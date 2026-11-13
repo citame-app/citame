@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { useNativeWebApi } from "../../test/native-web";
+import { installNativeWebApi } from "../../test/native-web";
 import { createProxy } from "./proxy";
 
-useNativeWebApi();
+installNativeWebApi();
 
 interface Seen {
   url: string;

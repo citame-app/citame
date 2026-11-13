@@ -26,8 +26,8 @@
   --color-warning-fg: var(--warning-fg);
   --color-scrim: var(--scrim);
 
-  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    sans-serif;
+  --font-sans:
+    "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-display: "Fraunces Variable", ui-serif, "Iowan Old Style", Georgia, serif;
 
   --radius-sm: 0.5rem;

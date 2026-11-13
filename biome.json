@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!**/drizzle", "!bun.lock"]
+    "includes": ["**", "!**/drizzle", "!bun.lock", "!**/routeTree.gen.ts"]
   },
   "formatter": {
     "enabled": true,
@@ -18,7 +18,13 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "preset": "recommended"
+      "preset": "recommended",
+      "suspicious": {
+        "noDocumentCookie": "off"
+      },
+      "complexity": {
+        "noImportantStyles": "off"
+      }
     }
   },
   "javascript": {
@@ -32,6 +38,11 @@
       "source": {
         "organizeImports": "on"
       }
+    }
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
     }
   }
 }

@@ -78,7 +78,7 @@ function offsetMinutes(timeZone: string, at: Date): number {
       .formatToParts(at)
       .find((part) => part.type === "timeZoneName")?.value ?? "GMT";
   const match = /GMT(?:([+-])(\d{2}):(\d{2}))?/.exec(label);
-  if (!match || !match[1]) return 0;
+  if (!match?.[1]) return 0;
   const minutes = Number(match[2]) * 60 + Number(match[3]);
   return match[1] === "-" ? -minutes : minutes;
 }

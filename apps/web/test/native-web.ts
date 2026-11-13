@@ -1,7 +1,7 @@
 import { afterAll, beforeAll } from "bun:test";
 
 /** Swaps Bun's native Request/Response/Headers/fetch back in for server-side test files. */
-export function useNativeWebApi() {
+export function installNativeWebApi() {
   const globals = globalThis as Record<string, unknown>;
   const native = globals.__nativeWebApi as Record<string, unknown>;
   const dom: Record<string, unknown> = {};
