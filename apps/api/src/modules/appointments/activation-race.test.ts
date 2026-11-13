@@ -45,7 +45,10 @@ async function waitForBlockedWriter() {
  * passed its pre-checks has to queue on the calendar lock. When the deactivation commits, the
  * queued request resumes and must notice that the calendar is gone.
  */
-async function raceAgainstDeactivation(staffId: string, request: () => Promise<Response>) {
+async function raceAgainstDeactivation(
+  staffId: string,
+  request: () => Response | Promise<Response>,
+) {
   let release!: () => void;
   const released = new Promise<void>((resolve) => {
     release = resolve;
@@ -61,7 +64,7 @@ async function raceAgainstDeactivation(staffId: string, request: () => Promise<R
     await released;
   });
   await hasLock;
-  const pending = request();
+  const pending = Promise.resolve(request());
   await waitForBlockedWriter();
   release();
   await deactivation;
