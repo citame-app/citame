@@ -59,7 +59,7 @@ describe("sign up validation", () => {
   test("messages are localized", () => {
     const result = validateAuth("sign-up", { name: "", email: "x", password: "" }, es);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.errors.name).toBe("Ingresá tu nombre");
+    if (!result.ok) expect(result.errors.name).toBe("Ingresa tu nombre");
   });
 });
 
