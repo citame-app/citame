@@ -3,6 +3,7 @@ import type { Database } from "@sob/db";
 import { Hono } from "hono";
 import { DomainError } from "./errors";
 import { errorBody, respondError } from "./http";
+import { appointmentsRoutes } from "./modules/appointments/routes";
 import { availabilityRoutes } from "./modules/availability/routes";
 import { servicesRoutes } from "./modules/services/routes";
 import { staffRoutes } from "./modules/staff/routes";
@@ -32,6 +33,7 @@ export function createApp(deps: AppDeps) {
   app.route("/services", servicesRoutes(deps));
   app.route("/staff", staffRoutes(deps));
   app.route("/availability", availabilityRoutes(deps));
+  app.route("/appointments", appointmentsRoutes(deps));
 
   return app;
 }
