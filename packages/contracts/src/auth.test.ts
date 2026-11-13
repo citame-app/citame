@@ -63,6 +63,7 @@ describe("me", () => {
       user: { id: "u1", email: "a@example.com", name: "A", role: "client" },
       staffId: null,
       clientId: uuid,
+      phone: null,
     });
     expect(me.clientId).toBe(uuid);
     expect(
@@ -70,6 +71,7 @@ describe("me", () => {
         user: { id: "u1", email: "a@example.com", name: "A", role: "wizard" },
         staffId: null,
         clientId: null,
+        phone: null,
       }).success,
     ).toBe(false);
   });

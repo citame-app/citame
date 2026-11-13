@@ -14,5 +14,6 @@ export * from "./clients";
 export * from "./common";
 export * from "./errors";
 export * from "./reports";
+export * from "./salon";
 export * from "./services";
 export * from "./staff";

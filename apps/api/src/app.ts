@@ -16,6 +16,7 @@ import { meRoutes } from "./modules/me/routes";
 import { reportRoutes } from "./modules/reports/routes";
 import { serviceAdminRoutes } from "./modules/services/admin-routes";
 import { servicesRoutes } from "./modules/services/routes";
+import { salonRoutes } from "./modules/settings/routes";
 import { staffAdminRoutes } from "./modules/staff/admin-routes";
 import { staffRoutes } from "./modules/staff/routes";
 import { createRateLimiter, rateLimit } from "./rate-limit";
@@ -66,7 +67,7 @@ export function createApp(deps: AppDeps) {
   // Better Auth owns everything under /api/auth (sign-up, sign-in, sign-out, session).
   app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
   app.use("/me", requireAuth(auth, deps.db));
-  app.route("/me", meRoutes());
+  app.route("/me", meRoutes(deps));
 
   app.use("/admin/*", requireAuth(auth, deps.db));
   app.route("/admin", adminRoutes(deps, auth));
@@ -76,6 +77,7 @@ export function createApp(deps: AppDeps) {
   app.route("/admin/reports", reportRoutes(deps));
 
   // Public catalog and availability: anonymous visitors browse before they sign up.
+  app.route("/salon", salonRoutes(deps));
   app.route("/services", servicesRoutes(deps));
   app.route("/staff", staffRoutes(deps));
   app.route("/availability", availabilityRoutes(deps));

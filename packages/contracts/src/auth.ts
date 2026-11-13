@@ -14,6 +14,8 @@ export const meResponseSchema = z.object({
   }),
   staffId: idSchema.nullable(),
   clientId: idSchema.nullable(),
+  /** Phone on the booking profile; null for accounts without one. */
+  phone: z.string().nullable(),
 });
 export type MeResponse = z.infer<typeof meResponseSchema>;
 
