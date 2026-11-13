@@ -61,7 +61,9 @@ export function appointmentsRoutes({ db, now = () => new Date() }: AppDeps) {
         const body = parseOrThrow(updateAppointmentRequestSchema, await readJson(c));
         const principal = c.get("principal");
         authorizeAppointmentChange(principal, await getAppointmentOwnership(db, id), body);
-        return c.json(await updateAppointment(db, id, body, { userId: principal.userId }));
+        return c.json(
+          await updateAppointment(db, id, body, { userId: principal.userId }, { now: now() }),
+        );
       })
   );
 }

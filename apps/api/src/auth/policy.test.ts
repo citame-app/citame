@@ -105,7 +105,7 @@ describe("authorizeAppointmentCreate", () => {
 });
 
 describe("authorizeAppointmentChange", () => {
-  const appt = { staffId: id(0xa), clientId: id(0xca) };
+  const appt = { staffId: id(0xa), clientId: id(0xca), status: "booked" as const };
   const cancel = { version: 1, status: "cancelled" as const };
 
   test("a client can change only their own appointment", () => {
@@ -126,6 +126,38 @@ describe("authorizeAppointmentChange", () => {
 
   test("the owner can change anything", () => {
     authorizeAppointmentChange(owner, appt, { version: 1, staffId: id(0xb) });
+  });
+
+  test("clients may only cancel: completed and no_show are for the salon", () => {
+    authorizeAppointmentChange(clientA, appt, { version: 1, status: "cancelled" });
+    forbidden(() => authorizeAppointmentChange(clientA, appt, { version: 1, status: "completed" }));
+    forbidden(() => authorizeAppointmentChange(clientA, appt, { version: 1, status: "no_show" }));
+  });
+
+  test("staff mark completed and no_show only on their own calendar; the owner anywhere", () => {
+    for (const status of ["completed", "no_show"] as const) {
+      authorizeAppointmentChange(staffA, appt, { version: 1, status });
+      forbidden(() => authorizeAppointmentChange(staffB, appt, { version: 1, status }));
+      authorizeAppointmentChange(owner, appt, { version: 1, status });
+    }
+  });
+
+  test("correcting completed <-> no_show is owner-only, even on your own calendar", () => {
+    const done = { ...appt, status: "completed" as const };
+    const missed = { ...appt, status: "no_show" as const };
+    authorizeAppointmentChange(owner, done, { version: 2, status: "no_show" });
+    authorizeAppointmentChange(owner, missed, { version: 2, status: "completed" });
+    forbidden(() => authorizeAppointmentChange(staffA, done, { version: 2, status: "no_show" }));
+    forbidden(() =>
+      authorizeAppointmentChange(staffA, missed, { version: 2, status: "completed" }),
+    );
+  });
+
+  test("the min-notice override on a move is for staff and owners only", () => {
+    const move = { version: 1, startsAt: "2026-03-09T15:00:00.000Z", override: true };
+    authorizeAppointmentChange(staffA, appt, move);
+    authorizeAppointmentChange(owner, appt, move);
+    forbidden(() => authorizeAppointmentChange(clientA, appt, move));
   });
 });
 

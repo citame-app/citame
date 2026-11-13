@@ -1,5 +1,6 @@
 import type {
   AppointmentListQuery,
+  AppointmentStatus,
   CalendarQuery,
   CreateAppointmentRequest,
   ReportQuery,
@@ -15,7 +16,8 @@ import type { Principal } from "./principal";
  * same rules. Anything not explicitly allowed is forbidden.
  *
  *   owner   everything
- *   staff   appointments on their own calendar (read, create, reschedule, cancel)
+ *   staff   appointments on their own calendar (read, create, reschedule, cancel, mark
+ *           completed / no_show)
  *   client  their own appointments only (create for themselves, read, reschedule, cancel)
  */
 
@@ -58,9 +60,10 @@ export function authorizeAppointmentCreate(
 
 export function authorizeAppointmentChange(
   principal: Principal,
-  appointment: { staffId: string; clientId: string },
+  appointment: { staffId: string; clientId: string; status: AppointmentStatus },
   request: UpdateAppointmentRequest,
 ): void {
+  const marking = request.status === "completed" || request.status === "no_show";
   switch (principal.role) {
     case "owner":
       return;
@@ -71,10 +74,18 @@ export function authorizeAppointmentChange(
       if (request.staffId !== undefined && request.staffId !== principal.staffId) {
         throw forbidden("Staff cannot move appointments to another calendar");
       }
+      // Marking a finished appointment is front-desk work; fixing a mistake is the owner's.
+      if (marking && appointment.status !== "booked") {
+        throw forbidden("Only the owner can correct an appointment outcome");
+      }
       return;
     case "client":
       if (!principal.clientId || appointment.clientId !== principal.clientId) {
         throw forbidden("This is not your appointment");
+      }
+      if (marking) throw forbidden("Clients can only cancel their appointments");
+      if (request.override) {
+        throw forbidden("Only staff can override the booking notice window");
       }
       return;
   }

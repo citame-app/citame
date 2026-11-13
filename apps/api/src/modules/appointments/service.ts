@@ -2,6 +2,8 @@ import {
   APPOINTMENT_PAGE_SIZE_DEFAULT,
   type Appointment,
   type AppointmentListQuery,
+  type AppointmentStatus,
+  type AppointmentTransition,
   type CreateAppointmentRequest,
   type ListAppointmentsResponse,
   type UpdateAppointmentRequest,
@@ -295,9 +297,13 @@ async function resolveClient(tx: Tx, request: CreateAppointmentRequest): Promise
 export async function getAppointmentOwnership(
   db: Database,
   id: string,
-): Promise<{ staffId: string; clientId: string }> {
+): Promise<{ staffId: string; clientId: string; status: AppointmentStatus }> {
   const [row] = await db
-    .select({ staffId: appointment.staffId, clientId: appointment.clientId })
+    .select({
+      staffId: appointment.staffId,
+      clientId: appointment.clientId,
+      status: appointment.status,
+    })
     .from(appointment)
     .where(and(eq(appointment.id, id), isNull(appointment.deletedAt)));
   if (!row) throw new DomainError("not_found", `Appointment ${id} not found`);
@@ -358,16 +364,62 @@ export async function listClientAppointments(
   return rows.map((row) => toAppointment(row, snapshots.get(row.id) ?? []));
 }
 
+type TransitionAction =
+  | "appointment.cancel"
+  | "appointment.complete"
+  | "appointment.no_show"
+  | "appointment.status_correct";
+
 /**
- * Reschedules and/or cancels with optimistic concurrency: the UPDATE only matches when
- * `version` equals the caller's, otherwise the caller is told to refetch (409).
+ * The status state machine (ADR 0004):
+ *
+ *   booked -> completed | no_show   only once the appointment has started
+ *   booked -> cancelled             any time
+ *   completed <-> no_show           a correction (the policy restricts it to the owner)
+ *   cancelled                       terminal
+ *
+ * Returns the audit action for the transition, or throws `invalid_state`.
+ */
+export function planTransition(
+  current: { status: AppointmentStatus; startsAt: Date },
+  target: AppointmentTransition,
+  now: Date,
+): TransitionAction {
+  const { status } = current;
+  if (status === "cancelled") {
+    throw new DomainError("invalid_state", "A cancelled appointment cannot be changed");
+  }
+  if (target === "cancelled") {
+    if (status !== "booked") {
+      throw new DomainError("invalid_state", `A ${status} appointment cannot be cancelled`);
+    }
+    return "appointment.cancel";
+  }
+  if (status === target) {
+    throw new DomainError("invalid_state", `The appointment is already ${target}`);
+  }
+  if (status === "booked") {
+    if (current.startsAt.getTime() > now.getTime()) {
+      throw new DomainError("invalid_state", "An appointment cannot be closed before it starts");
+    }
+    return target === "completed" ? "appointment.complete" : "appointment.no_show";
+  }
+  return "appointment.status_correct";
+}
+
+/**
+ * Applies one change with optimistic concurrency: the UPDATE only matches when `version` equals
+ * the caller's, otherwise the caller is told to refetch (409). A request either moves the
+ * appointment (reschedule, validated like a new booking) or changes its status.
  */
 export async function updateAppointment(
   db: Database,
   id: string,
   request: UpdateAppointmentRequest,
   actor?: Actor,
+  options: { now?: Date } = {},
 ): Promise<Appointment> {
+  const now = options.now ?? new Date();
   const [current] = await db
     .select()
     .from(appointment)
@@ -376,9 +428,11 @@ export async function updateAppointment(
   if (current.version !== request.version) throw versionConflict();
 
   const snapshots = (await loadSnapshots(db, [id])).get(id) ?? [];
-  const cancelling = request.status === "cancelled";
   const moving = request.startsAt !== undefined || request.staffId !== undefined;
-  if ((cancelling || moving) && current.status !== "booked") {
+  const transitionAction = request.status
+    ? planTransition(current, request.status, now)
+    : undefined;
+  if (moving && current.status !== "booked") {
     throw new DomainError("invalid_state", `A ${current.status} appointment cannot be changed`);
   }
 
@@ -402,7 +456,7 @@ export async function updateAppointment(
           staffId,
           startsAt,
           endsAt: new Date(startsAt.getTime() + durationMs),
-          ...(cancelling ? { status: "cancelled" as const } : {}),
+          ...(request.status ? { status: request.status } : {}),
           ...(request.notes !== undefined ? { notes: request.notes } : {}),
           version: sql`${appointment.version} + 1`,
         })
@@ -411,11 +465,7 @@ export async function updateAppointment(
       if (updated && actor) {
         await recordAudit(tx, {
           actorUserId: actor.userId,
-          action: cancelling
-            ? "appointment.cancel"
-            : moving
-              ? "appointment.reschedule"
-              : "appointment.update",
+          action: transitionAction ?? (moving ? "appointment.reschedule" : "appointment.update"),
           entity: "appointment",
           entityId: id,
           metadata: {
@@ -424,6 +474,7 @@ export async function updateAppointment(
             fromStaffId: current.staffId,
             toStaffId: updated.staffId,
             version: updated.version,
+            ...(transitionAction ? { fromStatus: current.status, toStatus: updated.status } : {}),
           },
         });
       }
