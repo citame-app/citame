@@ -18,7 +18,10 @@ export interface BookingSearch {
 
 export type BookingStep = "services" | "professional" | "time" | "review";
 
-const valid = <T>(schema: { safeParse: (value: unknown) => { success: boolean; data?: T } }, v: unknown) => {
+const valid = <T>(
+  schema: { safeParse: (value: unknown) => { success: boolean; data?: T } },
+  v: unknown,
+) => {
   const result = schema.safeParse(v);
   return result.success ? result.data : undefined;
 };

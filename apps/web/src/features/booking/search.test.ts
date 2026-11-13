@@ -80,7 +80,13 @@ describe("toggleService", () => {
 
   test("changing services invalidates the downstream choices", () => {
     const next = toggleService(
-      { services: [A], staff: STAFF, date: "2026-03-09", slot: "2026-03-09T12:00:00.000Z", slotStaff: STAFF },
+      {
+        services: [A],
+        staff: STAFF,
+        date: "2026-03-09",
+        slot: "2026-03-09T12:00:00.000Z",
+        slotStaff: STAFF,
+      },
       B,
     );
     expect(next).toEqual({ services: [A, B] });
@@ -93,14 +99,19 @@ describe("firstIncompleteStep", () => {
     expect(firstIncompleteStep({ services: [A] })).toBe("professional");
     expect(firstIncompleteStep({ services: [A], staff: "any" })).toBe("time");
     expect(
-      firstIncompleteStep({ services: [A], staff: "any", slot: "2026-03-09T12:00:00.000Z", slotStaff: STAFF }),
+      firstIncompleteStep({
+        services: [A],
+        staff: "any",
+        slot: "2026-03-09T12:00:00.000Z",
+        slotStaff: STAFF,
+      }),
     ).toBe("review");
   });
 
   test("a slot without a concrete professional is not complete", () => {
-    expect(firstIncompleteStep({ services: [A], staff: "any", slot: "2026-03-09T12:00:00.000Z" })).toBe(
-      "time",
-    );
+    expect(
+      firstIncompleteStep({ services: [A], staff: "any", slot: "2026-03-09T12:00:00.000Z" }),
+    ).toBe("time");
   });
 });
 

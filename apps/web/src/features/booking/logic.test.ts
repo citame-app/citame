@@ -86,7 +86,9 @@ describe("groupSlots", () => {
     );
     expect(groups.map((g) => g.part)).toEqual(["morning", "afternoon", "evening"]);
     expect(groups[0]?.slots[0]?.startsAt).toBe("2026-03-09T12:00:00.000Z");
-    expect(groupSlots([slot("2026-03-09T12:00:00.000Z")], TZ).map((g) => g.part)).toEqual(["morning"]);
+    expect(groupSlots([slot("2026-03-09T12:00:00.000Z")], TZ).map((g) => g.part)).toEqual([
+      "morning",
+    ]);
   });
 
   test("with several professionals one start time appears once, on the first professional", () => {
@@ -119,7 +121,12 @@ describe("buildDateStrip", () => {
       "2026-04-01",
       "2026-04-02",
     ]);
-    expect(buildDateStrip("2026-03-30", 10, 3)).toEqual(["2026-03-30", "2026-03-31", "2026-04-01", "2026-04-02"]);
+    expect(buildDateStrip("2026-03-30", 10, 3)).toEqual([
+      "2026-03-30",
+      "2026-03-31",
+      "2026-04-01",
+      "2026-04-02",
+    ]);
   });
 });
 
@@ -138,9 +145,13 @@ describe("firstAvailableDate", () => {
 
 describe("timezoneDifference", () => {
   test("is null when the visitor is on the salon's clock", () => {
-    expect(timezoneDifference("America/Argentina/Buenos_Aires", TZ, new Date("2026-03-09T12:00:00Z"))).toBeNull();
+    expect(
+      timezoneDifference("America/Argentina/Buenos_Aires", TZ, new Date("2026-03-09T12:00:00Z")),
+    ).toBeNull();
     // An alias of the same zone is not a difference either.
-    expect(timezoneDifference("America/Buenos_Aires", TZ, new Date("2026-03-09T12:00:00Z"))).toBeNull();
+    expect(
+      timezoneDifference("America/Buenos_Aires", TZ, new Date("2026-03-09T12:00:00Z")),
+    ).toBeNull();
   });
 
   test("reports the visitor zone and the hour offset when it differs", () => {

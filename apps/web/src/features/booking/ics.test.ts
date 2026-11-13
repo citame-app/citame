@@ -27,7 +27,7 @@ describe("buildIcs", () => {
 
   test("escapes commas, semicolons, backslashes and newlines in text values", () => {
     const ics = buildIcs({ ...event, summary: "A, B; C\\D" });
-    expect(ics).toContain("SUMMARY:A\\, B\; C\\\\D\r\n");
+    expect(ics).toContain("SUMMARY:A\\, B; C\\\\D\r\n");
     expect(ics).toContain("DESCRIPTION:With Stylist A\\nTotal: $25\\,000\r\n");
   });
 

@@ -10,14 +10,13 @@ export interface IcsEvent {
 }
 
 const compact = (instant: string | Date) =>
-  new Date(instant).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  new Date(instant)
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d{3}/, "");
 
 const escapeText = (value: string) =>
-  value
-    .replace(/\\/g, "\\\\")
-    .replace(/;/g, "\;")
-    .replace(/,/g, "\\,")
-    .replace(/\r?\n/g, "\\n");
+  value.replace(/\\/g, "\\\\").replace(/;/g, ";").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
 
 /** RFC 5545 section 3.1: lines are at most 75 octets; continuation lines start with a space. */
 function fold(line: string): string[] {

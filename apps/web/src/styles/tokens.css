@@ -1,0 +1,105 @@
+/*
+ * Color roles. Each role is a CSS variable so light and dark share one set of utilities.
+ * Contrast of every text/background and UI/background pair is asserted in tokens.test.ts
+ * (WCAG AA: 4.5:1 for text, 3:1 for borders, focus rings and graphical controls).
+ */
+:root {
+  color-scheme: light;
+
+  --bg: #fbf8f5;
+  --surface: #ffffff;
+  --surface-sunken: #f3eee9;
+  --border: #e6dfd8;
+  --border-strong: #857b73;
+
+  --fg: #2a2326;
+  --fg-muted: #5f5459;
+
+  --accent: #a24a68;
+  --accent-hover: #8b3d58;
+  --accent-fg: #ffffff;
+  --accent-text: #8f3c5a;
+  --accent-soft: #f7e7ec;
+  --accent-soft-fg: #7a2f4a;
+  --ring: #a24a68;
+
+  --danger-soft: #fce8e6;
+  --danger-fg: #8c1d18;
+  --success-soft: #e5f3ea;
+  --success-fg: #1d5c36;
+  --warning-soft: #fdf0d5;
+  --warning-fg: #6b4800;
+
+  --elev-sm: 0 1px 2px rgb(42 35 38 / 0.06), 0 1px 1px rgb(42 35 38 / 0.04);
+  --elev-md: 0 6px 16px -4px rgb(42 35 38 / 0.12), 0 2px 6px -2px rgb(42 35 38 / 0.08);
+  --elev-lg: 0 18px 40px -12px rgb(42 35 38 / 0.22), 0 6px 14px -6px rgb(42 35 38 / 0.12);
+  --scrim: rgb(30 22 26 / 0.5);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+
+    --bg: #171214;
+    --surface: #211a1d;
+    --surface-sunken: #120d0f;
+    --border: #3a2f34;
+    --border-strong: #8f8085;
+
+    --fg: #f3ecee;
+    --fg-muted: #c4b8bd;
+
+    --accent: #e0a0b6;
+    --accent-hover: #ecb6c8;
+    --accent-fg: #2a1019;
+    --accent-text: #eab0c3;
+    --accent-soft: #3a2430;
+    --accent-soft-fg: #f3c9d6;
+    --ring: #e0a0b6;
+
+    --danger-soft: #43211f;
+    --danger-fg: #ffb4ab;
+    --success-soft: #1c3426;
+    --success-fg: #8fd6a9;
+    --warning-soft: #3b2f12;
+    --warning-fg: #f1c76b;
+
+    --elev-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+    --elev-md: 0 6px 16px -4px rgb(0 0 0 / 0.5), 0 2px 6px -2px rgb(0 0 0 / 0.4);
+    --elev-lg: 0 18px 40px -12px rgb(0 0 0 / 0.6), 0 6px 14px -6px rgb(0 0 0 / 0.45);
+    --scrim: rgb(0 0 0 / 0.65);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #171214;
+  --surface: #211a1d;
+  --surface-sunken: #120d0f;
+  --border: #3a2f34;
+  --border-strong: #8f8085;
+
+  --fg: #f3ecee;
+  --fg-muted: #c4b8bd;
+
+  --accent: #e0a0b6;
+  --accent-hover: #ecb6c8;
+  --accent-fg: #2a1019;
+  --accent-text: #eab0c3;
+  --accent-soft: #3a2430;
+  --accent-soft-fg: #f3c9d6;
+  --ring: #e0a0b6;
+
+  --danger-soft: #43211f;
+  --danger-fg: #ffb4ab;
+  --success-soft: #1c3426;
+  --success-fg: #8fd6a9;
+  --warning-soft: #3b2f12;
+  --warning-fg: #f1c76b;
+
+  --elev-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --elev-md: 0 6px 16px -4px rgb(0 0 0 / 0.5), 0 2px 6px -2px rgb(0 0 0 / 0.4);
+  --elev-lg: 0 18px 40px -12px rgb(0 0 0 / 0.6), 0 6px 14px -6px rgb(0 0 0 / 0.45);
+  --scrim: rgb(0 0 0 / 0.65);
+}
