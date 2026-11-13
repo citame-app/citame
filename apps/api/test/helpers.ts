@@ -11,6 +11,8 @@ import { createTestDatabase, type TestDatabase } from "@sob/db/testing";
 import { sql } from "drizzle-orm";
 import type { Hono } from "hono";
 import { createApp } from "../src/app";
+import { type AppConfig, loadConfig } from "../src/config";
+import { createTestValkey, type TestValkey } from "./valkey";
 
 /** Fixed clock for deterministic availability: a Monday, 09:00 in Buenos Aires. */
 export const NOW = new Date("2026-03-02T12:00:00Z");
@@ -26,10 +28,56 @@ export interface Fixtures {
   clientId: string;
 }
 
-export async function setupApiTest(): Promise<TestDatabase & { app: Hono }> {
+export const TEST_SECRET = "test-secret-test-secret-test-secret-0123";
+
+export interface ApiTest extends TestDatabase {
+  app: Hono;
+  valkey: TestValkey;
+  config: AppConfig;
+  /** Epoch-ms clock used by the rate limiter; move it to cross window boundaries. */
+  clock: { now: () => number; advance: (seconds: number) => void };
+}
+
+export interface SetupOptions {
+  env?: Record<string, string>;
+}
+
+export async function setupApiTest(options: SetupOptions = {}): Promise<ApiTest> {
   const t = await createTestDatabase("api");
-  const app = createApp({ db: t.db, now: () => NOW });
-  return Object.assign(t, { app });
+  const valkey = await createTestValkey("api");
+  const config = loadConfig({
+    BETTER_AUTH_SECRET: TEST_SECRET,
+    VALKEY_KEY_PREFIX: valkey.prefix,
+    // Generous by default so only the rate-limit tests ever hit a limit.
+    RATE_LIMIT_GLOBAL_MAX: "100000",
+    RATE_LIMIT_AUTH_MAX: "100000",
+    ...options.env,
+  });
+  let nowMs = Date.parse("2026-03-02T12:00:00Z");
+  const clock = {
+    now: () => nowMs,
+    advance: (seconds: number) => {
+      nowMs += seconds * 1000;
+    },
+  };
+  const app = createApp({
+    db: t.db,
+    valkey: valkey.client,
+    config,
+    now: () => NOW,
+    rateLimitNow: clock.now,
+  });
+  const closeDb = t.close;
+  const resetDb = t.reset;
+  const close = async () => {
+    await closeDb();
+    await valkey.close();
+  };
+  const reset = async () => {
+    await resetDb();
+    await valkey.clear();
+  };
+  return Object.assign(t, { app, valkey, config, clock, close, reset });
 }
 
 /**
@@ -78,12 +126,40 @@ export async function seedFixtures(db: Database): Promise<Fixtures> {
   };
 }
 
-export function json(app: Hono, path: string, method: string, body?: unknown) {
+/** JSON request helper. Sends the app origin so Better Auth treats mutations as same-site. */
+export function json(app: Hono, path: string, method: string, body?: unknown, cookie?: string) {
+  const headers: Record<string, string> = { origin: "http://localhost:3000" };
+  if (body !== undefined) headers["content-type"] = "application/json";
+  if (cookie) headers.cookie = cookie;
   return app.request(path, {
     method,
-    headers: body === undefined ? undefined : { "content-type": "application/json" },
+    headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+}
+
+/** Turns a response's Set-Cookie headers into a Cookie request header value. */
+export function cookieFrom(res: Response): string {
+  return res.headers
+    .getSetCookie()
+    .map((c) => c.split(";")[0])
+    .filter((c): c is string => !!c && !c.endsWith("="))
+    .join("; ");
+}
+
+export const PASSWORD = "correct horse battery staple";
+
+/** Signs a client up through the public endpoint and returns its session cookie. */
+export async function signUp(app: Hono, email: string, name = "Test User", password = PASSWORD) {
+  const res = await json(app, "/api/auth/sign-up/email", "POST", { email, name, password });
+  if (res.status !== 200) throw new Error(`sign-up failed: ${res.status} ${await res.text()}`);
+  const body = (await res.json()) as { user: { id: string } };
+  return { cookie: cookieFrom(res), userId: body.user.id };
+}
+
+export async function signIn(app: Hono, email: string, password = PASSWORD) {
+  const res = await json(app, "/api/auth/sign-in/email", "POST", { email, password });
+  return { res, cookie: cookieFrom(res) };
 }
 
 /** Number of overlapping pairs among non-cancelled appointments of the same staff member. */
