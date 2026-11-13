@@ -14,6 +14,10 @@ import {
 } from "~/lib/format";
 import type { SlotGroup } from "./logic";
 
+/** A native input stretched over its label: clicks, taps and assistive tech hit the real control. */
+const HIDDEN_INPUT =
+  "peer absolute inset-0 z-10 m-0 size-full cursor-pointer opacity-0 disabled:cursor-not-allowed";
+
 const choiceCard =
   "relative flex min-h-11 w-full cursor-pointer items-start gap-3 rounded-lg border bg-surface p-4 " +
   "transition-[border-color,background-color,box-shadow] duration-150 " +
@@ -32,11 +36,11 @@ export function ServiceChoice({
 }) {
   const { locale } = useI18n();
   return (
-    <div>
+    <div className="relative">
       <input
         id={`service-${service.id}`}
         type="checkbox"
-        className="peer sr-only"
+        className={HIDDEN_INPUT}
         checked={selected}
         onChange={() => onToggle(service.id)}
         aria-describedby={`service-${service.id}-meta`}
@@ -88,12 +92,12 @@ export function ProfessionalChoice({
   initial?: ReactNode;
 }) {
   return (
-    <div>
+    <div className="relative">
       <input
         id={`staff-${value}`}
         type="radio"
         name="professional"
-        className="peer sr-only"
+        className={HIDDEN_INPUT}
         checked={selected}
         onChange={() => onSelect(value)}
       />
@@ -162,7 +166,7 @@ export function Stepper({
               <span
                 className={cn(
                   "text-sm font-medium",
-                  step.status === "current" ? "text-fg" : "hidden text-muted sm:inline",
+                  step.status === "current" ? "text-fg" : "text-muted max-sm:sr-only",
                 )}
               >
                 {step.label}
@@ -221,12 +225,12 @@ export function DateStrip({
         const unavailable = count === 0;
         const isSelected = date === selected;
         return (
-          <div key={date} className="snap-start">
+          <div key={date} className="relative snap-start">
             <input
               id={`date-${date}`}
               type="radio"
               name="date"
-              className="peer sr-only"
+              className={HIDDEN_INPUT}
               checked={isSelected}
               disabled={unavailable}
               onChange={() => onSelect(date)}
@@ -239,20 +243,18 @@ export function DateStrip({
                 "border-line bg-surface transition-colors hover:border-line-strong",
                 "peer-focus-visible:outline-3 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-ring",
                 "peer-checked:border-accent peer-checked:bg-accent peer-checked:text-accent-fg",
+                "[&_.sub]:text-muted peer-checked:[&_.sub]:text-accent-fg",
                 "peer-disabled:cursor-not-allowed peer-disabled:border-transparent peer-disabled:bg-sunken peer-disabled:text-muted peer-disabled:opacity-70",
               )}
             >
               <span className="sr-only">{formatDateLong(date, locale)}</span>
-              <span
-                aria-hidden="true"
-                className="text-xs font-medium uppercase tracking-wide opacity-80"
-              >
+              <span aria-hidden="true" className="sub text-xs font-medium uppercase tracking-wide">
                 {weekdayShort(date, locale)}
               </span>
               <span aria-hidden="true" className="font-display text-2xl font-semibold leading-none">
                 {dayOfMonth(date)}
               </span>
-              <span aria-hidden="true" className="text-xs opacity-80">
+              <span aria-hidden="true" className="sub text-xs">
                 {monthShort(date, locale)}
               </span>
               {date === nextAvailable && !unavailable && (
@@ -291,12 +293,12 @@ export function TimeSlotGrid({
             {group.slots.map((slot) => {
               const id = `slot-${slot.startsAt}`;
               return (
-                <div key={slot.startsAt}>
+                <div key={slot.startsAt} className="relative">
                   <input
                     id={id}
                     type="radio"
                     name="slot"
-                    className="peer sr-only"
+                    className={HIDDEN_INPUT}
                     checked={selected === slot.startsAt}
                     onChange={() => onSelect(slot)}
                   />

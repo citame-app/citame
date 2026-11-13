@@ -5,7 +5,13 @@ import { cn } from "~/lib/cn";
 import { effectiveTheme, nextTheme, type Theme, themeCookieValue } from "~/lib/theme";
 import { MoonIcon, SunIcon } from "./ui/icons";
 
-export function ThemeToggle({ initial }: { initial: Theme | undefined }) {
+export function ThemeToggle({
+  initial,
+  onChange,
+}: {
+  initial: Theme | undefined;
+  onChange?: (theme: Theme) => void;
+}) {
   const { t } = useI18n();
   // Server and first client render agree on "light"; the OS preference is resolved after mount
   // so hydration never mismatches.
@@ -19,6 +25,7 @@ export function ThemeToggle({ initial }: { initial: Theme | undefined }) {
     setCurrent(target);
     document.documentElement.dataset.theme = target;
     document.cookie = themeCookieValue(target);
+    onChange?.(target);
   }
 
   return (
@@ -47,12 +54,12 @@ export function LocaleSwitch({
     <fieldset className="inline-flex rounded-md border border-line-strong p-0.5">
       <legend className="sr-only">{t("locale.label")}</legend>
       {LOCALES.map((option) => (
-        <span key={option}>
+        <span key={option} className="relative">
           <input
             id={`locale-${option}`}
             type="radio"
             name="locale"
-            className="peer sr-only"
+            className="peer absolute inset-0 z-10 m-0 size-full cursor-pointer opacity-0"
             checked={locale === option}
             onChange={() => {
               document.cookie = localeCookieValue(option);
@@ -63,11 +70,14 @@ export function LocaleSwitch({
             htmlFor={`locale-${option}`}
             lang={option}
             className={cn(
-              "flex min-h-10 min-w-11 cursor-pointer items-center justify-center rounded px-2.5 text-sm font-medium text-muted transition-colors",
+              "flex min-h-11 min-w-11 cursor-pointer items-center justify-center rounded px-2.5 text-sm font-medium text-muted transition-colors",
               "peer-checked:bg-accent peer-checked:text-accent-fg peer-focus-visible:outline-3 peer-focus-visible:outline-ring",
             )}
           >
-            {LOCALE_LABEL[option]}
+            <span aria-hidden="true" className="sm:hidden">
+              {option === "en" ? "EN" : "ES"}
+            </span>
+            <span className="sr-only sm:not-sr-only">{LOCALE_LABEL[option]}</span>
           </label>
         </span>
       ))}

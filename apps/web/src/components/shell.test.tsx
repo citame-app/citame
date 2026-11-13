@@ -14,6 +14,13 @@ describe("ThemeToggle", () => {
     expect(document.cookie).toContain("sob_theme=light");
   });
 
+  test("reports the new theme so the app can keep its own copy in sync", () => {
+    const onChange = mock();
+    renderApp(<ThemeToggle initial="light" onChange={onChange} />);
+    fireEvent.click(screen.getByRole("button", { name: "Switch to dark mode" }));
+    expect(onChange).toHaveBeenCalledWith("dark");
+  });
+
   test("starts from the stored theme", () => {
     renderApp(<ThemeToggle initial="dark" />);
     expect(screen.getByRole("button", { name: "Switch to light mode" })).toBeInTheDocument();

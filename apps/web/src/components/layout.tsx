@@ -13,12 +13,14 @@ export function Header({
   theme,
   locale,
   onLocaleChange,
+  onThemeChange,
 }: {
   salonName: string;
   session: MeResponse | null;
   theme: Theme | undefined;
   locale: Locale;
   onLocaleChange: (locale: Locale) => void;
+  onThemeChange: (theme: Theme) => void;
 }) {
   const { t } = useI18n();
   const staff = session && session.user.role !== "client";
@@ -36,7 +38,7 @@ export function Header({
 
         <nav aria-label={t("nav.main")} className="flex items-center gap-1 sm:gap-2">
           <LocaleSwitch locale={locale} onChange={onLocaleChange} />
-          <ThemeToggle initial={theme} />
+          <ThemeToggle initial={theme} onChange={onThemeChange} />
           {session ? (
             <Link
               to={staff ? "/admin" : "/account"}
@@ -58,10 +60,7 @@ export function Header({
               <span className="hidden sm:inline">{t("nav.signIn")}</span>
             </Link>
           )}
-          <Link
-            to="/book"
-            className={`${buttonClasses({ variant: "primary" })} hidden sm:inline-flex`}
-          >
+          <Link to="/book" className={`${buttonClasses({ variant: "primary" })} max-sm:hidden`}>
             {t("nav.book")}
           </Link>
         </nav>

@@ -20,6 +20,7 @@ import { createTranslator, DEFAULT_LOCALE, type Locale } from "~/i18n";
 import { I18nProvider, useI18n } from "~/i18n/react";
 import { salonQuery } from "~/lib/queries";
 import { pageMeta } from "~/lib/seo";
+import type { Theme } from "~/lib/theme";
 import { bootstrapQuery } from "~/server/request";
 import appCss from "~/styles/app.css?url";
 
@@ -119,6 +120,13 @@ function RootLayout() {
     void router.invalidate();
   }
 
+  function changeTheme(next: Theme) {
+    // Keep the cached bootstrap in step so the server-rendered attribute and ours never disagree.
+    queryClient.setQueryData(bootstrapQuery.queryKey, (previous) =>
+      previous ? { ...previous, theme: next } : previous,
+    );
+  }
+
   return (
     <I18nProvider locale={locale} timeZone={salon.timezone}>
       <ToastHost>
@@ -129,6 +137,7 @@ function RootLayout() {
           theme={theme}
           locale={locale}
           onLocaleChange={changeLocale}
+          onThemeChange={changeTheme}
         />
       </ToastHost>
     </I18nProvider>
@@ -142,6 +151,7 @@ function Chrome({
   theme,
   locale,
   onLocaleChange,
+  onThemeChange,
 }: {
   salonName: string;
   timeZone: string;
@@ -149,6 +159,7 @@ function Chrome({
   theme: Parameters<typeof Header>[0]["theme"];
   locale: Locale;
   onLocaleChange: (locale: Locale) => void;
+  onThemeChange: (theme: Theme) => void;
 }) {
   const { t } = useI18n();
   const mainRef = useRef<HTMLElement>(null);
@@ -181,6 +192,7 @@ function Chrome({
         theme={theme}
         locale={locale}
         onLocaleChange={onLocaleChange}
+        onThemeChange={onThemeChange}
       />
       <main id="main" ref={mainRef} tabIndex={-1} className="flex-1 outline-none">
         <Outlet />
