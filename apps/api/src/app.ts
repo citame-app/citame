@@ -3,6 +3,7 @@ import type { Database } from "@sob/db";
 import { Hono } from "hono";
 import { DomainError } from "./errors";
 import { errorBody, respondError } from "./http";
+import { availabilityRoutes } from "./modules/availability/routes";
 import { servicesRoutes } from "./modules/services/routes";
 import { staffRoutes } from "./modules/staff/routes";
 
@@ -30,6 +31,7 @@ export function createApp(deps: AppDeps) {
   // Phase 2: protect with RBAC (owner / staff / client). Every router below is open for now.
   app.route("/services", servicesRoutes(deps));
   app.route("/staff", staffRoutes(deps));
+  app.route("/availability", availabilityRoutes(deps));
 
   return app;
 }
