@@ -7,6 +7,7 @@ import { requireAuth } from "./auth/principal";
 import type { AppConfig } from "./config";
 import { DomainError } from "./errors";
 import { errorBody, respondError } from "./http";
+import { adminRoutes } from "./modules/admin/routes";
 import { appointmentsRoutes } from "./modules/appointments/routes";
 import { availabilityRoutes } from "./modules/availability/routes";
 import { meRoutes } from "./modules/me/routes";
@@ -43,6 +44,9 @@ export function createApp(deps: AppDeps) {
   app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
   app.use("/me", requireAuth(auth, deps.db));
   app.route("/me", meRoutes());
+
+  app.use("/admin/*", requireAuth(auth, deps.db));
+  app.route("/admin", adminRoutes(deps, auth));
 
   // Public catalog and availability: anonymous visitors browse before they sign up.
   app.route("/services", servicesRoutes(deps));

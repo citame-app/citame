@@ -40,12 +40,13 @@ export function appointmentsRoutes({ db }: AppDeps) {
         principal,
         parseOrThrow(schema, await readJson(c)),
       );
-      return c.json(await createAppointment(db, request), 201);
+      return c.json(await createAppointment(db, request, { userId: principal.userId }), 201);
     })
     .patch("/:id", async (c) => {
       const id = parseOrThrow(idSchema, c.req.param("id"));
       const body = parseOrThrow(updateAppointmentRequestSchema, await readJson(c));
-      authorizeAppointmentChange(c.get("principal"), await getAppointmentOwnership(db, id), body);
-      return c.json(await updateAppointment(db, id, body));
+      const principal = c.get("principal");
+      authorizeAppointmentChange(principal, await getAppointmentOwnership(db, id), body);
+      return c.json(await updateAppointment(db, id, body, { userId: principal.userId }));
     });
 }

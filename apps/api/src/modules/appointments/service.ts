@@ -14,6 +14,7 @@ import {
   serviceStaff,
 } from "@sob/db";
 import { and, asc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { recordAudit } from "../../audit";
 import { DomainError } from "../../errors";
 import { totalBlockMinutes } from "../availability/compute";
 import { getServicesByIds } from "../services/service";
@@ -36,6 +37,11 @@ async function lockCalendars(tx: Tx, staffIds: string[]) {
   }
 }
 const MS_PER_MINUTE = 60_000;
+
+/** The authenticated caller on whose behalf a write happens; recorded in the audit log. */
+export interface Actor {
+  userId: string;
+}
 
 type AppointmentRow = typeof appointment.$inferSelect;
 type SnapshotRow = typeof appointmentService.$inferSelect;
@@ -118,6 +124,7 @@ async function loadSnapshots(db: Database, appointmentIds: string[]) {
 export async function createAppointment(
   db: Database,
   request: CreateAppointmentRequest,
+  actor?: Actor,
 ): Promise<Appointment> {
   await assertStaffExists(db, request.staffId);
   const services = await getServicesByIds(db, request.serviceIds);
@@ -161,6 +168,21 @@ export async function createAppointment(
           })),
         )
         .returning();
+      if (actor) {
+        await recordAudit(tx, {
+          actorUserId: actor.userId,
+          action: "appointment.create",
+          entity: "appointment",
+          entityId: row.id,
+          metadata: {
+            staffId: row.staffId,
+            clientId: row.clientId,
+            startsAt: row.startsAt.toISOString(),
+            endsAt: row.endsAt.toISOString(),
+            serviceIds: services.map((s) => s.id),
+          },
+        });
+      }
       return toAppointment(row, snapshots);
     });
   } catch (error) {
@@ -247,6 +269,7 @@ export async function updateAppointment(
   db: Database,
   id: string,
   request: UpdateAppointmentRequest,
+  actor?: Actor,
 ): Promise<Appointment> {
   const [current] = await db
     .select()
@@ -287,6 +310,25 @@ export async function updateAppointment(
         })
         .where(and(eq(appointment.id, id), eq(appointment.version, request.version)))
         .returning();
+      if (updated && actor) {
+        await recordAudit(tx, {
+          actorUserId: actor.userId,
+          action: cancelling
+            ? "appointment.cancel"
+            : moving
+              ? "appointment.reschedule"
+              : "appointment.update",
+          entity: "appointment",
+          entityId: id,
+          metadata: {
+            from: current.startsAt.toISOString(),
+            to: updated.startsAt.toISOString(),
+            fromStaffId: current.staffId,
+            toStaffId: updated.staffId,
+            version: updated.version,
+          },
+        });
+      }
       return updated;
     });
     if (!row) throw versionConflict();

@@ -2,6 +2,7 @@ import type { UserRole } from "@sob/contracts";
 import { account, clientProfile, type Database, pgErrorCode, staffProfile, user } from "@sob/db";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
+import { recordAudit } from "../audit";
 import { DomainError } from "../errors";
 import type { Auth } from "./auth";
 
@@ -23,6 +24,12 @@ export interface CreateAccountInput {
   role: UserRole;
   /** Name shown in the booking flow for staff accounts; defaults to `name`. */
   displayName?: string;
+}
+
+/** When present, the change is recorded in the audit log inside the same transaction. */
+export interface AuditContext {
+  actorUserId: string | null;
+  action: string;
 }
 
 export interface AccountResult {
@@ -93,6 +100,7 @@ async function ensureClientProfile(
 export async function createAccount(
   { auth, db }: AccountDeps,
   input: CreateAccountInput,
+  audit?: AuditContext,
 ): Promise<AccountResult> {
   assertPasswordPolicy(input.password);
   const email = normalizeEmail(input.email);
@@ -115,6 +123,15 @@ export async function createAccount(
           : null;
       const clientId =
         input.role === "client" ? await ensureClientProfile(tx, userId, input.name, email) : null;
+      if (audit) {
+        await recordAudit(tx, {
+          actorUserId: audit.actorUserId,
+          action: audit.action,
+          entity: "user",
+          entityId: userId,
+          metadata: { email, role: input.role, staffId, clientId },
+        });
+      }
       return { userId, role: input.role, staffId, clientId };
     });
   } catch (error) {
@@ -135,6 +152,7 @@ export async function assignRole(
   db: Database,
   userId: string,
   role: UserRole,
+  audit?: Pick<AuditContext, "actorUserId">,
 ): Promise<AccountResult> {
   return db.transaction(async (tx) => {
     const [row] = await tx.select().from(user).where(eq(user.id, userId));
@@ -156,6 +174,15 @@ export async function assignRole(
       .select({ id: clientProfile.id })
       .from(clientProfile)
       .where(and(eq(clientProfile.userId, userId)));
+    if (audit) {
+      await recordAudit(tx, {
+        actorUserId: audit.actorUserId,
+        action: "user.role_change",
+        entity: "user",
+        entityId: userId,
+        metadata: { from: row.role, to: role },
+      });
+    }
     return { userId, role, staffId: staff?.id ?? null, clientId: client?.id ?? null };
   });
 }
@@ -192,7 +219,11 @@ export async function bootstrapOwner(
   if (already) return already;
 
   try {
-    const created = await createAccount(deps, { ...input, email, role: "owner" });
+    const created = await createAccount(
+      deps,
+      { ...input, email, role: "owner" },
+      { actorUserId: null, action: "owner.bootstrap" },
+    );
     return { created: true, userId: created.userId };
   } catch (error) {
     // Lost a race with a concurrent bootstrap: treat the winner's account as ours.

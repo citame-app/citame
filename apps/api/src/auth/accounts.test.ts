@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { meResponseSchema } from "@sob/contracts";
-import { account, clientProfile, staffProfile, user } from "@sob/db";
+import { account, auditLog, clientProfile, staffProfile, user } from "@sob/db";
 import { eq } from "drizzle-orm";
 import { json, PASSWORD, setupApiTest, signIn, signUp } from "../../test/helpers";
 import { DomainError } from "../errors";
@@ -176,6 +176,19 @@ describe("bootstrapOwner", () => {
     expect(
       (await signIn(t.app, "owner@example.com", "a completely different one")).res.status,
     ).toBe(401);
+  });
+
+  test("is audited once, without the password, and a repeat run adds nothing", async () => {
+    const first = await bootstrapOwner(deps, input);
+    await bootstrapOwner(deps, input);
+    const rows = await t.db.select().from(auditLog);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      actorUserId: null,
+      action: "owner.bootstrap",
+      entityId: first.userId,
+    });
+    expect(JSON.stringify(rows[0])).not.toContain(PASSWORD);
   });
 
   test("refuses to promote an existing non-owner account (someone could have pre-registered the email)", async () => {
