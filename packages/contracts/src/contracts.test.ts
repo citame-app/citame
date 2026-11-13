@@ -8,6 +8,7 @@ import {
   createAppointmentRequestSchema,
   errorCodeSchema,
   errorResponseSchema,
+  errorStatus,
   serviceSchema,
   staffSchema,
   updateAppointmentRequestSchema,
@@ -29,9 +30,21 @@ describe("error shape", () => {
   });
 
   test("covers the documented codes", () => {
-    for (const code of ["slot_taken", "validation_error", "not_found", "version_conflict"]) {
+    for (const code of [
+      "slot_taken",
+      "validation_error",
+      "not_found",
+      "version_conflict",
+      "has_future_appointments",
+      "slot_unavailable",
+    ]) {
       expect(errorCodeSchema.safeParse(code).success).toBe(true);
     }
+  });
+
+  test("the new admin codes are conflicts (409)", () => {
+    expect(errorStatus.has_future_appointments).toBe(409);
+    expect(errorStatus.slot_unavailable).toBe(409);
   });
 });
 
