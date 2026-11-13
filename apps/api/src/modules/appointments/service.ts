@@ -445,17 +445,31 @@ export async function updateAppointment(
 
   const durationMs = current.endsAt.getTime() - current.startsAt.getTime();
   const startsAt = request.startsAt ? new Date(request.startsAt) : current.startsAt;
+  const endsAt = new Date(startsAt.getTime() + durationMs);
+  // Re-sending the current start and staff is not a move, so it is not re-validated.
+  const slotChanges =
+    staffId !== current.staffId || startsAt.getTime() !== current.startsAt.getTime();
+  const settings = slotChanges ? await getSalonSettings(db) : undefined;
 
   try {
     const row = await db.transaction(async (tx) => {
       await lockCalendars(tx, [current.staffId, staffId]);
-      if (staffId !== current.staffId) await assertStaffActive(tx, staffId);
+      const noticeOverridden =
+        settings !== undefined &&
+        (await assertBookable(tx, {
+          staffId,
+          startsAt,
+          endsAt,
+          now,
+          override: request.override === true,
+          settings,
+        }));
       const [updated] = await tx
         .update(appointment)
         .set({
           staffId,
           startsAt,
-          endsAt: new Date(startsAt.getTime() + durationMs),
+          endsAt,
           ...(request.status ? { status: request.status } : {}),
           ...(request.notes !== undefined ? { notes: request.notes } : {}),
           version: sql`${appointment.version} + 1`,
@@ -475,6 +489,7 @@ export async function updateAppointment(
             toStaffId: updated.staffId,
             version: updated.version,
             ...(transitionAction ? { fromStatus: current.status, toStatus: updated.status } : {}),
+            ...(slotChanges && request.override ? { override: true, noticeOverridden } : {}),
           },
         });
       }
