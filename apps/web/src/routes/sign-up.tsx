@@ -1,9 +1,9 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { PageContainer, PageHeading } from "~/components/pages";
-import { createTranslator } from "~/i18n";
-import { useI18n } from "~/i18n/react";
 import { AuthForm } from "~/features/auth/auth-form";
 import { useAuth } from "~/features/auth/use-auth";
+import { createTranslator } from "~/i18n";
+import { useI18n } from "~/i18n/react";
 import { homeFor } from "~/lib/auth/access";
 import { pageMeta } from "~/lib/seo";
 
@@ -42,7 +42,9 @@ function SignUpPage() {
         <div className="rounded-xl border border-line bg-surface p-6 shadow-sm">
           <AuthForm
             mode="sign-up"
-            onSubmit={(values) => auth.signUp({ ...values, name: "name" in values ? values.name : "" }, { redirectTo })}
+            onSubmit={(values) =>
+              auth.signUp({ ...values, name: "name" in values ? values.name : "" }, { redirectTo })
+            }
             footer={
               <p className="text-center text-muted">
                 {t("auth.signUp.switch")}{" "}

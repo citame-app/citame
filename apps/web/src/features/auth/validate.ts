@@ -38,11 +38,7 @@ function messageFor(t: Translator, field: string, issue: z.core.$ZodIssue, mode:
   return issue.message;
 }
 
-function collect(
-  t: Translator,
-  error: z.ZodError,
-  mode: AuthMode,
-): FieldErrors {
+function collect(t: Translator, error: z.ZodError, mode: AuthMode): FieldErrors {
   const errors: FieldErrors = {};
   for (const issue of error.issues) {
     const field = String(issue.path[0] ?? "form");

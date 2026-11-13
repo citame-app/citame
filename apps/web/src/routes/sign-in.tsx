@@ -1,9 +1,9 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { PageContainer, PageHeading } from "~/components/pages";
-import { createTranslator } from "~/i18n";
-import { useI18n } from "~/i18n/react";
 import { AuthForm } from "~/features/auth/auth-form";
 import { useAuth } from "~/features/auth/use-auth";
+import { createTranslator } from "~/i18n";
+import { useI18n } from "~/i18n/react";
 import { homeFor, resolveAccess } from "~/lib/auth/access";
 import { pageMeta } from "~/lib/seo";
 

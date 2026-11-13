@@ -15,7 +15,38 @@ const matchers = await import("@testing-library/jest-dom/matchers");
 const { expect, afterEach } = await import("bun:test");
 const { cleanup } = await import("@testing-library/react");
 
-expect.extend(matchers);
+expect.extend(matchers as unknown as Parameters<typeof expect.extend>[0]);
+
+// Component tests render without a router: links become plain anchors and navigation hooks no-ops.
+const { mock } = await import("bun:test");
+const React = await import("react");
+const router = await import("@tanstack/react-router");
+function MockLink({
+  to,
+  children,
+  className,
+  ...rest
+}: {
+  to?: string;
+  children?: unknown;
+  className?: string;
+}) {
+  return React.createElement(
+    "a",
+    {
+      href: String(to ?? "#"),
+      className,
+      "aria-label": (rest as Record<string, string>)["aria-label"],
+    },
+    children as never,
+  );
+}
+mock.module("@tanstack/react-router", () => ({
+  ...router,
+  Link: MockLink,
+  useNavigate: () => () => Promise.resolve(),
+  useRouter: () => ({ invalidate: () => Promise.resolve(), navigate: () => Promise.resolve() }),
+}));
 afterEach(() => {
   cleanup();
   document.documentElement.removeAttribute("lang");

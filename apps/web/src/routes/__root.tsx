@@ -157,6 +157,7 @@ function Chrome({
 
   // Move focus to the page content after client-side navigations so keyboard and screen reader
   // users land on the new page instead of being left on the link they activated.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the pathname is the trigger
   useEffect(() => {
     if (firstRender.current) {
       firstRender.current = false;

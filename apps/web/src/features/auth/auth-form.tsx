@@ -76,9 +76,7 @@ export function AuthForm({ mode, onSubmit, footer }: AuthFormProps) {
 
   return (
     <form ref={formRef} onSubmit={submit} noValidate className="space-y-5">
-      {formError !== null && (
-        <FormError error={formError} cooldown={cooldown} />
-      )}
+      {formError !== null && <FormError error={formError} cooldown={cooldown} />}
       {mode === "sign-up" && (
         <TextField
           label={t("auth.field.name")}
@@ -125,7 +123,10 @@ function FormError({ error, cooldown }: { error: unknown; cooldown: number }) {
   const { t } = useI18n();
   if (error instanceof ApiError && error.code === "invalid_credentials") {
     return (
-      <p role="alert" className="rounded-md bg-danger-soft px-4 py-3 text-[0.95rem] font-medium text-danger-fg">
+      <p
+        role="alert"
+        className="rounded-md bg-danger-soft px-4 py-3 text-[0.95rem] font-medium text-danger-fg"
+      >
         {t("auth.error.invalid")}
       </p>
     );
@@ -135,7 +136,9 @@ function FormError({ error, cooldown }: { error: unknown; cooldown: number }) {
       <div role="alert" className="rounded-md bg-danger-soft px-4 py-3 text-danger-fg">
         <p className="font-semibold">{t("error.rateLimited.title")}</p>
         <p className="text-[0.95rem]">
-          {t("error.rateLimited.body", { count: cooldown > 0 ? cooldown : (error.retryAfterSeconds ?? 30) })}
+          {t("error.rateLimited.body", {
+            count: cooldown > 0 ? cooldown : (error.retryAfterSeconds ?? 30),
+          })}
         </p>
       </div>
     );

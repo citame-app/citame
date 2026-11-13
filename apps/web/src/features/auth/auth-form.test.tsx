@@ -35,7 +35,10 @@ describe("AuthForm sign in", () => {
     fill("Password", "correct horse");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    expect(onSubmit.mock.calls[0]?.[0]).toEqual({ email: "lucia@example.com", password: "correct horse" });
+    expect(onSubmit.mock.calls[0]?.[0]).toEqual({
+      email: "lucia@example.com",
+      password: "correct horse",
+    });
   });
 
   test("wrong credentials show a form-level alert without blaming a field", async () => {
@@ -100,7 +103,9 @@ describe("AuthForm sign up", () => {
     fill("Email", "lucia@example.com");
     fill("Password", "correct horse battery");
     fireEvent.click(screen.getByRole("button", { name: "Create account" }));
-    expect(await screen.findByText("An account with this email already exists.")).toBeInTheDocument();
+    expect(
+      await screen.findByText("An account with this email already exists."),
+    ).toBeInTheDocument();
     expect(screen.getByLabelText("Email")).toHaveAttribute("aria-invalid", "true");
   });
 });

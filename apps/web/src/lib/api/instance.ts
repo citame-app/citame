@@ -10,7 +10,7 @@ export function serverEndpoints(cookie?: string | null): Endpoints {
     createApiClient({
       restBase: base,
       authBase: base,
-      headers: () => (cookie ? { cookie } : {}),
+      headers: (): Record<string, string> => (cookie ? { cookie } : {}),
     }),
   );
 }
