@@ -44,6 +44,7 @@ export function authorizeAppointmentCreate(
       return request;
     case "client": {
       if (!principal.clientId) throw forbidden("Your account has no booking profile");
+      if (request.override) throw forbidden("Only staff can override the booking notice window");
       if (request.clientId && request.clientId !== principal.clientId) {
         throw forbidden("You can only book appointments for yourself");
       }

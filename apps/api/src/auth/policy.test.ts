@@ -68,6 +68,13 @@ describe("authorizeAppointmentCreate", () => {
     forbidden(() => authorizeAppointmentCreate(clientA, booking({ clientId: id(0xcb) })));
   });
 
+  test("only staff and owners may use the min-notice override", () => {
+    forbidden(() => authorizeAppointmentCreate(clientA, booking({ override: true })));
+    expect(authorizeAppointmentCreate(clientA, booking({ override: false })).override).toBeFalsy();
+    expect(authorizeAppointmentCreate(staffA, booking({ override: true })).override).toBe(true);
+    expect(authorizeAppointmentCreate(owner, booking({ override: true })).override).toBe(true);
+  });
+
   test("a client without a booking profile cannot book", () => {
     forbidden(() => authorizeAppointmentCreate({ ...clientA, clientId: null }, booking()));
   });

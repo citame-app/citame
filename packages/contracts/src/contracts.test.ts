@@ -89,6 +89,12 @@ describe("self-service booking", () => {
     expect(createAppointmentRequestSchema.safeParse(base).success).toBe(false);
   });
 
+  test("accepts an optional boolean override and rejects other types", () => {
+    expect(createAppointmentBaseSchema.parse({ ...base, override: true }).override).toBe(true);
+    expect(createAppointmentBaseSchema.parse(base).override).toBeUndefined();
+    expect(createAppointmentBaseSchema.safeParse({ ...base, override: "yes" }).success).toBe(false);
+  });
+
   test("the base shape still validates the booking fields", () => {
     expect(createAppointmentBaseSchema.safeParse({ ...base, serviceIds: [] }).success).toBe(false);
     expect(createAppointmentBaseSchema.safeParse({ ...base, startsAt: "soon" }).success).toBe(

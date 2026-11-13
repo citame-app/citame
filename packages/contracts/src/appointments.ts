@@ -48,6 +48,11 @@ export const createAppointmentBaseSchema = z.object({
   clientId: idSchema.optional(),
   client: inlineClientSchema.optional(),
   notes: z.string().optional(),
+  /**
+   * Staff and owners only: book inside the minimum-notice window. It never bypasses working
+   * hours, time off or the maximum advance window, and the use is audited.
+   */
+  override: z.boolean().optional(),
 });
 
 /** Staff and owners must say who the appointment is for: exactly one of `clientId` / `client`. */

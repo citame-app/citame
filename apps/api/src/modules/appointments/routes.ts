@@ -22,7 +22,7 @@ import {
 } from "./service";
 
 /** Mounted behind `requireAuth`, so every handler can rely on `c.get("principal")`. */
-export function appointmentsRoutes({ db }: AppDeps) {
+export function appointmentsRoutes({ db, now = () => new Date() }: AppDeps) {
   return new Hono<AppEnv>()
     .get("/", async (c) => {
       const query = parseOrThrow(appointmentListQuerySchema, c.req.query());
@@ -40,7 +40,10 @@ export function appointmentsRoutes({ db }: AppDeps) {
         principal,
         parseOrThrow(schema, await readJson(c)),
       );
-      return c.json(await createAppointment(db, request, { userId: principal.userId }), 201);
+      return c.json(
+        await createAppointment(db, request, { userId: principal.userId }, { now: now() }),
+        201,
+      );
     })
     .patch("/:id", async (c) => {
       const id = parseOrThrow(idSchema, c.req.param("id"));

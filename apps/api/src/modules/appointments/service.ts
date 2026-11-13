@@ -12,12 +12,16 @@ import {
   EXCLUSION_VIOLATION,
   pgErrorCode,
   serviceStaff,
+  timeOff,
+  workingHours,
 } from "@sob/db";
 import { and, asc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { DomainError } from "../../errors";
 import { totalBlockMinutes } from "../availability/compute";
+import { type BookingViolation, bookingViolations } from "../availability/rules";
 import { getServicesByIds } from "../services/service";
+import { getSalonSettings } from "../settings/service";
 import { assertStaffExists } from "../staff/service";
 
 const UNIQUE_VIOLATION = "23505";
@@ -125,8 +129,11 @@ export async function createAppointment(
   db: Database,
   request: CreateAppointmentRequest,
   actor?: Actor,
+  options: { now?: Date } = {},
 ): Promise<Appointment> {
+  const now = options.now ?? new Date();
   await assertStaffExists(db, request.staffId);
+  const settings = await getSalonSettings(db);
   const services = await getServicesByIds(db, request.serviceIds);
   await assertStaffPerforms(
     db,
@@ -140,6 +147,14 @@ export async function createAppointment(
   try {
     return await db.transaction(async (tx) => {
       await lockCalendars(tx, [request.staffId]);
+      const noticeOverridden = await assertBookable(tx, {
+        staffId: request.staffId,
+        startsAt,
+        endsAt,
+        now,
+        override: request.override === true,
+        settings,
+      });
       const clientId = await resolveClient(tx, request);
       const [row] = await tx
         .insert(appointment)
@@ -180,6 +195,7 @@ export async function createAppointment(
             startsAt: row.startsAt.toISOString(),
             endsAt: row.endsAt.toISOString(),
             serviceIds: services.map((s) => s.id),
+            ...(request.override ? { override: true, noticeOverridden } : {}),
           },
         });
       }
@@ -188,6 +204,67 @@ export async function createAppointment(
   } catch (error) {
     return mapWriteError(error);
   }
+}
+
+const VIOLATION_MESSAGES: Record<BookingViolation, (minNotice: number, maxDays: number) => string> =
+  {
+    max_days_ahead: (_minutes, days) => `Appointments can only be booked up to ${days} days ahead`,
+    outside_working_hours: () => "The selected time is outside the staff member's working hours",
+    time_off: () => "The staff member is on time off at the selected time",
+    min_notice: (minutes) => `Appointments need at least ${minutes} minutes of notice`,
+  };
+
+/**
+ * Enforces working hours, time off and the notice window for a new booking. The exclusion
+ * constraint remains the source of truth for overlaps; these are the rules it cannot express.
+ * Returns whether `override` actually bypassed the min-notice rule.
+ */
+async function assertBookable(
+  tx: Tx,
+  input: {
+    staffId: string;
+    startsAt: Date;
+    endsAt: Date;
+    now: Date;
+    override: boolean;
+    settings: Awaited<ReturnType<typeof getSalonSettings>>;
+  },
+): Promise<boolean> {
+  const { staffId, startsAt, endsAt, settings } = input;
+  const hours = await tx
+    .select()
+    .from(workingHours)
+    .where(and(eq(workingHours.staffId, staffId), isNull(workingHours.deletedAt)));
+  const offs = await tx
+    .select()
+    .from(timeOff)
+    .where(
+      and(
+        eq(timeOff.staffId, staffId),
+        isNull(timeOff.deletedAt),
+        lt(timeOff.startsAt, endsAt),
+        gt(timeOff.endsAt, startsAt),
+      ),
+    );
+  const violations = bookingViolations({
+    startsAt,
+    endsAt,
+    timeZone: settings.timezone,
+    now: input.now,
+    minNoticeMinutes: settings.minNoticeMinutes,
+    maxDaysAhead: settings.maxDaysAhead,
+    workingHours: hours.map((h) => ({ weekday: h.weekday, start: h.startTime, end: h.endTime })),
+    timeOff: offs.map((o) => ({ start: o.startsAt, end: o.endsAt })),
+  });
+  const blocking = input.override ? violations.filter((v) => v !== "min_notice") : violations;
+  const first = blocking[0];
+  if (first) {
+    throw new DomainError(
+      "slot_unavailable",
+      VIOLATION_MESSAGES[first](settings.minNoticeMinutes, settings.maxDaysAhead),
+    );
+  }
+  return input.override && violations.includes("min_notice");
 }
 
 async function resolveClient(tx: Tx, request: CreateAppointmentRequest): Promise<string> {
