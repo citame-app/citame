@@ -5,6 +5,7 @@ import {
   authorizeAppointmentChange,
   authorizeAppointmentCreate,
   authorizeAppointmentList,
+  authorizeServiceAdmin,
   requireRole,
 } from "./policy";
 import type { Principal } from "./principal";
@@ -142,5 +143,13 @@ describe("authorizeAppointmentList", () => {
     expect(authorizeAppointmentList(owner, { ...range, staffId: id(0xb) }).query.staffId).toBe(
       id(0xb),
     );
+  });
+});
+
+describe("authorizeServiceAdmin", () => {
+  test("only the owner administers the service catalog", () => {
+    authorizeServiceAdmin(owner);
+    forbidden(() => authorizeServiceAdmin(staffA));
+    forbidden(() => authorizeServiceAdmin(clientA));
   });
 });

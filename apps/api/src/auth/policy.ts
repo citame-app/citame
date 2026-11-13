@@ -97,3 +97,8 @@ export function authorizeAppointmentList(
       return { query, clientId: principal.clientId };
   }
 }
+
+/** Service catalog administration (create, edit, deactivate, assign performers). */
+export function authorizeServiceAdmin(principal: Principal): void {
+  requireRole(principal, "owner");
+}
