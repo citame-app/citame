@@ -70,6 +70,19 @@ function parseTime(value: string): Temporal.PlainTime {
   return new Temporal.PlainTime(Number(hour), Number(minute), Number(second));
 }
 
+/** Resolves a wall-clock range on a salon-local date to absolute instants (epoch ms). */
+export function resolveWorkingRange(
+  date: Temporal.PlainDate,
+  timeZone: string,
+  range: { start: string; end: string },
+): { startMs: number; endMs: number } {
+  return {
+    startMs: date.toZonedDateTime({ timeZone, plainTime: parseTime(range.start) })
+      .epochMilliseconds,
+    endMs: date.toZonedDateTime({ timeZone, plainTime: parseTime(range.end) }).epochMilliseconds,
+  };
+}
+
 export function computeAvailability(input: AvailabilityInput): ComputedSlot[] {
   const { timeZone, granularityMinutes, blockMinutes } = input;
   const date = Temporal.PlainDate.from(input.date);
@@ -89,14 +102,7 @@ export function computeAvailability(input: AvailabilityInput): ComputedSlot[] {
   for (const member of input.staff) {
     for (const hours of member.workingHours) {
       if (hours.weekday !== weekday) continue;
-      const rangeStart = date.toZonedDateTime({
-        timeZone,
-        plainTime: parseTime(hours.start),
-      }).epochMilliseconds;
-      const rangeEnd = date.toZonedDateTime({
-        timeZone,
-        plainTime: parseTime(hours.end),
-      }).epochMilliseconds;
+      const { startMs: rangeStart, endMs: rangeEnd } = resolveWorkingRange(date, timeZone, hours);
 
       for (let start = rangeStart; start + blockMs <= rangeEnd; start += stepMs) {
         const end = start + blockMs;
