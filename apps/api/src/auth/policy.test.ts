@@ -7,6 +7,7 @@ import {
   authorizeAppointmentList,
   authorizeClientAccess,
   authorizeClientDelete,
+  authorizeReportQuery,
   authorizeServiceAdmin,
   authorizeStaffAdmin,
   authorizeStaffList,
@@ -201,5 +202,25 @@ describe("client directory policy", () => {
     authorizeClientDelete(owner);
     forbidden(() => authorizeClientDelete(staffA));
     forbidden(() => authorizeClientDelete(clientA));
+  });
+});
+
+describe("authorizeReportQuery", () => {
+  const range = { from: "2026-03-09", to: "2026-03-11" };
+
+  test("the owner sees everything, optionally filtered to one staff member", () => {
+    expect(authorizeReportQuery(owner, range)).toEqual(range);
+    expect(authorizeReportQuery(owner, { ...range, staffId: id(0xb) }).staffId).toBe(id(0xb));
+  });
+
+  test("staff are pinned to their own numbers; asking for someone else is forbidden", () => {
+    expect(authorizeReportQuery(staffA, range)).toEqual({ ...range, staffId: id(0xa) });
+    authorizeReportQuery(staffA, { ...range, staffId: id(0xa) });
+    forbidden(() => authorizeReportQuery(staffA, { ...range, staffId: id(0xb) }));
+    forbidden(() => authorizeReportQuery({ ...staffA, staffId: null }, range));
+  });
+
+  test("clients get no reports", () => {
+    forbidden(() => authorizeReportQuery(clientA, range));
   });
 });

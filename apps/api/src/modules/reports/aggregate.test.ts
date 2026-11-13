@@ -15,7 +15,8 @@ const row = (
 ): DayStaffStatusRow => ({ date, staffId, status, count, revenueCents });
 
 /**
- * Hand-computed fixture (see the integration test for the same data as real appointments):
+ * Hand-computed fixture. The integration test (routes.test.ts) uses the same shape as real
+ * appointments, plus two rows that sit on a UTC/local day boundary:
  *   03-09  Ana: 2 completed, 45000        03-10  Ana: 1 no_show, 1 cancelled
  *   03-10  Bea: 1 completed, 10000        03-11  Bea: 1 booked
  */

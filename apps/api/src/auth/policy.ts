@@ -1,6 +1,7 @@
 import type {
   AppointmentListQuery,
   CreateAppointmentRequest,
+  ReportQuery,
   UpdateAppointmentRequest,
   UserRole,
 } from "@sob/contracts";
@@ -142,4 +143,18 @@ export function authorizeClientAccess(principal: Principal): void {
 /** Only the owner removes (soft-deletes) clients. */
 export function authorizeClientDelete(principal: Principal): void {
   requireRole(principal, "owner");
+}
+
+/**
+ * Reports: the owner sees the whole salon (optionally one staff member); staff get only their
+ * own numbers (the query is pinned to their calendar); clients get none.
+ */
+export function authorizeReportQuery(principal: Principal, query: ReportQuery): ReportQuery {
+  requireRole(principal, "owner", "staff");
+  if (principal.role === "owner") return query;
+  if (!principal.staffId) throw forbidden("Your account has no calendar");
+  if (query.staffId !== undefined && query.staffId !== principal.staffId) {
+    throw forbidden("Staff can only see their own reports");
+  }
+  return { ...query, staffId: principal.staffId };
 }

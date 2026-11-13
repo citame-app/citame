@@ -13,6 +13,7 @@ import { appointmentsRoutes } from "./modules/appointments/routes";
 import { availabilityRoutes } from "./modules/availability/routes";
 import { clientAdminRoutes } from "./modules/clients/admin-routes";
 import { meRoutes } from "./modules/me/routes";
+import { reportRoutes } from "./modules/reports/routes";
 import { serviceAdminRoutes } from "./modules/services/admin-routes";
 import { servicesRoutes } from "./modules/services/routes";
 import { staffAdminRoutes } from "./modules/staff/admin-routes";
@@ -72,6 +73,7 @@ export function createApp(deps: AppDeps) {
   app.route("/admin/services", serviceAdminRoutes(deps));
   app.route("/admin/staff", staffAdminRoutes(deps));
   app.route("/admin/clients", clientAdminRoutes(deps));
+  app.route("/admin/reports", reportRoutes(deps));
 
   // Public catalog and availability: anonymous visitors browse before they sign up.
   app.route("/services", servicesRoutes(deps));
