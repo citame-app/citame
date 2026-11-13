@@ -10,19 +10,24 @@ import {
   unique,
   uuid,
 } from "drizzle-orm/pg-core";
+import { user } from "./auth";
 import { createdAt, deletedAt, primaryId, timestamptz, updatedAt } from "./helpers";
 import { service } from "./service";
 
-export const staffProfile = pgTable("staff_profile", {
-  id: primaryId(),
-  displayName: text().notNull(),
-  /** Phase 2 links this to a Better Auth user; intentionally no foreign key yet. */
-  userId: text(),
-  active: boolean().notNull().default(true),
-  createdAt: createdAt(),
-  updatedAt: updatedAt(),
-  deletedAt: deletedAt(),
-});
+export const staffProfile = pgTable(
+  "staff_profile",
+  {
+    id: primaryId(),
+    displayName: text().notNull(),
+    /** Login account of this staff member, if any. One account links to at most one profile. */
+    userId: text().references(() => user.id, { onDelete: "set null" }),
+    active: boolean().notNull().default(true),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    deletedAt: deletedAt(),
+  },
+  (t) => [unique("staff_profile_user_id_unique").on(t.userId)],
+);
 
 export const serviceStaff = pgTable(
   "service_staff",

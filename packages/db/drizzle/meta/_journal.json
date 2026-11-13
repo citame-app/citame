@@ -15,6 +15,13 @@
       "when": 1794605438556,
       "tag": "0001_appointment_no_overlap",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794606230673,
+      "tag": "0002_auth_rbac_audit",
+      "breakpoints": true
     }
   ]
 }
