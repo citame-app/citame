@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: sob
+          POSTGRES_PASSWORD: sob
+          POSTGRES_DB: sob
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sob -d sob"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      valkey:
+        image: valkey/valkey:9.1-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://sob:sob@localhost:5432/sob
+      VALKEY_URL: redis://localhost:6379
+      SALON_TIMEZONE: America/Argentina/Buenos_Aires
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - run: bunx turbo run typecheck lint test
