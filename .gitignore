@@ -9,3 +9,6 @@ coverage/
 .DS_Store
 .atl/
 !bun.lock
+apps/web/e2e/screenshots/
+apps/web/test-results/
+apps/web/playwright-report/

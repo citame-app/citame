@@ -1,0 +1,11 @@
+{
+  "extends": "@sob/config/tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable", "ESNext.Temporal"],
+    "jsx": "react-jsx",
+    "types": ["bun", "vite/client"],
+    "baseUrl": ".",
+    "paths": { "~/*": ["./src/*"] }
+  },
+  "include": ["src", "test", "e2e", "server.ts", "vite.config.ts", "playwright.config.ts"]
+}
