@@ -12,7 +12,10 @@
   },
   "dependencies": {
     "@sob/contracts": "workspace:*",
-    "hono": "4.13.18"
+    "@sob/db": "workspace:*",
+    "drizzle-orm": "0.45.4",
+    "hono": "4.13.18",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@sob/config": "workspace:*",
