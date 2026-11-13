@@ -1,0 +1,22 @@
+{
+  "name": "sistersofbeauty",
+  "private": true,
+  "packageManager": "bun@1.4.4",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "format": "biome format --write .",
+    "db:generate": "turbo run db:generate",
+    "db:migrate": "turbo run db:migrate",
+    "db:seed": "turbo run db:seed"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.7",
+    "turbo": "2.11.11",
+    "typescript": "7.0.2"
+  }
+}
