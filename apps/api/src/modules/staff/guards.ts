@@ -1,4 +1,4 @@
-import { appointment, type Database } from "@sob/db";
+import { appointment, type Database, staffProfile } from "@sob/db";
 import { and, eq, gt, isNull, ne } from "drizzle-orm";
 import { DomainError } from "../../errors";
 
@@ -30,4 +30,26 @@ export async function assertNoFutureAppointments(
       "This staff member has upcoming appointments; reassign or cancel them first",
     );
   }
+}
+
+/**
+ * Re-reads, inside the caller's transaction and after it took the calendar lock, that the
+ * staff member is still active. The pre-checks run before the lock, so a deactivation that
+ * commits in between would otherwise let a booking land on a calendar that was just closed.
+ */
+export async function assertStaffActive(
+  db: Pick<Database, "select">,
+  staffId: string,
+): Promise<void> {
+  const [row] = await db
+    .select({ id: staffProfile.id })
+    .from(staffProfile)
+    .where(
+      and(
+        eq(staffProfile.id, staffId),
+        eq(staffProfile.active, true),
+        isNull(staffProfile.deletedAt),
+      ),
+    );
+  if (!row) throw new DomainError("not_found", `Staff member ${staffId} not found`);
 }

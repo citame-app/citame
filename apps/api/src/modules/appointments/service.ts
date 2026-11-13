@@ -25,6 +25,7 @@ import { totalBlockMinutes } from "../availability/compute";
 import { type BookingViolation, bookingViolations } from "../availability/rules";
 import { getServicesByIds } from "../services/service";
 import { getSalonSettings } from "../settings/service";
+import { assertStaffActive } from "../staff/guards";
 import { assertStaffExists } from "../staff/service";
 
 const UNIQUE_VIOLATION = "23505";
@@ -220,6 +221,7 @@ async function assertBookable(
   },
 ): Promise<boolean> {
   const { staffId, startsAt, endsAt, settings } = input;
+  await assertStaffActive(tx, staffId);
   const hours = await tx
     .select()
     .from(workingHours)
@@ -393,6 +395,7 @@ export async function updateAppointment(
   try {
     const row = await db.transaction(async (tx) => {
       await lockCalendars(tx, [current.staffId, staffId]);
+      if (staffId !== current.staffId) await assertStaffActive(tx, staffId);
       const [updated] = await tx
         .update(appointment)
         .set({
