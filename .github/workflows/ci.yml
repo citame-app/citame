@@ -45,4 +45,8 @@ jobs:
         with:
           bun-version: 1.4.4
       - run: bun install --frozen-lockfile
+      # Fresh database: applies generated and hand-written migrations, then the sample seed.
+      # Integration tests create and migrate their own sob_test_* databases on the same server.
+      - run: bun run db:migrate
+      - run: bun run db:seed
       - run: bunx turbo run typecheck lint test
