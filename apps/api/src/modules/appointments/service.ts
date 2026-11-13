@@ -201,9 +201,23 @@ async function resolveClient(tx: Tx, request: CreateAppointmentRequest): Promise
   return created.id;
 }
 
+/** Who an appointment belongs to, for authorization decisions. */
+export async function getAppointmentOwnership(
+  db: Database,
+  id: string,
+): Promise<{ staffId: string; clientId: string }> {
+  const [row] = await db
+    .select({ staffId: appointment.staffId, clientId: appointment.clientId })
+    .from(appointment)
+    .where(and(eq(appointment.id, id), isNull(appointment.deletedAt)));
+  if (!row) throw new DomainError("not_found", `Appointment ${id} not found`);
+  return row;
+}
+
 export async function listAppointments(
   db: Database,
   query: AppointmentListQuery,
+  scope: { clientId?: string } = {},
 ): Promise<Appointment[]> {
   const rows = await db
     .select()
@@ -214,6 +228,7 @@ export async function listAppointments(
         lt(appointment.startsAt, new Date(query.to)),
         gt(appointment.endsAt, new Date(query.from)),
         query.staffId ? eq(appointment.staffId, query.staffId) : undefined,
+        scope.clientId ? eq(appointment.clientId, scope.clientId) : undefined,
       ),
     )
     .orderBy(asc(appointment.startsAt), asc(appointment.id));

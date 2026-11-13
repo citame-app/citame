@@ -1,3 +1,4 @@
+import type { UserRole } from "@sob/contracts";
 import {
   clientProfile,
   type Database,
@@ -8,9 +9,11 @@ import {
   workingHours,
 } from "@sob/db";
 import { createTestDatabase, type TestDatabase } from "@sob/db/testing";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { Hono } from "hono";
 import { createApp } from "../src/app";
+import { createAccount } from "../src/auth/accounts";
+import { createAuth } from "../src/auth/auth";
 import { type AppConfig, loadConfig } from "../src/config";
 import { createTestValkey, type TestValkey } from "./valkey";
 
@@ -173,4 +176,43 @@ export async function countOverlaps(db: Database): Promise<number> {
      and tstzrange(a.starts_at, a.ends_at, '[)') && tstzrange(b.starts_at, b.ends_at, '[)')
   `);
   return rows[0]?.n ?? -1;
+}
+
+export interface Actor {
+  userId: string;
+  cookie: string;
+  email: string;
+  staffId: string | null;
+  clientId: string | null;
+}
+
+/**
+ * Creates an account with the given role and signs it in through the public endpoint.
+ * For staff, `staffProfileId` re-links a fixture calendar (Ana, Bea) to the new login so
+ * the staff member owns appointments that already exist in the fixtures.
+ */
+export async function actor(
+  t: ApiTest,
+  role: UserRole,
+  email: string,
+  options: { staffProfileId?: string } = {},
+): Promise<Actor> {
+  const auth = createAuth({ db: t.db, valkey: t.valkey.client, config: t.config });
+  const created = await createAccount(
+    { auth, db: t.db },
+    { email, name: email.split("@")[0] ?? "Actor", password: PASSWORD, role },
+  );
+  let staffId = created.staffId;
+  if (role === "staff" && options.staffProfileId) {
+    if (created.staffId)
+      await t.db.delete(staffProfile).where(eq(staffProfile.id, created.staffId));
+    await t.db
+      .update(staffProfile)
+      .set({ userId: created.userId })
+      .where(eq(staffProfile.id, options.staffProfileId));
+    staffId = options.staffProfileId;
+  }
+  const { res, cookie } = await signIn(t.app, email);
+  if (res.status !== 200) throw new Error(`sign-in failed for ${email}: ${res.status}`);
+  return { userId: created.userId, cookie, email, staffId, clientId: created.clientId };
 }

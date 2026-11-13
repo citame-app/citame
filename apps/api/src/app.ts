@@ -44,10 +44,13 @@ export function createApp(deps: AppDeps) {
   app.use("/me", requireAuth(auth, deps.db));
   app.route("/me", meRoutes());
 
-  // Phase 2: protect with RBAC (owner / staff / client). Every router below is open for now.
+  // Public catalog and availability: anonymous visitors browse before they sign up.
   app.route("/services", servicesRoutes(deps));
   app.route("/staff", staffRoutes(deps));
   app.route("/availability", availabilityRoutes(deps));
+  // Everything that touches appointments needs a session; the routes enforce the role policy.
+  app.use("/appointments", requireAuth(auth, deps.db));
+  app.use("/appointments/*", requireAuth(auth, deps.db));
   app.route("/appointments", appointmentsRoutes(deps));
 
   return app;

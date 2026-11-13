@@ -1,0 +1,3 @@
+[test]
+# Integration tests hit real Postgres and Valkey and hash passwords with scrypt.
+timeout = 20000

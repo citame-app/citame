@@ -7,9 +7,11 @@ import {
 import { appointment, clientProfile } from "@sob/db";
 import { count, eq } from "drizzle-orm";
 import {
+  type Actor,
+  actor,
+  json as baseJson,
   countOverlaps,
   type Fixtures,
-  json,
   MONDAY_0900,
   seedFixtures,
   setupApiTest,
@@ -17,6 +19,16 @@ import {
 
 let t: Awaited<ReturnType<typeof setupApiTest>>;
 let f: Fixtures;
+/** Phase 1 behavior is exercised as the owner, who may do everything, now that routes are protected. */
+let owner: Actor;
+
+function json(app: Parameters<typeof baseJson>[0], path: string, method: string, body?: unknown) {
+  return baseJson(app, path, method, body, owner.cookie);
+}
+
+function getAsOwner(path: string) {
+  return t.app.request(path, { headers: { cookie: owner.cookie } });
+}
 
 beforeAll(async () => {
   t = await setupApiTest();
@@ -27,6 +39,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await t.reset();
   f = await seedFixtures(t.db);
+  owner = await actor(t, "owner", "owner@example.com");
 });
 
 function bookingBody(overrides: Record<string, unknown> = {}) {
@@ -151,7 +164,7 @@ describe("POST /appointments", () => {
     }
     const malformed = await t.app.request("/appointments", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", cookie: owner.cookie },
       body: "{not json",
     });
     expect(malformed.status).toBe(400);
@@ -167,7 +180,7 @@ describe("GET /appointments", () => {
 
     const range = "from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z";
     const all = listAppointmentsResponseSchema.parse(
-      await (await t.app.request(`/appointments?${range}`)).json(),
+      await (await getAsOwner(`/appointments?${range}`)).json(),
     );
     expect(all.appointments.map((a) => a.startsAt)).toEqual([
       MONDAY_0900,
@@ -176,13 +189,13 @@ describe("GET /appointments", () => {
     expect(all.appointments[0]?.services[0]?.name).toBe("Haircut");
 
     const ana = listAppointmentsResponseSchema.parse(
-      await (await t.app.request(`/appointments?${range}&staffId=${f.anaId}`)).json(),
+      await (await getAsOwner(`/appointments?${range}&staffId=${f.anaId}`)).json(),
     );
     expect(ana.appointments).toHaveLength(1);
   });
 
   test("returns 400 validation_error without a range", async () => {
-    const res = await t.app.request("/appointments");
+    const res = await getAsOwner("/appointments");
     expect(res.status).toBe(400);
     expect(await errorCode(res)).toBe("validation_error");
   });
