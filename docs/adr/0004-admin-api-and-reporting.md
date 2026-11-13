@@ -34,7 +34,7 @@ The global limiter **fails open**: when Valkey errors the failure is logged and 
 
 ### Staff deactivation and demotion: `409 has_future_appointments`
 
-Deactivating a staff calendar (`PATCH /admin/staff/:id {active:false}`) or demoting a staff account to client (which deactivates it) is refused while the calendar has any appointment that is not cancelled and has not ended yet. Nothing changes and nothing is audited. The owner must reassign (`PATCH /appointments/:id {staffId}`) or cancel first. Deleting a client behaves the same way for that client's upcoming appointments. The check runs under the per-calendar advisory lock that bookings use, so a booking cannot slip in between check and update. Residual race: a booking that already passed `assertStaffExists` before the lock can still commit just after a deactivation; the exclusion constraint is unaffected and the owner sees the booking in the calendar. Tightening it means re-reading `active` inside the booking transaction.
+Deactivating a staff calendar (`PATCH /admin/staff/:id {active:false}`) or demoting a staff account to client (which deactivates it) is refused while the calendar has any appointment that is not cancelled and has not ended yet. Nothing changes and nothing is audited. The owner must reassign (`PATCH /appointments/:id {staffId}`) or cancel first. Deleting a client behaves the same way for that client's upcoming appointments. The check runs under the per-calendar advisory lock that bookings use, so a booking cannot slip in between check and update. Booking and rescheduling also re-read `active` inside their own transaction, after taking that lock (`assertStaffActive`): a request that passed its pre-checks and then queued behind a committing deactivation is refused with `404 not_found` instead of landing on a closed calendar. Tests hold the deactivation transaction open to make that interleaving deterministic.
 
 ### Booking rules are real (`409 slot_unavailable`)
 
@@ -45,9 +45,23 @@ Deactivating a staff calendar (`PATCH /admin/staff/:id {active:false}`) or demot
 - a start earlier than `now + minNoticeMinutes`,
 - a local start date more than `maxDaysAhead` days ahead.
 
-They use the new stable code `slot_unavailable` (409); `slot_taken` still means "someone else has that slot" and comes only from the exclusion constraint, which remains the source of truth for overlaps. Staff and owners may send `override: true` to bypass **only** the minimum notice (clients get `403`). The audit entry of `appointment.create` records `override` and `noticeOverridden` (whether the override was actually needed). Rescheduling (`PATCH`) is deliberately **not** validated against hours: a front desk must be able to move things, and the conflict report below makes drift visible.
+They use the new stable code `slot_unavailable` (409); `slot_taken` still means "someone else has that slot" and comes only from the exclusion constraint, which remains the source of truth for overlaps. Staff and owners may send `override: true` to bypass **only** the minimum notice (clients get `403`). The audit entry of `appointment.create` records `override` and `noticeOverridden` (whether the override was actually needed). Rescheduling uses exactly the same rules: a `PATCH` that actually changes `startsAt` or `staffId` is validated against the target calendar (hours, time off, horizon, notice) inside the transaction and answers `409 slot_unavailable`; staff and owners may send `override: true` for the notice rule only, clients get `403`, and the use is audited on `appointment.reschedule`. Re-sending the current start and staff, changing notes and changing status are not moves and are not re-validated, so an appointment that has drifted outside the hours (the conflict report below lists them) can still be cancelled, closed or annotated.
 
 The rules are pure functions (`availability/rules.ts`) reused by availability search semantics (`compute.ts` shares the range resolution) and the conflict report.
+
+### Appointment status transitions
+
+`PATCH /appointments/:id` accepts `status` of `completed`, `no_show` or `cancelled` (never `booked`), always with the current `version`. A request either changes the status or moves the appointment, never both (`400`); notes may accompany either.
+
+| From                   | To                                          | Who                                          | When                                                                  |
+| ---------------------- | ------------------------------------------- | -------------------------------------------- | --------------------------------------------------------------------- |
+| booked                 | completed, no_show                          | the calendar's staff member, owner           | only once `starts_at <= now` (injectable clock), else 409 `invalid_state` |
+| booked                 | cancelled                                   | the client (own), the calendar's staff, owner | any time                                                              |
+| completed              | no_show, and back                           | owner only (a correction)                    | any time                                                              |
+| completed, no_show     | cancelled, or the same status again         | nobody                                       | 409 `invalid_state`                                                   |
+| cancelled              | anything                                    | nobody (terminal)                            | 409 `invalid_state`                                                   |
+
+Clients can only cancel; marking an outcome is 403 for them even on their own appointment. The audit action is `appointment.complete`, `appointment.no_show`, `appointment.cancel` or `appointment.status_correct`, with `fromStatus` and `toStatus`, written in the same transaction as the update and under the unchanged version check. Reports read these statuses.
 
 ### Working hours and time off never touch appointments
 
@@ -77,11 +91,13 @@ Staff see every client (front-desk need); only the owner soft-deletes. `GET /adm
 
 ### Audit
 
-Every mutation writes its audit row in the same transaction: `service.create|update|activate|deactivate|staff_set`, `staff.update|activate|deactivate`, `working_hours.replace`, `time_off.create|update|delete`, `client.update|delete`, and `appointment.create` with the override flags. No-op edits (values unchanged) write nothing.
+Every mutation writes its audit row in the same transaction: `service.create|update|activate|deactivate|staff_set`, `staff.update|activate|deactivate`, `working_hours.replace`, `time_off.create|update|delete`, `client.update|delete`, and `appointment.create` and `appointment.reschedule` with the override flags, and `appointment.complete|no_show|cancel|status_correct`. No-op edits (values unchanged) write nothing.
+
+### Soft-deleted client with a login
+
+Deleting a client profile that is linked to a login does not lock that person out: on their next authenticated request the principal loader restores the soft-deleted profile (history included) instead of colliding with its unique `user_id`. To really remove such a person, remove or change the account.
 
 ## Known gaps and follow-ups
 
-- There is no endpoint to mark an appointment `completed` or `no_show` (only cancel is allowed by the update contract), so reports depend on rows that nothing in the API can create yet. The dashboard needs it; it is a small contract change (`status` in the update request) with its own transition rules.
-- Reschedule is not validated against hours or time off (see above).
 - Single currency in reports; offset paging (fine at one-salon scale).
-- Staff reactivation race with in-flight bookings (see above).
+- The restore-on-next-request behavior above is silent (not audited).
