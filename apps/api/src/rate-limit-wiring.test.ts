@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { errorResponseSchema } from "@sob/contracts";
 import { PASSWORD, setupApiTest, signUp } from "../test/helpers";
+import { createApp } from "./app";
 
 const GLOBAL_MAX = 8;
 const AUTH_MAX = 3;
@@ -108,6 +109,57 @@ describe("global limit", () => {
       await t.app.request("/services", { headers: from("7.7.7.7") });
     expect((await t.app.request("/services", { headers: from("7.7.7.7") })).status).toBe(429);
     expect((await t.app.request("/services", { headers: from("7.7.7.6") })).status).toBe(200);
+  });
+});
+
+describe("when Valkey fails", () => {
+  /** Proxies the real client but makes the limiter's EVAL command fail. */
+  function appWithBrokenLimiter() {
+    const client = new Proxy(t.valkey.client, {
+      get(target, prop, receiver) {
+        if (prop === "send") {
+          return async (command: string, args: string[]) => {
+            if (command === "EVAL") throw new Error("valkey is down");
+            return target.send(command, args);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    return createApp({
+      db: t.db,
+      valkey: client,
+      config: t.config,
+      now: () => new Date("2026-03-02T12:00:00Z"),
+    });
+  }
+
+  test("the global limiter fails open: public reads keep working", async () => {
+    const original = console.error;
+    console.error = () => {};
+    try {
+      const res = await appWithBrokenLimiter().request("/services");
+      expect(res.status).toBe(200);
+    } finally {
+      console.error = original;
+    }
+  });
+
+  test("the auth limiter fails closed: credential endpoints are refused", async () => {
+    const original = console.error;
+    console.error = () => {};
+    try {
+      const res = await appWithBrokenLimiter().request("/api/auth/sign-in/email", {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "http://localhost:3000" },
+        body: JSON.stringify({ email: "nobody@example.com", password: "wrong password here" }),
+      });
+      expect(res.status).toBe(500);
+      expect(errorResponseSchema.parse(await res.json()).error.code).toBe("internal_error");
+    } finally {
+      console.error = original;
+    }
   });
 });
 

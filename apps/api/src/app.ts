@@ -49,7 +49,12 @@ export function createApp(deps: AppDeps) {
   });
 
   // Moderate limit for everything else, strict one for credential endpoints (brute force).
-  app.use("*", rateLimit({ limiter, scope: "global", rule: limits.global, trustProxy }));
+  // The global limiter fails open (a Valkey outage must not take public browsing down); the
+  // auth limiter fails closed.
+  app.use(
+    "*",
+    rateLimit({ limiter, scope: "global", rule: limits.global, trustProxy, failOpen: true }),
+  );
   const authLimit = rateLimit({ limiter, scope: "auth", rule: limits.auth, trustProxy });
   app.use("/api/auth/sign-in/*", authLimit);
   app.use("/api/auth/sign-up/*", authLimit);

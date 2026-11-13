@@ -72,6 +72,12 @@ export interface RateLimitOptions {
   scope: string;
   rule: RateLimitRule;
   trustProxy: boolean;
+  /**
+   * What to do when the counter store (Valkey) errors. `true` logs and lets the request through
+   * (availability over strictness: used by the global limiter); the default `false` rejects the
+   * request (used for credential endpoints, where letting brute force through is the worse failure).
+   */
+  failOpen?: boolean;
 }
 
 export function rateLimit({
@@ -79,9 +85,18 @@ export function rateLimit({
   scope,
   rule,
   trustProxy,
+  failOpen = false,
 }: RateLimitOptions): MiddlewareHandler {
   return async (c, next) => {
-    const result = await limiter.hit(scope, clientIdentity(c, trustProxy), rule);
+    let result: RateLimitResult;
+    try {
+      result = await limiter.hit(scope, clientIdentity(c, trustProxy), rule);
+    } catch (error) {
+      if (!failOpen) throw error;
+      console.error(`rate limit store failed for scope "${scope}", failing open`, error);
+      await next();
+      return;
+    }
     if (!result.allowed) {
       c.header("Retry-After", String(result.retryAfterSeconds));
       return c.json(errorBody("rate_limited", "Too many requests, try again later"), 429);

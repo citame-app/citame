@@ -129,6 +129,52 @@ describe("fixed-window rate limit", () => {
     expect(statuses.filter((s) => s === 429)).toHaveLength(30);
   });
 
+  describe("when the store fails", () => {
+    const brokenLimiter = createRateLimiter({
+      storage: {
+        increment: async () => {
+          throw new Error("valkey is down");
+        },
+      },
+    });
+    const appWith = (failOpen: boolean | undefined) => {
+      const app = new Hono();
+      app.use(
+        "*",
+        rateLimit({
+          limiter: brokenLimiter,
+          scope: "test",
+          rule: { max: 1, windowSeconds: 60 },
+          trustProxy: false,
+          failOpen,
+        }),
+      );
+      app.get("/", (c) => c.json({ ok: true }));
+      app.onError((_error, c) => c.json({ error: "boom" }, 500));
+      return app;
+    };
+
+    test("fail-open lets the request through and logs the failure", async () => {
+      const logged: unknown[][] = [];
+      const original = console.error;
+      console.error = (...args: unknown[]) => {
+        logged.push(args);
+      };
+      try {
+        const res = await get(appWith(true) as Hono);
+        expect(res.status).toBe(200);
+      } finally {
+        console.error = original;
+      }
+      expect(logged).toHaveLength(1);
+    });
+
+    test("fail-closed (the default) rejects instead of letting the request through", async () => {
+      expect((await get(appWith(false) as Hono)).status).toBe(500);
+      expect((await get(appWith(undefined) as Hono)).status).toBe(500);
+    });
+  });
+
   test("counters expire in Valkey on their own", async () => {
     const { app } = setup({ max: 5, windowSeconds: 30 });
     await get(app);
