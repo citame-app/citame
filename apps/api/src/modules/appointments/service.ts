@@ -1,8 +1,10 @@
-import type {
-  Appointment,
-  AppointmentListQuery,
-  CreateAppointmentRequest,
-  UpdateAppointmentRequest,
+import {
+  APPOINTMENT_PAGE_SIZE_DEFAULT,
+  type Appointment,
+  type AppointmentListQuery,
+  type CreateAppointmentRequest,
+  type ListAppointmentsResponse,
+  type UpdateAppointmentRequest,
 } from "@sob/contracts";
 import {
   appointment,
@@ -15,7 +17,7 @@ import {
   timeOff,
   workingHours,
 } from "@sob/db";
-import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { DomainError } from "../../errors";
 import { lockCalendars, type Tx } from "../../tx";
@@ -304,25 +306,37 @@ export async function listAppointments(
   db: Database,
   query: AppointmentListQuery,
   scope: { clientId?: string } = {},
-): Promise<Appointment[]> {
-  const rows = await db
-    .select()
-    .from(appointment)
-    .where(
-      and(
-        isNull(appointment.deletedAt),
-        lt(appointment.startsAt, new Date(query.to)),
-        gt(appointment.endsAt, new Date(query.from)),
-        query.staffId ? eq(appointment.staffId, query.staffId) : undefined,
-        scope.clientId ? eq(appointment.clientId, scope.clientId) : undefined,
-      ),
-    )
-    .orderBy(asc(appointment.startsAt), asc(appointment.id));
+): Promise<ListAppointmentsResponse> {
+  const page = query.page ?? 1;
+  const pageSize = query.pageSize ?? APPOINTMENT_PAGE_SIZE_DEFAULT;
+  const where = and(
+    isNull(appointment.deletedAt),
+    lt(appointment.startsAt, new Date(query.to)),
+    gt(appointment.endsAt, new Date(query.from)),
+    query.staffId ? eq(appointment.staffId, query.staffId) : undefined,
+    query.status ? inArray(appointment.status, query.status) : undefined,
+    scope.clientId ? eq(appointment.clientId, scope.clientId) : undefined,
+  );
+  const [rows, totals] = await Promise.all([
+    db
+      .select()
+      .from(appointment)
+      .where(where)
+      .orderBy(asc(appointment.startsAt), asc(appointment.id))
+      .limit(pageSize)
+      .offset((page - 1) * pageSize),
+    db.select({ total: count() }).from(appointment).where(where),
+  ]);
   const snapshots = await loadSnapshots(
     db,
     rows.map((r) => r.id),
   );
-  return rows.map((row) => toAppointment(row, snapshots.get(row.id) ?? []));
+  return {
+    appointments: rows.map((row) => toAppointment(row, snapshots.get(row.id) ?? [])),
+    page,
+    pageSize,
+    total: totals[0]?.total ?? 0,
+  };
 }
 
 /** Every appointment of one client, newest first (the CRM history view). */

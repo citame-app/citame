@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { idSchema, instantSchema } from "./common";
+import { idSchema, instantSchema, pageInfoSchema, pageSchema, pageSizeSchema } from "./common";
 
 export const appointmentStatusSchema = z.enum(["booked", "completed", "cancelled", "no_show"]);
 export type AppointmentStatus = z.infer<typeof appointmentStatusSchema>;
@@ -86,11 +86,34 @@ export const updateAppointmentRequestSchema = z
 
 export type UpdateAppointmentRequest = z.infer<typeof updateAppointmentRequestSchema>;
 
+export const APPOINTMENT_PAGE_SIZE_DEFAULT = 50;
+export const APPOINTMENT_PAGE_SIZE_MAX = 200;
+
+/** Comma-separated statuses from a query string, for example `booked,completed`. */
+const statusFilterSchema = z
+  .string()
+  .transform((value) => value.split(",").filter((part) => part.length > 0))
+  .pipe(
+    z
+      .array(appointmentStatusSchema)
+      .min(1)
+      .refine((statuses) => new Set(statuses).size === statuses.length, {
+        message: "status values must be unique",
+      }),
+  );
+
+/**
+ * Paging and the status filter are optional: without them the endpoint behaves as before, with
+ * the default page size applied by the service (see `APPOINTMENT_PAGE_SIZE_DEFAULT`).
+ */
 export const appointmentListQuerySchema = z
   .object({
     from: instantSchema,
     to: instantSchema,
     staffId: idSchema.optional(),
+    status: statusFilterSchema.optional(),
+    page: pageSchema.optional(),
+    pageSize: pageSizeSchema(APPOINTMENT_PAGE_SIZE_MAX).optional(),
   })
   .refine((value) => Date.parse(value.to) > Date.parse(value.from), {
     message: "`to` must be after `from`",
@@ -99,7 +122,7 @@ export const appointmentListQuerySchema = z
 
 export type AppointmentListQuery = z.infer<typeof appointmentListQuerySchema>;
 
-export const listAppointmentsResponseSchema = z.object({
+export const listAppointmentsResponseSchema = pageInfoSchema.extend({
   appointments: z.array(appointmentSchema),
 });
 export type ListAppointmentsResponse = z.infer<typeof listAppointmentsResponseSchema>;

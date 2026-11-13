@@ -9,6 +9,7 @@ import {
   errorCodeSchema,
   errorResponseSchema,
   errorStatus,
+  listAppointmentsResponseSchema,
   serviceSchema,
   staffSchema,
   updateAppointmentRequestSchema,
@@ -231,6 +232,47 @@ describe("appointments", () => {
         staffId: uuid,
       }).success,
     ).toBe(true);
+  });
+
+  test("list query accepts optional paging and a comma-separated status filter", () => {
+    const base = { from: "2026-03-09T00:00:00Z", to: "2026-03-10T00:00:00Z" };
+    const parsed = appointmentListQuerySchema.parse({
+      ...base,
+      page: "2",
+      pageSize: "25",
+      status: "booked,completed",
+    });
+    expect(parsed).toMatchObject({ page: 2, pageSize: 25, status: ["booked", "completed"] });
+    // all paging fields stay optional so existing callers keep working
+    const plain = appointmentListQuerySchema.parse(base);
+    expect(plain.page).toBeUndefined();
+    expect(plain.pageSize).toBeUndefined();
+    expect(plain.status).toBeUndefined();
+  });
+
+  test("list query rejects bad paging and unknown or repeated statuses", () => {
+    const base = { from: "2026-03-09T00:00:00Z", to: "2026-03-10T00:00:00Z" };
+    for (const bad of [
+      { page: "0" },
+      { pageSize: "0" },
+      { pageSize: "201" },
+      { status: "done" },
+      { status: "" },
+      { status: "booked,booked" },
+    ]) {
+      expect(appointmentListQuerySchema.safeParse({ ...base, ...bad }).success).toBe(false);
+    }
+  });
+
+  test("list response carries the paging envelope", () => {
+    const parsed = listAppointmentsResponseSchema.parse({
+      appointments: [],
+      page: 1,
+      pageSize: 50,
+      total: 0,
+    });
+    expect(parsed.total).toBe(0);
+    expect(listAppointmentsResponseSchema.safeParse({ appointments: [] }).success).toBe(false);
   });
 
   test("appointment response parses with its service snapshots", () => {
