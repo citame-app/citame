@@ -15,7 +15,7 @@ docker compose up -d --wait postgres valkey
 bun run db:migrate                    # schema, exclusion constraint, auth tables
 bun run db:seed                       # idempotent sample data (generic placeholders)
 OWNER_EMAIL=owner@example.com OWNER_PASSWORD='change-me-please' bun run bootstrap:owner   # idempotent
-bun run dev                           # API on http://localhost:3000
+bun run dev                           # API on http://localhost:3000 and the web app on http://localhost:5173
 ```
 
 Everything else defaults to the local compose services. Variables can live in a `.env` file (Bun and Compose both read it) or be exported; see the table below.
@@ -49,11 +49,12 @@ Anonymous `POST /appointments` is rejected with `401 unauthorized`: guest bookin
 | Method   | Path                                                    | Access                                  | Purpose                                                                  |
 | -------- | ------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------ |
 | GET      | `/health`                                               | public                                  | Liveness                                                                 |
+| GET      | `/salon`                                                | public                                  | Salon name, timezone and booking window                                  |
 | GET      | `/services`                                             | public                                  | Active service catalog                                                   |
 | GET      | `/staff`                                                | public                                  | Active staff and the services they perform                               |
 | GET      | `/availability?serviceIds=a,b&staffId=&date=YYYY-MM-DD` | public                                  | Bookable slots (`staffId` optional)                                      |
 | GET/POST | `/api/auth/*`                                           | public, strictly rate limited           | Better Auth: sign-up, sign-in, sign-out, session                         |
-| GET      | `/me`                                                   | signed in                               | Role and linked profile ids                                              |
+| GET/PATCH | `/me`                                                  | signed in                               | Role, linked profile ids and phone / edit your name and phone            |
 | POST     | `/appointments`                                         | client, staff, owner                    | Book; enforces hours, time off, notice and horizon (409 `slot_unavailable`); 409 `slot_taken` on overlap; `override: true` skips min notice (staff, owner) |
 | PATCH    | `/appointments/:id`                                     | the client, the calendar's staff, owner | Reschedule (same rules and notice override as booking, 409 `slot_unavailable`) or set `status`: `cancelled` (client too), `completed` / `no_show` (staff, owner, once started; corrections owner only). Needs the current `version` (409 `version_conflict`); invalid transitions are 409 `invalid_state` |
 | GET      | `/appointments?from=&to=&staffId=&status=&page=&pageSize=` | signed in                            | Role-filtered, paged (`status` is comma-separated); returns `page`, `pageSize`, `total` |
@@ -92,14 +93,43 @@ Errors look like `{ "error": { "code", "message" } }` with codes `validation_err
 | `OWNER_EMAIL`, `OWNER_PASSWORD`, `OWNER_NAME` | none                                    | Only read by `bun run bootstrap:owner`; never logged.                                      |
 | `SALON_TIMEZONE`                              | `America/Argentina/Buenos_Aires`        | Passed through by Compose.                                                                 |
 
+## Web app
+
+`apps/web` is a TanStack Start (SSR) app: the public booking flow (services, professional, date and time, sign in or up inline, confirmation with an .ics download), sign in and sign up, the client account (upcoming and past appointments, optimistic cancel, reschedule, profile) and a guarded `/admin` shell for the dashboard (Phase 3b-2). English and Spanish (es-AR), light and dark. Decisions: [ADR 0005](docs/adr/0005-web-app.md).
+
+The browser only talks to the web origin; the web server proxies `/api/*` to the API (`/api/auth/*` unchanged, `/api/<path>` becomes `/<path>`), so cookies are first-party and there is no CORS.
+
+```sh
+bun run --cwd apps/web build
+# API in production mode, trusting the web server as its single proxy:
+NODE_ENV=production TRUST_PROXY=true TRUSTED_ORIGINS=http://localhost:4173 bun apps/api/src/index.ts &
+API_INTERNAL_URL=http://localhost:3000 PORT=4173 bun apps/web/server.ts   # http://localhost:4173, /healthz
+```
+
+| Variable (web)       | Default                 | Notes                                                                                           |
+| -------------------- | ----------------------- | ----------------------------------------------------------------------------------------------- |
+| `API_INTERNAL_URL`   | `http://localhost:3000` | Where the web server reaches the API (also used for SSR). Read at runtime.                      |
+| `PORT`, `HOST`       | `4173`, `0.0.0.0`       |                                                                                                 |
+| `WEB_TRUST_PROXY`    | `false`                 | Only behind an edge proxy you operate: take the visitor address from its `X-Forwarded-For`.    |
+
+### End-to-end tests
+
+Playwright runs against the real stack at a mobile and a desktop viewport (booking flow, slot race, cancel and reschedule, auth errors, i18n, dark mode, axe, keyboard-only). Start Postgres and Valkey, migrate, seed, bootstrap an owner, start the API and the web server as above (raise `RATE_LIMIT_AUTH_MAX` and `RATE_LIMIT_GLOBAL_MAX` for the run), then:
+
+```sh
+cd apps/web && bunx playwright install chromium
+E2E_OWNER_EMAIL=... E2E_OWNER_PASSWORD=... bun run e2e
+```
+
 ## Docker
 
 ```sh
 export BETTER_AUTH_SECRET="$(openssl rand -base64 32)"
 docker compose up -d --wait postgres valkey
 bun run db:migrate                                   # or: docker compose run --rm api bun packages/db/src/scripts/migrate.ts
-docker compose up -d --build --wait api
-curl localhost:3000/health
+docker compose up -d --build --wait api web
+curl localhost:3000/health     # API (loopback only)
+curl localhost:4173/healthz    # web: open http://localhost:4173
 ```
 
 `BETTER_AUTH_SECRET` is deliberately not marked required in `compose.yaml` (Compose would then demand it even for `up postgres valkey`); the API validates it at startup and exits with a clear error. With `NODE_ENV=production` cookies are `Secure`, so browsers need https: terminate TLS in your proxy and set `BETTER_AUTH_URL` and `TRUST_PROXY=true`.
@@ -112,7 +142,7 @@ bun run lint        # Biome
 bun run test        # bun test; integration tests need the compose postgres and valkey
 bun run db:generate # drizzle-kit: generate a migration from schema changes
 bun run bootstrap:owner   # idempotent first owner from OWNER_EMAIL / OWNER_PASSWORD
-docker compose up -d --build   # full stack (postgres, valkey, api)
+docker compose up -d --build   # full stack (postgres, valkey, api, web)
 ```
 
 Integration tests create their own `sob_test_*` databases on the server in `DATABASE_URL` and use unique `sob-test:*` key prefixes on the Valkey in `VALKEY_URL`. Both fail loudly, with a hint, if the service is unreachable.
@@ -120,6 +150,7 @@ Integration tests create their own `sob_test_*` databases on the server in `DATA
 ## Layout
 
 - `apps/api`: Hono API on Bun (`src/modules/*`: services, staff, availability, appointments, clients, reports, admin, me; `src/auth`: Better Auth, principal, policy, accounts)
+- `apps/web`: TanStack Start web app (`src/routes`, `src/features/{booking,account,auth}`, `src/components/ui`, `src/i18n`, `src/server` BFF proxy and web server, `e2e`)
 - `packages/contracts`: shared Zod schemas and the error shape
 - `packages/db`: Drizzle schema (domain, Better Auth tables, audit log), migrations (including the hand-written exclusion constraint), seed
 - `packages/config`: shared TypeScript config
