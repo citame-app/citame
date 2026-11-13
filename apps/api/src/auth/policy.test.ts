@@ -5,6 +5,7 @@ import {
   authorizeAppointmentChange,
   authorizeAppointmentCreate,
   authorizeAppointmentList,
+  authorizeCalendarQuery,
   authorizeClientAccess,
   authorizeClientDelete,
   authorizeReportQuery,
@@ -222,5 +223,30 @@ describe("authorizeReportQuery", () => {
 
   test("clients get no reports", () => {
     forbidden(() => authorizeReportQuery(clientA, range));
+  });
+});
+
+describe("authorizeCalendarQuery", () => {
+  const range = { from: "2026-03-09T00:00:00Z", to: "2026-03-16T00:00:00Z" };
+
+  test("the owner sees everyone or any chosen staff members", () => {
+    expect(authorizeCalendarQuery(owner, range)).toEqual({});
+    expect(authorizeCalendarQuery(owner, { ...range, staffIds: [id(0xa), id(0xb)] })).toEqual({
+      staffIds: [id(0xa), id(0xb)],
+    });
+  });
+
+  test("staff are pinned to their own calendar; naming anyone else is forbidden", () => {
+    expect(authorizeCalendarQuery(staffA, range)).toEqual({ staffIds: [id(0xa)] });
+    expect(authorizeCalendarQuery(staffA, { ...range, staffIds: [id(0xa)] })).toEqual({
+      staffIds: [id(0xa)],
+    });
+    forbidden(() => authorizeCalendarQuery(staffA, { ...range, staffIds: [id(0xa), id(0xb)] }));
+    forbidden(() => authorizeCalendarQuery(staffA, { ...range, staffIds: [id(0xb)] }));
+    forbidden(() => authorizeCalendarQuery({ ...staffA, staffId: null }, range));
+  });
+
+  test("clients never get the calendar", () => {
+    forbidden(() => authorizeCalendarQuery(clientA, range));
   });
 });

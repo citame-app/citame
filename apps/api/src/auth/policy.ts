@@ -1,5 +1,6 @@
 import type {
   AppointmentListQuery,
+  CalendarQuery,
   CreateAppointmentRequest,
   ReportQuery,
   UpdateAppointmentRequest,
@@ -157,4 +158,21 @@ export function authorizeReportQuery(principal: Principal, query: ReportQuery): 
     throw forbidden("Staff can only see their own reports");
   }
   return { ...query, staffId: principal.staffId };
+}
+
+/**
+ * Calendar read model: the owner sees any staff (or all of them); staff only their own
+ * calendar; clients never (the response names other clients).
+ */
+export function authorizeCalendarQuery(
+  principal: Principal,
+  query: CalendarQuery,
+): { staffIds?: string[] } {
+  requireRole(principal, "owner", "staff");
+  if (principal.role === "owner") return query.staffIds ? { staffIds: query.staffIds } : {};
+  if (!principal.staffId) throw forbidden("Your account has no calendar");
+  if (query.staffIds?.some((staffId) => staffId !== principal.staffId)) {
+    throw forbidden("Staff can only see their own calendar");
+  }
+  return { staffIds: [principal.staffId] };
 }
