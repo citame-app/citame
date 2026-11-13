@@ -1,4 +1,7 @@
 {
   "extends": "@sob/config/tsconfig.base.json",
-  "include": ["src"]
+  "compilerOptions": {
+    "lib": ["ES2023", "ESNext.Temporal"]
+  },
+  "include": ["src", "test"]
 }
