@@ -44,7 +44,16 @@ services:
     environment:
       DATABASE_URL: postgres://sob:sob@postgres:5432/sob
       VALKEY_URL: redis://valkey:6379
-      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env}
+      # Not marked required with `:?` on purpose: Compose resolves that for every service, which
+      # would block `docker compose up postgres valkey`. The API refuses to start without it.
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3000}
+      TRUSTED_ORIGINS: ${TRUSTED_ORIGINS:-}
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      RATE_LIMIT_GLOBAL_MAX: ${RATE_LIMIT_GLOBAL_MAX:-300}
+      RATE_LIMIT_GLOBAL_WINDOW_SECONDS: ${RATE_LIMIT_GLOBAL_WINDOW_SECONDS:-60}
+      RATE_LIMIT_AUTH_MAX: ${RATE_LIMIT_AUTH_MAX:-10}
+      RATE_LIMIT_AUTH_WINDOW_SECONDS: ${RATE_LIMIT_AUTH_WINDOW_SECONDS:-60}
       SALON_TIMEZONE: ${SALON_TIMEZONE:-America/Argentina/Buenos_Aires}
       PORT: "3000"
     ports:

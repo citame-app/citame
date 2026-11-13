@@ -2,7 +2,10 @@
   "name": "sistersofbeauty",
   "private": true,
   "packageManager": "bun@1.4.4",
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
@@ -12,7 +15,8 @@
     "format": "biome format --write .",
     "db:generate": "turbo run db:generate",
     "db:migrate": "turbo run db:migrate",
-    "db:seed": "turbo run db:seed"
+    "db:seed": "turbo run db:seed",
+    "bootstrap:owner": "bun run --cwd apps/api bootstrap:owner"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.7",
