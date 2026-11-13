@@ -54,13 +54,26 @@ Anonymous `POST /appointments` is rejected with `401 unauthorized`: guest bookin
 | GET      | `/availability?serviceIds=a,b&staffId=&date=YYYY-MM-DD` | public                                  | Bookable slots (`staffId` optional)                                      |
 | GET/POST | `/api/auth/*`                                           | public, strictly rate limited           | Better Auth: sign-up, sign-in, sign-out, session                         |
 | GET      | `/me`                                                   | signed in                               | Role and linked profile ids                                              |
-| POST     | `/appointments`                                         | client, staff, owner                    | Book (409 `slot_taken` on overlap); clients book for themselves only     |
+| POST     | `/appointments`                                         | client, staff, owner                    | Book; enforces hours, time off, notice and horizon (409 `slot_unavailable`); 409 `slot_taken` on overlap; `override: true` skips min notice (staff, owner) |
 | PATCH    | `/appointments/:id`                                     | the client, the calendar's staff, owner | Reschedule or cancel with the current `version` (409 `version_conflict`) |
-| GET      | `/appointments?from=&to=&staffId=`                      | signed in                               | Role-filtered: clients see theirs, staff their calendar, owner all       |
+| GET      | `/appointments?from=&to=&staffId=&status=&page=&pageSize=` | signed in                            | Role-filtered, paged (`status` is comma-separated); returns `page`, `pageSize`, `total` |
+| GET      | `/appointments/calendar?from=&to=&staffIds=`            | staff (own), owner                      | Day/week calendar in one call: appointments with client and service names, time off, working windows (max 42 days) |
 | POST     | `/admin/staff-accounts`                                 | owner                                   | Create a staff login and calendar                                        |
-| PATCH    | `/admin/users/:id/role`                                 | owner                                   | Change a role (`owner`, `staff`, `client`); not your own                 |
+| PATCH    | `/admin/users/:id/role`                                 | owner                                   | Change a role; not your own; 409 `has_future_appointments` when demoting staff with upcoming bookings |
+| GET/POST | `/admin/services`                                       | owner                                   | List all services (inactive too) / create one                            |
+| PATCH/DELETE | `/admin/services/:id`                               | owner                                   | Edit (including `active`) / soft-deactivate                              |
+| PUT      | `/admin/services/:id/staff`                             | owner                                   | Replace who performs the service (`{ staffIds }`)                        |
+| GET      | `/admin/staff`                                          | staff (self), owner                     | Staff profiles including inactive ones                                   |
+| PATCH    | `/admin/staff/:id`                                      | owner                                   | Rename, (de)activate; 409 `has_future_appointments` on deactivation      |
+| GET/PUT  | `/admin/staff/:id/working-hours`                        | read: self, owner; write: owner         | Weekly hours (PUT replaces all); response lists `conflicts` with existing bookings |
+| GET/POST | `/admin/staff/:id/time-off`                             | self, owner                             | List / create time off; POST returns overlapping `conflicts`             |
+| PATCH/DELETE | `/admin/staff/:id/time-off/:timeOffId`              | self, owner                             | Edit / soft-delete a time-off entry                                      |
+| GET      | `/admin/clients?search=&sort=&order=&page=&pageSize=`   | staff, owner                            | Paged client directory (name, phone, email search)                       |
+| GET/PATCH | `/admin/clients/:id`                                   | staff, owner                            | Profile with appointment history / edit name, phone, notes               |
+| DELETE   | `/admin/clients/:id`                                    | owner                                   | Soft delete (409 `has_future_appointments` while bookings are upcoming)  |
+| GET      | `/admin/reports/summary?from=&to=&staffId=`             | owner (all), staff (own numbers)        | Counts by status, revenue, top services, per-day series, per-staff, no-show rate (salon-local dates) |
 
-Errors look like `{ "error": { "code", "message" } }` with codes `validation_error` 400, `unauthorized` 401, `forbidden` 403, `not_found` 404, `slot_taken` / `version_conflict` / `invalid_state` 409, `rate_limited` 429 (with `Retry-After`) and `internal_error` 500. The exception is `/api/auth/*`, which keeps Better Auth's own error body. The full policy matrix is in [ADR 0003](docs/adr/0003-auth-rbac-sessions.md).
+Errors look like `{ "error": { "code", "message" } }` with codes `validation_error` 400, `unauthorized` 401, `forbidden` 403, `not_found` 404, `slot_taken` / `slot_unavailable` / `version_conflict` / `invalid_state` / `has_future_appointments` 409, `rate_limited` 429 (with `Retry-After`) and `internal_error` 500. The exception is `/api/auth/*`, which keeps Better Auth's own error body. The policy matrix is in [ADR 0003](docs/adr/0003-auth-rbac-sessions.md) and the admin extensions in [ADR 0004](docs/adr/0004-admin-api-and-reporting.md).
 
 ## Environment variables
 
@@ -106,7 +119,7 @@ Integration tests create their own `sob_test_*` databases on the server in `DATA
 
 ## Layout
 
-- `apps/api`: Hono API on Bun (`src/modules/*`: services, staff, availability, appointments, admin, me; `src/auth`: Better Auth, principal, policy, accounts)
+- `apps/api`: Hono API on Bun (`src/modules/*`: services, staff, availability, appointments, clients, reports, admin, me; `src/auth`: Better Auth, principal, policy, accounts)
 - `packages/contracts`: shared Zod schemas and the error shape
 - `packages/db`: Drizzle schema (domain, Better Auth tables, audit log), migrations (including the hand-written exclusion constraint), seed
 - `packages/config`: shared TypeScript config
