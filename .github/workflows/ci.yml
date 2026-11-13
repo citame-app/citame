@@ -58,6 +58,81 @@ jobs:
           BETTER_AUTH_SECRET: ci-only-secret-ci-only-secret-0123456789
           OWNER_EMAIL: ci-owner@example.com
           OWNER_PASSWORD: ci-only-owner-password
-      - run: bunx turbo run typecheck lint test
+      - run: bunx turbo run typecheck lint test build
       # The production image must build from the pruned workspace (includes @sob/db and auth deps).
       - run: docker build -f docker/api.Dockerfile -t sob-api:ci .
+      - run: docker build -f docker/web.Dockerfile -t sob-web:ci .
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: check
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: sob
+          POSTGRES_PASSWORD: sob
+          POSTGRES_DB: sob
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sob -d sob"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      valkey:
+        image: valkey/valkey:9.1-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://sob:sob@localhost:5432/sob
+      VALKEY_URL: redis://localhost:6379
+      SALON_TIMEZONE: America/Argentina/Buenos_Aires
+      # Throwaway CI-only values.
+      BETTER_AUTH_SECRET: ci-only-secret-ci-only-secret-0123456789
+      OWNER_EMAIL: ci-owner@example.com
+      OWNER_PASSWORD: ci-only-owner-password
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - run: |
+          bun run db:migrate
+          bun run db:seed
+          bun run bootstrap:owner
+      - run: bun run --cwd apps/web build
+      # The real stack: the API in production mode behind the web server's same-origin proxy.
+      - name: Start API and web
+        run: |
+          NODE_ENV=production TRUSTED_ORIGINS=http://localhost:4173 TRUST_PROXY=true \
+            RATE_LIMIT_AUTH_MAX=1000 RATE_LIMIT_GLOBAL_MAX=100000 \
+            nohup bun apps/api/src/index.ts > api.log 2>&1 &
+          API_INTERNAL_URL=http://localhost:3000 PORT=4173 \
+            nohup bun apps/web/server.ts > web.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf localhost:3000/health && curl -sf localhost:4173/healthz && exit 0
+            sleep 1
+          done
+          cat api.log web.log
+          exit 1
+      - run: bunx playwright install --with-deps chromium
+        working-directory: apps/web
+      - run: bun run --cwd apps/web e2e
+        env:
+          E2E_OWNER_EMAIL: ci-owner@example.com
+          E2E_OWNER_PASSWORD: ci-only-owner-password
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            apps/web/test-results
+            api.log
+            web.log
