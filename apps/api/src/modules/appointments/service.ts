@@ -15,7 +15,7 @@ import {
   timeOff,
   workingHours,
 } from "@sob/db";
-import { and, asc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { DomainError } from "../../errors";
 import { lockCalendars, type Tx } from "../../tx";
@@ -318,6 +318,23 @@ export async function listAppointments(
       ),
     )
     .orderBy(asc(appointment.startsAt), asc(appointment.id));
+  const snapshots = await loadSnapshots(
+    db,
+    rows.map((r) => r.id),
+  );
+  return rows.map((row) => toAppointment(row, snapshots.get(row.id) ?? []));
+}
+
+/** Every appointment of one client, newest first (the CRM history view). */
+export async function listClientAppointments(
+  db: Database,
+  clientId: string,
+): Promise<Appointment[]> {
+  const rows = await db
+    .select()
+    .from(appointment)
+    .where(and(eq(appointment.clientId, clientId), isNull(appointment.deletedAt)))
+    .orderBy(desc(appointment.startsAt), desc(appointment.id));
   const snapshots = await loadSnapshots(
     db,
     rows.map((r) => r.id),

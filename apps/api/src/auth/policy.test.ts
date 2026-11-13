@@ -5,6 +5,8 @@ import {
   authorizeAppointmentChange,
   authorizeAppointmentCreate,
   authorizeAppointmentList,
+  authorizeClientAccess,
+  authorizeClientDelete,
   authorizeServiceAdmin,
   authorizeStaffAdmin,
   authorizeStaffList,
@@ -185,5 +187,19 @@ describe("staff administration policy", () => {
     authorizeTimeOffManage(staffA, id(0xa));
     forbidden(() => authorizeTimeOffManage(staffA, id(0xb)));
     forbidden(() => authorizeTimeOffManage(clientA, id(0xa)));
+  });
+});
+
+describe("client directory policy", () => {
+  test("owner and staff read and edit every client; clients none", () => {
+    authorizeClientAccess(owner);
+    authorizeClientAccess(staffA);
+    forbidden(() => authorizeClientAccess(clientA));
+  });
+
+  test("only the owner deletes clients", () => {
+    authorizeClientDelete(owner);
+    forbidden(() => authorizeClientDelete(staffA));
+    forbidden(() => authorizeClientDelete(clientA));
   });
 });

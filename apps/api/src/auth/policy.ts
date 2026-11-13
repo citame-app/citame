@@ -133,3 +133,13 @@ export function authorizeStaffScheduleRead(principal: Principal, staffId: string
 export function authorizeTimeOffManage(principal: Principal, staffId: string): void {
   requireOwnCalendarOrOwner(principal, staffId);
 }
+
+/** Client directory: the front desk (owner and staff) sees every client. */
+export function authorizeClientAccess(principal: Principal): void {
+  requireRole(principal, "owner", "staff");
+}
+
+/** Only the owner removes (soft-deletes) clients. */
+export function authorizeClientDelete(principal: Principal): void {
+  requireRole(principal, "owner");
+}

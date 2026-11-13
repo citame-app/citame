@@ -11,6 +11,7 @@ import { errorBody, respondError } from "./http";
 import { adminRoutes } from "./modules/admin/routes";
 import { appointmentsRoutes } from "./modules/appointments/routes";
 import { availabilityRoutes } from "./modules/availability/routes";
+import { clientAdminRoutes } from "./modules/clients/admin-routes";
 import { meRoutes } from "./modules/me/routes";
 import { serviceAdminRoutes } from "./modules/services/admin-routes";
 import { servicesRoutes } from "./modules/services/routes";
@@ -70,6 +71,7 @@ export function createApp(deps: AppDeps) {
   app.route("/admin", adminRoutes(deps, auth));
   app.route("/admin/services", serviceAdminRoutes(deps));
   app.route("/admin/staff", staffAdminRoutes(deps));
+  app.route("/admin/clients", clientAdminRoutes(deps));
 
   // Public catalog and availability: anonymous visitors browse before they sign up.
   app.route("/services", servicesRoutes(deps));
