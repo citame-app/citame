@@ -66,14 +66,24 @@ export const createAppointmentRequestSchema = createAppointmentBaseSchema.refine
 
 export type CreateAppointmentRequest = z.infer<typeof createAppointmentRequestSchema>;
 
+/** Statuses a caller may move an appointment to; "booked" is only ever the starting point. */
+export const appointmentTransitionSchema = z.enum(["completed", "no_show", "cancelled"]);
+export type AppointmentTransition = z.infer<typeof appointmentTransitionSchema>;
+
+/**
+ * One request does one thing: change the status (see ADR 0004 for who may and when), or move
+ * the appointment (`startsAt` / `staffId`), optionally with notes. `override` skips only the
+ * minimum-notice rule of a move and is for staff and owners.
+ */
 export const updateAppointmentRequestSchema = z
   .object({
     /** The version the caller last saw; the update fails with 409 if it is stale. */
     version: z.number().int().positive(),
-    status: z.literal("cancelled").optional(),
+    status: appointmentTransitionSchema.optional(),
     startsAt: instantSchema.optional(),
     staffId: idSchema.optional(),
     notes: z.string().optional(),
+    override: z.boolean().optional(),
   })
   .refine(
     (value) =>
@@ -82,6 +92,11 @@ export const updateAppointmentRequestSchema = z
       value.staffId !== undefined ||
       value.notes !== undefined,
     { message: "Provide at least one change", path: ["status"] },
+  )
+  .refine(
+    (value) =>
+      value.status === undefined || (value.startsAt === undefined && value.staffId === undefined),
+    { message: "A status change cannot be combined with rescheduling", path: ["status"] },
   );
 
 export type UpdateAppointmentRequest = z.infer<typeof updateAppointmentRequestSchema>;

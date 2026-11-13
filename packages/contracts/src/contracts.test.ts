@@ -209,7 +209,48 @@ describe("appointments", () => {
     ).toBe(true);
   });
 
-  test("update only allows cancelling through status", () => {
+  test("update accepts the completed and no_show transitions", () => {
+    for (const status of ["completed", "no_show", "cancelled"]) {
+      expect(updateAppointmentRequestSchema.safeParse({ version: 1, status }).success).toBe(true);
+    }
+  });
+
+  test("a status change cannot be combined with moving the appointment", () => {
+    expect(
+      updateAppointmentRequestSchema.safeParse({
+        version: 1,
+        status: "completed",
+        startsAt: "2026-03-10T12:00:00.000Z",
+      }).success,
+    ).toBe(false);
+    expect(
+      updateAppointmentRequestSchema.safeParse({ version: 1, status: "no_show", staffId: uuid })
+        .success,
+    ).toBe(false);
+    // notes may travel with a status change
+    expect(
+      updateAppointmentRequestSchema.safeParse({ version: 1, status: "completed", notes: "ok" })
+        .success,
+    ).toBe(true);
+  });
+
+  test("update takes an optional boolean override that is not a change on its own", () => {
+    expect(
+      updateAppointmentRequestSchema.safeParse({
+        version: 1,
+        startsAt: "2026-03-10T12:00:00.000Z",
+        override: true,
+      }).success,
+    ).toBe(true);
+    expect(updateAppointmentRequestSchema.safeParse({ version: 1, override: true }).success).toBe(
+      false,
+    );
+    expect(
+      updateAppointmentRequestSchema.safeParse({ version: 1, notes: "x", override: "yes" }).success,
+    ).toBe(false);
+  });
+
+  test("update only allows known statuses (booked cannot be set)", () => {
     expect(updateAppointmentRequestSchema.safeParse({ version: 1, status: "booked" }).success).toBe(
       false,
     );
