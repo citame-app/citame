@@ -4,6 +4,7 @@ import type { RedisClient } from "bun";
 import { Hono } from "hono";
 import { createAuth } from "./auth/auth";
 import { requireAuth } from "./auth/principal";
+import { valkeySecondaryStorage } from "./auth/secondary-storage";
 import type { AppConfig } from "./config";
 import { DomainError } from "./errors";
 import { errorBody, respondError } from "./http";
@@ -13,6 +14,7 @@ import { availabilityRoutes } from "./modules/availability/routes";
 import { meRoutes } from "./modules/me/routes";
 import { servicesRoutes } from "./modules/services/routes";
 import { staffRoutes } from "./modules/staff/routes";
+import { createRateLimiter, rateLimit } from "./rate-limit";
 
 export interface AppDeps {
   db: Database;
@@ -27,6 +29,11 @@ export interface AppDeps {
 export function createApp(deps: AppDeps) {
   const app = new Hono();
   const auth = createAuth(deps);
+  const limiter = createRateLimiter({
+    storage: valkeySecondaryStorage(deps.valkey, deps.config.valkeyKeyPrefix),
+    now: deps.rateLimitNow,
+  });
+  const { trustProxy, rateLimit: limits } = deps.config;
 
   app.onError((error, c) => {
     if (error instanceof DomainError) return respondError(c, error);
@@ -35,10 +42,17 @@ export function createApp(deps: AppDeps) {
   });
   app.notFound((c) => c.json(errorBody("not_found", "Route not found"), 404));
 
+  // Liveness stays outside every limiter so orchestrator probes can never be throttled.
   app.get("/health", (c) => {
     const body: HealthResponse = { status: "ok" };
     return c.json(body);
   });
+
+  // Moderate limit for everything else, strict one for credential endpoints (brute force).
+  app.use("*", rateLimit({ limiter, scope: "global", rule: limits.global, trustProxy }));
+  const authLimit = rateLimit({ limiter, scope: "auth", rule: limits.auth, trustProxy });
+  app.use("/api/auth/sign-in/*", authLimit);
+  app.use("/api/auth/sign-up/*", authLimit);
 
   // Better Auth owns everything under /api/auth (sign-up, sign-in, sign-out, session).
   app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
