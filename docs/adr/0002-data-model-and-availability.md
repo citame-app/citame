@@ -13,11 +13,11 @@ Phase 1 introduces the relational model, the booking rules and the first REST en
 - **Keys and time.** UUIDv7 primary keys generated in application code (`Bun.randomUUIDv7()`), so clients can pre-assign ids; `timestamptz` for every instant. Column names are snake_case (Drizzle `casing`).
 - **Soft delete.** `deleted_at` on every table that will be synchronised (service, staff, service_staff, working_hours, time_off, client_profile, appointment). `salon_settings` and `appointment_service` do not need tombstones.
 - **Single-row settings.** `salon_settings.id` is pinned to 1 by a CHECK constraint. It stores the salon timezone (IANA), slot granularity, minimum notice and the booking horizon.
-- **Auth links are deferred.** `staff_profile.user_id` and `client_profile.user_id` are nullable text columns without a foreign key; Phase 2 links them to Better Auth users.
+- **Auth links.** `staff_profile.user_id` and `client_profile.user_id` were nullable text columns without a foreign key in Phase 1; Phase 2 ([ADR 0003](0003-auth-rbac-sessions.md)) added the Better Auth tables and real, unique foreign keys.
 - **Working hours** are recurring wall-clock ranges (`weekday` 0-6 with 0 = Sunday, `time` start and end, several ranges per day allowed). Wall-clock storage is what keeps hours stable across DST changes. **Time off** is a plain `[starts_at, ends_at)` pair of `timestamptz`.
 - **Appointments** carry an integer `version` (optimistic concurrency, starts at 1, incremented by each update) and a status enum: `booked | completed | cancelled | no_show`.
 - **Service snapshots.** `appointment_service` copies name, duration, buffer and price at booking time, so catalog edits never rewrite history. `service_id` stays as a nullable reference.
-- Not built yet: `sync_change`, `reminder`, `audit_log` and Better Auth tables (later phases). Multi-location stays out of the model.
+- Not built yet: `sync_change` and `reminder` (later phases). `audit_log` and the Better Auth tables arrived in Phase 2. Multi-location stays out of the model.
 
 ### Exclusion constraint (the source of truth)
 
@@ -60,5 +60,5 @@ Integration tests use a real Postgres. Each package creates and migrates its own
 ## Consequences
 
 - Business rules are reusable from MCP and sync without touching HTTP code.
-- Routes are open in this phase; Phase 2 adds RBAC at the router level (marked in `apps/api/src/app.ts`).
+- Routes were open in this phase; Phase 2 added authentication and RBAC (ADR 0003).
 - Slot search and booking can disagree under races by design; clients must handle `409 slot_taken`.
