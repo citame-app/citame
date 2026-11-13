@@ -40,10 +40,19 @@ export async function loadPrincipal(db: Database, userId: string): Promise<Princ
   // Self-heal: the profile is created right after sign-up in a separate statement, so a crash
   // in between must not leave a client who can never book.
   if (row.role === "client" && !client) {
-    await db
-      .insert(clientProfile)
-      .values({ name: row.name, email: row.email, userId })
-      .onConflictDoNothing();
+    // A profile soft-deleted by the owner still owns the unique `user_id`: restore it (history
+    // included) instead of colliding with it, otherwise the login could never book again.
+    const restored = await db
+      .update(clientProfile)
+      .set({ deletedAt: null })
+      .where(eq(clientProfile.userId, userId))
+      .returning({ id: clientProfile.id });
+    if (restored.length === 0) {
+      await db
+        .insert(clientProfile)
+        .values({ name: row.name, email: row.email, userId })
+        .onConflictDoNothing();
+    }
     [client] = await db
       .select({ id: clientProfile.id })
       .from(clientProfile)

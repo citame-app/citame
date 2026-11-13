@@ -288,3 +288,29 @@ describe("DELETE /admin/clients/:id", () => {
     expect((await call(owner, "DELETE", `/admin/clients/${marta}`)).status).toBe(200);
   });
 });
+
+describe("a deleted client who still has a login", () => {
+  test("is restored on their next request instead of being locked out", async () => {
+    const profileId = client.clientId ?? "";
+    expect((await call(owner, "DELETE", `/admin/clients/${profileId}`)).status).toBe(200);
+    expect((await list(owner)).clients.map((c) => c.id)).not.toContain(profileId);
+
+    const me = await call(client, "GET", "/me");
+    expect(me.status).toBe(200);
+    expect(((await me.json()) as { clientId: string | null }).clientId).toBe(profileId);
+    expect((await list(owner)).clients.map((c) => c.id)).toContain(profileId);
+
+    const booking = await call(client, "POST", "/appointments", {
+      staffId: f.anaId,
+      serviceIds: [f.haircutId],
+      startsAt: MONDAY_0900,
+    });
+    expect(booking.status).toBe(201);
+    const rows = await t.db
+      .select()
+      .from(clientProfile)
+      .where(eq(clientProfile.userId, client.userId));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.deletedAt).toBeNull();
+  });
+});
