@@ -4,6 +4,7 @@ import {
   appointmentSchema,
   availabilityQuerySchema,
   availabilityResponseSchema,
+  createAppointmentBaseSchema,
   createAppointmentRequestSchema,
   errorCodeSchema,
   errorResponseSchema,
@@ -64,6 +65,22 @@ describe("service and staff", () => {
   test("parses a staff member with the services they perform", () => {
     const staff = staffSchema.parse({ id: uuid, displayName: "Ana", serviceIds: [uuid2] });
     expect(staff.serviceIds).toEqual([uuid2]);
+  });
+});
+
+describe("self-service booking", () => {
+  const base = { staffId: uuid, serviceIds: [uuid2], startsAt: "2026-03-09T12:00:00.000Z" };
+
+  test("the base shape needs no client identity (the server pins it for clients)", () => {
+    expect(createAppointmentBaseSchema.safeParse(base).success).toBe(true);
+    expect(createAppointmentRequestSchema.safeParse(base).success).toBe(false);
+  });
+
+  test("the base shape still validates the booking fields", () => {
+    expect(createAppointmentBaseSchema.safeParse({ ...base, serviceIds: [] }).success).toBe(false);
+    expect(createAppointmentBaseSchema.safeParse({ ...base, startsAt: "soon" }).success).toBe(
+      false,
+    );
   });
 });
 

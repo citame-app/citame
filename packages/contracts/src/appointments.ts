@@ -35,21 +35,29 @@ export const inlineClientSchema = z.object({
   email: z.email().optional(),
 });
 
-export const createAppointmentRequestSchema = z
-  .object({
-    /** Optional client-generated UUID (v7) so offline clients can pre-assign ids. */
-    id: idSchema.optional(),
-    staffId: idSchema,
-    serviceIds: z.array(idSchema).min(1),
-    startsAt: instantSchema,
-    clientId: idSchema.optional(),
-    client: inlineClientSchema.optional(),
-    notes: z.string().optional(),
-  })
-  .refine((value) => (value.clientId === undefined) !== (value.client === undefined), {
+/**
+ * Booking fields without the client identity. Clients book for themselves, so the server pins
+ * their profile and the payload carries neither `clientId` nor `client`.
+ */
+export const createAppointmentBaseSchema = z.object({
+  /** Optional client-generated UUID (v7) so offline clients can pre-assign ids. */
+  id: idSchema.optional(),
+  staffId: idSchema,
+  serviceIds: z.array(idSchema).min(1),
+  startsAt: instantSchema,
+  clientId: idSchema.optional(),
+  client: inlineClientSchema.optional(),
+  notes: z.string().optional(),
+});
+
+/** Staff and owners must say who the appointment is for: exactly one of `clientId` / `client`. */
+export const createAppointmentRequestSchema = createAppointmentBaseSchema.refine(
+  (value) => (value.clientId === undefined) !== (value.client === undefined),
+  {
     message: "Provide exactly one of clientId or client",
     path: ["clientId"],
-  });
+  },
+);
 
 export type CreateAppointmentRequest = z.infer<typeof createAppointmentRequestSchema>;
 
