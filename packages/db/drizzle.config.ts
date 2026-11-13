@@ -4,7 +4,8 @@ export default defineConfig({
   dialect: "postgresql",
   schema: "./src/schema/index.ts",
   out: "./drizzle",
+  casing: "snake_case",
   dbCredentials: {
-    url: process.env.DATABASE_URL ?? "",
+    url: process.env.DATABASE_URL ?? "postgres://sob:sob@localhost:5432/sob",
   },
 });
