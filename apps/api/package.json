@@ -1,0 +1,21 @@
+{
+  "name": "@sob/api",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --hot src/index.ts",
+    "start": "bun src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@sob/contracts": "workspace:*",
+    "hono": "4.13.18"
+  },
+  "devDependencies": {
+    "@sob/config": "workspace:*",
+    "@types/bun": "1.4.4"
+  }
+}
