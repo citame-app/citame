@@ -102,3 +102,34 @@ export function authorizeAppointmentList(
 export function authorizeServiceAdmin(principal: Principal): void {
   requireRole(principal, "owner");
 }
+
+/** Staff profile administration and weekly hours replacement. */
+export function authorizeStaffAdmin(principal: Principal): void {
+  requireRole(principal, "owner");
+}
+
+/** Narrows the admin staff listing: the owner sees everyone, staff only themselves. */
+export function authorizeStaffList(principal: Principal): { staffId?: string } {
+  requireRole(principal, "owner", "staff");
+  if (principal.role === "owner") return {};
+  if (!principal.staffId) throw forbidden("Your account has no calendar");
+  return { staffId: principal.staffId };
+}
+
+/** Owner: any staff member. Staff: only their own calendar. */
+function requireOwnCalendarOrOwner(principal: Principal, staffId: string): void {
+  requireRole(principal, "owner", "staff");
+  if (principal.role === "staff" && (!principal.staffId || principal.staffId !== staffId)) {
+    throw forbidden("This is not your calendar");
+  }
+}
+
+/** Reading a staff member's working hours. */
+export function authorizeStaffScheduleRead(principal: Principal, staffId: string): void {
+  requireOwnCalendarOrOwner(principal, staffId);
+}
+
+/** Creating, editing or removing time off. */
+export function authorizeTimeOffManage(principal: Principal, staffId: string): void {
+  requireOwnCalendarOrOwner(principal, staffId);
+}

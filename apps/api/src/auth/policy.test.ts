@@ -6,6 +6,10 @@ import {
   authorizeAppointmentCreate,
   authorizeAppointmentList,
   authorizeServiceAdmin,
+  authorizeStaffAdmin,
+  authorizeStaffList,
+  authorizeStaffScheduleRead,
+  authorizeTimeOffManage,
   requireRole,
 } from "./policy";
 import type { Principal } from "./principal";
@@ -151,5 +155,35 @@ describe("authorizeServiceAdmin", () => {
     authorizeServiceAdmin(owner);
     forbidden(() => authorizeServiceAdmin(staffA));
     forbidden(() => authorizeServiceAdmin(clientA));
+  });
+});
+
+describe("staff administration policy", () => {
+  test("only the owner edits staff profiles and weekly hours", () => {
+    authorizeStaffAdmin(owner);
+    forbidden(() => authorizeStaffAdmin(staffA));
+    forbidden(() => authorizeStaffAdmin(clientA));
+  });
+
+  test("the admin staff list is the whole team for the owner and just yourself for staff", () => {
+    expect(authorizeStaffList(owner)).toEqual({});
+    expect(authorizeStaffList(staffA)).toEqual({ staffId: id(0xa) });
+    forbidden(() => authorizeStaffList({ ...staffA, staffId: null }));
+    forbidden(() => authorizeStaffList(clientA));
+  });
+
+  test("working hours: the owner reads anyone, staff only their own, clients nobody", () => {
+    authorizeStaffScheduleRead(owner, id(0xb));
+    authorizeStaffScheduleRead(staffA, id(0xa));
+    forbidden(() => authorizeStaffScheduleRead(staffA, id(0xb)));
+    forbidden(() => authorizeStaffScheduleRead({ ...staffA, staffId: null }, id(0xa)));
+    forbidden(() => authorizeStaffScheduleRead(clientA, id(0xa)));
+  });
+
+  test("time off: the owner manages anyone, staff only their own entries, clients nobody", () => {
+    authorizeTimeOffManage(owner, id(0xb));
+    authorizeTimeOffManage(staffA, id(0xa));
+    forbidden(() => authorizeTimeOffManage(staffA, id(0xb)));
+    forbidden(() => authorizeTimeOffManage(clientA, id(0xa)));
   });
 });

@@ -14,6 +14,7 @@ import { availabilityRoutes } from "./modules/availability/routes";
 import { meRoutes } from "./modules/me/routes";
 import { serviceAdminRoutes } from "./modules/services/admin-routes";
 import { servicesRoutes } from "./modules/services/routes";
+import { staffAdminRoutes } from "./modules/staff/admin-routes";
 import { staffRoutes } from "./modules/staff/routes";
 import { createRateLimiter, rateLimit } from "./rate-limit";
 
@@ -68,6 +69,7 @@ export function createApp(deps: AppDeps) {
   app.use("/admin/*", requireAuth(auth, deps.db));
   app.route("/admin", adminRoutes(deps, auth));
   app.route("/admin/services", serviceAdminRoutes(deps));
+  app.route("/admin/staff", staffAdminRoutes(deps));
 
   // Public catalog and availability: anonymous visitors browse before they sign up.
   app.route("/services", servicesRoutes(deps));

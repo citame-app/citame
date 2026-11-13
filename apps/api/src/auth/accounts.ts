@@ -1,9 +1,11 @@
 import type { UserRole } from "@sob/contracts";
 import { account, clientProfile, type Database, pgErrorCode, staffProfile, user } from "@sob/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { recordAudit } from "../audit";
 import { DomainError } from "../errors";
+import { assertNoFutureAppointments } from "../modules/staff/guards";
+import { lockCalendars } from "../tx";
 import type { Auth } from "./auth";
 
 const UNIQUE_VIOLATION = "23505";
@@ -153,10 +155,29 @@ export async function assignRole(
   userId: string,
   role: UserRole,
   audit?: Pick<AuditContext, "actorUserId">,
+  options: { now?: Date } = {},
 ): Promise<AccountResult> {
   return db.transaction(async (tx) => {
     const [row] = await tx.select().from(user).where(eq(user.id, userId));
     if (!row) throw new DomainError("not_found", `User ${userId} not found`);
+
+    // Demoting to client deactivates the calendar, which must not strand upcoming bookings.
+    if (role === "client") {
+      const [calendar] = await tx
+        .select({ id: staffProfile.id })
+        .from(staffProfile)
+        .where(
+          and(
+            eq(staffProfile.userId, userId),
+            eq(staffProfile.active, true),
+            isNull(staffProfile.deletedAt),
+          ),
+        );
+      if (calendar) {
+        await lockCalendars(tx, [calendar.id]);
+        await assertNoFutureAppointments(tx, calendar.id, options.now ?? new Date());
+      }
+    }
 
     await tx.update(user).set({ role }).where(eq(user.id, userId));
 

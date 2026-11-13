@@ -20,7 +20,7 @@ const ownerOnly = createMiddleware<AppEnv>(async (c, next) => {
 });
 
 /** Owner-only account administration. Mounted behind `requireAuth`. */
-export function adminRoutes({ db }: AppDeps, auth: Auth) {
+export function adminRoutes({ db, now = () => new Date() }: AppDeps, auth: Auth) {
   return (
     new Hono<AppEnv>()
       // Scoped to this router's own paths: a `use("*")` here would leak onto every other
@@ -56,7 +56,13 @@ export function adminRoutes({ db }: AppDeps, auth: Auth) {
         if (userId === principal.userId) {
           throw new DomainError("forbidden", "You cannot change your own role");
         }
-        const result = await assignRole(db, userId, role, { actorUserId: principal.userId });
+        const result = await assignRole(
+          db,
+          userId,
+          role,
+          { actorUserId: principal.userId },
+          { now: now() },
+        );
         const response: ChangeRoleResponse = result;
         return c.json(response);
       })

@@ -18,6 +18,7 @@ import {
 import { and, asc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { DomainError } from "../../errors";
+import { lockCalendars, type Tx } from "../../tx";
 import { totalBlockMinutes } from "../availability/compute";
 import { type BookingViolation, bookingViolations } from "../availability/rules";
 import { getServicesByIds } from "../services/service";
@@ -26,20 +27,6 @@ import { assertStaffExists } from "../staff/service";
 
 const UNIQUE_VIOLATION = "23505";
 
-type Tx = Parameters<Parameters<Database["transaction"]>[0]>[0];
-
-/**
- * Serializes writers that touch the same staff calendars. The exclusion constraint alone is
- * enough for correctness, but concurrent inserts with partially overlapping ranges can
- * deadlock inside Postgres (each waits for the other's uncommitted row). A transaction-scoped
- * advisory lock per staff member makes them queue instead, and the constraint still has the
- * final say.
- */
-async function lockCalendars(tx: Tx, staffIds: string[]) {
-  for (const id of [...new Set(staffIds)].sort()) {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${id}, 0))`);
-  }
-}
 const MS_PER_MINUTE = 60_000;
 
 /** The authenticated caller on whose behalf a write happens; recorded in the audit log. */
