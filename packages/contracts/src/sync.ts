@@ -54,12 +54,10 @@ const appointmentCreate = z.object({
   ...envelope,
   kind: z.literal("appointment.create"),
   /** The id is mandatory: offline clients pre-assign it so later mutations can refer to it. */
-  payload: createAppointmentBaseSchema
-    .extend({ id: idSchema })
-    .refine(exactlyOneClient, {
-      message: "Provide exactly one of clientId or client",
-      path: ["clientId"],
-    }),
+  payload: createAppointmentBaseSchema.extend({ id: idSchema }).refine(exactlyOneClient, {
+    message: "Provide exactly one of clientId or client",
+    path: ["clientId"],
+  }),
 });
 
 const appointmentReschedule = z.object({
