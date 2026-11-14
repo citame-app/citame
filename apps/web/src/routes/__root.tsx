@@ -18,6 +18,7 @@ import { OfflineBanner } from "~/components/ui/states";
 import { ToastHost } from "~/components/ui/toast";
 import { createTranslator, DEFAULT_LOCALE, type Locale } from "~/i18n";
 import { I18nProvider, useI18n } from "~/i18n/react";
+import { buildCsp } from "~/lib/csp";
 import { salonQuery } from "~/lib/queries";
 import { pageMeta } from "~/lib/seo";
 import type { Theme } from "~/lib/theme";
@@ -34,7 +35,18 @@ const FALLBACK_SALON = {
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
   // Session-dependent HTML must never be cached by a shared cache.
-  headers: () => ({ "Cache-Control": "private, no-store" }),
+  // Annotated by hand: reading `ssr` from the inferred context makes it depend on `beforeLoad`.
+  headers: ({ ssr }: { ssr?: { nonce?: string } }) => ({
+    "Cache-Control": "private, no-store",
+    ...(ssr?.nonce
+      ? {
+          "Content-Security-Policy": buildCsp({
+            nonce: ssr.nonce,
+            https: (process.env.PUBLIC_URL ?? "").startsWith("https://"),
+          }),
+        }
+      : {}),
+  }),
   beforeLoad: async ({ context }) => {
     const [bootstrap, salon] = await Promise.all([
       context.queryClient.ensureQueryData(bootstrapQuery),

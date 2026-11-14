@@ -26,7 +26,7 @@ export const loadBootstrap = createServerFn({ method: "GET" }).handler(
     let session: MeResponse | null = null;
     if (cookie) {
       try {
-        session = await serverEndpoints(cookie).me();
+        session = await serverEndpoints(cookie, headers.get("x-request-id")).me();
       } catch (error) {
         // 401 simply means "signed out"; anything else must not break public pages.
         if (!(error instanceof ApiError && error.status === 401)) {

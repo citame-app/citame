@@ -206,3 +206,21 @@ describe("response forwarding", () => {
     });
   });
 });
+
+describe("operational endpoints stay internal", () => {
+  test("/api/metrics is never forwarded: the scrape endpoint is not a public route", async () => {
+    const { proxy, seen } = proxyWith();
+    const response = await proxy.handle(new Request("http://web/api/metrics"), "203.0.113.9");
+    expect(response.status).toBe(404);
+    expect(seen).toHaveLength(0);
+  });
+
+  test("the request id travels to the API", async () => {
+    const { proxy, seen } = proxyWith();
+    await proxy.handle(
+      new Request("http://web/api/services", { headers: { "x-request-id": "rid-0123456789" } }),
+      "203.0.113.9",
+    );
+    expect(headersOf(seen[0]).get("x-request-id")).toBe("rid-0123456789");
+  });
+});

@@ -52,6 +52,11 @@ export function createProxy({ apiUrl, trustProxy, fetch: doFetch = fetch }: Prox
     );
   }
 
+  /** Operational endpoints of the API that must never be reachable from the public origin. */
+  function isInternalOnly(url: URL): boolean {
+    return url.pathname === "/api/metrics" || url.pathname.startsWith("/api/metrics/");
+  }
+
   function matches(url: URL): boolean {
     return url.pathname === "/api" || url.pathname.startsWith("/api/") || isPassthrough(url);
   }
@@ -73,6 +78,12 @@ export function createProxy({ apiUrl, trustProxy, fetch: doFetch = fetch }: Prox
 
   async function handle(request: Request, socketAddress: string | null): Promise<Response> {
     const url = new URL(request.url);
+    if (isInternalOnly(url)) {
+      return Response.json(
+        { error: { code: "not_found", message: "Route not found" } },
+        { status: 404 },
+      );
+    }
     const headers = new Headers(request.headers);
     for (const name of HOP_BY_HOP) headers.delete(name);
     // The API is on the internal network: skip compression so the body streams back untouched.
@@ -102,7 +113,16 @@ export function createProxy({ apiUrl, trustProxy, fetch: doFetch = fetch }: Prox
         headers: responseHeaders,
       });
     } catch (error) {
-      console.error("API proxy failed", error);
+      console.error(
+        JSON.stringify({
+          time: new Date().toISOString(),
+          level: "error",
+          msg: "api proxy failed",
+          component: "web",
+          requestId: headers.get("x-request-id"),
+          error: error instanceof Error ? error.name : "unknown",
+        }),
+      );
       return Response.json(
         { error: { code: "internal_error", message: "The API is unavailable" } },
         { status: 502 },

@@ -13,6 +13,9 @@ const port = Number(process.env.PORT ?? 4173);
 const hostname = process.env.HOST ?? "0.0.0.0";
 const apiUrl = process.env.API_INTERNAL_URL ?? "http://localhost:3000";
 const trustProxy = process.env.WEB_TRUST_PROXY === "true";
+// HSTS only makes sense (and is only honoured) over https: opt in with the public https origin.
+const hsts =
+  process.env.WEB_HSTS === "true" || (process.env.PUBLIC_URL ?? "").startsWith("https://");
 
 const distDir = join(import.meta.dir, "dist");
 const entryUrl = pathToFileURL(join(distDir, "server", "server.js")).href;
@@ -24,6 +27,8 @@ const web = createWebServer({
   clientDir: join(distDir, "client"),
   ssr: (request) => entry.default.fetch(request),
   proxy: createProxy({ apiUrl, trustProxy }),
+  hsts,
+  log: (entry) => process.stdout.write(`${JSON.stringify(entry)}\n`),
 });
 
 const server = Bun.serve({

@@ -3,14 +3,20 @@ import { createEndpoints, type Endpoints } from "./endpoints";
 
 let browserEndpoints: Endpoints | undefined;
 
-/** Server-side endpoints: talk to the API directly, optionally on behalf of the visitor's cookie. */
-export function serverEndpoints(cookie?: string | null): Endpoints {
+/**
+ * Server-side endpoints: talk to the API directly, optionally on behalf of the visitor's cookie.
+ * `requestId` is the id the web server gave this visit, so API logs line up with web logs.
+ */
+export function serverEndpoints(cookie?: string | null, requestId?: string | null): Endpoints {
   const base = (process.env.API_INTERNAL_URL ?? "http://localhost:3000").replace(/\/+$/, "");
   return createEndpoints(
     createApiClient({
       restBase: base,
       authBase: base,
-      headers: (): Record<string, string> => (cookie ? { cookie } : {}),
+      headers: (): Record<string, string> => ({
+        ...(cookie ? { cookie } : {}),
+        ...(requestId ? { "x-request-id": requestId } : {}),
+      }),
     }),
   );
 }

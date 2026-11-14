@@ -12,8 +12,11 @@ let base: string;
 let dir: string;
 const proxied: string[] = [];
 
-function server(options: { ssr?: (request: Request) => Response | Promise<Response> } = {}) {
+function server(
+  options: { ssr?: (request: Request) => Response | Promise<Response>; hsts?: boolean } = {},
+) {
   return createWebServer({
+    hsts: options.hsts,
     clientDir: dir,
     ssr:
       options.ssr ??
@@ -129,5 +132,103 @@ describe("rendering", () => {
   test("POSTs are never answered from static files", async () => {
     const response = await get(server(), "/favicon.svg", { method: "POST", body: "x" });
     expect(await response.text()).toBe("<html>ssr</html>");
+  });
+});
+
+describe("security headers", () => {
+  test("every response, whichever path produced it, carries the baseline headers", async () => {
+    for (const path of ["/book", "/favicon.svg", "/api/services", "/healthz"]) {
+      const response = await get(server(), path);
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(response.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
+      expect(response.headers.get("x-frame-options")).toBe("DENY");
+      expect(response.headers.get("permissions-policy")).toContain("camera=()");
+      expect(response.headers.get("cross-origin-opener-policy")).toBe("same-origin");
+      expect(response.headers.get("strict-transport-security")).toBeNull();
+    }
+  });
+
+  test("HSTS is added only when the deployment is https", async () => {
+    const response = await get(server({ hsts: true }), "/book");
+    expect(response.headers.get("strict-transport-security")).toBe(
+      "max-age=31536000; includeSubDomains",
+    );
+  });
+
+  test("headers set by the app (its CSP) are kept, not overwritten", async () => {
+    const response = await get(
+      server({
+        ssr: () =>
+          new Response("x", {
+            headers: {
+              "content-type": "text/html",
+              "content-security-policy": "default-src 'self'",
+            },
+          }),
+      }),
+      "/book",
+    );
+    expect(response.headers.get("content-security-policy")).toBe("default-src 'self'");
+  });
+});
+
+describe("request ids and access log", () => {
+  function logged() {
+    const lines: Record<string, unknown>[] = [];
+    const handler = createWebServer({
+      clientDir: dir,
+      ssr: (request) =>
+        new Response(request.headers.get("x-request-id") ?? "none", {
+          headers: { "content-type": "text/plain" },
+        }),
+      proxy: {
+        matches: (url) => url.pathname.startsWith("/api/"),
+        handle: async (request) =>
+          new Response(request.headers.get("x-request-id") ?? "none", {
+            headers: { "content-type": "text/plain" },
+          }),
+      },
+      log: (entry) => lines.push(entry),
+    });
+    return { handler, lines };
+  }
+
+  test("a request id is generated, passed to SSR and the proxy, and returned", async () => {
+    const { handler } = logged();
+    const page = await get(handler, "/book");
+    const id = page.headers.get("x-request-id");
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(await page.text()).toBe(id as string);
+    const api = await get(handler, "/api/services");
+    expect(await api.text()).toBe(api.headers.get("x-request-id") as string);
+  });
+
+  test("a well-formed inbound id from the edge proxy is kept", async () => {
+    const { handler } = logged();
+    const response = await get(handler, "/book", {
+      headers: { "x-request-id": "edge-0123456789" },
+    });
+    expect(response.headers.get("x-request-id")).toBe("edge-0123456789");
+    expect(await response.text()).toBe("edge-0123456789");
+  });
+
+  test("logs one JSON-able line per request, without query strings or cookies", async () => {
+    const { handler, lines } = logged();
+    await get(handler, "/notifications/opt-out?token=SECRET", { headers: { cookie: "a=b" } });
+    const entry = lines.at(-1) ?? {};
+    expect(entry).toMatchObject({
+      msg: "request",
+      method: "GET",
+      path: "/notifications/opt-out",
+      status: 200,
+    });
+    expect(JSON.stringify(entry)).not.toContain("SECRET");
+    expect(JSON.stringify(entry)).not.toContain("a=b");
+  });
+
+  test("probes are not logged", async () => {
+    const { handler, lines } = logged();
+    await get(handler, "/healthz");
+    expect(lines).toHaveLength(0);
   });
 });

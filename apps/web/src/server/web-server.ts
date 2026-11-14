@@ -12,13 +12,30 @@ export interface WebServerOptions {
   /** The TanStack Start server entry's fetch handler. */
   ssr: (request: Request) => Response | Promise<Response>;
   proxy: ProxyLike;
+  /** Send HSTS. Only for deployments served over https (the header is ignored over http). */
+  hsts?: boolean;
+  /** Access log sink. Receives plain data (no query strings, cookies or addresses). */
+  log?: (entry: Record<string, unknown>) => void;
 }
+
+/** Baseline hardening for every response. The page CSP is set by the app itself (it needs a nonce). */
+const BASELINE_HEADERS: Record<string, string> = {
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "strict-origin-when-cross-origin",
+  "x-frame-options": "DENY",
+  "permissions-policy":
+    "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()",
+  "cross-origin-opener-policy": "same-origin",
+};
+
+const SAFE_REQUEST_ID = /^[A-Za-z0-9._-]{8,128}$/;
+const QUIET_PATHS = new Set(["/healthz"]);
 
 const COMPRESSIBLE = /^(text\/|application\/(json|javascript|xml)|image\/svg\+xml)/;
 const IMMUTABLE = "public, max-age=31536000, immutable";
 
 /** A small, dependency-free production server: health, API proxy, static files, then SSR. */
-export function createWebServer({ clientDir, ssr, proxy }: WebServerOptions) {
+export function createWebServer({ clientDir, ssr, proxy, hsts = false, log }: WebServerOptions) {
   const root = normalize(clientDir.endsWith(sep) ? clientDir : clientDir + sep);
   const gzipCache = new Map<string, Uint8Array>();
 
@@ -80,18 +97,56 @@ export function createWebServer({ clientDir, ssr, proxy }: WebServerOptions) {
     });
   }
 
+  async function route(
+    request: Request,
+    url: URL,
+    client: { address: string } | null,
+  ): Promise<Response> {
+    if (url.pathname === "/healthz") {
+      return Response.json({ status: "ok" }, { headers: { "cache-control": "no-store" } });
+    }
+    if (proxy.matches(url)) {
+      return compress(request, await proxy.handle(request, client?.address ?? null));
+    }
+    const asset = await staticFile(request, url.pathname);
+    if (asset) return asset;
+    return compress(request, await ssr(request));
+  }
+
   return {
     async fetch(request: Request, client: { address: string } | null): Promise<Response> {
+      const started = performance.now();
       const url = new URL(request.url);
-      if (url.pathname === "/healthz") {
-        return Response.json({ status: "ok" }, { headers: { "cache-control": "no-store" } });
+      const inbound = request.headers.get("x-request-id");
+      const requestId = inbound && SAFE_REQUEST_ID.test(inbound) ? inbound : crypto.randomUUID();
+      // One id for the whole visit: SSR server functions and the API proxy both read it from here.
+      const headers = new Headers(request.headers);
+      headers.set("x-request-id", requestId);
+      const tagged = new Request(request, { headers });
+
+      const response = await route(tagged, url, client);
+      const out = new Response(response.body, response);
+      for (const [name, value] of Object.entries(BASELINE_HEADERS)) {
+        if (!out.headers.has(name)) out.headers.set(name, value);
       }
-      if (proxy.matches(url)) {
-        return compress(request, await proxy.handle(request, client?.address ?? null));
+      if (hsts && !out.headers.has("strict-transport-security")) {
+        out.headers.set("strict-transport-security", "max-age=31536000; includeSubDomains");
       }
-      const asset = await staticFile(request, url.pathname);
-      if (asset) return asset;
-      return compress(request, await ssr(request));
+      out.headers.set("x-request-id", requestId);
+      if (log && !QUIET_PATHS.has(url.pathname)) {
+        log({
+          time: new Date().toISOString(),
+          level: out.status >= 500 ? "error" : "info",
+          msg: "request",
+          component: "web",
+          requestId,
+          method: request.method,
+          path: url.pathname,
+          status: out.status,
+          durationMs: Math.round((performance.now() - started) * 10) / 10,
+        });
+      }
+      return out;
     },
   };
 }
