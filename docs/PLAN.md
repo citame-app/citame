@@ -64,7 +64,7 @@ Each phase ends green (lint, typecheck, `bun test`, and the listed checks) and i
 3. **Web** — public booking flow (service → staff → slot → confirm), client account area, owner/staff dashboard (calendar, clients, services, schedules, reports with charts), Tailwind design system.
 4. **Sync protocol** — `sync_change`, push/pull/SSE endpoints, contract tests for idempotency, ordering and tombstones.
 5. **Desktop client** — GPUI app shell, local SQLite + outbox, calendar view, create/move/cancel, sync engine, OAuth PKCE login, offline indicator and conflict resolution UI.
-6. **MCP server** — OAuth 2.1 metadata and consent, tools listed above, tool-level authorization tests.
+6. **MCP server** — OAuth 2.1 metadata and consent, tools listed above, tool-level authorization tests. *Done; see ADR 0009 (desktop OAuth swap deferred).*
 7. **Notifications** — reminder scheduler (Valkey-backed queue), email provider adapter, optional SMS adapter behind an interface.
 8. **Hardening and release** — k6 load/contention suites, backups doc, observability (structured logs, health checks), production compose, self-hosting guide, open-source files (LICENSE, CONTRIBUTING, SECURITY).
 

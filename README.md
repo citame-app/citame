@@ -95,8 +95,19 @@ Errors look like `{ "error": { "code", "message" } }` with codes `validation_err
 | `RATE_LIMIT_GLOBAL_MAX`, `..._WINDOW_SECONDS` | `300`, `60`                             | Per client, every route except `/health`.                                                  |
 | `RATE_LIMIT_AUTH_MAX`, `..._WINDOW_SECONDS`   | `10`, `60`                              | Per client, sign-in and sign-up.                                                           |
 | `SYNC_STREAM_RATE_LIMIT_MAX`, `..._WINDOW_SECONDS` | `30`, `60`                         | New `/sync/stream` connections per caller.                                                 |
+| `MCP_RESOURCE_URL`                            | `<BETTER_AUTH_URL>/mcp`                 | Public URL of the MCP endpoint; it is the OAuth resource and token audience.               |
+| `OAUTH_ACCESS_TOKEN_TTL_SECONDS`, `OAUTH_REFRESH_TOKEN_TTL_SECONDS` | `900`, `1209600`          | Access (JWT) and refresh token lifetimes.                                                  |
+| `RATE_LIMIT_OAUTH_MAX`, `..._WINDOW_SECONDS`  | `60`, `60`                              | Per client: authorize, token, consent, revoke, introspect.                                 |
+| `RATE_LIMIT_OAUTH_REGISTER_MAX`, `..._WINDOW_SECONDS` | `10`, `60`                      | Per client: anonymous dynamic client registration.                                         |
+| `RATE_LIMIT_MCP_MAX`, `..._WINDOW_SECONDS`    | `120`, `60`                             | Per client: `/mcp` requests.                                                               |
 | `OWNER_EMAIL`, `OWNER_PASSWORD`, `OWNER_NAME` | none                                    | Only read by `bun run bootstrap:owner`; never logged.                                      |
 | `SALON_TIMEZONE`                              | `America/Argentina/Buenos_Aires`        | Passed through by Compose.                                                                 |
+
+## MCP server and OAuth 2.1
+
+AI assistants connect to `<origin>/mcp` (Streamable HTTP, stateless) and sign in through the OAuth 2.1 authorization server built into the API (Better Auth `oauthProvider()` + `jwt()`): dynamic client registration, authorization code with mandatory PKCE `S256`, consent screen in the web app (en and es-AR), 15 minute JWT access tokens bound to the MCP resource, rotating refresh tokens, RFC 8414 and RFC 9728 discovery, audit log of grants. Tools (`list_services`, `find_availability`, `create_appointment`, `cancel_appointment`, `list_my_appointments`, and staff-only `list_schedule`, `find_client`) call the same services and policy as REST, so a client token can never see another client's data. Connection guide, scopes and tool catalogue: [docs/mcp.md](docs/mcp.md). Decisions and threat model: [ADR 0009](docs/adr/0009-oauth-and-mcp.md). The desktop client is not on OAuth yet (follow-up listed there).
+
+Tests: `apps/api/src/oauth` (flow, PKCE, refresh rotation, CORS, rate limits, audit), `apps/api/src/mcp` (authorization matrix, booking rules, concurrency, token expiry, and an end-to-end test that runs the official MCP TypeScript SDK client against a live server through discovery, registration, PKCE and tool calls) in a dedicated `sob_test_mcp*` database, and `apps/web/e2e/oauth-consent.spec.ts` for the browser leg.
 
 ## Offline sync
 
@@ -104,7 +115,7 @@ The desktop client syncs through three endpoints: `POST /sync/push` (idempotent 
 
 ## Desktop client
 
-`apps/desktop` is the offline-first front-desk client: a Rust workspace with a GUI-free core (SQLite replica, outbox, sync engine, SSE nudges with a polling fallback, auth) and a GPUI app (day calendar with a column per staff member, create, move and cancel while offline, pending-sync badges, an online or offline indicator and a conflict review dialog). It signs in with the Better Auth session that the API supports today, behind a trait so the Phase 6 OAuth 2.1 + PKCE flow can replace it. Build, run and test instructions (including the headless sync tests against the real API): [apps/desktop/README.md](apps/desktop/README.md). Decisions: [ADR 0008](docs/adr/0008-desktop-client.md).
+`apps/desktop` is the offline-first front-desk client: a Rust workspace with a GUI-free core (SQLite replica, outbox, sync engine, SSE nudges with a polling fallback, auth) and a GPUI app (day calendar with a column per staff member, create, move and cancel while offline, pending-sync badges, an online or offline indicator and a conflict review dialog). It signs in with the Better Auth session that the API supports today, behind a trait so the OAuth 2.1 + PKCE flow (server side done in Phase 6, [ADR 0009](docs/adr/0009-oauth-and-mcp.md)) can replace it once `/sync/*` accepts bearer tokens. Build, run and test instructions (including the headless sync tests against the real API): [apps/desktop/README.md](apps/desktop/README.md). Decisions: [ADR 0008](docs/adr/0008-desktop-client.md).
 
 ## Web app
 

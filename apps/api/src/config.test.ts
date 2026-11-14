@@ -50,6 +50,15 @@ describe("loadConfig", () => {
     );
   });
 
+  test("an empty MCP_RESOURCE_URL (Compose passes unset variables as empty) means the default", () => {
+    const config = loadConfig({
+      BETTER_AUTH_SECRET: SECRET,
+      BETTER_AUTH_URL: "https://salon.example",
+      MCP_RESOURCE_URL: "",
+    });
+    expect(config.oauth.mcpResource).toBe("https://salon.example/mcp");
+  });
+
   test("derives the MCP resource from the public URL and exposes OAuth defaults", () => {
     const config = loadConfig({
       BETTER_AUTH_SECRET: SECRET,

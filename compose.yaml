@@ -57,6 +57,13 @@ services:
       RATE_LIMIT_AUTH_MAX: ${RATE_LIMIT_AUTH_MAX:-10}
       RATE_LIMIT_AUTH_WINDOW_SECONDS: ${RATE_LIMIT_AUTH_WINDOW_SECONDS:-60}
       SALON_TIMEZONE: ${SALON_TIMEZONE:-America/Argentina/Buenos_Aires}
+      # OAuth 2.1 / MCP (ADR 0009). The MCP resource defaults to ${BETTER_AUTH_URL}/mcp.
+      MCP_RESOURCE_URL: ${MCP_RESOURCE_URL:-}
+      OAUTH_ACCESS_TOKEN_TTL_SECONDS: ${OAUTH_ACCESS_TOKEN_TTL_SECONDS:-900}
+      OAUTH_REFRESH_TOKEN_TTL_SECONDS: ${OAUTH_REFRESH_TOKEN_TTL_SECONDS:-1209600}
+      RATE_LIMIT_OAUTH_MAX: ${RATE_LIMIT_OAUTH_MAX:-60}
+      RATE_LIMIT_OAUTH_REGISTER_MAX: ${RATE_LIMIT_OAUTH_REGISTER_MAX:-10}
+      RATE_LIMIT_MCP_MAX: ${RATE_LIMIT_MCP_MAX:-120}
       PORT: "3000"
     # Loopback only: with TRUST_PROXY=true anything that reaches the API directly could spoof
     # X-Forwarded-For, so the API is not published to the network.

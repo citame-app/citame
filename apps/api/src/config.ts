@@ -33,7 +33,7 @@ const envSchema = z.object({
    * Public URL of the MCP endpoint, which is also the OAuth resource (RFC 8707) and the token
    * audience. Defaults to `<BETTER_AUTH_URL>/mcp`: the web app's origin, forwarded to the API.
    */
-  MCP_RESOURCE_URL: z.url().optional(),
+  MCP_RESOURCE_URL: z.union([z.url(), z.literal("").transform(() => undefined)]).optional(),
   /** Lifetime of OAuth access tokens. Short on purpose: JWTs cannot be revoked before expiry. */
   OAUTH_ACCESS_TOKEN_TTL_SECONDS: positiveInt.default(900),
   /** Lifetime of OAuth refresh tokens (rotated on every use). */
