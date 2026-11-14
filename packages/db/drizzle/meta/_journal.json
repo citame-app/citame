@@ -36,6 +36,13 @@
       "when": 1794626980683,
       "tag": "0004_sync_triggers",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794677704582,
+      "tag": "0005_oauth_provider_tables",
+      "breakpoints": true
     }
   ]
 }
