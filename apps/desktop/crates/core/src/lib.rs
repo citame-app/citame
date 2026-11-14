@@ -9,6 +9,7 @@ pub mod ops;
 pub mod pkce;
 pub mod sse;
 pub mod store;
+pub mod sync;
 
 #[cfg(test)]
 mod offline_tests;
