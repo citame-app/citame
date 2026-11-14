@@ -1,0 +1,15 @@
+[workspace]
+resolver = "3"
+members = ["crates/core", "crates/app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+# xattr 0.2.3 (gpui -> gpui_http_client -> zed-async-tar) refers to libc::ENOATTR, which libc no
+# longer exports for Linux/glibc, so it does not compile. Linux uses ENODATA for the same
+# condition. Local copy with that single change; remove when gpui moves to a fixed xattr.
+[patch.crates-io]
+xattr = { path = "vendor/xattr" }
