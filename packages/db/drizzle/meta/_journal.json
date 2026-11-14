@@ -22,6 +22,20 @@
       "when": 1794606230673,
       "tag": "0002_auth_rbac_audit",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794626980079,
+      "tag": "0003_sync_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794626980683,
+      "tag": "0004_sync_triggers",
+      "breakpoints": true
     }
   ]
 }

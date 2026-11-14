@@ -5,3 +5,4 @@ export * from "./client";
 export * from "./salon-settings";
 export * from "./service";
 export * from "./staff";
+export * from "./sync";
