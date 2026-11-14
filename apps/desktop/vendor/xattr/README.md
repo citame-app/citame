@@ -1,5 +1,4 @@
-xattr
-=====
+# xattr
 
 [![Build Status](https://travis-ci.org/Stebalien/xattr.svg?branch=master)](https://travis-ci.org/Stebalien/xattr)
 [![Build Status](https://api.cirrus-ci.com/github/Stebalien/xattr.svg)](https://cirrus-ci.com/github/Stebalien/xattr)
@@ -10,11 +9,10 @@ Supported Platforms: Android, Linux, MacOS, FreeBSD, and NetBSD.
 
 API Documentation: https://stebalien.github.com/xattr/xattr/
 
-Unsupported Platforms
---------------------------
+## Unsupported Platforms
 
 This library includes no-op support for unsupported platforms. That is, it will
-build on *all* platforms but always fail on unsupported platforms.
+build on _all_ platforms but always fail on unsupported platforms.
 
 1. You can turn this off by disabling the default `unsupported` feature. If you
    do so, this library will fail to compile on unsupported platforms.

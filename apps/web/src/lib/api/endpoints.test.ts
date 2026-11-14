@@ -151,7 +151,9 @@ describe("notification endpoints", () => {
         body: init?.body ? JSON.parse(String(init.body)) : undefined,
       });
       const body = String(input).includes("opt-out") ? preview : prefs;
-      return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify(body), {
+        headers: { "content-type": "application/json" },
+      });
     }) as unknown as typeof fetch;
     const endpoints = createEndpoints(
       createApiClient({ restBase: "/api", authBase: "", fetch: fetcher }),

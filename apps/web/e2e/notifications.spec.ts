@@ -59,7 +59,9 @@ test.describe("notification preferences and opt-out", () => {
         const token = optOutToken(secret as string, me.clientId);
         await page.context().clearCookies();
         await page.goto(`/notifications/opt-out?token=${encodeURIComponent(token)}`);
-        await expect(page.getByRole("heading", { name: "Stop appointment reminders" })).toBeVisible();
+        await expect(
+          page.getByRole("heading", { name: "Stop appointment reminders" }),
+        ).toBeVisible();
         await expectNoSeriousA11yViolations(page, `opt-out (${scheme})`);
         await page.getByRole("button", { name: "Stop reminders" }).click();
         await expect(page.getByRole("heading", { name: "Reminders turned off" })).toBeVisible();

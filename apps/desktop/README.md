@@ -26,13 +26,13 @@ cargo run -p sob-desktop                    # needs a reachable API to sign in f
 
 Configuration is environment only:
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `SOB_API_URL` | `http://127.0.0.1:3000` | API origin (the web app's origin works too: it proxies `/api/auth`, `/sync`, `/me`) |
-| `SOB_DATA_DIR` | `$XDG_DATA_HOME/sisters-of-beauty/desktop` | `replica.db` (SQLite) and `session.json` (mode 0600) |
-| `SOB_LANG` / `LANG` | English | `es*` selects neutral es-AR |
-| `SOB_START_DATE` | today | `YYYY-MM-DD`, open the calendar on that day |
-| `SOB_START_VIEW` | none | `new`, `details` or `conflicts`: open that dialog at startup (QA and screenshots) |
+| Variable            | Default                                    | Meaning                                                                             |
+| ------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------- |
+| `SOB_API_URL`       | `http://127.0.0.1:3000`                    | API origin (the web app's origin works too: it proxies `/api/auth`, `/sync`, `/me`) |
+| `SOB_DATA_DIR`      | `$XDG_DATA_HOME/sisters-of-beauty/desktop` | `replica.db` (SQLite) and `session.json` (mode 0600)                                |
+| `SOB_LANG` / `LANG` | English                                    | `es*` selects neutral es-AR                                                         |
+| `SOB_START_DATE`    | today                                      | `YYYY-MM-DD`, open the calendar on that day                                         |
+| `SOB_START_VIEW`    | none                                       | `new`, `details` or `conflicts`: open that dialog at startup (QA and screenshots)   |
 
 Sign in with an owner or staff account (`bun run bootstrap:owner`, or an owner-created staff account). Once a session is saved the app opens straight into the calendar even without a connection.
 
