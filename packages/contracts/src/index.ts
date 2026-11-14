@@ -17,3 +17,4 @@ export * from "./reports";
 export * from "./salon";
 export * from "./services";
 export * from "./staff";
+export * from "./sync";
