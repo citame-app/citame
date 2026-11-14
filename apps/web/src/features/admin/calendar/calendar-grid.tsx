@@ -182,7 +182,12 @@ export function CalendarGrid(props: CalendarGridProps) {
   }
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-line bg-surface">
+    <section
+      aria-label={t("calendar.title")}
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: a horizontally scrollable region must be keyboard reachable
+      tabIndex={0}
+      className="overflow-x-auto rounded-xl border border-line bg-surface"
+    >
       <div className="min-w-fit">
         <div
           className="sticky top-16 z-20 grid border-b border-line bg-surface"
@@ -377,6 +382,9 @@ export function CalendarGrid(props: CalendarGridProps) {
                       >
                         <span className="flex items-center gap-1 font-semibold">
                           <Icon width={13} height={13} className="shrink-0" />
+                          <span className="shrink-0 tabular-nums">
+                            {formatTime(appointment.startsAt, timeZone, locale)}
+                          </span>{" "}
                           <span className="truncate">{appointment.clientName}</span>
                           {props.canMove(appointment) && (
                             <GripIcon
@@ -385,8 +393,8 @@ export function CalendarGrid(props: CalendarGridProps) {
                               className="ml-auto hidden shrink-0 opacity-50 md:block"
                             />
                           )}
-                        </span>
-                        <span className="truncate">{appointment.serviceNames.join(", ")}</span>
+                        </span>{" "}
+                        <span className="truncate">{appointment.serviceNames.join(", ")}</span>{" "}
                         <span className="mt-auto truncate font-medium">{status}</span>
                       </button>
                     </div>
@@ -411,6 +419,6 @@ export function CalendarGrid(props: CalendarGridProps) {
           })}
         </div>
       </div>
-    </div>
+    </section>
   );
 }
