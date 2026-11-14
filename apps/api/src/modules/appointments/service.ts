@@ -37,6 +37,8 @@ const MS_PER_MINUTE = 60_000;
 /** The authenticated caller on whose behalf a write happens; recorded in the audit log. */
 export interface Actor {
   userId: string;
+  /** Set when the change came through a delegated channel (an MCP client acting for the user). */
+  via?: { channel: string; clientId: string };
 }
 
 type AppointmentRow = typeof appointment.$inferSelect;
@@ -188,6 +190,7 @@ export async function createAppointment(
             endsAt: row.endsAt.toISOString(),
             serviceIds: services.map((s) => s.id),
             ...(request.override ? { override: true, noticeOverridden } : {}),
+            ...(actor.via ? { via: actor.via } : {}),
           },
         });
       }
@@ -490,6 +493,7 @@ export async function updateAppointment(
             version: updated.version,
             ...(transitionAction ? { fromStatus: current.status, toStatus: updated.status } : {}),
             ...(slotChanges && request.override ? { override: true, noticeOverridden } : {}),
+            ...(actor.via ? { via: actor.via } : {}),
           },
         });
       }

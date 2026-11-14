@@ -9,6 +9,7 @@ import { valkeySecondaryStorage } from "./auth/secondary-storage";
 import type { AppConfig } from "./config";
 import { DomainError } from "./errors";
 import { errorBody, respondError } from "./http";
+import { mcpRoutes } from "./mcp/routes";
 import { adminRoutes } from "./modules/admin/routes";
 import { appointmentsRoutes } from "./modules/appointments/routes";
 import { availabilityRoutes } from "./modules/availability/routes";
@@ -131,6 +132,19 @@ export function createApp(deps: AppDeps): App {
     app.use(path, publicCors);
   }
   app.use("/api/auth/oauth2/*", oauthAudit(auth, deps.db));
+
+  // MCP server (Streamable HTTP, stateless) and its RFC 9728 protected-resource metadata. The
+  // `/mcp` endpoint answers CORS for browser-based clients; authentication is bearer-only.
+  const mcp = mcpRoutes(deps, auth);
+  for (const path of ["/mcp", "/mcp/*"]) app.use(path, publicCors);
+  app.use(
+    "/mcp",
+    rateLimit({ limiter, scope: "mcp", rule: limits.mcp, trustProxy, failOpen: true }),
+  );
+  app.route("/mcp", mcp.app);
+  for (const path of ["/.well-known/oauth-protected-resource", new URL(mcp.metadataUrl).pathname]) {
+    app.get(path, (c) => c.json(mcp.metadata(), 200, { "Cache-Control": "public, max-age=300" }));
+  }
 
   // Better Auth owns everything under /api/auth (sign-up, sign-in, sign-out, session).
   app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
