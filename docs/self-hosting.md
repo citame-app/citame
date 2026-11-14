@@ -6,13 +6,13 @@ What the production stack is (`compose.prod.yaml`): Postgres 18, Valkey 9, the A
 
 ## 1. Requirements
 
-| Item        | Minimum                                                      | Notes                                                                                                   |
-| ----------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| Server      | 1 vCPU, 2 GB RAM, 10 GB disk, Linux x86_64 or arm64          | Container limits in the compose file add up to about 3.5 GB at their ceiling; real use is far below it. The load figures in [performance.md](performance.md) were measured on a laptop. |
-| Software    | Docker Engine 26+ with the Compose plugin, `git`, `openssl`  | Nothing else is installed on the host; images build from source (a few minutes the first time).         |
-| Network     | A public IPv4 (or IPv6) address, ports 80 and 443 open       | Port 80 is needed by Let's Encrypt validation.                                                          |
-| Domain      | A host name you control, e.g. `salon.example`                | Cookies are `Secure`, so the public site must be https.                                                 |
-| Email       | An SMTP account (provider, or your own server)               | Required: clients must confirm their address, and reminders go out by email. See section 4.             |
+| Item     | Minimum                                                     | Notes                                                                                                                                                                                   |
+| -------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Server   | 1 vCPU, 2 GB RAM, 10 GB disk, Linux x86_64 or arm64         | Container limits in the compose file add up to about 3.5 GB at their ceiling; real use is far below it. The load figures in [performance.md](performance.md) were measured on a laptop. |
+| Software | Docker Engine 26+ with the Compose plugin, `git`, `openssl` | Nothing else is installed on the host; images build from source (a few minutes the first time).                                                                                         |
+| Network  | A public IPv4 (or IPv6) address, ports 80 and 443 open      | Port 80 is needed by Let's Encrypt validation.                                                                                                                                          |
+| Domain   | A host name you control, e.g. `salon.example`               | Cookies are `Secure`, so the public site must be https.                                                                                                                                 |
+| Email    | An SMTP account (provider, or your own server)              | Required: clients must confirm their address, and reminders go out by email. See section 4.                                                                                             |
 
 ## 2. DNS and TLS
 
@@ -113,17 +113,17 @@ The Linux front-desk app (`apps/desktop`) points at your site: `SOB_API_URL=http
 
 ## 9. Troubleshooting
 
-| Symptom                                           | Look at                                                                                                                             |
-| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `docker compose up` fails with "set POSTGRES_PASSWORD" / "set PUBLIC_URL" | The `.env` file is missing a required variable, or you are not in the directory that holds it.                       |
-| API container restarts, log says `Invalid environment configuration`     | The message lists every problem: secret shorter than 32 characters, missing `SMTP_URL`, verification required with no provider.      |
-| Cannot sign in, page reloads on submit            | Cookies are `Secure`: you must use https (or `localhost`). Check that `PUBLIC_URL` is exactly the address in the browser bar.         |
-| Sign-up "check your inbox" but nothing arrives    | SMTP credentials or sender domain (spam folder, SPF/DKIM). Log line `account email failed`.                                          |
-| Caddy cannot get a certificate                    | DNS not pointing at the server yet, ports 80/443 closed, or another service holds them. `docker compose ... logs caddy`.             |
-| Everybody gets 429 "rate_limited"                 | All visitors share one address: the proxy does not append `X-Forwarded-For`, or `WEB_TRUST_PROXY` is wrong.                         |
-| `/ready` is 503                                   | The body names `database` or `valkey`; check that container's health and logs.                                                       |
-| Reminders never go out                            | Worker not running (`ps`), no provider configured, or the appointment is not yet inside a reminder window; `GET /admin/notifications/stats` as owner. |
-| "Slot taken" when two people book at once         | Normal: the database constraint decided who was first.                                                                               |
-| Disk fills up                                     | Docker logs rotate (10 MB x 5); Postgres growth is the sync log and reminders, trimmed daily by housekeeping.                        |
+| Symptom                                                                   | Look at                                                                                                                                               |
+| ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `docker compose up` fails with "set POSTGRES_PASSWORD" / "set PUBLIC_URL" | The `.env` file is missing a required variable, or you are not in the directory that holds it.                                                        |
+| API container restarts, log says `Invalid environment configuration`      | The message lists every problem: secret shorter than 32 characters, missing `SMTP_URL`, verification required with no provider.                       |
+| Cannot sign in, page reloads on submit                                    | Cookies are `Secure`: you must use https (or `localhost`). Check that `PUBLIC_URL` is exactly the address in the browser bar.                         |
+| Sign-up "check your inbox" but nothing arrives                            | SMTP credentials or sender domain (spam folder, SPF/DKIM). Log line `account email failed`.                                                           |
+| Caddy cannot get a certificate                                            | DNS not pointing at the server yet, ports 80/443 closed, or another service holds them. `docker compose ... logs caddy`.                              |
+| Everybody gets 429 "rate_limited"                                         | All visitors share one address: the proxy does not append `X-Forwarded-For`, or `WEB_TRUST_PROXY` is wrong.                                           |
+| `/ready` is 503                                                           | The body names `database` or `valkey`; check that container's health and logs.                                                                        |
+| Reminders never go out                                                    | Worker not running (`ps`), no provider configured, or the appointment is not yet inside a reminder window; `GET /admin/notifications/stats` as owner. |
+| "Slot taken" when two people book at once                                 | Normal: the database constraint decided who was first.                                                                                                |
+| Disk fills up                                                             | Docker logs rotate (10 MB x 5); Postgres growth is the sync log and reminders, trimmed daily by housekeeping.                                         |
 
 Still stuck? Open an issue with the `X-Request-Id` of the failing request and the relevant JSON log lines (no secrets), or follow [SECURITY.md](../SECURITY.md) if it is a vulnerability.
