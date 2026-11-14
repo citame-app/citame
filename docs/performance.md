@@ -40,3 +40,21 @@ See the section at the end of this file.
 - Bookings were made as the owner to avoid creating thousands of client accounts; the booking transaction is the same for clients.
 - The DB pool is the default 10 connections per process; the 200-racer run was served by one API process.
 - Numbers will differ on your hardware, with a remote database, or with a larger catalogue and appointment history. Re-run `bun run k6:*` after changes that touch the booking or availability path.
+
+### Lighthouse (mobile preset, performance category, Lighthouse 13.6, production build)
+
+Measured against the production-mode stack on the machine above, signed in as the owner for the admin pages (the cookie is sent as a header; the calendar URL includes `?view=day` so the redirect to it does not drop it). Five runs per page; the median is shown.
+
+| Page | Default throttling (4x CPU): score, TBT | 6x CPU slowdown: score, TBT | Transfer |
+| --- | --- | --- | --- |
+| `/admin` | 96, 215 ms | 90, 396 ms | 387 kB |
+| `/admin/calendar?view=day` | 97, 187 ms | 89, 456 ms | 401 kB |
+| `/book/time?services=..&staff=..` | 99, 146 ms | 87, 527 ms | 394 kB |
+
+LCP is about 750 ms on every page at both settings (the first paint is server-rendered HTML plus the CSS), CLS 0 except 0.015 on the calendar.
+
+**Honest status of the earlier numbers (calendar 79, `/admin` 88, `/book/time` 92 with a ~525 kB bundle).** They could not be reproduced: on the same code the pages score 96 to 99 at default throttling and 87 to 90 with a harsher 6x slowdown, and the transfer is 387 to 401 kB because the Recharts chunk (393 kB) is its own route chunk and is not loaded outside `/admin/reports`. Run-to-run noise is large (TBT of one page ranged 240 to 990 ms across identical runs), so differences of a few points are not evidence.
+
+**What was tried, and why nothing was kept.** The calendar's appointment drawer, new-appointment sheet and shortcut help were moved behind `React.lazy` (they are only needed after a click). The transfer for the calendar fell by 6 kB (401 to 395 kB) but the median score and TBT did not move beyond noise (6x slowdown: 89 before, 86 after, with TBT swinging 350 to 880 ms between runs), and it removes the drawer's exit animation. It was reverted rather than claimed as a win. What remains in the critical path is the shared entry chunk (about 128 kB gzip: React, the router, TanStack Query and the Zod contracts), not route code; shrinking it means replacing Zod on the client with a lighter validator, which is a larger change than this phase.
+
+The route-level splitting TanStack Start already performs, the nonce CSP (no inline-script penalty) and long-lived immutable asset caching are in place; the CSP and the extra headers added in this phase do not show up in the numbers (the pre-CSP pages were not re-measured for comparison, so there is no before/after for that change).
