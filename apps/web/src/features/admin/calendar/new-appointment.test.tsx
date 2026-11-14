@@ -1,0 +1,187 @@
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderApp } from "../../../../test/render";
+import { NewAppointmentSheet } from "./new-appointment";
+
+const ANA = "0198f5a0-7b1c-7000-8000-000000000201";
+const BEA = "0198f5a0-7b1c-7000-8000-000000000202";
+const CUT = "0198f5a0-7b1c-7000-8000-000000000101";
+const COLOR = "0198f5a0-7b1c-7000-8000-000000000103";
+const CLIENT = "0198f5a0-7b1c-7000-8000-0000000000c1";
+const realFetch = globalThis.fetch;
+
+let posts: unknown[];
+let postReply: { status: number; body: unknown };
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+beforeEach(() => {
+  posts = [];
+  postReply = {
+    status: 201,
+    body: {
+      id: "0198f5a0-7b1c-7000-8000-0000000000a9",
+      staffId: ANA,
+      clientId: CLIENT,
+      startsAt: "2026-03-09T12:00:00.000Z",
+      endsAt: "2026-03-09T12:45:00.000Z",
+      status: "booked",
+      notes: null,
+      version: 1,
+      services: [],
+      createdAt: "2026-03-09T10:00:00.000Z",
+      updatedAt: "2026-03-09T10:00:00.000Z",
+    },
+  };
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input), "http://localhost");
+    if (url.pathname === "/api/services") {
+      return json({
+        services: [
+          {
+            id: CUT,
+            name: "Haircut",
+            description: null,
+            durationMinutes: 45,
+            bufferMinutes: 15,
+            priceCents: 1_500_000,
+            currency: "ARS",
+          },
+          {
+            id: COLOR,
+            name: "Hair color",
+            description: null,
+            durationMinutes: 90,
+            bufferMinutes: 15,
+            priceCents: 4_500_000,
+            currency: "ARS",
+          },
+        ],
+      });
+    }
+    if (url.pathname === "/api/admin/staff") {
+      return json({
+        staff: [
+          { id: ANA, displayName: "Ana", active: true, userId: null, serviceIds: [CUT, COLOR] },
+          { id: BEA, displayName: "Bea", active: true, userId: null, serviceIds: [CUT] },
+        ],
+      });
+    }
+    if (url.pathname === "/api/admin/clients") {
+      const q = url.searchParams.get("search") ?? "";
+      const all = [
+        {
+          id: CLIENT,
+          name: "Lucia Perez",
+          phone: "+54 9 11 5555-0000",
+          email: null,
+          notes: null,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          appointmentCount: 2,
+          lastVisitAt: null,
+        },
+      ];
+      const clients = all.filter((c) => c.name.toLowerCase().includes(q.toLowerCase()));
+      return json({ clients, page: 1, pageSize: 8, total: clients.length });
+    }
+    if (url.pathname === "/api/appointments" && init?.method === "POST") {
+      posts.push(JSON.parse(String(init.body)));
+      return json(postReply.body, postReply.status);
+    }
+    return json({}, 404);
+  }) as unknown as typeof fetch;
+});
+afterEach(() => {
+  globalThis.fetch = realFetch;
+});
+
+const open = (props: Partial<Parameters<typeof NewAppointmentSheet>[0]> = {}) =>
+  renderApp(
+    <NewAppointmentSheet
+      open
+      onOpenChange={() => {}}
+      initial={{ staffId: ANA, date: "2026-03-09", minutesOfDay: 9 * 60 }}
+      role="owner"
+      ownStaffId={null}
+      {...props}
+    />,
+  );
+
+describe("NewAppointmentSheet", () => {
+  test("is prefilled from the clicked slot", async () => {
+    open();
+    expect(await screen.findByRole("dialog", { name: "New appointment" })).toBeInTheDocument();
+    expect(await screen.findByLabelText("Team member")).toHaveValue(ANA);
+    expect(screen.getByLabelText("Date")).toHaveValue("2026-03-09");
+    expect(screen.getByLabelText("Start time")).toHaveValue("09:00");
+  });
+
+  test("only offers the services the chosen team member performs", async () => {
+    open({ initial: { staffId: BEA, date: "2026-03-09", minutesOfDay: 600 } });
+    expect(await screen.findByRole("checkbox", { name: /Haircut/ })).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /Hair color/ })).toBeNull();
+  });
+
+  test("submitting an empty form lists what is missing and sends nothing", async () => {
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "Create appointment" }));
+    expect(await screen.findByText("Choose a client or enter a name")).toBeInTheDocument();
+    expect(screen.getByText("Choose at least one service")).toBeInTheDocument();
+    expect(posts).toHaveLength(0);
+  });
+
+  test("books an existing client found by search, with the notice override", async () => {
+    const onCreated = mock();
+    open({ onCreated });
+    fireEvent.change(await screen.findByLabelText("Search by name, phone or email"), {
+      target: { value: "lucia" },
+    });
+    fireEvent.click(await screen.findByRole("radio", { name: /Lucia Perez/ }));
+    fireEvent.click(await screen.findByRole("checkbox", { name: /Haircut/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Create appointment" }));
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]).toEqual({
+      staffId: ANA,
+      serviceIds: [CUT],
+      startsAt: "2026-03-09T12:00:00.000Z",
+      clientId: CLIENT,
+      override: true,
+    });
+    await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+  });
+
+  test("books a brand new client inline", async () => {
+    open();
+    fireEvent.click(await screen.findByRole("radio", { name: "New client" }));
+    fireEvent.change(screen.getByLabelText("Full name"), { target: { value: "Nora Diaz" } });
+    fireEvent.change(screen.getByLabelText("Phone (optional)"), {
+      target: { value: "+54 9 11 4444-1111" },
+    });
+    fireEvent.click(await screen.findByRole("checkbox", { name: /Hair color/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Create appointment" }));
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]).toMatchObject({
+      client: { name: "Nora Diaz", phone: "+54 9 11 4444-1111" },
+      serviceIds: [COLOR],
+    });
+  });
+
+  test("slot_taken keeps the form and explains how to recover", async () => {
+    postReply = { status: 409, body: { error: { code: "slot_taken", message: "taken" } } };
+    open();
+    fireEvent.click(await screen.findByRole("radio", { name: "New client" }));
+    fireEvent.change(screen.getByLabelText("Full name"), { target: { value: "Nora" } });
+    fireEvent.click(await screen.findByRole("checkbox", { name: /Haircut/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Create appointment" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Someone just took that time. Pick another time to continue.");
+    expect(screen.getByLabelText("Full name")).toHaveValue("Nora");
+    expect(screen.getByLabelText("Start time")).toHaveFocus();
+  });
+
+  test("staff book only into their own calendar", async () => {
+    open({ role: "staff", ownStaffId: ANA });
+    expect(await screen.findByLabelText("Team member")).toBeDisabled();
+  });
+});

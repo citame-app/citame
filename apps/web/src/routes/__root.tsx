@@ -165,6 +165,7 @@ function Chrome({
   const mainRef = useRef<HTMLElement>(null);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const firstRender = useRef(true);
+  const inAdmin = pathname === "/admin" || pathname.startsWith("/admin/");
 
   // Move focus to the page content after client-side navigations so keyboard and screen reader
   // users land on the new page instead of being left on the link they activated.
@@ -197,7 +198,7 @@ function Chrome({
       <main id="main" ref={mainRef} tabIndex={-1} className="flex-1 outline-none">
         <Outlet />
       </main>
-      <Footer salonName={salonName} timeZone={timeZone} />
+      {!inAdmin && <Footer salonName={salonName} timeZone={timeZone} />}
     </div>
   );
 }

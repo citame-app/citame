@@ -37,6 +37,7 @@ function MockLink({
       href: String(to ?? "#"),
       className,
       "aria-label": (rest as Record<string, string>)["aria-label"],
+      "aria-current": (rest as Record<string, string>)["aria-current"],
     },
     children as never,
   );
@@ -45,6 +46,17 @@ mock.module("@tanstack/react-router", () => ({
   ...router,
   Link: MockLink,
   useNavigate: () => () => Promise.resolve(),
+  // Tests drive the unsaved-changes blocker through these globals.
+  useBlocker: (options: unknown) => {
+    (globalThis as Record<string, unknown>).__blockerOptions = options;
+    return (
+      (globalThis as { __blockerState?: unknown }).__blockerState ?? {
+        status: "idle",
+        proceed() {},
+        reset() {},
+      }
+    );
+  },
   useRouter: () => ({ invalidate: () => Promise.resolve(), navigate: () => Promise.resolve() }),
 }));
 afterEach(() => {

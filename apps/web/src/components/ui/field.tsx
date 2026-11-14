@@ -1,9 +1,9 @@
-import { type InputHTMLAttributes, type ReactNode, useId, useState } from "react";
+import { type ComponentProps, type ReactNode, useId, useState } from "react";
 import { useI18n } from "~/i18n/react";
 import { cn } from "~/lib/cn";
 import { EyeIcon, EyeOffIcon } from "./icons";
 
-export interface TextFieldProps extends Omit<InputHTMLAttributes<HTMLInputElement>, "id"> {
+export interface TextFieldProps extends Omit<ComponentProps<"input">, "id"> {
   label: string;
   hint?: string;
   error?: string;

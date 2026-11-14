@@ -18,10 +18,13 @@ import { Route as SignUpRouteImport } from './routes/sign-up'
 import { Route as AccountIndexRouteImport } from './routes/account.index'
 import { Route as AccountProfileRouteImport } from './routes/account.profile'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
+import { Route as AdminCalendarRouteImport } from './routes/admin.calendar'
 import { Route as BookIndexRouteImport } from './routes/book.index'
 import { Route as BookProfessionalRouteImport } from './routes/book.professional'
 import { Route as BookReviewRouteImport } from './routes/book.review'
 import { Route as BookTimeRouteImport } from './routes/book.time'
+import { Route as AdminClientsIndexRouteImport } from './routes/admin.clients.index'
+import { Route as AdminClientsIdRouteImport } from './routes/admin.clients.$id'
 import { Route as BookConfirmedAppointmentIdRouteImport } from './routes/book.confirmed.$appointmentId'
 import { Route as AccountAppointmentsIdRescheduleRouteImport } from './routes/account.appointments.$id.reschedule'
 
@@ -70,6 +73,11 @@ const AdminIndexRoute = AdminIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminCalendarRoute = AdminCalendarRouteImport.update({
+  id: '/calendar',
+  path: '/calendar',
+  getParentRoute: () => AdminRoute,
+} as any)
 const BookIndexRoute = BookIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -89,6 +97,16 @@ const BookTimeRoute = BookTimeRouteImport.update({
   id: '/time',
   path: '/time',
   getParentRoute: () => BookRoute,
+} as any)
+const AdminClientsIndexRoute = AdminClientsIndexRouteImport.update({
+  id: '/clients/',
+  path: '/clients/',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminClientsIdRoute = AdminClientsIdRouteImport.update({
+  id: '/clients/$id',
+  path: '/clients/$id',
+  getParentRoute: () => AdminRoute,
 } as any)
 const BookConfirmedAppointmentIdRoute =
   BookConfirmedAppointmentIdRouteImport.update({
@@ -111,13 +129,16 @@ export interface FileRoutesByFullPath {
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
   '/account/profile': typeof AccountProfileRoute
+  '/admin/calendar': typeof AdminCalendarRoute
   '/book/professional': typeof BookProfessionalRoute
   '/book/review': typeof BookReviewRoute
   '/book/time': typeof BookTimeRoute
   '/account/': typeof AccountIndexRoute
   '/admin/': typeof AdminIndexRoute
   '/book/': typeof BookIndexRoute
+  '/admin/clients/$id': typeof AdminClientsIdRoute
   '/book/confirmed/$appointmentId': typeof BookConfirmedAppointmentIdRoute
+  '/admin/clients/': typeof AdminClientsIndexRoute
   '/account/appointments/$id/reschedule': typeof AccountAppointmentsIdRescheduleRoute
 }
 export interface FileRoutesByTo {
@@ -125,13 +146,16 @@ export interface FileRoutesByTo {
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
   '/account/profile': typeof AccountProfileRoute
+  '/admin/calendar': typeof AdminCalendarRoute
   '/book/professional': typeof BookProfessionalRoute
   '/book/review': typeof BookReviewRoute
   '/book/time': typeof BookTimeRoute
   '/account': typeof AccountIndexRoute
   '/admin': typeof AdminIndexRoute
   '/book': typeof BookIndexRoute
+  '/admin/clients/$id': typeof AdminClientsIdRoute
   '/book/confirmed/$appointmentId': typeof BookConfirmedAppointmentIdRoute
+  '/admin/clients': typeof AdminClientsIndexRoute
   '/account/appointments/$id/reschedule': typeof AccountAppointmentsIdRescheduleRoute
 }
 export interface FileRoutesById {
@@ -143,13 +167,16 @@ export interface FileRoutesById {
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
   '/account/profile': typeof AccountProfileRoute
+  '/admin/calendar': typeof AdminCalendarRoute
   '/book/professional': typeof BookProfessionalRoute
   '/book/review': typeof BookReviewRoute
   '/book/time': typeof BookTimeRoute
   '/account/': typeof AccountIndexRoute
   '/admin/': typeof AdminIndexRoute
   '/book/': typeof BookIndexRoute
+  '/admin/clients/$id': typeof AdminClientsIdRoute
   '/book/confirmed/$appointmentId': typeof BookConfirmedAppointmentIdRoute
+  '/admin/clients/': typeof AdminClientsIndexRoute
   '/account/appointments/$id/reschedule': typeof AccountAppointmentsIdRescheduleRoute
 }
 export interface FileRouteTypes {
@@ -162,13 +189,16 @@ export interface FileRouteTypes {
     | '/sign-in'
     | '/sign-up'
     | '/account/profile'
+    | '/admin/calendar'
     | '/book/professional'
     | '/book/review'
     | '/book/time'
     | '/account/'
     | '/admin/'
     | '/book/'
+    | '/admin/clients/$id'
     | '/book/confirmed/$appointmentId'
+    | '/admin/clients/'
     | '/account/appointments/$id/reschedule'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -176,13 +206,16 @@ export interface FileRouteTypes {
     | '/sign-in'
     | '/sign-up'
     | '/account/profile'
+    | '/admin/calendar'
     | '/book/professional'
     | '/book/review'
     | '/book/time'
     | '/account'
     | '/admin'
     | '/book'
+    | '/admin/clients/$id'
     | '/book/confirmed/$appointmentId'
+    | '/admin/clients'
     | '/account/appointments/$id/reschedule'
   id:
     | '__root__'
@@ -193,13 +226,16 @@ export interface FileRouteTypes {
     | '/sign-in'
     | '/sign-up'
     | '/account/profile'
+    | '/admin/calendar'
     | '/book/professional'
     | '/book/review'
     | '/book/time'
     | '/account/'
     | '/admin/'
     | '/book/'
+    | '/admin/clients/$id'
     | '/book/confirmed/$appointmentId'
+    | '/admin/clients/'
     | '/account/appointments/$id/reschedule'
   fileRoutesById: FileRoutesById
 }
@@ -277,6 +313,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminIndexRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/calendar': {
+      id: '/admin/calendar'
+      path: '/calendar'
+      fullPath: '/admin/calendar'
+      preLoaderRoute: typeof AdminCalendarRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/book/': {
       id: '/book/'
       path: '/'
@@ -304,6 +347,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/book/time'
       preLoaderRoute: typeof BookTimeRouteImport
       parentRoute: typeof BookRoute
+    }
+    '/admin/clients/': {
+      id: '/admin/clients/'
+      path: '/clients'
+      fullPath: '/admin/clients/'
+      preLoaderRoute: typeof AdminClientsIndexRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/clients/$id': {
+      id: '/admin/clients/$id'
+      path: '/clients/$id'
+      fullPath: '/admin/clients/$id'
+      preLoaderRoute: typeof AdminClientsIdRouteImport
+      parentRoute: typeof AdminRoute
     }
     '/book/confirmed/$appointmentId': {
       id: '/book/confirmed/$appointmentId'
@@ -338,11 +395,17 @@ const AccountRouteWithChildren =
   AccountRoute._addFileChildren(AccountRouteChildren)
 
 interface AdminRouteChildren {
+  AdminCalendarRoute: typeof AdminCalendarRoute
   AdminIndexRoute: typeof AdminIndexRoute
+  AdminClientsIdRoute: typeof AdminClientsIdRoute
+  AdminClientsIndexRoute: typeof AdminClientsIndexRoute
 }
 
 const AdminRouteChildren: AdminRouteChildren = {
+  AdminCalendarRoute: AdminCalendarRoute,
   AdminIndexRoute: AdminIndexRoute,
+  AdminClientsIdRoute: AdminClientsIdRoute,
+  AdminClientsIndexRoute: AdminClientsIndexRoute,
 }
 
 const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)

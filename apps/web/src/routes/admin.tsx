@@ -1,43 +1,37 @@
-import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
-import { PageContainer } from "~/components/pages";
-import { createTranslator } from "~/i18n";
+import { createFileRoute, Outlet, redirect, useRouterState } from "@tanstack/react-router";
+import { adminGuard, sectionOfPath } from "~/features/admin/nav";
+import { adminHead } from "~/features/admin/route-head";
+import { AdminShell } from "~/features/admin/shell";
 import { resolveAccess } from "~/lib/auth/access";
-import { pageMeta } from "~/lib/seo";
 
-/**
- * Staff and owner area. Phase 3b-2 builds the dashboard inside this layout: the guard, the shell
- * and the `/admin/*` routing are already in place.
- */
+/** Staff and owner area: guard, role-based navigation shell and the `/admin/*` pages. */
 export const Route = createFileRoute("/admin")({
   beforeLoad: ({ context, location }) => {
     const decision = resolveAccess("admin", context.session);
     if (decision.type === "signin") {
       throw redirect({ to: "/sign-in", search: { redirect: location.href } });
     }
-    if (decision.type === "forbidden") throw redirect({ to: "/account" });
+    if (decision.type === "forbidden" || !context.session) throw redirect({ to: "/account" });
+    const guard = adminGuard(location.pathname, context.session.user.role);
+    if (guard.type === "redirect") {
+      throw redirect(
+        guard.to === "/account"
+          ? { to: "/account" }
+          : { to: "/admin", search: { notice: guard.notice } },
+      );
+    }
   },
-  head: ({ match }) => {
-    const { locale, salon } = match.context;
-    const t = createTranslator(locale);
-    return {
-      meta: pageMeta({
-        title: t("admin.title"),
-        description: t("admin.lead"),
-        siteName: salon.name,
-        locale,
-        noindex: true,
-      }),
-    };
-  },
+  head: adminHead("admin.title"),
   component: AdminLayout,
 });
 
 function AdminLayout() {
+  const { session } = Route.useRouteContext();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  if (!session) return null;
   return (
-    <PageContainer width="max-w-6xl">
-      <div className="py-8 sm:py-12">
-        <Outlet />
-      </div>
-    </PageContainer>
+    <AdminShell role={session.user.role} active={sectionOfPath(pathname)}>
+      <Outlet />
+    </AdminShell>
   );
 }
