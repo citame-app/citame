@@ -4,6 +4,9 @@
  *
  * - `/api/auth/*` is forwarded unchanged (Better Auth is mounted there in the API).
  * - every other `/api/<path>` is forwarded as `/<path>` (the API's REST routes live at the root).
+ * - `/mcp` and `/.well-known/*` are forwarded unchanged. The OAuth issuer and the MCP resource
+ *   are public URLs on this origin (ADR 0009), and RFC 8414 / RFC 9728 put their metadata under
+ *   the origin's `/.well-known/`, so the browser-facing origin has to serve them.
  *
  * TRUST_PROXY: the API reads the client IP from the LAST `X-Forwarded-For` entry when it runs with
  * `TRUST_PROXY=true`. This proxy is that single trusted hop, so it REPLACES the header with one
@@ -41,11 +44,20 @@ export interface ProxyOptions {
 export function createProxy({ apiUrl, trustProxy, fetch: doFetch = fetch }: ProxyOptions) {
   const base = apiUrl.replace(/\/+$/, "");
 
+  function isPassthrough(url: URL): boolean {
+    return (
+      url.pathname === "/mcp" ||
+      url.pathname.startsWith("/mcp/") ||
+      url.pathname.startsWith("/.well-known/")
+    );
+  }
+
   function matches(url: URL): boolean {
-    return url.pathname === "/api" || url.pathname.startsWith("/api/");
+    return url.pathname === "/api" || url.pathname.startsWith("/api/") || isPassthrough(url);
   }
 
   function targetFor(url: URL): string {
+    if (isPassthrough(url)) return `${base}${url.pathname}${url.search}`;
     const path = url.pathname.slice("/api".length) || "/";
     const upstreamPath = path.startsWith("/auth/") || path === "/auth" ? `/api${path}` : path;
     return `${base}${upstreamPath}${url.search}`;

@@ -50,6 +50,36 @@ describe("route mapping", () => {
   });
 });
 
+describe("OAuth discovery and MCP routes", () => {
+  test("/mcp and /.well-known/* are handled by the proxy", () => {
+    const { proxy } = proxyWith();
+    expect(proxy.matches(new URL("http://web/mcp"))).toBe(true);
+    expect(proxy.matches(new URL("http://web/.well-known/oauth-protected-resource/mcp"))).toBe(true);
+    expect(
+      proxy.matches(new URL("http://web/.well-known/oauth-authorization-server/api/auth")),
+    ).toBe(true);
+    expect(proxy.matches(new URL("http://web/mcpx"))).toBe(false);
+    expect(proxy.matches(new URL("http://web/.well-known-other"))).toBe(false);
+    expect(proxy.matches(new URL("http://web/consent"))).toBe(false);
+  });
+
+  test("they reach the API at the same path, query included", async () => {
+    const { proxy, seen } = proxyWith();
+    await proxy.handle(
+      new Request("http://web/mcp", { method: "POST", body: "{}" }),
+      "203.0.113.9",
+    );
+    await proxy.handle(
+      new Request("http://web/.well-known/oauth-protected-resource/mcp?x=1"),
+      "203.0.113.9",
+    );
+    expect(seen.map((s) => s.url)).toEqual([
+      "http://api:3000/mcp",
+      "http://api:3000/.well-known/oauth-protected-resource/mcp?x=1",
+    ]);
+  });
+});
+
 describe("request forwarding", () => {
   test("forwards method, body, cookie, origin and content type", async () => {
     const { proxy, seen } = proxyWith();
