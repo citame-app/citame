@@ -31,13 +31,17 @@ export function toolFailure(error: unknown): ToolFailure {
   return { code: "internal_error", message: "The salon system had an unexpected problem." };
 }
 
-/** MCP tool result flagged as an error, with the next step spelled out. */
+/**
+ * MCP tool result flagged as an error, with the next step spelled out. The machine-readable
+ * code travels in `_meta`, not in `structuredContent`: clients validate structured content
+ * against the tool's output schema, and an error is not an instance of it.
+ */
 export function errorResult(failure: ToolFailure) {
   const hint = NEXT_STEP[failure.code];
   const text = hint ? `${failure.message}. ${hint}` : failure.message;
   return {
     isError: true as const,
     content: [{ type: "text" as const, text }],
-    structuredContent: { error: { code: failure.code, message: failure.message } },
+    _meta: { error: { code: failure.code, message: failure.message } },
   };
 }

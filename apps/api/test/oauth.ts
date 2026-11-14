@@ -218,7 +218,8 @@ export async function callTool(
     rpcError: body?.error ?? null,
     isError: result?.isError === true,
     text: result?.content?.map((c: { text?: string }) => c.text ?? "").join("\n") ?? "",
-    data: result?.structuredContent ?? null,
+    // Errors carry their code in `_meta`; successes in `structuredContent`.
+    data: result?.isError ? (result?._meta ?? null) : (result?.structuredContent ?? null),
   };
 }
 

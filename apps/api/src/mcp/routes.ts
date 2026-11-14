@@ -28,7 +28,7 @@ function challenge(metadataUrl: string, error?: BearerError): string {
   if (error && error.code !== "invalid_request") {
     parts.push(`error="${error.code}"`, `error_description="${error.message.replace(/"/g, "'")}"`);
   }
-  parts.push(`scope="mcp:read"`);
+  parts.push(`scope="${OAUTH_SCOPES.join(" ")}"`);
   return `Bearer ${parts.join(", ")}`;
 }
 
