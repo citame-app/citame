@@ -52,11 +52,6 @@ export function setup() {
   const staff = getJson("/staff");
   const service = (services.services || services)[0];
   const stylist = (staff.staff || staff)[0];
-  const clients = http.get(url("/admin/clients?pageSize=1"), { headers });
-  const clientList = clients.json();
-  const client = (clientList.clients || clientList.items || clientList)[0];
-  if (!client) throw new Error("need at least one client profile (run the seed)");
-
   // Non-overlapping free slots, one per round, taken from the real availability search.
   const slots = [];
   for (let day = 2; slots.length < ROUNDS && day < 60; day++) {
@@ -74,7 +69,7 @@ export function setup() {
     }
   }
   if (slots.length < ROUNDS) throw new Error(`only ${slots.length} free slots found`);
-  return { cookie, serviceId: service.id, staffId: stylist.id, clientId: client.id, slots };
+  return { cookie, serviceId: service.id, staffId: stylist.id, slots };
 }
 
 export function race(data) {
@@ -86,7 +81,8 @@ export function race(data) {
       staffId: data.staffId,
       serviceIds: [data.serviceId],
       startsAt: slot.startsAt,
-      clientId: data.clientId,
+      // Inline client: found by email, so every racer books for the same (created once) client.
+      client: { name: "k6 load client", email: "k6-load@example.com" },
     }),
     { headers: { ...JSON_HEADERS, Cookie: data.cookie }, tags: { name: "book" } },
   );

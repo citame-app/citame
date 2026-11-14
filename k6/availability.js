@@ -59,5 +59,7 @@ export default function (data) {
   check(res, {
     "availability 200 or 409": (r) => r.status === 200 || r.status === 409,
   });
-  sleep(0.5 + Math.random());
+  // SLEEP=0 turns the think time off: a throughput/saturation run instead of a realistic one.
+  const think = Number(__ENV.SLEEP ?? 1);
+  if (think > 0) sleep(think * (0.5 + Math.random()));
 }
