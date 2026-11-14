@@ -22,6 +22,11 @@ import {
 import { and, asc, count, desc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { DomainError } from "../../errors";
+import {
+  closeAppointment,
+  rescheduleAppointment,
+  scheduleNewAppointment,
+} from "../../notifications/outbox";
 import { lockCalendars, type Tx } from "../../tx";
 import { totalBlockMinutes } from "../availability/compute";
 import { type BookingViolation, bookingViolations } from "../availability/rules";
@@ -194,6 +199,7 @@ export async function createAppointment(
           },
         });
       }
+      await scheduleNewAppointment(tx, row, now);
       return toAppointment(row, snapshots);
     });
   } catch (error) {
@@ -496,6 +502,15 @@ export async function updateAppointment(
             ...(actor.via ? { via: actor.via } : {}),
           },
         });
+      }
+      if (updated) {
+        if (updated.status === "cancelled" && current.status !== "cancelled") {
+          await closeAppointment(tx, updated, now, { notify: true });
+        } else if (updated.status !== "booked" && current.status === "booked") {
+          await closeAppointment(tx, updated, now, { notify: false });
+        } else if (updated.status === "booked" && slotChanges) {
+          await rescheduleAppointment(tx, updated, now);
+        }
       }
       return updated;
     });
