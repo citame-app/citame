@@ -25,6 +25,7 @@ import { staffRoutes } from "./modules/staff/routes";
 import { createSyncHub } from "./modules/sync/hub";
 import { headSeq } from "./modules/sync/pull";
 import { syncRoutes } from "./modules/sync/routes";
+import type { EmailProvider } from "./notifications/providers/types";
 import { notificationAdminRoutes, optOutRoutes } from "./notifications/routes";
 import { oauthAudit } from "./oauth/audit";
 import { ensureOAuthSeeds } from "./oauth/clients";
@@ -55,6 +56,8 @@ export interface AppDeps {
   metrics?: AppMetrics;
   /** Structured logger; defaults to JSON lines on stdout. */
   logger?: Logger;
+  /** Sends account emails (verification, reset, invitation). Null or absent: skipped with a warning. */
+  emailProvider?: EmailProvider | null;
   /** Per-dependency timeout of `/ready` and of the gauges sampled by `/metrics` (default 2 000 ms). */
   readyTimeoutMs?: number;
 }
@@ -74,7 +77,7 @@ export function createApp(input: AppDeps): App {
   const deps: AppDeps = { ...input, metrics, logger };
   registerRuntimeGauges(metrics, deps, { timeoutMs: input.readyTimeoutMs });
   const app = new Hono() as App;
-  const auth = createAuth(deps);
+  const auth = createAuth({ ...deps, emailProvider: deps.emailProvider ?? null });
   const limiter = createRateLimiter({
     storage: valkeySecondaryStorage(deps.valkey, deps.config.valkeyKeyPrefix),
     now: deps.rateLimitNow,
@@ -85,7 +88,9 @@ export function createApp(input: AppDeps): App {
   app.drain = () => {
     draining = true;
   };
-  app.shutdown = () => hub.close();
+  app.shutdown = async () => {
+    await Promise.all([hub.close(), auth.mailer.flush()]);
+  };
   app.ready = () => ensureOAuthSeeds(deps.db, deps.config);
 
   app.onError((error, c) => {
@@ -168,6 +173,23 @@ export function createApp(input: AppDeps): App {
   const authLimit = rateLimit({ limiter, scope: "auth", rule: limits.auth, trustProxy });
   app.use("/api/auth/sign-in/*", authLimit);
   app.use("/api/auth/sign-up/*", authLimit);
+  // Endpoints that send mail or consume emailed tokens: same budget as credentials, counted apart
+  // so a burst of sign-ins cannot lock someone out of resetting their password (and vice versa).
+  const accountEmailLimit = rateLimit({
+    limiter,
+    scope: "auth-email",
+    rule: limits.auth,
+    trustProxy,
+  });
+  for (const path of [
+    "/api/auth/request-password-reset",
+    "/api/auth/reset-password",
+    "/api/auth/reset-password/*",
+    "/api/auth/send-verification-email",
+    "/api/auth/verify-email",
+  ]) {
+    app.use(path, accountEmailLimit);
+  }
 
   // OAuth 2.1 authorization server (Better Auth oauth-provider plugin). Anonymous registration
   // has its own, stricter counter; the rest of the protocol endpoints share one.

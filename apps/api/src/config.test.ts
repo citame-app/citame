@@ -36,12 +36,70 @@ describe("loadConfig", () => {
   });
 
   test("cookies are Secure over https and in production, never silently insecure", () => {
-    const base = { BETTER_AUTH_SECRET: SECRET };
+    const base = { BETTER_AUTH_SECRET: SECRET, AUTH_REQUIRE_EMAIL_VERIFICATION: "false" };
     expect(
       loadConfig({ ...base, BETTER_AUTH_URL: "https://salon.example" }).auth.secureCookies,
     ).toBe(true);
     expect(loadConfig({ ...base, NODE_ENV: "production" }).auth.secureCookies).toBe(true);
     expect(loadConfig(base).auth.secureCookies).toBe(false);
+  });
+
+  test("email verification is on by default and cannot be silently unreachable in production", () => {
+    expect(loadConfig({ BETTER_AUTH_SECRET: SECRET }).auth.requireEmailVerification).toBe(true);
+    expect(
+      loadConfig({ BETTER_AUTH_SECRET: SECRET, AUTH_REQUIRE_EMAIL_VERIFICATION: "false" }).auth
+        .requireEmailVerification,
+    ).toBe(false);
+    // Production with verification required but no way to send mail would lock every client out.
+    expect(() => loadConfig({ BETTER_AUTH_SECRET: SECRET, NODE_ENV: "production" })).toThrow(
+      /AUTH_REQUIRE_EMAIL_VERIFICATION/,
+    );
+    expect(
+      loadConfig({
+        BETTER_AUTH_SECRET: SECRET,
+        NODE_ENV: "production",
+        NOTIFY_EMAIL_PROVIDER: "smtp",
+        SMTP_URL: "smtp://mail:25",
+      }).auth.requireEmailVerification,
+    ).toBe(true);
+  });
+
+  test("maintenance defaults to daily with the documented retention windows", () => {
+    const base = { BETTER_AUTH_SECRET: SECRET };
+    expect(loadConfig(base).maintenance).toEqual({
+      enabled: true,
+      intervalHours: 24,
+      retention: {
+        syncLogDays: 30,
+        reminderDays: 90,
+        deadLetterDays: 180,
+        oauthGraceDays: 7,
+        idleClientDays: 30,
+      },
+    });
+    const custom = loadConfig({
+      ...base,
+      MAINTENANCE_ENABLED: "false",
+      MAINTENANCE_INTERVAL_HOURS: "6",
+      SYNC_LOG_RETENTION_DAYS: "14",
+    }).maintenance;
+    expect(custom.enabled).toBe(false);
+    expect(custom.intervalHours).toBe(6);
+    expect(custom.retention.syncLogDays).toBe(14);
+    expect(() => loadConfig({ ...base, REMINDER_RETENTION_DAYS: "0" })).toThrow(
+      /REMINDER_RETENTION_DAYS/,
+    );
+  });
+
+  test("metrics token and shutdown grace are optional and validated", () => {
+    const base = { BETTER_AUTH_SECRET: SECRET };
+    expect(loadConfig(base).metricsToken).toBeUndefined();
+    expect(loadConfig({ ...base, METRICS_TOKEN: "" }).metricsToken).toBeUndefined();
+    expect(loadConfig({ ...base, METRICS_TOKEN: "0123456789abcdef" }).metricsToken).toBe(
+      "0123456789abcdef",
+    );
+    expect(() => loadConfig({ ...base, METRICS_TOKEN: "short" })).toThrow(/METRICS_TOKEN/);
+    expect(loadConfig({ ...base, SHUTDOWN_GRACE_MS: "5000" }).shutdownGraceMs).toBe(5000);
   });
 
   test("rejects non-positive rate limits", () => {

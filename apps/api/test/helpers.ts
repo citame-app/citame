@@ -49,7 +49,7 @@ export interface SetupOptions {
   /** Suffix of the dedicated `sob_test_<suffix>` database; defaults to `api`. */
   dbSuffix?: string;
   /** Extra application dependencies, for example a short SSE heartbeat. */
-  deps?: Partial<Pick<AppDeps, "syncHeartbeatMs" | "jwksRefetchMs">>;
+  deps?: Partial<Pick<AppDeps, "syncHeartbeatMs" | "jwksRefetchMs" | "emailProvider">>;
 }
 
 export async function setupApiTest(options: SetupOptions = {}): Promise<ApiTest> {
@@ -61,6 +61,8 @@ export async function setupApiTest(options: SetupOptions = {}): Promise<ApiTest>
     // Generous by default so only the rate-limit tests ever hit a limit.
     RATE_LIMIT_GLOBAL_MAX: "100000",
     RATE_LIMIT_AUTH_MAX: "100000",
+    // Most suites sign clients up and book straight away; the verification suites opt in.
+    AUTH_REQUIRE_EMAIL_VERIFICATION: "false",
     ...options.env,
   });
   let nowMs = Date.parse("2026-03-02T12:00:00Z");

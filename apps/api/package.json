@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "test": "bun test",
-    "bootstrap:owner": "bun src/scripts/bootstrap-owner.ts"
+    "bootstrap:owner": "bun src/scripts/bootstrap-owner.ts",
+    "maintenance": "bun src/scripts/maintenance.ts"
   },
   "dependencies": {
     "@better-auth/oauth-provider": "1.7.23",

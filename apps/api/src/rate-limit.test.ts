@@ -3,6 +3,7 @@ import { errorResponseSchema } from "@sob/contracts";
 import { Hono } from "hono";
 import { createTestValkey, type TestValkey } from "../test/valkey";
 import { valkeySecondaryStorage } from "./auth/secondary-storage";
+import { createLogger } from "./observability/logger";
 import { createRateLimiter, rateLimit } from "./rate-limit";
 
 let v: TestValkey;
@@ -137,6 +138,7 @@ describe("fixed-window rate limit", () => {
         },
       },
     });
+    const logged: string[] = [];
     const appWith = (failOpen: boolean | undefined) => {
       const app = new Hono();
       app.use(
@@ -147,6 +149,7 @@ describe("fixed-window rate limit", () => {
           rule: { max: 1, windowSeconds: 60 },
           trustProxy: false,
           failOpen,
+          logger: createLogger({ write: (line) => logged.push(line) }),
         }),
       );
       app.get("/", (c) => c.json({ ok: true }));
@@ -155,18 +158,15 @@ describe("fixed-window rate limit", () => {
     };
 
     test("fail-open lets the request through and logs the failure", async () => {
-      const logged: unknown[][] = [];
-      const original = console.error;
-      console.error = (...args: unknown[]) => {
-        logged.push(args);
-      };
-      try {
-        const res = await get(appWith(true) as Hono);
-        expect(res.status).toBe(200);
-      } finally {
-        console.error = original;
-      }
+      logged.length = 0;
+      const res = await get(appWith(true) as Hono);
+      expect(res.status).toBe(200);
       expect(logged).toHaveLength(1);
+      expect(JSON.parse(logged[0] as string)).toMatchObject({
+        level: "error",
+        scope: "test",
+        msg: "rate limit store failed, failing open",
+      });
     });
 
     test("fail-closed (the default) rejects instead of letting the request through", async () => {

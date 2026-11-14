@@ -16,6 +16,11 @@ const envSchema = z.object({
     .min(32, "BETTER_AUTH_SECRET must be at least 32 characters"),
   /** Public base URL of the API (used for cookies, callbacks and origin checks). */
   BETTER_AUTH_URL: z.url().default("http://localhost:3000"),
+  /**
+   * Clients must confirm their email address before they can sign in (and so before they can
+   * book). On by default; turning it off is for local development without a mail server.
+   */
+  AUTH_REQUIRE_EMAIL_VERIFICATION: z.stringbool().default(true),
   /** Comma-separated origins allowed to call the auth endpoints from a browser (the web app). */
   TRUSTED_ORIGINS: z.string().default(""),
 
@@ -80,6 +85,14 @@ const envSchema = z.object({
   NOTIFY_MAX_ATTEMPTS: positiveInt.default(5),
   NOTIFY_BACKOFF_BASE_SECONDS: positiveInt.default(30),
   NOTIFY_BACKOFF_MAX_SECONDS: positiveInt.default(3600),
+  /** Scheduled housekeeping (see docs/operations.md). Runs in the worker, and in the API when it hosts the worker. */
+  MAINTENANCE_ENABLED: z.stringbool().default(true),
+  MAINTENANCE_INTERVAL_HOURS: positiveInt.default(24),
+  SYNC_LOG_RETENTION_DAYS: positiveInt.default(30),
+  REMINDER_RETENTION_DAYS: positiveInt.default(90),
+  DEAD_LETTER_RETENTION_DAYS: positiveInt.default(180),
+  OAUTH_TOKEN_GRACE_DAYS: positiveInt.default(7),
+  OAUTH_IDLE_CLIENT_DAYS: positiveInt.default(30),
   /** Language of messages for clients without a stored preference: `en` or `es-AR`. */
   NOTIFY_DEFAULT_LOCALE: z.enum(["en", "es-AR"]).default("en"),
   /** Public origin of the web app used in links; defaults to BETTER_AUTH_URL. */
@@ -108,6 +121,18 @@ export interface NotificationConfig {
   signingSecret: string;
 }
 
+export interface MaintenanceConfig {
+  enabled: boolean;
+  intervalHours: number;
+  retention: {
+    syncLogDays: number;
+    reminderDays: number;
+    deadLetterDays: number;
+    oauthGraceDays: number;
+    idleClientDays: number;
+  };
+}
+
 export interface AppConfig {
   databaseUrl: string;
   valkeyUrl: string;
@@ -119,6 +144,7 @@ export interface AppConfig {
     trustedOrigins: string[];
     /** Cookies carry the Secure attribute over https and in production. */
     secureCookies: boolean;
+    requireEmailVerification: boolean;
   };
   oauth: {
     /** Resource identifier and audience of every access token this API accepts at `/mcp`. */
@@ -127,6 +153,7 @@ export interface AppConfig {
     refreshTokenTtlSeconds: number;
   };
   notifications: NotificationConfig;
+  maintenance: MaintenanceConfig;
   trustProxy: boolean;
   metricsToken?: string;
   shutdownGraceMs: number;
@@ -156,6 +183,16 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     );
   }
   if (
+    e.NODE_ENV === "production" &&
+    e.AUTH_REQUIRE_EMAIL_VERIFICATION &&
+    e.NOTIFY_EMAIL_PROVIDER === "none"
+  ) {
+    throw new Error(
+      "Invalid environment configuration:\n  - AUTH_REQUIRE_EMAIL_VERIFICATION: clients could never confirm their address. " +
+        "Set NOTIFY_EMAIL_PROVIDER=smtp (and SMTP_URL), or AUTH_REQUIRE_EMAIL_VERIFICATION=false to opt out explicitly",
+    );
+  }
+  if (
     e.NOTIFY_SMS_PROVIDER === "twilio" &&
     !(e.TWILIO_ACCOUNT_SID && e.TWILIO_AUTH_TOKEN && e.TWILIO_FROM)
   ) {
@@ -175,6 +212,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
         .map((origin) => origin.trim())
         .filter((origin) => origin.length > 0),
       secureCookies: e.NODE_ENV === "production" || e.BETTER_AUTH_URL.startsWith("https://"),
+      requireEmailVerification: e.AUTH_REQUIRE_EMAIL_VERIFICATION,
     },
     oauth: {
       mcpResource: e.MCP_RESOURCE_URL ?? `${e.BETTER_AUTH_URL.replace(/\/+$/, "")}/mcp`,
@@ -199,6 +237,17 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       defaultLocale: e.NOTIFY_DEFAULT_LOCALE,
       publicUrl: (e.NOTIFY_PUBLIC_URL ?? e.BETTER_AUTH_URL).replace(/\/+$/, ""),
       signingSecret: `sob.notifications.v1:${e.BETTER_AUTH_SECRET}`,
+    },
+    maintenance: {
+      enabled: e.MAINTENANCE_ENABLED,
+      intervalHours: e.MAINTENANCE_INTERVAL_HOURS,
+      retention: {
+        syncLogDays: e.SYNC_LOG_RETENTION_DAYS,
+        reminderDays: e.REMINDER_RETENTION_DAYS,
+        deadLetterDays: e.DEAD_LETTER_RETENTION_DAYS,
+        oauthGraceDays: e.OAUTH_TOKEN_GRACE_DAYS,
+        idleClientDays: e.OAUTH_IDLE_CLIENT_DAYS,
+      },
     },
     trustProxy: e.TRUST_PROXY,
     metricsToken: e.METRICS_TOKEN,

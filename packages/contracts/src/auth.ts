@@ -19,11 +19,17 @@ export const meResponseSchema = z.object({
 });
 export type MeResponse = z.infer<typeof meResponseSchema>;
 
-/** Owner-only: creates a login with the `staff` role and its calendar profile. */
+/** Password bounds shared by sign-up, reset and staff creation (Better Auth enforces the same). */
+export const passwordSchema = z.string().min(8).max(128);
+
+/**
+ * Owner-only: creates a login with the `staff` role and its calendar profile. Without a
+ * `password` the person is invited: they receive an email link and choose their own.
+ */
 export const createStaffAccountRequestSchema = z.object({
   email: z.email(),
   name: z.string().min(1),
-  password: z.string().min(8).max(128),
+  password: passwordSchema.optional(),
   /** Name shown in the booking flow; defaults to `name`. */
   displayName: z.string().min(1).optional(),
 });
@@ -34,6 +40,8 @@ export const staffAccountResponseSchema = z.object({
   staffId: idSchema,
   email: z.string(),
   role: z.literal("staff"),
+  /** True when no password was given and an invitation email was queued. */
+  invited: z.boolean().default(false),
 });
 export type StaffAccountResponse = z.infer<typeof staffAccountResponseSchema>;
 

@@ -2,8 +2,10 @@ import { createDb } from "@sob/db";
 import { RedisClient } from "bun";
 import { createApp } from "./app";
 import { loadConfig } from "./config";
-import { rootLogger } from "./observability/logger";
+import { startMaintenance } from "./maintenance";
+import { createProviders } from "./notifications/providers";
 import { startNotificationRuntime } from "./notifications/runtime";
+import { rootLogger } from "./observability/logger";
 
 // Fails fast (with every problem listed) when the environment is incomplete.
 const config = loadConfig();
@@ -11,11 +13,23 @@ const { db, close: closeDb } = createDb(config.databaseUrl);
 const valkey = new RedisClient(config.valkeyUrl);
 await valkey.send("PING", []);
 
-const app = createApp({ db, valkey, config });
+// Account emails (verification, reset, invitation) use the same provider settings as reminders.
+const emailProvider = createProviders(config.notifications).email;
+const app = createApp({ db, valkey, config, emailProvider });
 await app.ready();
 
 // Optional in-process notification worker (NOTIFY_WORKER_ENABLED). `bun run worker` runs the same code alone.
 const notifications = startNotificationRuntime({ db, config });
+
+// Housekeeping runs where the queue worker runs: in this process only in all-in-one mode.
+const maintenance =
+  config.notifications.workerEnabled && config.maintenance.enabled
+    ? startMaintenance({
+        db,
+        intervalHours: config.maintenance.intervalHours,
+        retention: config.maintenance.retention,
+      })
+    : null;
 
 const server = Bun.serve({
   port: config.port,
@@ -39,7 +53,8 @@ async function shutdown(signal: string) {
   try {
     await app.shutdown(); // SSE streams must end or `server.stop()` waits for them forever
     await server.stop();
-    await notifications?.stop();
+    await emailProvider?.close?.();
+    await Promise.all([notifications?.stop(), maintenance?.stop()]);
     await closeDb();
     valkey.close();
     rootLogger.info("shutdown complete");

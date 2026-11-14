@@ -3,10 +3,12 @@ import { account, clientProfile, type Database, pgErrorCode, staffProfile, user 
 import { and, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { recordAudit } from "../audit";
+import type { AppConfig } from "../config";
 import { DomainError } from "../errors";
 import { assertNoFutureAppointments } from "../modules/staff/guards";
+import { localeFromRequest } from "../notifications/auth-emails";
 import { lockCalendars } from "../tx";
-import type { Auth } from "./auth";
+import { type Auth, INVITE_LINK_SECONDS } from "./auth";
 
 const UNIQUE_VIOLATION = "23505";
 const MIN_PASSWORD = 8;
@@ -22,8 +24,15 @@ export interface AccountDeps {
 export interface CreateAccountInput {
   email: string;
   name: string;
-  password: string;
+  /** Omitted for an invitation: the person chooses their own from the emailed link. */
+  password?: string;
   role: UserRole;
+  /**
+   * The server vouches for the address (owner bootstrap, owner-created accounts with a password).
+   * Defaults to true when a password is given and false for an invitation, which becomes
+   * verified when the invitee follows the link.
+   */
+  emailVerified?: boolean;
   /** Name shown in the booking flow for staff accounts; defaults to `name`. */
   displayName?: string;
 }
@@ -39,6 +48,8 @@ export interface AccountResult {
   role: UserRole;
   staffId: string | null;
   clientId: string | null;
+  /** True when no password was given and the login waits for the invitee to choose one. */
+  invited: boolean;
 }
 
 function assertPasswordPolicy(password: string) {
@@ -104,14 +115,22 @@ export async function createAccount(
   input: CreateAccountInput,
   audit?: AuditContext,
 ): Promise<AccountResult> {
-  assertPasswordPolicy(input.password);
+  const invited = input.password === undefined;
+  // An invited account gets a random, never-disclosed password: it can only be replaced through
+  // the emailed link, and a credential row exists for the reset to update.
+  const secret =
+    input.password ?? Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
+  assertPasswordPolicy(secret);
   const email = normalizeEmail(input.email);
-  const hash = await (await auth.$context).password.hash(input.password);
+  const hash = await (await auth.$context).password.hash(secret);
+  const emailVerified = input.emailVerified ?? !invited;
 
   try {
     return await db.transaction(async (tx) => {
       const userId = Bun.randomUUIDv7();
-      await tx.insert(user).values({ id: userId, name: input.name, email, role: input.role });
+      await tx
+        .insert(user)
+        .values({ id: userId, name: input.name, email, role: input.role, emailVerified });
       await tx.insert(account).values({
         id: Bun.randomUUIDv7(),
         accountId: userId,
@@ -131,10 +150,10 @@ export async function createAccount(
           action: audit.action,
           entity: "user",
           entityId: userId,
-          metadata: { email, role: input.role, staffId, clientId },
+          metadata: { email, role: input.role, staffId, clientId, invited },
         });
       }
-      return { userId, role: input.role, staffId, clientId };
+      return { userId, role: input.role, staffId, clientId, invited };
     });
   } catch (error) {
     if (pgErrorCode(error) === UNIQUE_VIOLATION) {
@@ -142,6 +161,35 @@ export async function createAccount(
     }
     throw error;
   }
+}
+
+/**
+ * Emails an invitation: a single-use link (the same mechanism as a password reset, with a
+ * longer lifetime) where the invitee chooses their own password. The owner never sees or
+ * transmits a credential.
+ */
+export async function sendInvitation(
+  auth: Auth,
+  config: Pick<AppConfig, "notifications">,
+  target: { userId: string; email: string },
+  request?: Request,
+): Promise<void> {
+  const ctx = await auth.$context;
+  const token = Buffer.from(crypto.getRandomValues(new Uint8Array(24))).toString("base64url");
+  await ctx.internalAdapter.createVerificationValue({
+    value: target.userId,
+    identifier: `reset-password:${token}`,
+    expiresAt: new Date(Date.now() + INVITE_LINK_SECONDS * 1000),
+  });
+  const callback = encodeURIComponent("/reset-password?invited=1");
+  auth.mailer.send({
+    kind: "staff_invite",
+    to: target.email,
+    url: `${ctx.baseURL}/reset-password/${token}?callbackURL=${callback}`,
+    locale: localeFromRequest(request, config.notifications.defaultLocale),
+    expiresInMinutes: INVITE_LINK_SECONDS / 60,
+    idempotencyKey: `staff_invite:${token.slice(0, 16)}`,
+  });
 }
 
 /**
@@ -204,7 +252,13 @@ export async function assignRole(
         metadata: { from: row.role, to: role },
       });
     }
-    return { userId, role, staffId: staff?.id ?? null, clientId: client?.id ?? null };
+    return {
+      userId,
+      role,
+      staffId: staff?.id ?? null,
+      clientId: client?.id ?? null,
+      invited: false,
+    };
   });
 }
 

@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   changeRoleRequestSchema,
   createStaffAccountRequestSchema,
+  passwordSchema,
+  staffAccountResponseSchema,
   errorCodeSchema,
   errorStatus,
   meResponseSchema,
@@ -54,6 +56,25 @@ describe("staff account creation", () => {
     expect(
       createStaffAccountRequestSchema.safeParse({ ...valid, password: "x".repeat(129) }).success,
     ).toBe(false);
+  });
+});
+
+describe("staff invitation", () => {
+  test("a staff account may be created without a password: the person sets it from an invitation", () => {
+    const parsed = createStaffAccountRequestSchema.parse({ email: "bea@example.com", name: "Bea" });
+    expect(parsed.password).toBeUndefined();
+  });
+
+  test("the shared password schema keeps the same bounds for sign-up and reset", () => {
+    expect(passwordSchema.safeParse("correct horse").success).toBe(true);
+    expect(passwordSchema.safeParse("short").success).toBe(false);
+    expect(passwordSchema.safeParse("x".repeat(129)).success).toBe(false);
+  });
+
+  test("the response says whether an invitation was sent", () => {
+    const base = { userId: "u", staffId: "0195c0de-0000-7000-8000-000000000001", email: "a@b.co" };
+    expect(staffAccountResponseSchema.parse({ ...base, role: "staff", invited: true }).invited).toBe(true);
+    expect(staffAccountResponseSchema.parse({ ...base, role: "staff" }).invited).toBe(false);
   });
 });
 

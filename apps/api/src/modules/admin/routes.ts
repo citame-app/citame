@@ -7,7 +7,7 @@ import {
 import { Hono } from "hono";
 import { createMiddleware } from "hono/factory";
 import type { AppDeps } from "../../app";
-import { assignRole, createAccount } from "../../auth/accounts";
+import { assignRole, createAccount, sendInvitation } from "../../auth/accounts";
 import type { Auth } from "../../auth/auth";
 import { requireRole } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
@@ -20,7 +20,8 @@ const ownerOnly = createMiddleware<AppEnv>(async (c, next) => {
 });
 
 /** Owner-only account administration. Mounted behind `requireAuth`. */
-export function adminRoutes({ db, now = () => new Date() }: AppDeps, auth: Auth) {
+export function adminRoutes(deps: AppDeps, auth: Auth) {
+  const { db, now = () => new Date() } = deps;
   return (
     new Hono<AppEnv>()
       // Scoped to this router's own paths: a `use("*")` here would leak onto every other
@@ -41,11 +42,16 @@ export function adminRoutes({ db, now = () => new Date() }: AppDeps, auth: Auth)
           { actorUserId: c.get("principal").userId, action: "staff.create" },
         );
         if (!created.staffId) throw new Error("Staff account was created without a calendar");
+        const email = body.email.trim().toLowerCase();
+        if (created.invited) {
+          await sendInvitation(auth, deps.config, { userId: created.userId, email }, c.req.raw);
+        }
         const response: StaffAccountResponse = {
           userId: created.userId,
           staffId: created.staffId,
-          email: body.email.trim().toLowerCase(),
+          email,
           role: "staff",
+          invited: created.invited,
         };
         return c.json(response, 201);
       })
