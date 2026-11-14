@@ -48,6 +48,7 @@ import { findAvailability } from "../modules/availability/service";
 import { listClients } from "../modules/clients/admin";
 import { listServices } from "../modules/services/service";
 import { listStaff } from "../modules/staff/service";
+import { bookingOutcome } from "../observability/booking";
 import { errorResult, toolFailure } from "./errors";
 
 export interface ToolContext {
@@ -55,6 +56,8 @@ export interface ToolContext {
   principal: Principal;
   scopes: readonly OAuthScope[];
   now: () => Date;
+  /** Optional booking-outcome counter (`sob_booking_total`). */
+  onBooking?: (outcome: string) => void;
   /** Recorded in the audit log of every write, so a booking made by an agent says so. */
   via: { channel: "mcp"; clientId: string };
 }
@@ -212,8 +215,10 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       const actor = { userId: principal.userId, via: ctx.via };
       try {
         const created = await createAppointment(db, authorized, actor, { now: ctx.now() });
+        ctx.onBooking?.("created");
         return { appointment: redactNotes(principal, created), replayed: false };
       } catch (error) {
+        ctx.onBooking?.(bookingOutcome(error));
         // The same requestId again: return the booking it already made, if it is this caller's.
         if (requestId && error instanceof DomainError && error.code === "invalid_state") {
           const existing = await findOwnedReplay(ctx, requestId, authorized);

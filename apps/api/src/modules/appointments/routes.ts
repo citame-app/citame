@@ -16,6 +16,7 @@ import {
 } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
+import { bookingOutcome } from "../../observability/booking";
 import { getCalendar } from "./calendar";
 import {
   createAppointment,
@@ -25,7 +26,7 @@ import {
 } from "./service";
 
 /** Mounted behind `requireAuth`, so every handler can rely on `c.get("principal")`. */
-export function appointmentsRoutes({ db, now = () => new Date() }: AppDeps) {
+export function appointmentsRoutes({ db, now = () => new Date(), metrics }: AppDeps) {
   return (
     new Hono<AppEnv>()
       .get("/", async (c) => {
@@ -51,10 +52,19 @@ export function appointmentsRoutes({ db, now = () => new Date() }: AppDeps) {
           principal,
           parseOrThrow(schema, await readJson(c)),
         );
-        return c.json(
-          await createAppointment(db, request, { userId: principal.userId }, { now: now() }),
-          201,
-        );
+        try {
+          const created = await createAppointment(
+            db,
+            request,
+            { userId: principal.userId },
+            { now: now() },
+          );
+          metrics?.booking.inc({ source: "rest", outcome: "created" });
+          return c.json(created, 201);
+        } catch (error) {
+          metrics?.booking.inc({ source: "rest", outcome: bookingOutcome(error) });
+          throw error;
+        }
       })
       .patch("/:id", async (c) => {
         const id = parseOrThrow(idSchema, c.req.param("id"));

@@ -2,6 +2,7 @@ import type { Context, MiddlewareHandler } from "hono";
 import type { ValkeySecondaryStorage } from "./auth/secondary-storage";
 import type { RateLimitRule } from "./config";
 import { errorBody } from "./http";
+import { rootLogger } from "./observability/logger";
 
 export interface RateLimitResult {
   allowed: boolean;
@@ -93,7 +94,7 @@ export function rateLimit({
       result = await limiter.hit(scope, clientIdentity(c, trustProxy), rule);
     } catch (error) {
       if (!failOpen) throw error;
-      console.error(`rate limit store failed for scope "${scope}", failing open`, error);
+      rootLogger.error("rate limit store failed, failing open", { scope, err: error });
       await next();
       return;
     }

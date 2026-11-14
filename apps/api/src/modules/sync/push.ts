@@ -7,6 +7,7 @@ import {
 import { type Database, syncMutation } from "@sob/db";
 import { eq, sql } from "drizzle-orm";
 import type { Principal } from "../../auth/principal";
+import { rootLogger } from "../../observability/logger";
 import { type ApplyContext, applyMutation, rejectionReason } from "./apply";
 import { headSeq } from "./pull";
 
@@ -127,7 +128,7 @@ export async function pushMutations(
     try {
       results.push(await processOne(ctx, principal, request.deviceId, raw));
     } catch (error) {
-      console.error("sync push: transient failure", error);
+      rootLogger.error("sync push: transient failure", { err: error });
       failure = "failed";
       results.push({
         mutationId: raw.mutationId,

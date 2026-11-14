@@ -1,3 +1,6 @@
+// Access logs would drown the test output; tests that assert on logs inject their own logger.
+process.env.LOG_LEVEL ??= "silent";
+
 import type { UserRole } from "@sob/contracts";
 import {
   clientProfile,

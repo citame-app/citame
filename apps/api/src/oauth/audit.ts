@@ -4,6 +4,7 @@ import type { MiddlewareHandler } from "hono";
 import { decodeJwt } from "jose";
 import { recordAudit } from "../audit";
 import type { Auth } from "../auth/auth";
+import { rootLogger } from "../observability/logger";
 
 async function readBody(request: {
   headers: { get(name: string): string | null };
@@ -106,7 +107,7 @@ export function oauthAudit(auth: Auth, db: Database): MiddlewareHandler {
         });
       }
     } catch (error) {
-      console.error("oauth audit failed", error);
+      rootLogger.error("oauth audit failed", { err: error });
     }
   };
 }

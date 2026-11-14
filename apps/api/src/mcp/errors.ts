@@ -1,5 +1,6 @@
 import type { ErrorCode } from "@sob/contracts";
 import { DomainError } from "../errors";
+import { rootLogger } from "../observability/logger";
 
 /**
  * Turns a domain failure into text an agent can act on. The REST layer sends a code and a
@@ -27,7 +28,7 @@ export interface ToolFailure {
 
 export function toolFailure(error: unknown): ToolFailure {
   if (error instanceof DomainError) return { code: error.code, message: error.message };
-  console.error("mcp tool failed", error);
+  rootLogger.error("mcp tool failed", { err: error });
   return { code: "internal_error", message: "The salon system had an unexpected problem." };
 }
 

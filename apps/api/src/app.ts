@@ -28,7 +28,16 @@ import { syncRoutes } from "./modules/sync/routes";
 import { notificationAdminRoutes, optOutRoutes } from "./notifications/routes";
 import { oauthAudit } from "./oauth/audit";
 import { ensureOAuthSeeds } from "./oauth/clients";
+import {
+  type AppMetrics,
+  createAppMetrics,
+  registerRuntimeGauges,
+} from "./observability/app-metrics";
+import { requestContext } from "./observability/http";
+import { type Logger, rootLogger } from "./observability/logger";
+import { checkReady } from "./observability/ready";
 import { createRateLimiter, rateLimit } from "./rate-limit";
+import { bearerMatches, originCheck, securityHeaders } from "./security";
 
 export interface AppDeps {
   db: Database;
@@ -42,16 +51,28 @@ export interface AppDeps {
   syncHeartbeatMs?: number;
   /** Minimum gap between JWKS refetches for unknown key ids (default 10 000 ms). */
   jwksRefetchMs?: number;
+  /** Prometheus registry and counters; every app gets its own unless one is injected. */
+  metrics?: AppMetrics;
+  /** Structured logger; defaults to JSON lines on stdout. */
+  logger?: Logger;
+  /** Per-dependency timeout of `/ready` and of the gauges sampled by `/metrics` (default 2 000 ms). */
+  readyTimeoutMs?: number;
 }
 
 /** The Hono app plus the lifecycle hook that releases long-lived resources (SSE, Valkey). */
 export type App = Hono & {
   shutdown: () => Promise<void>;
+  /** Marks the instance as draining: `/ready` answers 503 so the load balancer stops sending traffic. */
+  drain: () => void;
   /** Seeds the OAuth resource and first-party clients; resolves when the app is ready to serve OAuth flows. */
   ready: () => Promise<void>;
 };
 
-export function createApp(deps: AppDeps): App {
+export function createApp(input: AppDeps): App {
+  const metrics = input.metrics ?? createAppMetrics();
+  const logger = input.logger ?? rootLogger;
+  const deps: AppDeps = { ...input, metrics, logger };
+  registerRuntimeGauges(metrics, deps, { timeoutMs: input.readyTimeoutMs });
   const app = new Hono() as App;
   const auth = createAuth(deps);
   const limiter = createRateLimiter({
@@ -60,21 +81,71 @@ export function createApp(deps: AppDeps): App {
   });
   const { trustProxy, rateLimit: limits } = deps.config;
   const hub = createSyncHub({ valkey: deps.valkey, keyPrefix: deps.config.valkeyKeyPrefix });
+  let draining = false;
+  app.drain = () => {
+    draining = true;
+  };
   app.shutdown = () => hub.close();
   app.ready = () => ensureOAuthSeeds(deps.db, deps.config);
 
   app.onError((error, c) => {
     if (error instanceof DomainError) return respondError(c, error);
-    console.error(error);
+    logger.error("unhandled error", { err: error });
     return c.json(errorBody("internal_error", "Internal server error"), 500);
   });
   app.notFound((c) => c.json(errorBody("not_found", "Route not found"), 404));
 
-  // Liveness stays outside every limiter so orchestrator probes can never be throttled.
+  // Outermost: request id, access log and HTTP metrics for everything, probes excepted from the log.
+  app.use(
+    "*",
+    requestContext({ logger, http: metrics.http, quietPaths: ["/health", "/ready", "/metrics"] }),
+  );
+  app.use("*", securityHeaders({ hsts: deps.config.auth.secureCookies }));
+
+  // Liveness: the process is up and its event loop turns. It never asks a dependency, so an
+  // outage of Postgres or Valkey does not get the container restarted for no benefit.
   app.get("/health", (c) => {
     const body: HealthResponse = { status: "ok" };
     return c.json(body);
   });
+  // Readiness: can this instance serve traffic (Postgres + Valkey answer)? 503 takes it out of
+  // rotation. Both probes stay outside every limiter.
+  app.get("/ready", async (c) => {
+    c.header("cache-control", "no-store");
+    if (draining) return c.json({ status: "draining" }, 503);
+    const report = await checkReady(deps, deps.readyTimeoutMs);
+    return c.json(report, report.status === "ready" ? 200 : 503);
+  });
+  // Prometheus scrape. With METRICS_TOKEN it needs the bearer token; without one it answers only
+  // requests that did not arrive through the public proxy (which always adds forwarding headers).
+  app.get("/metrics", async (c) => {
+    const token = deps.config.metricsToken;
+    if (token) {
+      if (!bearerMatches(c.req.header("authorization"), token)) {
+        return c.json(errorBody("unauthorized", "Metrics token required"), 401);
+      }
+    } else if (
+      c.req.header("x-forwarded-for") ||
+      c.req.header("x-forwarded-host") ||
+      c.req.header("forwarded")
+    ) {
+      return c.json(errorBody("not_found", "Route not found"), 404);
+    }
+    c.header("cache-control", "no-store");
+    return c.text(await metrics.render(), 200, {
+      "content-type": "text/plain; version=0.0.4; charset=utf-8",
+    });
+  });
+
+  const trustedOrigins = [
+    new URL(deps.config.auth.baseURL).origin,
+    ...deps.config.auth.trustedOrigins,
+  ];
+  const sameOrigin = originCheck(trustedOrigins);
+  for (const prefix of ["/appointments", "/me", "/admin", "/sync"]) {
+    app.use(prefix, sameOrigin);
+    app.use(`${prefix}/*`, sameOrigin);
+  }
 
   // Moderate limit for everything else, strict one for credential endpoints (brute force).
   // The global limiter fails open (a Valkey outage must not take public browsing down); the
@@ -91,7 +162,7 @@ export function createApp(deps: AppDeps): App {
     try {
       await hub.publish(await headSeq(deps.db));
     } catch (error) {
-      console.error("sync nudge failed", error);
+      logger.error("sync nudge failed", { err: error });
     }
   });
   const authLimit = rateLimit({ limiter, scope: "auth", rule: limits.auth, trustProxy });

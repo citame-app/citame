@@ -11,7 +11,7 @@ import { pushMutations } from "./push";
 
 /** Mounted at `/sync` behind `requireAuth`. Sync is for the front desk: owner and staff only. */
 export function syncRoutes(
-  { db, now = () => new Date(), syncHeartbeatMs = 15_000 }: AppDeps,
+  { db, now = () => new Date(), syncHeartbeatMs = 15_000, metrics }: AppDeps,
   hub: SyncHub,
   streamLimit: MiddlewareHandler,
 ) {
@@ -23,11 +23,21 @@ export function syncRoutes(
       })
       .post("/push", async (c) => {
         const request = parseOrThrow(syncPushRequestSchema, await readJson(c));
-        return c.json(await pushMutations({ db, now }, c.get("principal"), request));
+        const response = await pushMutations({ db, now }, c.get("principal"), request);
+        for (const result of response.results) {
+          metrics?.syncPush.inc({
+            status: result.status,
+            reason: result.status === "rejected" ? result.reason : "",
+          });
+        }
+        return c.json(response);
       })
       .get("/pull", async (c) => {
         const query = parseOrThrow(syncPullQuerySchema, c.req.query());
-        return c.json(await pullChanges(db, c.get("principal"), query));
+        const response = await pullChanges(db, c.get("principal"), query);
+        metrics?.syncPull.inc();
+        metrics?.syncPullChanges.inc({}, response.changes.length);
+        return c.json(response);
       })
       // Server-sent events: a nudge carries only the head seq; the client then calls /sync/pull.
       .get("/stream", streamLimit, (c) =>

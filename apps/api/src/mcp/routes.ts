@@ -42,7 +42,7 @@ function challenge(metadataUrl: string, error?: BearerError): string {
  * session cookie must not be able to drive this endpoint from another origin.
  */
 export function mcpRoutes(
-  { db, config, now = () => new Date(), jwksRefetchMs }: AppDeps,
+  { db, config, now = () => new Date(), jwksRefetchMs, metrics }: AppDeps,
   auth: Auth,
 ) {
   const verifier = createTokenVerifier({ auth, db, config, keyRefetchMs: jwksRefetchMs });
@@ -87,6 +87,7 @@ export function mcpRoutes(
       principal: identity.principal,
       scopes: identity.scopes,
       now,
+      onBooking: (outcome) => metrics?.booking.inc({ source: "mcp", outcome }),
       via: { channel: "mcp", clientId: identity.clientId },
     });
     const transport = new WebStandardStreamableHTTPServerTransport({

@@ -19,6 +19,18 @@ const envSchema = z.object({
   /** Comma-separated origins allowed to call the auth endpoints from a browser (the web app). */
   TRUSTED_ORIGINS: z.string().default(""),
 
+  /**
+   * Bearer token Prometheus presents to `/metrics`. Unset: `/metrics` answers only requests that
+   * did not come through the public proxy (internal network scrape). Min 16 characters.
+   */
+  METRICS_TOKEN: z.union([z.string().min(16), z.literal("").transform(() => undefined)]).optional(),
+
+  /**
+   * On SIGTERM `/ready` answers 503 for this long before the listener closes, so the load
+   * balancer drains the instance first. Keep it below the orchestrator's kill timeout.
+   */
+  SHUTDOWN_GRACE_MS: z.coerce.number().int().min(0).default(0),
+
   /** Trust `X-Forwarded-For` for the client IP. Enable only behind a reverse proxy you control. */
   TRUST_PROXY: z.stringbool().default(false),
   RATE_LIMIT_GLOBAL_MAX: positiveInt.default(300),
@@ -116,6 +128,8 @@ export interface AppConfig {
   };
   notifications: NotificationConfig;
   trustProxy: boolean;
+  metricsToken?: string;
+  shutdownGraceMs: number;
   rateLimit: {
     global: RateLimitRule;
     auth: RateLimitRule;
@@ -187,6 +201,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       signingSecret: `sob.notifications.v1:${e.BETTER_AUTH_SECRET}`,
     },
     trustProxy: e.TRUST_PROXY,
+    metricsToken: e.METRICS_TOKEN,
+    shutdownGraceMs: e.SHUTDOWN_GRACE_MS,
     rateLimit: {
       global: { max: e.RATE_LIMIT_GLOBAL_MAX, windowSeconds: e.RATE_LIMIT_GLOBAL_WINDOW_SECONDS },
       auth: { max: e.RATE_LIMIT_AUTH_MAX, windowSeconds: e.RATE_LIMIT_AUTH_WINDOW_SECONDS },
