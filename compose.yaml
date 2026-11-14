@@ -64,6 +64,18 @@ services:
       RATE_LIMIT_OAUTH_MAX: ${RATE_LIMIT_OAUTH_MAX:-60}
       RATE_LIMIT_OAUTH_REGISTER_MAX: ${RATE_LIMIT_OAUTH_REGISTER_MAX:-10}
       RATE_LIMIT_MCP_MAX: ${RATE_LIMIT_MCP_MAX:-120}
+      # Notifications (ADR 0010, docs/notifications.md). Off by default: nothing is ever sent
+      # until you enable the worker and configure a provider.
+      NOTIFY_WORKER_ENABLED: ${NOTIFY_WORKER_ENABLED:-false}
+      NOTIFY_EMAIL_PROVIDER: ${NOTIFY_EMAIL_PROVIDER:-none}
+      SMTP_URL: ${SMTP_URL:-}
+      NOTIFY_EMAIL_FROM: ${NOTIFY_EMAIL_FROM:-Sisters of Beauty <no-reply@localhost>}
+      NOTIFY_SMS_PROVIDER: ${NOTIFY_SMS_PROVIDER:-none}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_FROM: ${TWILIO_FROM:-}
+      NOTIFY_DEFAULT_LOCALE: ${NOTIFY_DEFAULT_LOCALE:-en}
+      NOTIFY_PUBLIC_URL: ${NOTIFY_PUBLIC_URL:-}
       PORT: "3000"
     # Loopback only: with TRUST_PROXY=true anything that reaches the API directly could spoof
     # X-Forwarded-For, so the API is not published to the network.
@@ -74,6 +86,45 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+
+  # Optional stand-alone queue worker, same image as the API: `docker compose --profile worker up -d`.
+  # Leave NOTIFY_WORKER_ENABLED=false on the api service when you use it.
+  worker:
+    profiles: ["worker"]
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    command: ["bun", "apps/api/src/worker.ts"]
+    environment:
+      DATABASE_URL: postgres://sob:sob@postgres:5432/sob
+      VALKEY_URL: redis://valkey:6379
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:4173}
+      NOTIFY_EMAIL_PROVIDER: ${NOTIFY_EMAIL_PROVIDER:-none}
+      SMTP_URL: ${SMTP_URL:-}
+      NOTIFY_EMAIL_FROM: ${NOTIFY_EMAIL_FROM:-Sisters of Beauty <no-reply@localhost>}
+      NOTIFY_SMS_PROVIDER: ${NOTIFY_SMS_PROVIDER:-none}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_FROM: ${TWILIO_FROM:-}
+      NOTIFY_DEFAULT_LOCALE: ${NOTIFY_DEFAULT_LOCALE:-en}
+      NOTIFY_PUBLIC_URL: ${NOTIFY_PUBLIC_URL:-}
+
+  # Local mail catcher for development: SMTP on 1025, inbox UI on http://localhost:8025.
+  # `docker compose --profile mail up -d mailpit`, then SMTP_URL=smtp://localhost:1025.
+  mailpit:
+    profiles: ["mail"]
+    image: axllent/mailpit:v1.29
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
 
   web:
     build:

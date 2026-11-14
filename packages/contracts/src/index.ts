@@ -14,6 +14,7 @@ export * from "./clients";
 export * from "./common";
 export * from "./errors";
 export * from "./mcp";
+export * from "./notifications";
 export * from "./oauth";
 export * from "./reports";
 export * from "./salon";

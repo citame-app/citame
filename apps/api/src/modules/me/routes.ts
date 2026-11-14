@@ -5,6 +5,7 @@ import { Hono } from "hono";
 import type { AppDeps } from "../../app";
 import type { AppEnv, Principal } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
+import { preferenceRoutes } from "../../notifications/routes";
 import { getPhone, updateProfile } from "./service";
 
 export function meRoutes({ db }: Pick<AppDeps, "db">) {
@@ -21,6 +22,7 @@ export function meRoutes({ db }: Pick<AppDeps, "db">) {
   });
 
   return new Hono<AppEnv>()
+    .route("/notification-preferences", preferenceRoutes({ db }))
     .get("/", async (c) => c.json(await respond(c.get("principal"))))
     .patch("/", async (c) => {
       const principal = c.get("principal");

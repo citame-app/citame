@@ -1,4 +1,4 @@
-import type { SalonResponse, UpdateSalonSettingsRequest } from "@sob/contracts";
+import type { OwnerSalonSettings, SalonResponse, UpdateSalonSettingsRequest } from "@sob/contracts";
 import { type Database, salonSettings } from "@sob/db";
 import { eq } from "drizzle-orm";
 import { recordAudit } from "../../audit";
@@ -24,12 +24,22 @@ export function toSalonResponse(settings: Row): SalonResponse {
   };
 }
 
+export function toOwnerSettings(settings: Row): OwnerSalonSettings {
+  return {
+    ...toSalonResponse(settings),
+    reminderFirstLeadMinutes: settings.reminderFirstLeadMinutes,
+    reminderSecondLeadMinutes: settings.reminderSecondLeadMinutes,
+  };
+}
+
 const EDITABLE = [
   "name",
   "timezone",
   "slotGranularityMinutes",
   "minNoticeMinutes",
   "maxDaysAhead",
+  "reminderFirstLeadMinutes",
+  "reminderSecondLeadMinutes",
 ] as const;
 
 /** Edits the single settings row; a request that changes nothing writes nothing and audits nothing. */
@@ -37,7 +47,7 @@ export async function updateSalonSettings(
   db: Database,
   input: UpdateSalonSettingsRequest,
   actor: { userId: string },
-): Promise<SalonResponse> {
+): Promise<OwnerSalonSettings> {
   return db.transaction(async (tx) => {
     const current = await getSalonSettings(tx);
     const changes = Object.fromEntries(
@@ -46,7 +56,7 @@ export async function updateSalonSettings(
       ),
     );
     const fields = Object.keys(changes);
-    if (fields.length === 0) return toSalonResponse(current);
+    if (fields.length === 0) return toOwnerSettings(current);
     const [updated] = await tx
       .update(salonSettings)
       .set({ ...changes, updatedAt: new Date() })
@@ -60,6 +70,6 @@ export async function updateSalonSettings(
       entityId: "1",
       metadata: { fields },
     });
-    return toSalonResponse(updated);
+    return toOwnerSettings(updated);
   });
 }

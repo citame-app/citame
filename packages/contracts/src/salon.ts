@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { reminderLeadSchema } from "./notifications";
 
 /** Public salon information: what the booking flow needs to render dates and limits. */
 export const salonResponseSchema = z.object({
@@ -10,6 +11,15 @@ export const salonResponseSchema = z.object({
   maxDaysAhead: z.number().int().positive(),
 });
 export type SalonResponse = z.infer<typeof salonResponseSchema>;
+
+/** What the owner sees and edits: the public fields plus reminder timing. */
+export const ownerSalonSettingsSchema = salonResponseSchema.extend({
+  /** Minutes before the start for the first reminder (default 1440 = 24 h); null turns it off. */
+  reminderFirstLeadMinutes: reminderLeadSchema,
+  /** Minutes before the start for the second reminder (default 120 = 2 h); null turns it off. */
+  reminderSecondLeadMinutes: reminderLeadSchema,
+});
+export type OwnerSalonSettings = z.infer<typeof ownerSalonSettingsSchema>;
 
 /** Digits plus the usual separators; at least 6 digits. Format is not enforced beyond that. */
 export const phoneSchema = z
@@ -59,6 +69,8 @@ export const updateSalonSettingsRequestSchema = z
       .min(0)
       .max(60 * 24 * 30),
     maxDaysAhead: z.number().int().min(1).max(365),
+    reminderFirstLeadMinutes: reminderLeadSchema,
+    reminderSecondLeadMinutes: reminderLeadSchema,
   })
   .partial()
   .refine((value) => Object.values(value).some((v) => v !== undefined), {

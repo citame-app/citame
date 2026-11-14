@@ -25,6 +25,7 @@ import { staffRoutes } from "./modules/staff/routes";
 import { createSyncHub } from "./modules/sync/hub";
 import { headSeq } from "./modules/sync/pull";
 import { syncRoutes } from "./modules/sync/routes";
+import { notificationAdminRoutes, optOutRoutes } from "./notifications/routes";
 import { oauthAudit } from "./oauth/audit";
 import { ensureOAuthSeeds } from "./oauth/clients";
 import { createRateLimiter, rateLimit } from "./rate-limit";
@@ -154,6 +155,8 @@ export function createApp(deps: AppDeps): App {
     auth.handler(c.req.raw),
   );
   app.use("/me", requireAuth(auth, deps.db));
+  app.use("/me/*", requireAuth(auth, deps.db));
+  app.route("/notifications", optOutRoutes(deps));
   app.route("/me", meRoutes(deps));
 
   app.use("/admin/*", requireAuth(auth, deps.db));
@@ -163,6 +166,7 @@ export function createApp(deps: AppDeps): App {
   app.route("/admin/clients", clientAdminRoutes(deps));
   app.route("/admin/reports", reportRoutes(deps));
   app.route("/admin/settings", settingsAdminRoutes(deps));
+  app.route("/admin/notifications", notificationAdminRoutes(deps));
 
   // Public catalog and availability: anonymous visitors browse before they sign up.
   app.route("/salon", salonRoutes(deps));

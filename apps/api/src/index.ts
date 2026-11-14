@@ -2,6 +2,7 @@ import { createDb } from "@sob/db";
 import { RedisClient } from "bun";
 import { createApp } from "./app";
 import { loadConfig } from "./config";
+import { startNotificationRuntime } from "./notifications/runtime";
 
 // Fails fast (with every problem listed) when the environment is incomplete.
 const config = loadConfig();
@@ -12,10 +13,13 @@ await valkey.send("PING", []);
 const app = createApp({ db, valkey, config });
 await app.ready();
 
+// Optional in-process notification worker (NOTIFY_WORKER_ENABLED). `bun run worker` runs the same code alone.
+const notifications = startNotificationRuntime({ db, config });
+
 // Ends open SSE streams and the Valkey subscriber before the process exits.
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.on(signal, () => {
-    void app.shutdown().finally(() => process.exit(0));
+    void Promise.all([app.shutdown(), notifications?.stop()]).finally(() => process.exit(0));
   });
 }
 
