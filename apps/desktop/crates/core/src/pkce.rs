@@ -1,5 +1,8 @@
 //! OAuth 2.1 Authorization Code + PKCE building blocks with a loopback redirect (RFC 7636,
-//! RFC 8252). Not wired to the API yet: the OAuth provider arrives in Phase 6 (ADR 0008).
+//! RFC 8252). Not wired yet. The API now has the authorization server (ADR 0009, public client
+//! `sob-desktop`, loopback redirect `http://127.0.0.1/callback` on any port, scopes in
+//! `docs/mcp.md`), but `/sync/*` still authenticates by session cookie only, so the swap needs a
+//! bearer branch in the API first (listed as a follow-up in ADR 0009).
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

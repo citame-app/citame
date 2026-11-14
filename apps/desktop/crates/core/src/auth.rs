@@ -3,8 +3,9 @@
 //! Today the API only has Better Auth email + password with cookie sessions (ADR 0003): the
 //! desktop signs in at `POST /api/auth/sign-in/email`, keeps the signed `session_token` cookie
 //! and sends it as a `Cookie` header on every sync request. The OAuth 2.1 Authorization Code +
-//! PKCE flow with a loopback redirect (`pkce`) replaces `BetterAuthSession` in Phase 6, when the
-//! API gets its OAuth provider.
+//! PKCE flow with a loopback redirect (`pkce`) is meant to replace `BetterAuthSession`. The API
+//! has had its OAuth provider since Phase 6 (ADR 0009) but the swap is a follow-up: `/sync/*`
+//! must first accept bearer access tokens (it only reads the session cookie today).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};

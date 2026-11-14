@@ -62,6 +62,16 @@ export interface ToolContext {
 const DAY_MS = 86_400_000;
 const DEFAULT_WINDOW_DAYS = 90;
 
+/**
+ * Appointment notes are free text typed by clients. A front-desk agent reading them would be
+ * reading attacker-controlled instructions (prompt injection), so staff and owner tokens get the
+ * notes redacted; a client always sees their own. The REST API and the dashboard are unchanged:
+ * a person reading a note is not an agent obeying it.
+ */
+function redactNotes<T extends { notes: string | null }>(principal: Principal, row: T): T {
+  return principal.role === "client" ? row : { ...row, notes: null };
+}
+
 function ok<T extends Record<string, unknown>>(output: T) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(output) }],
@@ -162,7 +172,11 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
           page: args.page,
           pageSize: args.pageSize ?? MCP_PAGE_SIZE_DEFAULT,
         });
-        return { ...(await listAppointments(db, scoped.query, { clientId: scoped.clientId })) };
+        const result = await listAppointments(db, scoped.query, { clientId: scoped.clientId });
+        return {
+          ...result,
+          appointments: result.appointments.map((a) => redactNotes(principal, a)),
+        };
       },
     ),
   );
@@ -198,12 +212,12 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       const actor = { userId: principal.userId, via: ctx.via };
       try {
         const created = await createAppointment(db, authorized, actor, { now: ctx.now() });
-        return { appointment: created, replayed: false };
+        return { appointment: redactNotes(principal, created), replayed: false };
       } catch (error) {
         // The same requestId again: return the booking it already made, if it is this caller's.
         if (requestId && error instanceof DomainError && error.code === "invalid_state") {
           const existing = await findOwnedReplay(ctx, requestId, authorized);
-          if (existing) return { appointment: existing, replayed: true };
+          if (existing) return { appointment: redactNotes(principal, existing), replayed: true };
           throw new DomainError(
             "validation_error",
             "This requestId was already used. Generate a new one",
@@ -253,7 +267,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
         { userId: principal.userId, via: ctx.via },
         { now: ctx.now() },
       );
-      return { appointment: cancelled };
+      return { appointment: redactNotes(principal, cancelled) };
     }),
   );
 
@@ -286,7 +300,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       return {
         timezone: calendar.timezone,
         staff: calendar.staff,
-        appointments: calendar.appointments,
+        appointments: calendar.appointments.map((a) => redactNotes(principal, a)),
       };
     }),
   );
