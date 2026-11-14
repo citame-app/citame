@@ -241,6 +241,7 @@ export function CalendarGrid(props: CalendarGridProps) {
             const nowMin = nowMarkerMinutes(now, column.date, timeZone);
 
             return (
+              // biome-ignore lint/a11y/useSemanticElements: an absolutely positioned time grid cannot be a fieldset
               <div
                 key={column.key}
                 role="group"
@@ -251,7 +252,7 @@ export function CalendarGrid(props: CalendarGridProps) {
                 className="relative border-l border-line"
                 style={{ height }}
               >
-                {/* biome-ignore lint/a11y/useKeyWithClickEvents: keyboard users create through the "New appointment" button and the n shortcut */}
+                {/* biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useKeyWithClickEvents: keyboard users create through the "New appointment" button and the n shortcut */}
                 <div
                   data-testid="slot-surface"
                   ref={(el) => {

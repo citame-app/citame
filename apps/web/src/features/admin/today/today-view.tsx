@@ -79,7 +79,7 @@ export function TodayView({
     );
   }
 
-  const describe = (a: CalendarAppointment) => (
+  const summary = (a: CalendarAppointment) => (
     <>
       <p className="font-medium">{a.clientName}</p>
       <p className="text-sm text-muted">
@@ -95,6 +95,7 @@ export function TodayView({
 
   return (
     <div className="space-y-6">
+      {/* biome-ignore lint/a11y/useSemanticElements: a labelled group of figures, not a form fieldset */}
       <div role="group" aria-label={t("today.statsLabel")}>
         <dl className="grid grid-cols-2 gap-3 lg:grid-cols-5">
           {stats.map((stat) => (
@@ -118,7 +119,7 @@ export function TodayView({
               <p className="font-display text-3xl font-semibold tabular-nums text-accent-text">
                 {time(overview.nextUp.startsAt)}
               </p>
-              <div>{describe(overview.nextUp)}</div>
+              <div>{summary(overview.nextUp)}</div>
             </div>
           ) : (
             <p className="mt-2 text-muted">{t("today.nextUp.none")}</p>
@@ -142,7 +143,7 @@ export function TodayView({
                   <li key={a.id} className="space-y-2 py-3 first:pt-0 last:pb-0">
                     <div className="flex items-start gap-3">
                       <p className="w-16 shrink-0 font-semibold tabular-nums">{time(a.startsAt)}</p>
-                      <div className="min-w-0">{describe(a)}</div>
+                      <div className="min-w-0">{summary(a)}</div>
                     </div>
                     <AppointmentActions
                       appointment={a}
@@ -170,7 +171,7 @@ export function TodayView({
           {overview.timeline.map((a) => (
             <li key={a.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
               <p className="w-20 shrink-0 font-semibold tabular-nums">{time(a.startsAt)}</p>
-              <div className="min-w-0 flex-1">{describe(a)}</div>
+              <div className="min-w-0 flex-1">{summary(a)}</div>
               <StatusBadge status={a.status} />
             </li>
           ))}

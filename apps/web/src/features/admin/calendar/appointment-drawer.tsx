@@ -40,7 +40,7 @@ export function AppointmentDrawer({
   /** Refetch the calendar so the drawer shows the latest version after a conflict. */
   onReload?: () => void;
 }) {
-  const { t, locale, timeZone } = useI18n();
+  const { t } = useI18n();
   return (
     <Sheet
       open={appointment !== null}
@@ -101,6 +101,7 @@ function DrawerBody({
   );
 
   // The calendar refetches in the background; a fresh version resets the draft.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the version marks a fresh server copy
   useEffect(() => setNotes(appointment.notes ?? ""), [appointment.notes, appointment.version]);
 
   const afterSave = (saved: Parameters<typeof mergeAppointment>[1]) => {
