@@ -10,7 +10,16 @@ import {
   seedFixtures,
   setupApiTest,
 } from "../../test/helpers";
-import { callTool, ISSUER, listTools, MCP_URL, rpc, tokenFor } from "../../test/oauth";
+import {
+  callTool,
+  ISSUER,
+  listTools,
+  MCP_URL,
+  obtainTokens,
+  registerClient,
+  rpc,
+  tokenFor,
+} from "../../test/oauth";
 
 let t: ApiTest;
 let fx: Fixtures;
@@ -104,6 +113,19 @@ describe("RFC 9728 protected resource metadata and the 401 challenge", () => {
     claims.sub = "someone-else";
     const swapped = `${h}.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.${s}`;
     expect((await rpc(t.app, swapped, "tools/list")).res.status).toBe(401);
+  });
+
+  test("a token issued without a resource is opaque and is not accepted by the MCP server", async () => {
+    const who = await actor(t, "client", "lucia@example.com");
+    const { client } = await registerClient(t.app, { scope: "mcp:read" });
+    const { tokens } = await obtainTokens(t.app, {
+      clientId: client.client_id,
+      cookie: who.cookie,
+      scope: "mcp:read",
+      resource: null,
+    });
+    expect(tokens.access_token.split(".")).toHaveLength(1);
+    expect((await rpc(t.app, tokens.access_token, "tools/list")).res.status).toBe(401);
   });
 
   test("GET and DELETE are 405 (stateless server) but still need a token", async () => {

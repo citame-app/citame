@@ -57,6 +57,57 @@ describe("dynamic client registration", () => {
   });
 });
 
+describe("browser-based MCP clients (CORS)", () => {
+  const origin = "http://localhost:6274";
+
+  test("metadata, JWKS, registration and the token endpoint answer cross-origin without credentials", async () => {
+    for (const path of ["/.well-known/oauth-authorization-server/api/auth", "/api/auth/jwks"]) {
+      const res = await t.app.request(path, { headers: { origin } });
+      expect(res.status).toBe(200);
+      expect(res.headers.get("access-control-allow-origin")).toBe("*");
+      expect(res.headers.get("access-control-allow-credentials")).toBeNull();
+    }
+    const registered = await t.app.request("/api/auth/oauth2/register", {
+      method: "POST",
+      headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({
+        client_name: "Inspector",
+        redirect_uris: ["http://localhost:6274/oauth/callback"],
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code"],
+        response_types: ["code"],
+        scope: "mcp:read",
+      }),
+    });
+    expect(registered.status).toBe(201);
+    expect(registered.headers.get("access-control-allow-origin")).toBe("*");
+    const preflight = await t.app.request("/api/auth/oauth2/token", {
+      method: "OPTIONS",
+      headers: { origin, "access-control-request-method": "POST" },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get("access-control-allow-origin")).toBe("*");
+  });
+
+  test("cookie-bound endpoints get no CORS headers: another origin cannot read them", async () => {
+    const user = await actor(t, "client", "lucia@example.com");
+    const res = await t.app.request("/api/auth/oauth2/public-client?client_id=sob-desktop", {
+      headers: { origin, cookie: user.cookie },
+    });
+    expect(res.headers.get("access-control-allow-origin")).toBeNull();
+    const consent = await t.app.request("/api/auth/oauth2/consent", {
+      method: "POST",
+      headers: {
+        origin: "https://evil.example",
+        cookie: user.cookie,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ accept: true, oauth_query: "x" }),
+    });
+    expect(consent.status).toBe(403);
+  });
+});
+
 describe("pre-registered desktop client", () => {
   test("the desktop public client exists after startup and allows loopback redirects on any port", async () => {
     const user = await actor(t, "client", "desk@example.com");
