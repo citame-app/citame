@@ -55,7 +55,7 @@ Legend: OK = looked, nothing to fix. FIXED = defect above. OBS = observation abo
 | opt-out done (already off)              | OK (4/4; OBS)                                                   | not opened |
 | opt-out missing token, 404              | not opened                                                      | not opened |
 
-Desktop public shots (72 images) were generated and 19 of them (the Spanish dark variants) were assembled into sheets but **not inspected**: the review budget ran out.
+The "not opened" cells above were opened in the second pass below.
 
 ### Admin (admin-screenshots, 50 per viewport)
 
@@ -77,10 +77,27 @@ Reviewed on the first pass for phone: 01-34 (all calendar, client, service, team
 
 Notes from the admin pass: chart colors keep their contrast in dark mode; the calendar legend and "Outside working hours" hatching read correctly; all drawers trap focus and show a visible focus ring (seen on the keyboard-shortcuts close button and form fields).
 
+## Second pass (completion of the gaps)
+
+After the fixes, the remaining images were opened as contact sheets (4 variants per sheet, cells readable at roughly 1:1 text size):
+
+- Desktop public/auth/consent/notification set, all 76 images (sign-in, empty submit, wrong password, sign-up, forgot, sent, reset invalid, verify invalid, reset form, reset mismatch, notification preferences and saved, consent and invalid consent link, opt-out invalid, missing token, confirm, done, 404; en/es x light/dark): OK. No overlap, clipping, untranslated string or contrast problem. Focus rings on invalid fields are visible in light and dark.
+- Desktop `screenshots.spec` output, all 18 (home, booking steps, review, confirmed, account, reschedule, cancel dialog, profile, sign-up errors, 404, time error, dark and dark es): OK.
+- Phone public set: sign-in, empty submit, wrong password, sign-up, forgot, sent, reset invalid, verify invalid, reset form and mismatch, 404 (all 4 variants each): OK. Phone consent, notifications, opt-out sets were opened earlier: OK.
+- Phone `screenshots.spec` 01-16: OK (earlier round, after the fixes it is unchanged apart from the sign-out wait in the spec).
+- Desktop admin re-shoot after fixes: 02, 03, 19, 25, 28, 35 re-opened: OK (toast fix does not affect desktop, validation clearing leaves the correct empty-field errors).
+
+Minor observations (no change): after "Send reset link" the page keeps the lead text "Enter your email..." above the "Check your inbox" card; the Spanish price format is "$ 10.000" (es-AR locale) while English shows "ARS 10,000", which is intentional locale formatting.
+
+## Still not looked at
+
+- Phone `opt-out-missing-token` (4 images): same component as `opt-out-invalid`, opened on desktop only.
+- Most of the phone admin re-shoot after the fixes: only 19, 22, 25 and 50 were re-opened (the rest were reviewed before the fixes and the fixes do not touch them).
+- Desktop admin images 01, 04-18, 20-24, 26-27, 29-34, 36-50 were reviewed before the fixes, not after the re-shoot.
+- Everything in the section below.
+
 ## Not looked at, not done
 
-- The 72 desktop public/auth/consent/notification images and 44 other public-phone images listed "not opened" above.
-- The desktop copies of `screenshots.spec` (18 images).
 - Hover states, real devices, Safari and Firefox (Chromium only), landscape phones, 200 percent zoom, a screen reader.
 - The GPUI desktop client (no display was driven in this pass).
 - Transactional email rendering in real mail clients.
