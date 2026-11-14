@@ -124,7 +124,10 @@ function EmailRequestForm({
         {purpose === "reset" ? t("auth.forgot.submit") : t("auth.verify.invalidSubmit")}
       </Button>
       <p className="text-center">
-        <a href="/sign-in" className="font-medium text-accent-text underline underline-offset-4">
+        <a
+          href="/sign-in"
+          className="inline-flex min-h-11 items-center font-medium text-accent-text underline underline-offset-4"
+        >
           {t("auth.forgot.back")}
         </a>
       </p>

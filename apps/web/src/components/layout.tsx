@@ -42,7 +42,7 @@ export function Header({
           {session ? (
             <Link
               to={staff ? "/admin" : "/account"}
-              className="inline-flex min-h-11 items-center gap-2 rounded-md px-2 text-sm font-medium hover:bg-sunken sm:px-3"
+              className="inline-flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-md px-2 text-sm font-medium hover:bg-sunken sm:px-3"
               aria-label={staff ? t("nav.dashboard") : t("nav.account")}
             >
               <UserIcon />
@@ -53,7 +53,7 @@ export function Header({
           ) : (
             <Link
               to="/sign-in"
-              className="inline-flex min-h-11 items-center gap-2 rounded-md px-2 text-sm font-medium hover:bg-sunken sm:px-3"
+              className="inline-flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-md px-2 text-sm font-medium hover:bg-sunken sm:px-3"
               aria-label={t("nav.signIn")}
             >
               <UserIcon />

@@ -64,7 +64,9 @@ export function AdminShell({
   useEffect(() => {
     const root = document.documentElement;
     root.style.setProperty("--bottom-nav", "3.5rem");
-    return () => root.style.removeProperty("--bottom-nav");
+    return () => {
+      root.style.removeProperty("--bottom-nav");
+    };
   }, []);
 
   return (

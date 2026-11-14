@@ -140,10 +140,10 @@ export function AuthForm({ mode, onSubmit, onResendVerification, footer }: AuthF
         required
       />
       {mode === "sign-in" && (
-        <p className="-mt-2 text-sm">
+        <p className="-mt-4 text-sm">
           <a
             href="/forgot-password"
-            className="font-medium text-accent-text underline underline-offset-4"
+            className="inline-flex min-h-11 items-center font-medium text-accent-text underline underline-offset-4"
           >
             {t("auth.forgot.link")}
           </a>

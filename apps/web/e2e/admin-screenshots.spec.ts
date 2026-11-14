@@ -401,6 +401,9 @@ test.describe("admin screenshots", () => {
         "dark-reports",
       ],
       ["/admin/services", "dark-services"],
+      ["/admin/clients", "dark-clients"],
+      ["/admin/staff", "dark-team"],
+      ["/admin/settings", "dark-settings"],
     ] as const) {
       await page.goto(path);
       await page.getByRole("heading", { level: 1 }).waitFor();
@@ -418,8 +421,29 @@ test.describe("admin screenshots", () => {
     await shoot(page, project, "es-today");
     await page.goto("/admin/staff");
     await shoot(page, project, "es-team");
+    for (const [path, name] of [
+      ["/admin/clients", "es-clients"],
+      ["/admin/services", "es-services"],
+      [
+        `/admin/reports?preset=custom&from=${salonDate(off - 6)}&to=${day}&staff=${STYLIST_A}`,
+        "es-reports",
+      ],
+      ["/admin/settings", "es-settings"],
+    ] as const) {
+      await page.goto(path);
+      await page.getByRole("heading", { level: 1 }).waitFor();
+      await page.waitForLoadState("networkidle");
+      await page.waitForTimeout(500);
+      await shoot(page, project, name);
+    }
+    await page.goto(dayUrl);
+    await page.getByRole("button", { name: /Shot Pending Lucia/ }).click();
+    await page.waitForLoadState("networkidle");
+    await shoot(page, project, "es-calendar-drawer", false);
+    await page.keyboard.press("Escape");
 
     // ---- staff role: own schedule and the forbidden notice ----
+    await page.goto("/admin");
     await page.getByLabel("English").check({ force: true });
     await page.context().clearCookies();
     await signInAs(page, "e2e-staff@example.com", "/admin/services");
@@ -427,5 +451,9 @@ test.describe("admin screenshots", () => {
       page.getByRole("alert").filter({ hasText: "You do not have access" }),
     ).toBeVisible();
     await shoot(page, project, "staff-forbidden-notice", false);
+    await page.getByLabel("Español").check({ force: true });
+    await page.goto("/admin/services");
+    await expect(page.getByRole("alert").filter({ hasText: "No tienes acceso" })).toBeVisible();
+    await shoot(page, project, "es-staff-forbidden-notice", false);
   });
 });
