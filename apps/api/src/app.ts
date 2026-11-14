@@ -20,6 +20,7 @@ import { settingsAdminRoutes } from "./modules/settings/admin-routes";
 import { salonRoutes } from "./modules/settings/routes";
 import { staffAdminRoutes } from "./modules/staff/admin-routes";
 import { staffRoutes } from "./modules/staff/routes";
+import { syncRoutes } from "./modules/sync/routes";
 import { createRateLimiter, rateLimit } from "./rate-limit";
 
 export interface AppDeps {
@@ -30,10 +31,16 @@ export interface AppDeps {
   rateLimitNow?: () => number;
   /** Injectable clock so availability and notice rules are deterministic in tests. */
   now?: () => Date;
+  /** Interval of the SSE keep-alive comment, in milliseconds (default 15 000). */
+  syncHeartbeatMs?: number;
 }
 
-export function createApp(deps: AppDeps) {
-  const app = new Hono();
+/** The Hono app plus the lifecycle hook that releases long-lived resources (SSE, Valkey). */
+export type App = Hono & { shutdown: () => Promise<void> };
+
+export function createApp(deps: AppDeps): App {
+  const app = new Hono() as App;
+  app.shutdown = async () => {};
   const auth = createAuth(deps);
   const limiter = createRateLimiter({
     storage: valkeySecondaryStorage(deps.valkey, deps.config.valkeyKeyPrefix),
@@ -87,6 +94,9 @@ export function createApp(deps: AppDeps) {
   app.use("/appointments", requireAuth(auth, deps.db));
   app.use("/appointments/*", requireAuth(auth, deps.db));
   app.route("/appointments", appointmentsRoutes(deps));
+
+  app.use("/sync/*", requireAuth(auth, deps.db));
+  app.route("/sync", syncRoutes(deps));
 
   return app;
 }

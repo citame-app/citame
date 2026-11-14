@@ -11,7 +11,7 @@ import {
 import { createTestDatabase, type TestDatabase } from "@sob/db/testing";
 import { eq, sql } from "drizzle-orm";
 import type { Hono } from "hono";
-import { createApp } from "../src/app";
+import { type App, type AppDeps, createApp } from "../src/app";
 import { createAccount } from "../src/auth/accounts";
 import { createAuth } from "../src/auth/auth";
 import { type AppConfig, loadConfig } from "../src/config";
@@ -34,7 +34,7 @@ export interface Fixtures {
 export const TEST_SECRET = "test-secret-test-secret-test-secret-0123";
 
 export interface ApiTest extends TestDatabase {
-  app: Hono;
+  app: App;
   valkey: TestValkey;
   config: AppConfig;
   /** Epoch-ms clock used by the rate limiter; move it to cross window boundaries. */
@@ -43,11 +43,15 @@ export interface ApiTest extends TestDatabase {
 
 export interface SetupOptions {
   env?: Record<string, string>;
+  /** Suffix of the dedicated `sob_test_<suffix>` database; defaults to `api`. */
+  dbSuffix?: string;
+  /** Extra application dependencies, for example a short SSE heartbeat. */
+  deps?: Partial<Pick<AppDeps, "syncHeartbeatMs">>;
 }
 
 export async function setupApiTest(options: SetupOptions = {}): Promise<ApiTest> {
-  const t = await createTestDatabase("api");
-  const valkey = await createTestValkey("api");
+  const t = await createTestDatabase(options.dbSuffix ?? "api");
+  const valkey = await createTestValkey(options.dbSuffix ?? "api");
   const config = loadConfig({
     BETTER_AUTH_SECRET: TEST_SECRET,
     VALKEY_KEY_PREFIX: valkey.prefix,
@@ -69,10 +73,13 @@ export async function setupApiTest(options: SetupOptions = {}): Promise<ApiTest>
     config,
     now: () => NOW,
     rateLimitNow: clock.now,
+    ...options.deps,
   });
   const closeDb = t.close;
+  const closeApp = () => app.shutdown();
   const resetDb = t.reset;
   const close = async () => {
+    await closeApp();
     await closeDb();
     await valkey.close();
   };

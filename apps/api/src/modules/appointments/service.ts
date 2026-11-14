@@ -42,7 +42,7 @@ export interface Actor {
 type AppointmentRow = typeof appointment.$inferSelect;
 type SnapshotRow = typeof appointmentService.$inferSelect;
 
-function toAppointment(row: AppointmentRow, snapshots: SnapshotRow[]): Appointment {
+export function toAppointment(row: AppointmentRow, snapshots: SnapshotRow[]): Appointment {
   return {
     id: row.id,
     staffId: row.staffId,
@@ -98,7 +98,7 @@ async function assertStaffPerforms(db: Database, staffId: string, serviceIds: st
   }
 }
 
-async function loadSnapshots(db: Database, appointmentIds: string[]) {
+export async function loadSnapshots(db: Database, appointmentIds: string[]) {
   if (appointmentIds.length === 0) return new Map<string, SnapshotRow[]>();
   const rows = await db
     .select()

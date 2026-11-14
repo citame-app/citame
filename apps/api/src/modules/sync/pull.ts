@@ -1,0 +1,245 @@
+import type { SyncChange, SyncEntity, SyncPullQuery, SyncPullResponse } from "@sob/contracts";
+import {
+  appointment,
+  clientProfile,
+  type Database,
+  salonSettings,
+  service,
+  serviceStaff,
+  staffProfile,
+  syncChange,
+  timeOff,
+  workingHours,
+} from "@sob/db";
+import { and, asc, gt, inArray, isNull, max } from "drizzle-orm";
+import type { Principal } from "../../auth/principal";
+import { DomainError } from "../../errors";
+import { loadSnapshots, toAppointment } from "../appointments/service";
+
+/**
+ * Highest committed `seq`. Because seq order equals commit order (ADR 0007), everything at or
+ * below it that will ever be visible is already visible, so it is always a safe cursor.
+ */
+export async function headSeq(db: Pick<Database, "select">): Promise<number> {
+  const [row] = await db.select({ head: max(syncChange.seq) }).from(syncChange);
+  return Number(row?.head ?? 0);
+}
+
+interface Entry {
+  entity: SyncEntity;
+  id: string;
+  op: "upsert";
+  data: unknown;
+}
+type Visible = Map<string, Entry>;
+
+const hhmm = (time: string) => time.slice(0, 5);
+
+/**
+ * Current state of the rows an entity's changes point at, as the caller may see them. A row
+ * that is missing, soft-deleted or not visible to the caller is simply absent from the map and
+ * is announced as a tombstone.
+ */
+async function loadVisible(
+  db: Database,
+  principal: Principal,
+  entity: SyncEntity,
+  ids: string[],
+): Promise<Visible> {
+  const out: Visible = new Map();
+  const put = (id: string, data: unknown) => out.set(id, { entity, id, op: "upsert", data });
+  const owner = principal.role === "owner";
+  const ownCalendar = (staffId: string) => owner || staffId === principal.staffId;
+
+  switch (entity) {
+    case "appointment": {
+      const rows = await db
+        .select()
+        .from(appointment)
+        .where(and(inArray(appointment.id, ids), isNull(appointment.deletedAt)));
+      const visible = rows.filter((r) => ownCalendar(r.staffId));
+      const snapshots = await loadSnapshots(
+        db,
+        visible.map((r) => r.id),
+      );
+      for (const row of visible) put(row.id, toAppointment(row, snapshots.get(row.id) ?? []));
+      break;
+    }
+    case "client": {
+      const rows = await db
+        .select()
+        .from(clientProfile)
+        .where(and(inArray(clientProfile.id, ids), isNull(clientProfile.deletedAt)));
+      for (const r of rows) {
+        put(r.id, {
+          id: r.id,
+          name: r.name,
+          phone: r.phone,
+          email: r.email,
+          notes: r.notes,
+          createdAt: r.createdAt.toISOString(),
+          updatedAt: r.updatedAt.toISOString(),
+        });
+      }
+      break;
+    }
+    case "service": {
+      const rows = await db
+        .select()
+        .from(service)
+        .where(and(inArray(service.id, ids), isNull(service.deletedAt)));
+      for (const r of rows) {
+        put(r.id, {
+          id: r.id,
+          name: r.name,
+          description: r.description,
+          durationMinutes: r.durationMinutes,
+          bufferMinutes: r.bufferMinutes,
+          priceCents: r.priceCents,
+          currency: r.currency,
+          active: r.active,
+          updatedAt: r.updatedAt.toISOString(),
+        });
+      }
+      break;
+    }
+    case "staff": {
+      const rows = await db
+        .select()
+        .from(staffProfile)
+        .where(and(inArray(staffProfile.id, ids), isNull(staffProfile.deletedAt)));
+      for (const r of rows) {
+        put(r.id, {
+          id: r.id,
+          displayName: r.displayName,
+          active: r.active,
+          // The login link is account administration: owner only.
+          userId: owner ? r.userId : null,
+          updatedAt: r.updatedAt.toISOString(),
+        });
+      }
+      break;
+    }
+    case "service_staff": {
+      const rows = await db
+        .select()
+        .from(serviceStaff)
+        .where(and(inArray(serviceStaff.id, ids), isNull(serviceStaff.deletedAt)));
+      for (const r of rows) put(r.id, { id: r.id, serviceId: r.serviceId, staffId: r.staffId });
+      break;
+    }
+    case "working_hours": {
+      const rows = await db
+        .select()
+        .from(workingHours)
+        .where(and(inArray(workingHours.id, ids), isNull(workingHours.deletedAt)));
+      for (const r of rows.filter((row) => ownCalendar(row.staffId))) {
+        put(r.id, {
+          id: r.id,
+          staffId: r.staffId,
+          weekday: r.weekday,
+          startTime: hhmm(r.startTime),
+          endTime: hhmm(r.endTime),
+        });
+      }
+      break;
+    }
+    case "time_off": {
+      const rows = await db
+        .select()
+        .from(timeOff)
+        .where(and(inArray(timeOff.id, ids), isNull(timeOff.deletedAt)));
+      for (const r of rows.filter((row) => ownCalendar(row.staffId))) {
+        put(r.id, {
+          id: r.id,
+          staffId: r.staffId,
+          startsAt: r.startsAt.toISOString(),
+          endsAt: r.endsAt.toISOString(),
+          reason: r.reason,
+          updatedAt: r.updatedAt.toISOString(),
+        });
+      }
+      break;
+    }
+    case "salon_settings": {
+      const rows = await db.select().from(salonSettings);
+      for (const r of rows) {
+        put(String(r.id), {
+          name: r.name,
+          timezone: r.timezone,
+          slotGranularityMinutes: r.slotGranularityMinutes,
+          minNoticeMinutes: r.minNoticeMinutes,
+          maxDaysAhead: r.maxDaysAhead,
+          updatedAt: r.updatedAt.toISOString(),
+        });
+      }
+      break;
+    }
+  }
+  return out;
+}
+
+/**
+ * One page of the change log after `since`. `limit` bounds the log rows scanned; entries for
+ * the same row inside the page collapse into the latest one, and each entry carries the row's
+ * CURRENT state (never a stale snapshot), or a tombstone when the row is gone or hidden from
+ * the caller. The cursor advances over everything scanned, including entries the caller may not
+ * see, so filtered pages never stall.
+ */
+export async function pullChanges(
+  db: Database,
+  principal: Principal,
+  query: SyncPullQuery,
+): Promise<SyncPullResponse> {
+  if (principal.role === "client") {
+    throw new DomainError("forbidden", "Sync is available to staff and owners only");
+  }
+  const head = await headSeq(db);
+  if (query.since > head) {
+    throw new DomainError(
+      "invalid_state",
+      "The cursor is ahead of the server; discard local state and resync from 0",
+    );
+  }
+
+  const scanned = await db
+    .select()
+    .from(syncChange)
+    .where(gt(syncChange.seq, query.since))
+    .orderBy(asc(syncChange.seq))
+    .limit(query.limit + 1);
+  const hasMore = scanned.length > query.limit;
+  const page = scanned.slice(0, query.limit);
+  const nextCursor = page.at(-1)?.seq ?? query.since;
+
+  // Latest entry per row wins; Map keeps first-insertion order, so delete before set to order
+  // the survivors by the seq of their last occurrence.
+  const latest = new Map<string, (typeof page)[number]>();
+  for (const row of page) {
+    const key = `${row.entity}\u0000${row.rowId}`;
+    latest.delete(key);
+    latest.set(key, row);
+  }
+
+  const idsByEntity = new Map<SyncEntity, string[]>();
+  for (const row of latest.values()) {
+    const entity = row.entity as SyncEntity;
+    idsByEntity.set(entity, [...(idsByEntity.get(entity) ?? []), row.rowId]);
+  }
+  const states = new Map<SyncEntity, Visible>();
+  for (const [entity, ids] of idsByEntity) {
+    states.set(entity, await loadVisible(db, principal, entity, ids));
+  }
+
+  const changes: SyncChange[] = [];
+  for (const row of latest.values()) {
+    const entity = row.entity as SyncEntity;
+    const state = states.get(entity)?.get(row.rowId);
+    changes.push(
+      state
+        ? ({ ...state, seq: row.seq } as SyncChange)
+        : { seq: row.seq, entity, id: row.rowId, op: "delete", data: null },
+    );
+  }
+  return { changes, nextCursor, hasMore, headSeq: Math.max(head, nextCursor) };
+}
