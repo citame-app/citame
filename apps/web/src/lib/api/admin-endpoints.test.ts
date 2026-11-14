@@ -109,6 +109,8 @@ describe("admin endpoints", () => {
       slotGranularityMinutes: 15,
       minNoticeMinutes: 60,
       maxDaysAhead: 60,
+      reminderFirstLeadMinutes: 1440,
+      reminderSecondLeadMinutes: 120,
     });
     await api.settings.update({ minNoticeMinutes: 30 });
     expect(calls[0]?.url).toBe("/api/admin/settings");

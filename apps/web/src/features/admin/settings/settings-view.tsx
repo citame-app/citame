@@ -19,7 +19,12 @@ interface Form {
   slotGranularityMinutes: string;
   minNoticeMinutes: string;
   maxDaysAhead: string;
+  /** Empty means the reminder is off. */
+  reminderFirstLeadMinutes: string;
+  reminderSecondLeadMinutes: string;
 }
+
+const leadValue = (value: string) => (value.trim() === "" ? null : Number(value));
 
 function timezones(current: string): string[] {
   const list =
@@ -45,6 +50,8 @@ export function SettingsView() {
     slotGranularityMinutes: String(s.slotGranularityMinutes),
     minNoticeMinutes: String(s.minNoticeMinutes),
     maxDaysAhead: String(s.maxDaysAhead),
+    reminderFirstLeadMinutes: s.reminderFirstLeadMinutes?.toString() ?? "",
+    reminderSecondLeadMinutes: s.reminderSecondLeadMinutes?.toString() ?? "",
   });
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset only when the saved copy changes
@@ -83,6 +90,10 @@ export function SettingsView() {
       changes.minNoticeMinutes = Number(form.minNoticeMinutes);
     if (form.maxDaysAhead !== initial.maxDaysAhead)
       changes.maxDaysAhead = Number(form.maxDaysAhead);
+    if (form.reminderFirstLeadMinutes !== initial.reminderFirstLeadMinutes)
+      changes.reminderFirstLeadMinutes = leadValue(form.reminderFirstLeadMinutes);
+    if (form.reminderSecondLeadMinutes !== initial.reminderSecondLeadMinutes)
+      changes.reminderSecondLeadMinutes = leadValue(form.reminderSecondLeadMinutes);
     const parsed = updateSalonSettingsRequestSchema.safeParse(changes);
     const found: typeof errors = {};
     if (!parsed.success) {
@@ -95,7 +106,9 @@ export function SettingsView() {
               ? "settings.error.timezone"
               : key === "minNoticeMinutes"
                 ? "settings.error.minNotice"
-                : "settings.error.maxDays",
+                : key === "reminderFirstLeadMinutes" || key === "reminderSecondLeadMinutes"
+                  ? "settings.error.reminder"
+                  : "settings.error.maxDays",
         );
       }
     }
@@ -165,6 +178,28 @@ export function SettingsView() {
           onChange={(e) => set("maxDaysAhead", e.target.value)}
           hint={t("settings.maxDays.hint")}
           error={errors.maxDaysAhead}
+        />
+      </section>
+      <section className="space-y-4" aria-labelledby="settings-reminders">
+        <h2 id="settings-reminders" className="text-heading">
+          {t("settings.section.reminders")}
+        </h2>
+        <p className="text-sm text-muted">{t("settings.reminders.lead")}</p>
+        <TextField
+          label={t("settings.reminderFirst")}
+          inputMode="numeric"
+          value={form.reminderFirstLeadMinutes}
+          onChange={(e) => set("reminderFirstLeadMinutes", e.target.value)}
+          hint={t("settings.reminderFirst.hint")}
+          error={errors.reminderFirstLeadMinutes}
+        />
+        <TextField
+          label={t("settings.reminderSecond")}
+          inputMode="numeric"
+          value={form.reminderSecondLeadMinutes}
+          onChange={(e) => set("reminderSecondLeadMinutes", e.target.value)}
+          hint={t("settings.reminderSecond.hint")}
+          error={errors.reminderSecondLeadMinutes}
         />
       </section>
       <div className="flex flex-wrap items-center gap-3">

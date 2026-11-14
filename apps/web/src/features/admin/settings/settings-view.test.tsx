@@ -19,6 +19,8 @@ beforeEach(() => {
     slotGranularityMinutes: 15,
     minNoticeMinutes: 60,
     maxDaysAhead: 60,
+    reminderFirstLeadMinutes: 1440,
+    reminderSecondLeadMinutes: 120,
   };
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
@@ -33,6 +35,37 @@ beforeEach(() => {
 });
 afterEach(() => {
   globalThis.fetch = realFetch;
+});
+
+describe("SettingsView reminders", () => {
+  test("shows the lead times and saves a change; an empty field turns a reminder off", async () => {
+    renderApp(<SettingsView />);
+    const first = await screen.findByLabelText("First reminder (minutes before)");
+    expect(first).toHaveValue("1440");
+    expect(screen.getByLabelText("Second reminder (minutes before)")).toHaveValue("120");
+    fireEvent.change(first, { target: { value: "2880" } });
+    fireEvent.change(screen.getByLabelText("Second reminder (minutes before)"), {
+      target: { value: "" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
+    await waitFor(() =>
+      expect(patches).toEqual([
+        { reminderFirstLeadMinutes: 2880, reminderSecondLeadMinutes: null },
+      ]),
+    );
+  });
+
+  test("rejects lead times outside the allowed range", async () => {
+    renderApp(<SettingsView />);
+    fireEvent.change(await screen.findByLabelText("First reminder (minutes before)"), {
+      target: { value: "2" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
+    expect(
+      await screen.findByText("Enter minutes between 5 and 20160, or leave empty"),
+    ).toBeInTheDocument();
+    expect(patches).toHaveLength(0);
+  });
 });
 
 describe("SettingsView", () => {

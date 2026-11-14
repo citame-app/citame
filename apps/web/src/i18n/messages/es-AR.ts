@@ -1,5 +1,6 @@
 import { adminEsAR } from "./admin";
 import type { MessageKey } from "./en";
+import { notificationsEsAR } from "./notifications";
 
 /** Neutral, professional Spanish for Argentina. */
 export const esAR: Record<MessageKey, string> = {
@@ -222,4 +223,5 @@ export const esAR: Record<MessageKey, string> = {
   "account.profile.failed": "No pudimos guardar tu perfil",
   "account.signOut": "Cerrar sesión",
   ...adminEsAR,
+  ...notificationsEsAR,
 };

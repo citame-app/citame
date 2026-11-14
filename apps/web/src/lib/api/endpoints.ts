@@ -21,6 +21,9 @@ import {
   listStaffResponseSchema,
   listTimeOffResponseSchema,
   meResponseSchema,
+  notificationPreferencesSchema,
+  optOutPreviewSchema,
+  ownerSalonSettingsSchema,
   reportSummarySchema,
   type SetServiceStaffRequest,
   type SetWorkingHoursRequest,
@@ -29,6 +32,7 @@ import {
   timeOffResponseSchema,
   type UpdateAppointmentRequest,
   type UpdateClientRequest,
+  type UpdateNotificationPreferencesRequest,
   type UpdateProfileRequest,
   type UpdateSalonSettingsRequest,
   type UpdateServiceRequest,
@@ -81,6 +85,18 @@ export function createEndpoints(client: ApiClient) {
     me: () => client.get("/me", meResponseSchema),
     updateProfile: (request: UpdateProfileRequest) =>
       client.patch("/me", request, meResponseSchema),
+    notificationPreferences: {
+      get: () => client.get("/me/notification-preferences", notificationPreferencesSchema),
+      update: (request: UpdateNotificationPreferencesRequest) =>
+        client.patch("/me/notification-preferences", request, notificationPreferencesSchema),
+    },
+    /** Public, login-free: the signed link in a reminder email. GET only describes. */
+    optOut: {
+      preview: (token: string) =>
+        client.get("/notifications/opt-out", optOutPreviewSchema, { query: { token } }),
+      confirm: (token: string) =>
+        client.post("/notifications/opt-out", { token }, optOutPreviewSchema),
+    },
     appointments: {
       list: (query: Pick<AppointmentListQuery, "from" | "to" | "status" | "page" | "pageSize">) =>
         client.get("/appointments", listAppointmentsResponseSchema, {
@@ -145,9 +161,9 @@ export function createEndpoints(client: ApiClient) {
       reports: (query: { from: string; to: string; staffId?: string }) =>
         client.get("/admin/reports/summary", reportSummarySchema, { query }),
       settings: {
-        get: () => client.get("/admin/settings", salonResponseSchema),
+        get: () => client.get("/admin/settings", ownerSalonSettingsSchema),
         update: (request: UpdateSalonSettingsRequest) =>
-          client.patch("/admin/settings", request, salonResponseSchema),
+          client.patch("/admin/settings", request, ownerSalonSettingsSchema),
       },
     },
     auth: {

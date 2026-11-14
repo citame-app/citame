@@ -1,4 +1,5 @@
 import { adminEn } from "./admin";
+import { notificationsEn } from "./notifications";
 /** English is the source catalog: its keys define what every other catalog must provide. */
 export const en = {
   "common.greeting": "Hello, {name}",
@@ -218,6 +219,7 @@ export const en = {
   "account.profile.failed": "We could not save your profile",
   "account.signOut": "Sign out",
   ...adminEn,
+  ...notificationsEn,
 } as const;
 
 export type MessageKey = keyof typeof en;

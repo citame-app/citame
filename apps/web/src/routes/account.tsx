@@ -53,6 +53,11 @@ function AccountLayout() {
             <Link to="/account/profile" className={tabClass}>
               {t("account.nav.profile")}
             </Link>
+            {session?.clientId && (
+              <Link to="/account/notifications" className={tabClass}>
+                {t("account.nav.notifications")}
+              </Link>
+            )}
           </nav>
           <Button variant="ghost" onClick={() => void auth.signOut()}>
             <LogOutIcon />

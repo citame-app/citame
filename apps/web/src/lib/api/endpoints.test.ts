@@ -132,3 +132,41 @@ describe("OAuth endpoints", () => {
     });
   });
 });
+
+describe("notification endpoints", () => {
+  test("preferences are read and patched under /me, opt-out is public and token-based", async () => {
+    const seen: { method: string; url: string; body?: unknown }[] = [];
+    const prefs = {
+      locale: null,
+      email: { transactional: true, reminder: true },
+      sms: { transactional: false, reminder: false },
+      hasEmail: true,
+      hasPhone: false,
+    };
+    const preview = { channel: "email", category: "reminder", optedOut: false };
+    const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
+      seen.push({
+        method: init?.method ?? "GET",
+        url: String(input),
+        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      });
+      const body = String(input).includes("opt-out") ? preview : prefs;
+      return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const endpoints = createEndpoints(
+      createApiClient({ restBase: "/api", authBase: "", fetch: fetcher }),
+    );
+    expect((await endpoints.notificationPreferences.get()).hasEmail).toBe(true);
+    await endpoints.notificationPreferences.update({ email: { reminder: false } });
+    await endpoints.optOut.preview("abc def");
+    await endpoints.optOut.confirm("abc def");
+    expect(seen.map((s) => `${s.method} ${s.url}`)).toEqual([
+      "GET /api/me/notification-preferences",
+      "PATCH /api/me/notification-preferences",
+      "GET /api/notifications/opt-out?token=abc+def",
+      "POST /api/notifications/opt-out",
+    ]);
+    expect(seen[1]?.body).toEqual({ email: { reminder: false } });
+    expect(seen[3]?.body).toEqual({ token: "abc def" });
+  });
+});
