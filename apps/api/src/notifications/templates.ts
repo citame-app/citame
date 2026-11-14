@@ -137,7 +137,7 @@ const COPY: Record<Locale, Copy> = {
       cancellation: "{salon}: se canceló tu turno del {when}.",
       rescheduled: "{salon}: tu turno pasó a {when}.",
     },
-    smsStop: "Respondé STOP para no recibir más mensajes.",
+    smsStop: "Responde STOP para no recibir más mensajes.",
   },
 };
 

@@ -80,26 +80,26 @@ const COPY: Record<Locale, Copy> = {
   },
   "es-AR": {
     subject: {
-      verify_email: (s) => `Confirmá tu email en ${s}`,
-      reset_password: (s) => `Restablecé tu contraseña de ${s}`,
+      verify_email: (s) => `Confirma tu email en ${s}`,
+      reset_password: (s) => `Restablece tu contraseña de ${s}`,
       staff_invite: (s) => `Te invitaron a ${s}`,
-      account_exists: (s) => `Ya tenés una cuenta en ${s}`,
+      account_exists: (s) => `Ya tienes una cuenta en ${s}`,
     },
     heading: {
-      verify_email: "Confirmá tu email",
-      reset_password: "Restablecé tu contraseña",
-      staff_invite: "Configurá tu cuenta",
-      account_exists: "Ya tenés una cuenta",
+      verify_email: "Confirma tu email",
+      reset_password: "Restablece tu contraseña",
+      staff_invite: "Configura tu cuenta",
+      account_exists: "Ya tienes una cuenta",
     },
     body: {
       verify_email:
-        "Gracias por registrarte. Confirmá esta dirección para terminar de crear tu cuenta.",
+        "Gracias por registrarte. Confirma esta dirección para terminar de crear tu cuenta.",
       reset_password:
-        "Recibimos un pedido para restablecer tu contraseña. Elegí una nueva con el enlace de abajo.",
+        "Recibimos un pedido para restablecer tu contraseña. Elige una nueva con el enlace de abajo.",
       staff_invite:
-        "Te invitaron a sumarte al equipo. Elegí una contraseña para activar tu cuenta.",
+        "Te invitaron a sumarte al equipo. Elige una contraseña para activar tu cuenta.",
       account_exists:
-        "Alguien intentó crear una cuenta con este email, pero ya tenés una. Si fuiste vos, podés restablecer tu contraseña abajo.",
+        "Alguien intentó crear una cuenta con este email, pero ya tienes una. Si fuiste tú, puedes restablecer tu contraseña abajo.",
     },
     action: {
       verify_email: "Confirmar email",
@@ -109,15 +109,15 @@ const COPY: Record<Locale, Copy> = {
     },
     expires: (when) => `Este enlace funciona durante ${when}.`,
     ignore: {
-      verify_email: "Si no creaste esta cuenta, ignorá este mensaje.",
-      reset_password: "Si no lo pediste, ignorá este mensaje: tu contraseña no cambia.",
-      staff_invite: "Si no esperabas esta invitación, ignorá este mensaje.",
-      account_exists: "Si no fuiste vos, ignorá este mensaje: no cambió nada.",
+      verify_email: "Si no creaste esta cuenta, ignora este mensaje.",
+      reset_password: "Si no lo pediste, ignora este mensaje: tu contraseña no cambia.",
+      staff_invite: "Si no esperabas esta invitación, ignora este mensaje.",
+      account_exists: "Si no fuiste tú, ignora este mensaje: no cambió nada.",
     },
     minutes: (n) => `${n} ${n === 1 ? "minuto" : "minutos"}`,
     hours: (n) => `${n} ${n === 1 ? "hora" : "horas"}`,
     days: (n) => `${n} ${n === 1 ? "día" : "días"}`,
-    linkFallback: "Si el botón no funciona, copiá esta dirección en tu navegador:",
+    linkFallback: "Si el botón no funciona, copia esta dirección en tu navegador:",
   },
 };
 

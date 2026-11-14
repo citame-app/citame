@@ -79,7 +79,7 @@ test.describe("password reset", () => {
     await expect(page.getByRole("heading", { name: "Este enlace ya no es válido" })).toBeVisible();
     await page.getByRole("link", { name: "Pedir un enlace nuevo" }).click();
     await expect(
-      page.getByRole("heading", { level: 1, name: "Restablecé tu contraseña" }),
+      page.getByRole("heading", { level: 1, name: "Restablece tu contraseña" }),
     ).toBeVisible();
   });
 });

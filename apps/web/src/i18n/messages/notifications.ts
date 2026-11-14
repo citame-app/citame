@@ -46,7 +46,7 @@ export const notificationsEn = {
 export const notificationsEsAR: Record<keyof typeof notificationsEn, string> = {
   "account.nav.notifications": "Notificaciones",
   "notify.title": "Notificaciones",
-  "notify.lead": "Elegí cómo te contacta el salón por tus turnos.",
+  "notify.lead": "Elige cómo te contacta el salón por tus turnos.",
   "notify.language": "Idioma de los mensajes",
   "notify.language.default": "El del salón",
   "notify.language.en": "English",
@@ -55,8 +55,8 @@ export const notificationsEsAR: Record<keyof typeof notificationsEn, string> = {
   "notify.email.missing": "Tu cuenta no tiene una dirección de correo.",
   "notify.sms.legend": "Mensajes de texto (SMS)",
   "notify.sms.lead":
-    "Está desactivado hasta que lo actives. Al activarlo aceptás recibir mensajes de texto sobre tus turnos. Respondé STOP a cualquier mensaje para dejar de recibirlos.",
-  "notify.sms.missing": "Agregá un teléfono en tu perfil para recibir mensajes de texto.",
+    "Está desactivado hasta que lo actives. Al activarlo aceptas recibir mensajes de texto sobre tus turnos. Responde STOP a cualquier mensaje para dejar de recibirlos.",
+  "notify.sms.missing": "Agrega un teléfono en tu perfil para recibir mensajes de texto.",
   "notify.transactional": "Confirmaciones, cambios y cancelaciones de turnos",
   "notify.reminder": "Recordatorios antes de tu turno",
   "notify.save": "Guardar preferencias",
@@ -64,26 +64,26 @@ export const notificationsEsAR: Record<keyof typeof notificationsEn, string> = {
   "notify.failed": "No pudimos guardar tus preferencias",
   "notify.loadFailed": "No pudimos cargar tus preferencias",
   "optout.title": "Dejar de recibir recordatorios",
-  "optout.meta.description": "Desactivá los recordatorios de turnos del salón.",
+  "optout.meta.description": "Desactiva los recordatorios de turnos del salón.",
   "optout.lead.email":
     "Vas a dejar de recibir recordatorios por correo antes de tus turnos. Las confirmaciones y los cambios de turno no se ven afectados.",
   "optout.confirm": "Dejar de recibir recordatorios",
   "optout.done.title": "Recordatorios desactivados",
   "optout.done.lead":
-    "No vas a recibir más recordatorios por correo. Podés volver a activarlos desde tu cuenta.",
+    "No recibirás más recordatorios por correo. Puedes volver a activarlos desde tu cuenta.",
   "optout.already": "Los recordatorios ya están desactivados.",
   "optout.manage": "Administrar preferencias de notificación",
   "optout.invalid.title": "Este enlace no es válido",
   "optout.invalid.lead":
-    "El enlace para darte de baja está incompleto o fue modificado. Iniciá sesión y usá tus preferencias de notificación.",
-  "optout.failed": "No pudimos actualizar tus preferencias. Probá de nuevo.",
+    "El enlace para darte de baja está incompleto o fue modificado. Inicia sesión y usa tus preferencias de notificación.",
+  "optout.failed": "No pudimos actualizar tus preferencias. Prueba de nuevo.",
   "settings.section.reminders": "Recordatorios",
   "settings.reminders.lead":
-    "Cuándo se envían los recordatorios antes de un turno. Rige para los turnos que se reserven o muevan desde ahora. Dejá un campo vacío para desactivar ese recordatorio.",
+    "Cuándo se envían los recordatorios antes de un turno. Rige para los turnos que se reserven o muevan desde ahora. Deja un campo vacío para desactivar ese recordatorio.",
   "settings.reminderFirst": "Primer recordatorio (minutos antes)",
   "settings.reminderFirst.hint":
     "Por defecto 1440 (24 horas). Una cantidad entera de días conserva la misma hora del reloj.",
   "settings.reminderSecond": "Segundo recordatorio (minutos antes)",
   "settings.reminderSecond.hint": "Por defecto 120 (2 horas).",
-  "settings.error.reminder": "Ingresá entre 5 y 20160 minutos, o dejalo vacío",
+  "settings.error.reminder": "Ingresa entre 5 y 20160 minutos, o déjalo vacío",
 };

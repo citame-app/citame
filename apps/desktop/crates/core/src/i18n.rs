@@ -55,7 +55,7 @@ keys! {
     ServerUrl => ("Server", "Servidor"),
     ErrWrongCredentials => ("Wrong email or password.", "Correo o contraseña incorrectos."),
     ErrWrongRole => ("This account cannot use the front-desk app.", "Esta cuenta no puede usar la app de recepción."),
-    ErrNetwork => ("Cannot reach the server. Check the connection and try again.", "No se puede conectar con el servidor. Revisá la conexión e intentá de nuevo."),
+    ErrNetwork => ("Cannot reach the server. Check the connection and try again.", "No se puede conectar con el servidor. Revisa la conexión e intenta de nuevo."),
     ErrGeneric => ("Something went wrong.", "Algo salió mal."),
     Today => ("Today", "Hoy"),
     Previous => ("Previous day", "Día anterior"),
@@ -104,7 +104,7 @@ keys! {
     ConflictStale => ("The appointment changed on the server.", "El turno cambió en el servidor."),
     ConflictNotFound => ("The appointment no longer exists.", "El turno ya no existe."),
     ConflictInvalidState => ("That change is not allowed in the appointment's current state.", "Ese cambio no está permitido en el estado actual del turno."),
-    ConflictForbidden => ("You are not allowed to make that change.", "No tenés permiso para hacer ese cambio."),
+    ConflictForbidden => ("You are not allowed to make that change.", "No tienes permiso para hacer ese cambio."),
     ConflictInvalid => ("The server rejected that change.", "El servidor rechazó ese cambio."),
     ConflictPickNewTime => ("Pick another time", "Elegir otro horario"),
     ConflictDropBooking => ("Drop this booking", "Descartar esta reserva"),
@@ -115,9 +115,9 @@ keys! {
     ConflictCancel => ("Cancellation", "Cancelación"),
     ConflictOther => ("Change", "Cambio"),
     UnknownClient => ("Unknown client", "Cliente desconocido"),
-    ErrPickService => ("Pick at least one service.", "Elegí al menos un servicio."),
-    ErrPickClient => ("Pick or add a client.", "Elegí o agregá un cliente."),
-    ErrPickStaff => ("Pick a staff member.", "Elegí a una persona del personal."),
+    ErrPickService => ("Pick at least one service.", "Elige al menos un servicio."),
+    ErrPickClient => ("Pick or add a client.", "Elige o agrega un cliente."),
+    ErrPickStaff => ("Pick a staff member.", "Elige a una persona del personal."),
 }
 
 /// Short weekday name (`Mon` / `lun`).

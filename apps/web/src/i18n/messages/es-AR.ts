@@ -163,7 +163,7 @@ export const esAR: Record<MessageKey, string> = {
   "booking.review.notes": "Notas para el salón (opcional)",
   "booking.review.notesHint": "Alergias, preferencias o cualquier cosa que debamos saber.",
   "booking.review.authTitle": "Ingresa para confirmar",
-  "booking.review.authLead": "Tu selección está guardada. Ingresa o creá una cuenta para terminar.",
+  "booking.review.authLead": "Tu selección está guardada. Ingresa o crea una cuenta para terminar.",
   "booking.review.tab.new": "Es mi primera vez",
   "booking.review.tab.existing": "Ya tengo cuenta",
   "booking.review.staff.title": "Las cuentas del equipo reservan desde el panel",

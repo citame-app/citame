@@ -298,7 +298,7 @@ describe("password reset", () => {
       body: JSON.stringify({ email: "es@example.com", redirectTo: "/reset-password" }),
     });
     const message = await mailTo(mail, "es@example.com");
-    expect(message.subject).toContain("Restablecé");
+    expect(message.subject).toContain("Restablece");
     expect(message.html).toContain('lang="es-AR"');
   });
 });
