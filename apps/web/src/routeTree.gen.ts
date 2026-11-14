@@ -19,7 +19,9 @@ import { Route as AccountIndexRouteImport } from './routes/account.index'
 import { Route as AccountProfileRouteImport } from './routes/account.profile'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as AdminCalendarRouteImport } from './routes/admin.calendar'
+import { Route as AdminReportsRouteImport } from './routes/admin.reports'
 import { Route as AdminServicesRouteImport } from './routes/admin.services'
+import { Route as AdminSettingsRouteImport } from './routes/admin.settings'
 import { Route as AdminStaffRouteImport } from './routes/admin.staff'
 import { Route as BookIndexRouteImport } from './routes/book.index'
 import { Route as BookProfessionalRouteImport } from './routes/book.professional'
@@ -80,9 +82,19 @@ const AdminCalendarRoute = AdminCalendarRouteImport.update({
   path: '/calendar',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminReportsRoute = AdminReportsRouteImport.update({
+  id: '/reports',
+  path: '/reports',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AdminServicesRoute = AdminServicesRouteImport.update({
   id: '/services',
   path: '/services',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminSettingsRoute = AdminSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
   getParentRoute: () => AdminRoute,
 } as any)
 const AdminStaffRoute = AdminStaffRouteImport.update({
@@ -142,7 +154,9 @@ export interface FileRoutesByFullPath {
   '/sign-up': typeof SignUpRoute
   '/account/profile': typeof AccountProfileRoute
   '/admin/calendar': typeof AdminCalendarRoute
+  '/admin/reports': typeof AdminReportsRoute
   '/admin/services': typeof AdminServicesRoute
+  '/admin/settings': typeof AdminSettingsRoute
   '/admin/staff': typeof AdminStaffRoute
   '/book/professional': typeof BookProfessionalRoute
   '/book/review': typeof BookReviewRoute
@@ -161,7 +175,9 @@ export interface FileRoutesByTo {
   '/sign-up': typeof SignUpRoute
   '/account/profile': typeof AccountProfileRoute
   '/admin/calendar': typeof AdminCalendarRoute
+  '/admin/reports': typeof AdminReportsRoute
   '/admin/services': typeof AdminServicesRoute
+  '/admin/settings': typeof AdminSettingsRoute
   '/admin/staff': typeof AdminStaffRoute
   '/book/professional': typeof BookProfessionalRoute
   '/book/review': typeof BookReviewRoute
@@ -184,7 +200,9 @@ export interface FileRoutesById {
   '/sign-up': typeof SignUpRoute
   '/account/profile': typeof AccountProfileRoute
   '/admin/calendar': typeof AdminCalendarRoute
+  '/admin/reports': typeof AdminReportsRoute
   '/admin/services': typeof AdminServicesRoute
+  '/admin/settings': typeof AdminSettingsRoute
   '/admin/staff': typeof AdminStaffRoute
   '/book/professional': typeof BookProfessionalRoute
   '/book/review': typeof BookReviewRoute
@@ -208,7 +226,9 @@ export interface FileRouteTypes {
     | '/sign-up'
     | '/account/profile'
     | '/admin/calendar'
+    | '/admin/reports'
     | '/admin/services'
+    | '/admin/settings'
     | '/admin/staff'
     | '/book/professional'
     | '/book/review'
@@ -227,7 +247,9 @@ export interface FileRouteTypes {
     | '/sign-up'
     | '/account/profile'
     | '/admin/calendar'
+    | '/admin/reports'
     | '/admin/services'
+    | '/admin/settings'
     | '/admin/staff'
     | '/book/professional'
     | '/book/review'
@@ -249,7 +271,9 @@ export interface FileRouteTypes {
     | '/sign-up'
     | '/account/profile'
     | '/admin/calendar'
+    | '/admin/reports'
     | '/admin/services'
+    | '/admin/settings'
     | '/admin/staff'
     | '/book/professional'
     | '/book/review'
@@ -344,11 +368,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminCalendarRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/reports': {
+      id: '/admin/reports'
+      path: '/reports'
+      fullPath: '/admin/reports'
+      preLoaderRoute: typeof AdminReportsRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/admin/services': {
       id: '/admin/services'
       path: '/services'
       fullPath: '/admin/services'
       preLoaderRoute: typeof AdminServicesRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/settings': {
+      id: '/admin/settings'
+      path: '/settings'
+      fullPath: '/admin/settings'
+      preLoaderRoute: typeof AdminSettingsRouteImport
       parentRoute: typeof AdminRoute
     }
     '/admin/staff': {
@@ -434,7 +472,9 @@ const AccountRouteWithChildren =
 
 interface AdminRouteChildren {
   AdminCalendarRoute: typeof AdminCalendarRoute
+  AdminReportsRoute: typeof AdminReportsRoute
   AdminServicesRoute: typeof AdminServicesRoute
+  AdminSettingsRoute: typeof AdminSettingsRoute
   AdminStaffRoute: typeof AdminStaffRoute
   AdminIndexRoute: typeof AdminIndexRoute
   AdminClientsIdRoute: typeof AdminClientsIdRoute
@@ -443,7 +483,9 @@ interface AdminRouteChildren {
 
 const AdminRouteChildren: AdminRouteChildren = {
   AdminCalendarRoute: AdminCalendarRoute,
+  AdminReportsRoute: AdminReportsRoute,
   AdminServicesRoute: AdminServicesRoute,
+  AdminSettingsRoute: AdminSettingsRoute,
   AdminStaffRoute: AdminStaffRoute,
   AdminIndexRoute: AdminIndexRoute,
   AdminClientsIdRoute: AdminClientsIdRoute,

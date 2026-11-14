@@ -3,7 +3,9 @@ import { calendarUiEn, calendarUiEsAR } from "./calendar-ui";
 import { clientsEn, clientsEsAR } from "./clients";
 import { commonEn, commonEsAR } from "./common";
 import { drawerEn, drawerEsAR } from "./drawer";
+import { reportsEn, reportsEsAR } from "./reports";
 import { servicesEn, servicesEsAR } from "./services";
+import { settingsEn, settingsEsAR } from "./settings";
 import { staffEn, staffEsAR } from "./staff";
 import { todayEn, todayEsAR } from "./today";
 import { walkinEn, walkinEsAR } from "./walkin";
@@ -20,6 +22,8 @@ export const adminEn = {
   ...clientsEn,
   ...servicesEn,
   ...staffEn,
+  ...reportsEn,
+  ...settingsEn,
   // @@en
 } as const;
 export const adminEsAR: Record<keyof typeof adminEn, string> = {
@@ -32,5 +36,7 @@ export const adminEsAR: Record<keyof typeof adminEn, string> = {
   ...clientsEsAR,
   ...servicesEsAR,
   ...staffEsAR,
+  ...reportsEsAR,
+  ...settingsEsAR,
   // @@es
 };
