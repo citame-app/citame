@@ -26,6 +26,7 @@ test.describe("role access matrix", () => {
     page,
   }) => {
     await signInAs(page, STAFF_EMAIL);
+    await expect(page.getByRole("heading", { level: 1, name: "Today" })).toBeVisible();
     const nav = page.getByRole("navigation", { name: "Dashboard sections" });
     const mobileNav = page.getByRole("navigation", { name: "Dashboard sections (mobile)" });
     const visibleNav = (await nav.isVisible()) ? nav : mobileNav;

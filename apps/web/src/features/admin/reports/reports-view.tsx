@@ -262,7 +262,9 @@ export function ReportsView({
                   <dd className="mt-1 font-display text-2xl font-semibold tabular-nums">
                     {tile.value}
                   </dd>
-                  {tile.hint && <p className="mt-0.5 text-xs text-muted">{tile.hint}</p>}
+                  {tile.hint && (
+                    <dd className="mt-0.5 font-sans text-xs text-muted">{tile.hint}</dd>
+                  )}
                 </div>
               ))}
             </dl>
