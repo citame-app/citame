@@ -74,6 +74,9 @@ Anonymous `POST /appointments` is rejected with `401 unauthorized`: guest bookin
 | DELETE   | `/admin/clients/:id`                                    | owner                                   | Soft delete (409 `has_future_appointments` while bookings are upcoming)  |
 | GET/PATCH | `/admin/settings`                                      | owner                                   | Salon name, timezone, slot interval, minimum notice, booking window (applies to availability at once) |
 | GET      | `/admin/reports/summary?from=&to=&staffId=`             | owner (all), staff (own numbers)        | Counts by status, revenue, top services, per-day series, per-staff, no-show rate (salon-local dates) |
+| POST     | `/sync/push`                                            | staff, owner                            | Offline sync: ordered, idempotent batch of mutations (per-mutation `applied` / `rejected(reason)` / `retry`) |
+| GET      | `/sync/pull?since=&limit=`                              | staff, owner                            | Sync: change log after a cursor (role filtered, tombstones, paged)       |
+| GET      | `/sync/stream`                                          | staff, owner                            | Sync: Server-Sent Events nudge ("pull now"), heartbeat, rate limited     |
 
 Errors look like `{ "error": { "code", "message" } }` with codes `validation_error` 400, `unauthorized` 401, `forbidden` 403, `not_found` 404, `slot_taken` / `slot_unavailable` / `version_conflict` / `invalid_state` / `has_future_appointments` 409, `rate_limited` 429 (with `Retry-After`) and `internal_error` 500. The exception is `/api/auth/*`, which keeps Better Auth's own error body. The policy matrix is in [ADR 0003](docs/adr/0003-auth-rbac-sessions.md) and the admin extensions in [ADR 0004](docs/adr/0004-admin-api-and-reporting.md).
 
@@ -91,8 +94,13 @@ Errors look like `{ "error": { "code", "message" } }` with codes `validation_err
 | `TRUST_PROXY`                                 | `false`                                 | Read the client IP from the last `X-Forwarded-For` entry. Only behind a proxy you operate. |
 | `RATE_LIMIT_GLOBAL_MAX`, `..._WINDOW_SECONDS` | `300`, `60`                             | Per client, every route except `/health`.                                                  |
 | `RATE_LIMIT_AUTH_MAX`, `..._WINDOW_SECONDS`   | `10`, `60`                              | Per client, sign-in and sign-up.                                                           |
+| `SYNC_STREAM_RATE_LIMIT_MAX`, `..._WINDOW_SECONDS` | `30`, `60`                         | New `/sync/stream` connections per caller.                                                 |
 | `OWNER_EMAIL`, `OWNER_PASSWORD`, `OWNER_NAME` | none                                    | Only read by `bun run bootstrap:owner`; never logged.                                      |
 | `SALON_TIMEZONE`                              | `America/Argentina/Buenos_Aires`        | Passed through by Compose.                                                                 |
+
+## Offline sync
+
+The desktop client syncs through three endpoints: `POST /sync/push` (idempotent mutation batches, appointments server-authoritative, everything else last-writer-wins), `GET /sync/pull` (cursor-based change log with tombstones) and `GET /sync/stream` (SSE nudges backed by Valkey pub/sub). The change log is written by deferred Postgres triggers in the same transaction as every write, with `seq` drawn at commit under an advisory lock so a cursor can never skip a change. Decisions: [ADR 0007](docs/adr/0007-sync-protocol.md). Wire spec for client authors (JSON examples, error codes, retry and backoff): [docs/sync-protocol.md](docs/sync-protocol.md). Integration tests run against a dedicated `sob_test_sync` database.
 
 ## Web app
 
