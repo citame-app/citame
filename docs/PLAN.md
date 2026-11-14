@@ -65,7 +65,7 @@ Each phase ends green (lint, typecheck, `bun test`, and the listed checks) and i
 4. **Sync protocol** — `sync_change`, push/pull/SSE endpoints, contract tests for idempotency, ordering and tombstones.
 5. **Desktop client** — GPUI app shell, local SQLite + outbox, calendar view, create/move/cancel, sync engine, OAuth PKCE login, offline indicator and conflict resolution UI.
 6. **MCP server** — OAuth 2.1 metadata and consent, tools listed above, tool-level authorization tests. *Done; see ADR 0009 (desktop OAuth swap deferred).*
-7. **Notifications** — reminder scheduler (Valkey-backed queue), email provider adapter, optional SMS adapter behind an interface.
+7. **Notifications** — reminder scheduler, email provider adapter, optional SMS adapter behind an interface. Built on a Postgres outbox/queue (Valkey is not on the delivery path): see [ADR 0010](adr/0010-notifications-and-reminders.md).
 8. **Hardening and release** — k6 load/contention suites, backups doc, observability (structured logs, health checks), production compose, self-hosting guide, open-source files (LICENSE, CONTRIBUTING, SECURITY).
 
 ## Testing strategy

@@ -55,6 +55,9 @@ Anonymous `POST /appointments` is rejected with `401 unauthorized`: guest bookin
 | GET      | `/availability?serviceIds=a,b&staffId=&date=YYYY-MM-DD` | public                                  | Bookable slots (`staffId` optional)                                      |
 | GET/POST | `/api/auth/*`                                           | public, strictly rate limited           | Better Auth: sign-up, sign-in, sign-out, session                         |
 | GET/PATCH | `/me`                                                  | signed in                               | Role, linked profile ids and phone / edit your name and phone            |
+| GET/PATCH | `/me/notification-preferences`                         | client                                  | Message language and per channel/category switches (SMS is opt-in)       |
+| GET/POST  | `/notifications/opt-out?token=`                        | public (signed link)                    | GET describes, POST switches email reminders off; accepts RFC 8058 one-click |
+| GET       | `/admin/notifications/stats`                           | owner                                   | Reminder queue depth per status and worker counters                      |
 | POST     | `/appointments`                                         | client, staff, owner                    | Book; enforces hours, time off, notice and horizon (409 `slot_unavailable`); 409 `slot_taken` on overlap; `override: true` skips min notice (staff, owner) |
 | PATCH    | `/appointments/:id`                                     | the client, the calendar's staff, owner | Reschedule (same rules and notice override as booking, 409 `slot_unavailable`) or set `status`: `cancelled` (client too), `completed` / `no_show` (staff, owner, once started; corrections owner only). Needs the current `version` (409 `version_conflict`); invalid transitions are 409 `invalid_state` |
 | GET      | `/appointments?from=&to=&staffId=&status=&page=&pageSize=` | signed in                            | Role-filtered, paged (`status` is comma-separated); returns `page`, `pageSize`, `total` |
@@ -95,6 +98,9 @@ Errors look like `{ "error": { "code", "message" } }` with codes `validation_err
 | `RATE_LIMIT_GLOBAL_MAX`, `..._WINDOW_SECONDS` | `300`, `60`                             | Per client, every route except `/health`.                                                  |
 | `RATE_LIMIT_AUTH_MAX`, `..._WINDOW_SECONDS`   | `10`, `60`                              | Per client, sign-in and sign-up.                                                           |
 | `SYNC_STREAM_RATE_LIMIT_MAX`, `..._WINDOW_SECONDS` | `30`, `60`                         | New `/sync/stream` connections per caller.                                                 |
+| `NOTIFY_WORKER_ENABLED`                       | `false`                                 | Run the reminder worker inside the API process (or use `bun run worker`). See [docs/notifications.md](docs/notifications.md). |
+| `NOTIFY_EMAIL_PROVIDER` / `SMTP_URL`          | `none` / unset                          | `smtp` sends email through `SMTP_URL`; nothing is sent while it is `none`.                 |
+| `NOTIFY_SMS_PROVIDER` / `TWILIO_*`            | `none` / unset                          | `twilio` enables SMS (consent required, see the regulatory notes). Other `NOTIFY_*` keys: [docs/notifications.md](docs/notifications.md). |
 | `MCP_RESOURCE_URL`                            | `<BETTER_AUTH_URL>/mcp`                 | Public URL of the MCP endpoint; it is the OAuth resource and token audience.               |
 | `OAUTH_ACCESS_TOKEN_TTL_SECONDS`, `OAUTH_REFRESH_TOKEN_TTL_SECONDS` | `900`, `1209600`          | Access (JWT) and refresh token lifetimes.                                                  |
 | `RATE_LIMIT_OAUTH_MAX`, `..._WINDOW_SECONDS`  | `60`, `60`                              | Per client: authorize, token, consent, revoke, introspect.                                 |
@@ -144,6 +150,10 @@ The suite books real appointments, so run it against a fresh database (a databas
 cd apps/web && bunx playwright install chromium
 E2E_OWNER_EMAIL=... E2E_OWNER_PASSWORD=... bun run e2e
 ```
+
+### Notifications and reminders
+
+Confirmation, reminder (24 h and 2 h by default, owner-configurable), reschedule and cancellation messages by email and optionally SMS, in English or Spanish (es-AR) with the time in the salon timezone, an `.ics` entry on confirmations, and a login-free unsubscribe link on reminders. Scheduling is written in the same transaction as the appointment change (REST, desktop sync, MCP); a Postgres-backed worker (`SKIP LOCKED` claims, retries with backoff, dead letter, graceful shutdown) delivers them. Off by default: nothing is sent until you set a provider and enable the worker. Local mail catcher: `docker compose --profile mail up -d mailpit`. Operator guide and SMS regulatory notes: [docs/notifications.md](docs/notifications.md). Decisions and delivery guarantees: [ADR 0010](docs/adr/0010-notifications-and-reminders.md). Integration tests use `sob_test_notify*` databases and an in-memory fake provider (plus a real local SMTP server for the adapter); no real message is ever sent.
 
 ## Docker
 
