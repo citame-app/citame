@@ -20,6 +20,8 @@ import { settingsAdminRoutes } from "./modules/settings/admin-routes";
 import { salonRoutes } from "./modules/settings/routes";
 import { staffAdminRoutes } from "./modules/staff/admin-routes";
 import { staffRoutes } from "./modules/staff/routes";
+import { createSyncHub } from "./modules/sync/hub";
+import { headSeq } from "./modules/sync/pull";
 import { syncRoutes } from "./modules/sync/routes";
 import { createRateLimiter, rateLimit } from "./rate-limit";
 
@@ -40,13 +42,14 @@ export type App = Hono & { shutdown: () => Promise<void> };
 
 export function createApp(deps: AppDeps): App {
   const app = new Hono() as App;
-  app.shutdown = async () => {};
   const auth = createAuth(deps);
   const limiter = createRateLimiter({
     storage: valkeySecondaryStorage(deps.valkey, deps.config.valkeyKeyPrefix),
     now: deps.rateLimitNow,
   });
   const { trustProxy, rateLimit: limits } = deps.config;
+  const hub = createSyncHub({ valkey: deps.valkey, keyPrefix: deps.config.valkeyKeyPrefix });
+  app.shutdown = () => hub.close();
 
   app.onError((error, c) => {
     if (error instanceof DomainError) return respondError(c, error);
@@ -68,6 +71,17 @@ export function createApp(deps: AppDeps): App {
     "*",
     rateLimit({ limiter, scope: "global", rule: limits.global, trustProxy, failOpen: true }),
   );
+  // After every mutating request, tell connected sync clients that the change log moved. The
+  // log is written inside the request's own transaction, so by now the change is committed.
+  app.use("*", async (c, next) => {
+    await next();
+    if (c.req.method === "GET" || c.req.method === "HEAD" || c.req.method === "OPTIONS") return;
+    try {
+      await hub.publish(await headSeq(deps.db));
+    } catch (error) {
+      console.error("sync nudge failed", error);
+    }
+  });
   const authLimit = rateLimit({ limiter, scope: "auth", rule: limits.auth, trustProxy });
   app.use("/api/auth/sign-in/*", authLimit);
   app.use("/api/auth/sign-up/*", authLimit);
@@ -96,7 +110,14 @@ export function createApp(deps: AppDeps): App {
   app.route("/appointments", appointmentsRoutes(deps));
 
   app.use("/sync/*", requireAuth(auth, deps.db));
-  app.route("/sync", syncRoutes(deps));
+  const streamLimit = rateLimit({
+    limiter,
+    scope: "sync-stream",
+    rule: limits.syncStream,
+    trustProxy,
+    failOpen: true,
+  });
+  app.route("/sync", syncRoutes(deps, hub, streamLimit));
 
   return app;
 }

@@ -25,6 +25,9 @@ const envSchema = z.object({
   RATE_LIMIT_GLOBAL_WINDOW_SECONDS: positiveInt.default(60),
   RATE_LIMIT_AUTH_MAX: positiveInt.default(10),
   RATE_LIMIT_AUTH_WINDOW_SECONDS: positiveInt.default(60),
+  /** New SSE connections per caller and window: reconnect storms must not exhaust the server. */
+  SYNC_STREAM_RATE_LIMIT_MAX: positiveInt.default(30),
+  SYNC_STREAM_RATE_LIMIT_WINDOW_SECONDS: positiveInt.default(60),
 });
 
 export interface RateLimitRule {
@@ -45,7 +48,7 @@ export interface AppConfig {
     secureCookies: boolean;
   };
   trustProxy: boolean;
-  rateLimit: { global: RateLimitRule; auth: RateLimitRule };
+  rateLimit: { global: RateLimitRule; auth: RateLimitRule; syncStream: RateLimitRule };
 }
 
 /** Parses and validates the environment once, failing fast with every problem listed. */
@@ -75,6 +78,10 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     rateLimit: {
       global: { max: e.RATE_LIMIT_GLOBAL_MAX, windowSeconds: e.RATE_LIMIT_GLOBAL_WINDOW_SECONDS },
       auth: { max: e.RATE_LIMIT_AUTH_MAX, windowSeconds: e.RATE_LIMIT_AUTH_WINDOW_SECONDS },
+      syncStream: {
+        max: e.SYNC_STREAM_RATE_LIMIT_MAX,
+        windowSeconds: e.SYNC_STREAM_RATE_LIMIT_WINDOW_SECONDS,
+      },
     },
   };
 }
