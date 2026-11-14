@@ -144,17 +144,20 @@ export function BookingSummary({
             </span>
           </button>
 
-          <div className="hidden items-center justify-between lg:flex">
-            <span className="text-muted">
+          <div className="hidden lg:block">
+            <p className="flex items-center gap-2 text-sm text-muted">
               {t("booking.summary.services", { count: totals.count })}
               {totals.count > 0 && (
-                <span className="ml-2 inline-flex items-center gap-1">
+                <span className="inline-flex items-center gap-1">
                   <ClockIcon width={16} height={16} />
                   {formatDuration(totals.durationMinutes, locale)}
                 </span>
               )}
-            </span>
-            <span className="font-display text-2xl font-semibold">{total ?? "—"}</span>
+            </p>
+            <p className="mt-1 flex items-baseline justify-between">
+              <span className="text-muted">{t("booking.review.total")}</span>
+              <span className="font-display text-2xl font-semibold">{total ?? "—"}</span>
+            </p>
           </div>
 
           {/* Duration for the compact bar, readable by assistive tech as well. */}

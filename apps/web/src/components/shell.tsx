@@ -51,7 +51,7 @@ export function LocaleSwitch({
 }) {
   const { t } = useI18n();
   return (
-    <fieldset className="inline-flex rounded-md border border-line-strong p-0.5">
+    <fieldset className="inline-flex rounded-md border border-line p-0.5">
       <legend className="sr-only">{t("locale.label")}</legend>
       {LOCALES.map((option) => (
         <span key={option} className="relative">

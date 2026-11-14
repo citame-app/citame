@@ -85,7 +85,7 @@ export function SlotPicker({
           onSelect={(date) => onChange({ date, slot: undefined })}
         />
         {onMoreDates && (
-          <Button variant="ghost" className="mt-2" onClick={onMoreDates}>
+          <Button variant="ghost" className="-ml-3 mt-1" onClick={onMoreDates}>
             {t("slots.moreDates")}
           </Button>
         )}

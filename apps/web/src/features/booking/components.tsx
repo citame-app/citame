@@ -218,7 +218,7 @@ export function DateStrip({
     <div
       role="radiogroup"
       aria-label={label}
-      className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-2 snap-x sm:mx-0 sm:px-0"
+      className="-mx-4 flex gap-2 overflow-x-auto px-4 pt-3 pb-2 snap-x sm:mx-0 sm:px-0"
     >
       {dates.map((date) => {
         const count = slotCounts[date];
@@ -239,7 +239,7 @@ export function DateStrip({
               htmlFor={`date-${date}`}
               ref={isSelected ? selectedRef : undefined}
               className={cn(
-                "flex min-h-[5.25rem] w-[4.5rem] cursor-pointer flex-col items-center justify-center rounded-lg border px-2 py-2 text-center",
+                "relative flex min-h-[5.25rem] w-[4.5rem] cursor-pointer flex-col items-center justify-center rounded-lg border px-2 py-2 text-center",
                 "border-line bg-surface transition-colors hover:border-line-strong",
                 "peer-focus-visible:outline-3 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-ring",
                 "peer-checked:border-accent peer-checked:bg-accent peer-checked:text-accent-fg",
@@ -258,7 +258,7 @@ export function DateStrip({
                 {monthShort(date, locale)}
               </span>
               {date === nextAvailable && !unavailable && (
-                <span className="mt-1 rounded-full bg-accent-soft px-1.5 text-[0.65rem] font-semibold leading-4 text-accent-soft-fg">
+                <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full border border-accent/40 bg-accent-soft px-2 text-[0.65rem] font-semibold leading-4 text-accent-soft-fg">
                   {t("booking.date.nextAvailable")}
                 </span>
               )}

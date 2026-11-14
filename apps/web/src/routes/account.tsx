@@ -32,7 +32,7 @@ export const Route = createFileRoute("/account")({
 });
 
 const tabClass =
-  "inline-flex min-h-11 items-center rounded-md px-4 text-[0.95rem] font-medium text-muted transition-colors hover:text-fg";
+  "inline-flex min-h-11 items-center rounded-md px-4 text-[0.95rem] font-medium text-muted transition-colors hover:text-fg [&.active]:bg-accent-soft [&.active]:text-accent-soft-fg";
 
 function AccountLayout() {
   const { t } = useI18n();
@@ -47,25 +47,10 @@ function AccountLayout() {
         />
         <div className="mb-8 flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
           <nav aria-label={t("account.nav.label")} className="-ml-4 flex gap-1">
-            <Link
-              to="/account"
-              activeOptions={{ exact: true }}
-              className={tabClass}
-              activeProps={{
-                className: `${tabClass} bg-accent-soft text-accent-soft-fg!`,
-                "aria-current": "page",
-              }}
-            >
+            <Link to="/account" activeOptions={{ exact: true }} className={tabClass}>
               {t("account.nav.appointments")}
             </Link>
-            <Link
-              to="/account/profile"
-              className={tabClass}
-              activeProps={{
-                className: `${tabClass} bg-accent-soft text-accent-soft-fg!`,
-                "aria-current": "page",
-              }}
-            >
+            <Link to="/account/profile" className={tabClass}>
               {t("account.nav.profile")}
             </Link>
           </nav>
