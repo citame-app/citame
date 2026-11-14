@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { meResponseSchema, salonResponseSchema, updateProfileRequestSchema } from "./index";
+import {
+  meResponseSchema,
+  salonResponseSchema,
+  updateProfileRequestSchema,
+  updateSalonSettingsRequestSchema,
+} from "./index";
 
 describe("salon", () => {
   test("describes the public salon information the booking flow needs", () => {
@@ -43,5 +48,36 @@ describe("profile", () => {
       phone: null,
     });
     expect(parsed.phone).toBeNull();
+  });
+});
+
+describe("salon settings update", () => {
+  test("accepts a partial change and trims the name", () => {
+    expect(updateSalonSettingsRequestSchema.parse({ name: "  Studio  " })).toEqual({
+      name: "Studio",
+    });
+    expect(
+      updateSalonSettingsRequestSchema.parse({
+        timezone: "Europe/Madrid",
+        slotGranularityMinutes: 30,
+        minNoticeMinutes: 0,
+        maxDaysAhead: 120,
+      }).maxDaysAhead,
+    ).toBe(120);
+  });
+
+  test("rejects an empty change, an unknown timezone and out-of-range numbers", () => {
+    expect(updateSalonSettingsRequestSchema.safeParse({}).success).toBe(false);
+    expect(updateSalonSettingsRequestSchema.safeParse({ timezone: "Mars/Olympus" }).success).toBe(
+      false,
+    );
+    expect(updateSalonSettingsRequestSchema.safeParse({ slotGranularityMinutes: 7 }).success).toBe(
+      false,
+    );
+    expect(updateSalonSettingsRequestSchema.safeParse({ minNoticeMinutes: -1 }).success).toBe(
+      false,
+    );
+    expect(updateSalonSettingsRequestSchema.safeParse({ maxDaysAhead: 0 }).success).toBe(false);
+    expect(updateSalonSettingsRequestSchema.safeParse({ maxDaysAhead: 1000 }).success).toBe(false);
   });
 });

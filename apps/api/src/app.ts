@@ -16,6 +16,7 @@ import { meRoutes } from "./modules/me/routes";
 import { reportRoutes } from "./modules/reports/routes";
 import { serviceAdminRoutes } from "./modules/services/admin-routes";
 import { servicesRoutes } from "./modules/services/routes";
+import { settingsAdminRoutes } from "./modules/settings/admin-routes";
 import { salonRoutes } from "./modules/settings/routes";
 import { staffAdminRoutes } from "./modules/staff/admin-routes";
 import { staffRoutes } from "./modules/staff/routes";
@@ -75,6 +76,7 @@ export function createApp(deps: AppDeps) {
   app.route("/admin/staff", staffAdminRoutes(deps));
   app.route("/admin/clients", clientAdminRoutes(deps));
   app.route("/admin/reports", reportRoutes(deps));
+  app.route("/admin/settings", settingsAdminRoutes(deps));
 
   // Public catalog and availability: anonymous visitors browse before they sign up.
   app.route("/salon", salonRoutes(deps));

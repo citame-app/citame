@@ -30,3 +30,39 @@ export const updateProfileRequestSchema = z
     path: ["name"],
   });
 export type UpdateProfileRequest = z.infer<typeof updateProfileRequestSchema>;
+
+/** Slot grids the salon can pick from, in minutes. */
+export const SLOT_GRANULARITIES = [5, 10, 15, 20, 30, 60];
+
+const isTimeZone = (value: string) => {
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/** Owner-only edit of the single salon settings row. Every field is optional. */
+export const updateSalonSettingsRequestSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    timezone: z.string().trim().min(1).refine(isTimeZone, "Unknown IANA timezone"),
+    /** Offered start times are multiples of this many minutes. */
+    slotGranularityMinutes: z
+      .number()
+      .int()
+      .refine((n) => SLOT_GRANULARITIES.includes(n), "Unsupported granularity"),
+    minNoticeMinutes: z
+      .number()
+      .int()
+      .min(0)
+      .max(60 * 24 * 30),
+    maxDaysAhead: z.number().int().min(1).max(365),
+  })
+  .partial()
+  .refine((value) => Object.values(value).some((v) => v !== undefined), {
+    message: "Provide at least one change",
+    path: ["name"],
+  });
+export type UpdateSalonSettingsRequest = z.infer<typeof updateSalonSettingsRequestSchema>;
