@@ -20,6 +20,8 @@ type Member = {
 let staff: Member[];
 let writes: { method: string; path: string; body: unknown }[];
 let deactivateReply: { status: number; body: unknown };
+const INVITE = "Email an invitation so they choose their own password";
+
 let createReply: { status: number; body: unknown };
 let upcoming: unknown[];
 const json = (body: unknown, status = 200) =>
@@ -141,6 +143,7 @@ describe("TeamList", () => {
     open();
     fireEvent.click(await screen.findByRole("button", { name: "New team member" }));
     const dialog = await screen.findByRole("dialog", { name: "New staff account" });
+    fireEvent.click(within(dialog).getByLabelText(INVITE));
     fireEvent.click(within(dialog).getByRole("button", { name: "Create account" }));
     expect(await within(dialog).findByText("Enter a name")).toBeInTheDocument();
     expect(within(dialog).getByText("Enter a valid email")).toBeInTheDocument();
@@ -165,11 +168,36 @@ describe("TeamList", () => {
     expect(await screen.findByText("Staff account created")).toBeInTheDocument();
   });
 
+  test("by default the owner invites by email: no password field, no password sent", async () => {
+    createReply = {
+      status: 201,
+      body: { userId: "u", staffId: ANA, email: "nora@example.com", role: "staff", invited: true },
+    };
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "New team member" }));
+    const dialog = await screen.findByRole("dialog", { name: "New staff account" });
+    expect(within(dialog).getByLabelText(INVITE)).toBeChecked();
+    expect(within(dialog).queryByLabelText("Temporary password")).toBeNull();
+    fireEvent.change(within(dialog).getByLabelText("Full name"), {
+      target: { value: "Nora Diaz" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Email"), {
+      target: { value: "nora@example.com" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create account" }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]?.body).toEqual({ email: "nora@example.com", name: "Nora Diaz" });
+    expect(
+      await screen.findByText("Invitation sent. They will set their own password."),
+    ).toBeInTheDocument();
+  });
+
   test("a duplicate email is a field error, not a crash", async () => {
     createReply = { status: 409, body: { error: { code: "invalid_state", message: "exists" } } };
     open();
     fireEvent.click(await screen.findByRole("button", { name: "New team member" }));
     const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByLabelText(INVITE));
     fireEvent.change(within(dialog).getByLabelText("Full name"), { target: { value: "Nora" } });
     fireEvent.change(within(dialog).getByLabelText("Email"), {
       target: { value: "nora@example.com" },

@@ -128,6 +128,17 @@ describe("api client errors", () => {
     expect(error.status).toBe(401);
   });
 
+  test("maps the verification and token errors Better Auth raises", async () => {
+    for (const [code, expected] of [
+      ["EMAIL_NOT_VERIFIED", "email_not_verified"],
+      ["INVALID_TOKEN", "invalid_token"],
+    ] as const) {
+      const { client } = clientWith(() => json({ code, message: code }, { status: 403 }));
+      const error = await client.post("/api/auth/sign-in/email", {}, thing).catch((e) => e);
+      expect(error.code).toBe(expected);
+    }
+  });
+
   test("maps duplicate email and weak password from Better Auth", async () => {
     for (const [code, expected] of [
       ["USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL", "email_taken"],

@@ -16,6 +16,17 @@ export interface AuthOptions {
    * (usually the consent screen, which is a page of this app).
    */
   oauthQuery?: string;
+  /**
+   * Where the person ends up after confirming their address from the emailed link. Same-site
+   * path; the confirmation page forwards there once the address is verified.
+   */
+  afterVerification?: string;
+}
+
+/** The page Better Auth sends the browser to after the emailed confirmation link is followed. */
+export function verificationCallback(next: string | undefined): string {
+  const safe = safeRedirect(next, "/account");
+  return `/verify-email?next=${encodeURIComponent(safe)}`;
 }
 
 /** Session mutations. Each one refreshes the cached session so every route guard re-evaluates. */
@@ -58,9 +69,25 @@ export function useAuth() {
       const next = await api().auth.signIn(values, options.oauthQuery);
       await afterAuth(options, next.url);
     },
-    async signUp(values: SignUpValues, options: AuthOptions = {}) {
-      const next = await api().auth.signUp(values, options.oauthQuery);
+    /**
+     * Resolves with `{ verifyEmail }` when the address has to be confirmed first: there is no
+     * session yet, so nothing is refreshed and nobody is navigated away from the notice.
+     */
+    async signUp(
+      values: SignUpValues,
+      options: AuthOptions = {},
+    ): Promise<{ verifyEmail: string } | undefined> {
+      const next = await api().auth.signUp(
+        values,
+        options.oauthQuery,
+        verificationCallback(options.afterVerification ?? options.redirectTo),
+      );
+      if (next.verificationRequired) return { verifyEmail: values.email };
       await afterAuth(options, next.url);
+      return undefined;
+    },
+    async resendVerification(email: string, next?: string): Promise<void> {
+      await api().auth.resendVerification(email, verificationCallback(next));
     },
     async signOut() {
       await api().auth.signOut();

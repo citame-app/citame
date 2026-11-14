@@ -109,3 +109,48 @@ describe("AuthForm sign up", () => {
     expect(screen.getByLabelText("Email")).toHaveAttribute("aria-invalid", "true");
   });
 });
+
+describe("AuthForm account security", () => {
+  test("sign in links to the password reset page", () => {
+    renderApp(<AuthForm mode="sign-in" onSubmit={async () => {}} />);
+    expect(screen.getByRole("link", { name: "Forgot your password?" })).toHaveAttribute(
+      "href",
+      "/forgot-password",
+    );
+  });
+
+  test("sign up does not show the reset link", () => {
+    renderApp(<AuthForm mode="sign-up" onSubmit={async () => {}} />);
+    expect(screen.queryByRole("link", { name: "Forgot your password?" })).toBeNull();
+  });
+
+  test("an unconfirmed address is told to open the link that was just sent", async () => {
+    const onSubmit = async () => {
+      throw new ApiError("email_not_verified", 403, "Email not verified");
+    };
+    renderApp(<AuthForm mode="sign-in" onSubmit={onSubmit} />);
+    fill("Email", "lucia@example.com");
+    fill("Password", "correct horse");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(await screen.findByText(/not confirmed yet/)).toBeInTheDocument();
+  });
+
+  test("after sign up that needs confirmation the form gives way to the inbox notice, and can resend", async () => {
+    const onResend = mock(async (_email: string) => {});
+    renderApp(
+      <AuthForm
+        mode="sign-up"
+        onSubmit={async () => ({ verifyEmail: "lucia@example.com" })}
+        onResendVerification={onResend}
+      />,
+    );
+    fill("Full name", "Lucia");
+    fill("Email", "lucia@example.com");
+    fill("Password", "correct horse battery");
+    fireEvent.click(screen.getByRole("button", { name: "Create account" }));
+    expect(await screen.findByRole("heading", { name: "Check your inbox" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Password")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Send the email again" }));
+    await waitFor(() => expect(onResend).toHaveBeenCalledWith("lucia@example.com"));
+  });
+});

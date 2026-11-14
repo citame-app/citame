@@ -75,6 +75,61 @@ describe("endpoints", () => {
   });
 });
 
+describe("account recovery endpoints", () => {
+  test("password reset request names the page the emailed link must land on", async () => {
+    const { api, calls } = setup({ status: true });
+    await api.auth.requestPasswordReset("a@example.com");
+    expect(calls[0]?.url).toBe("/api/auth/request-password-reset");
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
+      email: "a@example.com",
+      redirectTo: "/reset-password",
+    });
+  });
+
+  test("reset posts the token and the new password", async () => {
+    const { api, calls } = setup({ status: true });
+    await api.auth.resetPassword("tok", "a long new password");
+    expect(calls[0]?.url).toBe("/api/auth/reset-password");
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
+      token: "tok",
+      newPassword: "a long new password",
+    });
+  });
+
+  test("resending verification carries the page to come back to", async () => {
+    const { api, calls } = setup({ status: true });
+    await api.auth.resendVerification("a@example.com", "/verify-email?next=%2Faccount");
+    expect(calls[0]?.url).toBe("/api/auth/send-verification-email");
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
+      email: "a@example.com",
+      callbackURL: "/verify-email?next=%2Faccount",
+    });
+  });
+
+  test("sign-up reports that a confirmation is needed when no session token comes back", async () => {
+    const { api, calls } = setup({ token: null, user: { id: "u" } });
+    const result = await api.auth.signUp(
+      { email: "a@example.com", password: "correct horse", name: "A" },
+      undefined,
+      "/verify-email?next=%2Faccount",
+    );
+    expect(result.verificationRequired).toBe(true);
+    expect(JSON.parse(String(calls[0]?.init.body)).callbackURL).toBe(
+      "/verify-email?next=%2Faccount",
+    );
+  });
+
+  test("sign-up with a session token is a normal sign-up", async () => {
+    const { api } = setup({ token: "t", user: { id: "u" } });
+    const result = await api.auth.signUp({
+      email: "a@example.com",
+      password: "correct horse",
+      name: "A",
+    });
+    expect(result.verificationRequired).toBe(false);
+  });
+});
+
 describe("OAuth endpoints", () => {
   test("sign-in during an authorization request forwards the signed query and returns the next URL", async () => {
     const { api, calls } = setup({ redirect: true, url: "/consent?client_id=c" });

@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { firstLink, pathOf, waitForMail } from "./mail";
 import {
   createClient,
   expectNoSeriousA11yViolations,
@@ -8,12 +9,20 @@ import {
 } from "./helpers";
 
 test.describe("authentication", () => {
-  test("sign up creates an account, signs in and lands on the account page", async ({ page }) => {
+  test("sign up asks to confirm the email; the emailed link signs in and lands on the account page", async ({
+    page,
+  }) => {
+    const email = uniqueEmail("signup");
     await page.goto("/sign-up");
     await page.getByLabel("Full name").fill("New Person");
-    await page.getByLabel("Email").fill(uniqueEmail("signup"));
+    await page.getByLabel("Email").fill(email);
     await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
     await page.getByRole("button", { name: "Create account", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Check your inbox" })).toBeVisible();
+    await expect(page.getByText(email)).toBeVisible();
+
+    const mail = await waitForMail(email, { subject: /confirm/i });
+    await page.goto(pathOf(firstLink(mail)));
     await expect(page).toHaveURL(/\/account$/);
     await expect(page.getByRole("heading", { level: 1, name: "My appointments" })).toBeVisible();
   });
@@ -30,7 +39,7 @@ test.describe("authentication", () => {
     await expect(page.getByLabel("Email")).toHaveAttribute("aria-invalid", "true");
   });
 
-  test("wrong credentials and an existing email give clear, specific errors", async ({
+  test("wrong credentials give a clear error; an existing email is never revealed on sign-up", async ({
     page,
     request,
     baseURL,
@@ -47,7 +56,12 @@ test.describe("authentication", () => {
     await page.getByLabel("Email").fill(client.email);
     await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
     await page.getByRole("button", { name: "Create account", exact: true }).click();
-    await expect(page.getByText("An account with this email already exists.")).toBeVisible();
+    // Same screen as a brand-new address: the page cannot be used to probe who has an account.
+    await expect(page.getByRole("heading", { name: "Check your inbox" })).toBeVisible();
+    await expect(page.getByText("An account with this email already exists.")).toHaveCount(0);
+    // The real owner of the address is told, by email, that they already have an account.
+    const notice = await waitForMail(client.email, { subject: /already/i });
+    expect(firstLink(notice)).toContain("/reset-password");
   });
 
   test("the password can be revealed and hidden", async ({ page }) => {

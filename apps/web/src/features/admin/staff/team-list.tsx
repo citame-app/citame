@@ -191,6 +191,8 @@ function CreateAccountSheet({
   const { t } = useI18n();
   const toast = useToast();
   const [form, setForm] = useState({ name: "", displayName: "", email: "", password: "" });
+  // Inviting is the default: the owner never has to pick, know or pass on someone's password.
+  const [invite, setInvite] = useState(true);
   const [errors, setErrors] = useState<Partial<Record<"name" | "email" | "password", string>>>({});
   const [open, setOpen] = useState(true);
 
@@ -199,11 +201,11 @@ function CreateAccountSheet({
       api().admin.staff.create({
         email: form.email.trim(),
         name: form.name.trim(),
-        password: form.password,
+        ...(invite ? {} : { password: form.password }),
         ...(form.displayName.trim() ? { displayName: form.displayName.trim() } : {}),
       }),
-    onSuccess: () => {
-      toast.success(t("staff.create.done"));
+    onSuccess: (created) => {
+      toast.success(created.invited ? t("staff.create.invited") : t("staff.create.done"));
       onCreated();
       setOpen(false);
       onClose();
@@ -219,7 +221,7 @@ function CreateAccountSheet({
     const found: typeof errors = {};
     if (form.name.trim() === "") found.name = t("staff.create.error.name");
     if (!/^\S+@\S+\.\S+$/.test(form.email.trim())) found.email = t("staff.create.error.email");
-    if (form.password.length < 8) found.password = t("staff.create.error.password");
+    if (!invite && form.password.length < 8) found.password = t("staff.create.error.password");
     setErrors(found);
     if (Object.keys(found).length === 0) create.mutate();
   }
@@ -281,14 +283,31 @@ function CreateAccountSheet({
           error={errors.email}
           autoComplete="off"
         />
-        <PasswordField
-          label={t("staff.create.password")}
-          hint={t("staff.create.password.hint")}
-          value={form.password}
-          onChange={(e) => set("password", e.target.value)}
-          error={errors.password}
-          autoComplete="new-password"
-        />
+        <div>
+          <label className="flex min-h-11 items-start gap-3 text-[0.95rem]">
+            <input
+              type="checkbox"
+              checked={invite}
+              onChange={(e) => setInvite(e.target.checked)}
+              className="mt-1 size-5 accent-[var(--accent)]"
+              aria-describedby="invite-hint"
+            />
+            <span>{t("staff.create.inviteLabel")}</span>
+          </label>
+          <p id="invite-hint" className="ml-8 text-sm text-muted">
+            {t("staff.create.inviteHint")}
+          </p>
+        </div>
+        {!invite && (
+          <PasswordField
+            label={t("staff.create.password")}
+            hint={t("staff.create.password.hint")}
+            value={form.password}
+            onChange={(e) => set("password", e.target.value)}
+            error={errors.password}
+            autoComplete="new-password"
+          />
+        )}
       </form>
     </Sheet>
   );

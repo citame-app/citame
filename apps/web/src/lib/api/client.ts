@@ -7,6 +7,8 @@ export type AuthErrorCode =
   | "email_taken"
   | "weak_password"
   | "invalid_email"
+  | "email_not_verified"
+  | "invalid_token"
   | "unknown";
 
 export type ApiErrorCode = ErrorCode | AuthErrorCode;
@@ -52,6 +54,8 @@ const BETTER_AUTH_CODES: Record<string, AuthErrorCode> = {
   PASSWORD_TOO_SHORT: "weak_password",
   PASSWORD_TOO_LONG: "weak_password",
   INVALID_EMAIL: "invalid_email",
+  EMAIL_NOT_VERIFIED: "email_not_verified",
+  INVALID_TOKEN: "invalid_token",
 };
 
 export interface ApiClientOptions {

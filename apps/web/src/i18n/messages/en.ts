@@ -1,3 +1,4 @@
+import { accountSecurityEn } from "./account-security";
 import { adminEn } from "./admin";
 import { notificationsEn } from "./notifications";
 /** English is the source catalog: its keys define what every other catalog must provide. */
@@ -220,6 +221,7 @@ export const en = {
   "account.signOut": "Sign out",
   ...adminEn,
   ...notificationsEn,
+  ...accountSecurityEn,
 } as const;
 
 export type MessageKey = keyof typeof en;

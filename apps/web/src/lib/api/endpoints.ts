@@ -49,7 +49,11 @@ const authAck = z.looseObject({});
  * Sign-in and sign-up answer `{ redirect: true, url }` when they were sent the signed query of
  * an authorization request: the server has already resumed the flow and says where to go next.
  */
-const authContinuation = z.looseObject({ url: z.string().optional() });
+const authContinuation = z.looseObject({
+  url: z.string().optional(),
+  /** Null when the address still has to be confirmed: the account exists but there is no session. */
+  token: z.string().nullable().optional(),
+});
 /** Public fields of an OAuth client, as the consent screen needs them. */
 const oauthClientSchema = z.looseObject({
   client_id: z.string(),
@@ -173,12 +177,34 @@ export function createEndpoints(client: ApiClient) {
           oauthQuery ? { ...credentials, oauth_query: oauthQuery } : credentials,
           authContinuation,
         ),
-      signUp: (details: { email: string; password: string; name: string }, oauthQuery?: string) =>
+      /**
+       * Creates the account. With email verification on, Better Auth answers without a session
+       * token: `verificationRequired` tells the caller to show "check your inbox" instead of
+       * pretending the visitor is signed in. `callbackURL` is where the emailed link lands.
+       */
+      signUp: async (
+        details: { email: string; password: string; name: string },
+        oauthQuery?: string,
+        callbackURL?: string,
+      ) => {
+        const body = {
+          ...details,
+          ...(oauthQuery ? { oauth_query: oauthQuery } : {}),
+          ...(callbackURL ? { callbackURL } : {}),
+        };
+        const result = await client.post("/api/auth/sign-up/email", body, authContinuation);
+        return { ...result, verificationRequired: result.token === null };
+      },
+      requestPasswordReset: (email: string) =>
         client.post(
-          "/api/auth/sign-up/email",
-          oauthQuery ? { ...details, oauth_query: oauthQuery } : details,
-          authContinuation,
+          "/api/auth/request-password-reset",
+          { email, redirectTo: "/reset-password" },
+          authAck,
         ),
+      resetPassword: (token: string, newPassword: string) =>
+        client.post("/api/auth/reset-password", { token, newPassword }, authAck),
+      resendVerification: (email: string, callbackURL: string) =>
+        client.post("/api/auth/send-verification-email", { email, callbackURL }, authAck),
       signOut: () => client.post("/api/auth/sign-out", {}, authAck),
     },
     oauth: {

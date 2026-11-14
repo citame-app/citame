@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { type APIRequestContext, expect, type Page } from "@playwright/test";
+import { firstLink, pathOf, waitForMail } from "./mail";
 
 export const SERVICES = { haircut: "Haircut", blowDry: "Blow dry", manicure: "Manicure" } as const;
 
@@ -11,7 +12,11 @@ export function uniqueEmail(label = "user"): string {
 
 export const PASSWORD = "correct horse battery staple";
 
-/** Creates a client through the public sign-up endpoint and returns the cookies to adopt. */
+/**
+ * Creates a client through the public sign-up endpoint and confirms the address the way a person
+ * would: by opening the emailed link. Verification signs the request context in, so callers
+ * that need a session (parallel booking contexts) have one; UI flows sign in again as usual.
+ */
 export async function createClient(
   request: APIRequestContext,
   baseURL: string,
@@ -20,9 +25,19 @@ export async function createClient(
   const email = options.email ?? uniqueEmail();
   const response = await request.post("/api/auth/sign-up/email", {
     headers: { origin: new URL(baseURL).origin },
-    data: { email, name: options.name ?? "E2E Client", password: PASSWORD },
+    data: {
+      email,
+      name: options.name ?? "E2E Client",
+      password: PASSWORD,
+      callbackURL: "/verify-email?next=%2Faccount",
+    },
   });
   expect(response.ok(), await response.text()).toBe(true);
+  const mail = await waitForMail(email, { subject: /confirm/i });
+  const verified = await request.get(pathOf(firstLink(mail)), {
+    headers: { origin: new URL(baseURL).origin },
+  });
+  expect(verified.ok(), await verified.text()).toBe(true);
   return { email, name: options.name ?? "E2E Client" };
 }
 

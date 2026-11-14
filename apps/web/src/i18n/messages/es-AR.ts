@@ -1,3 +1,4 @@
+import { accountSecurityEsAR } from "./account-security";
 import { adminEsAR } from "./admin";
 import type { MessageKey } from "./en";
 import { notificationsEsAR } from "./notifications";
@@ -224,4 +225,5 @@ export const esAR: Record<MessageKey, string> = {
   "account.signOut": "Cerrar sesión",
   ...adminEsAR,
   ...notificationsEsAR,
+  ...accountSecurityEsAR,
 };

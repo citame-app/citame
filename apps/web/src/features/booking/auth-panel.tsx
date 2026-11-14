@@ -5,6 +5,9 @@ import { useI18n } from "~/i18n/react";
 import { cn } from "~/lib/cn";
 
 /** Sign in / sign up inside the review step. The booking selection stays in the URL untouched. */
+/** Back to this very step (selection lives in the URL) once the address is confirmed. */
+const returnTo = () => `${window.location.pathname}${window.location.search}`;
+
 export const InlineAuth = forwardRef<HTMLElement>(function InlineAuth(_, ref) {
   const { t } = useI18n();
   const auth = useAuth();
@@ -48,12 +51,13 @@ export const InlineAuth = forwardRef<HTMLElement>(function InlineAuth(_, ref) {
         <AuthForm
           key={mode}
           mode={mode}
+          onResendVerification={(email) => auth.resendVerification(email, returnTo())}
           onSubmit={(values) =>
             mode === "sign-in"
               ? auth.signIn(values, { stay: true })
               : auth.signUp(
                   { ...values, name: "name" in values ? values.name : "" },
-                  { stay: true },
+                  { stay: true, afterVerification: returnTo() },
                 )
           }
         />

@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { firstLink, pathOf, waitForMail } from "./mail";
 import {
   createClient,
   expectNoSeriousA11yViolations,
@@ -46,6 +47,11 @@ test.describe("public booking flow", () => {
     await page.getByLabel("Email").fill(email);
     await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
     await page.getByRole("button", { name: "Create account", exact: true }).click();
+    // The address has to be confirmed first; the emailed link signs the person in and returns
+    // to this very step, so nothing they picked is lost.
+    await expect(page.getByRole("heading", { name: "Check your inbox" })).toBeVisible();
+    await page.goto(pathOf(firstLink(await waitForMail(email, { subject: /confirm/i }))));
+    await expect(page).toHaveURL(/\/book\/review/);
     await expect(page.getByRole("heading", { name: "Sign in to confirm" })).toHaveCount(0);
     await expect(page.getByRole("complementary", { name: "Your booking" })).toContainText(
       "Haircut",

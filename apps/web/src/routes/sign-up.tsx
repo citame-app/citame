@@ -49,6 +49,7 @@ function SignUpPage() {
         <div className="rounded-xl border border-line bg-surface p-6 shadow-sm">
           <AuthForm
             mode="sign-up"
+            onResendVerification={(email) => auth.resendVerification(email, redirectTo)}
             onSubmit={(values) =>
               auth.signUp(
                 { ...values, name: "name" in values ? values.name : "" },

@@ -1,4 +1,4 @@
-import { createStaffAccountRequestSchema, phoneSchema } from "@sob/contracts";
+import { createStaffAccountRequestSchema, passwordSchema, phoneSchema } from "@sob/contracts";
 import { z } from "zod";
 import type { Translator } from "~/i18n";
 
@@ -6,11 +6,9 @@ import type { Translator } from "~/i18n";
  * Client-side validation built from the shared contracts, so the browser and the API agree on
  * what a valid email, name and password are. Zod's messages are English; the user sees ours.
  */
-const signUpSchema = createStaffAccountRequestSchema.pick({
-  email: true,
-  name: true,
-  password: true,
-});
+const signUpSchema = createStaffAccountRequestSchema
+  .pick({ email: true, name: true })
+  .extend({ password: passwordSchema });
 const signInSchema = createStaffAccountRequestSchema
   .pick({ email: true })
   .extend({ password: z.string().min(1) });
