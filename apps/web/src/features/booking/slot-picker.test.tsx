@@ -11,12 +11,14 @@ const TZ = "America/Argentina/Buenos_Aires";
 type Day = Array<{ startsAt: string; staffId: string }>;
 let slotsByDate: Record<string, Day>;
 let failFor: string | null;
+let failAll = false;
 let requested: string[];
 const realFetch = globalThis.fetch;
 
 beforeEach(() => {
   requested = [];
   failFor = null;
+  failAll = false;
   slotsByDate = {
     "2026-03-09": [],
     "2026-03-10": [
@@ -31,7 +33,7 @@ beforeEach(() => {
     const url = new URL(String(input), "http://localhost");
     const date = url.searchParams.get("date") ?? "";
     requested.push(date);
-    if (failFor === date) {
+    if (failAll || failFor === date) {
       return new Response(JSON.stringify({ error: { code: "internal_error", message: "boom" } }), {
         status: 500,
         headers: { "content-type": "application/json" },
@@ -109,6 +111,16 @@ describe("SlotPicker", () => {
     renderApp(<SlotPicker {...base} selectedDate="2026-03-10" />);
     expect(await screen.findByRole("alert")).toBeInTheDocument();
     failFor = null;
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("radio", { name: /9:00/ })).toBeInTheDocument();
+  });
+
+  test("when every day fails to load, the error is shown instead of a misleading empty state", async () => {
+    failAll = true;
+    renderApp(<SlotPicker {...base} />);
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByText("No times left on this day")).not.toBeInTheDocument();
+    failAll = false;
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByRole("radio", { name: /9:00/ })).toBeInTheDocument();
   });

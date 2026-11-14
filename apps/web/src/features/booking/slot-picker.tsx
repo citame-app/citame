@@ -65,6 +65,10 @@ export function SlotPicker({
   }, [lost, onSelectionLost]);
 
   const stillLoading = !activeDate && results.some((r) => r.isPending);
+  // Nothing could be loaded at all: that is an error, not an empty calendar.
+  const failedEntirely =
+    !activeDate && !stillLoading && results.length > 0 && results.every((r) => r.isError);
+  const firstError = results.find((r) => r.isError)?.error;
 
   return (
     <div className="space-y-6">
@@ -102,6 +106,13 @@ export function SlotPicker({
               <Skeleton key={i} className="h-11" />
             ))}
           </div>
+        ) : failedEntirely ? (
+          <ErrorState
+            error={firstError}
+            onRetry={() => {
+              void queryClient.invalidateQueries({ queryKey: ["availability"] });
+            }}
+          />
         ) : active?.isError ? (
           <ErrorState
             error={active.error}
