@@ -1,0 +1,53 @@
+# The repository pins exact versions (no ^ or ~). `versioning-strategy: increase` makes the bot
+# rewrite the pin to the new exact version instead of widening it into a range.
+version: 2
+updates:
+  - package-ecosystem: bun
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    versioning-strategy: increase
+    open-pull-requests-limit: 5
+    groups:
+      dev-tooling:
+        dependency-type: development
+        update-types: [minor, patch]
+      production-patches:
+        dependency-type: production
+        update-types: [patch]
+    commit-message:
+      prefix: "chore(deps)"
+  - package-ecosystem: cargo
+    directory: /apps/desktop
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    # gpui is pinned exactly (ADR 0008): upgrades are deliberate, so only report patch releases.
+    ignore:
+      - dependency-name: gpui
+        update-types: [version-update:semver-major, version-update:semver-minor]
+    commit-message:
+      prefix: "chore(deps)"
+  - package-ecosystem: docker
+    directory: /docker
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "chore(docker)"
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "chore(docker)"
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "ci"
