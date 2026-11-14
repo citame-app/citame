@@ -2,10 +2,10 @@
 # compose.prod.yaml. Set SITE_ADDRESS to your public host name (DNS must point at this machine
 # and ports 80/443 must be reachable). For a local smoke test over plain http use
 # SITE_ADDRESS=:80.
-{
-	# Contact for certificate expiry notices (optional).
-	email {$ACME_EMAIL:}
-}
+# To receive certificate expiry notices add a global block at the top of this file:
+#   {
+#       email you@salon.example
+#   }
 
 {$SITE_ADDRESS:localhost} {
 	encode zstd gzip

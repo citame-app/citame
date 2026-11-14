@@ -55,6 +55,8 @@ services:
   valkey:
     <<: *hardened
     image: valkey/valkey:9.1-alpine
+    # The entrypoint starts as root to fix volume ownership, then drops to the valkey user.
+    cap_add: [CHOWN, SETUID, SETGID]
     # AOF every second plus periodic snapshots: sessions and rate-limit counters survive a restart.
     command: ["valkey-server", "--appendonly", "yes", "--appendfsync", "everysec", "--save", "300 10"]
     volumes:
@@ -183,12 +185,11 @@ services:
     security_opt:
       - no-new-privileges:true
     environment:
-      SITE_ADDRESS: ${SITE_ADDRESS:?set SITE_ADDRESS (public host name)}
-      ACME_EMAIL: ${ACME_EMAIL:-}
+      SITE_ADDRESS: ${SITE_ADDRESS:-localhost}
     ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
+      - "${CADDY_HTTP_PORT:-80}:80"
+      - "${CADDY_HTTPS_PORT:-443}:443"
+      - "${CADDY_HTTPS_PORT:-443}:443/udp"
     volumes:
       - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
@@ -208,8 +209,8 @@ services:
     command: ["bun", "apps/api/src/scripts/bootstrap-owner.ts"]
     environment:
       <<: *api-env
-      OWNER_EMAIL: ${OWNER_EMAIL:?set OWNER_EMAIL}
-      OWNER_PASSWORD: ${OWNER_PASSWORD:?set OWNER_PASSWORD}
+      OWNER_EMAIL: ${OWNER_EMAIL:-}
+      OWNER_PASSWORD: ${OWNER_PASSWORD:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
