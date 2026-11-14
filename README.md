@@ -72,6 +72,7 @@ Anonymous `POST /appointments` is rejected with `401 unauthorized`: guest bookin
 | GET      | `/admin/clients?search=&sort=&order=&page=&pageSize=`   | staff, owner                            | Paged client directory (name, phone, email search)                       |
 | GET/PATCH | `/admin/clients/:id`                                   | staff, owner                            | Profile with appointment history / edit name, phone, notes               |
 | DELETE   | `/admin/clients/:id`                                    | owner                                   | Soft delete (409 `has_future_appointments` while bookings are upcoming)  |
+| GET/PATCH | `/admin/settings`                                      | owner                                   | Salon name, timezone, slot interval, minimum notice, booking window (applies to availability at once) |
 | GET      | `/admin/reports/summary?from=&to=&staffId=`             | owner (all), staff (own numbers)        | Counts by status, revenue, top services, per-day series, per-staff, no-show rate (salon-local dates) |
 
 Errors look like `{ "error": { "code", "message" } }` with codes `validation_error` 400, `unauthorized` 401, `forbidden` 403, `not_found` 404, `slot_taken` / `slot_unavailable` / `version_conflict` / `invalid_state` / `has_future_appointments` 409, `rate_limited` 429 (with `Retry-After`) and `internal_error` 500. The exception is `/api/auth/*`, which keeps Better Auth's own error body. The policy matrix is in [ADR 0003](docs/adr/0003-auth-rbac-sessions.md) and the admin extensions in [ADR 0004](docs/adr/0004-admin-api-and-reporting.md).
@@ -95,7 +96,7 @@ Errors look like `{ "error": { "code", "message" } }` with codes `validation_err
 
 ## Web app
 
-`apps/web` is a TanStack Start (SSR) app: the public booking flow (services, professional, date and time, sign in or up inline, confirmation with an .ics download), sign in and sign up, the client account (upcoming and past appointments, optimistic cancel, reschedule, profile) and a guarded `/admin` shell for the dashboard (Phase 3b-2). English and Spanish (es-AR), light and dark. Decisions: [ADR 0005](docs/adr/0005-web-app.md).
+`apps/web` is a TanStack Start (SSR) app: the public booking flow (services, professional, date and time, sign in or up inline, confirmation with an .ics download), sign in and sign up, the client account (upcoming and past appointments, optimistic cancel, reschedule, profile) and the staff and owner dashboard under `/admin` (today, calendar with drag and keyboard rescheduling, clients, services, team hours and time off, reports with CSV export, settings), role-based navigation, responsive from 360px. English and Spanish (es-AR), light and dark. Decisions: [ADR 0005](docs/adr/0005-web-app.md) (app, design system) and [ADR 0006](docs/adr/0006-admin-dashboard.md) (dashboard).
 
 The browser only talks to the web origin; the web server proxies `/api/*` to the API (`/api/auth/*` unchanged, `/api/<path>` becomes `/<path>`), so cookies are first-party and there is no CORS.
 
@@ -114,7 +115,7 @@ API_INTERNAL_URL=http://localhost:3000 PORT=4173 bun apps/web/server.ts   # http
 
 ### End-to-end tests
 
-The suite books real appointments, so run it against a fresh database (a database saturated by many runs offers no free slots). Playwright runs against the real stack at a mobile and a desktop viewport (booking flow, slot race, cancel and reschedule, auth errors, i18n, dark mode, axe, keyboard-only). Start Postgres and Valkey, migrate, seed, bootstrap an owner, start the API and the web server as above (raise `RATE_LIMIT_AUTH_MAX` and `RATE_LIMIT_GLOBAL_MAX` for the run), then:
+The suite books real appointments, so run it against a fresh database (a database saturated by many runs offers no free slots; the admin specs randomize dates to tolerate a few reruns, and the report fixture is a fixed past Tuesday created once). The admin specs also create a staff account (`e2e-staff@example.com`) through the owner API, so `E2E_OWNER_EMAIL` and the owner password (`correct horse battery staple`) must match the bootstrapped owner. Playwright runs against the real stack at a mobile and a desktop viewport (booking flow, slot race, cancel and reschedule, auth errors, i18n, dark mode, axe, keyboard-only). Start Postgres and Valkey, migrate, seed, bootstrap an owner, start the API and the web server as above (raise `RATE_LIMIT_AUTH_MAX` and `RATE_LIMIT_GLOBAL_MAX` for the run), then:
 
 ```sh
 cd apps/web && bunx playwright install chromium
@@ -150,7 +151,7 @@ Integration tests create their own `sob_test_*` databases on the server in `DATA
 ## Layout
 
 - `apps/api`: Hono API on Bun (`src/modules/*`: services, staff, availability, appointments, clients, reports, admin, me; `src/auth`: Better Auth, principal, policy, accounts)
-- `apps/web`: TanStack Start web app (`src/routes`, `src/features/{booking,account,auth}`, `src/components/ui`, `src/i18n`, `src/server` BFF proxy and web server, `e2e`)
+- `apps/web`: TanStack Start web app (`src/routes`, `src/features/{booking,account,auth,admin}`, `src/components/ui`, `src/i18n`, `src/server` BFF proxy and web server, `e2e`)
 - `packages/contracts`: shared Zod schemas and the error shape
 - `packages/db`: Drizzle schema (domain, Better Auth tables, audit log), migrations (including the hand-written exclusion constraint), seed
 - `packages/config`: shared TypeScript config
