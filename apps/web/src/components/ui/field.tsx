@@ -14,7 +14,7 @@ export interface TextFieldProps extends Omit<ComponentProps<"input">, "id"> {
 const inputClasses =
   "block min-h-11 w-full rounded-md border bg-surface px-3.5 py-2.5 text-base text-fg " +
   "placeholder:text-muted/70 transition-colors disabled:opacity-60 " +
-  "border-line-strong hover:border-fg/60 focus:border-ring";
+  "border-line-strong hover:border-fg/60 focus:border-ring read-only:bg-sunken read-only:text-muted";
 
 export function TextField({ label, hint, error, trailing, className, ...props }: TextFieldProps) {
   const id = useId();

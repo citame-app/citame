@@ -60,7 +60,7 @@ export function RevenueChart({
             tick={AXIS}
             tickLine={false}
             axisLine={false}
-            width={56}
+            width={92}
             tickFormatter={(v: number) => formatMoney(v * 100, currency, locale)}
           />
           <Tooltip

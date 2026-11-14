@@ -31,7 +31,8 @@ test.describe("admin screenshots", () => {
     });
   };
 
-  test("capture", async ({ page, request, baseURL }, testInfo) => {
+  test("capture", async ({ page: realPage, browser, request, baseURL }, testInfo) => {
+    let page = realPage;
     test.setTimeout(240_000);
     const project = testInfo.project.name;
     const mobile = project === "mobile";
@@ -99,8 +100,18 @@ test.describe("admin screenshots", () => {
     });
 
     // Future data for the conflict and blocked screens.
-    const [future] = runDays(1);
-    const fh = await freeHour(future as string, 2);
+    let future = "";
+    let fh = 0;
+    for (const candidate of runDays(12)) {
+      try {
+        fh = await freeHour(candidate, 2);
+        future = candidate;
+        break;
+      } catch {
+        // that day is full, try the next one
+      }
+    }
+    expect(future, "a future day with a free block").not.toBe("");
     await book(owner, {
       date: future as string,
       time: `${String(fh).padStart(2, "0")}:00`,
@@ -129,7 +140,21 @@ test.describe("admin screenshots", () => {
       await createClient(request, baseURL as string, { name: `Shot Client ${stamp} ${i}` });
 
     const fixedAt = new Date(at(day, "14:00"));
-    const dayUrl = `/admin/calendar?date=${day}`;
+    /** A second browser context whose clock is pinned to 14:00 on the fixture day. */
+    const pinnedPage = async (colorScheme: "light" | "dark" = "light") => {
+      const context = await browser.newContext({
+        ...testInfo.project.use,
+        baseURL,
+        locale: "en",
+        colorScheme,
+        timezoneId: "America/Argentina/Buenos_Aires",
+      });
+      await context.clock.setFixedTime(fixedAt);
+      const p = await context.newPage();
+      await signInAs(p, OWNER_EMAIL, "/admin");
+      return p;
+    };
+    const dayUrl = `/admin/calendar?date=${day}&staff=${STYLIST_A},${STYLIST_B}`;
 
     // ---- empty "today" (a weekend in real time) and forbidden notice ----
     await signInAs(page, OWNER_EMAIL, "/admin");
@@ -138,7 +163,7 @@ test.describe("admin screenshots", () => {
     await shoot(page, project, "today-real-day");
 
     // ---- today with data: the browser clock is pinned to 14:00 on the fixture day ----
-    await page.clock.setFixedTime(fixedAt);
+    page = await pinnedPage();
     await page.goto("/admin");
     await expect(page.getByRole("heading", { name: "Waiting for an outcome" })).toBeVisible();
     await page.waitForLoadState("networkidle");
@@ -158,18 +183,12 @@ test.describe("admin screenshots", () => {
     await expect(page.getByRole("dialog", { name: "Shot Pending Lucia" })).toBeVisible();
     await page.waitForLoadState("networkidle");
     await shoot(page, project, "calendar-drawer", false);
-    await page.getByRole("dialog").getByRole("button", { name: "Reschedule" }).click();
-    await page
-      .getByRole("dialog")
-      .getByRole("group", { name: /Morning|Afternoon|Evening/ })
-      .first()
-      .waitFor();
-    await shoot(page, project, "calendar-drawer-reschedule", false);
     await page.keyboard.press("Escape");
 
     await page.getByRole("button", { name: "New appointment" }).click();
     const dialog = page.getByRole("dialog", { name: "New appointment" });
     await dialog.getByRole("radio", { name: "New client" }).check();
+    await dialog.getByLabel("Team member").selectOption({ label: "Stylist A" });
     await dialog.getByRole("checkbox", { name: /Haircut/ }).check();
     await dialog.getByRole("button", { name: "Create appointment" }).click();
     await shoot(page, project, "calendar-new-appointment-errors", false);
@@ -184,9 +203,9 @@ test.describe("admin screenshots", () => {
     await shoot(page, project, "calendar-staff-filter", false);
     await page.keyboard.press("Escape");
 
-    // conflict banner on a real future day
-    await page.clock.resume();
-    await page.goto(`/admin/calendar?date=${future}`);
+    // conflict banner on a real future day: a fresh page, so its clock is the real one
+    page = realPage;
+    await page.goto(`/admin/calendar?date=${future}&staff=${STYLIST_A}`);
     const mover = page.getByRole("button", { name: new RegExp(`Shot Mover ${stamp}`) });
     await expect(mover).toBeVisible();
     await mover.focus();
@@ -195,11 +214,29 @@ test.describe("admin screenshots", () => {
       page.getByRole("alert").filter({ hasText: "Someone just took that time" }),
     ).toBeVisible();
     await shoot(page, project, "calendar-conflict-banner");
+    await page
+      .getByRole("alert")
+      .filter({ hasText: "Someone just took that time" })
+      .getByRole("button", { name: "Open appointment" })
+      .click();
+    await page.getByRole("dialog").getByRole("button", { name: "Reschedule" }).click();
+    await page
+      .getByRole("dialog")
+      .getByRole("group", { name: /Morning|Afternoon|Evening/ })
+      .first()
+      .waitFor({ state: "attached", timeout: 15_000 });
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: /^Move to|Reschedule/ })
+      .last()
+      .scrollIntoViewIfNeeded();
+    await shoot(page, project, "calendar-drawer-reschedule", false);
+    await page.keyboard.press("Escape");
 
     // loading and error states (the API is delayed, then fails)
     await page.route("**/api/appointments/calendar**", async (route) => {
       await new Promise((r) => setTimeout(r, 4000));
-      await route.continue();
+      await route.continue().catch(() => {});
     });
     await page.goto(`/admin/calendar?date=${day}`);
     await expect(page.getByRole("status", { name: "Loading" })).toBeVisible();
@@ -314,7 +351,9 @@ test.describe("admin screenshots", () => {
     await shoot(page, project, "team-timeoff-list", false);
 
     // ---- reports ----
-    await page.goto(`/admin/reports?preset=custom&from=${salonDate(off - 6)}&to=${day}`);
+    await page.goto(
+      `/admin/reports?preset=custom&from=${salonDate(off - 6)}&to=${day}&staff=${STYLIST_A}`,
+    );
     await expect(page.getByRole("group", { name: "Summary" })).toBeVisible();
     await page.waitForLoadState("networkidle");
     await page.waitForTimeout(600);
@@ -353,12 +392,14 @@ test.describe("admin screenshots", () => {
     }
 
     // ---- dark mode and Spanish ----
-    await page.emulateMedia({ colorScheme: "dark" });
-    await page.clock.setFixedTime(fixedAt);
+    page = await pinnedPage("dark");
     for (const [path, name] of [
       ["/admin", "dark-today"],
       [dayUrl, "dark-calendar-day"],
-      [`/admin/reports?preset=custom&from=${salonDate(off - 6)}&to=${day}`, "dark-reports"],
+      [
+        `/admin/reports?preset=custom&from=${salonDate(off - 6)}&to=${day}&staff=${STYLIST_A}`,
+        "dark-reports",
+      ],
       ["/admin/services", "dark-services"],
     ] as const) {
       await page.goto(path);
@@ -367,7 +408,7 @@ test.describe("admin screenshots", () => {
       await page.waitForTimeout(500);
       await shoot(page, project, name);
     }
-    await page.emulateMedia({ colorScheme: "light" });
+    page = await pinnedPage("light");
     await page.goto(dayUrl);
     await page.getByLabel("Español").check({ force: true });
     await expect(page.getByRole("heading", { level: 1, name: "Agenda" })).toBeVisible();

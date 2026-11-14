@@ -219,7 +219,7 @@ export function CalendarView({
           </Button>
         </div>
         <h2
-          className="mx-1 min-w-0 flex-1 font-display text-lg font-semibold sm:text-xl"
+          className="mx-1 min-w-0 basis-full font-display text-lg font-semibold sm:flex-1 sm:basis-auto sm:text-xl"
           aria-live="polite"
         >
           {title}
@@ -289,7 +289,7 @@ export function CalendarView({
       {conflict && (
         <div
           role="alert"
-          className="flex flex-wrap items-center gap-3 rounded-lg border border-danger-fg/40 bg-danger-soft p-4 text-danger-fg"
+          className="flex flex-col gap-3 rounded-lg border border-danger-fg/40 bg-danger-soft p-4 text-danger-fg sm:flex-row sm:items-center"
         >
           <div className="min-w-0 flex-1">
             <p className="font-medium">{t("calendar.conflict.title")}</p>
@@ -386,7 +386,7 @@ function StaffFilter({
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Positioner sideOffset={8} align="end" className="z-50">
-          <Popover.Popup className="min-w-56 rounded-lg border border-line bg-surface p-2 shadow-lg">
+          <Popover.Popup className="max-h-[60dvh] min-w-56 overflow-y-auto rounded-lg border border-line bg-surface p-2 shadow-lg">
             <fieldset className="m-0 border-0 p-0">
               <legend className="sr-only">
                 {single ? t("calendar.staffFilter.week") : t("calendar.staffFilter")}

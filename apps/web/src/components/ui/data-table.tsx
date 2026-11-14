@@ -59,6 +59,8 @@ export interface DataTableProps<T extends RowData> {
   toolbar?: ReactNode;
   /** Hide the pager for short, fully loaded lists. */
   paginate?: boolean;
+  /** Primary actions shown beside the column menu (for example "New"). */
+  actions?: ReactNode;
 }
 
 const metaOf = (meta: unknown): DataTableColumnMeta => (meta ?? {}) as DataTableColumnMeta;
@@ -79,6 +81,7 @@ export function DataTable<T extends RowData>({
   empty,
   toolbar,
   paginate = true,
+  actions,
 }: DataTableProps<T>) {
   const { t } = useI18n();
   const table = useTable({
@@ -108,7 +111,10 @@ export function DataTable<T extends RowData>({
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0 flex-1">{toolbar}</div>
-        <ColumnMenu table={table} />
+        <div className="flex flex-wrap items-center gap-2">
+          <ColumnMenu table={table} />
+          {actions}
+        </div>
       </div>
 
       {loading ? (
@@ -254,7 +260,7 @@ export function DataTable<T extends RowData>({
         </>
       )}
 
-      {paginate && (
+      {paginate && total > 0 && (
         <nav
           aria-label={label}
           className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted"

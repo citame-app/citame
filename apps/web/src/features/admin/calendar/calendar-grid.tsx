@@ -190,8 +190,8 @@ export function CalendarGrid(props: CalendarGridProps) {
     >
       <div className="min-w-fit">
         <div
-          className="sticky top-16 z-20 grid border-b border-line bg-surface"
-          style={{ gridTemplateColumns: `3.5rem repeat(${columns.length}, minmax(9.5rem, 1fr))` }}
+          className="grid border-b border-line bg-surface"
+          style={{ gridTemplateColumns: `4.5rem repeat(${columns.length}, minmax(9.5rem, 1fr))` }}
         >
           <div className="sticky left-0 z-10 bg-surface" />
           {columns.map((column) => (
@@ -204,12 +204,12 @@ export function CalendarGrid(props: CalendarGridProps) {
 
         <div
           className="grid"
-          style={{ gridTemplateColumns: `3.5rem repeat(${columns.length}, minmax(9.5rem, 1fr))` }}
+          style={{ gridTemplateColumns: `4.5rem repeat(${columns.length}, minmax(9.5rem, 1fr))` }}
         >
           <div className="sticky left-0 z-10 bg-surface" style={{ height }} aria-hidden="true">
             {hours.map((hour) => (
               <div key={hour} className="relative" style={{ height: 60 * PX_PER_MINUTE }}>
-                <span className="absolute -top-2.5 right-2 text-xs tabular-nums text-muted">
+                <span className="absolute -top-2.5 right-2 text-xs tabular-nums whitespace-nowrap text-muted">
                   {hour === startHour
                     ? ""
                     : formatTime(
@@ -241,7 +241,19 @@ export function CalendarGrid(props: CalendarGridProps) {
               (a) =>
                 a.staffId === column.staffId && localDateOf(a.startsAt, timeZone) === column.date,
             );
-            const blocks = layoutBlocks(colAppointments, timeZone, gridStart);
+            // Cancelled appointments sit behind the live ones at full width, so a pile of them in one
+            // slot never squeezes the real bookings into thin lanes.
+            const live = layoutBlocks(
+              colAppointments.filter((a) => a.status !== "cancelled"),
+              timeZone,
+              gridStart,
+            );
+            const cancelled = layoutBlocks(
+              colAppointments.filter((a) => a.status === "cancelled"),
+              timeZone,
+              gridStart,
+            ).map((b) => ({ ...b, lane: 0, lanes: 1 }));
+            const blocks = [...cancelled, ...live];
             const windows = workingWindows.filter((w) => w.staffId === column.staffId);
             const nowMin = nowMarkerMinutes(now, column.date, timeZone);
 
@@ -340,7 +352,11 @@ export function CalendarGrid(props: CalendarGridProps) {
                     <div
                       key={block.id}
                       data-block
-                      className={cn("absolute px-0.5", dragging && "z-30 opacity-80")}
+                      className={cn(
+                        "absolute px-0.5",
+                        appointment.status === "cancelled" && "z-0 opacity-70",
+                        dragging && "z-30 opacity-80",
+                      )}
                       style={{
                         top: block.startMinutes * PX_PER_MINUTE,
                         height: px,

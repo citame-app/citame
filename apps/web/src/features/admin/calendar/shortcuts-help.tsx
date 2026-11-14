@@ -28,7 +28,7 @@ export function ShortcutsHelp({
           <div key={keys} className="flex items-center justify-between gap-4">
             <dt className="text-[0.95rem]">{t(label)}</dt>
             <dd>
-              <kbd className="rounded-md border border-line-strong bg-sunken px-2 py-1 font-mono text-sm">
+              <kbd className="whitespace-nowrap rounded-md border border-line-strong bg-sunken px-2 py-1 font-mono text-sm">
                 {keys}
               </kbd>
             </dd>
@@ -37,7 +37,7 @@ export function ShortcutsHelp({
         <div className="flex items-center justify-between gap-4 border-t border-line pt-3">
           <dt className="text-[0.95rem]">{t("calendar.shortcuts.move")}</dt>
           <dd>
-            <kbd className="rounded-md border border-line-strong bg-sunken px-2 py-1 font-mono text-sm">
+            <kbd className="whitespace-nowrap rounded-md border border-line-strong bg-sunken px-2 py-1 font-mono text-sm">
               {t("calendar.shortcuts.moveKeys")}
             </kbd>
           </dd>

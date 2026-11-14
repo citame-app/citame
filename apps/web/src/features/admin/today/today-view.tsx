@@ -99,7 +99,10 @@ export function TodayView({
       <div role="group" aria-label={t("today.statsLabel")}>
         <dl className="grid grid-cols-2 gap-3 lg:grid-cols-5">
           {stats.map((stat) => (
-            <div key={stat.label} className="rounded-xl border border-line bg-surface p-4">
+            <div
+              key={stat.label}
+              className="rounded-xl border border-line bg-surface p-4 max-sm:last:col-span-2"
+            >
               <dt className="text-sm text-muted">{stat.label}</dt>
               <dd className="mt-1 font-display text-2xl font-semibold tabular-nums">
                 {stat.value}

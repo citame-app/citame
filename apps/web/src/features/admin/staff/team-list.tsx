@@ -128,12 +128,6 @@ export function TeamList({ onOpenMember }: { onOpenMember: (id: string) => void 
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <Button onClick={() => setCreating(true)}>
-          <PlusIcon />
-          {t("staff.new")}
-        </Button>
-      </div>
       <DataTable
         label={t("staff.table")}
         columns={columns}
@@ -144,6 +138,12 @@ export function TeamList({ onOpenMember }: { onOpenMember: (id: string) => void 
         pageSize={Math.max(rows.length, 1)}
         paginate={false}
         loading={staff.isPending}
+        actions={
+          <Button onClick={() => setCreating(true)}>
+            <PlusIcon />
+            {t("staff.new")}
+          </Button>
+        }
         sorting={sorting}
         onSortingChange={setSorting}
         onPageChange={() => {}}

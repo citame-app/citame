@@ -85,7 +85,7 @@ export function HoursEditor({ staffId, editable }: { staffId: string; editable: 
           return (
             <fieldset key={weekday} className="rounded-xl border border-line bg-surface p-4">
               <legend className="px-1 font-medium">{name}</legend>
-              <div className="flex flex-wrap items-start gap-x-6 gap-y-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-x-6">
                 <div className="min-w-0 flex-1 space-y-2">
                   {day.length === 0 && (
                     <p className="flex min-h-11 items-center text-muted">{t("hours.closed")}</p>

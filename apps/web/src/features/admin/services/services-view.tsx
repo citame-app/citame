@@ -179,12 +179,6 @@ export function ServicesView() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <Button onClick={() => setEditing("new")}>
-          <PlusIcon />
-          {t("services.new")}
-        </Button>
-      </div>
       <DataTable
         label={t("services.table")}
         columns={columns}
@@ -195,6 +189,12 @@ export function ServicesView() {
         pageSize={Math.max(rows.length, 1)}
         paginate={false}
         loading={services.isPending}
+        actions={
+          <Button onClick={() => setEditing("new")}>
+            <PlusIcon />
+            {t("services.new")}
+          </Button>
+        }
         sorting={sorting}
         onSortingChange={setSorting}
         onPageChange={() => {}}
