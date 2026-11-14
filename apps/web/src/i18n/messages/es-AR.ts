@@ -1,3 +1,4 @@
+import { adminEsAR } from "./admin";
 import type { MessageKey } from "./en";
 
 /** Neutral, professional Spanish for Argentina. */
@@ -194,10 +195,5 @@ export const esAR: Record<MessageKey, string> = {
   "account.profile.saved": "Perfil guardado",
   "account.profile.failed": "No pudimos guardar tu perfil",
   "account.signOut": "Cerrar sesión",
-  "admin.title": "Panel",
-  "admin.lead": "El panel para el personal y la gerencia estará disponible pronto.",
-  "admin.welcome": "Sesión iniciada como {name}",
-  "admin.placeholder.title": "Tu espacio de trabajo está casi listo",
-  "admin.placeholder.body":
-    "Aquí aparecerán el calendario, los clientes, los servicios y los reportes.",
+  ...adminEsAR,
 };

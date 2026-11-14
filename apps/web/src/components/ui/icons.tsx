@@ -135,3 +135,93 @@ export const Spinner = (p: IconProps) => (
     <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
   </svg>
 );
+
+export const ChevronDownIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="m6 9 6 6 6-6" />
+  </Icon>
+);
+export const PlusIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M12 5v14M5 12h14" />
+  </Icon>
+);
+export const SearchIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="11" cy="11" r="6.5" />
+    <path d="m16 16 4 4" />
+  </Icon>
+);
+export const SlashIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="12" cy="12" r="8" />
+    <path d="m6.5 17.5 11-11" />
+  </Icon>
+);
+export const HomeIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="m4 11 8-6.5 8 6.5M6 9.5V19h12V9.5" />
+  </Icon>
+);
+export const UsersIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="9" cy="9" r="3.25" />
+    <path d="M3 19c.5-3 3-4.5 6-4.5s5.5 1.5 6 4.5M16 6.5a3 3 0 0 1 0 5.5M18 14.5c1.8.6 3 2 3.2 4.5" />
+  </Icon>
+);
+export const ScissorsIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="6" cy="6.5" r="2.5" />
+    <circle cx="6" cy="17.5" r="2.5" />
+    <path d="m8 8 12 9M8 16 20 7" />
+  </Icon>
+);
+export const ChartIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
+  </Icon>
+);
+export const SettingsIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="12" cy="12" r="3" />
+    <path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8" />
+  </Icon>
+);
+export const ColumnsIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="4" y="5" width="16" height="14" rx="2" />
+    <path d="M10 5v14M15 5v14" />
+  </Icon>
+);
+export const KeyboardIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="3" y="6.5" width="18" height="11" rx="2" />
+    <path d="M7 10h.01M11 10h.01M15 10h.01M17.5 10h.01M7 14h10" />
+  </Icon>
+);
+export const RefreshIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M20 6v5h-5M4 18v-5h5" />
+    <path d="M6.2 9.5A7 7 0 0 1 19 11M17.8 14.5A7 7 0 0 1 5 13" />
+  </Icon>
+);
+export const MenuIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M4 7h16M4 12h16M4 17h16" />
+  </Icon>
+);
+export const TrashIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12h10l1-12M9 7V4h6v3" />
+  </Icon>
+);
+export const GripIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01" strokeWidth="3" />
+  </Icon>
+);
+export const ArrowUpDownIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M8 4v16M8 4 5 7M8 4l3 3M16 20V4M16 20l-3-3M16 20l3-3" />
+  </Icon>
+);

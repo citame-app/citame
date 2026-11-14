@@ -1,3 +1,4 @@
+import { adminEn } from "./admin";
 /** English is the source catalog: its keys define what every other catalog must provide. */
 export const en = {
   "common.greeting": "Hello, {name}",
@@ -192,11 +193,7 @@ export const en = {
   "account.profile.saved": "Profile saved",
   "account.profile.failed": "We could not save your profile",
   "account.signOut": "Sign out",
-  "admin.title": "Dashboard",
-  "admin.lead": "The staff and owner dashboard is coming soon.",
-  "admin.welcome": "Signed in as {name}",
-  "admin.placeholder.title": "Your workspace is almost ready",
-  "admin.placeholder.body": "Calendar, clients, services and reports will appear here.",
+  ...adminEn,
 } as const;
 
 export type MessageKey = keyof typeof en;

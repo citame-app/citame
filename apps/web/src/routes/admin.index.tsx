@@ -14,7 +14,7 @@ function AdminHome() {
         title={t("admin.title")}
         lead={session ? t("admin.welcome", { name: session.user.name }) : undefined}
       />
-      <EmptyState title={t("admin.placeholder.title")} description={t("admin.placeholder.body")} />
+      <EmptyState title={t("admin.title")} description={t("admin.lead")} />
     </>
   );
 }

@@ -162,6 +162,10 @@ export function createApiClient(options: ApiClientOptions) {
       request("POST", path, schema, body, o),
     patch: <S extends ZodType>(path: string, body: unknown, schema: S, o?: RequestOptions) =>
       request("PATCH", path, schema, body, o),
+    put: <S extends ZodType>(path: string, body: unknown, schema: S, o?: RequestOptions) =>
+      request("PUT", path, schema, body, o),
+    delete: <S extends ZodType>(path: string, schema: S, o?: RequestOptions) =>
+      request("DELETE", path, schema, undefined, o),
   };
 }
 
