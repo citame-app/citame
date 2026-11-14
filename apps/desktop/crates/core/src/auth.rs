@@ -86,7 +86,9 @@ pub struct FileTokenStore {
 
 impl FileTokenStore {
     pub fn new(path: impl AsRef<Path>) -> Self {
-        Self { path: path.as_ref().to_path_buf() }
+        Self {
+            path: path.as_ref().to_path_buf(),
+        }
     }
 }
 
@@ -152,7 +154,10 @@ impl BetterAuthSession {
             .timeout_global(Some(TIMEOUT))
             .build()
             .into();
-        Self { base_url: base_url.trim_end_matches('/').to_owned(), agent }
+        Self {
+            base_url: base_url.trim_end_matches('/').to_owned(),
+            agent,
+        }
     }
 }
 
@@ -175,7 +180,8 @@ impl AuthProvider for BetterAuthSession {
         "better-auth-session"
     }
     fn sign_in(&self, credentials: &Credentials) -> Result<Session, AuthError> {
-        let body = serde_json::json!({"email": credentials.email, "password": credentials.password});
+        let body =
+            serde_json::json!({"email": credentials.email, "password": credentials.password});
         let mut resp = self
             .agent
             .post(&format!("{}/api/auth/sign-in/email", self.base_url))
@@ -189,11 +195,18 @@ impl AuthProvider for BetterAuthSession {
             .iter()
             .filter_map(|v| v.to_str().ok().map(str::to_owned))
             .collect();
-        let text = resp.body_mut().read_to_string().map_err(|e| AuthError::Network(e.to_string()))?;
+        let text = resp
+            .body_mut()
+            .read_to_string()
+            .map_err(|e| AuthError::Network(e.to_string()))?;
         match status {
             200 => {}
             401 | 400 | 403 => return Err(AuthError::InvalidCredentials),
-            429 => return Err(AuthError::Network("too many attempts, wait a minute".into())),
+            429 => {
+                return Err(AuthError::Network(
+                    "too many attempts, wait a minute".into(),
+                ));
+            }
             other => return Err(AuthError::Unexpected(format!("HTTP {other}"))),
         }
         let parsed: SignInBody =

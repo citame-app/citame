@@ -18,7 +18,12 @@ impl Default for Backoff {
 
 impl Backoff {
     pub fn new(base: Duration, factor: u32, cap: Duration) -> Self {
-        Self { base, factor, cap, failures: 0 }
+        Self {
+            base,
+            factor,
+            cap,
+            failures: 0,
+        }
     }
 
     pub fn failures(&self) -> u32 {
@@ -95,7 +100,10 @@ mod tests {
     #[test]
     fn retry_after_is_a_floor() {
         let d = Duration::from_secs(2);
-        assert_eq!(Backoff::at_least(d, Some(Duration::from_secs(30))), Duration::from_secs(30));
+        assert_eq!(
+            Backoff::at_least(d, Some(Duration::from_secs(30))),
+            Duration::from_secs(30)
+        );
         assert_eq!(Backoff::at_least(d, Some(Duration::from_secs(1))), d);
         assert_eq!(Backoff::at_least(d, None), d);
     }

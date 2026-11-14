@@ -40,7 +40,13 @@ impl HttpTransport {
             .timeout_recv_body(Some(STREAM_BODY_BUDGET))
             .build()
             .into();
-        Self { base_url: base_url.trim_end_matches('/').to_owned(), agent, stream_agent, session, auth }
+        Self {
+            base_url: base_url.trim_end_matches('/').to_owned(),
+            agent,
+            stream_agent,
+            session,
+            auth,
+        }
     }
 
     fn headers(&self) -> Result<Vec<(String, String)>, TransportError> {
@@ -49,7 +55,12 @@ impl HttpTransport {
         Ok(self.auth.authorize(session))
     }
 
-    fn get(&self, agent: &ureq::Agent, path: &str, accept: Option<&str>) -> Result<ureq::http::Response<ureq::Body>, TransportError> {
+    fn get(
+        &self,
+        agent: &ureq::Agent,
+        path: &str,
+        accept: Option<&str>,
+    ) -> Result<ureq::http::Response<ureq::Body>, TransportError> {
         let mut req = agent.get(&format!("{}{path}", self.base_url));
         for (k, v) in self.headers()? {
             req = req.header(k, v);
@@ -57,25 +68,36 @@ impl HttpTransport {
         if let Some(a) = accept {
             req = req.header("Accept", a);
         }
-        req.call().map_err(|e| TransportError::Offline(e.to_string()))
+        req.call()
+            .map_err(|e| TransportError::Offline(e.to_string()))
     }
 }
 
 fn error_message(body: &str) -> String {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()
-        .and_then(|v| v.pointer("/error/message").and_then(|m| m.as_str().map(str::to_owned)))
+        .and_then(|v| {
+            v.pointer("/error/message")
+                .and_then(|m| m.as_str().map(str::to_owned))
+        })
         .unwrap_or_else(|| body.chars().take(200).collect())
 }
 
 /// Maps an error response to the protocol's error table.
-pub fn classify_status(status: u16, retry_after: Option<&str>, body: &str, is_pull: bool) -> TransportError {
+pub fn classify_status(
+    status: u16,
+    retry_after: Option<&str>,
+    body: &str,
+    is_pull: bool,
+) -> TransportError {
     match status {
         401 => TransportError::Unauthorized,
         403 => TransportError::Forbidden(error_message(body)),
         409 if is_pull => TransportError::CursorAhead,
         429 => TransportError::RateLimited(
-            retry_after.and_then(|v| v.trim().parse::<u64>().ok()).map(Duration::from_secs),
+            retry_after
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .map(Duration::from_secs),
         ),
         400..=499 => TransportError::BadRequest(error_message(body)),
         _ => TransportError::Server(format!("HTTP {status}: {}", error_message(body))),
@@ -87,18 +109,35 @@ fn read_response<T: serde::de::DeserializeOwned>(
     is_pull: bool,
 ) -> Result<T, TransportError> {
     let status = resp.status().as_u16();
-    let retry_after = resp.headers().get("retry-after").and_then(|v| v.to_str().ok()).map(str::to_owned);
-    let body = resp.body_mut().read_to_string().map_err(|e| TransportError::Offline(e.to_string()))?;
+    let retry_after = resp
+        .headers()
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let body = resp
+        .body_mut()
+        .read_to_string()
+        .map_err(|e| TransportError::Offline(e.to_string()))?;
     if status != 200 {
-        return Err(classify_status(status, retry_after.as_deref(), &body, is_pull));
+        return Err(classify_status(
+            status,
+            retry_after.as_deref(),
+            &body,
+            is_pull,
+        ));
     }
-    serde_json::from_str(&body)
-        .map_err(|e| TransportError::Server(format!("unreadable response ({e}): {}", body.chars().take(80).collect::<String>())))
+    serde_json::from_str(&body).map_err(|e| {
+        TransportError::Server(format!(
+            "unreadable response ({e}): {}",
+            body.chars().take(80).collect::<String>()
+        ))
+    })
 }
 
 impl Transport for HttpTransport {
     fn push(&self, request: &PushRequest) -> Result<PushResponse, TransportError> {
-        let body = serde_json::to_string(request).map_err(|e| TransportError::BadRequest(e.to_string()))?;
+        let body = serde_json::to_string(request)
+            .map_err(|e| TransportError::BadRequest(e.to_string()))?;
         let mut req = self.agent.post(&format!("{}/sync/push", self.base_url));
         for (k, v) in self.headers()? {
             req = req.header(k, v);
@@ -111,7 +150,11 @@ impl Transport for HttpTransport {
     }
 
     fn pull(&self, since: i64, limit: u32) -> Result<PullResponse, TransportError> {
-        let resp = self.get(&self.agent, &format!("/sync/pull?since={since}&limit={limit}"), None)?;
+        let resp = self.get(
+            &self.agent,
+            &format!("/sync/pull?since={since}&limit={limit}"),
+            None,
+        )?;
         read_response(resp, true)
     }
 }
@@ -139,12 +182,25 @@ fn stream_until(
     on_connected: &mut dyn FnMut(),
     on_nudge: &mut dyn FnMut(i64),
 ) -> Result<StreamEnd, TransportError> {
-    let mut resp = transport.get(&transport.stream_agent, "/sync/stream", Some("text/event-stream"))?;
+    let mut resp = transport.get(
+        &transport.stream_agent,
+        "/sync/stream",
+        Some("text/event-stream"),
+    )?;
     let status = resp.status().as_u16();
     if status != 200 {
-        let retry_after = resp.headers().get("retry-after").and_then(|v| v.to_str().ok()).map(str::to_owned);
+        let retry_after = resp
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
         let body = resp.body_mut().read_to_string().unwrap_or_default();
-        return Err(classify_status(status, retry_after.as_deref(), &body, false));
+        return Err(classify_status(
+            status,
+            retry_after.as_deref(),
+            &body,
+            false,
+        ));
     }
     on_connected();
     let mut parser = SseParser::default();
@@ -154,13 +210,14 @@ fn stream_until(
             return Ok(StreamEnd::Stopped);
         }
         // A read error mid-stream (budget exhausted, connection dropped) is a normal end.
-        let Ok(line) = line else { return Ok(StreamEnd::Closed) };
-        if let Some(event) = parser.feed_line(line.trim_end_matches('\r')) {
-            if event.event.as_deref() == Some("change") {
-                if let Some(seq) = nudge_seq(&event) {
-                    on_nudge(seq);
-                }
-            }
+        let Ok(line) = line else {
+            return Ok(StreamEnd::Closed);
+        };
+        if let Some(event) = parser.feed_line(line.trim_end_matches('\r'))
+            && event.event.as_deref() == Some("change")
+            && let Some(seq) = nudge_seq(&event)
+        {
+            on_nudge(seq);
         }
     }
     Ok(StreamEnd::Closed)

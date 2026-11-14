@@ -4,6 +4,15 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+description = "Sisters of Beauty front-desk client (GPUI)."
 
 [dependencies]
+chrono = { version = "=0.4.45", default-features = false, features = ["std", "clock"] }
+chrono-tz = "=0.10.4"
 gpui = "=0.2.2"
+sob-core = { path = "../core" }
+
+[dev-dependencies]
+gpui = { version = "=0.2.2", features = ["test-support"] }
+tempfile = "=3.27.0"
+serde_json = "=1.0.154"

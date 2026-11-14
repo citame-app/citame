@@ -17,7 +17,12 @@ struct Scripted {
 
 impl Scripted {
     fn healthy() -> Arc<Self> {
-        Arc::new(Self { fail_with: Mutex::new(None), pushes: 0.into(), pulls: 0.into(), cursor_after: 5 })
+        Arc::new(Self {
+            fail_with: Mutex::new(None),
+            pushes: 0.into(),
+            pulls: 0.into(),
+            cursor_after: 5,
+        })
     }
     fn failing(e: TransportError) -> Arc<Self> {
         let s = Self::healthy();
@@ -36,7 +41,15 @@ impl Transport for Scripted {
             return Err(e);
         }
         Ok(PushResponse {
-            results: req.mutations.iter().map(|m| MutationResult::Applied { mutation_id: m.mutation_id.clone(), applied_seq: Some(1), replayed: false }).collect(),
+            results: req
+                .mutations
+                .iter()
+                .map(|m| MutationResult::Applied {
+                    mutation_id: m.mutation_id.clone(),
+                    applied_seq: Some(1),
+                    replayed: false,
+                })
+                .collect(),
             head_seq: 1,
         })
     }
@@ -45,17 +58,31 @@ impl Transport for Scripted {
         if let Some(e) = self.fail_with.lock().unwrap().clone() {
             return Err(e);
         }
-        Ok(PullResponse { changes: vec![], next_cursor: since.max(self.cursor_after), has_more: false, head_seq: 5 })
+        Ok(PullResponse {
+            changes: vec![],
+            next_cursor: since.max(self.cursor_after),
+            has_more: false,
+            head_seq: 5,
+        })
     }
 }
 
 fn core_with(t: Arc<Scripted>, queued: usize) -> (RunnerCore, SharedStatus) {
     let mut store = Store::open_in_memory().unwrap();
     for i in 0..queued {
-        store.enqueue("client.create", &format!("c{i}"), json!({"id": format!("c{i}"), "name": "N"})).unwrap();
+        store
+            .enqueue(
+                "client.create",
+                &format!("c{i}"),
+                json!({"id": format!("c{i}"), "name": "N"}),
+            )
+            .unwrap();
     }
     let status: SharedStatus = Default::default();
-    (RunnerCore::new(store, t, status.clone()).with_jitter(|| 0.5), status)
+    (
+        RunnerCore::new(store, t, status.clone()).with_jitter(|| 0.5),
+        status,
+    )
 }
 
 fn snap(s: &SharedStatus) -> SyncStatus {
@@ -76,10 +103,21 @@ fn a_successful_cycle_goes_online_clears_pending_and_waits_for_the_poll_interval
 
 #[test]
 fn consecutive_failures_back_off_exponentially_and_keep_the_pending_count() {
-    let (mut core, status) = core_with(Scripted::failing(TransportError::Offline("no route".into())), 3);
+    let (mut core, status) = core_with(
+        Scripted::failing(TransportError::Offline("no route".into())),
+        3,
+    );
     let waits: Vec<_> = (0..4).map(|_| core.run_cycle()).collect();
     // jitter 0.5 of ceilings 1, 2, 4, 8 seconds
-    assert_eq!(waits, vec![Duration::from_millis(500), Duration::from_secs(1), Duration::from_secs(2), Duration::from_secs(4)]);
+    assert_eq!(
+        waits,
+        vec![
+            Duration::from_millis(500),
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+            Duration::from_secs(4)
+        ]
+    );
     let s = snap(&status);
     assert_eq!(s.connectivity, Connectivity::Offline);
     assert_eq!(s.pending, 3);
@@ -98,12 +136,19 @@ fn recovery_resets_the_backoff() {
     assert_eq!(snap(&status).connectivity, Connectivity::Online);
     t.pushes.store(0, Ordering::SeqCst);
     *t.fail_with.lock().unwrap() = Some(TransportError::Offline("x".into()));
-    assert_eq!(core.run_cycle(), Duration::from_millis(500), "starts again from the first step");
+    assert_eq!(
+        core.run_cycle(),
+        Duration::from_millis(500),
+        "starts again from the first step"
+    );
 }
 
 #[test]
 fn retry_after_is_honored_as_a_floor() {
-    let (mut core, _s) = core_with(Scripted::failing(TransportError::RateLimited(Some(Duration::from_secs(30)))), 1);
+    let (mut core, _s) = core_with(
+        Scripted::failing(TransportError::RateLimited(Some(Duration::from_secs(30)))),
+        1,
+    );
     assert_eq!(core.run_cycle(), Duration::from_secs(30));
 }
 
@@ -141,13 +186,19 @@ fn the_worker_syncs_on_start_on_wake_and_stops_cleanly() {
     let t = Scripted::failing(TransportError::Offline("down".into()));
     let (core, status) = core_with(t.clone(), 1);
     let runner = SyncRunner::spawn(core);
-    wait_for(&status, "first (failed) cycle", |s| s.connectivity == Connectivity::Offline);
+    wait_for(&status, "first (failed) cycle", |s| {
+        s.connectivity == Connectivity::Offline
+    });
     t.heal();
     runner.wake(Wake::Manual);
-    wait_for(&status, "recovery", |s| s.connectivity == Connectivity::Online && s.pending == 0);
+    wait_for(&status, "recovery", |s| {
+        s.connectivity == Connectivity::Online && s.pending == 0
+    });
     let pulls_before = t.pulls.load(Ordering::SeqCst);
     runner.wake(Wake::Nudge(5)); // not news: no extra work
     runner.wake(Wake::Nudge(9));
-    wait_for(&status, "nudge pull", |_| t.pulls.load(Ordering::SeqCst) > pulls_before);
+    wait_for(&status, "nudge pull", |_| {
+        t.pulls.load(Ordering::SeqCst) > pulls_before
+    });
     runner.stop();
 }

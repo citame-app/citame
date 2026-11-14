@@ -195,7 +195,10 @@ pub enum MutationResult {
         replayed: bool,
     },
     #[serde(rename_all = "camelCase")]
-    Retry { mutation_id: String, message: String },
+    Retry {
+        mutation_id: String,
+        message: String,
+    },
 }
 
 impl MutationResult {

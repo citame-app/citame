@@ -26,18 +26,16 @@ fn pct_decode(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
-            b'%' if i + 2 < bytes.len() => {
-                match u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                    Ok(v) => {
-                        out.push(v);
-                        i += 3;
-                    }
-                    Err(_) => {
-                        out.push(b'%');
-                        i += 1;
-                    }
+            b'%' if i + 2 < bytes.len() => match u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                Ok(v) => {
+                    out.push(v);
+                    i += 3;
                 }
-            }
+                Err(_) => {
+                    out.push(b'%');
+                    i += 1;
+                }
+            },
             b'+' => {
                 out.push(b' ');
                 i += 1;
@@ -71,7 +69,10 @@ pub struct AuthorizationResponse {
 
 /// Parses the request line of the loopback redirect (`GET /callback?code=..&state=.. HTTP/1.1`).
 pub fn parse_redirect_request_line(line: &str) -> Result<AuthorizationResponse, String> {
-    let target = line.split_whitespace().nth(1).ok_or("malformed request line")?;
+    let target = line
+        .split_whitespace()
+        .nth(1)
+        .ok_or("malformed request line")?;
     let query = target.split_once('?').map(|(_, q)| q).unwrap_or("");
     let (mut code, mut state, mut error) = (None, None, None);
     for pair in query.split('&') {
@@ -126,7 +127,11 @@ impl LoopbackReceiver {
     }
 
     /// Blocks until the browser hits the redirect, answers with a small page, and checks `state`.
-    pub fn wait(self, expected_state: &str, timeout: Duration) -> Result<AuthorizationResponse, String> {
+    pub fn wait(
+        self,
+        expected_state: &str,
+        timeout: Duration,
+    ) -> Result<AuthorizationResponse, String> {
         let deadline = Instant::now() + timeout;
         let stream = loop {
             match self.listener.accept() {
@@ -141,9 +146,13 @@ impl LoopbackReceiver {
             }
         };
         stream.set_nonblocking(false).map_err(|e| e.to_string())?;
-        stream.set_read_timeout(Some(Duration::from_secs(5))).map_err(|e| e.to_string())?;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .map_err(|e| e.to_string())?;
         let mut line = String::new();
-        BufReader::new(&stream).read_line(&mut line).map_err(|e| e.to_string())?;
+        BufReader::new(&stream)
+            .read_line(&mut line)
+            .map_err(|e| e.to_string())?;
         let parsed = parse_redirect_request_line(&line);
         let body = if parsed.is_ok() {
             "<html><body>Signed in. You can close this tab.</body></html>"
@@ -183,24 +192,41 @@ mod tests {
         let b = new_verifier();
         assert_ne!(a, b);
         assert!((43..=128).contains(&a.len()));
-        assert!(a.chars().all(|c| c.is_ascii_alphanumeric() || "-._~".contains(c)));
+        assert!(
+            a.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-._~".contains(c))
+        );
     }
 
     #[test]
     fn parses_code_and_state_from_the_redirect() {
-        let r = parse_redirect_request_line("GET /callback?code=abc%20d&state=xyz HTTP/1.1").unwrap();
-        assert_eq!(r, AuthorizationResponse { code: "abc d".into(), state: "xyz".into() });
+        let r =
+            parse_redirect_request_line("GET /callback?code=abc%20d&state=xyz HTTP/1.1").unwrap();
+        assert_eq!(
+            r,
+            AuthorizationResponse {
+                code: "abc d".into(),
+                state: "xyz".into()
+            }
+        );
     }
 
     #[test]
     fn redirect_error_is_surfaced() {
-        let e = parse_redirect_request_line("GET /callback?error=access_denied&state=s HTTP/1.1").unwrap_err();
+        let e = parse_redirect_request_line("GET /callback?error=access_denied&state=s HTTP/1.1")
+            .unwrap_err();
         assert!(e.contains("access_denied"));
     }
 
     #[test]
     fn authorization_url_encodes_parameters() {
-        let url = authorization_url("http://api/authorize", "desktop", "http://127.0.0.1:5000/callback", "s t", "ch");
+        let url = authorization_url(
+            "http://api/authorize",
+            "desktop",
+            "http://127.0.0.1:5000/callback",
+            "s t",
+            "ch",
+        );
         assert!(url.starts_with("http://api/authorize?response_type=code&client_id=desktop"));
         assert!(url.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A5000%2Fcallback"));
         assert!(url.contains("state=s%20t"));
@@ -208,7 +234,14 @@ mod tests {
     }
 
     fn browser_hit(uri: &str, query: &str) {
-        let port = uri.rsplit(':').next().unwrap().split('/').next().unwrap().to_string();
+        let port = uri
+            .rsplit(':')
+            .next()
+            .unwrap()
+            .split('/')
+            .next()
+            .unwrap()
+            .to_string();
         let mut s = std::net::TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
         write!(s, "GET /callback?{query} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
         let mut out = String::new();
@@ -240,6 +273,10 @@ mod tests {
     #[test]
     fn loopback_times_out_when_nobody_comes() {
         let rx = LoopbackReceiver::bind().unwrap();
-        assert!(rx.wait("S", Duration::from_millis(150)).unwrap_err().contains("timed out"));
+        assert!(
+            rx.wait("S", Duration::from_millis(150))
+                .unwrap_err()
+                .contains("timed out")
+        );
     }
 }

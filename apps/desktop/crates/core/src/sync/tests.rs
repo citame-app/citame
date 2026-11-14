@@ -43,7 +43,10 @@ impl Transport for Fake {
     fn push(&self, request: &PushRequest) -> Result<PushResponse, TransportError> {
         let n = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
         self.max_in_flight.fetch_max(n, Ordering::SeqCst);
-        self.log.lock().unwrap().push(format!("push:{}", request.mutations.len()));
+        self.log
+            .lock()
+            .unwrap()
+            .push(format!("push:{}", request.mutations.len()));
         self.pushes.lock().unwrap().push(request.clone());
         let r = (self.push)(request);
         self.in_flight.fetch_sub(1, Ordering::SeqCst);
@@ -60,19 +63,36 @@ fn applied_all(req: &PushRequest) -> Result<PushResponse, TransportError> {
         results: req
             .mutations
             .iter()
-            .map(|m| MutationResult::Applied { mutation_id: m.mutation_id.clone(), applied_seq: Some(1), replayed: false })
+            .map(|m| MutationResult::Applied {
+                mutation_id: m.mutation_id.clone(),
+                applied_seq: Some(1),
+                replayed: false,
+            })
             .collect(),
         head_seq: 1,
     })
 }
 
 fn empty_pull(since: i64, _limit: u32) -> Result<PullResponse, TransportError> {
-    Ok(PullResponse { changes: vec![], next_cursor: since, has_more: false, head_seq: since })
+    Ok(PullResponse {
+        changes: vec![],
+        next_cursor: since,
+        has_more: false,
+        head_seq: since,
+    })
 }
 
 fn enqueue_clients(s: &mut Store, n: usize) -> Vec<String> {
     (0..n)
-        .map(|i| s.enqueue("client.create", &format!("c{i}"), json!({"id": format!("c{i}"), "name": format!("N{i}")})).unwrap().mutation_id)
+        .map(|i| {
+            s.enqueue(
+                "client.create",
+                &format!("c{i}"),
+                json!({"id": format!("c{i}"), "name": format!("N{i}")}),
+            )
+            .unwrap()
+            .mutation_id
+        })
         .collect()
 }
 
@@ -82,10 +102,23 @@ fn push_sends_batches_of_100_in_creation_order_one_at_a_time() {
     let ids = enqueue_clients(&mut s, 250);
     let t = Fake::new(Box::new(applied_all), Box::new(empty_pull));
     let r = push_outbox(&mut s, &t).unwrap();
-    assert_eq!(r, PushReport { batches: 3, applied: 250, rejected: 0 });
+    assert_eq!(
+        r,
+        PushReport {
+            batches: 3,
+            applied: 250,
+            rejected: 0
+        }
+    );
     let sent: Vec<_> = t.pushes();
-    assert_eq!(sent.iter().map(|p| p.mutations.len()).collect::<Vec<_>>(), [100, 100, 50]);
-    let flat: Vec<_> = sent.iter().flat_map(|p| p.mutations.iter().map(|m| m.mutation_id.clone())).collect();
+    assert_eq!(
+        sent.iter().map(|p| p.mutations.len()).collect::<Vec<_>>(),
+        [100, 100, 50]
+    );
+    let flat: Vec<_> = sent
+        .iter()
+        .flat_map(|p| p.mutations.iter().map(|m| m.mutation_id.clone()))
+        .collect();
     assert_eq!(flat, ids);
     assert_eq!(t.max_in_flight.load(Ordering::SeqCst), 1);
     assert!(sent.iter().all(|p| p.device_id == s.device_id().unwrap()));
@@ -104,7 +137,10 @@ fn an_empty_outbox_makes_no_push_request() {
 fn a_network_failure_keeps_the_outbox_and_the_resend_is_byte_identical_and_idempotent() {
     let mut s = Store::open_in_memory().unwrap();
     let ids = enqueue_clients(&mut s, 3);
-    let down = Fake::new(Box::new(|_| Err(TransportError::Offline("connection refused".into()))), Box::new(empty_pull));
+    let down = Fake::new(
+        Box::new(|_| Err(TransportError::Offline("connection refused".into()))),
+        Box::new(empty_pull),
+    );
     let err = push_outbox(&mut s, &down).unwrap_err();
     assert!(matches!(err, SyncError::Offline(_)));
     assert_eq!(s.outbox_len().unwrap(), 3);
@@ -117,7 +153,11 @@ fn a_network_failure_keeps_the_outbox_and_the_resend_is_byte_identical_and_idemp
                 results: req
                     .mutations
                     .iter()
-                    .map(|m| MutationResult::Applied { mutation_id: m.mutation_id.clone(), applied_seq: Some(5), replayed: true })
+                    .map(|m| MutationResult::Applied {
+                        mutation_id: m.mutation_id.clone(),
+                        applied_seq: Some(5),
+                        replayed: true,
+                    })
                     .collect(),
                 head_seq: 5,
             })
@@ -127,15 +167,26 @@ fn a_network_failure_keeps_the_outbox_and_the_resend_is_byte_identical_and_idemp
     push_outbox(&mut s, &up).unwrap();
     let first = down.pushes();
     let second = up.pushes();
-    assert_eq!(first, second, "same mutation ids, same createdAt, same payloads");
-    assert_eq!(second[0].mutations.iter().map(|m| m.mutation_id.clone()).collect::<Vec<_>>(), ids);
+    assert_eq!(
+        first, second,
+        "same mutation ids, same createdAt, same payloads"
+    );
+    assert_eq!(
+        second[0]
+            .mutations
+            .iter()
+            .map(|m| m.mutation_id.clone())
+            .collect::<Vec<_>>(),
+        ids
+    );
     assert_eq!(s.outbox_len().unwrap(), 0);
 }
 
 #[test]
 fn a_rejected_booking_surfaces_as_a_conflict_not_silence() {
     let mut s = Store::open_in_memory().unwrap();
-    s.enqueue("appointment.create", "A1", json!({"id": "A1"})).unwrap();
+    s.enqueue("appointment.create", "A1", json!({"id": "A1"}))
+        .unwrap();
     let t = Fake::new(
         Box::new(|req| {
             Ok(PushResponse {
@@ -165,22 +216,47 @@ fn a_retry_result_stops_the_push_and_leaves_the_rest_for_the_next_attempt() {
             let m = &req.mutations;
             Ok(PushResponse {
                 results: vec![
-                    MutationResult::Applied { mutation_id: m[0].mutation_id.clone(), applied_seq: Some(1), replayed: false },
-                    MutationResult::Retry { mutation_id: m[1].mutation_id.clone(), message: "busy".into() },
-                    MutationResult::Retry { mutation_id: m[2].mutation_id.clone(), message: "busy".into() },
+                    MutationResult::Applied {
+                        mutation_id: m[0].mutation_id.clone(),
+                        applied_seq: Some(1),
+                        replayed: false,
+                    },
+                    MutationResult::Retry {
+                        mutation_id: m[1].mutation_id.clone(),
+                        message: "busy".into(),
+                    },
+                    MutationResult::Retry {
+                        mutation_id: m[2].mutation_id.clone(),
+                        message: "busy".into(),
+                    },
                 ],
                 head_seq: 1,
             })
         }),
         Box::new(empty_pull),
     );
-    assert!(matches!(push_outbox(&mut s, &flaky).unwrap_err(), SyncError::Retry(_)));
-    let left: Vec<_> = s.outbox(10).unwrap().into_iter().map(|e| e.mutation_id).collect();
+    assert!(matches!(
+        push_outbox(&mut s, &flaky).unwrap_err(),
+        SyncError::Retry(_)
+    ));
+    let left: Vec<_> = s
+        .outbox(10)
+        .unwrap()
+        .into_iter()
+        .map(|e| e.mutation_id)
+        .collect();
     assert_eq!(left, ids[1..].to_vec());
     // Next attempt resends only the unprocessed tail, in order.
     let ok = Fake::new(Box::new(applied_all), Box::new(empty_pull));
     push_outbox(&mut s, &ok).unwrap();
-    assert_eq!(ok.pushes()[0].mutations.iter().map(|m| m.mutation_id.clone()).collect::<Vec<_>>(), ids[1..].to_vec());
+    assert_eq!(
+        ok.pushes()[0]
+            .mutations
+            .iter()
+            .map(|m| m.mutation_id.clone())
+            .collect::<Vec<_>>(),
+        ids[1..].to_vec()
+    );
 }
 
 fn page(from: i64, n: i64, has_more: bool) -> PullResponse {
@@ -209,7 +285,15 @@ fn pull_follows_has_more_and_stores_the_cursor_with_each_page() {
         Box::new(|since, _| Ok(page(since, 2, since < 4))),
     );
     let r = pull_all(&mut s, &t).unwrap();
-    assert_eq!(r, PullReport { pages: 3, changes: 6, cursor: 6, replica_reset: false });
+    assert_eq!(
+        r,
+        PullReport {
+            pages: 3,
+            changes: 6,
+            cursor: 6,
+            replica_reset: false
+        }
+    );
     assert_eq!(t.log(), ["pull:0", "pull:2", "pull:4"]);
     assert_eq!(s.cursor().unwrap(), 6);
     assert_eq!(s.clients().unwrap().len(), 6);
@@ -221,7 +305,10 @@ fn the_next_session_resumes_from_the_persisted_cursor() {
     let path = dir.path().join("r.db");
     {
         let mut s = Store::open(&path).unwrap();
-        let t = Fake::new(Box::new(applied_all), Box::new(|since, _| Ok(page(since, 3, false))));
+        let t = Fake::new(
+            Box::new(applied_all),
+            Box::new(|since, _| Ok(page(since, 3, false))),
+        );
         pull_all(&mut s, &t).unwrap();
     }
     let mut s = Store::open(&path).unwrap();
@@ -238,7 +325,13 @@ fn tombstones_in_a_pull_remove_local_rows() {
         Box::new(applied_all),
         Box::new(|_since, _| {
             Ok(PullResponse {
-                changes: vec![RawChange { seq: 3, entity: "client".into(), id: "c1".into(), op: "delete".into(), data: None }],
+                changes: vec![RawChange {
+                    seq: 3,
+                    entity: "client".into(),
+                    id: "c1".into(),
+                    op: "delete".into(),
+                    data: None,
+                }],
                 next_cursor: 3,
                 has_more: false,
                 head_seq: 3,
@@ -256,7 +349,13 @@ fn a_cursor_ahead_of_the_server_resets_the_replica_and_resyncs_from_zero_keeping
     enqueue_clients(&mut s, 1);
     let t = Fake::new(
         Box::new(applied_all),
-        Box::new(|since, _| if since > 10 { Err(TransportError::CursorAhead) } else { Ok(page(since, 1, false)) }),
+        Box::new(|since, _| {
+            if since > 10 {
+                Err(TransportError::CursorAhead)
+            } else {
+                Ok(page(since, 1, false))
+            }
+        }),
     );
     let r = pull_all(&mut s, &t).unwrap();
     assert!(r.replica_reset);
@@ -271,9 +370,19 @@ fn a_server_that_says_has_more_without_progress_cannot_spin_the_client() {
     let mut s = Store::open_in_memory().unwrap();
     let t = Fake::new(
         Box::new(applied_all),
-        Box::new(|since, _| Ok(PullResponse { changes: vec![], next_cursor: since, has_more: true, head_seq: 9 })),
+        Box::new(|since, _| {
+            Ok(PullResponse {
+                changes: vec![],
+                next_cursor: since,
+                has_more: true,
+                head_seq: 9,
+            })
+        }),
     );
-    assert!(matches!(pull_all(&mut s, &t).unwrap_err(), SyncError::Fatal(_)));
+    assert!(matches!(
+        pull_all(&mut s, &t).unwrap_err(),
+        SyncError::Fatal(_)
+    ));
 }
 
 #[test]
@@ -281,7 +390,14 @@ fn empty_pages_that_still_advance_the_cursor_are_followed() {
     let mut s = Store::open_in_memory().unwrap();
     let t = Fake::new(
         Box::new(applied_all),
-        Box::new(|since, _| Ok(PullResponse { changes: vec![], next_cursor: since + 5, has_more: since < 10, head_seq: 15 })),
+        Box::new(|since, _| {
+            Ok(PullResponse {
+                changes: vec![],
+                next_cursor: since + 5,
+                has_more: since < 10,
+                head_seq: 15,
+            })
+        }),
     );
     assert_eq!(pull_all(&mut s, &t).unwrap().cursor, 15);
 }
@@ -296,7 +412,10 @@ fn a_cycle_pushes_before_it_pulls_and_skips_the_pull_when_the_push_fails() {
     assert_eq!(r.push.applied, 2);
 
     enqueue_clients(&mut s, 1);
-    let down = Fake::new(Box::new(|_| Err(TransportError::Offline("x".into()))), Box::new(empty_pull));
+    let down = Fake::new(
+        Box::new(|_| Err(TransportError::Offline("x".into()))),
+        Box::new(empty_pull),
+    );
     assert!(sync_cycle(&mut s, &down).is_err());
     assert_eq!(down.log(), ["push:1"]);
 }
@@ -306,15 +425,31 @@ fn errors_are_classified_for_the_caller() {
     let mut s = Store::open_in_memory().unwrap();
     enqueue_clients(&mut s, 1);
     let mk = |e: TransportError| Fake::new(Box::new(move |_| Err(e.clone())), Box::new(empty_pull));
-    assert!(matches!(push_outbox(&mut s, &mk(TransportError::Unauthorized)).unwrap_err(), SyncError::AuthRequired));
+    assert!(matches!(
+        push_outbox(&mut s, &mk(TransportError::Unauthorized)).unwrap_err(),
+        SyncError::AuthRequired
+    ));
     assert!(matches!(
         push_outbox(&mut s, &mk(TransportError::RateLimited(Some(Duration::from_secs(7))))).unwrap_err(),
         SyncError::RateLimited(Some(d)) if d == Duration::from_secs(7)
     ));
-    assert!(matches!(push_outbox(&mut s, &mk(TransportError::Server("500".into()))).unwrap_err(), SyncError::Offline(_)));
-    assert!(matches!(push_outbox(&mut s, &mk(TransportError::Forbidden("no".into()))).unwrap_err(), SyncError::Forbidden(_)));
-    assert!(matches!(push_outbox(&mut s, &mk(TransportError::BadRequest("bad".into()))).unwrap_err(), SyncError::Fatal(_)));
-    assert_eq!(s.outbox_len().unwrap(), 1, "nothing is ever dropped on errors");
+    assert!(matches!(
+        push_outbox(&mut s, &mk(TransportError::Server("500".into()))).unwrap_err(),
+        SyncError::Offline(_)
+    ));
+    assert!(matches!(
+        push_outbox(&mut s, &mk(TransportError::Forbidden("no".into()))).unwrap_err(),
+        SyncError::Forbidden(_)
+    ));
+    assert!(matches!(
+        push_outbox(&mut s, &mk(TransportError::BadRequest("bad".into()))).unwrap_err(),
+        SyncError::Fatal(_)
+    ));
+    assert_eq!(
+        s.outbox_len().unwrap(),
+        1,
+        "nothing is ever dropped on errors"
+    );
 }
 
 #[test]
@@ -327,20 +462,55 @@ fn offline_create_then_reconnect_applies_and_clears_the_pending_flag() {
     let lucia = "01a1d81e-0000-7000-8000-0000000000c1";
     let t0 = "2026-03-01T10:00:00.000Z";
     let catalog = vec![
-        RawChange { seq: 1, entity: "staff".into(), id: ana.into(), op: "upsert".into(), data: Some(json!({"id": ana, "displayName": "Ana", "active": true, "userId": null, "updatedAt": t0})) },
-        RawChange { seq: 2, entity: "service".into(), id: cut.into(), op: "upsert".into(), data: Some(json!({"id": cut, "name": "Haircut", "description": null, "durationMinutes": 45, "bufferMinutes": 15, "priceCents": 1, "currency": "ARS", "active": true, "updatedAt": t0})) },
-        RawChange { seq: 3, entity: "client".into(), id: lucia.into(), op: "upsert".into(), data: Some(json!({"id": lucia, "name": "Lucia", "phone": null, "email": null, "notes": null, "createdAt": t0, "updatedAt": t0})) },
+        RawChange {
+            seq: 1,
+            entity: "staff".into(),
+            id: ana.into(),
+            op: "upsert".into(),
+            data: Some(
+                json!({"id": ana, "displayName": "Ana", "active": true, "userId": null, "updatedAt": t0}),
+            ),
+        },
+        RawChange {
+            seq: 2,
+            entity: "service".into(),
+            id: cut.into(),
+            op: "upsert".into(),
+            data: Some(
+                json!({"id": cut, "name": "Haircut", "description": null, "durationMinutes": 45, "bufferMinutes": 15, "priceCents": 1, "currency": "ARS", "active": true, "updatedAt": t0}),
+            ),
+        },
+        RawChange {
+            seq: 3,
+            entity: "client".into(),
+            id: lucia.into(),
+            op: "upsert".into(),
+            data: Some(
+                json!({"id": lucia, "name": "Lucia", "phone": null, "email": null, "notes": null, "createdAt": t0, "updatedAt": t0}),
+            ),
+        },
     ];
     s.apply_page(&catalog, 3).unwrap();
-    let id = create_appointment(&mut s, NewAppointment {
-        staff_id: ana.into(), service_ids: vec![cut.into()], starts_at: "2026-03-10T13:00:00Z".parse().unwrap(),
-        client_id: lucia.into(), notes: None, override_notice: false,
-    }).unwrap();
+    let id = create_appointment(
+        &mut s,
+        NewAppointment {
+            staff_id: ana.into(),
+            service_ids: vec![cut.into()],
+            starts_at: "2026-03-10T13:00:00Z".parse().unwrap(),
+            client_id: lucia.into(),
+            notes: None,
+            override_notice: false,
+        },
+    )
+    .unwrap();
     let date = "2026-03-10".parse().unwrap();
     assert!(day_view(&s, date).unwrap().columns[0].items[0].pending);
 
     // Offline attempt fails, nothing changes.
-    let down = Fake::new(Box::new(|_| Err(TransportError::Offline("no route".into()))), Box::new(empty_pull));
+    let down = Fake::new(
+        Box::new(|_| Err(TransportError::Offline("no route".into()))),
+        Box::new(empty_pull),
+    );
     assert!(sync_cycle(&mut s, &down).is_err());
     assert!(day_view(&s, date).unwrap().columns[0].items[0].pending);
 
@@ -350,9 +520,15 @@ fn offline_create_then_reconnect_applies_and_clears_the_pending_flag() {
         Box::new(applied_all),
         Box::new(move |since, _| {
             Ok(PullResponse {
-                changes: vec![RawChange { seq: 4, entity: "appointment".into(), id: appt_id.clone(), op: "upsert".into(), data: Some(json!({
+                changes: vec![RawChange {
+                    seq: 4,
+                    entity: "appointment".into(),
+                    id: appt_id.clone(),
+                    op: "upsert".into(),
+                    data: Some(json!({
                     "id": appt_id, "staffId": ana, "clientId": lucia, "startsAt": "2026-03-10T13:00:00.000Z", "endsAt": "2026-03-10T14:00:00.000Z",
-                    "status": "booked", "notes": null, "version": 1, "services": [], "createdAt": t0, "updatedAt": t0})) }],
+                    "status": "booked", "notes": null, "version": 1, "services": [], "createdAt": t0, "updatedAt": t0})),
+                }],
                 next_cursor: since.max(4),
                 has_more: false,
                 head_seq: 4,

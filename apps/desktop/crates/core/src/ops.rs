@@ -26,11 +26,28 @@ pub struct NewAppointment {
 #[derive(Debug, Clone)]
 pub enum Resolution {
     /// Pick another time (and optionally another staff member) and try again.
-    Reschedule { starts_at: DateTime<Utc>, staff_id: Option<String> },
+    Reschedule {
+        starts_at: DateTime<Utc>,
+        staff_id: Option<String>,
+    },
     /// Give up: drops a pending booking, or cancels an existing appointment.
     Cancel,
     /// Acknowledge a rejection that needs no action (non-appointment edits).
     Dismiss,
+}
+
+/// Services a staff member performs, per the synced `service_staff` links. Empty links (nothing
+/// synced yet) mean "unknown", reported as every service so the server stays the judge.
+pub fn performed_services(store: &Store, staff_id: &str) -> Result<Vec<String>> {
+    let links = store.service_staff()?;
+    if links.is_empty() {
+        return Ok(store.services()?.into_iter().map(|s| s.id).collect());
+    }
+    Ok(links
+        .into_iter()
+        .filter(|l| l.staff_id == staff_id)
+        .map(|l| l.service_id)
+        .collect())
 }
 
 /// Returns the new appointment id.
@@ -43,10 +60,25 @@ pub fn create_appointment(store: &mut Store, new: NewAppointment) -> Result<Stri
         return Err(CoreError::Invalid(format!("unknown service {bad}")));
     }
     if !store.staff()?.iter().any(|s| s.id == new.staff_id) {
-        return Err(CoreError::Invalid(format!("unknown staff member {}", new.staff_id)));
+        return Err(CoreError::Invalid(format!(
+            "unknown staff member {}",
+            new.staff_id
+        )));
     }
-    if !known_clients(store)?.iter().any(|(id, _)| *id == new.client_id) {
-        return Err(CoreError::Invalid(format!("unknown client {}", new.client_id)));
+    let performed = performed_services(store, &new.staff_id)?;
+    if let Some(bad) = new.service_ids.iter().find(|id| !performed.contains(id)) {
+        return Err(CoreError::Invalid(format!(
+            "this staff member does not perform service {bad}"
+        )));
+    }
+    if !known_clients(store)?
+        .iter()
+        .any(|(id, _)| *id == new.client_id)
+    {
+        return Err(CoreError::Invalid(format!(
+            "unknown client {}",
+            new.client_id
+        )));
     }
     let id = uuid::Uuid::now_v7().to_string();
     let mut p = Map::new();
@@ -69,7 +101,10 @@ fn editable(store: &Store, id: &str) -> Result<crate::model::Appointment> {
     let a = effective_appointment(store, id)?
         .ok_or_else(|| CoreError::NotFound(format!("appointment {id}")))?;
     if a.status != AppointmentStatus::Booked {
-        return Err(CoreError::Invalid(format!("appointment is {}", a.status.as_str())));
+        return Err(CoreError::Invalid(format!(
+            "appointment is {}",
+            a.status.as_str()
+        )));
     }
     Ok(a)
 }
@@ -81,7 +116,9 @@ pub fn reschedule_appointment(
     staff_id: Option<&str>,
 ) -> Result<()> {
     if starts_at.is_none() && staff_id.is_none() {
-        return Err(CoreError::Invalid("provide a new time and/or staff member".into()));
+        return Err(CoreError::Invalid(
+            "provide a new time and/or staff member".into(),
+        ));
     }
     let current = editable(store, id)?;
     let mut p = Map::new();
@@ -99,7 +136,11 @@ pub fn reschedule_appointment(
 
 pub fn cancel_appointment(store: &mut Store, id: &str) -> Result<()> {
     let current = editable(store, id)?;
-    store.enqueue("appointment.cancel", id, json!({"id": id, "version": current.version}))?;
+    store.enqueue(
+        "appointment.cancel",
+        id,
+        json!({"id": id, "version": current.version}),
+    )?;
     Ok(())
 }
 
@@ -120,7 +161,11 @@ pub fn create_client(store: &mut Store, name: &str, phone: Option<&str>) -> Resu
     Ok(id)
 }
 
-pub fn resolve_conflict(store: &mut Store, mutation_id: &str, resolution: Resolution) -> Result<()> {
+pub fn resolve_conflict(
+    store: &mut Store,
+    mutation_id: &str,
+    resolution: Resolution,
+) -> Result<()> {
     let c = store
         .conflict(mutation_id)?
         .ok_or_else(|| CoreError::NotFound(format!("open conflict {mutation_id}")))?;
@@ -139,7 +184,10 @@ pub fn resolve_conflict(store: &mut Store, mutation_id: &str, resolution: Resolu
             }
             store.resolve_conflict(mutation_id, "cancelled")
         }
-        Resolution::Reschedule { starts_at, staff_id } => {
+        Resolution::Reschedule {
+            starts_at,
+            staff_id,
+        } => {
             match c.kind.as_str() {
                 "appointment.create" => {
                     // A rejection is final: same appointment id, new mutation id.
@@ -151,7 +199,12 @@ pub fn resolve_conflict(store: &mut Store, mutation_id: &str, resolution: Resolu
                     store.enqueue("appointment.create", &c.entity_id, p)?;
                 }
                 "appointment.reschedule" => {
-                    reschedule_appointment(store, &c.entity_id, Some(starts_at), staff_id.as_deref())?;
+                    reschedule_appointment(
+                        store,
+                        &c.entity_id,
+                        Some(starts_at),
+                        staff_id.as_deref(),
+                    )?;
                 }
                 other => {
                     return Err(CoreError::Invalid(format!("{other} cannot be rescheduled")));

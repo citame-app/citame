@@ -64,7 +64,10 @@ pub enum SyncError {
 impl SyncError {
     /// Worth trying again later with backoff (as opposed to needing the user).
     pub fn is_transient(&self) -> bool {
-        matches!(self, Self::Offline(_) | Self::RateLimited(_) | Self::Retry(_))
+        matches!(
+            self,
+            Self::Offline(_) | Self::RateLimited(_) | Self::Retry(_)
+        )
     }
 }
 
@@ -95,7 +98,9 @@ fn classify(e: TransportError) -> SyncError {
         TransportError::RateLimited(after) => SyncError::RateLimited(after),
         TransportError::Unauthorized => SyncError::AuthRequired,
         TransportError::Forbidden(m) => SyncError::Forbidden(m),
-        TransportError::BadRequest(m) => SyncError::Fatal(format!("the server rejected the request: {m}")),
+        TransportError::BadRequest(m) => {
+            SyncError::Fatal(format!("the server rejected the request: {m}"))
+        }
         TransportError::CursorAhead => SyncError::Fatal("unexpected cursor conflict".into()),
     }
 }
@@ -117,7 +122,9 @@ pub fn push_outbox(store: &mut Store, transport: &dyn Transport) -> Result<PushR
             Err(e) => {
                 let counts = matches!(
                     e,
-                    TransportError::Offline(_) | TransportError::Server(_) | TransportError::RateLimited(_)
+                    TransportError::Offline(_)
+                        | TransportError::Server(_)
+                        | TransportError::RateLimited(_)
                 );
                 if counts {
                     let ids: Vec<String> = batch.iter().map(|m| m.mutation_id.clone()).collect();
@@ -173,7 +180,9 @@ pub fn pull_all(store: &mut Store, transport: &dyn Transport) -> Result<PullRepo
             break;
         }
         if page.next_cursor <= since {
-            return Err(SyncError::Fatal("the server reports more changes but did not advance the cursor".into()));
+            return Err(SyncError::Fatal(
+                "the server reports more changes but did not advance the cursor".into(),
+            ));
         }
     }
     report.cursor = store.cursor()?;

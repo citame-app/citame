@@ -149,7 +149,9 @@ impl RunnerCore {
                         };
                         let jittered = self.backoff.next_delay_with((self.jitter)());
                         let connectivity = match &e {
-                            SyncError::Offline(_) | SyncError::RateLimited(_) => Connectivity::Offline,
+                            SyncError::Offline(_) | SyncError::RateLimited(_) => {
+                                Connectivity::Offline
+                            }
                             _ => Connectivity::Online,
                         };
                         (connectivity, Backoff::at_least(jittered, retry_after))
@@ -205,7 +207,11 @@ impl SyncRunner {
                 }
             })
             .expect("spawn sync thread");
-        Self { tx, status, handle: Some(handle) }
+        Self {
+            tx,
+            status,
+            handle: Some(handle),
+        }
     }
 
     pub fn sender(&self) -> Sender<Wake> {

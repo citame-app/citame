@@ -13,7 +13,11 @@ impl Locale {
     /// not Spanish is English.
     pub fn detect(value: &str) -> Self {
         let lang = value.trim().to_ascii_lowercase();
-        if lang == "es" || lang.starts_with("es_") || lang.starts_with("es-") || lang.starts_with("es.") {
+        if lang == "es"
+            || lang.starts_with("es_")
+            || lang.starts_with("es-")
+            || lang.starts_with("es.")
+        {
             Self::EsAr
         } else {
             Self::En
@@ -23,7 +27,9 @@ impl Locale {
 
 /// Replaces `{name}` placeholders.
 pub fn fill(template: &str, args: &[(&str, &str)]) -> String {
-    args.iter().fold(template.to_owned(), |acc, (name, value)| acc.replace(&format!("{{{name}}}"), value))
+    args.iter().fold(template.to_owned(), |acc, (name, value)| {
+        acc.replace(&format!("{{{name}}}"), value)
+    })
 }
 
 macro_rules! keys {
@@ -62,8 +68,8 @@ keys! {
     Syncing => ("Syncing...", "Sincronizando..."),
     SyncNow => ("Sync now", "Sincronizar ahora"),
     AllSynced => ("All changes synced", "Todo sincronizado"),
-    PendingCount => ("{n} pending", "{n} pendientes"),
-    ConflictCount => ("{n} to review", "{n} para revisar"),
+    PendingCount => ("{n} pending", "Pendientes: {n}"),
+    ConflictCount => ("{n} to review", "Para revisar: {n}"),
     LastSync => ("Last sync {time}", "Última sincronización {time}"),
     NeverSynced => ("Not synced yet", "Todavía sin sincronizar"),
     RetryIn => ("Retrying in {n}s", "Reintentando en {n}s"),
@@ -114,6 +120,44 @@ keys! {
     ErrPickStaff => ("Pick a staff member.", "Elegí a una persona del personal."),
 }
 
+/// Short weekday name (`Mon` / `lun`).
+pub fn weekday_short(locale: Locale, day: chrono::Weekday) -> &'static str {
+    const EN: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    const ES: [&str; 7] = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"];
+    let i = day.num_days_from_monday() as usize;
+    match locale {
+        Locale::En => EN[i],
+        Locale::EsAr => ES[i],
+    }
+}
+
+/// Short month name (`Mar` / `mar`); `month` is 1-12.
+pub fn month_short(locale: Locale, month: u32) -> &'static str {
+    const EN: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    const ES: [&str; 12] = [
+        "ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic",
+    ];
+    let i = (month.clamp(1, 12) - 1) as usize;
+    match locale {
+        Locale::En => EN[i],
+        Locale::EsAr => ES[i],
+    }
+}
+
+/// `Mon 9 Mar 2026` / `lun 9 mar 2026`.
+pub fn date_label(locale: Locale, date: chrono::NaiveDate) -> String {
+    use chrono::Datelike;
+    format!(
+        "{} {} {} {}",
+        weekday_short(locale, date.weekday()),
+        date.day(),
+        month_short(locale, date.month()),
+        date.year()
+    )
+}
+
 pub fn t(locale: Locale, key: Key) -> &'static str {
     match locale {
         Locale::En => key.en(),
@@ -138,7 +182,10 @@ mod tests {
 
     #[test]
     fn placeholders_are_filled() {
-        assert_eq!(fill("{n} pending, {m} to review", &[("n", "3"), ("m", "1")]), "3 pending, 1 to review");
+        assert_eq!(
+            fill("{n} pending, {m} to review", &[("n", "3"), ("m", "1")]),
+            "3 pending, 1 to review"
+        );
         assert_eq!(fill("no placeholders", &[("n", "3")]), "no placeholders");
         assert_eq!(fill("{missing}", &[]), "{missing}");
     }
@@ -146,15 +193,33 @@ mod tests {
     #[test]
     fn every_key_has_copy_in_every_locale_with_matching_placeholders() {
         let placeholders = |s: &str| {
-            let mut v: Vec<String> = s.split('{').skip(1).filter_map(|p| p.split('}').next().map(str::to_owned)).collect();
+            let mut v: Vec<String> = s
+                .split('{')
+                .skip(1)
+                .filter_map(|p| p.split('}').next().map(str::to_owned))
+                .collect();
             v.sort();
             v
         };
         for &k in Key::ALL {
             let (en, es) = (t(Locale::En, k), t(Locale::EsAr, k));
-            assert!(!en.trim().is_empty() && !es.trim().is_empty(), "{k:?} is empty");
-            assert_eq!(placeholders(en), placeholders(es), "{k:?} placeholders differ");
+            assert!(
+                !en.trim().is_empty() && !es.trim().is_empty(),
+                "{k:?} is empty"
+            );
+            assert_eq!(
+                placeholders(en),
+                placeholders(es),
+                "{k:?} placeholders differ"
+            );
         }
+    }
+
+    #[test]
+    fn dates_are_labelled_per_locale() {
+        let d = chrono::NaiveDate::from_ymd_opt(2026, 3, 9).unwrap();
+        assert_eq!(date_label(Locale::En, d), "Mon 9 Mar 2026");
+        assert_eq!(date_label(Locale::EsAr, d), "lun 9 mar 2026");
     }
 
     #[test]

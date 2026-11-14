@@ -123,11 +123,17 @@ fn apply_change(tx: &Transaction, c: &RawChange) -> Result<()> {
     }
     match c.op.as_str() {
         "delete" => {
-            tx.execute(&format!("DELETE FROM {} WHERE id = ?1", c.entity), params![c.id])?;
+            tx.execute(
+                &format!("DELETE FROM {} WHERE id = ?1", c.entity),
+                params![c.id],
+            )?;
             Ok(())
         }
         "upsert" => upsert(tx, c),
-        other => Err(CoreError::Protocol(format!("unknown op {other:?} at seq {}", c.seq))),
+        other => Err(CoreError::Protocol(format!(
+            "unknown op {other:?} at seq {}",
+            c.seq
+        ))),
     }
 }
 
@@ -248,13 +254,17 @@ impl Store {
     }
 
     pub fn schema_version(&self) -> Result<i64> {
-        Ok(self.conn.pragma_query_value(None, "user_version", |r| r.get(0))?)
+        Ok(self
+            .conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))?)
     }
 
     pub fn get_meta(&self, key: &str) -> Result<Option<String>> {
         Ok(self
             .conn
-            .query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| r.get(0))
+            .query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| {
+                r.get(0)
+            })
             .optional()?)
     }
 
@@ -281,7 +291,10 @@ impl Store {
     }
 
     pub fn cursor(&self) -> Result<i64> {
-        Ok(self.get_meta("cursor")?.and_then(|v| v.parse().ok()).unwrap_or(0))
+        Ok(self
+            .get_meta("cursor")?
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0))
     }
 
     /// Applies one pull page and moves the cursor in a single transaction. The cursor never
@@ -314,27 +327,48 @@ impl Store {
 
     fn rows<T: DeserializeOwned>(&self, sql: &str) -> Result<Vec<T>> {
         let mut stmt = self.conn.prepare(sql)?;
-        let raw = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let raw = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         raw.iter().map(|j| Ok(serde_json::from_str(j)?)).collect()
     }
 
     pub fn staff(&self) -> Result<Vec<Staff>> {
         let mut v: Vec<Staff> = self.rows("SELECT json FROM staff")?;
         v.retain(|s| s.active);
-        v.sort_by(|a, b| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()).then(a.id.cmp(&b.id)));
+        v.sort_by(|a, b| {
+            a.display_name
+                .to_lowercase()
+                .cmp(&b.display_name.to_lowercase())
+                .then(a.id.cmp(&b.id))
+        });
         Ok(v)
     }
 
     pub fn services(&self) -> Result<Vec<Service>> {
         let mut v: Vec<Service> = self.rows("SELECT json FROM service")?;
-        v.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then(a.id.cmp(&b.id)));
+        v.sort_by(|a, b| {
+            a.name
+                .to_lowercase()
+                .cmp(&b.name.to_lowercase())
+                .then(a.id.cmp(&b.id))
+        });
         Ok(v)
     }
 
     pub fn clients(&self) -> Result<Vec<Client>> {
         let mut v: Vec<Client> = self.rows("SELECT json FROM client")?;
-        v.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then(a.id.cmp(&b.id)));
+        v.sort_by(|a, b| {
+            a.name
+                .to_lowercase()
+                .cmp(&b.name.to_lowercase())
+                .then(a.id.cmp(&b.id))
+        });
         Ok(v)
+    }
+
+    pub fn service_staff(&self) -> Result<Vec<ServiceStaff>> {
+        self.rows("SELECT json FROM service_staff")
     }
 
     pub fn working_hours(&self) -> Result<Vec<WorkingHours>> {
@@ -362,7 +396,11 @@ impl Store {
     pub fn appointment(&self, id: &str) -> Result<Option<Appointment>> {
         let j: Option<String> = self
             .conn
-            .query_row("SELECT json FROM appointment WHERE id = ?1", params![id], |r| r.get(0))
+            .query_row(
+                "SELECT json FROM appointment WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
             .optional()?;
         j.map(|j| Ok(serde_json::from_str(&j)?)).transpose()
     }
@@ -387,7 +425,13 @@ impl Store {
         self.conn.execute(
             "INSERT INTO outbox (mutation_id, created_at, kind, entity_id, payload)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![mutation_id, created_at, kind, entity_id, serde_json::to_string(&payload)?],
+            params![
+                mutation_id,
+                created_at,
+                kind,
+                entity_id,
+                serde_json::to_string(&payload)?
+            ],
         )?;
         let seq = self.conn.last_insert_rowid();
         Ok(OutboxEntry {
@@ -403,16 +447,19 @@ impl Store {
     }
 
     pub fn outbox(&self, limit: usize) -> Result<Vec<OutboxEntry>> {
-        let mut stmt = self
-            .conn
-            .prepare(&format!("SELECT {OUTBOX_COLS} FROM outbox ORDER BY seq LIMIT ?1"))?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {OUTBOX_COLS} FROM outbox ORDER BY seq LIMIT ?1"
+        ))?;
         Ok(stmt
             .query_map(params![limit as i64], outbox_from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     pub fn outbox_len(&self) -> Result<usize> {
-        Ok(self.conn.query_row("SELECT COUNT(*) FROM outbox", [], |r| r.get::<_, i64>(0))? as usize)
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM outbox", [], |r| r.get::<_, i64>(0))?
+            as usize)
     }
 
     /// Records the server's verdicts for a batch, in order, in one transaction. `applied` and
@@ -444,11 +491,19 @@ impl Store {
         for (s, r) in sent.iter().zip(results) {
             match r {
                 MutationResult::Applied { .. } => {
-                    tx.execute("DELETE FROM outbox WHERE mutation_id = ?1", params![s.mutation_id])?;
+                    tx.execute(
+                        "DELETE FROM outbox WHERE mutation_id = ?1",
+                        params![s.mutation_id],
+                    )?;
                     out.applied += 1;
                 }
-                MutationResult::Rejected { reason, message, .. } => {
-                    tx.execute("DELETE FROM outbox WHERE mutation_id = ?1", params![s.mutation_id])?;
+                MutationResult::Rejected {
+                    reason, message, ..
+                } => {
+                    tx.execute(
+                        "DELETE FROM outbox WHERE mutation_id = ?1",
+                        params![s.mutation_id],
+                    )?;
                     let open: i64 = tx.query_row(
                         "SELECT COUNT(*) FROM conflict WHERE entity_id = ?1 AND resolved_at IS NULL",
                         params![s.entity_id],
@@ -520,7 +575,10 @@ impl Store {
     }
 
     pub fn conflict(&self, mutation_id: &str) -> Result<Option<Conflict>> {
-        Ok(self.conflicts()?.into_iter().find(|c| c.mutation_id == mutation_id))
+        Ok(self
+            .conflicts()?
+            .into_iter()
+            .find(|c| c.mutation_id == mutation_id))
     }
 
     pub fn resolve_conflict(&mut self, mutation_id: &str, resolution: &str) -> Result<()> {

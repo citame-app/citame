@@ -80,7 +80,13 @@ mod tests {
 
     #[test]
     fn handles_fields_without_space_and_resets_between_events() {
-        let evs = feed(&["event:change", "data:{\"seq\":1}", "", "data: {\"seq\":2}", ""]);
+        let evs = feed(&[
+            "event:change",
+            "data:{\"seq\":1}",
+            "",
+            "data: {\"seq\":2}",
+            "",
+        ]);
         assert_eq!(evs.len(), 2);
         assert_eq!(evs[1].event, None);
         assert_eq!(nudge_seq(&evs[1]), Some(2));

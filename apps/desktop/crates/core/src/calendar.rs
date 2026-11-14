@@ -66,7 +66,9 @@ pub fn local_day_range(tz: Tz, date: NaiveDate) -> (DateTime<Utc>, DateTime<Utc>
 }
 
 fn parse_instant(v: &Value) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(v.as_str()?).ok().map(|d| d.with_timezone(&Utc))
+    DateTime::parse_from_rfc3339(v.as_str()?)
+        .ok()
+        .map(|d| d.with_timezone(&Utc))
 }
 
 fn str_of(v: &Value, key: &str) -> Option<String> {
@@ -85,13 +87,17 @@ fn overlay(
     if outbox.is_empty() {
         return Ok(pending);
     }
-    let services: HashMap<String, Service> =
-        store.services()?.into_iter().map(|s| (s.id.clone(), s)).collect();
+    let services: HashMap<String, Service> = store
+        .services()?
+        .into_iter()
+        .map(|s| (s.id.clone(), s))
+        .collect();
     for e in &outbox {
-        if e.kind.starts_with("appointment.") && !map.contains_key(&e.entity_id) {
-            if let Some(a) = store.appointment(&e.entity_id)? {
-                map.insert(a.id.clone(), a);
-            }
+        if e.kind.starts_with("appointment.")
+            && !map.contains_key(&e.entity_id)
+            && let Some(a) = store.appointment(&e.entity_id)?
+        {
+            map.insert(a.id.clone(), a);
         }
     }
     for e in &outbox {
@@ -101,9 +107,10 @@ fn overlay(
             .unwrap_or_else(|_| Utc::now());
         match e.kind.as_str() {
             "appointment.create" => {
-                let (Some(staff_id), Some(starts_at)) =
-                    (str_of(p, "staffId"), p.get("startsAt").and_then(parse_instant))
-                else {
+                let (Some(staff_id), Some(starts_at)) = (
+                    str_of(p, "staffId"),
+                    p.get("startsAt").and_then(parse_instant),
+                ) else {
                     continue;
                 };
                 let picked: Vec<AppointmentService> = p
@@ -121,7 +128,10 @@ fn overlay(
                         currency: s.currency.clone(),
                     })
                     .collect();
-                let block: i64 = picked.iter().map(|s| s.duration_minutes + s.buffer_minutes).sum();
+                let block: i64 = picked
+                    .iter()
+                    .map(|s| s.duration_minutes + s.buffer_minutes)
+                    .sum();
                 map.insert(
                     e.entity_id.clone(),
                     Appointment {
@@ -177,7 +187,9 @@ fn overlay(
                 }
             }
             "client.update" => {
-                if let (Some(name), Some(slot)) = (str_of(p, "name"), client_names.get_mut(&e.entity_id)) {
+                if let (Some(name), Some(slot)) =
+                    (str_of(p, "name"), client_names.get_mut(&e.entity_id))
+                {
                     *slot = name;
                 }
             }
@@ -188,7 +200,11 @@ fn overlay(
 }
 
 fn client_names(store: &Store) -> Result<HashMap<String, String>> {
-    Ok(store.clients()?.into_iter().map(|c| (c.id, c.name)).collect())
+    Ok(store
+        .clients()?
+        .into_iter()
+        .map(|c| (c.id, c.name))
+        .collect())
 }
 
 /// Ids and display names of every client the user can book right now (mirror plus queued).
@@ -196,7 +212,11 @@ pub fn known_clients(store: &Store) -> Result<Vec<(String, String)>> {
     let mut names = client_names(store)?;
     overlay(store, &mut HashMap::new(), &mut names)?;
     let mut v: Vec<_> = names.into_iter().collect();
-    v.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()).then(a.0.cmp(&b.0)));
+    v.sort_by(|a, b| {
+        a.1.to_lowercase()
+            .cmp(&b.1.to_lowercase())
+            .then(a.0.cmp(&b.0))
+    });
     Ok(v)
 }
 
@@ -220,31 +240,52 @@ pub fn day_view(store: &Store, date: NaiveDate) -> Result<DayView> {
         .collect();
     let mut names = client_names(store)?;
     let pending = overlay(store, &mut map, &mut names)?;
-    let conflicts: HashSet<String> = store.conflicts()?.into_iter().map(|c| c.entity_id).collect();
+    let conflicts: HashSet<String> = store
+        .conflicts()?
+        .into_iter()
+        .map(|c| c.entity_id)
+        .collect();
 
-    let mut columns: Vec<StaffColumn> =
-        store.staff()?.into_iter().map(|staff| StaffColumn { staff, items: vec![] }).collect();
+    let mut columns: Vec<StaffColumn> = store
+        .staff()?
+        .into_iter()
+        .map(|staff| StaffColumn {
+            staff,
+            items: vec![],
+        })
+        .collect();
     let mut appts: Vec<Appointment> = map
         .into_values()
-        .filter(|a| a.status != AppointmentStatus::Cancelled && a.starts_at < to && a.ends_at > from)
+        .filter(|a| {
+            a.status != AppointmentStatus::Cancelled && a.starts_at < to && a.ends_at > from
+        })
         .collect();
     appts.sort_by(|a, b| a.starts_at.cmp(&b.starts_at).then(a.id.cmp(&b.id)));
     for a in appts {
         if let Some(col) = columns.iter_mut().find(|c| c.staff.id == a.staff_id) {
             col.items.push(CalendarItem {
-                client_name: names.get(&a.client_id).cloned().unwrap_or_else(|| "Unknown client".into()),
+                client_name: names
+                    .get(&a.client_id)
+                    .cloned()
+                    .unwrap_or_else(|| "Unknown client".into()),
                 pending: pending.contains(&a.id),
                 conflict: conflicts.contains(&a.id),
                 appointment: a,
             });
         }
     }
-    Ok(DayView { date, timezone: tz.name().to_owned(), columns })
+    Ok(DayView {
+        date,
+        timezone: tz.name().to_owned(),
+        columns,
+    })
 }
 
 /// Seven consecutive days starting at `first_day`.
 pub fn week_view(store: &Store, first_day: NaiveDate) -> Result<Vec<DayView>> {
-    (0..7).map(|i| day_view(store, first_day + Duration::days(i))).collect()
+    (0..7)
+        .map(|i| day_view(store, first_day + Duration::days(i)))
+        .collect()
 }
 
 pub fn sync_summary(store: &Store) -> Result<SyncSummary> {
