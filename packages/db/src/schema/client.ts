@@ -10,6 +10,8 @@ export const clientProfile = pgTable(
     phone: text(),
     email: text(),
     notes: text(),
+    /** Preferred language for messages (`en` or `es-AR`); null falls back to the salon default. */
+    locale: text(),
     /** Login account of this client, if any (walk-in clients have none). */
     userId: text().references(() => user.id, { onDelete: "set null" }),
     createdAt: createdAt(),

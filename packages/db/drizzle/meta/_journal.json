@@ -43,6 +43,13 @@
       "when": 1794677704582,
       "tag": "0005_oauth_provider_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794680050075,
+      "tag": "0006_notifications",
+      "breakpoints": true
     }
   ]
 }

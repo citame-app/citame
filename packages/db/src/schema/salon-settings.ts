@@ -13,6 +13,10 @@ export const salonSettings = pgTable(
     slotGranularityMinutes: integer().notNull().default(15),
     minNoticeMinutes: integer().notNull().default(60),
     maxDaysAhead: integer().notNull().default(60),
+    /** Lead of the first reminder before the start, in minutes; null disables it. */
+    reminderFirstLeadMinutes: integer().default(1440),
+    /** Lead of the second reminder, in minutes; null disables it. */
+    reminderSecondLeadMinutes: integer().default(120),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -21,5 +25,7 @@ export const salonSettings = pgTable(
     check("salon_settings_granularity_positive", sql`${t.slotGranularityMinutes} > 0`),
     check("salon_settings_min_notice_non_negative", sql`${t.minNoticeMinutes} >= 0`),
     check("salon_settings_max_days_positive", sql`${t.maxDaysAhead} > 0`),
+    check("salon_settings_reminder_first_positive", sql`${t.reminderFirstLeadMinutes} > 0`),
+    check("salon_settings_reminder_second_positive", sql`${t.reminderSecondLeadMinutes} > 0`),
   ],
 );
