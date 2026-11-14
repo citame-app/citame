@@ -4,6 +4,17 @@ import { renderApp } from "../../../test/render";
 import { AdminShell } from "./shell";
 
 describe("AdminShell", () => {
+  test("reserves room for the mobile bottom bar so toasts never sit on top of it", () => {
+    const view = renderApp(
+      <AdminShell role="owner" active="today">
+        <p>content</p>
+      </AdminShell>,
+    );
+    expect(document.documentElement.style.getPropertyValue("--bottom-nav")).toBe("3.5rem");
+    view.unmount();
+    expect(document.documentElement.style.getPropertyValue("--bottom-nav")).toBe("");
+  });
+
   test("the owner gets the full sidebar, labelled and with the active page marked", () => {
     renderApp(
       <AdminShell role="owner" active="clients">

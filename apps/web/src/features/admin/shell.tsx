@@ -1,6 +1,6 @@
 import type { UserRole } from "@sob/contracts";
 import { Link } from "@tanstack/react-router";
-import { type ComponentType, type ReactNode, useState } from "react";
+import { type ComponentType, type ReactNode, useEffect, useState } from "react";
 import {
   CalendarIcon,
   ChartIcon,
@@ -59,6 +59,13 @@ export function AdminShell({
   const inline = fits ? items : items.filter((i) => BOTTOM_BAR_PRIORITY.includes(i.section));
   const overflow = fits ? [] : items.filter((i) => !BOTTOM_BAR_PRIORITY.includes(i.section));
   const [moreOpen, setMoreOpen] = useState(false);
+
+  // The fixed bottom bar (56px, min-h-14) must not be covered by toasts: tell the toast viewport.
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty("--bottom-nav", "3.5rem");
+    return () => root.style.removeProperty("--bottom-nav");
+  }, []);
 
   return (
     <div className="mx-auto w-full max-w-[96rem] md:grid md:grid-cols-[14.5rem_minmax(0,1fr)]">
