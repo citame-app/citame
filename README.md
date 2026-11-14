@@ -114,7 +114,7 @@ API_INTERNAL_URL=http://localhost:3000 PORT=4173 bun apps/web/server.ts   # http
 
 ### End-to-end tests
 
-Playwright runs against the real stack at a mobile and a desktop viewport (booking flow, slot race, cancel and reschedule, auth errors, i18n, dark mode, axe, keyboard-only). Start Postgres and Valkey, migrate, seed, bootstrap an owner, start the API and the web server as above (raise `RATE_LIMIT_AUTH_MAX` and `RATE_LIMIT_GLOBAL_MAX` for the run), then:
+The suite books real appointments, so run it against a fresh database (a database saturated by many runs offers no free slots). Playwright runs against the real stack at a mobile and a desktop viewport (booking flow, slot race, cancel and reschedule, auth errors, i18n, dark mode, axe, keyboard-only). Start Postgres and Valkey, migrate, seed, bootstrap an owner, start the API and the web server as above (raise `RATE_LIMIT_AUTH_MAX` and `RATE_LIMIT_GLOBAL_MAX` for the run), then:
 
 ```sh
 cd apps/web && bunx playwright install chromium
