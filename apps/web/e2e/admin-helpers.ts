@@ -121,9 +121,14 @@ export async function ensureStaff(
   };
   const haircut = svc.services.find((s) => s.id === HAIRCUT) as { id: string; staffIds: string[] };
   if (!haircut.staffIds.includes(staffId)) {
-    await owner.put(`/api/admin/services/${HAIRCUT}/staff`, {
-      data: { staffIds: [...haircut.staffIds, staffId] },
-    });
+    // Deactivated calendars cannot be assigned: keep only the active ones, plus the new member.
+    const all = (await (await owner.get("/api/admin/staff")).json()) as {
+      staff: { id: string; active: boolean }[];
+    };
+    const active = new Set(all.staff.filter((m) => m.active).map((m) => m.id));
+    const staffIds = [...haircut.staffIds.filter((id) => active.has(id)), staffId];
+    const put = await owner.put(`/api/admin/services/${HAIRCUT}/staff`, { data: { staffIds } });
+    expect(put.ok(), await put.text()).toBe(true);
   }
   await owner.put(`/api/admin/staff/${staffId}/working-hours`, {
     data: {

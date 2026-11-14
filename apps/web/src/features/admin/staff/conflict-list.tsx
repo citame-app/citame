@@ -39,7 +39,6 @@ export function ConflictList({ conflicts }: { conflicts: ScheduleConflict[] }) {
             <Link
               to="/admin/clients/$id"
               params={{ id: c.clientId }}
-              aria-label={`${t("conflicts.open")}: ${c.clientId}`}
               className="inline-flex min-h-11 items-center underline"
             >
               <ClientName clientId={c.clientId} />
