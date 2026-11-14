@@ -32,9 +32,11 @@ export function formatDuration(totalMinutes: number, locale: string): string {
 }
 
 export function formatTime(instant: string, timeZone: string, locale: string): string {
-  return new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit", timeZone }).format(
-    new Date(instant),
-  );
+  // Browsers separate the day period with U+202F, Bun with a plain space: normalize so server
+  // and client render identical text (a mismatch breaks hydration).
+  return new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit", timeZone })
+    .format(new Date(instant))
+    .replaceAll("\u202f", " ");
 }
 
 /** Calendar date (`YYYY-MM-DD`) of an instant as seen in `timeZone`. */

@@ -44,6 +44,24 @@ describe("salon timezone dates", () => {
     expect(formatTime(instant, "Asia/Tokyo", "es-AR")).toBe("21:00");
   });
 
+  test("never emits a narrow no-break space, which differs between server and browser ICU and breaks hydration", () => {
+    const RealDateTimeFormat = Intl.DateTimeFormat;
+    // Simulate a browser whose ICU separates the day period with U+202F.
+    class NarrowSpaceFormat extends RealDateTimeFormat {
+      override format = (date?: Date | number) =>
+        RealDateTimeFormat.prototype.formatToParts
+          .call(this, date)
+          .map((part) => (part.type === "literal" && part.value === " " ? "\u202f" : part.value))
+          .join("");
+    }
+    Intl.DateTimeFormat = NarrowSpaceFormat as typeof Intl.DateTimeFormat;
+    try {
+      expect(formatTime(instant, TZ, "en")).toBe("9:00 AM");
+    } finally {
+      Intl.DateTimeFormat = RealDateTimeFormat;
+    }
+  });
+
   test("derives the salon-local calendar date of an instant", () => {
     expect(localDateOf("2026-03-10T02:30:00.000Z", TZ)).toBe("2026-03-09");
     expect(localDateOf("2026-03-10T02:30:00.000Z", "Asia/Tokyo")).toBe("2026-03-10");

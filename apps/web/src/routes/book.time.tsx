@@ -15,6 +15,7 @@ import { BookingSummary } from "~/features/booking/summary";
 import { useBooking } from "~/features/booking/use-booking";
 import { useI18n } from "~/i18n/react";
 import { localDateOf } from "~/lib/format";
+import { availabilityQuery } from "~/lib/queries";
 
 const PAGE = 10;
 
@@ -28,6 +29,22 @@ export const Route = createFileRoute("/book/time")({
         replace: true,
       });
     }
+  },
+  // Prefetch the visible days on the server so the first paint already shows times.
+  loaderDeps: ({ search }) => ({ services: search.services, staff: search.staff }),
+  loader: async ({ context, deps }) => {
+    const parsed = parseBookingSearch(deps);
+    if (parsed.services.length === 0) return;
+    const today = localDateOf(new Date().toISOString(), context.salon.timezone);
+    const dates = buildDateStrip(today, PAGE, context.salon.maxDaysAhead);
+    const staffId = parsed.staff === "any" ? undefined : parsed.staff;
+    await Promise.all(
+      dates.map((date) =>
+        context.queryClient
+          .ensureQueryData(availabilityQuery({ serviceIds: parsed.services, staffId, date }))
+          .catch(() => undefined),
+      ),
+    );
   },
   component: TimeStep,
 });
