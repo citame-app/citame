@@ -47,11 +47,53 @@ const envSchema = z.object({
   /** MCP requests per caller and window. */
   RATE_LIMIT_MCP_MAX: positiveInt.default(120),
   RATE_LIMIT_MCP_WINDOW_SECONDS: positiveInt.default(60),
+
+  /** Runs the notification worker inside the API process (see also `bun run worker`). */
+  NOTIFY_WORKER_ENABLED: z.stringbool().default(false),
+  /** `smtp` sends through SMTP_URL; `none` skips every email (rows are marked skipped). */
+  NOTIFY_EMAIL_PROVIDER: z.enum(["none", "smtp"]).default("none"),
+  /** `smtp://user:pass@host:587` or `smtps://...`. Never logged. */
+  SMTP_URL: z.string().optional(),
+  NOTIFY_EMAIL_FROM: z.string().min(3).default("Sisters of Beauty <no-reply@localhost>"),
+  /** `twilio` uses the Twilio REST adapter; `none` (default) skips every SMS. */
+  NOTIFY_SMS_PROVIDER: z.enum(["none", "twilio"]).default("none"),
+  TWILIO_ACCOUNT_SID: z.string().optional(),
+  TWILIO_AUTH_TOKEN: z.string().optional(),
+  /** Sender number or messaging service id, E.164 or `MG...`. */
+  TWILIO_FROM: z.string().optional(),
+  NOTIFY_POLL_INTERVAL_MS: positiveInt.default(5000),
+  NOTIFY_BATCH_SIZE: positiveInt.default(10),
+  /** How long a claimed job stays invisible to other workers before it is retried. */
+  NOTIFY_VISIBILITY_TIMEOUT_SECONDS: positiveInt.default(120),
+  NOTIFY_MAX_ATTEMPTS: positiveInt.default(5),
+  NOTIFY_BACKOFF_BASE_SECONDS: positiveInt.default(30),
+  NOTIFY_BACKOFF_MAX_SECONDS: positiveInt.default(3600),
+  /** Language of messages for clients without a stored preference: `en` or `es-AR`. */
+  NOTIFY_DEFAULT_LOCALE: z.enum(["en", "es-AR"]).default("en"),
+  /** Public origin of the web app used in links; defaults to BETTER_AUTH_URL. */
+  NOTIFY_PUBLIC_URL: z.union([z.url(), z.literal("").transform(() => undefined)]).optional(),
 });
 
 export interface RateLimitRule {
   max: number;
   windowSeconds: number;
+}
+
+export interface NotificationConfig {
+  workerEnabled: boolean;
+  email: { provider: "none" | "smtp"; smtpUrl?: string; from: string };
+  sms: { provider: "none" | "twilio"; accountSid?: string; authToken?: string; from?: string };
+  pollIntervalMs: number;
+  batchSize: number;
+  visibilityTimeoutSeconds: number;
+  maxAttempts: number;
+  backoffBaseSeconds: number;
+  backoffMaxSeconds: number;
+  defaultLocale: "en" | "es-AR";
+  /** Origin of the web app, no trailing slash. */
+  publicUrl: string;
+  /** HMAC key for opt-out links, derived from the auth secret. */
+  signingSecret: string;
 }
 
 export interface AppConfig {
@@ -72,6 +114,7 @@ export interface AppConfig {
     accessTokenTtlSeconds: number;
     refreshTokenTtlSeconds: number;
   };
+  notifications: NotificationConfig;
   trustProxy: boolean;
   rateLimit: {
     global: RateLimitRule;
@@ -93,6 +136,19 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     throw new Error(`Invalid environment configuration:\n${problems}`);
   }
   const e = parsed.data;
+  if (e.NOTIFY_EMAIL_PROVIDER === "smtp" && !e.SMTP_URL) {
+    throw new Error(
+      "Invalid environment configuration:\n  - SMTP_URL: required when NOTIFY_EMAIL_PROVIDER=smtp",
+    );
+  }
+  if (
+    e.NOTIFY_SMS_PROVIDER === "twilio" &&
+    !(e.TWILIO_ACCOUNT_SID && e.TWILIO_AUTH_TOKEN && e.TWILIO_FROM)
+  ) {
+    throw new Error(
+      "Invalid environment configuration:\n  - TWILIO_*: ACCOUNT_SID, AUTH_TOKEN and FROM are required when NOTIFY_SMS_PROVIDER=twilio",
+    );
+  }
   return {
     databaseUrl: e.DATABASE_URL,
     valkeyUrl: e.VALKEY_URL,
@@ -110,6 +166,25 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       mcpResource: e.MCP_RESOURCE_URL ?? `${e.BETTER_AUTH_URL.replace(/\/+$/, "")}/mcp`,
       accessTokenTtlSeconds: e.OAUTH_ACCESS_TOKEN_TTL_SECONDS,
       refreshTokenTtlSeconds: e.OAUTH_REFRESH_TOKEN_TTL_SECONDS,
+    },
+    notifications: {
+      workerEnabled: e.NOTIFY_WORKER_ENABLED,
+      email: { provider: e.NOTIFY_EMAIL_PROVIDER, smtpUrl: e.SMTP_URL, from: e.NOTIFY_EMAIL_FROM },
+      sms: {
+        provider: e.NOTIFY_SMS_PROVIDER,
+        accountSid: e.TWILIO_ACCOUNT_SID,
+        authToken: e.TWILIO_AUTH_TOKEN,
+        from: e.TWILIO_FROM,
+      },
+      pollIntervalMs: e.NOTIFY_POLL_INTERVAL_MS,
+      batchSize: e.NOTIFY_BATCH_SIZE,
+      visibilityTimeoutSeconds: e.NOTIFY_VISIBILITY_TIMEOUT_SECONDS,
+      maxAttempts: e.NOTIFY_MAX_ATTEMPTS,
+      backoffBaseSeconds: e.NOTIFY_BACKOFF_BASE_SECONDS,
+      backoffMaxSeconds: e.NOTIFY_BACKOFF_MAX_SECONDS,
+      defaultLocale: e.NOTIFY_DEFAULT_LOCALE,
+      publicUrl: (e.NOTIFY_PUBLIC_URL ?? e.BETTER_AUTH_URL).replace(/\/+$/, ""),
+      signingSecret: `sob.notifications.v1:${e.BETTER_AUTH_SECRET}`,
     },
     trustProxy: e.TRUST_PROXY,
     rateLimit: {
