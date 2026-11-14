@@ -106,6 +106,7 @@ impl Root {
     pub fn new(config: Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let locale = config.locale;
         let start_date = config.start_date;
+        let start_view = config.start_view.clone();
         let svc = Services::open(config).expect("open the local database");
         let t = |k| i18n::t(locale, k);
         let email = cx.new(|cx| TextField::new(t(Key::Email), false, cx));
@@ -148,6 +149,7 @@ impl Root {
             // background and only a definite "no" signs the user out.
             root.enter_main(cx);
             root.validate_saved(saved, cx);
+            root.open_start_view(start_view.as_deref(), window, cx);
         } else {
             email.read(cx).focus(window);
         }
@@ -163,6 +165,32 @@ impl Root {
         })
         .detach();
         root
+    }
+
+    fn open_start_view(&mut self, view: Option<&str>, window: &mut Window, cx: &mut Context<Self>) {
+        match view {
+            Some("new") => self.open_new(window, cx),
+            Some("conflicts") => {
+                self.overlay = Overlay::Conflicts {
+                    editing: None,
+                    error: None,
+                };
+                cx.notify();
+            }
+            Some("details") => {
+                let id = self.view.as_ref().and_then(|v| {
+                    v.columns
+                        .iter()
+                        .flat_map(|c| c.items.first())
+                        .next()
+                        .map(|i| i.appointment.id.clone())
+                });
+                if let Some(id) = id {
+                    self.open_details(&id, cx);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn t(&self, key: Key) -> &'static str {
@@ -1739,6 +1767,7 @@ mod tests {
             data_dir: dir.path().to_path_buf(),
             locale: Locale::En,
             start_date: Some("2026-03-09".parse().unwrap()),
+            start_view: None,
         };
         (dir, config)
     }

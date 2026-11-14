@@ -15,6 +15,9 @@ pub struct Config {
     pub locale: Locale,
     /// `SOB_START_DATE` (`YYYY-MM-DD`): open the calendar on that day instead of today.
     pub start_date: Option<NaiveDate>,
+    /// `SOB_START_VIEW` (`new`, `details` or `conflicts`): open that dialog at startup. A QA
+    /// convenience for looking at dialogs without clicking through (screenshots, demos).
+    pub start_view: Option<String>,
 }
 
 impl Config {
@@ -33,6 +36,7 @@ impl Config {
             data_dir,
             locale: Locale::detect(&get("SOB_LANG").or_else(|| get("LANG")).unwrap_or_default()),
             start_date: get("SOB_START_DATE").and_then(|d| d.parse().ok()),
+            start_view: get("SOB_START_VIEW"),
         }
     }
 
