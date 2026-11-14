@@ -56,17 +56,20 @@ Custom, deliberately simple protocol (one salon, a handful of devices); Electric
 
 ## Phases
 
-Each phase ends green (lint, typecheck, `bun test`, and the listed checks) and is committed with conventional commits, split into reviewable work units.
+Each phase ends green (lint, typecheck, `bun test`, and the listed checks) and is committed with conventional commits, split into reviewable work units. Final status at release 0.1.0:
 
-0. **Foundations** — monorepo skeleton, tsconfig/lint, `docker compose` (postgres, valkey, api, web), `.env.example`, CI, ADR for the decisions above, copy this plan to `docs/PLAN.md`.
-1. **Data + core API** — Drizzle schema and migrations (including the exclusion constraint), Hono app, service layer for services/staff/availability/appointments, Zod contracts, seed data for Sisters of Beauty.
-2. **Auth + RBAC** — Better Auth, roles, Valkey secondary storage, rate limiting, audit log.
-3. **Web** — public booking flow (service → staff → slot → confirm), client account area, owner/staff dashboard (calendar, clients, services, schedules, reports with charts), Tailwind design system.
-4. **Sync protocol** — `sync_change`, push/pull/SSE endpoints, contract tests for idempotency, ordering and tombstones.
-5. **Desktop client** — GPUI app shell, local SQLite + outbox, calendar view, create/move/cancel, sync engine, OAuth PKCE login, offline indicator and conflict resolution UI.
-6. **MCP server** — OAuth 2.1 metadata and consent, tools listed above, tool-level authorization tests. _Done; see ADR 0009 (desktop OAuth swap deferred)._
-7. **Notifications** — reminder scheduler, email provider adapter, optional SMS adapter behind an interface. Built on a Postgres outbox/queue (Valkey is not on the delivery path): see [ADR 0010](adr/0010-notifications-and-reminders.md).
-8. **Hardening and release** — k6 load/contention suites, backups doc, observability (structured logs, health checks), production compose, self-hosting guide, open-source files (LICENSE, CONTRIBUTING, SECURITY).
+| #   | Phase                                                                                                  | Status                            | Caveats                                                                                                                                                                                                                     |
+| --- | ------------------------------------------------------------------------------------------------------ | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0   | Foundations: monorepo, compose, CI, ADR 0001                                                           | Done                              | The plan called for a `.env.example`; writing `.env*` files was not possible in the authoring environment, so [docs/env-reference.md](env-reference.md) carries the template instead.                                       |
+| 1   | Data and core API: schema, exclusion constraint, availability, appointments, seed                      | Done                              | [ADR 0002](adr/0002-data-model-and-availability.md).                                                                                                                                                                        |
+| 2   | Auth and RBAC: Better Auth, Valkey sessions, rate limits, audit log                                    | Done                              | [ADR 0003](adr/0003-auth-rbac-sessions.md). No MFA, no account lockout beyond rate limiting.                                                                                                                                |
+| 3   | Web: booking flow, account area, admin dashboard, design system                                        | Done                              | ADRs [0005](adr/0005-web-app.md), [0006](adr/0006-admin-dashboard.md), [0004](adr/0004-admin-api-and-reporting.md). Guest booking is out of scope; the week view shows one team member at a time.                           |
+| 4   | Sync protocol: change log, push/pull/SSE                                                               | Done                              | [ADR 0007](adr/0007-sync-protocol.md), [sync-protocol.md](sync-protocol.md). Tombstones are never purged.                                                                                                                   |
+| 5   | Desktop client (GPUI)                                                                                  | Done, with gaps                   | [ADR 0008](adr/0008-desktop-client.md). Signs in with a session cookie, not OAuth; no week view, text selection or IME, dark theme, keyring, installer or auto-update. Linux only, verified on the author's machine and CI. |
+| 6   | MCP server and OAuth 2.1                                                                               | Done                              | [ADR 0009](adr/0009-oauth-and-mcp.md). Not tested against real third-party MCP hosts; the desktop OAuth swap is deferred (see below).                                                                                       |
+| 7   | Notifications                                                                                          | Done                              | [ADR 0010](adr/0010-notifications-and-reminders.md). SMS tested against a stubbed Twilio API only, never a real account.                                                                                                    |
+| 8a  | Hardening: account security, observability, backups, production compose, k6                            | Done                              | [ADR 0011](adr/0011-production-hardening.md), [operations.md](operations.md), [performance.md](performance.md). Load numbers come from one laptop.                                                                          |
+| 8b  | Release readiness: visual QA, open-source files, self-hosting guide, release workflow, security review | Done, release workflow unverified | [visual-qa.md](visual-qa.md), [self-hosting.md](self-hosting.md), [security-review.md](security-review.md). `.github/workflows/release.yml` could not be run outside GitHub.                                                |
 
 ## Testing strategy
 
@@ -86,13 +89,25 @@ Each phase ends green (lint, typecheck, `bun test`, and the listed checks) and i
 5. Go offline on the desktop, create an appointment, reconnect → it syncs; create a conflicting one on web while offline → conflict UI appears.
 6. Connect an MCP client, complete OAuth 2.1, call `find_availability` and `create_appointment`.
 
+## Known limitations and roadmap
+
+Not in 0.1.0, roughly in the order we would tackle them:
+
+- **Multi-factor authentication** and account lockout beyond rate limiting (ADR 0003, 0011).
+- **Durable queue for account emails.** Verification, reset and invitation emails are sent in process with two retries; an API crash between the response and the send loses one email, and the person asks again (ADR 0011).
+- **OpenTelemetry tracing.** Logs carry a request id and metrics are Prometheus-only.
+- **Desktop OAuth login.** The first-party `sob-desktop` OAuth client is seeded, but `/sync/*` accepts session cookies only. Needed: a bearer branch in `requireAuth` for a `sync` resource and scope, token storage and refresh in `sob-core`, a loopback listener plus browser step in the GPUI login. Deliberately not started in 0.1.0: the API half is useless without the Rust half, and the Rust half cannot be tested without a display (ADR 0009).
+- **Desktop UI gaps.** Week view (the read model exists), text selection and IME, dark theme, OS keyring for the session, `completed` / `no_show` buttons, installers and auto-update, macOS and Windows builds.
+- **Tombstone purge.** Deleted rows stay in the sync log forever so that a long-offline device cannot resurrect them; a safe purge needs per-device cursors (ADR 0007).
+- **Multi-location.** The schema keeps `location_id` but nothing builds on it.
+- **Online payments and deposits**, guest booking, loyalty and marketing campaigns (non-goals for v1).
+- **OAuth extras**: an account screen to list and revoke grants, verified client identity (CIMD), DPoP (ADR 0009).
+- **Release automation** is written but unproven; the first tag will be its test.
+- **Dead configuration.** `SALON_TIMEZONE` is passed by Compose and Turborepo but nothing reads it (the timezone lives in settings); remove it in a cleanup.
+
 ## Open risks
 
-- GPUI is pre-1.0 and consumed from git: pin a commit SHA, expect upgrade work, budget time for missing widgets (date pickers, calendar grid are custom).
-- Better Auth OAuth/MCP plugin API is in flux between versions: pin the version, read its docs at install time.
-- "Latest everything" raises breakage risk: pin exact versions in lockfiles and upgrade deliberately.
-- Reminders by SMS/email need a provider and, for SMS, local regulatory checks.
-
-## Immediate next step on approval
-
-Phase 0: scaffold the monorepo and compose stack, copy this plan to `docs/PLAN.md`, then commit with a conventional commit (no AI attribution, per user rules).
+- GPUI is pre-1.0: the dependency is pinned exactly (`=0.2.2`), expect upgrade work.
+- Better Auth's OAuth plugin API moves between versions: the version is pinned.
+- "Latest everything" raises breakage risk: exact pins in lockfiles, upgrades through Dependabot pull requests.
+- Reminders by SMS need a provider and local regulatory checks ([notifications.md](notifications.md)).

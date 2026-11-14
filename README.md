@@ -2,7 +2,7 @@
 
 Open-source booking and salon-management platform (a Booksy alternative): online booking for clients, calendar and CRM for the salon, reminders, and an offline-capable desktop client for the front desk. Self-hosted with Docker.
 
-The project is built in phases. See [docs/PLAN.md](docs/PLAN.md) for scope, architecture and roadmap, and [docs/adr](docs/adr) for decision records.
+The project is built in phases. See [docs/PLAN.md](docs/PLAN.md) for scope, architecture, phase status and roadmap, and [docs/adr](docs/adr) for decision records. Running it for a real salon: [docs/self-hosting.md](docs/self-hosting.md) and the [environment reference](docs/env-reference.md). Contributing: [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [CHANGELOG.md](CHANGELOG.md). Licensed under the [MIT License](LICENSE).
 
 ## Quickstart
 
@@ -107,7 +107,7 @@ Errors look like `{ "error": { "code", "message" } }` with codes `validation_err
 | `RATE_LIMIT_OAUTH_REGISTER_MAX`, `..._WINDOW_SECONDS`               | `10`, `60`                              | Per client: anonymous dynamic client registration.                                                                                                                                                                |
 | `RATE_LIMIT_MCP_MAX`, `..._WINDOW_SECONDS`                          | `120`, `60`                             | Per client: `/mcp` requests.                                                                                                                                                                                      |
 | `OWNER_EMAIL`, `OWNER_PASSWORD`, `OWNER_NAME`                       | none                                    | Only read by `bun run bootstrap:owner`; never logged.                                                                                                                                                             |
-| `SALON_TIMEZONE`                                                    | `America/Argentina/Buenos_Aires`        | Passed through by Compose.                                                                                                                                                                                        |
+| `SALON_TIMEZONE`                                                    | `America/Argentina/Buenos_Aires`        | Passed through by Compose but not read by any code: the salon timezone is stored in the database (Admin, Settings).                                                                                               |
 | `AUTH_REQUIRE_EMAIL_VERIFICATION`                                   | `true`                                  | Clients confirm their email before signing in. Production refuses to boot with it on and no email provider. `compose.yaml` (development) defaults it to `false`.                                                  |
 | `METRICS_TOKEN`                                                     | unset                                   | Bearer token for `/metrics`. Unset: only requests that did not come through the public proxy are answered.                                                                                                        |
 | `SHUTDOWN_GRACE_MS`                                                 | `0`                                     | After SIGTERM `/ready` is 503 for this long before the listener closes.                                                                                                                                           |
