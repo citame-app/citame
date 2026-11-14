@@ -11,20 +11,20 @@ All numbers below were measured, not estimated. They describe one development ma
 
 Every virtual user fires one `POST /appointments` for the same slot at the same moment; repeated for several slots.
 
-| Run | Racers per slot | Slots | `201` | `409 slot_taken` | Other | p95 booking latency | DB overlap check |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| API direct | 50 | 10 | **10** (exactly 1 per slot) | 490 | 0 | 261 ms (avg 165 ms) | 0 overlapping pairs, 10 live appointments |
-| Through the web proxy | 200 | 20 | **20** (exactly 1 per slot) | 3 980 | 0 | 619 ms (avg 527 ms) | 0 overlapping pairs, 30 live appointments |
+| Run                   | Racers per slot | Slots | `201`                       | `409 slot_taken` | Other | p95 booking latency | DB overlap check                          |
+| --------------------- | --------------- | ----- | --------------------------- | ---------------- | ----- | ------------------- | ----------------------------------------- |
+| API direct            | 50              | 10    | **10** (exactly 1 per slot) | 490              | 0     | 261 ms (avg 165 ms) | 0 overlapping pairs, 10 live appointments |
+| Through the web proxy | 200             | 20    | **20** (exactly 1 per slot) | 3 980            | 0     | 619 ms (avg 527 ms) | 0 overlapping pairs, 30 live appointments |
 
 All thresholds passed, including the teardown check that each raced slot has exactly one live appointment. The exclusion constraint, not application code, decides the winner: the losers are answered `409 slot_taken` without a stack trace or a 500. Latency grows with the number of simultaneous racers because the losing inserts queue behind the winner's row lock; it is not a throughput limit (a realistic salon sees a handful of concurrent bookings).
 
 ## Availability (the read-heavy path)
 
-| Scenario | Load | p95 slot search | p95 catalogue | Errors | Throughput |
-| --- | --- | --- | --- | --- | --- |
-| Realistic browsing, API direct | 50 VUs, ~1 s think time | 2.5 ms | 1.6 ms | 0 % of 7 118 | 127 req/s (limited by think time) |
-| Realistic browsing, via the web proxy | 50 VUs, ~1 s think time | 2.7 ms | 1.9 ms | 0 % of 7 157 | 128 req/s |
-| Saturation, API direct | 100 VUs, no think time | 79 ms | 38 ms | 0 % of 155 276 | **2 823 req/s** (CPU shared with k6) |
+| Scenario                              | Load                    | p95 slot search | p95 catalogue | Errors         | Throughput                           |
+| ------------------------------------- | ----------------------- | --------------- | ------------- | -------------- | ------------------------------------ |
+| Realistic browsing, API direct        | 50 VUs, ~1 s think time | 2.5 ms          | 1.6 ms        | 0 % of 7 118   | 127 req/s (limited by think time)    |
+| Realistic browsing, via the web proxy | 50 VUs, ~1 s think time | 2.7 ms          | 1.9 ms        | 0 % of 7 157   | 128 req/s                            |
+| Saturation, API direct                | 100 VUs, no think time  | 79 ms           | 38 ms         | 0 % of 155 276 | **2 823 req/s** (CPU shared with k6) |
 
 Mixed smoke (20 browsers, 2 front-desk users reading the calendar and `/sync/pull`, 5 `/ready` probes/s, 30 s): p95 9 ms overall, `/ready` p95 1.5 ms, 0 % errors, 1 473 requests.
 
@@ -45,11 +45,11 @@ See the section at the end of this file.
 
 Measured against the production-mode stack on the machine above, signed in as the owner for the admin pages (the cookie is sent as a header; the calendar URL includes `?view=day` so the redirect to it does not drop it). Five runs per page; the median is shown.
 
-| Page | Default throttling (4x CPU): score, TBT | 6x CPU slowdown: score, TBT | Transfer |
-| --- | --- | --- | --- |
-| `/admin` | 96, 215 ms | 90, 396 ms | 387 kB |
-| `/admin/calendar?view=day` | 97, 187 ms | 89, 456 ms | 401 kB |
-| `/book/time?services=..&staff=..` | 99, 146 ms | 87, 527 ms | 394 kB |
+| Page                              | Default throttling (4x CPU): score, TBT | 6x CPU slowdown: score, TBT | Transfer |
+| --------------------------------- | --------------------------------------- | --------------------------- | -------- |
+| `/admin`                          | 96, 215 ms                              | 90, 396 ms                  | 387 kB   |
+| `/admin/calendar?view=day`        | 97, 187 ms                              | 89, 456 ms                  | 401 kB   |
+| `/book/time?services=..&staff=..` | 99, 146 ms                              | 87, 527 ms                  | 394 kB   |
 
 LCP is about 750 ms on every page at both settings (the first paint is server-rendered HTML plus the CSS), CLS 0 except 0.015 on the calendar.
 

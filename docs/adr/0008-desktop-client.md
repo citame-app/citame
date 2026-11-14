@@ -31,12 +31,12 @@ The text field is hand-written (typing, backspace, paste, tab, enter): no select
 
 Migrations are an ordered list applied inside transactions and tracked with `PRAGMA user_version` (currently 1).
 
-| Table | Purpose |
-| --- | --- |
-| `meta` | `device_id` (UUIDv7, generated once, sent as `deviceId`) and `cursor` |
-| `client`, `service`, `staff`, `service_staff`, `working_hours`, `time_off`, `salon_settings`, `appointment` | Server mirror: primary key `id`, the validated wire JSON, plus extracted columns only where queries need them (`appointment`: staff, start and end in epoch ms, status, version; `time_off`: range) |
-| `outbox` | Pending mutations: autoincrement `seq` (creation order), `mutation_id` (UUIDv7, fixed when the user acts), `created_at` (fixed, reused on every resend), `kind`, `entity_id`, `payload`, `attempts`, `last_error` |
-| `conflict` | Rejected mutations awaiting the user: reason, server message, the original payload, `resolved_at` and `resolution` |
+| Table                                                                                                       | Purpose                                                                                                                                                                                                           |
+| ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `meta`                                                                                                      | `device_id` (UUIDv7, generated once, sent as `deviceId`) and `cursor`                                                                                                                                             |
+| `client`, `service`, `staff`, `service_staff`, `working_hours`, `time_off`, `salon_settings`, `appointment` | Server mirror: primary key `id`, the validated wire JSON, plus extracted columns only where queries need them (`appointment`: staff, start and end in epoch ms, status, version; `time_off`: range)               |
+| `outbox`                                                                                                    | Pending mutations: autoincrement `seq` (creation order), `mutation_id` (UUIDv7, fixed when the user acts), `created_at` (fixed, reused on every resend), `kind`, `entity_id`, `payload`, `attempts`, `last_error` |
+| `conflict`                                                                                                  | Rejected mutations awaiting the user: reason, server message, the original payload, `resolved_at` and `resolution`                                                                                                |
 
 Rules that follow from the protocol:
 

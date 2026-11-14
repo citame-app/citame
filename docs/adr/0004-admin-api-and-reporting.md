@@ -12,19 +12,19 @@ Everything below is implemented as the thin HTTP layer over the same service-lay
 
 ### Authorization (extends ADR 0003)
 
-| Resource / action                                           | Client | Staff                          | Owner |
-| ----------------------------------------------------------- | ------ | ------------------------------ | ----- |
-| `/admin/services` (list, create, edit, deactivate, assign)  | 403    | 403                            | yes   |
-| `GET /admin/staff`                                          | 403    | only themselves                | all   |
-| `PATCH /admin/staff/:id` (rename, activate, deactivate)     | 403    | 403                            | yes   |
-| `GET /admin/staff/:id/working-hours`                        | 403    | own only                       | any   |
-| `PUT /admin/staff/:id/working-hours`                        | 403    | 403                            | yes   |
-| time off list, create, edit, delete                         | 403    | own entries only               | any   |
-| `GET`, `PATCH /admin/clients[/:id]`                         | 403    | every client (front desk)      | yes   |
-| `DELETE /admin/clients/:id`                                 | 403    | 403                            | yes   |
-| `GET /admin/reports/summary`                                | 403    | own numbers (query is pinned)  | all   |
-| `GET /appointments/calendar`                                | 403    | own calendar only              | any   |
-| `GET /appointments` paging and `status` filter              | own    | own calendar                   | all   |
+| Resource / action                                          | Client | Staff                         | Owner |
+| ---------------------------------------------------------- | ------ | ----------------------------- | ----- |
+| `/admin/services` (list, create, edit, deactivate, assign) | 403    | 403                           | yes   |
+| `GET /admin/staff`                                         | 403    | only themselves               | all   |
+| `PATCH /admin/staff/:id` (rename, activate, deactivate)    | 403    | 403                           | yes   |
+| `GET /admin/staff/:id/working-hours`                       | 403    | own only                      | any   |
+| `PUT /admin/staff/:id/working-hours`                       | 403    | 403                           | yes   |
+| time off list, create, edit, delete                        | 403    | own entries only              | any   |
+| `GET`, `PATCH /admin/clients[/:id]`                        | 403    | every client (front desk)     | yes   |
+| `DELETE /admin/clients/:id`                                | 403    | 403                           | yes   |
+| `GET /admin/reports/summary`                               | 403    | own numbers (query is pinned) | all   |
+| `GET /appointments/calendar`                               | 403    | own calendar only             | any   |
+| `GET /appointments` paging and `status` filter             | own    | own calendar                  | all   |
 
 Router guards are per route, never `use("*")` inside a sub-router: Hono matches middleware by request path regardless of which router registered it, so a blanket guard in one `/admin` router would leak onto every router mounted after it.
 
@@ -53,13 +53,13 @@ The rules are pure functions (`availability/rules.ts`) reused by availability se
 
 `PATCH /appointments/:id` accepts `status` of `completed`, `no_show` or `cancelled` (never `booked`), always with the current `version`. A request either changes the status or moves the appointment, never both (`400`); notes may accompany either.
 
-| From                   | To                                          | Who                                          | When                                                                  |
-| ---------------------- | ------------------------------------------- | -------------------------------------------- | --------------------------------------------------------------------- |
-| booked                 | completed, no_show                          | the calendar's staff member, owner           | only once `starts_at <= now` (injectable clock), else 409 `invalid_state` |
-| booked                 | cancelled                                   | the client (own), the calendar's staff, owner | any time                                                              |
-| completed              | no_show, and back                           | owner only (a correction)                    | any time                                                              |
-| completed, no_show     | cancelled, or the same status again         | nobody                                       | 409 `invalid_state`                                                   |
-| cancelled              | anything                                    | nobody (terminal)                            | 409 `invalid_state`                                                   |
+| From               | To                                  | Who                                           | When                                                                      |
+| ------------------ | ----------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------- |
+| booked             | completed, no_show                  | the calendar's staff member, owner            | only once `starts_at <= now` (injectable clock), else 409 `invalid_state` |
+| booked             | cancelled                           | the client (own), the calendar's staff, owner | any time                                                                  |
+| completed          | no_show, and back                   | owner only (a correction)                     | any time                                                                  |
+| completed, no_show | cancelled, or the same status again | nobody                                        | 409 `invalid_state`                                                       |
+| cancelled          | anything                            | nobody (terminal)                             | 409 `invalid_state`                                                       |
 
 Clients can only cancel; marking an outcome is 403 for them even on their own appointment. The audit action is `appointment.complete`, `appointment.no_show`, `appointment.cancel` or `appointment.status_correct`, with `fromStatus` and `toStatus`, written in the same transaction as the update and under the unchanged version check. Reports read these statuses.
 

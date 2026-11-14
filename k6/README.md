@@ -2,12 +2,12 @@
 
 k6 2.x scripts in plain JavaScript. They talk to a running stack (compose or local processes) with a migrated, seeded database. Results measured on a real run are in [docs/performance.md](../docs/performance.md).
 
-| Script | What it proves |
-| --- | --- |
-| `availability.js` | Read-heavy browsing (catalogue + slot search), ramping VUs. Thresholds: p95 < 300 ms for slot search, < 150 ms for the catalogue, < 1 % errors. |
+| Script                  | What it proves                                                                                                                                                                                                                                                      |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `availability.js`       | Read-heavy browsing (catalogue + slot search), ramping VUs. Thresholds: p95 < 300 ms for slot search, < 150 ms for the catalogue, < 1 % errors.                                                                                                                     |
 | `booking-contention.js` | `VUS` users (default 50) race for the **same** slot, for `ROUNDS` (default 10) different slots. Thresholds: exactly one `201` per slot, every other answer `409 slot_taken`, no other status, and a teardown check that each slot has exactly one live appointment. |
-| `check-overlaps.ts` | SQL proof after the run: no two non-cancelled appointments of one staff member overlap. |
-| `mixed.js` | Smoke-sized mixed workload (browsers, front-desk calendar and sync pull, `/ready` probes). |
+| `check-overlaps.ts`     | SQL proof after the run: no two non-cancelled appointments of one staff member overlap.                                                                                                                                                                             |
+| `mixed.js`              | Smoke-sized mixed workload (browsers, front-desk calendar and sync pull, `/ready` probes).                                                                                                                                                                          |
 
 ## Running
 

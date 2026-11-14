@@ -26,30 +26,32 @@ SITE_ADDRESS=salon.example ACME_EMAIL=you@salon.example \
 
 Without the `tls` profile the web service listens on `127.0.0.1:4173`; put nginx, Traefik or a cloud load balancer in front, and keep `WEB_TRUST_PROXY=true` only when that proxy appends the visitor's address to `X-Forwarded-For` (Caddy and nginx `$proxy_add_x_forwarded_for` do). `docker/Caddyfile` is a working example; its comments explain each line.
 
+`scripts/smoke-prod.sh` runs this whole procedure against a throwaway stack (build, migrate, owner, readiness, sign-in, public availability, a client booking and a 409 on the same slot, headers, non-root/read-only checks) and tears it down; run it before trusting a change to `compose.prod.yaml`.
+
 ### Environment reference (production)
 
-| Variable | Required | Meaning |
-| --- | --- | --- |
-| `POSTGRES_PASSWORD` | yes | Password of the `sob` database user (also builds `DATABASE_URL` for the services). |
-| `BETTER_AUTH_SECRET` | yes | 32+ characters. Signs sessions and opt-out links and encrypts the OAuth signing keys. **Rotating it logs everybody out and invalidates unsubscribe links in sent emails** (section 6). |
-| `PUBLIC_URL` | yes | Public origin; becomes `BETTER_AUTH_URL`, `TRUSTED_ORIGINS` and the base of every emailed link. |
-| `SMTP_URL`, `NOTIFY_EMAIL_PROVIDER` | yes unless verification is off | Account and reminder email. The API refuses to start in production with verification required and no provider. |
-| `AUTH_REQUIRE_EMAIL_VERIFICATION` | no (true) | Clients must confirm their address before signing in. |
-| `METRICS_TOKEN` | no | Bearer token for `/metrics` (16+ chars). Unset: only internal scrapes are answered. |
-| `NOTIFY_*`, `TWILIO_*` | no | See [notifications](notifications.md). |
-| `WEB_TRUST_PROXY` | no (true) | Trust `X-Forwarded-For` from the proxy in front of `web`. |
-| `WEB_PUBLISH` | no | Host binding of the web port (default `127.0.0.1:4173`). |
-| `MAINTENANCE_*`, `*_RETENTION_DAYS` | no | Housekeeping schedule and windows (section 7). |
-| `SHUTDOWN_GRACE_MS` | no | Compose sets 5000. |
-| `*_FILE` | no | `DATABASE_URL`, `BETTER_AUTH_SECRET`, `SMTP_URL`, `TWILIO_AUTH_TOKEN`, `METRICS_TOKEN` can be read from a file (Docker/Kubernetes secrets), e.g. `BETTER_AUTH_SECRET_FILE=/run/secrets/auth`. |
+| Variable                            | Required                       | Meaning                                                                                                                                                                                       |
+| ----------------------------------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POSTGRES_PASSWORD`                 | yes                            | Password of the `sob` database user (also builds `DATABASE_URL` for the services).                                                                                                            |
+| `BETTER_AUTH_SECRET`                | yes                            | 32+ characters. Signs sessions and opt-out links and encrypts the OAuth signing keys. **Rotating it logs everybody out and invalidates unsubscribe links in sent emails** (section 6).        |
+| `PUBLIC_URL`                        | yes                            | Public origin; becomes `BETTER_AUTH_URL`, `TRUSTED_ORIGINS` and the base of every emailed link.                                                                                               |
+| `SMTP_URL`, `NOTIFY_EMAIL_PROVIDER` | yes unless verification is off | Account and reminder email. The API refuses to start in production with verification required and no provider.                                                                                |
+| `AUTH_REQUIRE_EMAIL_VERIFICATION`   | no (true)                      | Clients must confirm their address before signing in.                                                                                                                                         |
+| `METRICS_TOKEN`                     | no                             | Bearer token for `/metrics` (16+ chars). Unset: only internal scrapes are answered.                                                                                                           |
+| `NOTIFY_*`, `TWILIO_*`              | no                             | See [notifications](notifications.md).                                                                                                                                                        |
+| `WEB_TRUST_PROXY`                   | no (true)                      | Trust `X-Forwarded-For` from the proxy in front of `web`.                                                                                                                                     |
+| `WEB_PUBLISH`                       | no                             | Host binding of the web port (default `127.0.0.1:4173`).                                                                                                                                      |
+| `MAINTENANCE_*`, `*_RETENTION_DAYS` | no                             | Housekeeping schedule and windows (section 7).                                                                                                                                                |
+| `SHUTDOWN_GRACE_MS`                 | no                             | Compose sets 5000.                                                                                                                                                                            |
+| `*_FILE`                            | no                             | `DATABASE_URL`, `BETTER_AUTH_SECRET`, `SMTP_URL`, `TWILIO_AUTH_TOKEN`, `METRICS_TOKEN` can be read from a file (Docker/Kubernetes secrets), e.g. `BETTER_AUTH_SECRET_FILE=/run/secrets/auth`. |
 
 ## 2. Health, logs and metrics
 
-| Endpoint | Use | Answers |
-| --- | --- | --- |
-| `GET /health` (API), `GET /healthz` (web) | liveness: restart the container if it fails | 200 while the process runs |
-| `GET /ready` (API) | readiness: route traffic only while it is 200 | 200 when Postgres and Valkey answer; 503 `unavailable` (with the failing check) or `draining` |
-| `GET /metrics` (API, internal) | Prometheus scrape | text exposition format |
+| Endpoint                                  | Use                                           | Answers                                                                                       |
+| ----------------------------------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `GET /health` (API), `GET /healthz` (web) | liveness: restart the container if it fails   | 200 while the process runs                                                                    |
+| `GET /ready` (API)                        | readiness: route traffic only while it is 200 | 200 when Postgres and Valkey answer; 503 `unavailable` (with the failing check) or `draining` |
+| `GET /metrics` (API, internal)            | Prometheus scrape                             | text exposition format                                                                        |
 
 **Logs** are JSON lines on stdout (`docker compose -f compose.prod.yaml logs -f api`). Follow one request across web and API with its id: `... logs api web | rg '"requestId":"<id>"'`; the id is also the `X-Request-Id` response header users can quote in a support request. Useful fields: `level`, `msg`, `route`, `status`, `durationMs`. Passwords, tokens, cookies, email addresses and query strings are never logged. Docker rotates the files (10 MB x 5).
 
@@ -115,26 +117,26 @@ The web and API containers are stateless, so a rolling restart is: scale `api` t
 
 ## 6. Secrets rotation
 
-| Secret | How | Effect |
-| --- | --- | --- |
-| `POSTGRES_PASSWORD` | `ALTER USER sob PASSWORD '...'` in Postgres, set the new value, `up -d` | brief reconnect |
-| `SMTP_URL` / `TWILIO_AUTH_TOKEN` | set the new value, `up -d api worker` | none; queued messages retry |
-| `METRICS_TOKEN` | change it and the Prometheus job | scrape gap until both match |
-| `BETTER_AUTH_SECRET` | set the new value, `up -d` | **everyone is signed out**, the OAuth signing keys (encrypted with it) can no longer be read so MCP/desktop clients must reconnect, and unsubscribe links in already-sent emails stop working. Rotate only after a suspected leak, at a quiet hour. |
-| A person's password | they use "Forgot your password?"; the reset ends their other sessions | |
+| Secret                           | How                                                                     | Effect                                                                                                                                                                                                                                              |
+| -------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POSTGRES_PASSWORD`              | `ALTER USER sob PASSWORD '...'` in Postgres, set the new value, `up -d` | brief reconnect                                                                                                                                                                                                                                     |
+| `SMTP_URL` / `TWILIO_AUTH_TOKEN` | set the new value, `up -d api worker`                                   | none; queued messages retry                                                                                                                                                                                                                         |
+| `METRICS_TOKEN`                  | change it and the Prometheus job                                        | scrape gap until both match                                                                                                                                                                                                                         |
+| `BETTER_AUTH_SECRET`             | set the new value, `up -d`                                              | **everyone is signed out**, the OAuth signing keys (encrypted with it) can no longer be read so MCP/desktop clients must reconnect, and unsubscribe links in already-sent emails stop working. Rotate only after a suspected leak, at a quiet hour. |
+| A person's password              | they use "Forgot your password?"; the reset ends their other sessions   |                                                                                                                                                                                                                                                     |
 
 ## 7. Housekeeping (scheduled compaction)
 
 The worker runs `runMaintenance` 60 s after start and then every `MAINTENANCE_INTERVAL_HOURS` (24). Multiple workers are safe (advisory lock). One-shot from cron: `bun run maintenance` (prints a JSON report). It removes only what nothing reads or what is past its window:
 
-| What | Window (env) | Notes |
-| --- | --- | --- |
-| Superseded `sync_change` rows | 30 days (`SYNC_LOG_RETENTION_DAYS`) | The newest entry of every row stays, so cursors stay valid. **Tombstones are never purged**: a desktop offline longer than any window would resurrect a deleted row (ADR 0007). A device offline longer than the window still converges, because pull returns current row state. |
-| Sent / skipped / cancelled reminders | 90 days (`REMINDER_RETENTION_DAYS`) | Pending and in-flight rows are never touched. |
-| Dead-lettered reminders | 180 days (`DEAD_LETTER_RETENTION_DAYS`) | Kept longer so operators can investigate. |
-| Expired OAuth access/refresh tokens | 7 days after expiry (`OAUTH_TOKEN_GRACE_DAYS`) | |
-| Idle OAuth clients | 30 days (`OAUTH_IDLE_CLIENT_DAYS`) | Dynamically registered clients with no token and no consent; the desktop client is exempt. |
-| Expired verification values, sessions | 1 day after expiry | |
+| What                                  | Window (env)                                   | Notes                                                                                                                                                                                                                                                                            |
+| ------------------------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Superseded `sync_change` rows         | 30 days (`SYNC_LOG_RETENTION_DAYS`)            | The newest entry of every row stays, so cursors stay valid. **Tombstones are never purged**: a desktop offline longer than any window would resurrect a deleted row (ADR 0007). A device offline longer than the window still converges, because pull returns current row state. |
+| Sent / skipped / cancelled reminders  | 90 days (`REMINDER_RETENTION_DAYS`)            | Pending and in-flight rows are never touched.                                                                                                                                                                                                                                    |
+| Dead-lettered reminders               | 180 days (`DEAD_LETTER_RETENTION_DAYS`)        | Kept longer so operators can investigate.                                                                                                                                                                                                                                        |
+| Expired OAuth access/refresh tokens   | 7 days after expiry (`OAUTH_TOKEN_GRACE_DAYS`) |                                                                                                                                                                                                                                                                                  |
+| Idle OAuth clients                    | 30 days (`OAUTH_IDLE_CLIENT_DAYS`)             | Dynamically registered clients with no token and no consent; the desktop client is exempt.                                                                                                                                                                                       |
+| Expired verification values, sessions | 1 day after expiry                             |                                                                                                                                                                                                                                                                                  |
 
 `audit_log` is intentionally kept forever (it is small and is the record of who changed what); archive it yourself if policy requires.
 

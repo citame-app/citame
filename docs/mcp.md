@@ -6,12 +6,12 @@ The API is also a [Model Context Protocol](https://modelcontextprotocol.io) serv
 
 With `BETTER_AUTH_URL=https://salon.example` (the public origin of the web app):
 
-| What | URL |
-| --- | --- |
-| MCP server (Streamable HTTP, stateless, JSON responses) | `https://salon.example/mcp` |
-| Protected resource metadata (RFC 9728) | `https://salon.example/.well-known/oauth-protected-resource/mcp` |
-| Authorization server metadata (RFC 8414) | `https://salon.example/.well-known/oauth-authorization-server/api/auth` |
-| Dynamic client registration (RFC 7591) | `https://salon.example/api/auth/oauth2/register` |
+| What                                                    | URL                                                                     |
+| ------------------------------------------------------- | ----------------------------------------------------------------------- |
+| MCP server (Streamable HTTP, stateless, JSON responses) | `https://salon.example/mcp`                                             |
+| Protected resource metadata (RFC 9728)                  | `https://salon.example/.well-known/oauth-protected-resource/mcp`        |
+| Authorization server metadata (RFC 8414)                | `https://salon.example/.well-known/oauth-authorization-server/api/auth` |
+| Dynamic client registration (RFC 7591)                  | `https://salon.example/api/auth/oauth2/register`                        |
 
 A host that only knows the MCP URL discovers the rest: an unauthenticated call gets `401` with `WWW-Authenticate: Bearer resource_metadata="..."`, the metadata names the authorization server, the host registers itself, runs authorization code + PKCE (`S256` only) and sends `Authorization: Bearer <token>` with every request.
 
@@ -26,12 +26,12 @@ Hosts must send the RFC 8707 `resource` parameter (the MCP URL) when authorizing
 
 ## Consent screen and scopes
 
-| Scope | What the user is told | Tools |
-| --- | --- | --- |
-| `mcp:read` (always on) | View services, availability and the appointments you can see | `list_services`, `find_availability`, `list_my_appointments` |
-| `mcp:book` | Book and cancel appointments for you | `create_appointment`, `cancel_appointment` |
-| `schedule:read` (staff and owner accounts only) | Read the staff schedule and look up clients | `list_schedule`, `find_client` |
-| `offline_access` | Stay connected until you remove access | refresh tokens |
+| Scope                                           | What the user is told                                        | Tools                                                        |
+| ----------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
+| `mcp:read` (always on)                          | View services, availability and the appointments you can see | `list_services`, `find_availability`, `list_my_appointments` |
+| `mcp:book`                                      | Book and cancel appointments for you                         | `create_appointment`, `cancel_appointment`                   |
+| `schedule:read` (staff and owner accounts only) | Read the staff schedule and look up clients                  | `list_schedule`, `find_client`                               |
+| `offline_access`                                | Stay connected until you remove access                       | refresh tokens                                               |
 
 A token's powers are the intersection of its scopes and the user's current role, checked on every call. Access tokens last 15 minutes; hosts refresh them with a rotating refresh token (14 days).
 
@@ -39,15 +39,15 @@ A token's powers are the intersection of its scopes and the user's current role,
 
 All inputs are validated with Zod schemas from `@sob/contracts`; all successful results include `structuredContent` that matches the tool's `outputSchema`. Failures are results with `isError: true`, a message that says what to do next, and `_meta.error.code`.
 
-| Tool | Who | Annotations | What it does |
-| --- | --- | --- | --- |
-| `list_services` | any | read-only | Services (duration, buffer, price) and the professionals who perform them. |
-| `find_availability` | any | read-only | Free start times for `serviceIds` on one `date` (salon timezone), optionally one `staffId`. Advisory. |
-| `list_my_appointments` | any | read-only | Appointments in a window (default now to +90 days). Clients: their own. Staff: their calendar. Owner: all. |
-| `create_appointment` | any | not destructive | Books `staffId` + `serviceIds` at `startsAt` (copied from a slot). Clients book for themselves; staff and owners pass `clientId` and may only book their own calendar (owners: any). Optional `requestId` (UUID) makes retries safe. |
-| `cancel_appointment` | any | destructive | Cancels an appointment. Clients: only their own; a foreign or unknown id is "not found". |
-| `list_schedule` | staff, owner | read-only | Appointments with client and service names between two instants (max 42 days). Staff: own calendar only. |
-| `find_client` | staff, owner | read-only | Clients by name, phone or email fragment (id, name, phone, email, visit stats; no internal notes). |
+| Tool                   | Who          | Annotations     | What it does                                                                                                                                                                                                                         |
+| ---------------------- | ------------ | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `list_services`        | any          | read-only       | Services (duration, buffer, price) and the professionals who perform them.                                                                                                                                                           |
+| `find_availability`    | any          | read-only       | Free start times for `serviceIds` on one `date` (salon timezone), optionally one `staffId`. Advisory.                                                                                                                                |
+| `list_my_appointments` | any          | read-only       | Appointments in a window (default now to +90 days). Clients: their own. Staff: their calendar. Owner: all.                                                                                                                           |
+| `create_appointment`   | any          | not destructive | Books `staffId` + `serviceIds` at `startsAt` (copied from a slot). Clients book for themselves; staff and owners pass `clientId` and may only book their own calendar (owners: any). Optional `requestId` (UUID) makes retries safe. |
+| `cancel_appointment`   | any          | destructive     | Cancels an appointment. Clients: only their own; a foreign or unknown id is "not found".                                                                                                                                             |
+| `list_schedule`        | staff, owner | read-only       | Appointments with client and service names between two instants (max 42 days). Staff: own calendar only.                                                                                                                             |
+| `find_client`          | staff, owner | read-only       | Clients by name, phone or email fragment (id, name, phone, email, visit stats; no internal notes).                                                                                                                                   |
 
 Error codes in `_meta.error.code`: `slot_taken` and `slot_unavailable` (call `find_availability` again), `validation_error`, `not_found`, `forbidden` (also used for a missing scope: the message names it), `invalid_state` (already cancelled), `version_conflict`, `internal_error`.
 

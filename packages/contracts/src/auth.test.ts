@@ -2,11 +2,11 @@ import { describe, expect, test } from "bun:test";
 import {
   changeRoleRequestSchema,
   createStaffAccountRequestSchema,
-  passwordSchema,
-  staffAccountResponseSchema,
   errorCodeSchema,
   errorStatus,
   meResponseSchema,
+  passwordSchema,
+  staffAccountResponseSchema,
   userRoleSchema,
 } from "./index";
 
@@ -73,7 +73,9 @@ describe("staff invitation", () => {
 
   test("the response says whether an invitation was sent", () => {
     const base = { userId: "u", staffId: "0195c0de-0000-7000-8000-000000000001", email: "a@b.co" };
-    expect(staffAccountResponseSchema.parse({ ...base, role: "staff", invited: true }).invited).toBe(true);
+    expect(
+      staffAccountResponseSchema.parse({ ...base, role: "staff", invited: true }).invited,
+    ).toBe(true);
     expect(staffAccountResponseSchema.parse({ ...base, role: "staff" }).invited).toBe(false);
   });
 });

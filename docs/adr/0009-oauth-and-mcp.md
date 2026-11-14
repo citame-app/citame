@@ -25,25 +25,25 @@ Tables (`oauth_client`, `oauth_resource`, `oauth_client_resource`, `oauth_access
 
 ### Public URLs
 
-| What | URL |
-| --- | --- |
-| Issuer | `<BETTER_AUTH_URL>/api/auth` |
-| AS metadata (RFC 8414) | `<origin>/.well-known/oauth-authorization-server/api/auth` (also `<issuer>/.well-known/oauth-authorization-server`) |
-| Authorize / token / register / revoke / JWKS | `<issuer>/oauth2/authorize`, `/oauth2/token`, `/oauth2/register`, `/oauth2/revoke`, `/jwks` |
-| MCP resource (token audience) | `MCP_RESOURCE_URL`, default `<BETTER_AUTH_URL>/mcp` |
-| Protected resource metadata (RFC 9728) | `<origin>/.well-known/oauth-protected-resource/mcp` (and the unsuffixed path) |
-| Login / consent pages | `/sign-in`, `/consent` on the same origin (apps/web) |
+| What                                         | URL                                                                                                                 |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Issuer                                       | `<BETTER_AUTH_URL>/api/auth`                                                                                        |
+| AS metadata (RFC 8414)                       | `<origin>/.well-known/oauth-authorization-server/api/auth` (also `<issuer>/.well-known/oauth-authorization-server`) |
+| Authorize / token / register / revoke / JWKS | `<issuer>/oauth2/authorize`, `/oauth2/token`, `/oauth2/register`, `/oauth2/revoke`, `/jwks`                         |
+| MCP resource (token audience)                | `MCP_RESOURCE_URL`, default `<BETTER_AUTH_URL>/mcp`                                                                 |
+| Protected resource metadata (RFC 9728)       | `<origin>/.well-known/oauth-protected-resource/mcp` (and the unsuffixed path)                                       |
+| Login / consent pages                        | `/sign-in`, `/consent` on the same origin (apps/web)                                                                |
 
 `BETTER_AUTH_URL` is the browser-facing origin (the web app in Compose). The web server forwards `/mcp` and `/.well-known/*` to the API unchanged, next to `/api/*`, so the issuer, the metadata and the consent page are one origin. OpenID (`/.well-known/openid-configuration`) is not served: the `openid` scope is deliberately not offered. Nothing here needs identity claims, and not issuing ID tokens keeps profile data out of third-party hands.
 
 ### Scopes
 
-| Scope | Allows | Notes |
-| --- | --- | --- |
-| `mcp:read` | `list_services`, `find_availability`, `list_my_appointments` | Always on in the consent screen. |
-| `mcp:book` | `create_appointment`, `cancel_appointment` | Can be unchecked at consent. |
-| `schedule:read` | `list_schedule`, `find_client` | Only offered to staff and owner accounts. |
-| `offline_access` | refresh tokens | Without it the client has to ask again after 15 minutes. |
+| Scope            | Allows                                                       | Notes                                                    |
+| ---------------- | ------------------------------------------------------------ | -------------------------------------------------------- |
+| `mcp:read`       | `list_services`, `find_availability`, `list_my_appointments` | Always on in the consent screen.                         |
+| `mcp:book`       | `create_appointment`, `cancel_appointment`                   | Can be unchecked at consent.                             |
+| `schedule:read`  | `list_schedule`, `find_client`                               | Only offered to staff and owner accounts.                |
+| `offline_access` | refresh tokens                                               | Without it the client has to ask again after 15 minutes. |
 
 Effective permission is the intersection of scope and role, evaluated on every call. The role is read from the database (like `requireAuth`), so a demotion applies at once to tokens that are already out. A client-role token that carries `schedule:read` can do nothing extra: the policy functions refuse.
 
@@ -91,20 +91,20 @@ MCP hosts cannot be provisioned beforehand, so `POST /oauth2/register` is open (
 
 ## Threat model
 
-| Threat | Mitigation |
-| --- | --- |
-| Stolen access token | 15 minute JWT, audience-bound, consent and client re-checked per call; refresh rotation with reuse detection. Sender-constrained tokens (DPoP, supported by the plugin) are not enabled: follow-up. |
-| Token minted for another resource or by another flow | `aud`, `iss`, `typ`, `alg` checks; session JWTs and opaque tokens refused. |
-| Confused deputy / token passthrough | The API never forwards the caller's token; downstream calls are in-process with the resolved principal. |
-| Malicious or look-alike registered client | Public + PKCE only, scope and redirect restrictions, rate limit, consent with host and unverified notice, per-scope opt-out, audit of grants. Residual: phishing with a convincing name. |
-| Authorization code interception | PKCE S256 mandatory, single-use code, exact redirect matching (loopback port exempt per RFC 8252), `state` echoed. |
-| CSRF / forged consent | Signed authorization query (`sig`, `exp`) verified by the server; session cookie is `SameSite=Lax` and Better Auth's origin check applies to the consent POST. |
-| Over-broad delegation | Scope ∩ role on every call; client-role tokens cannot reach staff data even with `schedule:read`. |
-| Data leakage between clients | Policy-scoped listing; unknown and foreign ids are indistinguishable; tested with two clients. |
-| Prompt injection through tool results | Staff output redacts client-written notes; tool results are structured data; writes are annotated for host confirmation. |
-| Argument tampering | Zod validation, dropped unknown keys, UUID-only ids, length caps, policy checks after parsing. |
-| Abuse and DoS | Per-endpoint Valkey limits, 64 KiB body cap, stateless server. |
-| DNS rebinding / cross-site calls to `/mcp` | Bearer only, no ambient credentials, so there is nothing for a rebound page to ride on. `Origin` is therefore not allow-listed. |
+| Threat                                               | Mitigation                                                                                                                                                                                          |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stolen access token                                  | 15 minute JWT, audience-bound, consent and client re-checked per call; refresh rotation with reuse detection. Sender-constrained tokens (DPoP, supported by the plugin) are not enabled: follow-up. |
+| Token minted for another resource or by another flow | `aud`, `iss`, `typ`, `alg` checks; session JWTs and opaque tokens refused.                                                                                                                          |
+| Confused deputy / token passthrough                  | The API never forwards the caller's token; downstream calls are in-process with the resolved principal.                                                                                             |
+| Malicious or look-alike registered client            | Public + PKCE only, scope and redirect restrictions, rate limit, consent with host and unverified notice, per-scope opt-out, audit of grants. Residual: phishing with a convincing name.            |
+| Authorization code interception                      | PKCE S256 mandatory, single-use code, exact redirect matching (loopback port exempt per RFC 8252), `state` echoed.                                                                                  |
+| CSRF / forged consent                                | Signed authorization query (`sig`, `exp`) verified by the server; session cookie is `SameSite=Lax` and Better Auth's origin check applies to the consent POST.                                      |
+| Over-broad delegation                                | Scope ∩ role on every call; client-role tokens cannot reach staff data even with `schedule:read`.                                                                                                   |
+| Data leakage between clients                         | Policy-scoped listing; unknown and foreign ids are indistinguishable; tested with two clients.                                                                                                      |
+| Prompt injection through tool results                | Staff output redacts client-written notes; tool results are structured data; writes are annotated for host confirmation.                                                                            |
+| Argument tampering                                   | Zod validation, dropped unknown keys, UUID-only ids, length caps, policy checks after parsing.                                                                                                      |
+| Abuse and DoS                                        | Per-endpoint Valkey limits, 64 KiB body cap, stateless server.                                                                                                                                      |
+| DNS rebinding / cross-site calls to `/mcp`           | Bearer only, no ambient credentials, so there is nothing for a rebound page to ride on. `Origin` is therefore not allow-listed.                                                                     |
 
 ## Consequences and follow-ups
 

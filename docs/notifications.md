@@ -4,13 +4,13 @@ Design and guarantees: [ADR 0010](adr/0010-notifications-and-reminders.md). This
 
 ## What gets sent
 
-| When | Kind | Category |
-| --- | --- | --- |
+| When                                                | Kind                                        | Category      |
+| --------------------------------------------------- | ------------------------------------------- | ------------- |
 | Appointment booked (any channel: web, desktop, MCP) | `confirmation` (with `.ics` calendar entry) | transactional |
-| Appointment moved to another time or staff member | `rescheduled` (with `.ics`) | transactional |
-| Appointment cancelled | `cancellation` | transactional |
-| First lead time before the start (default 24 h) | `reminder_24h` | reminder |
-| Second lead time before the start (default 2 h) | `reminder_2h` | reminder |
+| Appointment moved to another time or staff member   | `rescheduled` (with `.ics`)                 | transactional |
+| Appointment cancelled                               | `cancellation`                              | transactional |
+| First lead time before the start (default 24 h)     | `reminder_24h`                              | reminder      |
+| Second lead time before the start (default 2 h)     | `reminder_2h`                               | reminder      |
 
 Lead times are owner settings (Admin, Settings, Reminders; API: `PATCH /admin/settings` with `reminderFirstLeadMinutes` / `reminderSecondLeadMinutes`, 5 to 20160 minutes, `null` = off). A whole number of days keeps the same clock time in the salon timezone across DST. They apply to appointments booked or moved after the change.
 
@@ -27,21 +27,21 @@ Scheduling happens regardless (rows are written with every booking), so enabling
 
 ### Environment
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `NOTIFY_WORKER_ENABLED` | `false` | Run the worker in the API process. |
-| `NOTIFY_EMAIL_PROVIDER` | `none` | `none` or `smtp`. |
-| `SMTP_URL` | | `smtp://user:pass@host:587` (`smtps://` for implicit TLS). Required for `smtp`. Secret. |
-| `NOTIFY_EMAIL_FROM` | `Sisters of Beauty <no-reply@localhost>` | Sender. Use an address on a domain you control (SPF, DKIM, DMARC). |
-| `NOTIFY_SMS_PROVIDER` | `none` | `none` or `twilio`. |
-| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM` | | Required for `twilio`. `TWILIO_FROM` is an E.164 number or a `MG...` messaging service. Secrets. |
-| `NOTIFY_DEFAULT_LOCALE` | `en` | `en` or `es-AR`. |
-| `NOTIFY_PUBLIC_URL` | `BETTER_AUTH_URL` | Public origin used in links (the web app). |
-| `NOTIFY_POLL_INTERVAL_MS` | `5000` | Idle poll interval. |
-| `NOTIFY_BATCH_SIZE` | `10` | Jobs claimed per poll. |
-| `NOTIFY_VISIBILITY_TIMEOUT_SECONDS` | `120` | Lease of a claimed job; keep it well above the slowest send. |
-| `NOTIFY_MAX_ATTEMPTS` | `5` | Attempts before dead-lettering. |
-| `NOTIFY_BACKOFF_BASE_SECONDS`, `NOTIFY_BACKOFF_MAX_SECONDS` | `30`, `3600` | Exponential backoff bounds (with jitter). |
+| Variable                                                    | Default                                  | Meaning                                                                                          |
+| ----------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `NOTIFY_WORKER_ENABLED`                                     | `false`                                  | Run the worker in the API process.                                                               |
+| `NOTIFY_EMAIL_PROVIDER`                                     | `none`                                   | `none` or `smtp`.                                                                                |
+| `SMTP_URL`                                                  |                                          | `smtp://user:pass@host:587` (`smtps://` for implicit TLS). Required for `smtp`. Secret.          |
+| `NOTIFY_EMAIL_FROM`                                         | `Sisters of Beauty <no-reply@localhost>` | Sender. Use an address on a domain you control (SPF, DKIM, DMARC).                               |
+| `NOTIFY_SMS_PROVIDER`                                       | `none`                                   | `none` or `twilio`.                                                                              |
+| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`    |                                          | Required for `twilio`. `TWILIO_FROM` is an E.164 number or a `MG...` messaging service. Secrets. |
+| `NOTIFY_DEFAULT_LOCALE`                                     | `en`                                     | `en` or `es-AR`.                                                                                 |
+| `NOTIFY_PUBLIC_URL`                                         | `BETTER_AUTH_URL`                        | Public origin used in links (the web app).                                                       |
+| `NOTIFY_POLL_INTERVAL_MS`                                   | `5000`                                   | Idle poll interval.                                                                              |
+| `NOTIFY_BATCH_SIZE`                                         | `10`                                     | Jobs claimed per poll.                                                                           |
+| `NOTIFY_VISIBILITY_TIMEOUT_SECONDS`                         | `120`                                    | Lease of a claimed job; keep it well above the slowest send.                                     |
+| `NOTIFY_MAX_ATTEMPTS`                                       | `5`                                      | Attempts before dead-lettering.                                                                  |
+| `NOTIFY_BACKOFF_BASE_SECONDS`, `NOTIFY_BACKOFF_MAX_SECONDS` | `30`, `3600`                             | Exponential backoff bounds (with jitter).                                                        |
 
 ## Local development with Mailpit
 

@@ -6,12 +6,12 @@ All endpoints live on the API origin, require a session (the same Better Auth se
 
 ## Concepts
 
-| Term | Meaning |
-| --- | --- |
-| `seq` | Monotonic integer position in the server's change log. Not contiguous (gaps happen). |
-| cursor | The last `seq` a client has fully applied. Persist it in local SQLite together with the data it describes (same transaction). |
-| outbox | Local queue of mutations not yet acknowledged. Each has a UUIDv7 `mutationId` generated once, when the user acts. |
-| tombstone | A change with `op: "delete"`: remove the local row. |
+| Term      | Meaning                                                                                                                       |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `seq`     | Monotonic integer position in the server's change log. Not contiguous (gaps happen).                                          |
+| cursor    | The last `seq` a client has fully applied. Persist it in local SQLite together with the data it describes (same transaction). |
+| outbox    | Local queue of mutations not yet acknowledged. Each has a UUIDv7 `mutationId` generated once, when the user acts.             |
+| tombstone | A change with `op: "delete"`: remove the local row.                                                                           |
 
 Guarantee: if you have seen `seq = n`, you have seen every change that will ever commit with a seq below `n`. Your cursor is always safe to resume from.
 
@@ -63,11 +63,24 @@ Response `200`:
 ```json
 {
   "results": [
-    { "mutationId": "01a1d81f-2231-75bd-ba65-bc41f42803e9", "status": "applied", "appliedSeq": 412, "replayed": false },
-    { "mutationId": "01a1d81f-3000-7000-8000-000000000002", "status": "rejected", "reason": "slot_taken",
-      "message": "The selected time slot is no longer available", "replayed": false },
-    { "mutationId": "01a1d81f-3000-7000-8000-000000000003", "status": "retry",
-      "message": "Temporary server error; resend with backoff" }
+    {
+      "mutationId": "01a1d81f-2231-75bd-ba65-bc41f42803e9",
+      "status": "applied",
+      "appliedSeq": 412,
+      "replayed": false
+    },
+    {
+      "mutationId": "01a1d81f-3000-7000-8000-000000000002",
+      "status": "rejected",
+      "reason": "slot_taken",
+      "message": "The selected time slot is no longer available",
+      "replayed": false
+    },
+    {
+      "mutationId": "01a1d81f-3000-7000-8000-000000000003",
+      "status": "retry",
+      "message": "Temporary server error; resend with backoff"
+    }
   ],
   "headSeq": 415
 }
@@ -79,41 +92,44 @@ A malformed envelope (no `deviceId`, empty or more than 100 mutations, an elemen
 
 ### Mutation kinds
 
-| `kind` | `payload` | Who | Conflict model |
-| --- | --- | --- | --- |
-| `appointment.create` | `id` (required, client-assigned), `staffId`, `serviceIds[]`, `startsAt`, exactly one of `clientId` / `client {name, phone?, email?}`, `notes?`, `override?` | owner; staff on own calendar | server-authoritative |
-| `appointment.reschedule` | `id`, `version`, `startsAt?`, `staffId?` (at least one), `notes?`, `override?` | same | server-authoritative |
-| `appointment.cancel` | `id`, `version` | same | server-authoritative |
-| `appointment.set_status` | `id`, `version`, `status` (`completed` or `no_show`), `notes?` | same | server-authoritative |
-| `client.create` | `id`, `name`, `phone?`, `email?`, `notes?` | owner, staff | LWW |
-| `client.update` | `id`, any of `name`, `phone` (nullable), `notes` (nullable) | owner, staff | LWW |
-| `time_off.create` | `id`, `staffId`, `startsAt`, `endsAt`, `reason?` | owner; staff for self | LWW |
-| `time_off.update` | `id`, `staffId`, any of `startsAt`, `endsAt`, `reason` | same | LWW |
-| `time_off.delete` | `id`, `staffId` | same | LWW |
-| `service.update` | `id`, any catalog field or `active` | owner | LWW |
-| `staff.update` | `id`, `displayName?`, `active?` | owner | LWW |
-| `settings.update` | any of `name`, `timezone`, `slotGranularityMinutes`, `minNoticeMinutes`, `maxDaysAhead` | owner | LWW |
+| `kind`                   | `payload`                                                                                                                                                   | Who                          | Conflict model       |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- | -------------------- |
+| `appointment.create`     | `id` (required, client-assigned), `staffId`, `serviceIds[]`, `startsAt`, exactly one of `clientId` / `client {name, phone?, email?}`, `notes?`, `override?` | owner; staff on own calendar | server-authoritative |
+| `appointment.reschedule` | `id`, `version`, `startsAt?`, `staffId?` (at least one), `notes?`, `override?`                                                                              | same                         | server-authoritative |
+| `appointment.cancel`     | `id`, `version`                                                                                                                                             | same                         | server-authoritative |
+| `appointment.set_status` | `id`, `version`, `status` (`completed` or `no_show`), `notes?`                                                                                              | same                         | server-authoritative |
+| `client.create`          | `id`, `name`, `phone?`, `email?`, `notes?`                                                                                                                  | owner, staff                 | LWW                  |
+| `client.update`          | `id`, any of `name`, `phone` (nullable), `notes` (nullable)                                                                                                 | owner, staff                 | LWW                  |
+| `time_off.create`        | `id`, `staffId`, `startsAt`, `endsAt`, `reason?`                                                                                                            | owner; staff for self        | LWW                  |
+| `time_off.update`        | `id`, `staffId`, any of `startsAt`, `endsAt`, `reason`                                                                                                      | same                         | LWW                  |
+| `time_off.delete`        | `id`, `staffId`                                                                                                                                             | same                         | LWW                  |
+| `service.update`         | `id`, any catalog field or `active`                                                                                                                         | owner                        | LWW                  |
+| `staff.update`           | `id`, `displayName?`, `active?`                                                                                                                             | owner                        | LWW                  |
+| `settings.update`        | any of `name`, `timezone`, `slotGranularityMinutes`, `minNoticeMinutes`, `maxDaysAhead`                                                                     | owner                        | LWW                  |
 
 `version` is the `version` of the appointment as you last received it (it increases on every server-side change). If you queue several mutations for the same appointment while offline, increment your local copy yourself after each: the second mutation in the example below carries `version: 2` because the first one will bring it to 2.
 
 ```json
 [
-  { "kind": "appointment.reschedule", "payload": { "id": "A", "version": 1, "startsAt": "2026-03-09T13:00:00.000Z" } },
+  {
+    "kind": "appointment.reschedule",
+    "payload": { "id": "A", "version": 1, "startsAt": "2026-03-09T13:00:00.000Z" }
+  },
   { "kind": "appointment.cancel", "payload": { "id": "A", "version": 2 } }
 ]
 ```
 
 ### Rejection reasons
 
-| `reason` | Meaning | What the client does |
-| --- | --- | --- |
-| `slot_taken` | Another appointment holds that time for the staff member | Show the conflict; user picks another time or cancels the pending booking |
-| `slot_unavailable` | Outside working hours, during time off, or breaks the notice or advance window | Same; staff can resend with `override: true` for the notice window only |
-| `conflict` | Stale appointment `version`, or an LWW edit older than what the server has | Pull, then show the user the server state and let them redo the edit |
-| `not_found` | The row does not exist (yet, or was deleted) | Usually a dependency arrived late or the row was deleted; surface it |
-| `invalid_state` | State machine forbids it (cancelled appointment, closing before start, duplicate id, deactivating staff with future bookings) | Surface |
-| `forbidden` | Not allowed for this user | Surface; do not retry |
-| `invalid` | Malformed or violates a constraint, or the `mutationId` was used by someone else | Surface (this is a client bug) |
+| `reason`           | Meaning                                                                                                                       | What the client does                                                      |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `slot_taken`       | Another appointment holds that time for the staff member                                                                      | Show the conflict; user picks another time or cancels the pending booking |
+| `slot_unavailable` | Outside working hours, during time off, or breaks the notice or advance window                                                | Same; staff can resend with `override: true` for the notice window only   |
+| `conflict`         | Stale appointment `version`, or an LWW edit older than what the server has                                                    | Pull, then show the user the server state and let them redo the edit      |
+| `not_found`        | The row does not exist (yet, or was deleted)                                                                                  | Usually a dependency arrived late or the row was deleted; surface it      |
+| `invalid_state`    | State machine forbids it (cancelled appointment, closing before start, duplicate id, deactivating staff with future bookings) | Surface                                                                   |
+| `forbidden`        | Not allowed for this user                                                                                                     | Surface; do not retry                                                     |
+| `invalid`          | Malformed or violates a constraint, or the `mutationId` was used by someone else                                              | Surface (this is a client bug)                                            |
 
 Rejections are final and stored: resending the same `mutationId` returns the same rejection. To retry after the user resolved it, create a NEW mutation with a NEW `mutationId`.
 
@@ -133,16 +149,49 @@ Rejections are final and stored: resending the same `mutationId` returns the sam
 ```json
 {
   "changes": [
-    { "seq": 410, "entity": "client", "id": "01a1...c1", "op": "upsert",
-      "data": { "id": "01a1...c1", "name": "Lucia", "phone": null, "email": null, "notes": "vip",
-                "createdAt": "2026-03-01T10:00:00.000Z", "updatedAt": "2026-03-09T11:00:00.000Z" } },
-    { "seq": 412, "entity": "appointment", "id": "01a1...a1", "op": "upsert",
-      "data": { "id": "01a1...a1", "staffId": "01a1...01", "clientId": "01a1...c1",
-                "startsAt": "2026-03-09T12:00:00.000Z", "endsAt": "2026-03-09T13:00:00.000Z",
-                "status": "booked", "notes": null, "version": 1,
-                "services": [ { "serviceId": "01a1...a1", "name": "Haircut", "durationMinutes": 45,
-                                "bufferMinutes": 15, "priceCents": 10000, "currency": "ARS" } ],
-                "createdAt": "2026-03-09T11:58:03.000Z", "updatedAt": "2026-03-09T11:58:03.000Z" } },
+    {
+      "seq": 410,
+      "entity": "client",
+      "id": "01a1...c1",
+      "op": "upsert",
+      "data": {
+        "id": "01a1...c1",
+        "name": "Lucia",
+        "phone": null,
+        "email": null,
+        "notes": "vip",
+        "createdAt": "2026-03-01T10:00:00.000Z",
+        "updatedAt": "2026-03-09T11:00:00.000Z"
+      }
+    },
+    {
+      "seq": 412,
+      "entity": "appointment",
+      "id": "01a1...a1",
+      "op": "upsert",
+      "data": {
+        "id": "01a1...a1",
+        "staffId": "01a1...01",
+        "clientId": "01a1...c1",
+        "startsAt": "2026-03-09T12:00:00.000Z",
+        "endsAt": "2026-03-09T13:00:00.000Z",
+        "status": "booked",
+        "notes": null,
+        "version": 1,
+        "services": [
+          {
+            "serviceId": "01a1...a1",
+            "name": "Haircut",
+            "durationMinutes": 45,
+            "bufferMinutes": 15,
+            "priceCents": 10000,
+            "currency": "ARS"
+          }
+        ],
+        "createdAt": "2026-03-09T11:58:03.000Z",
+        "updatedAt": "2026-03-09T11:58:03.000Z"
+      }
+    },
     { "seq": 414, "entity": "time_off", "id": "01a1...t1", "op": "delete", "data": null }
   ],
   "nextCursor": 414,
@@ -182,14 +231,14 @@ data: {"seq":415}
 
 ## Error summary
 
-| Status | `error.code` | When |
-| --- | --- | --- |
-| 400 | `validation_error` | Bad envelope or query (`limit` out of range, empty batch, more than 100 mutations) |
-| 401 | `unauthorized` | No session |
-| 403 | `forbidden` | Role `client` |
-| 409 | `invalid_state` | Pull cursor ahead of the server |
-| 429 | `rate_limited` | Global or stream rate limit; see `Retry-After` |
-| 500 | `internal_error` | Unexpected; retry the same batch with backoff |
+| Status | `error.code`       | When                                                                               |
+| ------ | ------------------ | ---------------------------------------------------------------------------------- |
+| 400    | `validation_error` | Bad envelope or query (`limit` out of range, empty batch, more than 100 mutations) |
+| 401    | `unauthorized`     | No session                                                                         |
+| 403    | `forbidden`        | Role `client`                                                                      |
+| 409    | `invalid_state`    | Pull cursor ahead of the server                                                    |
+| 429    | `rate_limited`     | Global or stream rate limit; see `Retry-After`                                     |
+| 500    | `internal_error`   | Unexpected; retry the same batch with backoff                                      |
 
 ## Local schema hints
 

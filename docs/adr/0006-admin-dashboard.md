@@ -8,15 +8,15 @@ Phase 3a left a complete admin API and Phase 3b-1 left an empty `/admin` shell. 
 
 ## Scope and routes
 
-| Route                | Who                | What                                                                                           |
-| -------------------- | ------------------ | ---------------------------------------------------------------------------------------------- |
-| `/admin`             | owner, staff       | Today: stats, next up, appointments waiting for an outcome (complete / no-show), day timeline  |
-| `/admin/calendar`    | owner, staff       | Day and week grid, walk-in booking, appointment drawer, drag and keyboard rescheduling         |
-| `/admin/clients`     | owner, staff       | Server-side paged table, client page (history, notes, phone), owner-only soft delete           |
-| `/admin/services`    | owner              | Catalog CRUD, staff assignment, live preview of the client-facing card                         |
-| `/admin/staff`       | owner, staff       | Owner: team list, create account, (de)activate, hours editor, time off. Staff: own schedule    |
-| `/admin/reports`     | owner, staff (own) | Presets and custom range, tiles, two charts with table alternatives, CSV export                |
-| `/admin/settings`    | owner              | Salon name, timezone, slot interval, minimum notice, booking window                            |
+| Route             | Who                | What                                                                                          |
+| ----------------- | ------------------ | --------------------------------------------------------------------------------------------- |
+| `/admin`          | owner, staff       | Today: stats, next up, appointments waiting for an outcome (complete / no-show), day timeline |
+| `/admin/calendar` | owner, staff       | Day and week grid, walk-in booking, appointment drawer, drag and keyboard rescheduling        |
+| `/admin/clients`  | owner, staff       | Server-side paged table, client page (history, notes, phone), owner-only soft delete          |
+| `/admin/services` | owner              | Catalog CRUD, staff assignment, live preview of the client-facing card                        |
+| `/admin/staff`    | owner, staff       | Owner: team list, create account, (de)activate, hours editor, time off. Staff: own schedule   |
+| `/admin/reports`  | owner, staff (own) | Presets and custom range, tiles, two charts with table alternatives, CSV export               |
+| `/admin/settings` | owner              | Salon name, timezone, slot interval, minimum notice, booking window                           |
 
 Navigation is role based (`features/admin/nav.ts`, pure and tested): a sidebar on desktop, a bottom bar on phones (four most used sections plus "More" for the rest). `adminGuard` redirects staff away from owner pages to `/admin?notice=forbidden`, which shows an explicit message; clients go to `/account`. The API stays the authority; the guard only decides what to show.
 
