@@ -136,3 +136,92 @@ jobs:
             apps/web/test-results
             api.log
             web.log
+
+  desktop:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: sob
+          POSTGRES_PASSWORD: sob
+          POSTGRES_DB: sob
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sob -d sob"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      valkey:
+        image: valkey/valkey:9.1-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://sob:sob@localhost:5432/sob
+      VALKEY_URL: redis://localhost:6379
+      SALON_TIMEZONE: America/Argentina/Buenos_Aires
+      # Throwaway CI-only values.
+      BETTER_AUTH_SECRET: ci-only-secret-ci-only-secret-0123456789
+      OWNER_EMAIL: ci-owner@example.com
+      OWNER_PASSWORD: ci-only-owner-password
+    steps:
+      - uses: actions/checkout@v7
+      # GPUI links against the Linux graphics stack even for its test runtime.
+      - name: System libraries for GPUI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake pkg-config libasound2-dev \
+            libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libssl-dev libzstd-dev libvulkan1
+      # The toolchain is pinned by apps/desktop/rust-toolchain.toml.
+      - name: Rust toolchain
+        working-directory: apps/desktop
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/target
+          key: desktop-${{ runner.os }}-${{ hashFiles('apps/desktop/Cargo.lock', 'apps/desktop/rust-toolchain.toml') }}
+      - run: cargo fmt --check
+        working-directory: apps/desktop
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        working-directory: apps/desktop
+      - run: cargo test --workspace --locked
+        working-directory: apps/desktop
+      # Headless sync tests against the real API, Postgres and Valkey (no server mocks).
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - run: |
+          bun run db:migrate
+          bun run db:seed
+          bun run bootstrap:owner
+      - name: Start the API
+        run: |
+          RATE_LIMIT_AUTH_MAX=1000 RATE_LIMIT_GLOBAL_MAX=100000 PORT=3055 \
+            BETTER_AUTH_URL=http://127.0.0.1:3055 nohup bun apps/api/src/index.ts > api.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf localhost:3055/health && exit 0
+            sleep 1
+          done
+          cat api.log
+          exit 1
+      - run: cargo test -p sob-core --test headless_sync --locked -- --ignored --test-threads=1
+        working-directory: apps/desktop
+        env:
+          SOB_TEST_API_URL: http://127.0.0.1:3055
+          SOB_TEST_EMAIL: ci-owner@example.com
+          SOB_TEST_PASSWORD: ci-only-owner-password
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: desktop-api-log
+          path: api.log

@@ -102,6 +102,10 @@ Errors look like `{ "error": { "code", "message" } }` with codes `validation_err
 
 The desktop client syncs through three endpoints: `POST /sync/push` (idempotent mutation batches, appointments server-authoritative, everything else last-writer-wins), `GET /sync/pull` (cursor-based change log with tombstones) and `GET /sync/stream` (SSE nudges backed by Valkey pub/sub). The change log is written by deferred Postgres triggers in the same transaction as every write, with `seq` drawn at commit under an advisory lock so a cursor can never skip a change. Decisions: [ADR 0007](docs/adr/0007-sync-protocol.md). Wire spec for client authors (JSON examples, error codes, retry and backoff): [docs/sync-protocol.md](docs/sync-protocol.md). Integration tests run against a dedicated `sob_test_sync` database.
 
+## Desktop client
+
+`apps/desktop` is the offline-first front-desk client: a Rust workspace with a GUI-free core (SQLite replica, outbox, sync engine, SSE nudges with a polling fallback, auth) and a GPUI app (day calendar with a column per staff member, create, move and cancel while offline, pending-sync badges, an online or offline indicator and a conflict review dialog). It signs in with the Better Auth session that the API supports today, behind a trait so the Phase 6 OAuth 2.1 + PKCE flow can replace it. Build, run and test instructions (including the headless sync tests against the real API): [apps/desktop/README.md](apps/desktop/README.md). Decisions: [ADR 0008](docs/adr/0008-desktop-client.md).
+
 ## Web app
 
 `apps/web` is a TanStack Start (SSR) app: the public booking flow (services, professional, date and time, sign in or up inline, confirmation with an .ics download), sign in and sign up, the client account (upcoming and past appointments, optimistic cancel, reschedule, profile) and the staff and owner dashboard under `/admin` (today, calendar with drag and keyboard rescheduling, clients, services, team hours and time off, reports with CSV export, settings), role-based navigation, responsive from 360px. English and Spanish (es-AR), light and dark. Decisions: [ADR 0005](docs/adr/0005-web-app.md) (app, design system) and [ADR 0006](docs/adr/0006-admin-dashboard.md) (dashboard).
@@ -160,6 +164,7 @@ Integration tests create their own `sob_test_*` databases on the server in `DATA
 
 - `apps/api`: Hono API on Bun (`src/modules/*`: services, staff, availability, appointments, clients, reports, admin, me; `src/auth`: Better Auth, principal, policy, accounts)
 - `apps/web`: TanStack Start web app (`src/routes`, `src/features/{booking,account,auth,admin}`, `src/components/ui`, `src/i18n`, `src/server` BFF proxy and web server, `e2e`)
+- `apps/desktop`: Rust workspace, not part of the Bun workspaces or Turborepo (`crates/core` store, outbox, sync, auth; `crates/app` GPUI shell)
 - `packages/contracts`: shared Zod schemas and the error shape
 - `packages/db`: Drizzle schema (domain, Better Auth tables, audit log), migrations (including the hand-written exclusion constraint), seed
 - `packages/config`: shared TypeScript config
