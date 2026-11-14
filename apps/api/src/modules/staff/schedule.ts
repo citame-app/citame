@@ -198,6 +198,7 @@ export async function createTimeOff(
   request: CreateTimeOffRequest,
   actor: AdminActor,
   now: Date,
+  options: { id?: string } = {},
 ): Promise<TimeOffResponse> {
   return db.transaction(async (tx) => {
     await lockCalendars(tx, [staffId]);
@@ -205,6 +206,7 @@ export async function createTimeOff(
     const [row] = await tx
       .insert(timeOff)
       .values({
+        id: options.id,
         staffId,
         startsAt: new Date(request.startsAt),
         endsAt: new Date(request.endsAt),
