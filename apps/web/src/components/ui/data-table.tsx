@@ -57,6 +57,8 @@ export interface DataTableProps<T extends RowData> {
   empty?: ReactNode;
   /** Controls placed beside the column menu (search box, filters). */
   toolbar?: ReactNode;
+  /** Hide the pager for short, fully loaded lists. */
+  paginate?: boolean;
 }
 
 const metaOf = (meta: unknown): DataTableColumnMeta => (meta ?? {}) as DataTableColumnMeta;
@@ -76,6 +78,7 @@ export function DataTable<T extends RowData>({
   loading = false,
   empty,
   toolbar,
+  paginate = true,
 }: DataTableProps<T>) {
   const { t } = useI18n();
   const table = useTable({
@@ -251,31 +254,33 @@ export function DataTable<T extends RowData>({
         </>
       )}
 
-      <nav
-        aria-label={label}
-        className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted"
-      >
-        <p>{t("table.showing", { from, to, total })}</p>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="secondary"
-            aria-label={t("table.previous")}
-            disabled={page <= 1}
-            onClick={() => onPageChange(page - 1)}
-          >
-            <ChevronLeftIcon />
-          </Button>
-          <span aria-live="polite">{t("table.page", { page, pages })}</span>
-          <Button
-            variant="secondary"
-            aria-label={t("table.next")}
-            disabled={page >= pages}
-            onClick={() => onPageChange(page + 1)}
-          >
-            <ChevronRightIcon />
-          </Button>
-        </div>
-      </nav>
+      {paginate && (
+        <nav
+          aria-label={label}
+          className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted"
+        >
+          <p>{t("table.showing", { from, to, total })}</p>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              aria-label={t("table.previous")}
+              disabled={page <= 1}
+              onClick={() => onPageChange(page - 1)}
+            >
+              <ChevronLeftIcon />
+            </Button>
+            <span aria-live="polite">{t("table.page", { page, pages })}</span>
+            <Button
+              variant="secondary"
+              aria-label={t("table.next")}
+              disabled={page >= pages}
+              onClick={() => onPageChange(page + 1)}
+            >
+              <ChevronRightIcon />
+            </Button>
+          </div>
+        </nav>
+      )}
     </div>
   );
 }

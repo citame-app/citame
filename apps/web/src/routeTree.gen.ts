@@ -19,6 +19,8 @@ import { Route as AccountIndexRouteImport } from './routes/account.index'
 import { Route as AccountProfileRouteImport } from './routes/account.profile'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as AdminCalendarRouteImport } from './routes/admin.calendar'
+import { Route as AdminServicesRouteImport } from './routes/admin.services'
+import { Route as AdminStaffRouteImport } from './routes/admin.staff'
 import { Route as BookIndexRouteImport } from './routes/book.index'
 import { Route as BookProfessionalRouteImport } from './routes/book.professional'
 import { Route as BookReviewRouteImport } from './routes/book.review'
@@ -78,6 +80,16 @@ const AdminCalendarRoute = AdminCalendarRouteImport.update({
   path: '/calendar',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminServicesRoute = AdminServicesRouteImport.update({
+  id: '/services',
+  path: '/services',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminStaffRoute = AdminStaffRouteImport.update({
+  id: '/staff',
+  path: '/staff',
+  getParentRoute: () => AdminRoute,
+} as any)
 const BookIndexRoute = BookIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -130,6 +142,8 @@ export interface FileRoutesByFullPath {
   '/sign-up': typeof SignUpRoute
   '/account/profile': typeof AccountProfileRoute
   '/admin/calendar': typeof AdminCalendarRoute
+  '/admin/services': typeof AdminServicesRoute
+  '/admin/staff': typeof AdminStaffRoute
   '/book/professional': typeof BookProfessionalRoute
   '/book/review': typeof BookReviewRoute
   '/book/time': typeof BookTimeRoute
@@ -147,6 +161,8 @@ export interface FileRoutesByTo {
   '/sign-up': typeof SignUpRoute
   '/account/profile': typeof AccountProfileRoute
   '/admin/calendar': typeof AdminCalendarRoute
+  '/admin/services': typeof AdminServicesRoute
+  '/admin/staff': typeof AdminStaffRoute
   '/book/professional': typeof BookProfessionalRoute
   '/book/review': typeof BookReviewRoute
   '/book/time': typeof BookTimeRoute
@@ -168,6 +184,8 @@ export interface FileRoutesById {
   '/sign-up': typeof SignUpRoute
   '/account/profile': typeof AccountProfileRoute
   '/admin/calendar': typeof AdminCalendarRoute
+  '/admin/services': typeof AdminServicesRoute
+  '/admin/staff': typeof AdminStaffRoute
   '/book/professional': typeof BookProfessionalRoute
   '/book/review': typeof BookReviewRoute
   '/book/time': typeof BookTimeRoute
@@ -190,6 +208,8 @@ export interface FileRouteTypes {
     | '/sign-up'
     | '/account/profile'
     | '/admin/calendar'
+    | '/admin/services'
+    | '/admin/staff'
     | '/book/professional'
     | '/book/review'
     | '/book/time'
@@ -207,6 +227,8 @@ export interface FileRouteTypes {
     | '/sign-up'
     | '/account/profile'
     | '/admin/calendar'
+    | '/admin/services'
+    | '/admin/staff'
     | '/book/professional'
     | '/book/review'
     | '/book/time'
@@ -227,6 +249,8 @@ export interface FileRouteTypes {
     | '/sign-up'
     | '/account/profile'
     | '/admin/calendar'
+    | '/admin/services'
+    | '/admin/staff'
     | '/book/professional'
     | '/book/review'
     | '/book/time'
@@ -320,6 +344,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminCalendarRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/services': {
+      id: '/admin/services'
+      path: '/services'
+      fullPath: '/admin/services'
+      preLoaderRoute: typeof AdminServicesRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/staff': {
+      id: '/admin/staff'
+      path: '/staff'
+      fullPath: '/admin/staff'
+      preLoaderRoute: typeof AdminStaffRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/book/': {
       id: '/book/'
       path: '/'
@@ -396,6 +434,8 @@ const AccountRouteWithChildren =
 
 interface AdminRouteChildren {
   AdminCalendarRoute: typeof AdminCalendarRoute
+  AdminServicesRoute: typeof AdminServicesRoute
+  AdminStaffRoute: typeof AdminStaffRoute
   AdminIndexRoute: typeof AdminIndexRoute
   AdminClientsIdRoute: typeof AdminClientsIdRoute
   AdminClientsIndexRoute: typeof AdminClientsIndexRoute
@@ -403,6 +443,8 @@ interface AdminRouteChildren {
 
 const AdminRouteChildren: AdminRouteChildren = {
   AdminCalendarRoute: AdminCalendarRoute,
+  AdminServicesRoute: AdminServicesRoute,
+  AdminStaffRoute: AdminStaffRoute,
   AdminIndexRoute: AdminIndexRoute,
   AdminClientsIdRoute: AdminClientsIdRoute,
   AdminClientsIndexRoute: AdminClientsIndexRoute,

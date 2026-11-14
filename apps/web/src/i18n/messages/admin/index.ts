@@ -3,8 +3,11 @@ import { calendarUiEn, calendarUiEsAR } from "./calendar-ui";
 import { clientsEn, clientsEsAR } from "./clients";
 import { commonEn, commonEsAR } from "./common";
 import { drawerEn, drawerEsAR } from "./drawer";
+import { servicesEn, servicesEsAR } from "./services";
+import { staffEn, staffEsAR } from "./staff";
 import { todayEn, todayEsAR } from "./today";
 import { walkinEn, walkinEsAR } from "./walkin";
+// @@imports
 
 /** Dashboard catalogs: one file per area keeps `en` and `es-AR` side by side and type-checked. */
 export const adminEn = {
@@ -15,6 +18,9 @@ export const adminEn = {
   ...walkinEn,
   ...drawerEn,
   ...clientsEn,
+  ...servicesEn,
+  ...staffEn,
+  // @@en
 } as const;
 export const adminEsAR: Record<keyof typeof adminEn, string> = {
   ...commonEsAR,
@@ -24,4 +30,7 @@ export const adminEsAR: Record<keyof typeof adminEn, string> = {
   ...walkinEsAR,
   ...drawerEsAR,
   ...clientsEsAR,
+  ...servicesEsAR,
+  ...staffEsAR,
+  // @@es
 };
