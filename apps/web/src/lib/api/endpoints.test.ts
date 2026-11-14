@@ -74,3 +74,61 @@ describe("endpoints", () => {
     expect(calls[0]?.init.body).toBe('{"email":"a@example.com","password":"long enough pw"}');
   });
 });
+
+describe("OAuth endpoints", () => {
+  test("sign-in during an authorization request forwards the signed query and returns the next URL", async () => {
+    const { api, calls } = setup({ redirect: true, url: "/consent?client_id=c" });
+    const result = await api.auth.signIn(
+      { email: "a@example.com", password: "correct horse" },
+      "client_id=c&sig=x",
+    );
+    expect(result.url).toBe("/consent?client_id=c");
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
+      email: "a@example.com",
+      password: "correct horse",
+      oauth_query: "client_id=c&sig=x",
+    });
+  });
+
+  test("a plain sign-in sends no oauth_query", async () => {
+    const { api, calls } = setup({ user: { id: "u" } });
+    await api.auth.signIn({ email: "a@example.com", password: "correct horse" });
+    expect(String(calls[0]?.init.body)).not.toContain("oauth_query");
+  });
+
+  test("sign-up can continue an authorization request too", async () => {
+    const { api, calls } = setup({ redirect: true, url: "/consent?x=1" });
+    await api.auth.signUp(
+      { email: "a@example.com", password: "correct horse", name: "A" },
+      "client_id=c&sig=x",
+    );
+    expect(JSON.parse(String(calls[0]?.init.body)).oauth_query).toBe("client_id=c&sig=x");
+  });
+
+  test("reads the public details of a client", async () => {
+    const { api, calls } = setup({ client_id: "c", client_name: "Claude", redirect_uris: [] });
+    const client = await api.oauth.client("c");
+    expect(calls[0]?.url).toBe("/api/auth/oauth2/public-client?client_id=c");
+    expect(client.client_name).toBe("Claude");
+  });
+
+  test("approving sends the chosen scopes with the signed query; denying sends none", async () => {
+    const { api, calls } = setup({ redirect: true, url: "http://127.0.0.1:1/cb?code=x" });
+    const next = await api.oauth.consent({
+      accept: true,
+      scopes: ["mcp:read", "mcp:book"],
+      query: "client_id=c&sig=x",
+    });
+    expect(next.url).toBe("http://127.0.0.1:1/cb?code=x");
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
+      accept: true,
+      scope: "mcp:read mcp:book",
+      oauth_query: "client_id=c&sig=x",
+    });
+    await api.oauth.consent({ accept: false, scopes: [], query: "client_id=c&sig=x" });
+    expect(JSON.parse(String(calls[1]?.init.body))).toEqual({
+      accept: false,
+      oauth_query: "client_id=c&sig=x",
+    });
+  });
+});

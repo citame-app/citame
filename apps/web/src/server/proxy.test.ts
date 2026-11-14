@@ -54,7 +54,9 @@ describe("OAuth discovery and MCP routes", () => {
   test("/mcp and /.well-known/* are handled by the proxy", () => {
     const { proxy } = proxyWith();
     expect(proxy.matches(new URL("http://web/mcp"))).toBe(true);
-    expect(proxy.matches(new URL("http://web/.well-known/oauth-protected-resource/mcp"))).toBe(true);
+    expect(proxy.matches(new URL("http://web/.well-known/oauth-protected-resource/mcp"))).toBe(
+      true,
+    );
     expect(
       proxy.matches(new URL("http://web/.well-known/oauth-authorization-server/api/auth")),
     ).toBe(true);

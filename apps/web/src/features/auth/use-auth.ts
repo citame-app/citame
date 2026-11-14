@@ -10,6 +10,12 @@ export interface AuthOptions {
   redirectTo?: string;
   /** Stay on the current page, e.g. when signing in inline during booking. */
   stay?: boolean;
+  /**
+   * The signed query of an OAuth authorization request that sent the visitor here. The server
+   * resumes that flow after the credentials check and answers with the URL to open next
+   * (usually the consent screen, which is a page of this app).
+   */
+  oauthQuery?: string;
 }
 
 /** Session mutations. Each one refreshes the cached session so every route guard re-evaluates. */
@@ -32,8 +38,13 @@ export function useAuth() {
     return session;
   }
 
-  async function afterAuth(options: AuthOptions) {
+  async function afterAuth(options: AuthOptions, continueTo?: string) {
     const session = await refreshSession();
+    if (options.oauthQuery && continueTo) {
+      // A full navigation: the target may be the consent page or an external client redirect.
+      window.location.assign(continueTo);
+      return;
+    }
     if (options.stay) return;
     await navigate({
       to: safeRedirect(options.redirectTo, session ? homeFor(session.user.role) : "/"),
@@ -44,12 +55,12 @@ export function useAuth() {
   return {
     refreshSession,
     async signIn(values: SignInValues, options: AuthOptions = {}) {
-      await api().auth.signIn(values);
-      await afterAuth(options);
+      const next = await api().auth.signIn(values, options.oauthQuery);
+      await afterAuth(options, next.url);
     },
     async signUp(values: SignUpValues, options: AuthOptions = {}) {
-      await api().auth.signUp(values);
-      await afterAuth(options);
+      const next = await api().auth.signUp(values, options.oauthQuery);
+      await afterAuth(options, next.url);
     },
     async signOut() {
       await api().auth.signOut();

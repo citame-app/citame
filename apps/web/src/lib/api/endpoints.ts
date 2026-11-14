@@ -41,6 +41,22 @@ import type { ApiClient } from "./client";
 
 /** Better Auth answers with extra fields we do not depend on. */
 const authAck = z.looseObject({});
+/**
+ * Sign-in and sign-up answer `{ redirect: true, url }` when they were sent the signed query of
+ * an authorization request: the server has already resumed the flow and says where to go next.
+ */
+const authContinuation = z.looseObject({ url: z.string().optional() });
+/** Public fields of an OAuth client, as the consent screen needs them. */
+const oauthClientSchema = z.looseObject({
+  client_id: z.string(),
+  client_name: z.string().optional(),
+  client_uri: z.string().optional(),
+  logo_uri: z.string().optional(),
+  tos_uri: z.string().optional(),
+  policy_uri: z.string().optional(),
+});
+const consentResultSchema = z.object({ url: z.string() });
+export type OAuthClientInfo = z.infer<typeof oauthClientSchema>;
 const deletedAck = z.object({ id: z.string(), deleted: z.literal(true) });
 
 export interface AvailabilityParams {
@@ -135,11 +151,34 @@ export function createEndpoints(client: ApiClient) {
       },
     },
     auth: {
-      signIn: (credentials: { email: string; password: string }) =>
-        client.post("/api/auth/sign-in/email", credentials, authAck),
-      signUp: (details: { email: string; password: string; name: string }) =>
-        client.post("/api/auth/sign-up/email", details, authAck),
+      signIn: (credentials: { email: string; password: string }, oauthQuery?: string) =>
+        client.post(
+          "/api/auth/sign-in/email",
+          oauthQuery ? { ...credentials, oauth_query: oauthQuery } : credentials,
+          authContinuation,
+        ),
+      signUp: (details: { email: string; password: string; name: string }, oauthQuery?: string) =>
+        client.post(
+          "/api/auth/sign-up/email",
+          oauthQuery ? { ...details, oauth_query: oauthQuery } : details,
+          authContinuation,
+        ),
       signOut: () => client.post("/api/auth/sign-out", {}, authAck),
+    },
+    oauth: {
+      client: (clientId: string) =>
+        client.get("/api/auth/oauth2/public-client", oauthClientSchema, {
+          query: { client_id: clientId },
+        }),
+      /** Approves (with the scopes the user left on) or denies an authorization request. */
+      consent: (decision: { accept: boolean; scopes: string[]; query: string }) =>
+        client.post(
+          "/api/auth/oauth2/consent",
+          decision.accept
+            ? { accept: true, scope: decision.scopes.join(" "), oauth_query: decision.query }
+            : { accept: false, oauth_query: decision.query },
+          consentResultSchema,
+        ),
     },
   };
 }
