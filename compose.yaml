@@ -57,6 +57,11 @@ services:
       RATE_LIMIT_AUTH_MAX: ${RATE_LIMIT_AUTH_MAX:-10}
       RATE_LIMIT_AUTH_WINDOW_SECONDS: ${RATE_LIMIT_AUTH_WINDOW_SECONDS:-60}
       SALON_TIMEZONE: ${SALON_TIMEZONE:-America/Argentina/Buenos_Aires}
+      # Development stack: off by default so you can sign up without a mail server. Turn it on
+      # (and run `docker compose --profile mail up -d mailpit`, SMTP_URL=smtp://mailpit:1025) to
+      # exercise the confirmation flow; compose.prod.yaml has it on.
+      AUTH_REQUIRE_EMAIL_VERIFICATION: ${AUTH_REQUIRE_EMAIL_VERIFICATION:-false}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
       # OAuth 2.1 / MCP (ADR 0009). The MCP resource defaults to ${BETTER_AUTH_URL}/mcp.
       MCP_RESOURCE_URL: ${MCP_RESOURCE_URL:-}
       OAUTH_ACCESS_TOKEN_TTL_SECONDS: ${OAUTH_ACCESS_TOKEN_TTL_SECONDS:-900}

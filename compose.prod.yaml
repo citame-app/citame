@@ -1,0 +1,221 @@
+# Production stack: nothing is published except the web service (loopback by default) and, with
+# the `tls` profile, Caddy on 80/443. See docs/operations.md and docs/self-hosting notes there.
+#
+#   cp .env.production.example .env   # (document your values; see "Production environment" in README)
+#   docker compose -f compose.prod.yaml up -d --build --wait
+#   docker compose -f compose.prod.yaml --profile setup run --rm bootstrap-owner
+#   docker compose -f compose.prod.yaml --profile tls up -d     # optional: automatic HTTPS
+name: sistersofbeauty-prod
+
+x-api-image: &api-image
+  image: sob-api:${SOB_TAG:-local}
+  build:
+    context: .
+    dockerfile: docker/api.Dockerfile
+
+x-hardened: &hardened
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+services:
+  postgres:
+    <<: *hardened
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: sob
+      POSTGRES_DB: sob
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    # Postgres needs its data directory, a runtime socket dir and the few capabilities below to
+    # drop privileges from root to the postgres user at start.
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    tmpfs:
+      - /tmp
+      - /run/postgresql
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sob -d sob"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 1g }
+
+  valkey:
+    <<: *hardened
+    image: valkey/valkey:9.1-alpine
+    # AOF every second plus periodic snapshots: sessions and rate-limit counters survive a restart.
+    command: ["valkey-server", "--appendonly", "yes", "--appendfsync", "everysec", "--save", "300 10"]
+    volumes:
+      - valkey-data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 256m }
+
+  # One-shot: applies pending migrations, then exits. The API and the worker wait for it.
+  migrate:
+    <<: [*api-image, *hardened]
+    restart: "no"
+    command: ["bun", "packages/db/src/scripts/migrate.ts"]
+    environment:
+      DATABASE_URL: postgres://sob:${POSTGRES_PASSWORD}@postgres:5432/sob
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 256m }
+
+  api:
+    <<: [*api-image, *hardened]
+    environment: &api-env
+      NODE_ENV: production
+      DATABASE_URL: postgres://sob:${POSTGRES_PASSWORD}@postgres:5432/sob
+      VALKEY_URL: redis://valkey:6379
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET (openssl rand -base64 32)}
+      # The public origin is the web app: the browser only ever talks to it (same-origin BFF).
+      BETTER_AUTH_URL: ${PUBLIC_URL:?set PUBLIC_URL, e.g. https://salon.example}
+      TRUSTED_ORIGINS: ${PUBLIC_URL}
+      TRUST_PROXY: "true"
+      PORT: "3000"
+      SALON_TIMEZONE: ${SALON_TIMEZONE:-America/Argentina/Buenos_Aires}
+      AUTH_REQUIRE_EMAIL_VERIFICATION: ${AUTH_REQUIRE_EMAIL_VERIFICATION:-true}
+      NOTIFY_EMAIL_PROVIDER: ${NOTIFY_EMAIL_PROVIDER:-smtp}
+      SMTP_URL: ${SMTP_URL:-}
+      NOTIFY_EMAIL_FROM: ${NOTIFY_EMAIL_FROM:-Sisters of Beauty <no-reply@localhost>}
+      NOTIFY_SMS_PROVIDER: ${NOTIFY_SMS_PROVIDER:-none}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_FROM: ${TWILIO_FROM:-}
+      NOTIFY_PUBLIC_URL: ${PUBLIC_URL}
+      NOTIFY_DEFAULT_LOCALE: ${NOTIFY_DEFAULT_LOCALE:-en}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      SHUTDOWN_GRACE_MS: "5000"
+      # The queue worker runs in its own service below.
+      NOTIFY_WORKER_ENABLED: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:3000/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 15s
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 768m }
+
+  # Reminder queue and scheduled housekeeping (sync log compaction, old reminders, expired tokens).
+  worker:
+    <<: [*api-image, *hardened]
+    command: ["bun", "apps/api/src/worker.ts"]
+    environment: *api-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 384m }
+
+  web:
+    <<: *hardened
+    image: sob-web:${SOB_TAG:-local}
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    environment:
+      NODE_ENV: production
+      API_INTERNAL_URL: http://api:3000
+      PORT: "4173"
+      PUBLIC_URL: ${PUBLIC_URL}
+      # True when a proxy you operate (Caddy below, nginx, a cloud LB) sits in front.
+      WEB_TRUST_PROXY: ${WEB_TRUST_PROXY:-true}
+    depends_on:
+      api:
+        condition: service_healthy
+    # The only published port of the base stack, on loopback: put your TLS proxy in front, or
+    # enable the `tls` profile. Use 0.0.0.0:4173 only if something else terminates TLS for you.
+    ports:
+      - "${WEB_PUBLISH:-127.0.0.1:4173}:4173"
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:4173/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 384m }
+
+  # Optional automatic HTTPS: `docker compose -f compose.prod.yaml --profile tls up -d`.
+  caddy:
+    profiles: ["tls"]
+    restart: unless-stopped
+    image: caddy:2.10.2-alpine
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?set SITE_ADDRESS (public host name)}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 128m }
+
+  # One-shot: creates the first owner (idempotent). OWNER_EMAIL / OWNER_PASSWORD from the environment.
+  bootstrap-owner:
+    <<: [*api-image]
+    profiles: ["setup"]
+    restart: "no"
+    command: ["bun", "apps/api/src/scripts/bootstrap-owner.ts"]
+    environment:
+      <<: *api-env
+      OWNER_EMAIL: ${OWNER_EMAIL:?set OWNER_EMAIL}
+      OWNER_PASSWORD: ${OWNER_PASSWORD:?set OWNER_PASSWORD}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  postgres-data:
+  valkey-data:
+  caddy-data:
+  caddy-config:

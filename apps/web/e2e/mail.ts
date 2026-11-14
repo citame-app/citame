@@ -27,13 +27,10 @@ export async function waitForMail(
   let lastError = "no message yet";
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(
-        `${MAILPIT}/api/v1/search?query=${encodeURIComponent(`to:"${to}"`)}`,
-      );
+      const res = await fetch(`${MAILPIT}/api/v1/search?query=${encodeURIComponent(`to:"${to}"`)}`);
       const found = (await res.json()) as SearchResult;
       const match = found.messages.find(
-        (m) =>
-          !options.ignore?.has(m.ID) && (!options.subject || options.subject.test(m.Subject)),
+        (m) => !options.ignore?.has(m.ID) && (!options.subject || options.subject.test(m.Subject)),
       );
       if (match) {
         const full = (await (await fetch(`${MAILPIT}/api/v1/message/${match.ID}`)).json()) as {

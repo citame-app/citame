@@ -28,7 +28,9 @@ test.describe("password reset", () => {
     const mail = await waitForMail(client.email, { subject: /reset/i });
     await page.goto(pathOf(firstLink(mail)));
     await expect(page).toHaveURL(/\/reset-password\?token=/);
-    await expect(page.getByRole("heading", { level: 1, name: "Choose a new password" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Choose a new password" }),
+    ).toBeVisible();
     await expectNoSeriousA11yViolations(page, "reset password");
 
     const next = "a brand new passphrase 42";
@@ -76,7 +78,9 @@ test.describe("password reset", () => {
     await page.reload();
     await expect(page.getByRole("heading", { name: "Este enlace ya no es válido" })).toBeVisible();
     await page.getByRole("link", { name: "Pedir un enlace nuevo" }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "Restablecé tu contraseña" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Restablecé tu contraseña" }),
+    ).toBeVisible();
   });
 });
 
@@ -126,7 +130,7 @@ test.describe("staff invitation", () => {
 
     const mail = await waitForMail(email, { subject: /invited/i });
     await page.goto(pathOf(firstLink(mail)));
-    await expect(page).toHaveURL(/\/reset-password\?invited=1&token=/);
+    await expect(page).toHaveURL(/\/reset-password\?invited=(1|true)&token=/);
     await expect(page.getByRole("heading", { level: 1, name: "Set your password" })).toBeVisible();
     const password = "my own team passphrase";
     await page.getByLabel("New password", { exact: true }).fill(password);

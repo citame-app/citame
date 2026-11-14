@@ -1,5 +1,4 @@
 import { expect, test } from "@playwright/test";
-import { firstLink, pathOf, waitForMail } from "./mail";
 import {
   createClient,
   expectNoSeriousA11yViolations,
@@ -7,6 +6,7 @@ import {
   signInThroughUi,
   uniqueEmail,
 } from "./helpers";
+import { firstLink, pathOf, waitForMail } from "./mail";
 
 test.describe("authentication", () => {
   test("sign up asks to confirm the email; the emailed link signs in and lands on the account page", async ({
@@ -132,7 +132,7 @@ test.describe("authentication", () => {
     await page.getByLabel("Password", { exact: true }).fill(ownerPassword as string);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
     await expect(page).toHaveURL(/\/admin$/);
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-    await expectNoSeriousA11yViolations(page, "admin placeholder");
+    await expect(page.getByRole("heading", { level: 1, name: "Today" })).toBeVisible();
+    await expectNoSeriousA11yViolations(page, "admin today");
   });
 });

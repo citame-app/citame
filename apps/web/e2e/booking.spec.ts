@@ -1,5 +1,4 @@
 import { expect, test } from "@playwright/test";
-import { firstLink, pathOf, waitForMail } from "./mail";
 import {
   createClient,
   expectNoSeriousA11yViolations,
@@ -10,6 +9,7 @@ import {
   startBooking,
   uniqueEmail,
 } from "./helpers";
+import { firstLink, pathOf, waitForMail } from "./mail";
 
 test.describe("public booking flow", () => {
   test("a new visitor books from the home page to the confirmation, signing up inline", async ({

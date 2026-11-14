@@ -59,6 +59,8 @@ jobs:
           OWNER_EMAIL: ci-owner@example.com
           OWNER_PASSWORD: ci-only-owner-password
       - run: bunx turbo run typecheck lint test build
+      # Backup and restore round trip (real pg_dump/pg_restore through the postgres container).
+      - run: PG_MODE=docker PG_CONTAINER="$(docker ps -q --filter ancestor=postgres:18-alpine)" bun run test:scripts
       # The production image must build from the pruned workspace (includes @sob/db and auth deps).
       - run: docker build -f docker/api.Dockerfile -t sob-api:ci .
       - run: docker build -f docker/web.Dockerfile -t sob-web:ci .
@@ -89,14 +91,20 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
+      # Mail sink: the e2e tests follow the real verification, reset and invitation links.
+      mailpit:
+        image: axllent/mailpit:v1.29
+        ports:
+          - 1025:1025
+          - 8025:8025
     env:
       DATABASE_URL: postgres://sob:sob@localhost:5432/sob
       VALKEY_URL: redis://localhost:6379
       SALON_TIMEZONE: America/Argentina/Buenos_Aires
-      # Throwaway CI-only values.
+      # Throwaway CI-only values. The e2e helpers sign in as the owner with this password.
       BETTER_AUTH_SECRET: ci-only-secret-ci-only-secret-0123456789
       OWNER_EMAIL: ci-owner@example.com
-      OWNER_PASSWORD: ci-only-owner-password
+      OWNER_PASSWORD: correct horse battery staple
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
@@ -111,10 +119,12 @@ jobs:
       # The real stack: the API in production mode behind the web server's same-origin proxy.
       - name: Start API and web
         run: |
-          NODE_ENV=production TRUSTED_ORIGINS=http://localhost:4173 TRUST_PROXY=true \
-            RATE_LIMIT_AUTH_MAX=1000 RATE_LIMIT_GLOBAL_MAX=100000 \
+          NODE_ENV=production BETTER_AUTH_URL=http://localhost:4173 \
+            TRUSTED_ORIGINS=http://localhost:4173 TRUST_PROXY=true \
+            NOTIFY_EMAIL_PROVIDER=smtp SMTP_URL=smtp://localhost:1025 \
+            RATE_LIMIT_AUTH_MAX=1000 RATE_LIMIT_GLOBAL_MAX=1000000 \
             nohup bun apps/api/src/index.ts > api.log 2>&1 &
-          API_INTERNAL_URL=http://localhost:3000 PORT=4173 \
+          API_INTERNAL_URL=http://localhost:3000 PORT=4173 PUBLIC_URL=http://localhost:4173 \
             nohup bun apps/web/server.ts > web.log 2>&1 &
           for i in $(seq 1 30); do
             curl -sf localhost:3000/health && curl -sf localhost:4173/healthz && exit 0
@@ -127,7 +137,15 @@ jobs:
       - run: bun run --cwd apps/web e2e
         env:
           E2E_OWNER_EMAIL: ci-owner@example.com
-          E2E_OWNER_PASSWORD: ci-only-owner-password
+          E2E_OWNER_PASSWORD: correct horse battery staple
+      # Contention under load against the same stack: one 201 per slot, the rest 409, then SQL proof.
+      - uses: grafana/setup-k6-action@v1
+      - run: |
+          k6 run k6/booking-contention.js
+          bun k6/check-overlaps.ts
+        env:
+          K6_EMAIL: ci-owner@example.com
+          K6_PASSWORD: correct horse battery staple
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

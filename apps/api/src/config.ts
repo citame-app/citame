@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { z } from "zod";
 
 const positiveInt = z.coerce.number().int().positive();
@@ -167,8 +168,33 @@ export interface AppConfig {
   };
 }
 
+/** Variables that may be supplied as `<NAME>_FILE=/run/secrets/...` (Docker and Kubernetes secrets). */
+const FILE_BACKED = [
+  "DATABASE_URL",
+  "BETTER_AUTH_SECRET",
+  "SMTP_URL",
+  "TWILIO_AUTH_TOKEN",
+  "METRICS_TOKEN",
+] as const;
+
+/** A plain variable wins; otherwise the file's content (minus the trailing newline) is used. */
+function withSecretFiles(env: Record<string, string | undefined>) {
+  const resolved = { ...env };
+  for (const name of FILE_BACKED) {
+    const path = env[`${name}_FILE`];
+    if (env[name] || !path) continue;
+    try {
+      resolved[name] = readFileSync(path, "utf8").replace(/\r?\n+$/, "");
+    } catch {
+      throw new Error(`Invalid environment configuration:\n  - ${name}_FILE: cannot read ${path}`);
+    }
+  }
+  return resolved;
+}
+
 /** Parses and validates the environment once, failing fast with every problem listed. */
-export function loadConfig(env: Record<string, string | undefined> = process.env): AppConfig {
+export function loadConfig(input: Record<string, string | undefined> = process.env): AppConfig {
+  const env = withSecretFiles(input);
   const parsed = envSchema.safeParse(env);
   if (!parsed.success) {
     const problems = parsed.error.issues

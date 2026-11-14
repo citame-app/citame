@@ -108,6 +108,12 @@ Errors look like `{ "error": { "code", "message" } }` with codes `validation_err
 | `RATE_LIMIT_MCP_MAX`, `..._WINDOW_SECONDS`    | `120`, `60`                             | Per client: `/mcp` requests.                                                               |
 | `OWNER_EMAIL`, `OWNER_PASSWORD`, `OWNER_NAME` | none                                    | Only read by `bun run bootstrap:owner`; never logged.                                      |
 | `SALON_TIMEZONE`                              | `America/Argentina/Buenos_Aires`        | Passed through by Compose.                                                                 |
+| `AUTH_REQUIRE_EMAIL_VERIFICATION`             | `true`                                  | Clients confirm their email before signing in. Production refuses to boot with it on and no email provider. `compose.yaml` (development) defaults it to `false`. |
+| `METRICS_TOKEN`                               | unset                                   | Bearer token for `/metrics`. Unset: only requests that did not come through the public proxy are answered. |
+| `SHUTDOWN_GRACE_MS`                           | `0`                                     | After SIGTERM `/ready` is 503 for this long before the listener closes.                    |
+| `MAINTENANCE_ENABLED`, `MAINTENANCE_INTERVAL_HOURS` | `true`, `24`                      | Scheduled housekeeping in the worker. Retention: `SYNC_LOG_RETENTION_DAYS` (30), `REMINDER_RETENTION_DAYS` (90), `DEAD_LETTER_RETENTION_DAYS` (180), `OAUTH_TOKEN_GRACE_DAYS` (7), `OAUTH_IDLE_CLIENT_DAYS` (30). |
+| `<NAME>_FILE`                                 | unset                                   | Read `DATABASE_URL`, `BETTER_AUTH_SECRET`, `SMTP_URL`, `TWILIO_AUTH_TOKEN` or `METRICS_TOKEN` from a file (Docker/Kubernetes secrets). |
+| `PUBLIC_URL`, `WEB_HSTS` (web server)         | unset                                   | An https `PUBLIC_URL` (or `WEB_HSTS=true`) makes the web server send HSTS and the CSP add `upgrade-insecure-requests`. |
 
 ## MCP server and OAuth 2.1
 
@@ -151,6 +157,12 @@ cd apps/web && bunx playwright install chromium
 E2E_OWNER_EMAIL=... E2E_OWNER_PASSWORD=... bun run e2e
 ```
 
+The e2e suite follows the real confirmation, reset and invitation links, so it needs a mail sink and an API that sends to it: `docker compose --profile mail up -d mailpit`, then start the API with `BETTER_AUTH_URL=http://localhost:4173 NOTIFY_EMAIL_PROVIDER=smtp SMTP_URL=smtp://localhost:1025` (see `.github/workflows/ci.yml` for the full command lines). The owner is bootstrapped with `OWNER_PASSWORD="correct horse battery staple"`, which the helpers use; `E2E_MAILPIT_URL` overrides the inbox API (default `http://localhost:8025`).
+
+### Account security, observability and operations
+
+Email verification, password reset (rate limited, no user enumeration) and staff invitations are on by default; `/health`, `/ready` and `/metrics`, JSON logs with request ids, security headers and a nonce-based CSP are built in. Load tests live in [k6/](k6/README.md), with measured results in [docs/performance.md](docs/performance.md). Backups, upgrades, rollback, secrets rotation and housekeeping are in [docs/operations.md](docs/operations.md); the decisions are in [ADR 0011](docs/adr/0011-production-hardening.md).
+
 ### Notifications and reminders
 
 Confirmation, reminder (24 h and 2 h by default, owner-configurable), reschedule and cancellation messages by email and optionally SMS, in English or Spanish (es-AR) with the time in the salon timezone, an `.ics` entry on confirmations, and a login-free unsubscribe link on reminders. Scheduling is written in the same transaction as the appointment change (REST, desktop sync, MCP); a Postgres-backed worker (`SKIP LOCKED` claims, retries with backoff, dead letter, graceful shutdown) delivers them. Off by default: nothing is sent until you set a provider and enable the worker. Local mail catcher: `docker compose --profile mail up -d mailpit`. Operator guide and SMS regulatory notes: [docs/notifications.md](docs/notifications.md). Decisions and delivery guarantees: [ADR 0010](docs/adr/0010-notifications-and-reminders.md). Integration tests use `sob_test_notify*` databases and an in-memory fake provider (plus a real local SMTP server for the adapter); no real message is ever sent.
@@ -168,6 +180,21 @@ curl localhost:4173/healthz    # web: open http://localhost:4173
 
 `BETTER_AUTH_SECRET` is deliberately not marked required in `compose.yaml` (Compose would then demand it even for `up postgres valkey`); the API validates it at startup and exits with a clear error. With `NODE_ENV=production` cookies are `Secure`, so browsers need https: terminate TLS in your proxy and set `BETTER_AUTH_URL` and `TRUST_PROXY=true`.
 
+### Production
+
+`compose.prod.yaml` is the hardened stack (no database ports, read-only containers, resource limits, one-shot migrations, a separate worker, optional automatic HTTPS with Caddy):
+
+```sh
+export POSTGRES_PASSWORD="$(openssl rand -base64 24)" BETTER_AUTH_SECRET="$(openssl rand -base64 32)" \
+       PUBLIC_URL=https://salon.example SMTP_URL=smtps://user:pass@smtp.example:465
+docker compose -f compose.prod.yaml up -d --build --wait
+OWNER_EMAIL=you@salon.example OWNER_PASSWORD='a long passphrase' \
+  docker compose -f compose.prod.yaml --profile setup run --rm bootstrap-owner
+SITE_ADDRESS=salon.example docker compose -f compose.prod.yaml --profile tls up -d   # optional HTTPS
+```
+
+See [docs/operations.md](docs/operations.md).
+
 ## Common commands
 
 ```sh
@@ -176,6 +203,10 @@ bun run lint        # Biome
 bun run test        # bun test; integration tests need the compose postgres and valkey
 bun run db:generate # drizzle-kit: generate a migration from schema changes
 bun run bootstrap:owner   # idempotent first owner from OWNER_EMAIL / OWNER_PASSWORD
+bun run maintenance       # one-shot housekeeping (the worker also runs it daily)
+bun run backup            # pg_dump to backups/ with a checksum (scripts/restore.sh restores it)
+bun run test:scripts      # backup/restore round trip against compose Postgres
+bun run k6:availability   # also k6:contention, k6:mixed (see k6/README.md)
 docker compose up -d --build   # full stack (postgres, valkey, api, web)
 ```
 

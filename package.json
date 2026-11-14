@@ -17,7 +17,14 @@
     "db:migrate": "turbo run db:migrate",
     "db:seed": "turbo run db:seed",
     "worker": "bun run --cwd apps/api worker",
-    "bootstrap:owner": "bun run --cwd apps/api bootstrap:owner"
+    "bootstrap:owner": "bun run --cwd apps/api bootstrap:owner",
+    "maintenance": "bun run --cwd apps/api maintenance",
+    "k6:availability": "k6 run k6/availability.js",
+    "k6:contention": "k6 run k6/booking-contention.js && bun k6/check-overlaps.ts",
+    "k6:mixed": "k6 run k6/mixed.js",
+    "k6:overlaps": "bun k6/check-overlaps.ts",
+    "test:scripts": "bun test scripts",
+    "backup": "bash scripts/backup.sh"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.7",

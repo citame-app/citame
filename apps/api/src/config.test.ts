@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { loadConfig } from "./config";
 
 const SECRET = "x".repeat(32);
@@ -88,6 +91,32 @@ describe("loadConfig", () => {
     expect(custom.retention.syncLogDays).toBe(14);
     expect(() => loadConfig({ ...base, REMINDER_RETENTION_DAYS: "0" })).toThrow(
       /REMINDER_RETENTION_DAYS/,
+    );
+  });
+
+  test("secrets may come from files (Docker/Kubernetes secrets) through KEY_FILE", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sob-secrets-"));
+    try {
+      writeFileSync(join(dir, "auth"), `${"s".repeat(40)}\n`);
+      writeFileSync(join(dir, "db"), "postgres://sob:pw@db:5432/sob\n");
+      const config = loadConfig({
+        BETTER_AUTH_SECRET_FILE: join(dir, "auth"),
+        DATABASE_URL_FILE: join(dir, "db"),
+      });
+      // Trailing newlines (every editor adds one) are not part of the secret.
+      expect(config.auth.secret).toBe("s".repeat(40));
+      expect(config.databaseUrl).toBe("postgres://sob:pw@db:5432/sob");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a plain variable wins over its _FILE twin, and a missing file is a loud error", () => {
+    expect(
+      loadConfig({ BETTER_AUTH_SECRET: SECRET, BETTER_AUTH_SECRET_FILE: "/nope" }).auth.secret,
+    ).toBe(SECRET);
+    expect(() => loadConfig({ BETTER_AUTH_SECRET_FILE: "/definitely/not/here" })).toThrow(
+      /BETTER_AUTH_SECRET_FILE/,
     );
   });
 
