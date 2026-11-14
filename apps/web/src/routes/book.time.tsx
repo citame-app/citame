@@ -96,17 +96,6 @@ function TimeStep() {
             <span>{t("booking.time.taken")}</span>
           </p>
         )}
-        {difference && (
-          <p className="flex items-start gap-2.5 rounded-lg bg-accent-soft px-4 py-3 text-accent-soft-fg">
-            <ClockIcon className="mt-0.5 shrink-0" />
-            <span>
-              {t("booking.time.tzDifference", {
-                zone: difference.visitorTimeZone.replaceAll("_", " "),
-                salonZone: salon.timezone.replaceAll("_", " "),
-              })}
-            </span>
-          </p>
-        )}
         <SlotPicker
           serviceIds={search.services}
           staffId={staffId}
@@ -138,6 +127,17 @@ function TimeStep() {
             );
           }}
         />
+        {difference && (
+          <p className="flex items-start gap-2.5 rounded-lg bg-accent-soft px-4 py-3 text-accent-soft-fg">
+            <ClockIcon className="mt-0.5 shrink-0" />
+            <span>
+              {t("booking.time.tzDifference", {
+                zone: difference.visitorTimeZone.replaceAll("_", " "),
+                salonZone: salon.timezone.replaceAll("_", " "),
+              })}
+            </span>
+          </p>
+        )}
       </div>
     </BookingFrame>
   );

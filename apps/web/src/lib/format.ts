@@ -34,7 +34,14 @@ export function formatDuration(totalMinutes: number, locale: string): string {
 export function formatTime(instant: string, timeZone: string, locale: string): string {
   // Browsers separate the day period with U+202F, Bun with a plain space: normalize so server
   // and client render identical text (a mismatch breaks hydration).
-  return new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit", timeZone })
+  return new Intl.DateTimeFormat(locale, {
+    hour: "numeric",
+    minute: "2-digit",
+    // Explicit: the default clock for a locale differs between ICU versions (es-AR is 24h in one
+    // and "a. m./p. m." in another), which would make server and browser render different text.
+    hourCycle: locale.startsWith("es") ? "h23" : "h12",
+    timeZone,
+  })
     .format(new Date(instant))
     .replaceAll("\u202f", " ");
 }

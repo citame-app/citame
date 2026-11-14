@@ -28,3 +28,30 @@ test("key pages load without console errors, failed requests or hydration warnin
   await expect(page.getByRole("main").getByRole("group").first()).toBeVisible();
   expect(problems).toEqual([]);
 });
+
+test("the Spanish time step hydrates without mismatches in the browser's own ICU", async ({
+  browser,
+  baseURL,
+}) => {
+  const context = await browser.newContext({
+    baseURL,
+    locale: "es-ES",
+    timezoneId: "Europe/Madrid",
+  });
+  const page = await context.newPage();
+  const problems: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") problems.push(message.text());
+  });
+  page.on("pageerror", (error) => problems.push(error.message));
+  await page.goto("/book");
+  await page.getByRole("checkbox", { name: /Haircut/ }).check();
+  await page.getByRole("button", { name: "Continuar" }).click();
+  await page.getByRole("radio", { name: /Cualquier profesional disponible/ }).check();
+  await page.getByRole("button", { name: "Continuar" }).click();
+  await expect(page.getByRole("main").getByRole("group").first()).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("main").getByRole("group").first()).toBeVisible();
+  expect(problems).toEqual([]);
+  await context.close();
+});
