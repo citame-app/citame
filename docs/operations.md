@@ -20,7 +20,7 @@ OWNER_EMAIL=you@salon.example OWNER_PASSWORD='a long passphrase' \
   docker compose -f compose.prod.yaml --profile setup run --rm bootstrap-owner
 
 # 4. Automatic HTTPS (optional): point DNS at the host, then
-SITE_ADDRESS=salon.example ACME_EMAIL=you@salon.example \
+SITE_ADDRESS=salon.example \
   docker compose -f compose.prod.yaml --profile tls up -d
 ```
 

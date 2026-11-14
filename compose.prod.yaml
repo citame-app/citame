@@ -1,7 +1,7 @@
 # Production stack: nothing is published except the web service (loopback by default) and, with
-# the `tls` profile, Caddy on 80/443. See docs/operations.md and docs/self-hosting notes there.
+# the `tls` profile, Caddy on 80/443. See docs/self-hosting.md and docs/operations.md.
 #
-#   cp .env.production.example .env   # (document your values; see "Production environment" in README)
+#   write a .env next to this file (docs/env-reference.md has a minimal one)
 #   docker compose -f compose.prod.yaml up -d --build --wait
 #   docker compose -f compose.prod.yaml --profile setup run --rm bootstrap-owner
 #   docker compose -f compose.prod.yaml --profile tls up -d     # optional: automatic HTTPS
@@ -224,6 +224,7 @@ services:
       <<: *api-env
       OWNER_EMAIL: ${OWNER_EMAIL:-}
       OWNER_PASSWORD: ${OWNER_PASSWORD:-}
+      OWNER_NAME: ${OWNER_NAME:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
