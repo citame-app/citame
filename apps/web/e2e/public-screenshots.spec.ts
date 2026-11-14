@@ -199,7 +199,12 @@ test.describe("public screenshots", () => {
       await variants("opt-out-confirm", `/notifications/opt-out?token=${token}`);
       await variants("opt-out-done", `/notifications/opt-out?token=${token}`, {
         act: async (p) => {
-          await p.locator("main button").first().click();
+          // the first variant switches reminders off; later ones open the page already switched off
+          await p
+            .locator("main button")
+            .first()
+            .click({ timeout: 3000 })
+            .catch(() => {});
           await p.waitForTimeout(700);
         },
       });

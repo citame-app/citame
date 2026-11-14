@@ -73,8 +73,8 @@ test.describe("screenshots", () => {
     await shoot(page, project, "account-profile");
 
     await page.getByRole("button", { name: "Sign out" }).click();
-    // signing out sends the visitor to the sign-in page: wait for that before navigating on
-    await expect(page).toHaveURL(/\/sign-in/);
+    // signing out sends the visitor home: wait for that before navigating on
+    await expect(page).toHaveURL(/\/$/);
     await page.goto("/sign-up");
     await page.getByRole("button", { name: "Create account", exact: true }).click();
     await expect(page.getByText("Enter your name")).toBeVisible();
