@@ -300,8 +300,11 @@ function ServiceSheet({
     if (!next && dirty && !save.isPending) setDiscarding(true);
     else setOpen(next);
   };
-  const set = (key: keyof ServiceFormValues, value: string) =>
+  const set = (key: keyof ServiceFormValues, value: string) => {
     setValues((v) => ({ ...v, [key]: value }));
+    // an edited field is no longer wrong until the next submit proves otherwise
+    setErrors(({ [key]: _cleared, ...rest }) => rest);
+  };
   const err = (key: keyof ServiceFormValues) =>
     errors[key] ? t(`services.error.${errors[key]}` as "services.error.required") : undefined;
   const activeStaff = (staff.data ?? []).filter((s) => s.active);

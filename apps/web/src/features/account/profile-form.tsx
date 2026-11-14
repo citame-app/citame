@@ -51,7 +51,10 @@ export function ProfileForm({
         name="name"
         autoComplete="name"
         value={values.name}
-        onChange={(e) => setValues((v) => ({ ...v, name: e.target.value }))}
+        onChange={(e) => {
+          setValues((v) => ({ ...v, name: e.target.value }));
+          setErrors(({ name: _cleared, ...rest }) => rest);
+        }}
         error={errors.name}
         required
       />
@@ -70,7 +73,10 @@ export function ProfileForm({
         inputMode="tel"
         autoComplete="tel"
         value={values.phone}
-        onChange={(e) => setValues((v) => ({ ...v, phone: e.target.value }))}
+        onChange={(e) => {
+          setValues((v) => ({ ...v, phone: e.target.value }));
+          setErrors(({ phone: _cleared, ...rest }) => rest);
+        }}
         error={errors.phone}
         hint={t("account.profile.phoneHint")}
       />

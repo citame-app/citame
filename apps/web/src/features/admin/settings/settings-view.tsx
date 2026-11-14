@@ -77,7 +77,10 @@ export function SettingsView() {
 
   const initial = toForm(saved);
   const dirty = (Object.keys(form) as (keyof Form)[]).some((key) => form[key] !== initial[key]);
-  const set = (key: keyof Form, value: string) => setForm({ ...form, [key]: value });
+  const set = (key: keyof Form, value: string) => {
+    setForm({ ...form, [key]: value });
+    setErrors(({ [key]: _cleared, ...rest }) => rest);
+  };
 
   function submit() {
     if (!form) return;

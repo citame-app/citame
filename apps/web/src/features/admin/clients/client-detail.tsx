@@ -164,14 +164,20 @@ export function ClientDetail({
         <TextField
           label={t("clients.detail.name")}
           value={form.name}
-          onChange={(e) => setForm({ ...form, name: e.target.value })}
+          onChange={(e) => {
+            setForm({ ...form, name: e.target.value });
+            setErrors(({ name: _cleared, ...rest }) => rest);
+          }}
           error={errors.name}
         />
         <TextField
           label={t("clients.detail.phone")}
           type="tel"
           value={form.phone}
-          onChange={(e) => setForm({ ...form, phone: e.target.value })}
+          onChange={(e) => {
+            setForm({ ...form, phone: e.target.value });
+            setErrors(({ phone: _cleared, ...rest }) => rest);
+          }}
           error={errors.phone}
         />
         <TextField label={t("clients.detail.email")} value={client.email ?? ""} readOnly />

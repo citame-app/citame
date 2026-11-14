@@ -102,7 +102,10 @@ export function AuthForm({ mode, onSubmit, onResendVerification, footer }: AuthF
           name="name"
           autoComplete="name"
           value={values.name}
-          onChange={(e) => setValues((v) => ({ ...v, name: e.target.value }))}
+          onChange={(e) => {
+            setValues((v) => ({ ...v, name: e.target.value }));
+            setErrors(({ name: _cleared, ...rest }) => rest);
+          }}
           error={errors.name}
           required
         />
@@ -116,7 +119,10 @@ export function AuthForm({ mode, onSubmit, onResendVerification, footer }: AuthF
         autoCapitalize="none"
         spellCheck={false}
         value={values.email}
-        onChange={(e) => setValues((v) => ({ ...v, email: e.target.value }))}
+        onChange={(e) => {
+          setValues((v) => ({ ...v, email: e.target.value }));
+          setErrors(({ email: _cleared, ...rest }) => rest);
+        }}
         error={errors.email}
         required
       />
@@ -125,7 +131,10 @@ export function AuthForm({ mode, onSubmit, onResendVerification, footer }: AuthF
         name="password"
         autoComplete={mode === "sign-in" ? "current-password" : "new-password"}
         value={values.password}
-        onChange={(e) => setValues((v) => ({ ...v, password: e.target.value }))}
+        onChange={(e) => {
+          setValues((v) => ({ ...v, password: e.target.value }));
+          setErrors(({ password: _cleared, ...rest }) => rest);
+        }}
         error={errors.password}
         hint={mode === "sign-up" ? t("auth.field.passwordHint") : undefined}
         required

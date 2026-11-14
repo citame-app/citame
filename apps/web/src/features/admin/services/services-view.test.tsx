@@ -141,6 +141,22 @@ describe("ServicesView", () => {
     expect(writes()).toHaveLength(0);
   });
 
+  test("an error disappears as soon as its field is corrected", async () => {
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "New service" }));
+    const dialog = await screen.findByRole("dialog", { name: "New service" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+    expect(
+      await within(dialog).findByText("Enter a whole number greater than zero"),
+    ).toBeInTheDocument();
+    fireEvent.change(within(dialog).getByLabelText("Duration (minutes)"), {
+      target: { value: "75" },
+    });
+    expect(within(dialog).queryByText("Enter a whole number greater than zero")).toBeNull();
+    // the field that is still empty keeps its message
+    expect(within(dialog).getAllByText("This field is required").length).toBeGreaterThan(0);
+  });
+
   test("the live preview mirrors what the client will see", async () => {
     open();
     fireEvent.click(await screen.findByRole("button", { name: "New service" }));

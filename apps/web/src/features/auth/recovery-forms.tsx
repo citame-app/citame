@@ -213,7 +213,10 @@ export function ResetPasswordForm({ onSubmit }: { onSubmit: (password: string) =
         name="new-password"
         autoComplete="new-password"
         value={values.password}
-        onChange={(e) => setValues((v) => ({ ...v, password: e.target.value }))}
+        onChange={(e) => {
+          setValues((v) => ({ ...v, password: e.target.value }));
+          setErrors(({ password: _cleared, ...rest }) => rest);
+        }}
         error={errors.password}
         hint={t("auth.field.passwordHint")}
         required
@@ -223,7 +226,10 @@ export function ResetPasswordForm({ onSubmit }: { onSubmit: (password: string) =
         name="confirm-password"
         autoComplete="new-password"
         value={values.confirm}
-        onChange={(e) => setValues((v) => ({ ...v, confirm: e.target.value }))}
+        onChange={(e) => {
+          setValues((v) => ({ ...v, confirm: e.target.value }));
+          setErrors(({ confirm: _cleared, ...rest }) => rest);
+        }}
         error={errors.confirm}
         required
       />

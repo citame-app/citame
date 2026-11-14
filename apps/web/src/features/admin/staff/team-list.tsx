@@ -226,7 +226,14 @@ function CreateAccountSheet({
     if (Object.keys(found).length === 0) create.mutate();
   }
 
-  const set = (key: keyof typeof form, value: string) => setForm((f) => ({ ...f, [key]: value }));
+  const set = (key: keyof typeof form, value: string) => {
+    setForm((f) => ({ ...f, [key]: value }));
+    setErrors((current) => {
+      const next: Record<string, string | undefined> = { ...current };
+      delete next[key];
+      return next;
+    });
+  };
 
   return (
     <Sheet

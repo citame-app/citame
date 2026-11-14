@@ -127,6 +127,16 @@ export function NewAppointmentSheet({
     if (Object.keys(found).length === 0) create.mutate();
   }
 
+  // After a failed submit, keep the messages in step with what the form holds now.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only edits re-run validation
+  useEffect(() => {
+    setErrors((current) => {
+      if (Object.keys(current).length === 0) return current;
+      const startsAt = date && time ? zonedInstant(date, time, timeZone) : "";
+      return validateWalkIn({ ...values, startsAt });
+    });
+  }, [values, date, time]);
+
   const set = <K extends keyof WalkInValues>(key: K, value: WalkInValues[K]) =>
     setValues((v) => ({ ...v, [key]: value }));
   const errorText = (key: keyof WalkInErrors) =>
