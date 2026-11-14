@@ -46,7 +46,7 @@ export interface SetupOptions {
   /** Suffix of the dedicated `sob_test_<suffix>` database; defaults to `api`. */
   dbSuffix?: string;
   /** Extra application dependencies, for example a short SSE heartbeat. */
-  deps?: Partial<Pick<AppDeps, "syncHeartbeatMs">>;
+  deps?: Partial<Pick<AppDeps, "syncHeartbeatMs" | "jwksRefetchMs">>;
 }
 
 export async function setupApiTest(options: SetupOptions = {}): Promise<ApiTest> {
@@ -73,6 +73,8 @@ export async function setupApiTest(options: SetupOptions = {}): Promise<ApiTest>
     config,
     now: () => NOW,
     rateLimitNow: clock.now,
+    // Tests truncate the database (and with it the signing keys) between cases.
+    jwksRefetchMs: 0,
     ...options.deps,
   });
   const closeDb = t.close;
@@ -86,7 +88,9 @@ export async function setupApiTest(options: SetupOptions = {}): Promise<ApiTest>
   const reset = async () => {
     await resetDb();
     await valkey.clear();
+    await app.ready();
   };
+  await app.ready();
   return Object.assign(t, { app, valkey, config, clock, close, reset });
 }
 

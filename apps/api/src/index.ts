@@ -10,6 +10,7 @@ const valkey = new RedisClient(config.valkeyUrl);
 await valkey.send("PING", []);
 
 const app = createApp({ db, valkey, config });
+await app.ready();
 
 // Ends open SSE streams and the Valkey subscriber before the process exits.
 for (const signal of ["SIGTERM", "SIGINT"] as const) {

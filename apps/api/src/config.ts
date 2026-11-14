@@ -28,6 +28,25 @@ const envSchema = z.object({
   /** New SSE connections per caller and window: reconnect storms must not exhaust the server. */
   SYNC_STREAM_RATE_LIMIT_MAX: positiveInt.default(30),
   SYNC_STREAM_RATE_LIMIT_WINDOW_SECONDS: positiveInt.default(60),
+
+  /**
+   * Public URL of the MCP endpoint, which is also the OAuth resource (RFC 8707) and the token
+   * audience. Defaults to `<BETTER_AUTH_URL>/mcp`: the web app's origin, forwarded to the API.
+   */
+  MCP_RESOURCE_URL: z.url().optional(),
+  /** Lifetime of OAuth access tokens. Short on purpose: JWTs cannot be revoked before expiry. */
+  OAUTH_ACCESS_TOKEN_TTL_SECONDS: positiveInt.default(900),
+  /** Lifetime of OAuth refresh tokens (rotated on every use). */
+  OAUTH_REFRESH_TOKEN_TTL_SECONDS: positiveInt.default(14 * 24 * 60 * 60),
+  /** Token, authorize, consent, revoke and introspection calls per caller and window. */
+  RATE_LIMIT_OAUTH_MAX: positiveInt.default(60),
+  RATE_LIMIT_OAUTH_WINDOW_SECONDS: positiveInt.default(60),
+  /** Anonymous dynamic client registrations per caller and window. */
+  RATE_LIMIT_OAUTH_REGISTER_MAX: positiveInt.default(10),
+  RATE_LIMIT_OAUTH_REGISTER_WINDOW_SECONDS: positiveInt.default(60),
+  /** MCP requests per caller and window. */
+  RATE_LIMIT_MCP_MAX: positiveInt.default(120),
+  RATE_LIMIT_MCP_WINDOW_SECONDS: positiveInt.default(60),
 });
 
 export interface RateLimitRule {
@@ -47,8 +66,21 @@ export interface AppConfig {
     /** Cookies carry the Secure attribute over https and in production. */
     secureCookies: boolean;
   };
+  oauth: {
+    /** Resource identifier and audience of every access token this API accepts at `/mcp`. */
+    mcpResource: string;
+    accessTokenTtlSeconds: number;
+    refreshTokenTtlSeconds: number;
+  };
   trustProxy: boolean;
-  rateLimit: { global: RateLimitRule; auth: RateLimitRule; syncStream: RateLimitRule };
+  rateLimit: {
+    global: RateLimitRule;
+    auth: RateLimitRule;
+    syncStream: RateLimitRule;
+    oauth: RateLimitRule;
+    oauthRegister: RateLimitRule;
+    mcp: RateLimitRule;
+  };
 }
 
 /** Parses and validates the environment once, failing fast with every problem listed. */
@@ -74,6 +106,11 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
         .filter((origin) => origin.length > 0),
       secureCookies: e.NODE_ENV === "production" || e.BETTER_AUTH_URL.startsWith("https://"),
     },
+    oauth: {
+      mcpResource: e.MCP_RESOURCE_URL ?? `${e.BETTER_AUTH_URL.replace(/\/+$/, "")}/mcp`,
+      accessTokenTtlSeconds: e.OAUTH_ACCESS_TOKEN_TTL_SECONDS,
+      refreshTokenTtlSeconds: e.OAUTH_REFRESH_TOKEN_TTL_SECONDS,
+    },
     trustProxy: e.TRUST_PROXY,
     rateLimit: {
       global: { max: e.RATE_LIMIT_GLOBAL_MAX, windowSeconds: e.RATE_LIMIT_GLOBAL_WINDOW_SECONDS },
@@ -82,6 +119,12 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
         max: e.SYNC_STREAM_RATE_LIMIT_MAX,
         windowSeconds: e.SYNC_STREAM_RATE_LIMIT_WINDOW_SECONDS,
       },
+      oauth: { max: e.RATE_LIMIT_OAUTH_MAX, windowSeconds: e.RATE_LIMIT_OAUTH_WINDOW_SECONDS },
+      oauthRegister: {
+        max: e.RATE_LIMIT_OAUTH_REGISTER_MAX,
+        windowSeconds: e.RATE_LIMIT_OAUTH_REGISTER_WINDOW_SECONDS,
+      },
+      mcp: { max: e.RATE_LIMIT_MCP_MAX, windowSeconds: e.RATE_LIMIT_MCP_WINDOW_SECONDS },
     },
   };
 }

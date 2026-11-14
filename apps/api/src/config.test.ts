@@ -49,4 +49,19 @@ describe("loadConfig", () => {
       /RATE_LIMIT_AUTH_MAX/,
     );
   });
+
+  test("derives the MCP resource from the public URL and exposes OAuth defaults", () => {
+    const config = loadConfig({
+      BETTER_AUTH_SECRET: SECRET,
+      BETTER_AUTH_URL: "https://salon.example/",
+    });
+    expect(config.oauth.mcpResource).toBe("https://salon.example/mcp");
+    expect(config.oauth.accessTokenTtlSeconds).toBe(900);
+    expect(config.oauth.refreshTokenTtlSeconds).toBe(14 * 24 * 60 * 60);
+    expect(config.rateLimit.oauthRegister).toEqual({ max: 10, windowSeconds: 60 });
+    expect(
+      loadConfig({ BETTER_AUTH_SECRET: SECRET, MCP_RESOURCE_URL: "https://mcp.example/mcp" }).oauth
+        .mcpResource,
+    ).toBe("https://mcp.example/mcp");
+  });
 });

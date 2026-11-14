@@ -124,19 +124,31 @@ describe("sign-in and session", () => {
 });
 
 describe("Valkey session storage", () => {
-  test("sessions live in Valkey under the configured prefix, not in Postgres", async () => {
+  test("sessions are served from Valkey under the configured prefix and kept durably in Postgres", async () => {
     await signUp(t.app, "lucia@example.com");
     const keys = (await t.valkey.client.send("KEYS", [`${t.valkey.prefix}*`])) as string[];
     expect(keys.length).toBeGreaterThan(0);
-    expect(await t.db.select().from(session)).toHaveLength(0);
+    // The OAuth provider links refresh tokens to the session row (ADR 0009), so the durable copy
+    // must exist.
+    expect(await t.db.select().from(session)).toHaveLength(1);
   });
 
-  test("clearing Valkey logs everyone out (sessions are not duplicated elsewhere)", async () => {
+  test("flushing Valkey does not log anyone out: the database copy repopulates the cache", async () => {
     await signUp(t.app, "lucia@example.com");
     const { cookie } = await signIn(t.app, "lucia@example.com");
     expect((await me(cookie)).status).toBe(200);
     await t.valkey.clear();
+    expect((await me(cookie)).status).toBe(200);
+  });
+
+  test("sign-out removes the session from both stores", async () => {
+    await signUp(t.app, "lucia@example.com");
+    const { cookie } = await signIn(t.app, "lucia@example.com");
+    const before = (await t.db.select().from(session)).length;
+    expect((await json(t.app, "/api/auth/sign-out", "POST", {}, cookie)).status).toBe(200);
+    await t.valkey.clear();
     expect((await me(cookie)).status).toBe(401);
+    expect(await t.db.select().from(session)).toHaveLength(before - 1);
   });
 });
 

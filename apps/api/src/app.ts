@@ -2,6 +2,7 @@ import type { HealthResponse } from "@sob/contracts";
 import type { Database } from "@sob/db";
 import type { RedisClient } from "bun";
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { createAuth } from "./auth/auth";
 import { requireAuth } from "./auth/principal";
 import { valkeySecondaryStorage } from "./auth/secondary-storage";
@@ -23,6 +24,8 @@ import { staffRoutes } from "./modules/staff/routes";
 import { createSyncHub } from "./modules/sync/hub";
 import { headSeq } from "./modules/sync/pull";
 import { syncRoutes } from "./modules/sync/routes";
+import { oauthAudit } from "./oauth/audit";
+import { ensureOAuthSeeds } from "./oauth/clients";
 import { createRateLimiter, rateLimit } from "./rate-limit";
 
 export interface AppDeps {
@@ -35,10 +38,16 @@ export interface AppDeps {
   now?: () => Date;
   /** Interval of the SSE keep-alive comment, in milliseconds (default 15 000). */
   syncHeartbeatMs?: number;
+  /** Minimum gap between JWKS refetches for unknown key ids (default 10 000 ms). */
+  jwksRefetchMs?: number;
 }
 
 /** The Hono app plus the lifecycle hook that releases long-lived resources (SSE, Valkey). */
-export type App = Hono & { shutdown: () => Promise<void> };
+export type App = Hono & {
+  shutdown: () => Promise<void>;
+  /** Seeds the OAuth resource and first-party clients; resolves when the app is ready to serve OAuth flows. */
+  ready: () => Promise<void>;
+};
 
 export function createApp(deps: AppDeps): App {
   const app = new Hono() as App;
@@ -50,6 +59,7 @@ export function createApp(deps: AppDeps): App {
   const { trustProxy, rateLimit: limits } = deps.config;
   const hub = createSyncHub({ valkey: deps.valkey, keyPrefix: deps.config.valkeyKeyPrefix });
   app.shutdown = () => hub.close();
+  app.ready = () => ensureOAuthSeeds(deps.db, deps.config);
 
   app.onError((error, c) => {
     if (error instanceof DomainError) return respondError(c, error);
@@ -86,8 +96,49 @@ export function createApp(deps: AppDeps): App {
   app.use("/api/auth/sign-in/*", authLimit);
   app.use("/api/auth/sign-up/*", authLimit);
 
+  // OAuth 2.1 authorization server (Better Auth oauth-provider plugin). Anonymous registration
+  // has its own, stricter counter; the rest of the protocol endpoints share one.
+  const registerLimit = rateLimit({
+    limiter,
+    scope: "oauth-register",
+    rule: limits.oauthRegister,
+    trustProxy,
+  });
+  const oauthLimit = rateLimit({ limiter, scope: "oauth", rule: limits.oauth, trustProxy });
+  app.use("/api/auth/oauth2/register", registerLimit);
+  app.use("/api/auth/oauth2/token", oauthLimit);
+  app.use("/api/auth/oauth2/authorize", oauthLimit);
+  app.use("/api/auth/oauth2/consent", oauthLimit);
+  app.use("/api/auth/oauth2/revoke", oauthLimit);
+  app.use("/api/auth/oauth2/introspect", oauthLimit);
+  // Browser-based MCP clients read metadata and talk to the token endpoint cross-origin. These
+  // endpoints never rely on cookies (PKCE, bearer or anonymous), so a wildcard origin without
+  // credentials is safe; cookie-bound endpoints (authorize, consent) get no CORS headers.
+  const publicCors = cors({
+    origin: "*",
+    allowMethods: ["GET", "HEAD", "POST", "OPTIONS"],
+    allowHeaders: ["Content-Type", "Authorization", "MCP-Protocol-Version", "Mcp-Session-Id"],
+    exposeHeaders: ["WWW-Authenticate", "Mcp-Session-Id"],
+    maxAge: 600,
+  });
+  for (const path of [
+    "/.well-known/*",
+    "/api/auth/jwks",
+    "/api/auth/oauth2/token",
+    "/api/auth/oauth2/register",
+    "/api/auth/oauth2/revoke",
+  ]) {
+    app.use(path, publicCors);
+  }
+  app.use("/api/auth/oauth2/*", oauthAudit(auth, deps.db));
+
   // Better Auth owns everything under /api/auth (sign-up, sign-in, sign-out, session).
   app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
+  // RFC 8414: the issuer is `<origin>/api/auth`, so its metadata lives at the origin root with
+  // the issuer path appended. Better Auth answers these itself (plugin `onRequest`).
+  app.on(["GET", "HEAD"], "/.well-known/oauth-authorization-server/api/auth", (c) =>
+    auth.handler(c.req.raw),
+  );
   app.use("/me", requireAuth(auth, deps.db));
   app.route("/me", meRoutes(deps));
 
