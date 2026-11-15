@@ -53,7 +53,7 @@ Any SMTP provider works (Postmark, SES, Mailgun, Brevo, your hosting provider, a
 - a sender address on a domain you control (`NOTIFY_EMAIL_FROM`),
 - SPF, DKIM and DMARC records for that domain as your provider describes them; without them, confirmation emails land in spam and clients cannot sign up.
 
-Test before opening the doors: after the stack is up, sign up with a personal address on the site and check that the confirmation arrives. If it does not, `docker compose -f compose.prod.yaml logs api | rg "account email failed"` (addresses are never logged) and your provider's logs tell you why. To run without email on a private network, set `AUTH_REQUIRE_EMAIL_VERIFICATION=false` and `NOTIFY_EMAIL_PROVIDER=none` explicitly: the API refuses to start in production with verification required and no provider, on purpose.
+Test before opening the doors: after the stack is up, sign up with a personal address on the site and check that the confirmation arrives. If it does not, check `accountEmails` in the owner notification stats and `account_email_outbox.last_error`, then your provider's logs. Addresses and action links are not logged. To run without email on a private network, set `AUTH_REQUIRE_EMAIL_VERIFICATION=false` and `NOTIFY_EMAIL_PROVIDER=none` explicitly: the API refuses to start in production with verification required and no provider, on purpose.
 
 Reminders run only when the worker is running (it is its own service here) and a provider is set. SMS is optional and has regulatory implications: read [notifications.md](notifications.md) first.
 
@@ -109,7 +109,7 @@ Pre-built images (published by the release workflow, not yet exercised by the pr
 
 ## 8. The desktop client
 
-The Linux front-desk app (`apps/desktop`) points at your site: `SOB_API_URL=https://salon.example`. It signs in with an owner or staff account and works offline, syncing when the connection returns. See [apps/desktop/README.md](../apps/desktop/README.md); there is no packaged installer in 0.1.0 beyond the release workflow's best-effort Linux archive.
+The Linux front-desk app (`apps/desktop`) points at your site: `SOB_API_URL=https://salon.example`. It signs in with an owner or staff account and works offline, syncing when the connection returns. See [apps/desktop/README.md](../apps/desktop/README.md); the release workflow requires a Linux archive with a checksum before publishing. It is an executable bundle, not a system installer; the machine still needs the graphics libraries listed in that README.
 
 ## 9. Troubleshooting
 
@@ -118,7 +118,7 @@ The Linux front-desk app (`apps/desktop`) points at your site: `SOB_API_URL=http
 | `docker compose up` fails with "set POSTGRES_PASSWORD" / "set PUBLIC_URL" | The `.env` file is missing a required variable, or you are not in the directory that holds it.                                                        |
 | API container restarts, log says `Invalid environment configuration`      | The message lists every problem: secret shorter than 32 characters, missing `SMTP_URL`, verification required with no provider.                       |
 | Cannot sign in, page reloads on submit                                    | Cookies are `Secure`: you must use https (or `localhost`). Check that `PUBLIC_URL` is exactly the address in the browser bar.                         |
-| Sign-up "check your inbox" but nothing arrives                            | SMTP credentials or sender domain (spam folder, SPF/DKIM). Log line `account email failed`.                                                           |
+| Sign-up "check your inbox" but nothing arrives                            | SMTP credentials or sender domain (spam folder, SPF/DKIM). Check owner `accountEmails` queue stats and safe outbox error codes.                       |
 | Caddy cannot get a certificate                                            | DNS not pointing at the server yet, ports 80/443 closed, or another service holds them. `docker compose ... logs caddy`.                              |
 | Everybody gets 429 "rate_limited"                                         | All visitors share one address: the proxy does not append `X-Forwarded-For`, or `WEB_TRUST_PROXY` is wrong.                                           |
 | `/ready` is 503                                                           | The body names `database` or `valkey`; check that container's health and logs.                                                                        |

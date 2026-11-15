@@ -126,7 +126,7 @@ The desktop client syncs through three endpoints: `POST /sync/push` (idempotent 
 
 ## Desktop client
 
-`apps/desktop` is the offline-first front-desk client: a Rust workspace with a GUI-free core (SQLite replica, outbox, sync engine, SSE nudges with a polling fallback, auth) and a GPUI app (day calendar with a column per staff member, create, move and cancel while offline, pending-sync badges, an online or offline indicator and a conflict review dialog). It signs in with the Better Auth session that the API supports today, behind a trait so the OAuth 2.1 + PKCE flow (server side done in Phase 6, [ADR 0009](docs/adr/0009-oauth-and-mcp.md)) can replace it once `/sync/*` accepts bearer tokens. Build, run and test instructions (including the headless sync tests against the real API): [apps/desktop/README.md](apps/desktop/README.md). Decisions: [ADR 0008](docs/adr/0008-desktop-client.md).
+`apps/desktop` is the offline-first front-desk client: a Rust workspace with a GUI-free core (SQLite replica, outbox, sync engine, SSE nudges with a polling fallback, auth) and a GPUI app (day/week calendar, light/dark themes, native text selection and IME, create, move, cancel and record completed/no-show while offline, pending-sync badges, an online or offline indicator and a conflict review dialog). It signs in with the Better Auth session that the API supports today, behind a trait so the OAuth 2.1 + PKCE flow (server side done in Phase 6, [ADR 0009](docs/adr/0009-oauth-and-mcp.md)) can replace it once `/sync/*` accepts bearer tokens. Build, run and test instructions (including the headless sync tests against the real API): [apps/desktop/README.md](apps/desktop/README.md). Decisions: [ADR 0008](docs/adr/0008-desktop-client.md).
 
 ## Web app
 
@@ -160,11 +160,15 @@ The e2e suite follows the real confirmation, reset and invitation links, so it n
 
 ### Account security, observability and operations
 
-Email verification, password reset (rate limited, no user enumeration) and staff invitations are on by default; `/health`, `/ready` and `/metrics`, JSON logs with request ids, security headers and a nonce-based CSP are built in. Load tests live in [k6/](k6/README.md), with measured results in [docs/performance.md](docs/performance.md). Backups, upgrades, rollback, secrets rotation and housekeeping are in [docs/operations.md](docs/operations.md); the decisions are in [ADR 0011](docs/adr/0011-production-hardening.md).
+Email verification, password reset (rate limited, no user enumeration) and staff invitations are on by default and use an encrypted, durable Postgres outbox; `/health`, `/ready` and `/metrics`, JSON logs with request ids, security headers and a nonce-based CSP are built in. Load tests live in [k6/](k6/README.md), with measured results in [docs/performance.md](docs/performance.md). Backups, upgrades, rollback, secrets rotation and housekeeping are in [docs/operations.md](docs/operations.md); the decisions are in [ADR 0011](docs/adr/0011-production-hardening.md).
 
 ### Notifications and reminders
 
 Confirmation, reminder (24 h and 2 h by default, owner-configurable), reschedule and cancellation messages by email and optionally SMS, in English or Spanish (es-AR) with the time in the salon timezone, an `.ics` entry on confirmations, and a login-free unsubscribe link on reminders. Scheduling is written in the same transaction as the appointment change (REST, desktop sync, MCP); a Postgres-backed worker (`SKIP LOCKED` claims, retries with backoff, dead letter, graceful shutdown) delivers them. Off by default: nothing is sent until you set a provider and enable the worker. Local mail catcher: `docker compose --profile mail up -d mailpit`. Operator guide and SMS regulatory notes: [docs/notifications.md](docs/notifications.md). Decisions and delivery guarantees: [ADR 0010](docs/adr/0010-notifications-and-reminders.md). Integration tests use `sob_test_notify*` databases and an in-memory fake provider (plus a real local SMTP server for the adapter); no real message is ever sent.
+
+## Release preparation
+
+`bun run release:check` validates every package version, the Rust workspace version and the matching changelog section, then writes local metadata and notes to `.release/`. No remote or domain is needed. The tag workflow runs the full reusable CI suite on that exact tag, requires the Linux desktop archive, then publishes container images and release assets. Nothing is published by the local command. See [docs/release.md](docs/release.md).
 
 ## Docker
 

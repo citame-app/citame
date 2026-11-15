@@ -67,7 +67,7 @@ MCP hosts cannot be provisioned beforehand, so `POST /oauth2/register` is open (
 
 ### First-party desktop client
 
-`sob-desktop` is seeded idempotently at API start (`ensureOAuthSeeds`): native public client, PKCE, redirect `http://127.0.0.1/callback` (Better Auth lets the port vary for registered loopback URIs, RFC 8252 section 7.3, tested), consent still required. **The desktop app has not been switched to it.** `/sync/*` authenticates by session cookie only, so the swap needs (a) a bearer branch in `requireAuth` for a second resource and a `sync` scope, (b) token storage, refresh and expiry handling in `sob-core`, (c) a browser step in the GPUI login screen. None of that is cheap to test without a display, so it is a tracked follow-up; the Rust crates only had comments updated.
+`sob-desktop` is seeded idempotently at API start (`ensureOAuthSeeds`): native public client, PKCE, redirect `http://127.0.0.1/callback` (Better Auth lets the port vary for registered loopback URIs, RFC 8252 section 7.3, tested), consent still required. **The desktop app has not been switched to it.** `/sync/*` authenticates by session cookie only, so the swap needs (a) a bearer branch in `requireAuth` for a second resource and a `sync` scope, (b) token storage, refresh and expiry handling in `sob-core`, (c) a browser step in the GPUI login screen. That complete authentication change remains outside the Linux v1 session-based release. The current native session flow is exercised against the real API; the PKCE helpers are tested separately.
 
 ### MCP server
 

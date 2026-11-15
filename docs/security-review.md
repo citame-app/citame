@@ -1,17 +1,17 @@
 # Security review and dependency inventory (release 0.1.0)
 
-Status as of 2026-11-14, commit range up to the 0.1.0 release candidate. This is a self-review plus automated advisory scans, **not** an independent audit or a penetration test. Report vulnerabilities through [SECURITY.md](../SECURITY.md).
+Status as of 2026-11-15, commit range up to the 0.1.0 release candidate. This is a self-review plus automated advisory scans, **not** an independent audit or a penetration test. Report vulnerabilities through [SECURITY.md](../SECURITY.md).
 
 ## 1. Advisory scans
 
-### JavaScript (`bun audit`, Bun 1.4.5-canary, 346 installed packages)
+### JavaScript (`bun audit`, Bun 1.4.5-canary.1, 2026-11-15)
 
-| Scope              | Result                                                                                                                                                                                                                                                  |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bun audit --prod` | No vulnerabilities (269 production packages).                                                                                                                                                                                                           |
-| `bun audit` (all)  | 1 moderate: `esbuild` `<=0.24.2`, GHSA-67mh-4wv8-2f99 ("any website can send requests to the esbuild **development server** and read the response"). Reached through `drizzle-kit` (migration generator, dev dependency) and `unplugin` (Vite tooling). |
+| Scope              | Result                                        |
+| ------------------ | --------------------------------------------- |
+| `bun audit --prod` | No vulnerabilities (269 production packages). |
+| `bun audit` (all)  | No vulnerabilities (436 checked packages).    |
 
-Triage: **accepted, not exploitable here.** The advisory concerns `esbuild --serve`, which neither the build nor any script starts; esbuild is used as a library to bundle, only on developer and CI machines, and none of it ships in the production images (`bun install --production`, verified by the `--prod` scan above). Action: let Dependabot propose the `drizzle-kit` upgrade that moves it to a patched esbuild; do not force an override of the transitive version, since `drizzle-kit` is sensitive to it.
+The previously accepted transitive esbuild advisory is resolved by the exact root override `esbuild: 0.28.2`. Migration generation, production builds, unit/integration tests and the pinned Bun 1.4.4 Docker build/smoke were checked with that override. Keep the pin until upstream tooling resolves its old transitive dependency, then remove it with those same checks.
 
 ### Rust (`cargo audit` 0.23.0, advisory database of 2026-11-14, 738 crates in `apps/desktop/Cargo.lock`)
 
@@ -90,7 +90,7 @@ Be clear about the limits of this review:
 - `cargo audit` and `bun audit` cover known advisories only; `cargo deny` and a license gate are not in CI.
 - Container image vulnerability scans (Trivy, Grype) were not run against the built images.
 - The desktop client stores its session in a mode-0600 file, not the OS keyring (known gap).
-- Residual risks documented elsewhere: self-asserted OAuth client names (phishing of consent, ADR 0009), no MFA, no account lockout beyond rate limiting, account emails not on a durable queue.
+- Residual risks documented elsewhere: self-asserted OAuth client names (phishing of consent, ADR 0009), no MFA, no account lockout beyond rate limiting, account-email delivery is at least once; a crash after SMTP acceptance can duplicate mail. Pending payloads are encrypted and terminal payloads are erased (ADR 0011).
 
 ## 5. Recommended follow-ups before a 1.0
 
