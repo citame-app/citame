@@ -21,7 +21,7 @@ export WEB_PUBLISH="127.0.0.1:0"
 export WEB_TRUST_PROXY=true
 # The smoke environment has no mail server: opt out of verification explicitly (production
 # refuses to start with verification required and no provider, see ADR 0011).
-export AUTH_REQUIRE_EMAIL_VERIFICATION=false NOTIFY_EMAIL_PROVIDER=none NOTIFY_SMS_PROVIDER=none
+export AUTH_REQUIRE_EMAIL_VERIFICATION=false NOTIFY_EMAIL_PROVIDER=none NOTIFY_SMS_PROVIDER=none PAYMENT_PROVIDER=none
 export OWNER_EMAIL=smoke-owner@example.com OWNER_PASSWORD="smoke passphrase $(openssl rand -hex 4)"
 COMPOSE=(docker compose --project-name "$SMOKE_PROJECT" --env-file /dev/null -f compose.prod.yaml --profile tls)
 BASE="http://localhost:8088"

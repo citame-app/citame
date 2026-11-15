@@ -13,6 +13,7 @@ async function failedValidation() {
     `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$SMOKE_COMMAND_LOG"
 printf 'sms=%s tag=%s\\n' "$NOTIFY_SMS_PROVIDER" "$SOB_TAG" >> "$SMOKE_COMMAND_LOG"
+printf 'payments=%s\\n' "$PAYMENT_PROVIDER" >> "$SMOKE_COMMAND_LOG"
 exit 23
 `,
   );
@@ -25,6 +26,7 @@ exit 23
         SMOKE_COMMAND_LOG: log,
         COMPOSE_PROJECT_NAME: "real-salon",
         NOTIFY_SMS_PROVIDER: "twilio",
+        PAYMENT_PROVIDER: "redsys",
         SOB_TAG: "live",
       },
       stdout: "pipe",
@@ -71,4 +73,11 @@ test("smoke cleanup removes only the images tagged for that run", async () => {
   const tag = settings?.match(/tag=(sob-smoke-[a-z0-9-]+)/)?.[1];
   expect(tag).toBeDefined();
   expect(lines).toContain(`image rm sob-api:${tag} sob-web:${tag}`);
+});
+
+test("production smoke never enables an inherited bank gateway", async () => {
+  const lines = await failedValidation();
+  const settings = lines.filter((line) => line.startsWith("payments="));
+  expect(settings).toHaveLength(3);
+  for (const line of settings) expect(line).toBe("payments=none");
 });
