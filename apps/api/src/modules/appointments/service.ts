@@ -17,6 +17,7 @@ import {
   pgErrorCode,
   serviceStaff,
   timeOff,
+  user,
   workingHours,
 } from "@sob/db";
 import { and, asc, count, desc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
@@ -282,15 +283,28 @@ async function resolveClient(tx: Tx, request: CreateAppointmentRequest): Promise
   if (!inline)
     throw new DomainError("validation_error", "Provide exactly one of clientId or client");
 
-  const matchers = [
-    inline.email ? eq(clientProfile.email, inline.email) : undefined,
-    inline.phone ? eq(clientProfile.phone, inline.phone) : undefined,
+  // Walk-in profiles (no login) match by email or phone. A profile with a login carries a phone
+  // its owner typed and nobody verified, so it never matches by phone, and by email only when
+  // the login has verified that address: otherwise a booking could land on someone else's account.
+  const candidates = [
+    inline.email
+      ? or(
+          and(isNull(clientProfile.userId), eq(clientProfile.email, inline.email)),
+          and(eq(clientProfile.email, inline.email), eq(user.emailVerified, true)),
+        )
+      : undefined,
+    inline.phone
+      ? and(isNull(clientProfile.userId), eq(clientProfile.phone, inline.phone))
+      : undefined,
   ].filter((m) => m !== undefined);
-  if (matchers.length > 0) {
+  if (candidates.length > 0) {
     const [match] = await tx
       .select({ id: clientProfile.id })
       .from(clientProfile)
-      .where(and(isNull(clientProfile.deletedAt), or(...matchers)))
+      .leftJoin(user, eq(user.id, clientProfile.userId))
+      .where(and(isNull(clientProfile.deletedAt), or(...candidates)))
+      // Several duplicates are possible; always pick the oldest so the result is repeatable.
+      .orderBy(asc(clientProfile.createdAt), asc(clientProfile.id))
       .limit(1);
     if (match) return match.id;
   }
