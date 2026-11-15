@@ -10,6 +10,7 @@ description = "Sisters of Beauty front-desk client (GPUI)."
 chrono = { version = "=0.4.45", default-features = false, features = ["std", "clock"] }
 chrono-tz = "=0.10.4"
 gpui = "=0.2.2"
+unicode-segmentation = "=1.13.3"
 sob-core = { path = "../core" }
 
 [dev-dependencies]

@@ -1,4 +1,4 @@
-//! Runtime configuration from the environment (no config file in v1).
+//! Runtime configuration from the environment, plus a saved non-secret theme preference.
 
 use std::path::PathBuf;
 
@@ -46,5 +46,25 @@ impl Config {
 
     pub fn session_path(&self) -> PathBuf {
         self.data_dir.join("session.json")
+    }
+
+    pub fn saved_theme(&self) -> Option<bool> {
+        match std::fs::read_to_string(self.data_dir.join("theme"))
+            .ok()?
+            .trim()
+        {
+            "dark" => Some(true),
+            "light" => Some(false),
+            _ => None,
+        }
+    }
+
+    pub fn save_theme(&self, dark: bool) -> std::io::Result<()> {
+        std::fs::create_dir_all(&self.data_dir)?;
+        let temporary = self
+            .data_dir
+            .join(format!(".theme-{}.tmp", std::process::id()));
+        std::fs::write(&temporary, if dark { "dark\n" } else { "light\n" })?;
+        std::fs::rename(temporary, self.data_dir.join("theme"))
     }
 }

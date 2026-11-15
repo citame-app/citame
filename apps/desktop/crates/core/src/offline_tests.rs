@@ -249,6 +249,63 @@ fn cancelling_offline_hides_the_appointment_and_queues_a_cancel() {
 }
 
 #[test]
+fn recording_an_outcome_offline_updates_the_calendar_and_preserves_the_version() {
+    for status in [AppointmentStatus::Completed, AppointmentStatus::NoShow] {
+        let mut store = seeded();
+        set_appointment_status(&mut store, EXISTING, status, at("2026-03-10T12:00:00Z")).unwrap();
+        let current = effective_appointment(&store, EXISTING).unwrap().unwrap();
+        assert_eq!(current.status, status);
+        assert_eq!(current.version, 4);
+        let jobs = store.outbox(10).unwrap();
+        assert_eq!(jobs[0].kind, "appointment.set_status");
+        assert_eq!(jobs[0].payload["version"], json!(3));
+        assert_eq!(jobs[0].payload["status"], json!(status.as_str()));
+        assert!(column(&day_view(&store, day("2026-03-09")).unwrap(), "Ana").items[0].pending);
+    }
+}
+
+#[test]
+fn outcomes_cannot_close_future_or_already_closed_appointments() {
+    let mut store = seeded();
+    assert!(
+        set_appointment_status(
+            &mut store,
+            EXISTING,
+            AppointmentStatus::Completed,
+            at("2026-03-08T12:00:00Z")
+        )
+        .is_err()
+    );
+    assert!(
+        set_appointment_status(
+            &mut store,
+            EXISTING,
+            AppointmentStatus::Cancelled,
+            at("2026-03-10T12:00:00Z")
+        )
+        .is_err()
+    );
+    assert!(store.outbox(10).unwrap().is_empty());
+    set_appointment_status(
+        &mut store,
+        EXISTING,
+        AppointmentStatus::Completed,
+        at("2026-03-10T12:00:00Z"),
+    )
+    .unwrap();
+    assert!(
+        set_appointment_status(
+            &mut store,
+            EXISTING,
+            AppointmentStatus::NoShow,
+            at("2026-03-10T12:00:00Z")
+        )
+        .is_err()
+    );
+    assert_eq!(store.outbox(10).unwrap().len(), 1);
+}
+
+#[test]
 fn an_appointment_created_and_moved_offline_is_edited_in_the_overlay_only() {
     let mut s = seeded();
     let id = create_appointment(&mut s, new_appt("2026-03-10T13:00:00Z")).unwrap();

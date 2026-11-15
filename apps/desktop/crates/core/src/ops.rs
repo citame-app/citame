@@ -162,6 +162,33 @@ pub fn cancel_appointment(store: &mut Store, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Records an outcome offline; the API rechecks the time, role and version at synchronization.
+pub fn set_appointment_status(
+    store: &mut Store,
+    id: &str,
+    status: AppointmentStatus,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    if !matches!(
+        status,
+        AppointmentStatus::Completed | AppointmentStatus::NoShow
+    ) {
+        return Err(CoreError::Invalid("choose completed or no_show".into()));
+    }
+    let current = editable(store, id)?;
+    if current.starts_at > now {
+        return Err(CoreError::Invalid(
+            "an outcome can only be recorded once the appointment starts".into(),
+        ));
+    }
+    store.enqueue(
+        "appointment.set_status",
+        id,
+        json!({ "id": id, "version": current.version, "status": status.as_str() }),
+    )?;
+    Ok(())
+}
+
 /// Returns the new client id.
 pub fn create_client(store: &mut Store, name: &str, phone: Option<&str>) -> Result<String> {
     let name = name.trim();

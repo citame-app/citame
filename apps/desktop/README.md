@@ -5,7 +5,7 @@ Offline-first front-desk client in Rust: a GPUI app over a GUI-free core crate. 
 ```text
 apps/desktop
   crates/core   sob-core: SQLite store + outbox, sync engine, runner, HTTP/SSE, auth, calendar model, i18n
-  crates/app    sob-desktop: GPUI shell (login, day calendar, booking, conflicts, sync status)
+  crates/app    sob-desktop: GPUI shell (login, day/week calendar, booking, conflicts, sync status, light/dark theme)
   vendor/xattr  one-line patch so gpui compiles on current Linux toolchains (see the ADR)
 ```
 
@@ -24,19 +24,32 @@ export CARGO_TARGET_DIR=$PWD/target        # already git-ignored; a debug GUI bu
 cargo run -p sob-desktop                    # needs a reachable API to sign in for the first time
 ```
 
-Configuration is environment only:
+Connection and startup configuration comes from the environment; the theme toggle persists its choice in the data directory:
 
-| Variable            | Default                                    | Meaning                                                                             |
-| ------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------- |
-| `SOB_API_URL`       | `http://127.0.0.1:3000`                    | API origin (the web app's origin works too: it proxies `/api/auth`, `/sync`, `/me`) |
-| `SOB_DATA_DIR`      | `$XDG_DATA_HOME/sisters-of-beauty/desktop` | `replica.db` (SQLite) and `session.json` (mode 0600)                                |
-| `SOB_LANG` / `LANG` | English                                    | `es*` selects neutral es-AR                                                         |
-| `SOB_START_DATE`    | today                                      | `YYYY-MM-DD`, open the calendar on that day                                         |
-| `SOB_START_VIEW`    | none                                       | `new`, `details` or `conflicts`: open that dialog at startup (QA and screenshots)   |
+| Variable            | Default                                    | Meaning                                                                                           |
+| ------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `SOB_API_URL`       | `http://127.0.0.1:3000`                    | API origin (the web app's origin works too: it proxies `/api/auth`, `/sync`, `/me`)               |
+| `SOB_DATA_DIR`      | `$XDG_DATA_HOME/sisters-of-beauty/desktop` | `replica.db` (SQLite) and `session.json` (mode 0600)                                              |
+| `SOB_LANG` / `LANG` | English                                    | `es*` selects neutral es-AR                                                                       |
+| `SOB_THEME`         | system appearance, then saved choice       | `light`, `dark` or `system`; the header toggle saves its choice to `theme` in the data directory. |
+| `SOB_START_DATE`    | today                                      | `YYYY-MM-DD`, open the calendar on that day                                                       |
+| `SOB_START_VIEW`    | none                                       | `new`, `details` or `conflicts`: open that dialog at startup (QA and screenshots)                 |
 
 Sign in with an owner or staff account (`bun run bootstrap:owner`, or an owner-created staff account). Once a session is saved the app opens straight into the calendar even without a connection.
 
-Using it: the calendar shows one column per staff member; "New appointment" books (a new client can be typed in), clicking a booking opens move (time and staff) and cancel. Edits apply locally at once and show a "Pending sync" badge until the server acknowledges them. The header shows online or offline, the last sync (or the retry countdown), the number of pending edits and, when the server refused something (for example the slot was taken meanwhile), a "to review" badge: the conflicts dialog offers another time, dropping the booking or cancelling the appointment, or dismissing the notice.
+Using it: Day view shows one column per staff member; Week view shows Monday to Sunday for the selected member. The header switches views and moves by one day or one week. Text inputs support selection, clipboard shortcuts, grapheme-aware editing and IME composition. In the calendar, "New appointment" books (a new client can be typed in), clicking a booking opens move (time and staff) and cancel, or completed/no-show for a booked appointment that has started. Closed appointments cannot be moved or cancelled. Edits apply locally at once and show a "Pending sync" badge until the server acknowledges them. The header shows online or offline, the last sync (or the retry countdown), the number of pending edits and, when the server refused something (for example the slot was taken meanwhile), a "to review" badge: the conflicts dialog offers another time, dropping the booking or cancelling the appointment, or dismissing the notice.
+
+## Prepare a Linux release locally
+
+```sh
+# From the repository root; no registry, remote or production domain is needed.
+bun run release:check
+(cd apps/desktop && cargo build --release --locked -p sob-desktop)
+bash scripts/package-desktop.sh
+(cd .release/desktop && sha256sum -c *.sha256)
+```
+
+The archive includes the executable, MIT license, this guide and release metadata (source revision and whether the checkout was dirty). Packaging uses deterministic archive metadata and emits a SHA-256 checksum; it does not install or publish. Build and package on the target architecture. See [release.md](../../docs/release.md) for the CI gate and future publishing steps.
 
 ## Tests
 

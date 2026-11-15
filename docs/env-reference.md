@@ -115,9 +115,10 @@ The production services also receive `AUTH_REQUIRE_EMAIL_VERIFICATION`, `NOTIFY_
 
 ## Desktop client
 
-| Variable                           | Default                                    | Notes                                        |
-| ---------------------------------- | ------------------------------------------ | -------------------------------------------- |
-| `SOB_API_URL`                      | `http://127.0.0.1:3000`                    | API origin (the web origin works too).       |
-| `SOB_DATA_DIR`                     | `$XDG_DATA_HOME/sisters-of-beauty/desktop` | `replica.db` and `session.json` (mode 0600). |
-| `SOB_LANG` / `LANG`                | English                                    | `es*` selects neutral es-AR.                 |
-| `SOB_START_DATE`, `SOB_START_VIEW` | today, none                                | QA helpers: open on a day or in a dialog.    |
+| Variable                           | Default                                    | Notes                                                                    |
+| ---------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------ |
+| `SOB_API_URL`                      | `http://127.0.0.1:3000`                    | API origin (the web origin works too).                                   |
+| `SOB_DATA_DIR`                     | `$XDG_DATA_HOME/sisters-of-beauty/desktop` | `replica.db` and `session.json` (mode 0600).                             |
+| `SOB_LANG` / `LANG`                | English                                    | `es*` selects neutral es-AR.                                             |
+| `SOB_THEME`                        | saved choice, otherwise system appearance  | `light`, `dark`, `system`; header toggle persists in the data directory. |
+| `SOB_START_DATE`, `SOB_START_VIEW` | today, none                                | QA helpers: open on a day or in a dialog.                                |

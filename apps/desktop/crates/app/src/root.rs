@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use chrono::{DateTime, Duration as Span, NaiveDate, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration as Span, NaiveDate, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
 use gpui::prelude::*;
 use gpui::{
@@ -91,6 +91,10 @@ pub struct Root {
     date: NaiveDate,
     tz: Tz,
     view: Option<DayView>,
+    week_mode: bool,
+    week_views: Vec<DayView>,
+    week_staff_id: String,
+    theme_override: Option<bool>,
     status: SyncStatus,
     summary: SyncSummary,
     conflicts: Vec<Conflict>,
@@ -105,6 +109,12 @@ pub struct Root {
 impl Root {
     pub fn new(config: Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let locale = config.locale;
+        let theme_override = match std::env::var("SOB_THEME").ok().as_deref() {
+            Some("dark") => Some(true),
+            Some("light") => Some(false),
+            Some("system") => None,
+            _ => config.saved_theme(),
+        };
         let start_date = config.start_date;
         let start_view = config.start_view.clone();
         let svc = Services::open(config).expect("open the local database");
@@ -134,6 +144,10 @@ impl Root {
             date: start_date.unwrap_or_else(|| Utc::now().date_naive()),
             tz: Tz::UTC,
             view: None,
+            week_mode: false,
+            week_views: vec![],
+            week_staff_id: String::new(),
+            theme_override,
             status: SyncStatus::default(),
             summary: SyncSummary::default(),
             conflicts: vec![],
@@ -301,6 +315,23 @@ impl Root {
         let store = &self.svc.store;
         self.tz = calendar::salon_tz(store).unwrap_or(Tz::UTC);
         self.view = calendar::day_view(store, self.date).ok();
+        if !self.view.as_ref().is_some_and(|view| {
+            view.columns
+                .iter()
+                .any(|col| col.staff.id == self.week_staff_id)
+        }) {
+            self.week_staff_id = self
+                .view
+                .as_ref()
+                .and_then(|view| view.columns.first())
+                .map(|col| col.staff.id.clone())
+                .unwrap_or_default();
+        }
+        self.week_views = if self.week_mode {
+            calendar::week_view(store, self.date).unwrap_or_default()
+        } else {
+            vec![]
+        };
         self.status = self.svc.status();
         self.summary = calendar::sync_summary(store).unwrap_or_default();
         self.conflicts = store.conflicts().unwrap_or_default();
@@ -323,13 +354,57 @@ impl Root {
     }
 
     fn shift_day(&mut self, days: i64, cx: &mut Context<Self>) {
-        self.date += Span::days(days);
+        self.date += Span::days(days * if self.week_mode { 7 } else { 1 });
         self.reload(cx);
     }
 
     fn today(&mut self, cx: &mut Context<Self>) {
         self.date = Utc::now().with_timezone(&self.tz).date_naive();
+        if self.week_mode {
+            self.date -= Span::days(self.date.weekday().num_days_from_monday().into());
+        }
         self.reload(cx);
+    }
+
+    fn set_week(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.week_mode = enabled;
+        if enabled {
+            self.date -= Span::days(self.date.weekday().num_days_from_monday().into());
+        }
+        self.reload(cx);
+    }
+
+    fn set_week_staff(&mut self, id: String, cx: &mut Context<Self>) {
+        self.week_staff_id = id;
+        cx.notify();
+    }
+
+    fn set_theme(&mut self, dark: bool, cx: &mut Context<Self>) {
+        self.theme_override = Some(dark);
+        theme::set_dark(dark);
+        if let Err(error) = self.svc.config.save_theme(dark) {
+            eprintln!("could not save theme preference: {error}");
+        }
+        cx.notify();
+    }
+
+    fn calendar_columns(&self) -> Vec<(NaiveDate, &calendar::StaffColumn)> {
+        if self.week_mode {
+            self.week_views
+                .iter()
+                .filter_map(|view| {
+                    view.columns
+                        .iter()
+                        .find(|col| col.staff.id == self.week_staff_id)
+                        .map(|col| (view.date, col))
+                })
+                .collect()
+        } else {
+            self.view
+                .as_ref()
+                .map(|view| view.columns.iter().map(|col| (view.date, col)).collect())
+                .unwrap_or_default()
+        }
     }
 
     // ---------------------------------------------------------------- time helpers
@@ -526,6 +601,27 @@ impl Root {
             }
             Err(e) => {
                 d.error = Some(e.to_string());
+                cx.notify();
+            }
+        }
+    }
+
+    fn set_outcome(
+        &mut self,
+        status: AppointmentStatus,
+        now: DateTime<Utc>,
+        cx: &mut Context<Self>,
+    ) {
+        let Overlay::Details(d) = &mut self.overlay else {
+            return;
+        };
+        match ops::set_appointment_status(&mut self.svc.store, &d.id, status, now) {
+            Ok(()) => {
+                self.overlay = Overlay::None;
+                self.edited(cx);
+            }
+            Err(error) => {
+                d.error = Some(error.to_string());
                 cx.notify();
             }
         }
@@ -870,9 +966,11 @@ impl Root {
     fn render_header(&self, cx: &mut Context<Self>) -> gpui::Div {
         div()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap_4()
-            .h(px(60.))
+            .min_h(px(60.))
+            .py_2()
             .px_4()
             .border_b_1()
             .border_color(theme::line())
@@ -915,8 +1013,38 @@ impl Root {
                             .child(SharedString::from(i18n::date_label(self.locale, self.date))),
                     ),
             )
+            .child(self.button(
+                "view-day",
+                self.t(Key::ViewDay),
+                if self.week_mode {
+                    Kind::Ghost
+                } else {
+                    Kind::Primary
+                },
+                cx.listener(|this, _, _, cx| this.set_week(false, cx)),
+            ))
+            .child(self.button(
+                "view-week",
+                self.t(Key::ViewWeek),
+                if self.week_mode {
+                    Kind::Primary
+                } else {
+                    Kind::Ghost
+                },
+                cx.listener(|this, _, _, cx| this.set_week(true, cx)),
+            ))
             .child(div().flex_1())
             .child(self.status_cluster(cx))
+            .child(self.button(
+                "toggle-theme",
+                self.t(if theme::is_dark() {
+                    Key::ThemeLight
+                } else {
+                    Key::ThemeDark
+                }),
+                Kind::Ghost,
+                cx.listener(|this, _, _, cx| this.set_theme(!theme::is_dark(), cx)),
+            ))
             .child(self.button(
                 "new",
                 self.t(Key::NewAppointment),
@@ -954,12 +1082,13 @@ impl Root {
     fn render_block(
         &self,
         item: &CalendarItem,
+        date: NaiveDate,
         first_hour: u32,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let a = &item.appointment;
         let start_local = a.starts_at.with_timezone(&self.tz);
-        let day_start = self.at_local(self.date, 0);
+        let day_start = self.at_local(date, 0);
         let from_min = ((a.starts_at - day_start).num_minutes() as f32).max(0.0);
         let _ = start_local;
         let top = (from_min - first_hour as f32 * 60.0) * HOUR_PX / 60.0;
@@ -1052,7 +1181,15 @@ impl Root {
                 .child(self.t(Key::NoStaff))
                 .into_any_element();
         }
-        let (first, last) = self.visible_hours(view);
+        let (first, last) = if self.week_mode {
+            self.week_views
+                .iter()
+                .map(|view| self.visible_hours(view))
+                .fold((8, 20), |(a, b), (c, d)| (a.min(c), b.max(d)))
+        } else {
+            self.visible_hours(view)
+        };
+        let visible_columns = self.calendar_columns();
         let total_h = (last - first) as f32 * HOUR_PX;
         let hours = div()
             .w(px(GUTTER_PX))
@@ -1068,65 +1205,90 @@ impl Root {
                     .text_color(theme::muted())
                     .child(SharedString::from(format!("{h:02}:00")))
             }));
-        let columns = view.columns.iter().map(|col| {
-            div()
-                .flex_1()
-                .min_w(px(160.))
-                .relative()
-                .h(px(total_h))
-                .border_l_1()
-                .border_color(theme::line())
-                .children((first..last).map(|h| {
-                    div()
-                        .absolute()
-                        .top(px((h - first) as f32 * HOUR_PX))
-                        .left_0()
-                        .right_0()
-                        .h(px(1.))
-                        .bg(theme::line_soft())
-                }))
-                .children(
-                    col.items
-                        .iter()
-                        .map(|item| self.render_block(item, first, cx)),
-                )
-        });
-        let heads = view.columns.iter().map(|col| {
-            div()
-                .flex_1()
-                .min_w(px(160.))
-                .h(px(36.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .border_l_1()
-                .border_color(theme::line())
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(SharedString::from(col.staff.display_name.clone()))
-        });
-        div()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .child(
+        let columns = visible_columns
+            .iter()
+            .enumerate()
+            .map(|(index, (date, col))| {
                 div()
-                    .flex()
-                    .flex_none()
-                    .border_b_1()
-                    .border_color(theme::line())
-                    .bg(theme::panel())
-                    .child(div().w(px(GUTTER_PX)).flex_none())
-                    .children(heads),
-            )
-            .child(
-                div()
-                    .id("calendar-scroll")
+                    .debug_selector(|| format!("calendar-col-{index}"))
                     .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .bg(theme::panel())
-                    .child(div().flex().child(hours).children(columns)),
+                    .min_w(px(160.))
+                    .relative()
+                    .h(px(total_h))
+                    .border_l_1()
+                    .border_color(theme::line())
+                    .children((first..last).map(|h| {
+                        div()
+                            .absolute()
+                            .top(px((h - first) as f32 * HOUR_PX))
+                            .left_0()
+                            .right_0()
+                            .h(px(1.))
+                            .bg(theme::line_soft())
+                    }))
+                    .children(
+                        col.items
+                            .iter()
+                            .map(|item| self.render_block(item, *date, first, cx)),
+                    )
+            });
+        let heads = visible_columns
+            .iter()
+            .enumerate()
+            .map(|(index, (date, col))| {
+                div()
+                    .debug_selector(|| format!("calendar-head-{index}"))
+                    .flex_1()
+                    .min_w(px(160.))
+                    .h(px(36.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .border_l_1()
+                    .border_color(theme::line())
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(SharedString::from(if self.week_mode {
+                        format!(
+                            "{} {}",
+                            i18n::weekday_short(self.locale, date.weekday()),
+                            date.format("%d/%m")
+                        )
+                    } else {
+                        col.staff.display_name.clone()
+                    }))
+            });
+        div()
+            .id("calendar-horizontal-scroll")
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .overflow_x_scroll()
+            .child(
+                div()
+                    .w_full()
+                    .h_full()
+                    .min_w(px(GUTTER_PX + visible_columns.len() as f32 * 160.))
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_none()
+                            .border_b_1()
+                            .border_color(theme::line())
+                            .bg(theme::panel())
+                            .child(div().w(px(GUTTER_PX)).flex_none())
+                            .children(heads),
+                    )
+                    .child(
+                        div()
+                            .id("calendar-scroll")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .bg(theme::panel())
+                            .child(div().flex().child(hours).children(columns)),
+                    ),
             )
             .into_any_element()
     }
@@ -1357,7 +1519,12 @@ impl Root {
             .as_ref()
             .map(|a| self.client_name(&a.client_id))
             .unwrap_or_default();
-        let changed = d.start != d.original_start || d.staff_id != d.original_staff;
+        let editable = current
+            .as_ref()
+            .is_some_and(|a| a.status == AppointmentStatus::Booked);
+        let can_set_outcome =
+            editable && current.as_ref().is_some_and(|a| a.starts_at <= Utc::now());
+        let changed = editable && (d.start != d.original_start || d.staff_id != d.original_staff);
         self.modal(
             div()
                 .child(
@@ -1399,21 +1566,54 @@ impl Root {
                         .text_sm()
                         .child(SharedString::from(self.date_time_label(d.original_start))),
                 )
-                .child(self.label(Key::MoveTo))
-                .child(self.stepper("move", d.start, cx, |this, minutes, cx| {
-                    if let Overlay::Details(d) = &mut this.overlay {
-                        d.start += Span::minutes(minutes);
-                    }
-                    cx.notify();
-                }))
-                .child(
-                    self.staff_chips("move-staff", &d.staff_id, cx, |this, id, cx| {
-                        if let Overlay::Details(d) = &mut this.overlay {
-                            d.staff_id = id;
-                        }
-                        cx.notify();
+                .when(editable, |x| {
+                    x.child(self.label(Key::MoveTo))
+                        .child(self.stepper("move", d.start, cx, |this, minutes, cx| {
+                            if let Overlay::Details(d) = &mut this.overlay {
+                                d.start += Span::minutes(minutes);
+                            }
+                            cx.notify();
+                        }))
+                        .child(
+                            self.staff_chips("move-staff", &d.staff_id, cx, |this, id, cx| {
+                                if let Overlay::Details(d) = &mut this.overlay {
+                                    d.staff_id = id;
+                                }
+                                cx.notify();
+                            }),
+                        )
+                })
+                .when_some(
+                    current.as_ref().and_then(|a| match a.status {
+                        AppointmentStatus::Completed => Some(Key::Completed),
+                        AppointmentStatus::NoShow => Some(Key::NoShow),
+                        _ => None,
                     }),
+                    |x, key| x.child(self.badge(self.t(key), theme::text(), theme::line_soft())),
                 )
+                .when(can_set_outcome, |x| {
+                    x.child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(self.button(
+                                "mark-completed",
+                                self.t(Key::MarkCompleted),
+                                Kind::Primary,
+                                cx.listener(|this, _, _, cx| {
+                                    this.set_outcome(AppointmentStatus::Completed, Utc::now(), cx)
+                                }),
+                            ))
+                            .child(self.button(
+                                "mark-no-show",
+                                self.t(Key::MarkNoShow),
+                                Kind::Ghost,
+                                cx.listener(|this, _, _, cx| {
+                                    this.set_outcome(AppointmentStatus::NoShow, Utc::now(), cx)
+                                }),
+                            )),
+                    )
+                })
                 .when_some(d.error.clone(), |x, e| {
                     x.child(
                         div()
@@ -1427,16 +1627,18 @@ impl Root {
                         .flex()
                         .justify_between()
                         .gap_2()
-                        .child(self.button(
-                            "cancel-appointment",
-                            if d.confirm_cancel {
-                                "Confirm: ".to_owned() + self.t(Key::CancelAppointment)
-                            } else {
-                                self.t(Key::CancelAppointment).to_owned()
-                            },
-                            Kind::Danger,
-                            cx.listener(|this, _, _, cx| this.cancel_appointment(cx)),
-                        ))
+                        .when(editable, |x| {
+                            x.child(self.button(
+                                "cancel-appointment",
+                                if d.confirm_cancel {
+                                    "Confirm: ".to_owned() + self.t(Key::CancelAppointment)
+                                } else {
+                                    self.t(Key::CancelAppointment).to_owned()
+                                },
+                                Kind::Danger,
+                                cx.listener(|this, _, _, cx| this.cancel_appointment(cx)),
+                            ))
+                        })
                         .child(
                             div()
                                 .flex()
@@ -1672,7 +1874,11 @@ fn rgb_white() -> gpui::Rgba {
 }
 
 impl Render for Root {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        theme::set_dark(self.theme_override.unwrap_or(matches!(
+            window.appearance(),
+            gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
+        )));
         let base = div()
             .size_full()
             .relative()
@@ -1692,6 +1898,20 @@ impl Render for Root {
                 base.flex()
                     .flex_col()
                     .child(self.render_header(cx))
+                    .when(self.week_mode, |d| {
+                        d.child(
+                            div()
+                                .px_4()
+                                .py_2()
+                                .bg(theme::panel())
+                                .child(self.staff_chips(
+                                    "week-staff",
+                                    &self.week_staff_id,
+                                    cx,
+                                    |this, id, cx| this.set_week_staff(id, cx),
+                                )),
+                        )
+                    })
                     .child(self.render_calendar(cx))
                     .children(overlay)
             }
@@ -1806,6 +2026,89 @@ mod tests {
             );
             assert_eq!(view.columns[0].items.len(), 1);
             assert_eq!(view.columns[0].items[0].client_name, "Lucia");
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    async fn a_theme_change_is_saved_for_the_next_launch(cx: &mut TestAppContext) {
+        let (_d, win) = open(cx);
+        win.update(cx, |root, _, cx| {
+            root.set_theme(true, cx);
+            assert_eq!(root.svc.config.saved_theme(), Some(true));
+            assert!(theme::is_dark());
+            root.set_theme(false, cx);
+            assert_eq!(root.svc.config.saved_theme(), Some(false));
+            assert!(!theme::is_dark());
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    async fn week_view_starts_on_monday_and_navigates_in_whole_weeks(cx: &mut TestAppContext) {
+        let (_d, win) = open(cx);
+        win.update(cx, |root, _, cx| {
+            root.date = "2026-03-11".parse().unwrap();
+            root.set_week(true, cx);
+            assert_eq!(root.date, "2026-03-09".parse::<NaiveDate>().unwrap());
+            let columns = root.calendar_columns();
+            assert_eq!(columns.len(), 7);
+            assert_eq!(columns[0].0, root.date);
+            assert_eq!(columns[6].0, root.date + Span::days(6));
+            root.shift_day(1, cx);
+            assert_eq!(root.date, "2026-03-16".parse::<NaiveDate>().unwrap());
+            root.set_week(false, cx);
+            assert_eq!(root.calendar_columns().len(), 2);
+            root.shift_day(-1, cx);
+            assert_eq!(root.date, "2026-03-15".parse::<NaiveDate>().unwrap());
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    async fn a_narrow_week_calendar_scrolls_headers_and_days_together(cx: &mut TestAppContext) {
+        let (_dir, config) = desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        root.update(cx, |root, cx| root.set_week(true, cx));
+        cx.simulate_resize(gpui::size(px(800.), px(700.)));
+        cx.run_until_parked();
+        let before = cx.debug_bounds("calendar-head-6").expect("Sunday heading");
+        assert!(before.right() > px(800.));
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: gpui::point(px(400.), px(400.)),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(-600.), px(0.))),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+        let after = cx.debug_bounds("calendar-head-6").unwrap();
+        assert!(
+            after.origin.x < before.origin.x - px(100.),
+            "horizontal scroll must reveal later days"
+        );
+        assert!(after.right() <= px(800.));
+        assert_eq!(
+            after.origin.x,
+            cx.debug_bounds("calendar-col-6").unwrap().origin.x
+        );
+    }
+
+    #[gpui::test]
+    async fn week_view_changes_staff_without_mixing_their_calendars(cx: &mut TestAppContext) {
+        let (_d, win) = open(cx);
+        win.update(cx, |root, _, cx| {
+            root.set_week(true, cx);
+            assert!(
+                root.calendar_columns()
+                    .iter()
+                    .all(|(_, col)| col.staff.id == ANA)
+            );
+            root.set_week_staff(BEA.to_owned(), cx);
+            assert_eq!(root.calendar_columns().len(), 7);
+            assert!(
+                root.calendar_columns()
+                    .iter()
+                    .all(|(_, col)| col.staff.id == BEA)
+            );
         })
         .unwrap();
     }
@@ -1933,6 +2236,40 @@ mod tests {
                 root.view.as_ref().unwrap().columns[0].items.is_empty(),
                 "cancelled bookings leave the grid"
             );
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    async fn recording_an_outcome_queues_it_offline_and_prevents_further_edits(
+        cx: &mut TestAppContext,
+    ) {
+        let (_d, win) = open(cx);
+        win.update(cx, |root, _, cx| {
+            root.open_details(EXISTING, cx);
+            root.set_outcome(
+                AppointmentStatus::Completed,
+                "2026-03-10T12:00:00Z".parse().unwrap(),
+                cx,
+            );
+            assert!(matches!(root.overlay, Overlay::None));
+            assert_eq!(outbox_kinds(root), ["appointment.set_status"]);
+            assert_eq!(
+                root.svc.store.outbox(5).unwrap()[0].payload["version"],
+                json!(3)
+            );
+            let current = calendar::effective_appointment(&root.svc.store, EXISTING)
+                .unwrap()
+                .unwrap();
+            assert_eq!(current.status, AppointmentStatus::Completed);
+            root.open_details(EXISTING, cx);
+            root.set_outcome(
+                AppointmentStatus::NoShow,
+                "2026-03-10T12:00:00Z".parse().unwrap(),
+                cx,
+            );
+            assert!(matches!(&root.overlay, Overlay::Details(d) if d.error.is_some()));
+            assert_eq!(outbox_kinds(root).len(), 1);
         })
         .unwrap();
     }
