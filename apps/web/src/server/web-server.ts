@@ -1,5 +1,7 @@
 import { join, normalize, sep } from "node:path";
 import { gzipSync } from "node:zlib";
+import { visitorAddress } from "./client-address";
+import { runWithRequestContext } from "./request-context";
 
 export interface ProxyLike {
   matches: (url: URL) => boolean;
@@ -14,6 +16,11 @@ export interface WebServerOptions {
   proxy: ProxyLike;
   /** Send HSTS. Only for deployments served over https (the header is ignored over http). */
   hsts?: boolean;
+  /**
+   * The web server is behind an edge proxy that appends to `X-Forwarded-For` (`WEB_TRUST_PROXY`).
+   * Decides how the visitor address handed to SSR (and so to the API) is determined.
+   */
+  trustProxy?: boolean;
   /** Access log sink. Receives plain data (no query strings, cookies or addresses). */
   log?: (entry: Record<string, unknown>) => void;
 }
@@ -35,7 +42,14 @@ const COMPRESSIBLE = /^(text\/|application\/(json|javascript|xml)|image\/svg\+xm
 const IMMUTABLE = "public, max-age=31536000, immutable";
 
 /** A small, dependency-free production server: health, API proxy, static files, then SSR. */
-export function createWebServer({ clientDir, ssr, proxy, hsts = false, log }: WebServerOptions) {
+export function createWebServer({
+  clientDir,
+  ssr,
+  proxy,
+  hsts = false,
+  trustProxy = false,
+  log,
+}: WebServerOptions) {
   const root = normalize(clientDir.endsWith(sep) ? clientDir : clientDir + sep);
   const gzipCache = new Map<string, Uint8Array>();
 
@@ -110,7 +124,13 @@ export function createWebServer({ clientDir, ssr, proxy, hsts = false, log }: We
     }
     const asset = await staticFile(request, url.pathname);
     if (asset) return asset;
-    return compress(request, await ssr(request));
+    // SSR calls the API from this container: carry the visitor's address so the API rate-limits
+    // each visitor on their own instead of lumping every render into the web container's bucket.
+    const context = {
+      visitorIp: visitorAddress(request, client?.address ?? null, trustProxy),
+      requestId: request.headers.get("x-request-id") ?? "",
+    };
+    return compress(request, await runWithRequestContext(context, () => ssr(request)));
   }
 
   return {

@@ -15,6 +15,7 @@
  * server itself sits behind an edge proxy you operate, set `WEB_TRUST_PROXY=true` and the visitor
  * is the last inbound entry instead of the socket address.
  */
+import { visitorAddress } from "./client-address";
 
 const HOP_BY_HOP = [
   "connection",
@@ -68,14 +69,6 @@ export function createProxy({ apiUrl, trustProxy, fetch: doFetch = fetch }: Prox
     return `${base}${upstreamPath}${url.search}`;
   }
 
-  function visitorAddress(request: Request, socketAddress: string | null): string | null {
-    if (trustProxy) {
-      const last = request.headers.get("x-forwarded-for")?.split(",").at(-1)?.trim();
-      if (last) return last;
-    }
-    return socketAddress;
-  }
-
   async function handle(request: Request, socketAddress: string | null): Promise<Response> {
     const url = new URL(request.url);
     if (isInternalOnly(url)) {
@@ -88,7 +81,7 @@ export function createProxy({ apiUrl, trustProxy, fetch: doFetch = fetch }: Prox
     for (const name of HOP_BY_HOP) headers.delete(name);
     // The API is on the internal network: skip compression so the body streams back untouched.
     headers.set("accept-encoding", "identity");
-    const address = visitorAddress(request, socketAddress);
+    const address = visitorAddress(request, socketAddress, trustProxy);
     if (address) headers.set("x-forwarded-for", address);
     headers.set("x-forwarded-host", url.host);
     headers.set("x-forwarded-proto", url.protocol.replace(":", ""));

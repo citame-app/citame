@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { installNativeWebApi } from "../../test/native-web";
+import { currentRequestContext } from "../lib/api/request-context";
 import { createWebServer } from "./web-server";
 
 installNativeWebApi();
@@ -62,6 +63,49 @@ describe("health", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "ok" });
     expect(response.headers.get("cache-control")).toBe("no-store");
+  });
+});
+
+describe("ssr request context", () => {
+  const seen = (options: { trustProxy?: boolean } = {}) => {
+    const contexts: Array<ReturnType<typeof currentRequestContext>> = [];
+    const handler = createWebServer({
+      clientDir: dir,
+      trustProxy: options.trustProxy,
+      ssr: () => {
+        contexts.push(currentRequestContext());
+        return new Response("ok");
+      },
+      proxy: { matches: () => false, handle: async () => new Response("") },
+    });
+    return { handler, contexts };
+  };
+
+  test("SSR runs with the socket address as the visitor, ignoring a client-supplied XFF", async () => {
+    const { handler, contexts } = seen();
+    await get(handler, "/", { headers: { "x-forwarded-for": "6.6.6.6" } });
+    expect(contexts[0]?.visitorIp).toBe("203.0.113.9");
+    expect(contexts[0]?.requestId).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  test("behind a trusted edge proxy the visitor is the last XFF entry", async () => {
+    const { handler, contexts } = seen({ trustProxy: true });
+    await get(handler, "/", { headers: { "x-forwarded-for": "6.6.6.6, 198.51.100.4" } });
+    expect(contexts[0]?.visitorIp).toBe("198.51.100.4");
+  });
+
+  test("concurrent requests keep separate contexts", async () => {
+    const { handler, contexts } = seen({ trustProxy: true });
+    await Promise.all(
+      ["198.51.100.1", "198.51.100.2", "198.51.100.3"].map((ip) =>
+        get(handler, "/", { headers: { "x-forwarded-for": ip } }),
+      ),
+    );
+    expect(contexts.map((c) => c?.visitorIp).sort()).toEqual([
+      "198.51.100.1",
+      "198.51.100.2",
+      "198.51.100.3",
+    ]);
   });
 });
 

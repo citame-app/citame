@@ -28,6 +28,7 @@ const web = createWebServer({
   ssr: (request) => entry.default.fetch(request),
   proxy: createProxy({ apiUrl, trustProxy }),
   hsts,
+  trustProxy,
   log: (entry) => process.stdout.write(`${JSON.stringify(entry)}\n`),
 });
 

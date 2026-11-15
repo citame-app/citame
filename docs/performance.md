@@ -6,6 +6,7 @@ All numbers below were measured, not estimated. They describe one development ma
 
 - Linux 7.0 (Ubuntu), Intel Core i7-8565U (4 cores / 8 threads, 1.8 GHz base, a laptop CPU), 14 GB RAM, NVMe disk. k6 2.2.0, Bun 1.4, Postgres 18 and Valkey 9.1 in Docker (default settings), API and web as local production-mode Bun processes (`NODE_ENV=production`, `RATE_LIMIT_GLOBAL_MAX=1000000`). **k6, API, web, Postgres and Valkey all shared the same 8 CPUs**, which understates what a separate load generator would see.
 - Database: fresh, migrated and seeded (3 services, 2 stylists). Scenarios are in [k6/](../k6/README.md).
+- **Rate limits were effectively off for these runs.** The global limiter (300 requests per minute per client address by default) was raised to 1 000 000 because k6 is a single address. Production numbers for one visitor are bounded by the real limit. Server-rendered pages call the API on behalf of the visitor and forward their address (`X-Forwarded-For`, set by the web server), so each visitor has their own bucket; before that fix every SSR call shared the web container's bucket.
 
 ## Booking contention (the correctness test)
 

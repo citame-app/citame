@@ -1,5 +1,6 @@
 import { createApiClient } from "./client";
 import { createEndpoints, type Endpoints } from "./endpoints";
+import { currentRequestContext } from "./request-context";
 
 let browserEndpoints: Endpoints | undefined;
 
@@ -13,10 +14,17 @@ export function serverEndpoints(cookie?: string | null, requestId?: string | nul
     createApiClient({
       restBase: base,
       authBase: base,
-      headers: (): Record<string, string> => ({
-        ...(cookie ? { cookie } : {}),
-        ...(requestId ? { "x-request-id": requestId } : {}),
-      }),
+      headers: (): Record<string, string> => {
+        // The visit being rendered: its address makes the API rate-limit this visitor, not the
+        // web container, and its request id lines API logs up with web logs.
+        const visit = currentRequestContext();
+        const id = requestId || visit?.requestId;
+        return {
+          ...(cookie ? { cookie } : {}),
+          ...(id ? { "x-request-id": id } : {}),
+          ...(visit?.visitorIp ? { "x-forwarded-for": visit.visitorIp } : {}),
+        };
+      },
     }),
   );
 }
