@@ -1,6 +1,7 @@
 import { createDb } from "@sob/db";
 import { loadConfig } from "./config";
 import { startMaintenance } from "./maintenance";
+import { startInventoryExpiry } from "./modules/inventory/runtime";
 import { startNotificationRuntime } from "./notifications/runtime";
 import { rootLogger } from "./observability/logger";
 
@@ -15,6 +16,7 @@ const loaded = loadConfig();
 const config = { ...loaded, notifications: { ...loaded.notifications, workerEnabled: true } };
 const { db, close } = createDb(config.databaseUrl);
 const runtime = startNotificationRuntime({ db, config });
+const inventoryExpiry = startInventoryExpiry(db);
 const maintenance = config.maintenance.enabled
   ? startMaintenance({
       db,
@@ -30,7 +32,7 @@ async function shutdown(signal: string) {
   stopping = true;
   rootLogger.info("worker shutdown requested", { signal });
   try {
-    await Promise.all([runtime?.stop(), maintenance?.stop()]);
+    await Promise.all([runtime?.stop(), maintenance?.stop(), inventoryExpiry.stop()]);
     await close();
     rootLogger.info("worker shutdown complete");
     process.exit(0);

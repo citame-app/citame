@@ -11,6 +11,7 @@ import { api } from "~/lib/api/instance";
 import { formatMoney } from "~/lib/format";
 import { centsInput, inputCents } from "./money";
 import { printReceipt } from "./print-receipt";
+import { StockReturn } from "./stock-return";
 
 export function CheckoutPanel({
   id,
@@ -56,8 +57,17 @@ export function CheckoutPanel({
         setRequestKey(crypto.randomUUID());
       }
       void queries.invalidateQueries({ queryKey: ["commerce"] });
+      void queries.invalidateQueries({ queryKey: ["inventory"] });
     },
     onError: () => setError(true),
+  });
+  const voidSale = useMutation({
+    mutationFn: () => api().commerce.void(id, mode),
+    onSuccess: () => {
+      setForm(null);
+      void queries.invalidateQueries({ queryKey: ["commerce"] });
+      void queries.invalidateQueries({ queryKey: ["inventory"] });
+    },
   });
   if (sale.isPending) return <Skeleton className="h-72" />;
   if (sale.isError) return <ErrorState error={sale.error} onRetry={() => void sale.refetch()} />;
@@ -110,6 +120,26 @@ export function CheckoutPanel({
           {t(`commerce.status.${order.status}`)}
         </p>
       </div>
+      {mode === "admin" &&
+        order.status === "open" &&
+        !order.payments.some((p) => p.status !== "failed") && (
+          <details>
+            <summary className="cursor-pointer py-2 font-medium">{t("inventory.void")}</summary>
+            <p className="my-2 text-sm text-muted">{t("inventory.voidHelp")}</p>
+            <Button
+              variant="secondary"
+              disabled={!online || voidSale.isPending}
+              onClick={() => voidSale.mutate()}
+            >
+              {t("inventory.void")}
+            </Button>
+            {voidSale.isError && <p role="alert">{t("inventory.error")}</p>}
+          </details>
+        )}
+      {mode === "admin" &&
+        role === "owner" &&
+        order.fulfilledAt &&
+        order.lines.some((line) => line.kind === "product") && <StockReturn checkout={order} />}
       <ul className="divide-y divide-line">
         {order.lines.map((line) => (
           <li key={line.id} className="flex justify-between gap-3 py-3">

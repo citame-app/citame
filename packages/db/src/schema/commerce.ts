@@ -14,6 +14,7 @@ import { appointment } from "./appointment";
 import { user } from "./auth";
 import { clientProfile } from "./client";
 import { createdAt, primaryId, timestamptz, updatedAt } from "./helpers";
+import { retailProduct } from "./inventory-product";
 
 export const checkoutStatus = pgEnum("checkout_status", [
   "open",
@@ -58,12 +59,15 @@ export const checkout = pgTable(
     createdBy: text().references(() => user.id, { onDelete: "set null" }),
     idempotencyKey: text().notNull(),
     requestHash: text().notNull(),
+    fulfilledAt: timestamptz(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => [
     unique("checkout_actor_idempotency_unique").on(t.createdBy, t.idempotencyKey),
-    unique("checkout_appointment_unique").on(t.appointmentId),
+    uniqueIndex("checkout_active_appointment_unique")
+      .on(t.appointmentId)
+      .where(sql`${t.status} <> 'void'`),
     index("checkout_client_idx").on(t.clientId),
     index("checkout_created_idx").on(t.createdAt),
     check(
@@ -80,11 +84,12 @@ export const checkoutLine = pgTable(
       .notNull()
       .references(() => checkout.id),
     kind: text().notNull(),
-    productId: uuid(),
+    productId: uuid().references(() => retailProduct.id),
     serviceId: uuid(),
     description: text().notNull(),
     quantity: integer().notNull(),
     unitAmountCents: integer().notNull(),
+    unitCostCents: integer(),
     taxBasisPoints: integer().notNull().default(0),
     createdAt: createdAt(),
   },

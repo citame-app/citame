@@ -26,6 +26,8 @@ export function commerceEndpoints(client: ApiClient) {
       client.get(`${base(mode)}/checkouts/${id}`, checkoutSchema),
     byOrder: (order: string) =>
       client.get(`/me/payments/by-order/${encodeURIComponent(order)}`, checkoutSchema),
+    void: (id: string, mode: CommerceMode) =>
+      client.post(`${base(mode)}/checkouts/${id}/void`, {}, checkoutSchema),
     pay: (id: string, input: StartPaymentInput, mode: CommerceMode) =>
       client.post(`${base(mode)}/checkouts/${id}/payments`, input, startedPaymentSchema),
     cash: () =>

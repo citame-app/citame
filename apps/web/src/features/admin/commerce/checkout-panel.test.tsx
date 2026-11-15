@@ -173,3 +173,9 @@ test("only an owner is offered bank reconciliation for a stale pending attempt",
   await screen.findByLabelText("Bank confirmation reference");
   expect(screen.queryByRole("button", { name: "Record payment" })).toBeNull();
 });
+test("an unpaid receipt offers an explicit void action", async () => {
+  renderApp(<CheckoutPanel id={id} mode="admin" role="owner" />);
+  await screen.findByText("Haircut");
+  fireEvent.click(screen.getByText("Void unpaid checkout", { selector: "summary" }));
+  expect(screen.getByRole("button", { name: "Void unpaid checkout" })).toBeInTheDocument();
+});

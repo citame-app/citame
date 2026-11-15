@@ -32,6 +32,7 @@ import {
   reconcileRefund,
   requireOperator,
   startPayment,
+  voidCheckout,
 } from "./service";
 
 const operator = createMiddleware<AppEnv>(async (c, next) => {
@@ -72,6 +73,9 @@ export function commerceAdminRoutes(deps: AppDeps) {
     )
     .get("/checkouts/:id", async (c) =>
       c.json(await getCheckout(deps.db, checkoutId(c.req.param("id")), c.get("principal"))),
+    )
+    .post("/checkouts/:id/void", async (c) =>
+      c.json(await voidCheckout(deps.db, checkoutId(c.req.param("id")), c.get("principal"))),
     )
     .post("/checkouts/:id/payments", async (c) =>
       c.json(
@@ -188,6 +192,9 @@ export function commerceClientRoutes(deps: AppDeps) {
       if (!payment) throw new DomainError("not_found", "Payment not found");
       return c.json(await getCheckout(deps.db, payment.checkoutId, c.get("principal")));
     })
+    .post("/checkouts/:id/void", async (c) =>
+      c.json(await voidCheckout(deps.db, checkoutId(c.req.param("id")), c.get("principal"))),
+    )
     .post("/checkouts/:id/payments", async (c) =>
       c.json(
         await startPayment(

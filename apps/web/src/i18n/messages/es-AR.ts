@@ -2,6 +2,7 @@ import { accountSecurityEsAR } from "./account-security";
 import { adminEsAR } from "./admin";
 import { commerceEsAR } from "./commerce";
 import type { MessageKey } from "./en";
+import { inventoryEsAR } from "./inventory";
 import { notificationsEsAR } from "./notifications";
 
 /** Neutral, professional Spanish for Argentina. */
@@ -225,6 +226,7 @@ export const esAR: Record<MessageKey, string> = {
   "account.profile.failed": "No pudimos guardar tu perfil",
   "account.signOut": "Cerrar sesión",
   ...adminEsAR,
+  ...inventoryEsAR,
   ...commerceEsAR,
   ...notificationsEsAR,
   ...accountSecurityEsAR,

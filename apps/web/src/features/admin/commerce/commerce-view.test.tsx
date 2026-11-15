@@ -14,6 +14,33 @@ beforeEach(() => {
     const path = new URL(String(input), "http://localhost").pathname;
     const body = init?.body ? JSON.parse(String(init.body)) : {};
     if (init?.method === "POST") calls.push({ path, body });
+    if (path.endsWith("/inventory/products"))
+      return Response.json({
+        products: [
+          {
+            id,
+            name: "Retail shampoo",
+            sku: "SH-1",
+            barcode: null,
+            description: null,
+            priceCents: 2000,
+            currency: "EUR",
+            taxBasisPoints: 2100,
+            unitLabel: "unit",
+            storageLocation: null,
+            active: true,
+            stockOnHand: 5,
+            stockReserved: 0,
+            available: 5,
+            lowStockThreshold: 0,
+            lowStock: false,
+            version: 1,
+            createdAt: "2026-03-09T12:00:00.000Z",
+            updatedAt: "2026-03-09T12:00:00.000Z",
+          },
+        ],
+        pagination: { page: 1, pageSize: 20, total: 1 },
+      });
     if (path.endsWith("/cash-sessions/current")) return Response.json({ session: cash });
     if (path.endsWith("/cash-sessions") && init?.method === "POST") {
       cash = {
@@ -70,4 +97,18 @@ test("invalid cash input explains the error without sending a mutation", async (
   fireEvent.click(screen.getByRole("button", { name: "Open register" }));
   await screen.findByRole("alert");
   expect(calls).toHaveLength(0);
+});
+test("retail checkout uses catalog ids and quantities without browser-supplied prices", async () => {
+  renderApp(<CommerceView role="owner" />);
+  await screen.findByText("No sales yet");
+  fireEvent.click(screen.getByRole("button", { name: "New sale" }));
+  await screen.findByLabelText("Choose a product");
+  fireEvent.change(screen.getByLabelText("Choose a product"), { target: { value: id } });
+  fireEvent.click(screen.getByRole("button", { name: "Add product" }));
+  fireEvent.change(screen.getByLabelText("Quantity"), { target: { value: "2" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create checkout" }));
+  await screen.findByRole("alert");
+  expect(calls[0]?.body.lines).toEqual([
+    { kind: "product", productId: id, quantity: 2, taxBasisPoints: 0 },
+  ]);
 });

@@ -19,6 +19,7 @@ import {
   commerceClientRoutes,
   redsysNotificationRoutes,
 } from "./modules/commerce/routes";
+import { inventoryRoutes } from "./modules/inventory/routes";
 import { meRoutes } from "./modules/me/routes";
 import { reportRoutes } from "./modules/reports/routes";
 import { serviceAdminRoutes } from "./modules/services/admin-routes";
@@ -268,6 +269,7 @@ export function createApp(input: AppDeps): App {
   app.use("/admin/*", requireAuth(auth, deps.db));
   app.route("/admin", adminRoutes(deps, auth));
   app.route("/admin/commerce", commerceAdminRoutes(deps));
+  app.route("/admin/inventory", inventoryRoutes(deps));
   app.route("/admin/services", serviceAdminRoutes(deps));
   app.route("/admin/staff", staffAdminRoutes(deps));
   app.route("/admin/clients", clientAdminRoutes(deps));

@@ -43,6 +43,7 @@ import {
 import { z } from "zod";
 import type { ApiClient } from "./client";
 import { commerceEndpoints } from "./commerce-endpoints";
+import { inventoryEndpoints } from "./inventory-endpoints";
 
 /** Better Auth answers with extra fields we do not depend on. */
 const authAck = z.looseObject({});
@@ -80,6 +81,7 @@ type CreateBooking = Omit<CreateAppointmentRequest, "clientId" | "client">;
 export function createEndpoints(client: ApiClient) {
   return {
     commerce: commerceEndpoints(client),
+    inventory: inventoryEndpoints(client),
     salon: () => client.get("/salon", salonResponseSchema),
     services: () => client.get("/services", listServicesResponseSchema),
     staff: () => client.get("/staff", listStaffResponseSchema),

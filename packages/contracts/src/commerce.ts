@@ -116,6 +116,7 @@ export const checkoutSchema = z.object({
   totalCents: moneyCentsSchema,
   paidCents: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   refundedCents: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  fulfilledAt: instantSchema.nullable().optional(),
   overpaidCents: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).default(0),
   balanceCents: moneyCentsSchema,
   lines: z.array(checkoutLineSchema),

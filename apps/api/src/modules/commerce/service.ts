@@ -17,6 +17,12 @@ import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import type { PaymentGateway } from "../../payments/types";
 import type { Tx } from "../../tx";
+import {
+  consumeReservedInventory,
+  loadCheckoutProducts,
+  releaseCheckoutInventory,
+  reserveCheckoutProducts,
+} from "../inventory/reservations";
 
 type Connection = Database | Tx;
 const hash = (data: unknown) => createHash("sha256").update(JSON.stringify(data)).digest("hex");
@@ -80,6 +86,7 @@ async function snapshot(db: Connection, row: typeof checkout.$inferSelect): Prom
     tipCents: row.tipCents,
     taxCents: row.taxCents,
     totalCents: row.totalCents,
+    fulfilledAt: row.fulfilledAt?.toISOString() ?? null,
     paidCents,
     refundedCents,
     overpaidCents: Math.max(0, paidCents - refundedCents - row.totalCents),
@@ -149,7 +156,43 @@ async function refreshStatus(tx: Tx, id: string) {
       : view.paidCents >= view.totalCents
         ? "paid"
         : "open";
+  if (status === "paid" && !row.fulfilledAt) await fulfillCheckout(tx, id);
   await tx.update(checkout).set({ status }).where(eq(checkout.id, id));
+}
+async function fulfillCheckout(tx: Tx, id: string) {
+  await consumeReservedInventory(tx, id);
+  const fulfilledAt = new Date();
+  await tx.update(checkout).set({ fulfilledAt }).where(eq(checkout.id, id));
+  return fulfilledAt;
+}
+export async function voidCheckout(db: Database, id: string, principal: Principal) {
+  return db.transaction(async (tx) => {
+    const row = await saleRow(tx, id, principal, true);
+    if (row.status === "void") return snapshot(tx, row);
+    const payments = await tx
+      .select()
+      .from(checkoutPayment)
+      .where(eq(checkoutPayment.checkoutId, id));
+    if (row.status !== "open" || row.fulfilledAt || payments.some((p) => p.status !== "failed"))
+      throw new DomainError(
+        "invalid_state",
+        "Only unpaid checkouts without unresolved payment attempts can be voided",
+      );
+    await releaseCheckoutInventory(tx, id);
+    const [updated] = await tx
+      .update(checkout)
+      .set({ status: "void" })
+      .where(eq(checkout.id, id))
+      .returning();
+    if (!updated) throw new Error("Checkout void failed");
+    await recordAudit(tx, {
+      actorUserId: principal.userId,
+      action: "commerce.checkout_voided",
+      entity: "checkout",
+      entityId: id,
+    });
+    return snapshot(tx, updated);
+  });
 }
 export async function createCheckout(
   db: Database,
@@ -184,6 +227,7 @@ export async function createCheckout(
     const lines: {
       kind: string;
       productId?: string;
+      unitCostCents?: number | null;
       serviceId?: string | null;
       description: string;
       quantity: number;
@@ -210,7 +254,9 @@ export async function createCheckout(
       const [previous] = await tx
         .select()
         .from(checkout)
-        .where(eq(checkout.appointmentId, input.appointmentId));
+        .where(
+          and(eq(checkout.appointmentId, input.appointmentId), sql`${checkout.status} <> 'void'`),
+        );
       if (previous) {
         if (input.lines.length || input.discountCents || input.tipCents || input.clientId)
           checkReplay(previous, requestHash);
@@ -237,9 +283,22 @@ export async function createCheckout(
         })),
       );
     }
+    const products = await loadCheckoutProducts(tx, input.lines);
     for (const line of input.lines) {
-      if (line.kind === "product")
-        throw new DomainError("invalid_state", "Select an available catalog product");
+      if (line.kind === "product") {
+        const product = line.productId ? products.get(line.productId) : undefined;
+        if (!product) throw new DomainError("not_found", "Product not found");
+        lines.push({
+          kind: "product",
+          productId: product.id,
+          description: product.name,
+          quantity: line.quantity,
+          unitAmountCents: product.priceCents,
+          unitCostCents: product.costCents,
+          taxBasisPoints: product.taxBasisPoints,
+        });
+        continue;
+      }
       if (line.unitAmountCents === undefined || !line.description)
         throw new DomainError("validation_error", "Custom items need a description and amount");
       lines.push({
@@ -294,7 +353,12 @@ export async function createCheckout(
       })
       .returning();
     if (!row) throw new Error("Checkout insert failed");
-    await tx.insert(checkoutLine).values(lines.map((line) => ({ ...line, checkoutId: row.id })));
+    const insertedLines = await tx
+      .insert(checkoutLine)
+      .values(lines.map((line) => ({ ...line, checkoutId: row.id })))
+      .returning();
+    await reserveCheckoutProducts(tx, row.id, insertedLines);
+    if (totalCents === 0) row.fulfilledAt = await fulfillCheckout(tx, row.id);
     await recordAudit(tx, {
       actorUserId: principal.userId,
       action: "commerce.checkout_created",

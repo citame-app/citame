@@ -3,6 +3,7 @@ import { RedisClient } from "bun";
 import { createApp } from "./app";
 import { loadConfig } from "./config";
 import { startMaintenance } from "./maintenance";
+import { startInventoryExpiry } from "./modules/inventory/runtime";
 import { createProviders } from "./notifications/providers";
 import { startNotificationRuntime } from "./notifications/runtime";
 import { rootLogger } from "./observability/logger";
@@ -18,6 +19,7 @@ await valkey.send("PING", []);
 const emailProvider = createProviders(config.notifications).email;
 const app = createApp({ db, valkey, config, emailProvider });
 await app.ready();
+const inventoryExpiry = startInventoryExpiry(db);
 
 // Optional in-process notification worker (NOTIFY_WORKER_ENABLED). `bun run worker` runs the same code alone.
 const notifications = startNotificationRuntime({ db, config });
@@ -55,7 +57,7 @@ async function shutdown(signal: string) {
     await app.shutdown(); // SSE streams must end or `server.stop()` waits for them forever
     await server.stop();
     await emailProvider?.close?.();
-    await Promise.all([notifications?.stop(), maintenance?.stop()]);
+    await Promise.all([notifications?.stop(), maintenance?.stop(), inventoryExpiry.stop()]);
     await closeDb();
     valkey.close();
     rootLogger.info("shutdown complete");

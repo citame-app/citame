@@ -9,15 +9,30 @@ import { useI18n } from "~/i18n/react";
 import { api } from "~/lib/api/instance";
 import { formatMoney } from "~/lib/format";
 import { CheckoutPanel } from "./checkout-panel";
+import { InventoryView } from "./inventory-view";
 import { inputCents } from "./money";
+import { type CartProduct, ProductCart } from "./product-cart";
 
 export function CommerceView({ role }: { role: UserRole }) {
   const { t, locale } = useI18n();
   const sales = useQuery({ queryKey: ["commerce", "sales"], queryFn: () => api().commerce.list() });
   const [selected, setSelected] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [inventory, setInventory] = useState(false);
+  if (inventory)
+    return (
+      <div className="space-y-4">
+        <Button variant="ghost" onClick={() => setInventory(false)}>
+          {t("commerce.back")}
+        </Button>
+        <InventoryView role={role} />
+      </div>
+    );
   return (
     <div className="space-y-6">
+      <Button variant="secondary" onClick={() => setInventory(true)}>
+        {t("inventory.title")}
+      </Button>
       <CashRegister role={role} />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-heading">{t("commerce.history")}</h2>
@@ -88,6 +103,7 @@ function NewSale({ onCreated }: { onCreated: (id: string) => void }) {
   const { t } = useI18n();
   const queries = useQueryClient();
   const online = useOnline();
+  const [items, setItems] = useState<CartProduct[]>([]);
   const [description, setDescription] = useState("");
   const [price, setPrice] = useState("");
   const [discount, setDiscount] = useState("0");
@@ -95,27 +111,48 @@ function NewSale({ onCreated }: { onCreated: (id: string) => void }) {
   const [key, setKey] = useState(() => crypto.randomUUID());
   const create = useMutation({
     mutationFn: async () => {
-      const unitAmountCents = inputCents(price);
+      const unitAmountCents = description.trim() ? inputCents(price) : 0;
       const discountCents = inputCents(discount);
       const tipCents = inputCents(tip);
       if (
-        !description.trim() ||
+        (!description.trim() && !items.length) ||
         unitAmountCents === null ||
         discountCents === null ||
         tipCents === null ||
-        discountCents > unitAmountCents
+        items.some(
+          (item) =>
+            !item.quantity.trim() ||
+            !Number.isInteger(Number(item.quantity)) ||
+            Number(item.quantity) < 1 ||
+            Number(item.quantity) > item.product.available ||
+            Number(item.quantity) > 1000,
+        )
       )
         throw new Error("Invalid sale");
+      const subtotal =
+        unitAmountCents +
+        items.reduce((sum, item) => sum + item.product.priceCents * Number(item.quantity), 0);
+      if (discountCents > subtotal) throw new Error("Invalid discount");
       return api().commerce.create({
         currency: "EUR",
         lines: [
-          {
-            kind: "custom",
-            description: description.trim(),
-            quantity: 1,
-            unitAmountCents,
+          ...items.map((item) => ({
+            kind: "product" as const,
+            productId: item.product.id,
+            quantity: Number(item.quantity),
             taxBasisPoints: 0,
-          },
+          })),
+          ...(description.trim()
+            ? [
+                {
+                  kind: "custom" as const,
+                  description: description.trim(),
+                  quantity: 1,
+                  unitAmountCents,
+                  taxBasisPoints: 0,
+                },
+              ]
+            : []),
         ],
         discountCents,
         tipCents,
@@ -124,6 +161,7 @@ function NewSale({ onCreated }: { onCreated: (id: string) => void }) {
     },
     onSuccess: (sale) => {
       void queries.invalidateQueries({ queryKey: ["commerce"] });
+      void queries.invalidateQueries({ queryKey: ["inventory"] });
       onCreated(sale.id);
     },
   });
@@ -142,6 +180,14 @@ function NewSale({ onCreated }: { onCreated: (id: string) => void }) {
     >
       <h3 className="font-semibold sm:col-span-2">{t("commerce.newSale")}</h3>
       <p className="text-sm text-muted sm:col-span-2">{t("commerce.customHelp")}</p>
+      <ProductCart
+        items={items}
+        onChange={(next) => {
+          setItems(next);
+          create.reset();
+          setKey(crypto.randomUUID());
+        }}
+      />
       <TextField
         label={t("commerce.description")}
         value={description}

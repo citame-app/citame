@@ -3,6 +3,8 @@ export * from "./audit";
 export * from "./auth";
 export * from "./client";
 export * from "./commerce";
+export * from "./inventory";
+export * from "./inventory-product";
 export * from "./notification";
 export * from "./oauth";
 export * from "./salon-settings";

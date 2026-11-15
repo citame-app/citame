@@ -8,7 +8,8 @@ The release is not complete merely because a table or endpoint exists. Each oper
 
 - [x] Payments and checkout: provider interface, hosted Redsys card/Bizum, signed notifications, order/amount/currency matching, idempotence, pending/declined states, cash/card records, partial payments, receipts, refund/reconciliation workflow, cash sessions and tips.
 - [ ] Booking protection: configurable deposits, payment holds and expiry, cancellation policy and fees; no card data stored locally.
-- [ ] Retail and staff accounting: products, stock movements, low-stock alerts, checkout inventory deduction, service/product commission rules, sales and cash reports.
+- [x] Retail inventory: products, stock movements, low-stock alerts, checkout reservations/deduction, expiry/void and physical returns; [operator guide](inventory.md).
+- [ ] Staff accounting: service/product commission rules, sales and cash reports, five access presets with scoped permissions.
 - [ ] Retention: gift cards and balances, multi-visit packages, memberships and entitlements, loyalty accrual/redemption, discounts and promotion validity.
 - [ ] Scheduling: automated waitlist and expiring offers, resources/capacity, recurring appointments, service variants/add-ons/combinations and processing gaps.
 - [ ] CRM: client tags, blocked/trusted clients, photos, import/export and deduplication; custom intake forms/waivers with versioned answers.
@@ -32,3 +33,7 @@ Merchant enrollment, bank credentials, production domain, real email/SMS deliver
 ## First delivery evidence
 
 Payments/cash/receipts are implemented; [operator and Redsys guide](payments.md). Baseline full suites passed with 712 API and 613 web tests; subsequent focused money/print/reconciliation regressions pass as well. The Redsys adapter passes 11 tests on the pinned Bun 1.4.4 container without networking. The real mobile cash workflow was explored before its four passing light/dark mobile/desktop Playwright cases (including axe). This does not mark the other delivery blocks complete or replace real-bank activation.
+
+## Retail delivery evidence
+
+Inventory integration: 726 API, 620 web, 118 contract and 47 database tests passed. Eight real Chromium checkout/inventory cases passed across mobile/desktop and light/dark, including axe and horizontal-overflow checks. Typechecking and repository lint passed. Inventory is tracked separately from commissions and access presets, which remain open.

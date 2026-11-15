@@ -19,6 +19,7 @@ export function AppointmentCheckout({
   disabled?: boolean;
 }) {
   const { t } = useI18n();
+  const [requestKey, setRequestKey] = useState(() => crypto.randomUUID());
   const [selected, setSelected] = useState<string | null>(null);
   const start = useMutation({
     mutationFn: () =>
@@ -29,7 +30,7 @@ export function AppointmentCheckout({
           lines: [],
           discountCents: 0,
           tipCents: 0,
-          idempotencyKey: `appointment-${appointmentId}`,
+          idempotencyKey: requestKey,
         },
         mode,
       ),
@@ -51,7 +52,12 @@ export function AppointmentCheckout({
       )}
       <Sheet
         open={selected !== null}
-        onOpenChange={(open) => !open && setSelected(null)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSelected(null);
+            setRequestKey(crypto.randomUUID());
+          }
+        }}
         title={t("commerce.receipt")}
         size="lg"
       >
