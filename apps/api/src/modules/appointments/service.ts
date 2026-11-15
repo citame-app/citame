@@ -320,12 +320,13 @@ async function resolveClient(tx: Tx, request: CreateAppointmentRequest): Promise
 export async function getAppointmentOwnership(
   db: Database,
   id: string,
-): Promise<{ staffId: string; clientId: string; status: AppointmentStatus }> {
+): Promise<{ staffId: string; clientId: string; status: AppointmentStatus; startsAt: Date }> {
   const [row] = await db
     .select({
       staffId: appointment.staffId,
       clientId: appointment.clientId,
       status: appointment.status,
+      startsAt: appointment.startsAt,
     })
     .from(appointment)
     .where(and(eq(appointment.id, id), isNull(appointment.deletedAt)));

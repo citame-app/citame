@@ -133,6 +133,32 @@ describe("clients", () => {
     expect(after).toBe(before);
   });
 
+  test("cannot edit notes or cancel once the appointment is closed or has started", async () => {
+    const closed = await bookAs(clientA);
+    await t.db.update(appointment).set({ status: "no_show" }).where(eq(appointment.id, closed.id));
+    const notes = await patch(clientA, closed.id, { version: 1, notes: "rewritten history" });
+    expect(notes.status).toBe(403);
+    // Cancelling a closed appointment is refused by the state machine, not erased.
+    expect((await patch(clientA, closed.id, { version: 1, status: "cancelled" })).status).toBe(409);
+    expect(
+      (await t.db.select().from(appointment).where(eq(appointment.id, closed.id)))[0]?.status,
+    ).toBe("no_show");
+
+    // Booked but already started (the app clock is fixed at 2026-03-02T12:00Z): cancelling would
+    // erase a no-show before the salon can record it.
+    const started = await bookAs(clientB, { startsAt: "2026-03-09T15:00:00.000Z" });
+    await t.db
+      .update(appointment)
+      .set({ startsAt: new Date("2026-03-02T11:00:00Z"), endsAt: new Date("2026-03-02T11:45:00Z") })
+      .where(eq(appointment.id, started.id));
+    expect((await patch(clientB, started.id, { version: 1, status: "cancelled" })).status).toBe(
+      403,
+    );
+    // The salon can still record the outcome.
+    const marked = await patch(ana, started.id, { version: 1, status: "no_show" });
+    expect(marked.status).toBe(200);
+  });
+
   test("can reschedule and cancel their own appointment", async () => {
     const a = await bookAs(clientA);
     const moved = await patch(clientA, a.id, { version: 1, startsAt: "2026-03-09T15:00:00.000Z" });

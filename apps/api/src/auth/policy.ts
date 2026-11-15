@@ -58,10 +58,16 @@ export function authorizeAppointmentCreate(
   }
 }
 
+/**
+ * Who may change an existing appointment. A client acts only on their own appointment, and only
+ * while it is `booked` and has not started: once it has started it may be about to become a
+ * no-show (which a cancel would erase), and once it is closed it is the salon's record.
+ */
 export function authorizeAppointmentChange(
   principal: Principal,
-  appointment: { staffId: string; clientId: string; status: AppointmentStatus },
+  appointment: { staffId: string; clientId: string; status: AppointmentStatus; startsAt: Date },
   request: UpdateAppointmentRequest,
+  now: Date = new Date(),
 ): void {
   const marking = request.status === "completed" || request.status === "no_show";
   switch (principal.role) {
@@ -84,6 +90,14 @@ export function authorizeAppointmentChange(
         throw forbidden("This is not your appointment");
       }
       if (marking) throw forbidden("Clients can only cancel their appointments");
+      // A cancel attempt on a closed appointment passes through to the state machine, which
+      // answers 409 `invalid_state` (cancelled is terminal, finished ones are not cancellable).
+      if (appointment.status !== "booked" && request.status !== "cancelled") {
+        throw forbidden("Only a booked appointment can be changed");
+      }
+      if (appointment.startsAt.getTime() <= now.getTime()) {
+        throw forbidden("This appointment has already started");
+      }
       if (request.override) {
         throw forbidden("Only staff can override the booking notice window");
       }

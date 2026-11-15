@@ -105,13 +105,26 @@ describe("authorizeAppointmentCreate", () => {
 });
 
 describe("authorizeAppointmentChange", () => {
-  const appt = { staffId: id(0xa), clientId: id(0xca), status: "booked" as const };
+  const now = new Date("2026-03-02T12:00:00Z");
+  const appt = {
+    staffId: id(0xa),
+    clientId: id(0xca),
+    status: "booked" as const,
+    startsAt: new Date("2026-03-09T12:00:00Z"),
+  };
   const cancel = { version: 1, status: "cancelled" as const };
 
   test("a client can change only their own appointment", () => {
-    authorizeAppointmentChange(clientA, appt, cancel);
-    authorizeAppointmentChange(clientA, appt, { version: 1, startsAt: "2026-03-09T15:00:00.000Z" });
-    forbidden(() => authorizeAppointmentChange({ ...clientA, clientId: id(0xcb) }, appt, cancel));
+    authorizeAppointmentChange(clientA, appt, cancel, now);
+    authorizeAppointmentChange(
+      clientA,
+      appt,
+      { version: 1, startsAt: "2026-03-09T15:00:00.000Z" },
+      now,
+    );
+    forbidden(() =>
+      authorizeAppointmentChange({ ...clientA, clientId: id(0xcb) }, appt, cancel, now),
+    );
   });
 
   test("staff manage appointments on their own calendar only", () => {
@@ -129,9 +142,13 @@ describe("authorizeAppointmentChange", () => {
   });
 
   test("clients may only cancel: completed and no_show are for the salon", () => {
-    authorizeAppointmentChange(clientA, appt, { version: 1, status: "cancelled" });
-    forbidden(() => authorizeAppointmentChange(clientA, appt, { version: 1, status: "completed" }));
-    forbidden(() => authorizeAppointmentChange(clientA, appt, { version: 1, status: "no_show" }));
+    authorizeAppointmentChange(clientA, appt, { version: 1, status: "cancelled" }, now);
+    forbidden(() =>
+      authorizeAppointmentChange(clientA, appt, { version: 1, status: "completed" }, now),
+    );
+    forbidden(() =>
+      authorizeAppointmentChange(clientA, appt, { version: 1, status: "no_show" }, now),
+    );
   });
 
   test("staff mark completed and no_show only on their own calendar; the owner anywhere", () => {
@@ -150,6 +167,56 @@ describe("authorizeAppointmentChange", () => {
     forbidden(() => authorizeAppointmentChange(staffA, done, { version: 2, status: "no_show" }));
     forbidden(() =>
       authorizeAppointmentChange(staffA, missed, { version: 2, status: "completed" }),
+    );
+  });
+
+  // Decision (ADR 0004): a client changes an appointment (cancel, move, notes) only while it is
+  // booked and has not started. After that the record belongs to the salon: it may already be
+  // closed, and a started booking may be about to become a no-show, which a cancel would erase.
+  test("clients cannot edit notes or move an appointment that is no longer booked", () => {
+    for (const status of ["completed", "no_show", "cancelled"] as const) {
+      const closed = { ...appt, status };
+      forbidden(() => authorizeAppointmentChange(clientA, closed, { version: 2, notes: "x" }, now));
+      forbidden(() =>
+        authorizeAppointmentChange(
+          clientA,
+          closed,
+          { version: 2, startsAt: "2026-03-10T12:00:00.000Z" },
+          now,
+        ),
+      );
+      // A cancel attempt is left to the state machine, which answers 409 invalid_state.
+      authorizeAppointmentChange(clientA, closed, cancel, now);
+    }
+  });
+
+  test("clients cannot cancel, move or annotate once the appointment has started", () => {
+    const started = { ...appt, startsAt: new Date("2026-03-02T11:00:00Z") };
+    forbidden(() => authorizeAppointmentChange(clientA, started, cancel, now));
+    forbidden(() =>
+      authorizeAppointmentChange(
+        clientA,
+        started,
+        { version: 1, startsAt: "2026-03-09T15:00:00.000Z" },
+        now,
+      ),
+    );
+    forbidden(() => authorizeAppointmentChange(clientA, started, { version: 1, notes: "x" }, now));
+    // Exactly at the start counts as started.
+    forbidden(() => authorizeAppointmentChange(clientA, { ...appt, startsAt: now }, cancel, now));
+    // Before the start the same changes are fine.
+    authorizeAppointmentChange(clientA, appt, cancel, now);
+    authorizeAppointmentChange(clientA, appt, { version: 1, notes: "x" }, now);
+  });
+
+  test("the salon can still close or correct a started or closed appointment", () => {
+    const started = { ...appt, startsAt: new Date("2026-03-02T11:00:00Z") };
+    authorizeAppointmentChange(staffA, started, { version: 1, status: "no_show" }, now);
+    authorizeAppointmentChange(
+      owner,
+      { ...started, status: "completed" },
+      { version: 2, status: "no_show" },
+      now,
     );
   });
 

@@ -56,12 +56,12 @@ The rules are pure functions (`availability/rules.ts`) reused by availability se
 | From               | To                                  | Who                                           | When                                                                      |
 | ------------------ | ----------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------- |
 | booked             | completed, no_show                  | the calendar's staff member, owner            | only once `starts_at <= now` (injectable clock), else 409 `invalid_state` |
-| booked             | cancelled                           | the client (own), the calendar's staff, owner | any time                                                                  |
+| booked             | cancelled                           | the client (own), the calendar's staff, owner | staff and owner: any time; the client: only before `starts_at`            |
 | completed          | no_show, and back                   | owner only (a correction)                     | any time                                                                  |
 | completed, no_show | cancelled, or the same status again | nobody                                        | 409 `invalid_state`                                                       |
 | cancelled          | anything                            | nobody (terminal)                             | 409 `invalid_state`                                                       |
 
-Clients can only cancel; marking an outcome is 403 for them even on their own appointment. The audit action is `appointment.complete`, `appointment.no_show`, `appointment.cancel` or `appointment.status_correct`, with `fromStatus` and `toStatus`, written in the same transaction as the update and under the unchanged version check. Reports read these statuses.
+Clients can only cancel; marking an outcome is 403 for them even on their own appointment. A client changes an appointment (cancel, move, notes) only while it is `booked` and has not started: after the start it may be about to become a no-show, which a late cancel would erase, and once closed it is the salon's record. Such requests are `403`, except a cancel of an already closed appointment, which the state machine answers `409 invalid_state`. There is no notice period for clients beyond that: cancelling any time before the start is allowed. The audit action is `appointment.complete`, `appointment.no_show`, `appointment.cancel` or `appointment.status_correct`, with `fromStatus` and `toStatus`, written in the same transaction as the update and under the unchanged version check. Reports read these statuses.
 
 ### Working hours and time off never touch appointments
 

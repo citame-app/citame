@@ -128,7 +128,7 @@ export async function applyMutation(
         mutation.kind === "appointment.cancel"
           ? { version: mutation.payload.version, status: "cancelled" }
           : { ...rest };
-      authorizeAppointmentChange(principal, await getAppointmentOwnership(db, id), body);
+      authorizeAppointmentChange(principal, await getAppointmentOwnership(db, id), body, now);
       await updateAppointment(db, id, body, actor, { now });
       return;
     }

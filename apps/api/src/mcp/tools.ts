@@ -251,7 +251,12 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
     guarded(ctx, "cancel_appointment", async (args: z.infer<typeof mcpCancelAppointmentInput>) => {
       const ownership = await getAppointmentOwnership(db, args.appointmentId);
       try {
-        authorizeAppointmentChange(principal, ownership, { status: "cancelled", version: 1 });
+        authorizeAppointmentChange(
+          principal,
+          ownership,
+          { status: "cancelled", version: 1 },
+          ctx.now(),
+        );
       } catch (error) {
         // Same answer as for an unknown id: a client must not learn that an id exists.
         if (principal.role === "client" && error instanceof DomainError) {
