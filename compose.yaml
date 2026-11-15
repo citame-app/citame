@@ -56,7 +56,6 @@ services:
       RATE_LIMIT_GLOBAL_WINDOW_SECONDS: ${RATE_LIMIT_GLOBAL_WINDOW_SECONDS:-60}
       RATE_LIMIT_AUTH_MAX: ${RATE_LIMIT_AUTH_MAX:-10}
       RATE_LIMIT_AUTH_WINDOW_SECONDS: ${RATE_LIMIT_AUTH_WINDOW_SECONDS:-60}
-      SALON_TIMEZONE: ${SALON_TIMEZONE:-America/Argentina/Buenos_Aires}
       # Development stack: off by default so you can sign up without a mail server. Turn it on
       # (and run `docker compose --profile mail up -d mailpit`, SMTP_URL=smtp://mailpit:1025) to
       # exercise the confirmation flow; compose.prod.yaml has it on.

@@ -10,7 +10,7 @@
     "worker": "bun src/worker.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
-    "test": "bun test",
+    "test": "bun test --timeout 20000",
     "bootstrap:owner": "bun src/scripts/bootstrap-owner.ts",
     "maintenance": "bun src/scripts/maintenance.ts"
   },

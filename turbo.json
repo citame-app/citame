@@ -11,10 +11,11 @@
     "lint": {},
     "test": {
       "dependsOn": ["^build"],
-      "env": ["DATABASE_URL", "VALKEY_URL", "SALON_TIMEZONE"]
+      "env": ["DATABASE_URL", "VALKEY_URL"]
     },
     "dev": {
       "cache": false,
+      "passThroughEnv": ["*"],
       "persistent": true
     },
     "db:generate": {
@@ -32,7 +33,7 @@
     "e2e": {
       "cache": false,
       "dependsOn": ["build"],
-      "env": ["E2E_BASE_URL", "E2E_OWNER_EMAIL", "E2E_OWNER_PASSWORD"]
+      "passThroughEnv": ["E2E_*", "DATABASE_URL", "VALKEY_URL", "BETTER_AUTH_SECRET", "SMTP_URL"]
     }
   }
 }

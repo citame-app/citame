@@ -58,7 +58,6 @@ test.beforeAll(async () => {
   const shared = {
     DATABASE_URL: process.env.DATABASE_URL ?? "postgres://sob:sob@localhost:5432/sob",
     VALKEY_URL: process.env.VALKEY_URL ?? "redis://localhost:6379",
-    SALON_TIMEZONE: process.env.SALON_TIMEZONE ?? "America/Argentina/Buenos_Aires",
     BETTER_AUTH_SECRET:
       process.env.BETTER_AUTH_SECRET ?? "ci-only-secret-ci-only-secret-0123456789",
   };
