@@ -19,14 +19,14 @@ beforeAll(async () => {
   await source.reset();
   await seedSampleData(source.db);
   dir = mkdtempSync(join(tmpdir(), "sob-backup-"));
-});
+}, 60_000);
 afterAll(async () => {
   const admin = new SQL(source.url.replace(/\/[^/]+$/, "/postgres"));
   await admin.unsafe(`drop database if exists "${restoredName}" with (force)`);
   await admin.close();
   await source.close();
   rmSync(dir, { recursive: true, force: true });
-});
+}, 120_000);
 
 const run = (cmd: string[], env: Record<string, string>) =>
   Bun.spawnSync(cmd, { env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe" });
@@ -60,7 +60,7 @@ test("backup then restore into a fresh database reproduces every table", async (
   const after = await counts(target);
   expect(Object.values(before).reduce((a, b) => a + b, 0)).toBeGreaterThan(10);
   expect(after).toEqual(before);
-});
+}, 60_000);
 
 test("restore refuses a corrupted dump and a non-empty target", async () => {
   const dump = join(dir, "bad.dump");
@@ -71,6 +71,9 @@ test("restore refuses a corrupted dump and a non-empty target", async () => {
   expect(bad.exitCode).not.toBe(0);
   expect(bad.stderr.toString()).toContain("checksum");
 
+  // Use an intact dump here, otherwise checksum rejection masks the non-empty-target guard.
+  expect(run(["bash", "scripts/backup.sh", dump], { DATABASE_URL: source.url }).exitCode).toBe(0);
   const occupied = run(["bash", "scripts/restore.sh", dump, source.url], {});
   expect(occupied.exitCode).not.toBe(0);
-});
+  expect(occupied.stderr.toString()).toContain("already has");
+}, 60_000);

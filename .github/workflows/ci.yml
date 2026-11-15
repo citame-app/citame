@@ -38,7 +38,6 @@ jobs:
     env:
       DATABASE_URL: postgres://sob:sob@localhost:5432/sob
       VALKEY_URL: redis://localhost:6379
-      SALON_TIMEZONE: America/Argentina/Buenos_Aires
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
@@ -61,9 +60,10 @@ jobs:
       - run: bunx turbo run typecheck lint test build
       # Backup and restore round trip (real pg_dump/pg_restore through the postgres container).
       - run: PG_MODE=docker PG_CONTAINER="$(docker ps -q --filter ancestor=postgres:18-alpine)" bun run test:scripts
-      # The production image must build from the pruned workspace (includes @sob/db and auth deps).
-      - run: docker build -f docker/api.Dockerfile -t sob-api:ci .
-      - run: docker build -f docker/web.Dockerfile -t sob-web:ci .
+      # Build and boot the hardened production images; verify migrations, proxy, auth,
+      # booking contention and runtime hardening against isolated throwaway volumes.
+      - name: Production deployment smoke test
+        run: bash scripts/smoke-prod.sh
 
   e2e:
     runs-on: ubuntu-latest
@@ -100,7 +100,6 @@ jobs:
     env:
       DATABASE_URL: postgres://sob:sob@localhost:5432/sob
       VALKEY_URL: redis://localhost:6379
-      SALON_TIMEZONE: America/Argentina/Buenos_Aires
       # Throwaway CI-only values. The e2e helpers sign in as the owner with this password.
       BETTER_AUTH_SECRET: ci-only-secret-ci-only-secret-0123456789
       OWNER_EMAIL: ci-owner@example.com
@@ -183,7 +182,6 @@ jobs:
     env:
       DATABASE_URL: postgres://sob:sob@localhost:5432/sob
       VALKEY_URL: redis://localhost:6379
-      SALON_TIMEZONE: America/Argentina/Buenos_Aires
       # Throwaway CI-only values.
       BETTER_AUTH_SECRET: ci-only-secret-ci-only-secret-0123456789
       OWNER_EMAIL: ci-owner@example.com

@@ -8,22 +8,29 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Never reuse a deployment's project, volumes, images or .env during a destructive smoke run.
+SMOKE_PROJECT="sob-smoke-$(openssl rand -hex 8)"
+SMOKE_DIR="$(mktemp -d)"
+export SOB_TAG="$SMOKE_PROJECT"
 export POSTGRES_PASSWORD="smoke-$(openssl rand -hex 8)"
 export BETTER_AUTH_SECRET="$(openssl rand -base64 32)"
 export PUBLIC_URL="http://localhost:8088"
 export SITE_ADDRESS=":80" CADDY_HTTP_PORT=8088 CADDY_HTTPS_PORT=8443
-export WEB_PUBLISH="127.0.0.1:4173"
+export WEB_PUBLISH="127.0.0.1:0"
 # Caddy (profile tls) is the trusted edge in front of web.
 export WEB_TRUST_PROXY=true
 # The smoke environment has no mail server: opt out of verification explicitly (production
 # refuses to start with verification required and no provider, see ADR 0011).
-export AUTH_REQUIRE_EMAIL_VERIFICATION=false NOTIFY_EMAIL_PROVIDER=none
+export AUTH_REQUIRE_EMAIL_VERIFICATION=false NOTIFY_EMAIL_PROVIDER=none NOTIFY_SMS_PROVIDER=none
 export OWNER_EMAIL=smoke-owner@example.com OWNER_PASSWORD="smoke passphrase $(openssl rand -hex 4)"
-export SALON_TIMEZONE=America/Argentina/Buenos_Aires
-COMPOSE=(docker compose -f compose.prod.yaml --profile tls)
+COMPOSE=(docker compose --project-name "$SMOKE_PROJECT" --env-file /dev/null -f compose.prod.yaml --profile tls)
 BASE="http://localhost:8088"
 
-cleanup() { "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true; }
+cleanup() {
+  "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
+  docker image rm "sob-api:$SOB_TAG" "sob-web:$SOB_TAG" >/dev/null 2>&1 || true
+  rm -rf "$SMOKE_DIR"
+}
 trap cleanup EXIT
 
 step() { printf '\n== %s\n' "$*"; }
@@ -59,7 +66,7 @@ for h in content-security-policy x-content-type-options x-frame-options referrer
 done
 
 step "owner signs in"
-jar="$(mktemp)"
+jar="$SMOKE_DIR/owner-cookies"
 code="$(curl -s -o /dev/null -w '%{http_code}' -c "$jar" -X POST "$BASE/api/auth/sign-in/email" \
   -H 'content-type: application/json' -H "origin: $PUBLIC_URL" \
   -d "{\"email\":\"$OWNER_EMAIL\",\"password\":\"$OWNER_PASSWORD\"}")"
@@ -77,13 +84,13 @@ for day in $(seq 2 14); do
   [ -n "$slot" ] && break
 done
 [ -n "$slot" ] || fail "no availability found"
-cjar="$(mktemp)"
+cjar="$SMOKE_DIR/client-cookies"
 curl -s -o /dev/null -c "$cjar" -X POST "$BASE/api/auth/sign-up/email" -H 'content-type: application/json' -H "origin: $PUBLIC_URL" \
   -d '{"email":"smoke-client@example.com","name":"Smoke Client","password":"a smoke client passphrase"}'
-status="$(curl -s -o /tmp/smoke-booking.json -w '%{http_code}' -b "$cjar" -X POST "$BASE/api/appointments" \
+status="$(curl -s -o "$SMOKE_DIR/booking.json" -w '%{http_code}' -b "$cjar" -X POST "$BASE/api/appointments" \
   -H 'content-type: application/json' -H "origin: $PUBLIC_URL" \
   -d "{\"staffId\":\"$staff\",\"serviceIds\":[\"$service\"],\"startsAt\":\"$slot\"}")"
-[ "$status" = 201 ] || fail "booking returned $status: $(cat /tmp/smoke-booking.json)"
+[ "$status" = 201 ] || fail "booking returned $status: $(cat "$SMOKE_DIR/booking.json")"
 status="$(curl -s -o /dev/null -w '%{http_code}' -b "$cjar" -X POST "$BASE/api/appointments" \
   -H 'content-type: application/json' -H "origin: $PUBLIC_URL" \
   -d "{\"staffId\":\"$staff\",\"serviceIds\":[\"$service\"],\"startsAt\":\"$slot\"}")"
@@ -97,6 +104,7 @@ for svc in api web worker; do
   cid="$("${COMPOSE[@]}" ps -q "$svc")"
   user="$(docker inspect -f '{{.Config.User}}' "$cid")"; ro="$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$cid")"
   echo "$svc user=${user:-root} readonly=$ro"
+  [ -n "$user" ] && [ "$user" != root ] && [ "$user" != 0 ] && [ "${user%%:*}" != 0 ] || fail "$svc runs as root"
   [ "$ro" = true ] || fail "$svc root filesystem is writable"
 done
 
