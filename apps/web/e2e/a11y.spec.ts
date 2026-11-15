@@ -4,7 +4,6 @@ import {
   expectNoSeriousA11yViolations,
   pickFirstTime,
   pickProfessional,
-  signedInContext,
   startBooking,
 } from "./helpers";
 

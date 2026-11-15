@@ -37,7 +37,7 @@ function ReschedulePage() {
           </div>
         ) : mine.isError ? (
           <ErrorState error={mine.error} onRetry={() => mine.refetch()} />
-        ) : !appointment || appointment.status !== "booked" ? (
+        ) : appointment?.status !== "booked" ? (
           <ErrorState error={new Error("not found")} />
         ) : (
           <RescheduleView

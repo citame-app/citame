@@ -1,7 +1,6 @@
 import { expect, test } from "@playwright/test";
 import {
   createClient,
-  expectNoSeriousA11yViolations,
   PASSWORD,
   pickFirstTime,
   pickProfessional,
@@ -185,8 +184,8 @@ test.describe("slot races", () => {
     const first = await browser.newContext({ baseURL: origin });
     const second = await browser.newContext({ baseURL: origin });
     const [a, b] = [await first.newPage(), await second.newPage()];
-    const clientA = await createClient(first.request, origin, { name: "Racer A" });
-    const clientB = await createClient(second.request, origin, { name: "Racer B" });
+    await createClient(first.request, origin, { name: "Racer A" });
+    await createClient(second.request, origin, { name: "Racer B" });
     // Sign-up already set the session cookie in each context.
 
     await Promise.all([a.goto(review), b.goto(review)]);

@@ -35,7 +35,6 @@ export const Route = createFileRoute("/book/confirmed/$appointmentId")({
 });
 
 function Confirmed() {
-  const { t } = useI18n();
   const { appointmentId } = Route.useParams();
   const { salon } = Route.useRouteContext();
   const justBooked = useStore(bookingStore, (state) => state.lastBooked);

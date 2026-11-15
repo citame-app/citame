@@ -1,11 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
-import {
-  createClient,
-  pickFirstTime,
-  pickProfessional,
-  signedInContext,
-  startBooking,
-} from "./helpers";
+import { createClient, pickFirstTime, pickProfessional, startBooking } from "./helpers";
 
 /** Not assertions: a visual record of every screen, reviewed by a human. Output is git-ignored. */
 test.describe("screenshots", () => {

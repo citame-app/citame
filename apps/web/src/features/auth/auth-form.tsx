@@ -13,6 +13,7 @@ export interface AuthFormProps {
    * Resolves on success; throws the API error otherwise so the form can explain it. Sign-up
    * resolves with `verifyEmail` when the address must be confirmed before the first sign-in.
    */
+  // biome-ignore lint/suspicious/noConfusingVoidType: sign-in callbacks return Promise<void>.
   onSubmit: (values: SignInValues | SignUpValues) => Promise<void | { verifyEmail: string }>;
   /** Sends the confirmation link again (shown with the "check your inbox" notice). */
   onResendVerification?: (email: string) => Promise<void>;

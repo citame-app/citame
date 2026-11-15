@@ -47,7 +47,6 @@ export const options = {
 
 export function setup() {
   const cookie = signIn(__ENV.K6_EMAIL || "owner@example.com", __ENV.K6_PASSWORD || "");
-  const headers = { Origin: JSON_HEADERS.Origin, Cookie: cookie };
   const services = getJson("/services");
   const staff = getJson("/staff");
   const service = (services.services || services)[0];

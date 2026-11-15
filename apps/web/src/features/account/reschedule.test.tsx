@@ -136,7 +136,10 @@ describe("RescheduleView", () => {
 
   test("an appointment whose service was removed cannot be rescheduled online", () => {
     view({
-      appointment: { ...appointment, services: [{ ...appointment.services[0]!, serviceId: null }] },
+      appointment: {
+        ...appointment,
+        services: appointment.services.map((service) => ({ ...service, serviceId: null })),
+      },
     });
     expect(
       screen.getByText("This appointment can no longer be rescheduled online."),

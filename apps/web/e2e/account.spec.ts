@@ -58,7 +58,6 @@ test.describe("client account", () => {
     const slots = page.getByRole("main").getByRole("group").getByRole("radio");
     await expect(slots.first()).toBeVisible();
     const target = slots.nth(1);
-    const targetId = await target.getAttribute("id");
     await target.check();
     await page.getByRole("button", { name: "Confirm new time" }).click();
     await expect(page.getByText("Your appointment was moved")).toBeVisible();

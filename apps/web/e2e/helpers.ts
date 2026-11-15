@@ -92,7 +92,7 @@ export async function pickFirstTime(page: Page): Promise<string> {
   const first = page.getByRole("main").getByRole("group").getByRole("radio").first();
   await expect(first).toBeVisible();
   const id = await first.getAttribute("id");
-  const label = (await page.locator(`label[for="${id}"]`).innerText()).trim();
+  const label = (await page.locator(`label[for="${id}"]`).textContent())?.trim() ?? "";
   await first.check();
   return label;
 }

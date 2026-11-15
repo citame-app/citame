@@ -2,7 +2,8 @@ import { expect, test } from "@playwright/test";
 import { book, ensureStaff, freeHour, OWNER_EMAIL, runDays, signInAs } from "./admin-helpers";
 import { expectNoSeriousA11yViolations } from "./helpers";
 
-const stamp = Date.now().toString(36);
+// Both themes deliberately share a date: fixture identities must remain unambiguous.
+const [auditDate] = runDays(1, -1);
 const ROUTES = [
   ["/admin", "Today"],
   ["/admin/calendar", "Calendar"],
@@ -41,23 +42,24 @@ test.describe("admin accessibility (axe: zero serious or critical violations)", 
 
       test("calendar with data, the drawer and the forms", async ({ page }) => {
         test.setTimeout(120_000);
+        const clientName = `Axe ${crypto.randomUUID()}`;
         await ensureStaff("e2e-staff@example.com", "E2E Stylist");
-        const [date] = runDays(1, -1);
+        const date = auditDate;
         const { asOwner } = await import("./admin-helpers");
         const owner = await asOwner();
         const h = await freeHour(date as string);
         await book(owner, {
           date: date as string,
           time: `${String(h).padStart(2, "0")}:00`,
-          client: `Axe ${stamp}`,
+          client: clientName,
         });
         await signInAs(page, OWNER_EMAIL, `/admin/calendar?date=${date}`);
-        await expect(page.getByRole("button", { name: new RegExp(`Axe ${stamp}`) })).toBeVisible();
+        await expect(page.getByRole("button", { name: new RegExp(clientName) })).toBeVisible();
         // Same settle step as every other audit here: the grid keeps fetching after the first block paints.
         await page.waitForLoadState("networkidle");
         await expectNoSeriousA11yViolations(page, `calendar (${scheme})`);
-        await page.getByRole("button", { name: new RegExp(`Axe ${stamp}`) }).click();
-        await expect(page.getByRole("dialog", { name: `Axe ${stamp}` })).toBeVisible();
+        await page.getByRole("button", { name: new RegExp(clientName) }).click();
+        await expect(page.getByRole("dialog", { name: clientName, exact: true })).toBeVisible();
         await page.waitForLoadState("networkidle");
         await expectNoSeriousA11yViolations(page, `drawer (${scheme})`);
         await page.keyboard.press("Escape");

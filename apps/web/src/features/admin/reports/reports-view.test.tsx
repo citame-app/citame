@@ -127,9 +127,10 @@ describe("ReportsView", () => {
   test("exporting downloads the visible data as CSV", async () => {
     const created: Blob[] = [];
     const realCreate = URL.createObjectURL;
-    URL.createObjectURL = ((blob: Blob) => (
-      created.push(blob), "blob:x"
-    )) as typeof URL.createObjectURL;
+    URL.createObjectURL = ((blob: Blob) => {
+      created.push(blob);
+      return "blob:x";
+    }) as typeof URL.createObjectURL;
     URL.revokeObjectURL = () => {};
     open();
     fireEvent.click(await screen.findByRole("button", { name: "Export CSV" }));
