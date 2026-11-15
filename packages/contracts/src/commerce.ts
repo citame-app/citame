@@ -132,7 +132,8 @@ export const checkoutSchema = z.object({
   staffId: idSchema.nullable().optional(),
   currency: z.literal("EUR"),
   status: checkoutStatusSchema,
-  subtotalCents: moneyCentsSchema,
+  // Gross may exceed the payable limit when a valid discount reduces the total.
+  subtotalCents: z.number().int().nonnegative().max(2_147_483_647),
   discountCents: moneyCentsSchema,
   tipCents: moneyCentsSchema,
   taxCents: moneyCentsSchema,

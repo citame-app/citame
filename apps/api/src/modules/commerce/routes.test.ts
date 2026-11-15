@@ -441,7 +441,9 @@ test("discount tax allocation stays within each line and uses exact integer rati
     idempotencyKey: crypto.randomUUID(),
   });
   expect(response.status).toBe(201);
-  expect(await response.json()).toMatchObject({ totalCents: 999999998, taxCents: 499999999 });
+  const receipt = await response.json();
+  expect(checkoutSchema.safeParse(receipt).success).toBe(true);
+  expect(receipt).toMatchObject({ totalCents: 999999998, taxCents: 499999999 });
   const pennies = await call(owner, "/admin/commerce/checkouts", "POST", {
     lines: [1, 2, 3].map((i) => ({
       kind: "custom",
