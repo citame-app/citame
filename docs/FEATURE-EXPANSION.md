@@ -11,11 +11,13 @@ The release is not complete merely because a table or endpoint exists. Each oper
 - [x] Retail inventory: products, stock movements, low-stock alerts, checkout reservations/deduction, expiry/void and physical returns; [operator guide](inventory.md).
 - [x] Staff accounting: service/product commission rules, attribution, immutable accruals, refund adjustments, payout records, sales/cash reports and CSV exports; [operator guide](accounting.md).
 - [x] Staff access: five effective access levels with scoped calendar, sales, cash, inventory, costs and commission permissions; [access guide](staff-access.md).
-- [ ] Retention: gift cards and balances, multi-visit packages, memberships and entitlements, loyalty accrual/redemption, discounts and promotion validity.
+- [x] Gift cards: paid activation, bearer codes, balances, partial redemption, refund holds/restoration, closure, code/expiry recovery, vouchers and customer account UI; [operator guide](gift-cards.md).
+- [ ] Packages and memberships: multi-visit plans, paid periods, eligible-service entitlements, renewals and cancellation.
+- [ ] Loyalty and promotions: accrual/redemption, refund adjustments, discounts, usage limits and validity.
 - [ ] Scheduling: automated waitlist and expiring offers, resources/capacity, recurring appointments, service variants/add-ons/combinations and processing gaps.
 - [ ] CRM: client tags, blocked/trusted clients, photos, import/export and deduplication; custom intake forms/waivers with versioned answers.
 - [ ] Reputation and acquisition: verified post-visit reviews, moderated public portfolio, booking links/QR/widget/social entry points.
-- [ ] Marketing: explicit channel consent, client segments, templates, scheduled campaigns, unsubscribe/suppression, durable delivery and outcomes.
+- [ ] Marketing: explicit channel consent, client segments, templates, scheduled campaigns, unsubscribe/suppression, durable delivery and outcomes, including transactional gift/pass delivery.
 - [ ] Mobile experience: responsive flows and installable application behavior, offline/reconnect states, deep links and device/browser verification; native distribution only where the required platform/signing environment exists.
 - [ ] Final integration: UI/UX review, cross-feature races, money/stock/entitlement invariants, all suites, production smoke and deployment guidance.
 
@@ -46,3 +48,7 @@ Commission/accounting plus checkout/inventory regression coverage: 38 targeted A
 ## Access delivery evidence
 
 Full suites passed: 742 API, 627 web, 123 contracts and 47 database tests. Four light/dark mobile/desktop Chromium workflows passed for owner profile changes, read-only calendar presentation, live-session promotion and rejected account/access escalation, including axe and horizontal-overflow checks. Shared policies also cover sync and MCP; a customer-route permission bypass was reproduced and covered before correction. Typechecking and repository lint pass.
+
+## Gift-card delivery evidence
+
+Full suites passed with 752 API, 632 web, 125 contract and 47 database tests; four light/dark mobile/desktop Chromium gift workflows passed, including isolated print-document inspection, redemption/refund balance checks and axe. A subsequent financial regression run passed 55 tests for full-return closure and late captures; all 12 gift tests pass after also covering expired-request replay. Typechecking and repository lint pass. No real bank operation or gift delivery was performed.

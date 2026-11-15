@@ -1,3 +1,4 @@
+import { permissionsFor } from "@sob/contracts";
 import { createFileRoute, Link, Outlet, redirect } from "@tanstack/react-router";
 import { PageContainer, PageHeading } from "~/components/pages";
 import { Button } from "~/components/ui/button";
@@ -46,7 +47,7 @@ function AccountLayout() {
           lead={session ? t("common.greeting", { name: session.user.name }) : undefined}
         />
         <div className="mb-8 flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
-          <nav aria-label={t("account.nav.label")} className="-ml-4 flex gap-1">
+          <nav aria-label={t("account.nav.label")} className="-ml-4 flex flex-wrap gap-1">
             <Link to="/account" activeOptions={{ exact: true }} className={tabClass}>
               {t("account.nav.appointments")}
             </Link>
@@ -58,6 +59,13 @@ function AccountLayout() {
                 {t("account.nav.notifications")}
               </Link>
             )}
+            {session &&
+              (session.user.role === "client" ||
+                permissionsFor(session.user.role, session.accessPreset).commerce) && (
+                <Link to="/account/rewards" className={tabClass}>
+                  {t("rewards.title")}
+                </Link>
+              )}
           </nav>
           <Button variant="ghost" onClick={() => void auth.signOut()}>
             <LogOutIcon />

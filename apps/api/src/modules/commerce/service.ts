@@ -22,6 +22,13 @@ import type { PaymentGateway } from "../../payments/types";
 import type { Tx } from "../../tx";
 import { accrueCommissions } from "../accounting/service";
 import {
+  activateCheckoutGifts,
+  pendingGiftForCheckout,
+  redeemGift,
+  syncCheckoutGiftRefunds,
+  voidCheckoutGifts,
+} from "../gift-cards/value";
+import {
   consumeReservedInventory,
   loadCheckoutProducts,
   releaseCheckoutInventory,
@@ -167,6 +174,7 @@ export async function listCheckouts(db: Database, principal: Principal) {
 async function refreshStatus(tx: Tx, id: string) {
   const [row] = await tx.select().from(checkout).where(eq(checkout.id, id));
   if (!row || row.status === "void") return;
+  if (await syncCheckoutGiftRefunds(tx, id)) return;
   const view = await snapshot(tx, row);
   const status =
     view.refundedCents > 0
@@ -184,6 +192,7 @@ async function refreshStatus(tx: Tx, id: string) {
 async function fulfillCheckout(tx: Tx, id: string) {
   await consumeReservedInventory(tx, id);
   await accrueCommissions(tx, id);
+  await activateCheckoutGifts(tx, id);
   const fulfilledAt = new Date();
   await tx.update(checkout).set({ fulfilledAt }).where(eq(checkout.id, id));
   return fulfilledAt;
@@ -202,6 +211,7 @@ export async function voidCheckout(db: Database, id: string, principal: Principa
         "Only unpaid checkouts without unresolved payment attempts can be voided",
       );
     await releaseCheckoutInventory(tx, id);
+    await voidCheckoutGifts(tx, id);
     const [updated] = await tx
       .update(checkout)
       .set({ status: "void" })
@@ -222,207 +232,243 @@ export async function createCheckout(
   input: CreateCheckoutInput,
   principal: Principal,
 ) {
+  return db.transaction((tx) => createCheckoutInTransaction(tx, input, principal));
+}
+export async function getCheckoutInTransaction(tx: Tx, id: string, principal: Principal) {
+  return snapshot(tx, await saleRow(tx, id, principal));
+}
+export async function createCheckoutInTransaction(
+  tx: Tx,
+  input: CreateCheckoutInput,
+  principal: Principal,
+  options: { giftPurchase?: boolean } = {},
+) {
+  const giftPurchase =
+    options.giftPurchase === true &&
+    input.lines.length === 1 &&
+    input.lines[0]?.kind === "gift_card" &&
+    input.lines[0].quantity === 1 &&
+    !input.appointmentId &&
+    !input.staffId &&
+    !input.discountCents &&
+    !input.tipCents;
+  if (input.lines.some((line) => line.kind === "gift_card") && !giftPurchase)
+    throw new DomainError("forbidden", "Gift purchases must use the gift card purchase workflow");
+  if (giftPurchase && principal.role === "client" && input.clientId !== principal.clientId)
+    throw new DomainError("forbidden", "Gift buyer must match the authenticated client");
   if (
     principal.role === "client" &&
+    !giftPurchase &&
     (!input.appointmentId || input.lines.length || input.discountCents || input.staffId)
   )
     throw new DomainError("forbidden", "Clients can check out only their own appointment");
   if (principal.role !== "client") requireOperator(principal);
-  return db.transaction(async (tx) => {
-    // Serialize repeated creates before looking up idempotency or the unique appointment.
-    await tx.execute(
-      sql`select pg_advisory_xact_lock(hashtextextended(${`checkout:${input.appointmentId ?? `${principal.userId}:${input.idempotencyKey}`}`}, 0))`,
+  // Serialize repeated creates before looking up idempotency or the unique appointment.
+  await tx.execute(
+    sql`select pg_advisory_xact_lock(hashtextextended(${`checkout:${input.appointmentId ?? `${principal.userId}:${input.idempotencyKey}`}`}, 0))`,
+  );
+  const requestHash = idemHash(input);
+  const [existing] = await tx
+    .select()
+    .from(checkout)
+    .where(
+      and(
+        eq(checkout.createdBy, principal.userId),
+        eq(checkout.idempotencyKey, input.idempotencyKey),
+      ),
     );
-    const requestHash = idemHash(input);
-    const [existing] = await tx
+  if (existing) {
+    checkReplay(existing, requestHash);
+    return snapshot(tx, existing);
+  }
+  let clientId = input.clientId ?? null;
+  let staffId = input.staffId ?? (principal.role === "staff" ? principal.staffId : null);
+  if (
+    principal.role === "staff" &&
+    !permissionsFor(principal.role, principal.accessPreset).allSales &&
+    input.staffId &&
+    input.staffId !== principal.staffId
+  )
+    throw new DomainError("forbidden", "Staff can only attribute sales to themselves");
+  if (staffId && !input.appointmentId) {
+    const [seller] = await tx
+      .select()
+      .from(staffProfile)
+      .where(
+        and(
+          eq(staffProfile.id, staffId),
+          eq(staffProfile.active, true),
+          isNull(staffProfile.deletedAt),
+        ),
+      );
+    if (!seller) throw new DomainError("not_found", "Active staff member not found");
+  }
+  const lines: {
+    kind: string;
+    productId?: string;
+    giftCardId?: string;
+    unitCostCents?: number | null;
+    serviceId?: string | null;
+    description: string;
+    quantity: number;
+    unitAmountCents: number;
+    taxBasisPoints: number;
+    discountCents?: number;
+    taxCents?: number;
+  }[] = [];
+  if (input.appointmentId) {
+    const [booking] = await tx
+      .select()
+      .from(appointment)
+      .where(eq(appointment.id, input.appointmentId))
+      .for("update");
+    if (
+      !booking ||
+      booking.deletedAt ||
+      (principal.role === "client" && booking.clientId !== principal.clientId) ||
+      (principal.role === "staff" &&
+        !permissionsFor(principal.role, principal.accessPreset).allSales &&
+        booking.staffId !== principal.staffId)
+    )
+      throw new DomainError("not_found", "Appointment not found");
+    if (booking.status === "cancelled")
+      throw new DomainError("invalid_state", "Cancelled appointments cannot be checked out");
+    if (clientId && clientId !== booking.clientId)
+      throw new DomainError("validation_error", "Checkout client must match appointment");
+    clientId = booking.clientId;
+    if (input.staffId && input.staffId !== booking.staffId)
+      throw new DomainError(
+        "validation_error",
+        "Appointment seller must match the booked professional",
+      );
+    staffId = booking.staffId;
+    const [previous] = await tx
       .select()
       .from(checkout)
       .where(
-        and(
-          eq(checkout.createdBy, principal.userId),
-          eq(checkout.idempotencyKey, input.idempotencyKey),
-        ),
+        and(eq(checkout.appointmentId, input.appointmentId), sql`${checkout.status} <> 'void'`),
       );
-    if (existing) {
-      checkReplay(existing, requestHash);
-      return snapshot(tx, existing);
+    if (previous) {
+      if (input.lines.length || input.discountCents || input.tipCents || input.clientId)
+        checkReplay(previous, requestHash);
+      return snapshot(tx, previous);
     }
-    let clientId = input.clientId ?? null;
-    let staffId = input.staffId ?? (principal.role === "staff" ? principal.staffId : null);
-    if (
-      principal.role === "staff" &&
-      !permissionsFor(principal.role, principal.accessPreset).allSales &&
-      input.staffId &&
-      input.staffId !== principal.staffId
-    )
-      throw new DomainError("forbidden", "Staff can only attribute sales to themselves");
-    if (staffId && !input.appointmentId) {
-      const [seller] = await tx
-        .select()
-        .from(staffProfile)
-        .where(
-          and(
-            eq(staffProfile.id, staffId),
-            eq(staffProfile.active, true),
-            isNull(staffProfile.deletedAt),
-          ),
-        );
-      if (!seller) throw new DomainError("not_found", "Active staff member not found");
-    }
-    const lines: {
-      kind: string;
-      productId?: string;
-      unitCostCents?: number | null;
-      serviceId?: string | null;
-      description: string;
-      quantity: number;
-      unitAmountCents: number;
-      taxBasisPoints: number;
-      discountCents?: number;
-      taxCents?: number;
-    }[] = [];
-    if (input.appointmentId) {
-      const [booking] = await tx
-        .select()
-        .from(appointment)
-        .where(eq(appointment.id, input.appointmentId))
-        .for("update");
-      if (
-        !booking ||
-        booking.deletedAt ||
-        (principal.role === "client" && booking.clientId !== principal.clientId) ||
-        (principal.role === "staff" &&
-          !permissionsFor(principal.role, principal.accessPreset).allSales &&
-          booking.staffId !== principal.staffId)
-      )
-        throw new DomainError("not_found", "Appointment not found");
-      if (booking.status === "cancelled")
-        throw new DomainError("invalid_state", "Cancelled appointments cannot be checked out");
-      if (clientId && clientId !== booking.clientId)
-        throw new DomainError("validation_error", "Checkout client must match appointment");
-      clientId = booking.clientId;
-      if (input.staffId && input.staffId !== booking.staffId)
-        throw new DomainError(
-          "validation_error",
-          "Appointment seller must match the booked professional",
-        );
-      staffId = booking.staffId;
-      const [previous] = await tx
-        .select()
-        .from(checkout)
-        .where(
-          and(eq(checkout.appointmentId, input.appointmentId), sql`${checkout.status} <> 'void'`),
-        );
-      if (previous) {
-        if (input.lines.length || input.discountCents || input.tipCents || input.clientId)
-          checkReplay(previous, requestHash);
-        return snapshot(tx, previous);
-      }
-      const booked = await tx
-        .select()
-        .from(appointmentService)
-        .where(eq(appointmentService.appointmentId, booking.id))
-        .orderBy(asc(appointmentService.position));
-      if (!booked.length || booked.some((s) => s.currency !== input.currency))
-        throw new DomainError(
-          "validation_error",
-          "Appointment currency must match the EUR merchant currency",
-        );
-      lines.push(
-        ...booked.map((s) => ({
-          kind: "service",
-          serviceId: s.serviceId,
-          description: s.name,
-          quantity: 1,
-          unitAmountCents: s.priceCents,
-          taxBasisPoints: 0,
-        })),
+    const booked = await tx
+      .select()
+      .from(appointmentService)
+      .where(eq(appointmentService.appointmentId, booking.id))
+      .orderBy(asc(appointmentService.position));
+    if (!booked.length || booked.some((s) => s.currency !== input.currency))
+      throw new DomainError(
+        "validation_error",
+        "Appointment currency must match the EUR merchant currency",
       );
-    }
-    const products = await loadCheckoutProducts(tx, input.lines);
-    for (const line of input.lines) {
-      if (line.kind === "product") {
-        const product = line.productId ? products.get(line.productId) : undefined;
-        if (!product) throw new DomainError("not_found", "Product not found");
-        lines.push({
-          kind: "product",
-          productId: product.id,
-          description: product.name,
-          quantity: line.quantity,
-          unitAmountCents: product.priceCents,
-          unitCostCents: product.costCents,
-          taxBasisPoints: product.taxBasisPoints,
-        });
-        continue;
-      }
-      if (line.unitAmountCents === undefined || !line.description)
-        throw new DomainError("validation_error", "Custom items need a description and amount");
-      lines.push({
-        kind: "custom",
-        description: line.description,
-        quantity: line.quantity,
-        unitAmountCents: line.unitAmountCents,
-        taxBasisPoints: line.taxBasisPoints,
-      });
-    }
-    const subtotalCents = lines.reduce((a, b) => a + b.quantity * b.unitAmountCents, 0);
-    const totalCents = subtotalCents - input.discountCents + input.tipCents;
-    if (
-      !lines.length ||
-      input.discountCents > subtotalCents ||
-      !Number.isSafeInteger(totalCents) ||
-      totalCents < 0 ||
-      totalCents > 999999999
-    )
-      throw new DomainError("validation_error", "Invalid checkout total or discount");
-    // Prices include tax. Discounts are allocated proportionally in integer cents.
-    const discounts = allocateDiscount(
-      lines.map((line) => line.quantity * line.unitAmountCents),
-      input.discountCents,
+    lines.push(
+      ...booked.map((s) => ({
+        kind: "service",
+        serviceId: s.serviceId,
+        description: s.name,
+        quantity: 1,
+        unitAmountCents: s.priceCents,
+        taxBasisPoints: 0,
+      })),
     );
-    let taxCents = 0;
-    for (const [index, line] of lines.entries()) {
-      const gross = line.quantity * line.unitAmountCents;
-      const discount = discounts[index] ?? 0;
-      line.discountCents = discount;
-      line.taxCents = Math.round(
-        ((gross - discount) * line.taxBasisPoints) / (10000 + line.taxBasisPoints),
-      );
-      taxCents += line.taxCents;
+  }
+  const products = await loadCheckoutProducts(tx, input.lines);
+  for (const line of input.lines) {
+    if (line.kind === "gift_card") {
+      const card = await pendingGiftForCheckout(tx, line.giftCardId ?? "", principal);
+      lines.push({
+        kind: "gift_card",
+        giftCardId: card.id,
+        description: card.label || "Gift card",
+        quantity: 1,
+        unitAmountCents: card.amountCents,
+        taxBasisPoints: 0,
+      });
+      continue;
     }
-    const [row] = await tx
-      .insert(checkout)
-      .values({
-        appointmentId: input.appointmentId,
-        clientId,
-        staffId,
-        subtotalCents,
-        discountCents: input.discountCents,
-        tipCents: input.tipCents,
-        taxCents,
-        totalCents,
-        status: totalCents === 0 ? "paid" : "open",
-        createdBy: principal.userId,
-        idempotencyKey: input.idempotencyKey,
-        requestHash,
-      })
-      .returning();
-    if (!row) throw new Error("Checkout insert failed");
-    const insertedLines = await tx
-      .insert(checkoutLine)
-      .values(lines.map((line) => ({ ...line, checkoutId: row.id })))
-      .returning();
-    await reserveCheckoutProducts(tx, row.id, insertedLines);
-    if (totalCents === 0) row.fulfilledAt = await fulfillCheckout(tx, row.id);
-    await recordAudit(tx, {
-      actorUserId: principal.userId,
-      action: "commerce.checkout_created",
-      entity: "checkout",
-      entityId: row.id,
-      metadata: { totalCents, currency: row.currency },
+    if (line.kind === "product") {
+      const product = line.productId ? products.get(line.productId) : undefined;
+      if (!product) throw new DomainError("not_found", "Product not found");
+      lines.push({
+        kind: "product",
+        productId: product.id,
+        description: product.name,
+        quantity: line.quantity,
+        unitAmountCents: product.priceCents,
+        unitCostCents: product.costCents,
+        taxBasisPoints: product.taxBasisPoints,
+      });
+      continue;
+    }
+    if (line.unitAmountCents === undefined || !line.description)
+      throw new DomainError("validation_error", "Custom items need a description and amount");
+    lines.push({
+      kind: "custom",
+      description: line.description,
+      quantity: line.quantity,
+      unitAmountCents: line.unitAmountCents,
+      taxBasisPoints: line.taxBasisPoints,
     });
-    return snapshot(tx, row);
+  }
+  const subtotalCents = lines.reduce((a, b) => a + b.quantity * b.unitAmountCents, 0);
+  const totalCents = subtotalCents - input.discountCents + input.tipCents;
+  if (
+    !lines.length ||
+    input.discountCents > subtotalCents ||
+    !Number.isSafeInteger(totalCents) ||
+    totalCents < 0 ||
+    totalCents > 999999999
+  )
+    throw new DomainError("validation_error", "Invalid checkout total or discount");
+  // Prices include tax. Discounts are allocated proportionally in integer cents.
+  const discounts = allocateDiscount(
+    lines.map((line) => line.quantity * line.unitAmountCents),
+    input.discountCents,
+  );
+  let taxCents = 0;
+  for (const [index, line] of lines.entries()) {
+    const gross = line.quantity * line.unitAmountCents;
+    const discount = discounts[index] ?? 0;
+    line.discountCents = discount;
+    line.taxCents = Math.round(
+      ((gross - discount) * line.taxBasisPoints) / (10000 + line.taxBasisPoints),
+    );
+    taxCents += line.taxCents;
+  }
+  const [row] = await tx
+    .insert(checkout)
+    .values({
+      appointmentId: input.appointmentId,
+      clientId,
+      staffId,
+      subtotalCents,
+      discountCents: input.discountCents,
+      tipCents: input.tipCents,
+      taxCents,
+      totalCents,
+      status: totalCents === 0 ? "paid" : "open",
+      createdBy: principal.userId,
+      idempotencyKey: input.idempotencyKey,
+      requestHash,
+    })
+    .returning();
+  if (!row) throw new Error("Checkout insert failed");
+  const insertedLines = await tx
+    .insert(checkoutLine)
+    .values(lines.map((line) => ({ ...line, checkoutId: row.id })))
+    .returning();
+  await reserveCheckoutProducts(tx, row.id, insertedLines);
+  if (totalCents === 0) row.fulfilledAt = await fulfillCheckout(tx, row.id);
+  await recordAudit(tx, {
+    actorUserId: principal.userId,
+    action: "commerce.checkout_created",
+    entity: "checkout",
+    entityId: row.id,
+    metadata: { totalCents, currency: row.currency },
   });
+  return snapshot(tx, row);
 }
 async function openSession(tx: Tx) {
   await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('sob.cash-session', 0))`);
@@ -446,13 +492,14 @@ export async function startPayment(
   gateway: PaymentGateway | null,
   bizumEnabled = false,
 ) {
-  if (principal.role === "client" && !["redsys_card", "redsys_bizum"].includes(input.method))
+  if (
+    principal.role === "client" &&
+    !["redsys_card", "redsys_bizum", "gift_card"].includes(input.method)
+  )
     throw new DomainError("forbidden", "Clients cannot record manual payments");
   const bank = input.method === "redsys_card" || input.method === "redsys_bizum";
   if (bank && (!gateway || (input.method === "redsys_bizum" && !bizumEnabled)))
     throw new DomainError("payment_unavailable", "This online payment method is not configured");
-  if (input.method === "gift_card")
-    throw new DomainError("invalid_state", "Select a valid gift card to redeem");
   return db.transaction(async (tx) => {
     const sale = await saleRow(tx, id, principal, true);
     const requestHash = idemHash(input);
@@ -505,6 +552,15 @@ export async function startPayment(
       }
       if (!payment)
         throw new DomainError("invalid_state", "Could not allocate a unique payment order");
+      if (input.method === "gift_card")
+        await redeemGift(
+          tx,
+          input.giftCardCode ?? "",
+          input.amountCents,
+          payment.id,
+          id,
+          principal,
+        );
       if (session)
         await tx.insert(cashMovement).values({
           sessionId: session.id,

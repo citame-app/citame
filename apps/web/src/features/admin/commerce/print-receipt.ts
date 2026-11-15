@@ -60,13 +60,22 @@ export function printableReceipt(
   return main;
 }
 export function printReceipt(sale: Checkout, locale: string, t: Translator, timeZone: string) {
+  printDocument(`${t("commerce.receipt")} ${sale.id}`, locale, (doc) =>
+    printableReceipt(doc, sale, locale, t, timeZone),
+  );
+}
+export function printDocument(
+  title: string,
+  locale: string,
+  build: (doc: Document) => HTMLElement,
+) {
   document.querySelectorAll("iframe[data-sob-print-frame]").forEach((frame) => {
     frame.remove();
   });
   const active = document.activeElement;
   const frame = document.createElement("iframe");
   frame.dataset.sobPrintFrame = "";
-  frame.title = t("commerce.receipt");
+  frame.title = title;
   frame.setAttribute("aria-hidden", "true");
   frame.sandbox.add("allow-same-origin", "allow-modals");
   frame.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;height:297mm;border:0";
@@ -77,9 +86,9 @@ export function printReceipt(sale: Checkout, locale: string, t: Translator, time
     frame.remove();
     return;
   }
-  doc.title = `${t("commerce.receipt")} ${sale.id}`;
+  doc.title = title;
   doc.documentElement.lang = locale;
-  doc.body.append(printableReceipt(doc, sale, locale, t, timeZone));
+  doc.body.append(build(doc));
   const cleanup = () => {
     frame.remove();
     if (active instanceof HTMLElement) active.focus();

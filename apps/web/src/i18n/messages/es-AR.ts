@@ -4,6 +4,7 @@ import { accountingEsAR } from "./accounting";
 import { adminEsAR } from "./admin";
 import { commerceEsAR } from "./commerce";
 import type { MessageKey } from "./en";
+import { giftCardsEsAR } from "./gift-cards";
 import { inventoryEsAR } from "./inventory";
 import { notificationsEsAR } from "./notifications";
 
@@ -228,6 +229,7 @@ export const esAR: Record<MessageKey, string> = {
   "account.profile.failed": "No pudimos guardar tu perfil",
   "account.signOut": "Cerrar sesión",
   ...adminEsAR,
+  ...giftCardsEsAR,
   ...accessEsAR,
   ...accountingEsAR,
   ...inventoryEsAR,

@@ -1,4 +1,10 @@
-import type { Checkout, HostedPaymentForm, StartPaymentInput, UserRole } from "@sob/contracts";
+import {
+  type Checkout,
+  giftCardCodeSchema,
+  type HostedPaymentForm,
+  type StartPaymentInput,
+  type UserRole,
+} from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Button } from "~/components/ui/button";
@@ -40,21 +46,55 @@ export function CheckoutPanel({
     queryFn: () => api().commerce.capabilities(mode),
   });
   const [amount, setAmount] = useState<string | null>(null);
-  const [method, setMethod] = useState<StartPaymentInput["method"]>(
+  const [selectedMethod, setMethod] = useState<StartPaymentInput["method"]>(
     mode === "client" ? "redsys_card" : "cash",
   );
+  const [giftCode, setGiftCode] = useState("");
+  const [giftCodeError, setGiftCodeError] = useState(false);
   const [requestKey, setRequestKey] = useState(() => crypto.randomUUID());
   const [form, setForm] = useState<HostedPaymentForm | null>(null);
   const [error, setError] = useState(false);
   const [amountError, setAmountError] = useState(false);
+  const options = [
+    ...(mode === "admin"
+      ? [
+          { value: "cash", label: t("commerce.cash") },
+          { value: "external_card", label: t("commerce.external_card") },
+        ]
+      : []),
+    ...(capabilities.data?.card
+      ? [{ value: "redsys_card", label: t("commerce.redsys_card") }]
+      : []),
+    ...(capabilities.data?.bizum
+      ? [{ value: "redsys_bizum", label: t("commerce.redsys_bizum") }]
+      : []),
+    ...(capabilities.data?.giftCards && !sale.data?.lines.some((line) => line.kind === "gift_card")
+      ? [{ value: "gift_card", label: t("commerce.gift_card") }]
+      : []),
+  ];
+  const method = (
+    options.some((option) => option.value === selectedMethod)
+      ? selectedMethod
+      : (options[0]?.value ?? selectedMethod)
+  ) as StartPaymentInput["method"];
   const pay = useMutation({
     mutationFn: (amountCents: number) =>
-      api().commerce.pay(id, { method, amountCents, idempotencyKey: requestKey }, mode),
+      api().commerce.pay(
+        id,
+        {
+          method,
+          amountCents,
+          idempotencyKey: requestKey,
+          ...(method === "gift_card" ? { giftCardCode: giftCardCodeSchema.parse(giftCode) } : {}),
+        },
+        mode,
+      ),
     onSuccess: (result) => {
       setError(false);
       setForm(result.form);
       if (result.payment.status !== "pending") {
         setAmount(null);
+        setGiftCode("");
         setRequestKey(crypto.randomUUID());
       }
       void invalidateCommerce(queries);
@@ -90,20 +130,6 @@ export function CheckoutPanel({
   const review = order.payments.some(
     (p) => p.status === "reconciliation" && refundedFor(p.id) < p.amountCents,
   );
-  const options = [
-    ...(mode === "admin"
-      ? [
-          { value: "cash", label: t("commerce.cash") },
-          { value: "external_card", label: t("commerce.external_card") },
-        ]
-      : []),
-    ...(capabilities.data?.card
-      ? [{ value: "redsys_card", label: t("commerce.redsys_card") }]
-      : []),
-    ...(capabilities.data?.bizum
-      ? [{ value: "redsys_bizum", label: t("commerce.redsys_bizum") }]
-      : []),
-  ];
   return (
     <section
       aria-label={t("commerce.receipt")}
@@ -215,6 +241,11 @@ export function CheckoutPanel({
                   return;
                 }
                 setAmountError(false);
+                if (method === "gift_card" && !giftCardCodeSchema.safeParse(giftCode).success) {
+                  setGiftCodeError(true);
+                  return;
+                }
+                setGiftCodeError(false);
                 pay.mutate(cents);
               }}
             >
@@ -240,13 +271,34 @@ export function CheckoutPanel({
                   setError(false);
                 }}
               />
+              {method === "gift_card" && (
+                <TextField
+                  label={t("gift.code")}
+                  value={giftCode}
+                  autoComplete="off"
+                  maxLength={80}
+                  onChange={(event) => {
+                    setGiftCode(event.target.value);
+                    setGiftCodeError(false);
+                    setError(false);
+                    setRequestKey(crypto.randomUUID());
+                  }}
+                  error={giftCodeError ? t("gift.invalidCode") : undefined}
+                />
+              )}
               {error && (
                 <p role="alert" className="text-danger-fg sm:col-span-2">
-                  {t("commerce.paymentError")}
+                  {t(method === "gift_card" ? "gift.paymentError" : "commerce.paymentError")}
                 </p>
               )}
               <Button type="submit" disabled={pay.isPending || !online}>
-                {t(method.startsWith("redsys_") ? "commerce.continue" : "commerce.record")}
+                {t(
+                  method === "gift_card"
+                    ? "gift.redeem"
+                    : method.startsWith("redsys_")
+                      ? "commerce.continue"
+                      : "commerce.record",
+                )}
               </Button>
             </form>
           ) : (

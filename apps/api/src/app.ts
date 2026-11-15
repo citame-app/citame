@@ -20,6 +20,7 @@ import {
   commerceClientRoutes,
   redsysNotificationRoutes,
 } from "./modules/commerce/routes";
+import { giftCardRoutes } from "./modules/gift-cards/routes";
 import { inventoryRoutes } from "./modules/inventory/routes";
 import { meRoutes } from "./modules/me/routes";
 import { reportRoutes } from "./modules/reports/routes";
@@ -272,6 +273,8 @@ export function createApp(input: AppDeps): App {
   app.route("/admin/commerce", commerceAdminRoutes(deps));
   app.route("/admin/inventory", inventoryRoutes(deps));
   app.route("/admin/accounting", accountingRoutes(deps));
+  app.route("/admin/gift-cards", giftCardRoutes(deps));
+  app.route("/me/gift-cards", giftCardRoutes(deps));
   app.route("/admin/services", serviceAdminRoutes(deps));
   app.route("/admin/staff", staffAdminRoutes(deps));
   app.route("/admin/clients", clientAdminRoutes(deps));

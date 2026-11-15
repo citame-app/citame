@@ -432,6 +432,9 @@ function SalesReport() {
                     included_tax_at_sale: report.data.includedTaxCents,
                     settled_tips: report.data.tipsCents,
                     known_product_cost_at_sale: report.data.productCostCents,
+                    gift_value_applied: report.data.storedValueAppliedCents,
+                    gift_value_returned: report.data.storedValueReturnedCents,
+                    gift_value_issued: report.data.giftValueIssuedCents,
                   }).map(([metric, value]) => [
                     report.data.from,
                     report.data.to,
@@ -441,7 +444,7 @@ function SalesReport() {
                     "EUR",
                   ]),
                   [],
-                  ["method", "collected_cents", "refunded_cents", "currency"],
+                  ["method", "tender_applied_cents", "tender_returned_cents", "currency"],
                   ...report.data.methods.map((method) => [
                     method.method,
                     method.collectedCents,
@@ -485,6 +488,9 @@ function SalesReport() {
               ["accounting.tax", report.data.includedTaxCents],
               ["accounting.tips", report.data.tipsCents],
               ["accounting.cost", report.data.productCostCents],
+              ["gift.storedApplied", report.data.storedValueAppliedCents],
+              ["gift.storedReturned", report.data.storedValueReturnedCents],
+              ["gift.issued", report.data.giftValueIssuedCents],
             ].map(([label, value]) => (
               <div key={label} className="rounded-xl border border-line bg-surface p-4">
                 <dt className="text-sm text-muted">{t(label as "accounting.collected")}</dt>
@@ -500,8 +506,10 @@ function SalesReport() {
               <li key={method.method} className="flex flex-wrap justify-between gap-3 py-2">
                 <span>{t(`commerce.${method.method as "cash"}`)}</span>
                 <span>
-                  {t("accounting.collected")}: {money(method.collectedCents)} ·{" "}
-                  {t("accounting.refunded")}: {money(method.refundedCents)}
+                  {t(method.method === "gift_card" ? "gift.storedApplied" : "accounting.collected")}
+                  : {money(method.collectedCents)} ·{" "}
+                  {t(method.method === "gift_card" ? "gift.storedReturned" : "accounting.refunded")}
+                  : {money(method.refundedCents)}
                 </span>
               </li>
             ))}

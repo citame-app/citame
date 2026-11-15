@@ -58,6 +58,7 @@ export function commerceAdminRoutes(deps: AppDeps) {
         card: Boolean(gateway),
         bizum: Boolean(gateway && deps.config.payments.bizumEnabled),
         currency: "EUR",
+        giftCards: true,
       }),
     )
     .get("/checkouts", async (c) =>
@@ -172,6 +173,7 @@ export function commerceClientRoutes(deps: AppDeps) {
         card: Boolean(gateway),
         bizum: Boolean(gateway && deps.config.payments.bizumEnabled),
         currency: "EUR",
+        giftCards: true,
       }),
     )
     .post("/checkouts", async (c) =>

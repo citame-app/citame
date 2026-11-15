@@ -13,6 +13,7 @@ import {
 import { appointment } from "./appointment";
 import { user } from "./auth";
 import { clientProfile } from "./client";
+import { giftCard } from "./gift-card";
 import { createdAt, primaryId, timestamptz, updatedAt } from "./helpers";
 import { retailProduct } from "./inventory-product";
 import { staffProfile } from "./staff";
@@ -87,6 +88,9 @@ export const checkoutLine = pgTable(
       .references(() => checkout.id),
     kind: text().notNull(),
     productId: uuid().references(() => retailProduct.id),
+    giftCardId: uuid()
+      .references(() => giftCard.id)
+      .unique(),
     serviceId: uuid(),
     description: text().notNull(),
     quantity: integer().notNull(),
@@ -136,6 +140,7 @@ export const checkoutPayment = pgTable(
     status: paymentStatus().notNull().default("pending"),
     amountCents: integer().notNull(),
     currency: text().notNull().default("EUR"),
+    giftCardId: uuid().references(() => giftCard.id),
     bankOrder: text().unique(),
     bankResponse: text(),
     authorizationCode: text(),

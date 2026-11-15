@@ -272,10 +272,13 @@ export async function salesReport(db: Database, query: ReportQuery, principal: P
         tax: string | number;
         tips: string | number;
       }>(
-        sql`select coalesce(sum(c.total_cents),0)::bigint as sold, coalesce(sum(c.tax_cents),0)::bigint as tax, coalesce(sum(c.tip_cents),0)::bigint as tips from checkout c where c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt} ${staff}`,
+        sql`select coalesce(sum(c.total_cents),0)::bigint as sold, coalesce(sum(c.tax_cents),0)::bigint as tax, coalesce(sum(c.tip_cents),0)::bigint as tips from checkout c where c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt} and not exists (select 1 from checkout_line gl where gl.checkout_id = c.id and gl.kind = 'gift_card') ${staff}`,
       );
       const [costs] = await tx.execute<{ cost: string | number; unknown: number }>(
         sql`select coalesce(sum(l.quantity * l.unit_cost_cents::bigint),0)::bigint as cost, count(*) filter (where l.unit_cost_cents is null)::int as unknown from checkout_line l join checkout c on c.id = l.checkout_id where l.kind = 'product' and c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt} ${staff}`,
+      );
+      const [giftIssued] = await tx.execute<{ amount: string | number }>(
+        sql`select coalesce(sum(m.amount_cents),0)::bigint as amount from gift_card_movement m join checkout c on c.id = m.checkout_id where m.kind = 'activation' and m.created_at >= ${fromAt} and m.created_at < ${toAt} ${staff}`,
       );
       const sessions = query.staffId
         ? []
@@ -291,8 +294,12 @@ export async function salesReport(db: Database, query: ReportQuery, principal: P
           collectedCents: Number(payments.find((row) => row.method === method)?.amount ?? 0),
           refundedCents: Number(refunds.find((row) => row.method === method)?.amount ?? 0),
         }));
-      const collectedCents = methods.reduce((sum, row) => sum + row.collectedCents, 0);
-      const refundedCents = methods.reduce((sum, row) => sum + row.refundedCents, 0);
+      const collectedCents = methods
+        .filter((row) => row.method !== "gift_card")
+        .reduce((sum, row) => sum + row.collectedCents, 0);
+      const refundedCents = methods
+        .filter((row) => row.method !== "gift_card")
+        .reduce((sum, row) => sum + row.refundedCents, 0);
       return {
         from: query.from,
         to: query.to,
@@ -300,6 +307,11 @@ export async function salesReport(db: Database, query: ReportQuery, principal: P
         collectedCents,
         refundedCents,
         netCollectedCents: collectedCents - refundedCents,
+        storedValueAppliedCents:
+          methods.find((row) => row.method === "gift_card")?.collectedCents ?? 0,
+        storedValueReturnedCents:
+          methods.find((row) => row.method === "gift_card")?.refundedCents ?? 0,
+        giftValueIssuedCents: Number(giftIssued?.amount ?? 0),
         soldCents: Number(sales?.sold ?? 0),
         includedTaxCents: Number(sales?.tax ?? 0),
         tipsCents: Number(sales?.tips ?? 0),

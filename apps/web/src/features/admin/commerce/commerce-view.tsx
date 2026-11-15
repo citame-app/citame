@@ -11,6 +11,7 @@ import { api } from "~/lib/api/instance";
 import { formatMoney } from "~/lib/format";
 import { AccountingView } from "./accounting-view";
 import { CheckoutPanel } from "./checkout-panel";
+import { GiftCardsView } from "./gift-cards-view";
 import { invalidateCommerce } from "./invalidate";
 import { InventoryView } from "./inventory-view";
 import { inputCents } from "./money";
@@ -28,8 +29,18 @@ export function CommerceView({
   const sales = useQuery({ queryKey: ["commerce", "sales"], queryFn: () => api().commerce.list() });
   const [selected, setSelected] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [rewards, setRewards] = useState(false);
   const [accounting, setAccounting] = useState(false);
   const [inventory, setInventory] = useState(false);
+  if (rewards)
+    return (
+      <div className="space-y-4">
+        <Button variant="ghost" onClick={() => setRewards(false)}>
+          {t("commerce.back")}
+        </Button>
+        <GiftCardsView mode="admin" role={role} accessPreset={accessPreset} />
+      </div>
+    );
   if (accounting)
     return (
       <div className="space-y-4">
@@ -50,12 +61,17 @@ export function CommerceView({
     );
   return (
     <div className="space-y-6">
-      <Button variant="secondary" onClick={() => setInventory(true)}>
-        {t("inventory.title")}
-      </Button>
-      <Button variant="secondary" onClick={() => setAccounting(true)}>
-        {t(permissions.financialReports ? "accounting.title" : "accounting.own")}
-      </Button>
+      <div className="flex flex-wrap gap-3">
+        <Button variant="secondary" onClick={() => setInventory(true)}>
+          {t("inventory.title")}
+        </Button>
+        <Button variant="secondary" onClick={() => setAccounting(true)}>
+          {t(permissions.financialReports ? "accounting.title" : "accounting.own")}
+        </Button>
+        <Button variant="secondary" onClick={() => setRewards(true)}>
+          {t("rewards.title")}
+        </Button>
+      </div>
       {permissions.manageCash && <CashRegister role="owner" />}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-heading">{t("commerce.history")}</h2>

@@ -127,3 +127,11 @@ test("owner can attribute a retail or custom sale to a professional", async () =
   await screen.findByRole("alert");
   expect(calls[0]?.body.staffId).toBe(id);
 });
+test("opening rewards and returning to sales preserves a valid render lifecycle", async () => {
+  renderApp(<CommerceView role="owner" />);
+  await screen.findByText("No sales yet");
+  fireEvent.click(screen.getByRole("button", { name: "Gift cards & rewards" }));
+  await screen.findByRole("heading", { name: "Gift cards", level: 2 });
+  fireEvent.click(screen.getByRole("button", { name: "Back to sales" }));
+  await screen.findByText("No sales yet");
+});

@@ -3,6 +3,7 @@ import { accountSecurityEn } from "./account-security";
 import { accountingEn } from "./accounting";
 import { adminEn } from "./admin";
 import { commerceEn } from "./commerce";
+import { giftCardsEn } from "./gift-cards";
 import { inventoryEn } from "./inventory";
 import { notificationsEn } from "./notifications";
 /** English is the source catalog: its keys define what every other catalog must provide. */
@@ -224,6 +225,7 @@ export const en = {
   "account.profile.failed": "We could not save your profile",
   "account.signOut": "Sign out",
   ...adminEn,
+  ...giftCardsEn,
   ...accessEn,
   ...accountingEn,
   ...inventoryEn,

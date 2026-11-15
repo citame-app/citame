@@ -46,6 +46,7 @@ import { z } from "zod";
 import { accountingEndpoints } from "./accounting-endpoints";
 import type { ApiClient } from "./client";
 import { commerceEndpoints } from "./commerce-endpoints";
+import { giftCardEndpoints } from "./gift-card-endpoints";
 import { inventoryEndpoints } from "./inventory-endpoints";
 
 /** Better Auth answers with extra fields we do not depend on. */
@@ -86,6 +87,7 @@ export function createEndpoints(client: ApiClient) {
     commerce: commerceEndpoints(client),
     inventory: inventoryEndpoints(client),
     accounting: accountingEndpoints(client),
+    giftCards: giftCardEndpoints(client),
     salon: () => client.get("/salon", salonResponseSchema),
     services: () => client.get("/services", listServicesResponseSchema),
     staff: () => client.get("/staff", listStaffResponseSchema),

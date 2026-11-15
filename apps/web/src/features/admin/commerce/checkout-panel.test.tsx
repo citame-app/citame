@@ -8,6 +8,7 @@ const realFetch = globalThis.fetch;
 let requests: { method: string; path: string; body: unknown }[];
 let paid = false;
 let online = false;
+let giftAvailable = false;
 let refunds: Record<string, unknown>[] = [];
 let payments: Record<string, unknown>[] = [];
 const sale = () => ({
@@ -43,6 +44,7 @@ beforeEach(() => {
   requests = [];
   paid = false;
   online = false;
+  giftAvailable = false;
   refunds = [];
   payments = [];
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
@@ -55,14 +57,15 @@ beforeEach(() => {
         provider: online ? "redsys" : "none",
         environment: online ? "test" : null,
         card: online,
+        giftCards: giftAvailable,
         bizum: online,
         currency: "EUR",
       });
     if (path.endsWith("/payments") && method === "POST") {
-      if (body.method === "cash") {
+      if (body.method === "cash" || body.method === "gift_card") {
         paid = true;
         return reply({
-          payment: { id, status: "succeeded", method: "cash", amountCents: 2500, order: null },
+          payment: { id, status: "succeeded", method: body.method, amountCents: 2500, order: null },
           form: null,
         });
       }
@@ -178,4 +181,21 @@ test("an unpaid receipt offers an explicit void action", async () => {
   await screen.findByText("Haircut");
   fireEvent.click(screen.getByText("Void unpaid checkout", { selector: "summary" }));
   expect(screen.getByRole("button", { name: "Void unpaid checkout" })).toBeInTheDocument();
+});
+test("a client can select gift tender when online banking is disabled and sends its code in the body", async () => {
+  giftAvailable = true;
+  renderApp(<CheckoutPanel id={id} mode="client" role="client" />);
+  await screen.findByText("Haircut");
+  fireEvent.change(await screen.findByLabelText("Gift card code"), {
+    target: { value: "SOB-ABCD-1234-ABCD-1234-ABCD-1234" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Redeem gift card" }));
+  await screen.findByText("Paid", { selector: "p" });
+  const posted = requests.filter((request) => request.method === "POST");
+  expect(posted).toHaveLength(1);
+  expect(posted[0]?.body).toMatchObject({
+    method: "gift_card",
+    giftCardCode: "SOBABCD1234ABCD1234ABCD1234",
+    amountCents: 2500,
+  });
 });

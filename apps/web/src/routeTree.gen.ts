@@ -22,6 +22,7 @@ import { Route as VerifyEmailRouteImport } from './routes/verify-email'
 import { Route as AccountIndexRouteImport } from './routes/account.index'
 import { Route as AccountNotificationsRouteImport } from './routes/account.notifications'
 import { Route as AccountProfileRouteImport } from './routes/account.profile'
+import { Route as AccountRewardsRouteImport } from './routes/account.rewards'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as AdminCalendarRouteImport } from './routes/admin.calendar'
 import { Route as AdminCommerceRouteImport } from './routes/admin.commerce'
@@ -103,6 +104,11 @@ const AccountNotificationsRoute = AccountNotificationsRouteImport.update({
 const AccountProfileRoute = AccountProfileRouteImport.update({
   id: '/profile',
   path: '/profile',
+  getParentRoute: () => AccountRoute,
+} as any)
+const AccountRewardsRoute = AccountRewardsRouteImport.update({
+  id: '/rewards',
+  path: '/rewards',
   getParentRoute: () => AccountRoute,
 } as any)
 const AdminIndexRoute = AdminIndexRouteImport.update({
@@ -206,6 +212,7 @@ export interface FileRoutesByFullPath {
   '/verify-email': typeof VerifyEmailRoute
   '/account/notifications': typeof AccountNotificationsRoute
   '/account/profile': typeof AccountProfileRoute
+  '/account/rewards': typeof AccountRewardsRoute
   '/admin/calendar': typeof AdminCalendarRoute
   '/admin/commerce': typeof AdminCommerceRoute
   '/admin/reports': typeof AdminReportsRoute
@@ -235,6 +242,7 @@ export interface FileRoutesByTo {
   '/verify-email': typeof VerifyEmailRoute
   '/account/notifications': typeof AccountNotificationsRoute
   '/account/profile': typeof AccountProfileRoute
+  '/account/rewards': typeof AccountRewardsRoute
   '/admin/calendar': typeof AdminCalendarRoute
   '/admin/commerce': typeof AdminCommerceRoute
   '/admin/reports': typeof AdminReportsRoute
@@ -268,6 +276,7 @@ export interface FileRoutesById {
   '/verify-email': typeof VerifyEmailRoute
   '/account/notifications': typeof AccountNotificationsRoute
   '/account/profile': typeof AccountProfileRoute
+  '/account/rewards': typeof AccountRewardsRoute
   '/admin/calendar': typeof AdminCalendarRoute
   '/admin/commerce': typeof AdminCommerceRoute
   '/admin/reports': typeof AdminReportsRoute
@@ -302,6 +311,7 @@ export interface FileRouteTypes {
     | '/verify-email'
     | '/account/notifications'
     | '/account/profile'
+    | '/account/rewards'
     | '/admin/calendar'
     | '/admin/commerce'
     | '/admin/reports'
@@ -331,6 +341,7 @@ export interface FileRouteTypes {
     | '/verify-email'
     | '/account/notifications'
     | '/account/profile'
+    | '/account/rewards'
     | '/admin/calendar'
     | '/admin/commerce'
     | '/admin/reports'
@@ -363,6 +374,7 @@ export interface FileRouteTypes {
     | '/verify-email'
     | '/account/notifications'
     | '/account/profile'
+    | '/account/rewards'
     | '/admin/calendar'
     | '/admin/commerce'
     | '/admin/reports'
@@ -491,6 +503,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AccountProfileRouteImport
       parentRoute: typeof AccountRoute
     }
+    '/account/rewards': {
+      id: '/account/rewards'
+      path: '/rewards'
+      fullPath: '/account/rewards'
+      preLoaderRoute: typeof AccountRewardsRouteImport
+      parentRoute: typeof AccountRoute
+    }
     '/admin/': {
       id: '/admin/'
       path: '/'
@@ -616,6 +635,7 @@ declare module '@tanstack/react-router' {
 interface AccountRouteChildren {
   AccountNotificationsRoute: typeof AccountNotificationsRoute
   AccountProfileRoute: typeof AccountProfileRoute
+  AccountRewardsRoute: typeof AccountRewardsRoute
   AccountIndexRoute: typeof AccountIndexRoute
   AccountAppointmentsIdRescheduleRoute: typeof AccountAppointmentsIdRescheduleRoute
 }
@@ -623,6 +643,7 @@ interface AccountRouteChildren {
 const AccountRouteChildren: AccountRouteChildren = {
   AccountNotificationsRoute: AccountNotificationsRoute,
   AccountProfileRoute: AccountProfileRoute,
+  AccountRewardsRoute: AccountRewardsRoute,
   AccountIndexRoute: AccountIndexRoute,
   AccountAppointmentsIdRescheduleRoute: AccountAppointmentsIdRescheduleRoute,
 }

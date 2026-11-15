@@ -27,3 +27,5 @@ Retail unit costs are snapshots. Unknown costs are counted separately and never 
 The owner or a manager can inspect collections/refunds per payment method and cash sessions opened in the selected date range, including counted differences, and export the summary to CSV. Financial mutations invalidate receipt, inventory and accounting caches together. Financial screens also refresh when reopened, on focus and every 30 seconds.
 
 Migrations `0011_staff_accounting.sql` and `0012_backfill_checkout_attribution.sql` add the ledgers and prepare previously open receipts. The upgrade retains settled historical totals and allocates discounts/tax on unfulfilled open receipts using exact integer arithmetic. No bank transfers or real charges are performed by local verification.
+
+Gift-card tender is prepaid value, not a second collection of cash. The summary excludes gift redemption/refund from new-money totals and excludes gift purchases from settled service/retail sales. Gift value issued and applied/returned are separate metrics; CSV method rows describe applied and returned tender.

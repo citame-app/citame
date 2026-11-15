@@ -4,6 +4,8 @@ export * from "./audit";
 export * from "./auth";
 export * from "./client";
 export * from "./commerce";
+export * from "./gift-card";
+export * from "./gift-card-ledger";
 export * from "./inventory";
 export * from "./inventory-product";
 export * from "./notification";

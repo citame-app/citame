@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { idSchema, instantSchema } from "./common";
+import { giftCardCodeSchema } from "./gift-card-code";
 import { staffPermissionsSchema } from "./permissions";
 
 export const moneyCentsSchema = z.number().int().min(0).max(999_999_999);
@@ -24,8 +25,9 @@ export const idempotencyKeySchema = z
   .regex(/^[A-Za-z0-9_-]+$/);
 export const checkoutLineInputSchema = z
   .object({
-    kind: z.enum(["product", "custom"]),
+    kind: z.enum(["product", "custom", "gift_card"]),
     productId: idSchema.optional(),
+    giftCardId: idSchema.optional(),
     description: z.string().trim().min(1).max(200).optional(),
     quantity: z.number().int().min(1).max(1000),
     unitAmountCents: moneyCentsSchema.optional(),
@@ -33,6 +35,16 @@ export const checkoutLineInputSchema = z
   })
   .strict()
   .superRefine((line, ctx) => {
+    if (
+      line.kind === "gift_card" &&
+      (!line.giftCardId || line.productId || line.unitAmountCents !== undefined)
+    )
+      ctx.addIssue({
+        code: "custom",
+        message: "Gift card purchase requires its server-created card",
+      });
+    if (line.kind !== "gift_card" && line.giftCardId)
+      ctx.addIssue({ code: "custom", message: "Unexpected gift card id" });
     if (line.kind === "product" && (!line.productId || line.unitAmountCents !== undefined))
       ctx.addIssue({ code: "custom", message: "Products require an id and use the catalog price" });
     if (
@@ -60,10 +72,18 @@ export const createCheckoutSchema = z
 export const startPaymentSchema = z
   .object({
     method: paymentMethodSchema,
+    giftCardCode: giftCardCodeSchema.optional(),
     amountCents: moneyCentsSchema.refine((v) => v > 0),
     idempotencyKey: idempotencyKeySchema,
   })
-  .strict();
+  .strict()
+  .superRefine((input, ctx) => {
+    if ((input.method === "gift_card") !== Boolean(input.giftCardCode))
+      ctx.addIssue({
+        code: "custom",
+        message: "Gift card tender requires its code; other methods cannot include one",
+      });
+  });
 export const refundRequestSchema = z
   .object({
     amountCents: moneyCentsSchema.refine((v) => v > 0),
@@ -136,6 +156,7 @@ export const paymentCapabilitiesSchema = z.object({
   provider: z.enum(["none", "redsys"]),
   environment: z.enum(["test", "live"]).nullable(),
   card: z.boolean(),
+  giftCards: z.boolean().optional(),
   bizum: z.boolean(),
   currency: z.literal("EUR"),
 });
