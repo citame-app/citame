@@ -98,6 +98,12 @@ services:
       TRUST_PROXY: "true"
       PORT: "3000"
       AUTH_REQUIRE_EMAIL_VERIFICATION: ${AUTH_REQUIRE_EMAIL_VERIFICATION:-true}
+      PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-none}
+      REDSYS_ENVIRONMENT: ${REDSYS_ENVIRONMENT:-test}
+      REDSYS_MERCHANT_CODE: ${REDSYS_MERCHANT_CODE:-}
+      REDSYS_TERMINAL: ${REDSYS_TERMINAL:-}
+      REDSYS_SECRET_KEY: ${REDSYS_SECRET_KEY:-}
+      REDSYS_BIZUM_ENABLED: ${REDSYS_BIZUM_ENABLED:-false}
       NOTIFY_EMAIL_PROVIDER: ${NOTIFY_EMAIL_PROVIDER:-smtp}
       SMTP_URL: ${SMTP_URL:-}
       NOTIFY_EMAIL_FROM: ${NOTIFY_EMAIL_FROM:-Sisters of Beauty <no-reply@localhost>}
@@ -137,7 +143,10 @@ services:
   worker:
     <<: [*api-image, *hardened]
     command: ["bun", "apps/api/src/worker.ts"]
-    environment: *api-env
+    environment:
+      <<: *api-env
+      PAYMENT_PROVIDER: none
+      REDSYS_SECRET_KEY: ""
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -224,6 +233,8 @@ services:
     command: ["bun", "apps/api/src/scripts/bootstrap-owner.ts"]
     environment:
       <<: *api-env
+      PAYMENT_PROVIDER: none
+      REDSYS_SECRET_KEY: ""
       OWNER_EMAIL: ${OWNER_EMAIL:-}
       OWNER_PASSWORD: ${OWNER_PASSWORD:-}
       OWNER_NAME: ${OWNER_NAME:-}

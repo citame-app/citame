@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
+import { type RedsysConfig, RedsysGateway } from "./payments/redsys";
 
 const positiveInt = z.coerce.number().int().positive();
 
@@ -73,6 +74,13 @@ const envSchema = z.object({
   RATE_LIMIT_MCP_MAX: positiveInt.default(120),
   RATE_LIMIT_MCP_WINDOW_SECONDS: positiveInt.default(60),
 
+  PAYMENT_PROVIDER: z.enum(["none", "redsys"]).default("none"),
+  REDSYS_MERCHANT_CODE: z.string().optional(),
+  REDSYS_TERMINAL: z.string().optional(),
+  REDSYS_SECRET_KEY: z.string().optional(),
+  REDSYS_ENVIRONMENT: z.enum(["test", "live"]).default("test"),
+  REDSYS_BIZUM_ENABLED: z.stringbool().default(false),
+
   /** Runs the notification worker inside the API process (see also `bun run worker`). */
   NOTIFY_WORKER_ENABLED: z.stringbool().default(false),
   /** `smtp` sends through SMTP_URL; `none` skips every email (rows are marked skipped). */
@@ -142,6 +150,7 @@ export interface MaintenanceConfig {
 }
 
 export interface AppConfig {
+  payments: { provider: "none" | "redsys"; redsys: RedsysConfig | null; bizumEnabled: boolean };
   databaseUrl: string;
   valkeyUrl: string;
   valkeyKeyPrefix: string;
@@ -183,6 +192,7 @@ const FILE_BACKED = [
   "SMTP_URL",
   "TWILIO_AUTH_TOKEN",
   "METRICS_TOKEN",
+  "REDSYS_SECRET_KEY",
 ] as const;
 
 /** A plain variable wins; otherwise the file's content (minus the trailing newline) is used. */
@@ -234,7 +244,23 @@ export function loadConfig(input: Record<string, string | undefined> = process.e
       "Invalid environment configuration:\n  - TWILIO_*: ACCOUNT_SID, AUTH_TOKEN and FROM are required when NOTIFY_SMS_PROVIDER=twilio",
     );
   }
+  let redsys: RedsysConfig | null = null;
+  if (e.PAYMENT_PROVIDER === "redsys") {
+    if (!e.REDSYS_MERCHANT_CODE || !e.REDSYS_TERMINAL || !e.REDSYS_SECRET_KEY)
+      throw new Error(
+        "REDSYS_MERCHANT_CODE, REDSYS_TERMINAL and REDSYS_SECRET_KEY are required for Redsys",
+      );
+    redsys = {
+      merchantCode: e.REDSYS_MERCHANT_CODE,
+      terminal: e.REDSYS_TERMINAL,
+      secret: e.REDSYS_SECRET_KEY,
+      environment: e.REDSYS_ENVIRONMENT,
+      publicURL: e.NOTIFY_PUBLIC_URL || e.BETTER_AUTH_URL,
+    };
+    new RedsysGateway(redsys); // Validate before accepting traffic; never performs a bank request.
+  }
   return {
+    payments: { provider: e.PAYMENT_PROVIDER, redsys, bizumEnabled: e.REDSYS_BIZUM_ENABLED },
     databaseUrl: e.DATABASE_URL,
     valkeyUrl: e.VALKEY_URL,
     valkeyKeyPrefix: e.VALKEY_KEY_PREFIX,

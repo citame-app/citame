@@ -14,6 +14,11 @@ import { adminRoutes } from "./modules/admin/routes";
 import { appointmentsRoutes } from "./modules/appointments/routes";
 import { availabilityRoutes } from "./modules/availability/routes";
 import { clientAdminRoutes } from "./modules/clients/admin-routes";
+import {
+  commerceAdminRoutes,
+  commerceClientRoutes,
+  redsysNotificationRoutes,
+} from "./modules/commerce/routes";
 import { meRoutes } from "./modules/me/routes";
 import { reportRoutes } from "./modules/reports/routes";
 import { serviceAdminRoutes } from "./modules/services/admin-routes";
@@ -37,10 +42,12 @@ import {
 import { requestContext } from "./observability/http";
 import { type Logger, rootLogger } from "./observability/logger";
 import { checkReady } from "./observability/ready";
+import type { PaymentGateway } from "./payments/types";
 import { createRateLimiter, rateLimit } from "./rate-limit";
 import { bearerMatches, originCheck, securityHeaders } from "./security";
 
 export interface AppDeps {
+  paymentGateway?: PaymentGateway | null;
   db: Database;
   valkey: RedisClient;
   config: AppConfig;
@@ -155,6 +162,8 @@ export function createApp(input: AppDeps): App {
     app.use(`${prefix}/*`, sameOrigin);
   }
 
+  app.route("/payments", redsysNotificationRoutes(deps));
+
   // Moderate limit for everything else, strict one for credential endpoints (brute force).
   // The global limiter fails open (a Valkey outage must not take public browsing down); the
   // auth limiter fails closed.
@@ -254,9 +263,11 @@ export function createApp(input: AppDeps): App {
   app.use("/me/*", requireAuth(auth, deps.db));
   app.route("/notifications", optOutRoutes(deps));
   app.route("/me", meRoutes(deps));
+  app.route("/me", commerceClientRoutes(deps));
 
   app.use("/admin/*", requireAuth(auth, deps.db));
   app.route("/admin", adminRoutes(deps, auth));
+  app.route("/admin/commerce", commerceAdminRoutes(deps));
   app.route("/admin/services", serviceAdminRoutes(deps));
   app.route("/admin/staff", staffAdminRoutes(deps));
   app.route("/admin/clients", clientAdminRoutes(deps));

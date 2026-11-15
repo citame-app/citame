@@ -162,3 +162,30 @@ describe("loadConfig", () => {
     ).toBe("https://mcp.example/mcp");
   });
 });
+
+test("payment gateways are disabled by default and enabled Redsys requires complete private configuration", () => {
+  expect(loadConfig({ BETTER_AUTH_SECRET: SECRET }).payments.provider).toBe("none");
+  expect(() => loadConfig({ BETTER_AUTH_SECRET: SECRET, PAYMENT_PROVIDER: "redsys" })).toThrow(
+    "REDSYS",
+  );
+  const ready = loadConfig({
+    BETTER_AUTH_SECRET: SECRET,
+    PAYMENT_PROVIDER: "redsys",
+    REDSYS_MERCHANT_CODE: "999008881",
+    REDSYS_TERMINAL: "1",
+    REDSYS_SECRET_KEY: "public-test-key",
+    REDSYS_ENVIRONMENT: "test",
+  });
+  expect(ready.payments.redsys?.environment).toBe("test");
+  expect(ready.payments.bizumEnabled).toBe(false);
+  expect(() =>
+    loadConfig({
+      BETTER_AUTH_SECRET: SECRET,
+      PAYMENT_PROVIDER: "redsys",
+      REDSYS_MERCHANT_CODE: "999008881",
+      REDSYS_TERMINAL: "1",
+      REDSYS_SECRET_KEY: "public-test-key",
+      REDSYS_ENVIRONMENT: "live",
+    }),
+  ).toThrow("HTTPS");
+});

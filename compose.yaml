@@ -71,6 +71,12 @@ services:
       # Notifications (ADR 0010, docs/notifications.md). Off by default: nothing is ever sent
       # until you enable the worker and configure a provider.
       NOTIFY_WORKER_ENABLED: ${NOTIFY_WORKER_ENABLED:-false}
+      PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-none}
+      REDSYS_ENVIRONMENT: ${REDSYS_ENVIRONMENT:-test}
+      REDSYS_MERCHANT_CODE: ${REDSYS_MERCHANT_CODE:-}
+      REDSYS_TERMINAL: ${REDSYS_TERMINAL:-}
+      REDSYS_SECRET_KEY: ${REDSYS_SECRET_KEY:-}
+      REDSYS_BIZUM_ENABLED: ${REDSYS_BIZUM_ENABLED:-false}
       NOTIFY_EMAIL_PROVIDER: ${NOTIFY_EMAIL_PROVIDER:-none}
       SMTP_URL: ${SMTP_URL:-}
       NOTIFY_EMAIL_FROM: ${NOTIFY_EMAIL_FROM:-Sisters of Beauty <no-reply@localhost>}

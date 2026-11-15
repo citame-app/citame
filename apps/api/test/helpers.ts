@@ -49,7 +49,9 @@ export interface SetupOptions {
   /** Suffix of the dedicated `sob_test_<suffix>` database; defaults to `api`. */
   dbSuffix?: string;
   /** Extra application dependencies, for example a short SSE heartbeat. */
-  deps?: Partial<Pick<AppDeps, "syncHeartbeatMs" | "jwksRefetchMs" | "emailProvider">>;
+  deps?: Partial<
+    Pick<AppDeps, "syncHeartbeatMs" | "jwksRefetchMs" | "emailProvider" | "paymentGateway">
+  >;
 }
 
 export async function setupApiTest(options: SetupOptions = {}): Promise<ApiTest> {

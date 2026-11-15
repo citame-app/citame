@@ -13,6 +13,7 @@ export const errorCodeSchema = z.enum([
   /** The requested time is outside working hours, during time off, or breaks the notice window. */
   "slot_unavailable",
   "rate_limited",
+  "payment_unavailable",
   "internal_error",
 ]);
 
@@ -40,5 +41,6 @@ export const errorStatus = {
   has_future_appointments: 409,
   slot_unavailable: 409,
   rate_limited: 429,
+  payment_unavailable: 503,
   internal_error: 500,
 } as const satisfies Record<ErrorCode, number>;

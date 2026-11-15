@@ -11,6 +11,7 @@ export * from "./auth";
 export * from "./availability";
 export * from "./calendar";
 export * from "./clients";
+export * from "./commerce";
 export * from "./common";
 export * from "./errors";
 export * from "./mcp";
