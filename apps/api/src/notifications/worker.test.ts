@@ -14,7 +14,7 @@ import type { NotificationConfig } from "../config";
 import { createAppointment, updateAppointment } from "../modules/appointments/service";
 import { createMetrics } from "./metrics";
 import { FakeEmailProvider, FakeSmsProvider } from "./providers/fake";
-import { PermanentProviderError } from "./providers/types";
+import { PermanentProviderError, TransientProviderError } from "./providers/types";
 import { claimDue } from "./queue";
 import { createNotificationWorker } from "./worker";
 
@@ -381,6 +381,61 @@ describe("crash recovery and visibility timeout", () => {
     expect(row?.status).toBe("sent");
     expect(row?.lockedBy).toBe("fast");
     expect(email.delivered.size).toBe(1);
+  });
+});
+
+describe("leases and supersession", () => {
+  test("a batch keeps the leases of the jobs still waiting while earlier ones are slow", async () => {
+    await book();
+    clock = new Date("2026-03-08T12:00:00Z"); // confirmation and the 24h reminder are both due
+    let calls = 0;
+    let stolen = -1;
+    email.beforeDeliver = async () => {
+      calls += 1;
+      if (calls === 1) {
+        clock = new Date(clock.getTime() + 90_000); // the first send outlasts the 60 s lease
+        return;
+      }
+      // Second job is being handled now. Another worker looking for work must not find it.
+      const taken = await claimDue(t.db, {
+        now: clock,
+        limit: 5,
+        visibilitySeconds: 60,
+        workerId: "other",
+        maxAttempts: 3,
+      });
+      stolen = taken.filter((r) => r.channel === "email").length;
+    };
+    await worker("w1", { sms: null }).runOnce();
+    expect(calls).toBe(2);
+    expect(stolen).toBe(0);
+  });
+
+  test("a failed send does not resurrect a reminder withdrawn by a reschedule", async () => {
+    const appt = await book();
+    clock = new Date("2026-03-08T12:00:00Z");
+    let release: (error: Error) => void = () => {};
+    const gate = new Promise<void>((_, reject) => {
+      release = reject;
+    });
+    email.beforeDeliver = () => gate;
+    const running = worker("w1", { sms: null }).runOnce();
+    await Bun.sleep(150);
+    // While the reminder is in flight, the appointment moves: its old schedule is withdrawn.
+    await updateAppointment(
+      t.db,
+      appt.id,
+      { version: 1, startsAt: "2026-03-09T15:00:00.000Z" },
+      { userId: owner.userId },
+      { now: clock },
+    );
+    release(new TransientProviderError("smtp down"));
+    await running;
+    const old24h = (await rows()).filter(
+      (r) => r.kind === "reminder_24h" && r.channel === "email" && r.appointmentVersion === 1,
+    );
+    expect(old24h).toHaveLength(1);
+    expect(old24h[0]?.status).toBe("cancelled");
   });
 });
 

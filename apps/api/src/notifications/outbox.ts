@@ -1,5 +1,5 @@
 import { type appointment, clientProfile, reminder } from "@sob/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { getSalonSettings } from "../modules/settings/service";
 import type { Tx } from "../tx";
 import { planReminders } from "./schedule";
@@ -58,12 +58,22 @@ async function reminderPlan(tx: Tx, appt: AppointmentRow, now: Date) {
   });
 }
 
-/** Withdraws everything that has not started sending yet. Rows in flight finish on their own. */
+/**
+ * Withdraws everything that has not been sent. That includes rows a worker is sending right
+ * now: the send in flight cannot be recalled, but the worker's own bookkeeping is fenced on
+ * `processing`, so once withdrawn it can neither record the outcome nor put the row back to
+ * `pending` for a retry after a failure (which would send a reminder for a superseded schedule).
+ */
 async function withdrawPending(tx: Tx, appointmentId: string) {
   await tx
     .update(reminder)
-    .set({ status: "cancelled", lastError: "withdrawn: appointment changed" })
-    .where(and(eq(reminder.appointmentId, appointmentId), eq(reminder.status, "pending")));
+    .set({ status: "cancelled", lockedUntil: null, lastError: "withdrawn: appointment changed" })
+    .where(
+      and(
+        eq(reminder.appointmentId, appointmentId),
+        inArray(reminder.status, ["pending", "processing"]),
+      ),
+    );
 }
 
 export async function scheduleNewAppointment(tx: Tx, appt: AppointmentRow, now: Date) {

@@ -71,6 +71,34 @@ export async function claimDue(db: Database, options: ClaimOptions): Promise<Rem
 }
 
 /**
+ * Extends the lease on claimed rows this worker still owns and returns the ids it still owns.
+ * A batch is processed one job at a time under the lease taken at claim time, so a slow job
+ * would otherwise let the leases of the jobs behind it expire and a second worker claim (and
+ * send) them too.
+ */
+export async function renewLeases(
+  db: Database,
+  ids: string[],
+  workerId: string,
+  now: Date,
+  visibilitySeconds: number,
+): Promise<string[]> {
+  if (ids.length === 0) return [];
+  const renewed = await db
+    .update(reminder)
+    .set({ lockedUntil: new Date(now.getTime() + visibilitySeconds * 1000) })
+    .where(
+      and(
+        inArray(reminder.id, ids),
+        eq(reminder.status, "processing"),
+        eq(reminder.lockedBy, workerId),
+      ),
+    )
+    .returning({ id: reminder.id });
+  return renewed.map((r) => r.id);
+}
+
+/**
  * Ends a claim. Fenced on `locked_by` and `processing`: a worker whose lease was taken over
  * cannot overwrite the new owner's outcome. Returns whether the claim was still ours.
  */

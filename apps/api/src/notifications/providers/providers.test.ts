@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { createServer } from "node:net";
 import { SMTPServer } from "smtp-server";
 import { loadConfig } from "../../config";
 import { createProviders } from ".";
@@ -152,5 +153,43 @@ describe("createProviders", () => {
   test("requires credentials for the selected providers", () => {
     expect(() => loadConfig({ ...env, NOTIFY_EMAIL_PROVIDER: "smtp" })).toThrow(/SMTP_URL/);
     expect(() => loadConfig({ ...env, NOTIFY_SMS_PROVIDER: "twilio" })).toThrow(/TWILIO/);
+  });
+});
+
+describe("SMTP provider timeouts", () => {
+  test("a server that accepts the connection but never greets fails fast and retryably", async () => {
+    // A black hole: the TCP handshake completes, nothing is ever said.
+    const hole = createServer(() => {});
+    await new Promise<void>((resolve) => hole.listen(0, "127.0.0.1", resolve));
+    const port = (hole.address() as { port: number }).port;
+    const provider = createSmtpProvider({
+      url: `smtp://127.0.0.1:${port}`,
+      from: "Salon <no-reply@salon.example>",
+      timeouts: { connectionMs: 500, greetingMs: 500, socketMs: 500 },
+    });
+    const started = Date.now();
+    try {
+      await expect(
+        provider.send({
+          to: "lucia@example.com",
+          subject: "s",
+          text: "t",
+          html: "h",
+          idempotencyKey: "0190aaaa-0000-7000-8000-00000000000a",
+        }),
+      ).rejects.toBeInstanceOf(TransientProviderError);
+      expect(Date.now() - started).toBeLessThan(4000);
+    } finally {
+      await provider.close?.();
+      hole.close();
+    }
+  }, 10_000);
+
+  test("sensible defaults are in place for production use", async () => {
+    // The defaults must stay well under the 120 s job lease (NOTIFY_VISIBILITY_TIMEOUT_SECONDS).
+    const { SMTP_TIMEOUTS } = await import("./smtp");
+    expect(
+      SMTP_TIMEOUTS.connectionMs + SMTP_TIMEOUTS.greetingMs + SMTP_TIMEOUTS.socketMs,
+    ).toBeLessThan(60_000);
   });
 });

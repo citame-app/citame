@@ -12,7 +12,7 @@ import { type Metrics, processMetrics } from "./metrics";
 import { categoryOf, isEnabled } from "./preferences";
 import type { Providers } from "./providers";
 import { PermanentProviderError } from "./providers/types";
-import { backoffMs, claimDue, finishClaim, type ReminderRow } from "./queue";
+import { backoffMs, claimDue, finishClaim, type ReminderRow, renewLeases } from "./queue";
 import { LOCALES, type Locale, type MessageData, renderEmail, renderSms } from "./templates";
 import { signOptOutToken } from "./tokens";
 
@@ -220,7 +220,22 @@ export function createNotificationWorker(options: WorkerOptions): NotificationWo
       maxAttempts: config.maxAttempts,
     });
     metrics.inc("claimed", claimed.length);
-    for (const row of claimed) await handle(row);
+    let waiting = [...claimed];
+    while (waiting.length > 0) {
+      const row = waiting.shift() as ReminderRow;
+      await handle(row);
+      // Keep the leases of the jobs still waiting alive, and drop any that were taken over.
+      const owned = new Set(
+        await renewLeases(
+          db,
+          waiting.map((r) => r.id),
+          workerId,
+          clock(),
+          config.visibilityTimeoutSeconds,
+        ),
+      );
+      waiting = waiting.filter((r) => owned.has(r.id));
+    }
     return claimed.length;
   }
 

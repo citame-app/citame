@@ -19,12 +19,30 @@ function classify(error: unknown): Error {
 }
 
 /**
+ * Network timeouts. Without them a server that accepts the connection and then goes quiet would
+ * hold a worker (and its job lease) indefinitely. Their sum stays well under the 120 s job lease.
+ */
+export const SMTP_TIMEOUTS = { connectionMs: 10_000, greetingMs: 10_000, socketMs: 30_000 };
+
+/**
  * SMTP through nodemailer. SMTP has no idempotency key: the deterministic `Message-ID` lets a
  * receiving server or the operator spot a duplicate, but a crash between "server accepted" and
  * "row marked sent" can still deliver twice (at-least-once, see ADR 0010).
  */
-export function createSmtpProvider(options: { url: string; from: string }): EmailProvider {
-  const transport = nodemailer.createTransport({ url: options.url, pool: true, maxConnections: 2 });
+export function createSmtpProvider(options: {
+  url: string;
+  from: string;
+  timeouts?: typeof SMTP_TIMEOUTS;
+}): EmailProvider {
+  const timeouts = options.timeouts ?? SMTP_TIMEOUTS;
+  const transport = nodemailer.createTransport({
+    url: options.url,
+    pool: true,
+    maxConnections: 2,
+    connectionTimeout: timeouts.connectionMs,
+    greetingTimeout: timeouts.greetingMs,
+    socketTimeout: timeouts.socketMs,
+  });
   const domain = options.from.match(/@([^>\s]+)>?\s*$/)?.[1] ?? "localhost";
   return {
     async send(message: EmailMessage): Promise<SendResult> {
