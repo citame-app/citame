@@ -10,6 +10,11 @@ export interface ServerRequestContext {
   /** The visitor's address as the web server determined it, or null when unknown. */
   visitorIp: string | null;
   requestId: string;
+  /**
+   * Set when the API answered 429 to any call made for this visit. The web server uses it to turn
+   * an SSR failure into a 429 page instead of a 500. Absent when nothing was limited.
+   */
+  rateLimit?: { retryAfterSeconds: number };
 }
 
 export const REQUEST_CONTEXT_KEY = Symbol.for("sob.web.requestContext");

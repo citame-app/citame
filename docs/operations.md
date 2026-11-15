@@ -145,5 +145,5 @@ The worker runs `runMaintenance` 60 s after start and then every `MAINTENANCE_IN
 
 - **Nobody can sign up / "check your inbox" never arrives**: the API logs `account email failed` (no addresses) when SMTP rejects; check `SMTP_URL` and your provider's logs. Try Mailpit locally (`docker compose --profile mail up -d mailpit`, inbox on http://localhost:8025).
 - **`/ready` is 503**: the response names `database` or `valkey`; check that service's health and `docker compose logs`.
-- **Everybody gets 429**: the client address is wrong behind your proxy (all visitors share one). Check `WEB_TRUST_PROXY` and that the proxy appends to `X-Forwarded-For`.
+- **Everybody gets 429**: the client address is wrong behind your proxy (all visitors share one). Check `WEB_TRUST_PROXY` and that the proxy appends to `X-Forwarded-For`. A rendered page that hits the limit answers `429` with `Retry-After` (never a `500`); one server-rendered page costs a few API calls (3 on `/book`, more when signed in), so size `RATE_LIMIT_GLOBAL_MAX` per visitor accordingly.
 - **Cookie not kept on http**: production sets `Secure` cookies; use https (or `localhost`).

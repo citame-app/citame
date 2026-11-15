@@ -109,6 +109,122 @@ describe("ssr request context", () => {
   });
 });
 
+describe("rate-limited renders", () => {
+  const html = { "content-type": "text/html; charset=utf-8" };
+  const limited = (retryAfterSeconds: number, status = 500, body = "<html>boom</html>") =>
+    createWebServer({
+      clientDir: dir,
+      ssr: () => {
+        const visit = currentRequestContext();
+        if (visit) visit.rateLimit = { retryAfterSeconds };
+        return new Response(body, { status, headers: html });
+      },
+      proxy: { matches: () => false, handle: async () => new Response("") },
+    });
+
+  test("an SSR failure caused by the API's 429 becomes a 429 page with Retry-After", async () => {
+    const response = await get(limited(17), "/book");
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("17");
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("content-type")).toContain("text/html");
+    const body = await response.text();
+    expect(body).toContain("Too many attempts");
+    expect(body).not.toContain("boom");
+  });
+
+  test("the notice follows the visitor's language: cookie first, then Accept-Language", async () => {
+    const byCookie = await get(limited(9), "/book", { headers: { cookie: "sob_locale=es-AR" } });
+    expect(await byCookie.text()).toContain("Demasiados intentos");
+    const byHeader = await get(limited(9), "/book", {
+      headers: { "accept-language": "es-AR,es;q=0.9" },
+    });
+    expect(await byHeader.text()).toContain("Demasiados intentos");
+  });
+
+  test("the notice carries a nonce-based CSP that matches its inline style", async () => {
+    const response = await get(limited(9), "/book");
+    const csp = response.headers.get("content-security-policy") ?? "";
+    const nonce = /style-src 'self' 'nonce-([^']+)'/.exec(csp)?.[1];
+    expect(nonce).toBeTruthy();
+    expect(await response.text()).toContain(`<style nonce="${nonce}">`);
+  });
+
+  test("a page that rendered fine keeps its status even if an optional call was limited", async () => {
+    const response = await get(limited(9, 200, "<html>fine</html>"), "/book");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("retry-after")).toBeNull();
+    expect(await response.text()).toBe("<html>fine</html>");
+  });
+
+  test("a failure that is not rate limiting stays a 500", async () => {
+    const handler = createWebServer({
+      clientDir: dir,
+      ssr: () => new Response("<html>boom</html>", { status: 500, headers: html }),
+      proxy: { matches: () => false, handle: async () => new Response("") },
+    });
+    const response = await get(handler, "/book");
+    expect(response.status).toBe(500);
+    expect(response.headers.get("retry-after")).toBeNull();
+  });
+
+  test("non-document responses (server functions) keep their body but get 429 and Retry-After", async () => {
+    const handler = createWebServer({
+      clientDir: dir,
+      ssr: () => {
+        const visit = currentRequestContext();
+        if (visit) visit.rateLimit = { retryAfterSeconds: 4 };
+        return Response.json({ error: "x" }, { status: 500 });
+      },
+      proxy: { matches: () => false, handle: async () => new Response("") },
+    });
+    const response = await get(handler, "/_serverFn/abc");
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("4");
+    expect(await response.json()).toEqual({ error: "x" });
+  });
+
+  test("a page request answered with a bare JSON 500 (unhandled SSR error) still gets the notice", async () => {
+    const handler = createWebServer({
+      clientDir: dir,
+      ssr: () => {
+        const visit = currentRequestContext();
+        if (visit) visit.rateLimit = { retryAfterSeconds: 6 };
+        return Response.json(
+          { status: 500, unhandled: true, message: "HTTPError" },
+          { status: 500 },
+        );
+      },
+      proxy: { matches: () => false, handle: async () => new Response("") },
+    });
+    const response = await get(handler, "/account");
+    expect(response.status).toBe(429);
+    expect(response.headers.get("content-type")).toContain("text/html");
+    expect(await response.text()).toContain("Too many attempts");
+  });
+
+  test("two visitors rendering at once never see each other's rate-limit state", async () => {
+    const handler = createWebServer({
+      clientDir: dir,
+      trustProxy: true,
+      ssr: async () => {
+        const visit = currentRequestContext();
+        await Bun.sleep(5);
+        if (visit?.visitorIp === "198.51.100.1" && visit)
+          visit.rateLimit = { retryAfterSeconds: 3 };
+        return new Response("ok", { status: visit?.rateLimit ? 500 : 200, headers: html });
+      },
+      proxy: { matches: () => false, handle: async () => new Response("") },
+    });
+    const [a, b] = await Promise.all(
+      ["198.51.100.1", "198.51.100.2"].map((ip) =>
+        get(handler, "/book", { headers: { "x-forwarded-for": ip } }),
+      ),
+    );
+    expect([a?.status, b?.status]).toEqual([429, 200]);
+  });
+});
+
 describe("api proxy", () => {
   test("hands /api requests to the proxy with the socket address", async () => {
     const response = await get(server(), "/api/services");

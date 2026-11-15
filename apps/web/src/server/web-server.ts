@@ -1,6 +1,11 @@
 import { join, normalize, sep } from "node:path";
 import { gzipSync } from "node:zlib";
+import { resolveLocale } from "../i18n";
+import type { ServerRequestContext } from "../lib/api/request-context";
+import { createNonce } from "../lib/csp";
+import { parseThemeCookie } from "../lib/theme";
 import { visitorAddress } from "./client-address";
+import { renderRateLimitedPage } from "./rate-limited-page";
 import { runWithRequestContext } from "./request-context";
 
 export interface ProxyLike {
@@ -35,6 +40,7 @@ const BASELINE_HEADERS: Record<string, string> = {
   "cross-origin-opener-policy": "same-origin",
 };
 
+const SERVER_FN_PREFIX = "/_serverFn/";
 const SAFE_REQUEST_ID = /^[A-Za-z0-9._-]{8,128}$/;
 const QUIET_PATHS = new Set(["/healthz"]);
 
@@ -116,6 +122,41 @@ export function createWebServer({
     });
   }
 
+  /**
+   * The API said 429 while rendering and the render failed because of it: answer 429 with
+   * Retry-After (never a 500), and for documents a friendly page in the visitor's language.
+   * A render that succeeded despite a limited optional call is left alone.
+   */
+  function rateLimitedOr(request: Request, response: Response, context: ServerRequestContext) {
+    const limit = context.rateLimit;
+    if (!limit || response.status < 500) return response;
+    const headers = new Headers(response.headers);
+    headers.set("retry-after", String(limit.retryAfterSeconds));
+    headers.set("cache-control", "private, no-store");
+    // TanStack Start's server functions (called by the browser during navigation) speak their own
+    // wire format: keep the body, fix the status. Everything else is a page request.
+    if (new URL(request.url).pathname.startsWith(SERVER_FN_PREFIX)) {
+      return new Response(response.body, { status: 429, headers });
+    }
+    const cookie = request.headers.get("cookie");
+    const nonce = createNonce();
+    headers.delete("content-length");
+    headers.delete("content-encoding");
+    headers.set("content-type", "text/html; charset=utf-8");
+    headers.set(
+      "content-security-policy",
+      `default-src 'none'; style-src 'self' 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+    );
+    const html = renderRateLimitedPage({
+      locale: resolveLocale({ cookie, acceptLanguage: request.headers.get("accept-language") }),
+      theme: parseThemeCookie(cookie),
+      retryAfterSeconds: limit.retryAfterSeconds,
+      nonce,
+    });
+    void response.body?.cancel();
+    return new Response(request.method === "HEAD" ? null : html, { status: 429, headers });
+  }
+
   async function route(
     request: Request,
     url: URL,
@@ -131,11 +172,12 @@ export function createWebServer({
     if (asset) return asset;
     // SSR calls the API from this container: carry the visitor's address so the API rate-limits
     // each visitor on their own instead of lumping every render into the web container's bucket.
-    const context = {
+    const context: ServerRequestContext = {
       visitorIp: visitorAddress(request, client?.address ?? null, trustProxy),
       requestId: request.headers.get("x-request-id") ?? "",
     };
-    return compress(request, await runWithRequestContext(context, () => ssr(request)));
+    const rendered = await runWithRequestContext(context, () => ssr(request));
+    return compress(request, rateLimitedOr(request, rendered, context));
   }
 
   return {

@@ -3,9 +3,9 @@ import { queryOptions } from "@tanstack/react-query";
 import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeaders } from "@tanstack/react-start/server";
 import { type Locale, resolveLocale } from "~/i18n";
-import { ApiError } from "~/lib/api/client";
 import { serverEndpoints } from "~/lib/api/instance";
 import { parseThemeCookie, type Theme } from "~/lib/theme";
+import { resolveSession } from "./session";
 
 export interface Bootstrap {
   locale: Locale;
@@ -23,17 +23,9 @@ export const loadBootstrap = createServerFn({ method: "GET" }).handler(
     const cookie = headers.get("cookie");
     const locale = resolveLocale({ cookie, acceptLanguage: headers.get("accept-language") });
     const theme = parseThemeCookie(cookie);
-    let session: MeResponse | null = null;
-    if (cookie) {
-      try {
-        session = await serverEndpoints(cookie, headers.get("x-request-id")).me();
-      } catch (error) {
-        // 401 simply means "signed out"; anything else must not break public pages.
-        if (!(error instanceof ApiError && error.status === 401)) {
-          console.error("session lookup failed", error);
-        }
-      }
-    }
+    const session = cookie
+      ? await resolveSession(() => serverEndpoints(cookie, headers.get("x-request-id")).me())
+      : null;
     return { locale, theme, session };
   },
 );
