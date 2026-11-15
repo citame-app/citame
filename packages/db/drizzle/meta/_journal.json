@@ -78,6 +78,20 @@
       "when": 1794776813335,
       "tag": "0010_retail_inventory",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1794778331491,
+      "tag": "0011_staff_accounting",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1794778519230,
+      "tag": "0012_backfill_checkout_attribution",
+      "breakpoints": true
     }
   ]
 }

@@ -44,6 +44,7 @@ export const createCheckoutSchema = z
   .object({
     appointmentId: idSchema.optional(),
     clientId: idSchema.optional(),
+    staffId: idSchema.optional(),
     currency: z.literal("EUR").default("EUR"),
     lines: z.array(checkoutLineInputSchema).max(100).default([]),
     discountCents: moneyCentsSchema.default(0),
@@ -107,6 +108,7 @@ export const checkoutSchema = z.object({
   id: idSchema,
   appointmentId: idSchema.nullable(),
   clientId: idSchema.nullable(),
+  staffId: idSchema.nullable().optional(),
   currency: z.literal("EUR"),
   status: checkoutStatusSchema,
   subtotalCents: moneyCentsSchema,

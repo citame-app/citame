@@ -10,6 +10,7 @@ import {
   checkoutPayment,
   checkoutRefund,
   type Database,
+  staffProfile,
 } from "@sob/db";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
@@ -17,6 +18,7 @@ import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import type { PaymentGateway } from "../../payments/types";
 import type { Tx } from "../../tx";
+import { accrueCommissions } from "../accounting/service";
 import {
   consumeReservedInventory,
   loadCheckoutProducts,
@@ -80,6 +82,7 @@ async function snapshot(db: Connection, row: typeof checkout.$inferSelect): Prom
     id: row.id,
     appointmentId: row.appointmentId,
     clientId: row.clientId,
+    staffId: row.staffId,
     currency: "EUR",
     status: row.status,
     subtotalCents: row.subtotalCents,
@@ -162,6 +165,7 @@ async function refreshStatus(tx: Tx, id: string) {
 }
 async function fulfillCheckout(tx: Tx, id: string) {
   await consumeReservedInventory(tx, id);
+  await accrueCommissions(tx, id);
   const fulfilledAt = new Date();
   await tx.update(checkout).set({ fulfilledAt }).where(eq(checkout.id, id));
   return fulfilledAt;
@@ -202,7 +206,7 @@ export async function createCheckout(
 ) {
   if (
     principal.role === "client" &&
-    (!input.appointmentId || input.lines.length || input.discountCents)
+    (!input.appointmentId || input.lines.length || input.discountCents || input.staffId)
   )
     throw new DomainError("forbidden", "Clients can check out only their own appointment");
   return db.transaction(async (tx) => {
@@ -225,6 +229,22 @@ export async function createCheckout(
       return snapshot(tx, existing);
     }
     let clientId = input.clientId ?? null;
+    let staffId = input.staffId ?? (principal.role === "staff" ? principal.staffId : null);
+    if (principal.role === "staff" && input.staffId && input.staffId !== principal.staffId)
+      throw new DomainError("forbidden", "Staff can only attribute sales to themselves");
+    if (staffId && !input.appointmentId) {
+      const [seller] = await tx
+        .select()
+        .from(staffProfile)
+        .where(
+          and(
+            eq(staffProfile.id, staffId),
+            eq(staffProfile.active, true),
+            isNull(staffProfile.deletedAt),
+          ),
+        );
+      if (!seller) throw new DomainError("not_found", "Active staff member not found");
+    }
     const lines: {
       kind: string;
       productId?: string;
@@ -234,6 +254,8 @@ export async function createCheckout(
       quantity: number;
       unitAmountCents: number;
       taxBasisPoints: number;
+      discountCents?: number;
+      taxCents?: number;
     }[] = [];
     if (input.appointmentId) {
       const [booking] = await tx
@@ -252,6 +274,12 @@ export async function createCheckout(
       if (clientId && clientId !== booking.clientId)
         throw new DomainError("validation_error", "Checkout client must match appointment");
       clientId = booking.clientId;
+      if (input.staffId && input.staffId !== booking.staffId)
+        throw new DomainError(
+          "validation_error",
+          "Appointment seller must match the booked professional",
+        );
+      staffId = booking.staffId;
       const [previous] = await tx
         .select()
         .from(checkout)
@@ -329,15 +357,18 @@ export async function createCheckout(
     for (const [index, line] of lines.entries()) {
       const gross = line.quantity * line.unitAmountCents;
       const discount = discounts[index] ?? 0;
-      taxCents += Math.round(
+      line.discountCents = discount;
+      line.taxCents = Math.round(
         ((gross - discount) * line.taxBasisPoints) / (10000 + line.taxBasisPoints),
       );
+      taxCents += line.taxCents;
     }
     const [row] = await tx
       .insert(checkout)
       .values({
         appointmentId: input.appointmentId,
         clientId,
+        staffId,
         subtotalCents,
         discountCents: input.discountCents,
         tipCents: input.tipCents,

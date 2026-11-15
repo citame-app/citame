@@ -15,6 +15,7 @@ import { user } from "./auth";
 import { clientProfile } from "./client";
 import { createdAt, primaryId, timestamptz, updatedAt } from "./helpers";
 import { retailProduct } from "./inventory-product";
+import { staffProfile } from "./staff";
 
 export const checkoutStatus = pgEnum("checkout_status", [
   "open",
@@ -49,6 +50,7 @@ export const checkout = pgTable(
     id: primaryId(),
     appointmentId: uuid().references(() => appointment.id),
     clientId: uuid().references(() => clientProfile.id),
+    staffId: uuid().references(() => staffProfile.id),
     currency: text().notNull().default("EUR"),
     status: checkoutStatus().notNull().default("open"),
     subtotalCents: integer().notNull(),
@@ -90,6 +92,8 @@ export const checkoutLine = pgTable(
     quantity: integer().notNull(),
     unitAmountCents: integer().notNull(),
     unitCostCents: integer(),
+    discountCents: integer().notNull().default(0),
+    taxCents: integer().notNull().default(0),
     taxBasisPoints: integer().notNull().default(0),
     createdAt: createdAt(),
   },

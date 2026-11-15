@@ -14,6 +14,10 @@ beforeEach(() => {
     const path = new URL(String(input), "http://localhost").pathname;
     const body = init?.body ? JSON.parse(String(init.body)) : {};
     if (init?.method === "POST") calls.push({ path, body });
+    if (path.endsWith("/admin/staff"))
+      return Response.json({
+        staff: [{ id, displayName: "Ana", active: true, userId: null, serviceIds: [] }],
+      });
     if (path.endsWith("/inventory/products"))
       return Response.json({
         products: [
@@ -111,4 +115,15 @@ test("retail checkout uses catalog ids and quantities without browser-supplied p
   expect(calls[0]?.body.lines).toEqual([
     { kind: "product", productId: id, quantity: 2, taxBasisPoints: 0 },
   ]);
+});
+test("owner can attribute a retail or custom sale to a professional", async () => {
+  renderApp(<CommerceView role="owner" />);
+  await screen.findByText("No sales yet");
+  fireEvent.click(screen.getByRole("button", { name: "New sale" }));
+  fireEvent.change(await screen.findByLabelText("Professional"), { target: { value: id } });
+  fireEvent.change(screen.getByLabelText("Item or service"), { target: { value: "Custom item" } });
+  fireEvent.change(screen.getByLabelText("Price (EUR)"), { target: { value: "20" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create checkout" }));
+  await screen.findByRole("alert");
+  expect(calls[0]?.body.staffId).toBe(id);
 });

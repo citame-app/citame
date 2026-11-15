@@ -6,9 +6,12 @@ import { TextField } from "~/components/ui/field";
 import { SelectField } from "~/components/ui/select-field";
 import { EmptyState, ErrorState, Skeleton, useOnline } from "~/components/ui/states";
 import { useI18n } from "~/i18n/react";
+import { adminStaffQuery } from "~/lib/admin-queries";
 import { api } from "~/lib/api/instance";
 import { formatMoney } from "~/lib/format";
+import { AccountingView } from "./accounting-view";
 import { CheckoutPanel } from "./checkout-panel";
+import { invalidateCommerce } from "./invalidate";
 import { InventoryView } from "./inventory-view";
 import { inputCents } from "./money";
 import { type CartProduct, ProductCart } from "./product-cart";
@@ -18,7 +21,17 @@ export function CommerceView({ role }: { role: UserRole }) {
   const sales = useQuery({ queryKey: ["commerce", "sales"], queryFn: () => api().commerce.list() });
   const [selected, setSelected] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [accounting, setAccounting] = useState(false);
   const [inventory, setInventory] = useState(false);
+  if (accounting)
+    return (
+      <div className="space-y-4">
+        <Button variant="ghost" onClick={() => setAccounting(false)}>
+          {t("commerce.back")}
+        </Button>
+        <AccountingView role={role} />
+      </div>
+    );
   if (inventory)
     return (
       <div className="space-y-4">
@@ -32,6 +45,9 @@ export function CommerceView({ role }: { role: UserRole }) {
     <div className="space-y-6">
       <Button variant="secondary" onClick={() => setInventory(true)}>
         {t("inventory.title")}
+      </Button>
+      <Button variant="secondary" onClick={() => setAccounting(true)}>
+        {t(role === "owner" ? "accounting.title" : "accounting.own")}
       </Button>
       <CashRegister role={role} />
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -47,6 +63,7 @@ export function CommerceView({ role }: { role: UserRole }) {
       </div>
       {creating && (
         <NewSale
+          role={role}
           onCreated={(id) => {
             setCreating(false);
             setSelected(id);
@@ -99,10 +116,12 @@ export function CommerceView({ role }: { role: UserRole }) {
     </div>
   );
 }
-function NewSale({ onCreated }: { onCreated: (id: string) => void }) {
+function NewSale({ onCreated, role }: { onCreated: (id: string) => void; role: UserRole }) {
   const { t } = useI18n();
   const queries = useQueryClient();
   const online = useOnline();
+  const staff = useQuery({ ...adminStaffQuery, enabled: role === "owner" });
+  const [seller, setSeller] = useState("");
   const [items, setItems] = useState<CartProduct[]>([]);
   const [description, setDescription] = useState("");
   const [price, setPrice] = useState("");
@@ -135,6 +154,7 @@ function NewSale({ onCreated }: { onCreated: (id: string) => void }) {
       if (discountCents > subtotal) throw new Error("Invalid discount");
       return api().commerce.create({
         currency: "EUR",
+        ...(seller ? { staffId: seller } : {}),
         lines: [
           ...items.map((item) => ({
             kind: "product" as const,
@@ -160,8 +180,7 @@ function NewSale({ onCreated }: { onCreated: (id: string) => void }) {
       });
     },
     onSuccess: (sale) => {
-      void queries.invalidateQueries({ queryKey: ["commerce"] });
-      void queries.invalidateQueries({ queryKey: ["inventory"] });
+      void invalidateCommerce(queries);
       onCreated(sale.id);
     },
   });
@@ -180,6 +199,28 @@ function NewSale({ onCreated }: { onCreated: (id: string) => void }) {
     >
       <h3 className="font-semibold sm:col-span-2">{t("commerce.newSale")}</h3>
       <p className="text-sm text-muted sm:col-span-2">{t("commerce.customHelp")}</p>
+      {role === "owner" &&
+        (staff.isPending ? (
+          <Skeleton className="h-14" />
+        ) : staff.isError ? (
+          <ErrorState error={staff.error} onRetry={() => void staff.refetch()} />
+        ) : (
+          <SelectField
+            label={t("accounting.staff")}
+            value={seller}
+            options={[
+              { value: "", label: t("accounting.unassigned") },
+              ...staff.data
+                .filter((member) => member.active)
+                .map((member) => ({ value: member.id, label: member.displayName })),
+            ]}
+            onChange={(value) => {
+              setSeller(value);
+              create.reset();
+              setKey(crypto.randomUUID());
+            }}
+          />
+        ))}
       <ProductCart
         items={items}
         onChange={(next) => {
@@ -233,7 +274,7 @@ function CashRegister({ role }: { role: UserRole }) {
   });
   const [opening, setOpening] = useState("0");
   const [counted, setCounted] = useState("");
-  const changed = () => void queries.invalidateQueries({ queryKey: ["commerce"] });
+  const changed = () => void invalidateCommerce(queries);
   const open = useMutation({
     mutationFn: () => {
       const value = inputCents(opening);
@@ -383,7 +424,7 @@ function CashAdjustment() {
       setAmount("");
       setReason("");
       changeKey();
-      void queries.invalidateQueries({ queryKey: ["commerce"] });
+      void invalidateCommerce(queries);
     },
   });
   return (

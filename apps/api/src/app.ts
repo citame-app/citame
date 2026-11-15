@@ -10,6 +10,7 @@ import type { AppConfig } from "./config";
 import { DomainError } from "./errors";
 import { errorBody, respondError } from "./http";
 import { mcpRoutes } from "./mcp/routes";
+import { accountingRoutes } from "./modules/accounting/routes";
 import { adminRoutes } from "./modules/admin/routes";
 import { appointmentsRoutes } from "./modules/appointments/routes";
 import { availabilityRoutes } from "./modules/availability/routes";
@@ -270,6 +271,7 @@ export function createApp(input: AppDeps): App {
   app.route("/admin", adminRoutes(deps, auth));
   app.route("/admin/commerce", commerceAdminRoutes(deps));
   app.route("/admin/inventory", inventoryRoutes(deps));
+  app.route("/admin/accounting", accountingRoutes(deps));
   app.route("/admin/services", serviceAdminRoutes(deps));
   app.route("/admin/staff", staffAdminRoutes(deps));
   app.route("/admin/clients", clientAdminRoutes(deps));

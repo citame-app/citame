@@ -1,4 +1,5 @@
 import { accountSecurityEn } from "./account-security";
+import { accountingEn } from "./accounting";
 import { adminEn } from "./admin";
 import { commerceEn } from "./commerce";
 import { inventoryEn } from "./inventory";
@@ -222,6 +223,7 @@ export const en = {
   "account.profile.failed": "We could not save your profile",
   "account.signOut": "Sign out",
   ...adminEn,
+  ...accountingEn,
   ...inventoryEn,
   ...commerceEn,
   ...notificationsEn,

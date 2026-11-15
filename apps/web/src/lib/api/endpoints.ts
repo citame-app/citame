@@ -41,6 +41,7 @@ import {
   workingHoursResponseSchema,
 } from "@sob/contracts";
 import { z } from "zod";
+import { accountingEndpoints } from "./accounting-endpoints";
 import type { ApiClient } from "./client";
 import { commerceEndpoints } from "./commerce-endpoints";
 import { inventoryEndpoints } from "./inventory-endpoints";
@@ -82,6 +83,7 @@ export function createEndpoints(client: ApiClient) {
   return {
     commerce: commerceEndpoints(client),
     inventory: inventoryEndpoints(client),
+    accounting: accountingEndpoints(client),
     salon: () => client.get("/salon", salonResponseSchema),
     services: () => client.get("/services", listServicesResponseSchema),
     staff: () => client.get("/staff", listStaffResponseSchema),

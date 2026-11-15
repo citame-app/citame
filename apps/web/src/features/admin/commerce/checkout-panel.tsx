@@ -9,6 +9,7 @@ import { useI18n } from "~/i18n/react";
 import type { CommerceMode } from "~/lib/api/commerce-endpoints";
 import { api } from "~/lib/api/instance";
 import { formatMoney } from "~/lib/format";
+import { invalidateCommerce } from "./invalidate";
 import { centsInput, inputCents } from "./money";
 import { printReceipt } from "./print-receipt";
 import { StockReturn } from "./stock-return";
@@ -56,8 +57,7 @@ export function CheckoutPanel({
         setAmount(null);
         setRequestKey(crypto.randomUUID());
       }
-      void queries.invalidateQueries({ queryKey: ["commerce"] });
-      void queries.invalidateQueries({ queryKey: ["inventory"] });
+      void invalidateCommerce(queries);
     },
     onError: () => setError(true),
   });
@@ -65,8 +65,7 @@ export function CheckoutPanel({
     mutationFn: () => api().commerce.void(id, mode),
     onSuccess: () => {
       setForm(null);
-      void queries.invalidateQueries({ queryKey: ["commerce"] });
-      void queries.invalidateQueries({ queryKey: ["inventory"] });
+      void invalidateCommerce(queries);
     },
   });
   if (sale.isPending) return <Skeleton className="h-72" />;
@@ -328,7 +327,7 @@ function RefundForm({ paymentId, amountCents }: { paymentId: string; amountCents
     },
     onSuccess: () => {
       setOpen(false);
-      void queries.invalidateQueries({ queryKey: ["commerce"] });
+      void invalidateCommerce(queries);
     },
   });
   return (
@@ -385,7 +384,7 @@ function RefundStatus({ refund, owner }: { refund: Checkout["refunds"][number]; 
   const queries = useQueryClient();
   const [reference, setReference] = useState("");
   const [outcome, setOutcome] = useState("");
-  const changed = () => void queries.invalidateQueries({ queryKey: ["commerce"] });
+  const changed = () => void invalidateCommerce(queries);
   const execute = useMutation({
     mutationFn: () => api().commerce.executeRefund(refund.id),
     onSuccess: changed,
@@ -477,7 +476,7 @@ function PaymentReconciliation({ paymentId }: { paymentId: string }) {
         outcome: outcome as "succeeded" | "failed",
         reference: reference.trim(),
       }),
-    onSuccess: () => void queries.invalidateQueries({ queryKey: ["commerce"] }),
+    onSuccess: () => void invalidateCommerce(queries),
   });
   return (
     <form
