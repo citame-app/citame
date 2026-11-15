@@ -107,7 +107,6 @@ Errors look like `{ "error": { "code", "message" } }` with codes `validation_err
 | `RATE_LIMIT_OAUTH_REGISTER_MAX`, `..._WINDOW_SECONDS`               | `10`, `60`                              | Per client: anonymous dynamic client registration.                                                                                                                                                                |
 | `RATE_LIMIT_MCP_MAX`, `..._WINDOW_SECONDS`                          | `120`, `60`                             | Per client: `/mcp` requests.                                                                                                                                                                                      |
 | `OWNER_EMAIL`, `OWNER_PASSWORD`, `OWNER_NAME`                       | none                                    | Only read by `bun run bootstrap:owner`; never logged.                                                                                                                                                             |
-| `SALON_TIMEZONE`                                                    | `America/Argentina/Buenos_Aires`        | Passed through by Compose but not read by any code: the salon timezone is stored in the database (Admin, Settings).                                                                                               |
 | `AUTH_REQUIRE_EMAIL_VERIFICATION`                                   | `true`                                  | Clients confirm their email before signing in. Production refuses to boot with it on and no email provider. `compose.yaml` (development) defaults it to `false`.                                                  |
 | `METRICS_TOKEN`                                                     | unset                                   | Bearer token for `/metrics`. Unset: only requests that did not come through the public proxy are answered.                                                                                                        |
 | `SHUTDOWN_GRACE_MS`                                                 | `0`                                     | After SIGTERM `/ready` is 503 for this long before the listener closes.                                                                                                                                           |
@@ -184,8 +183,10 @@ curl localhost:4173/healthz    # web: open http://localhost:4173
 
 `compose.prod.yaml` is the hardened stack (no database ports, read-only containers, resource limits, one-shot migrations, a separate worker, optional automatic HTTPS with Caddy):
 
+Copy [`.env.example`](.env.example) to `.env`, run `chmod 600 .env` and fill the required secrets, public origin and SMTP settings. The environment reference describes every option. Alternatively, export the required values:
+
 ```sh
-export POSTGRES_PASSWORD="$(openssl rand -base64 24)" BETTER_AUTH_SECRET="$(openssl rand -base64 32)" \
+export POSTGRES_PASSWORD="$(openssl rand -hex 32)" BETTER_AUTH_SECRET="$(openssl rand -base64 32)" \
        PUBLIC_URL=https://salon.example SMTP_URL=smtps://user:pass@smtp.example:465
 docker compose -f compose.prod.yaml up -d --build --wait
 OWNER_EMAIL=you@salon.example OWNER_PASSWORD='a long passphrase' \
@@ -205,7 +206,7 @@ bun run db:generate # drizzle-kit: generate a migration from schema changes
 bun run bootstrap:owner   # idempotent first owner from OWNER_EMAIL / OWNER_PASSWORD
 bun run maintenance       # one-shot housekeeping (the worker also runs it daily)
 bun run backup            # pg_dump to backups/ with a checksum (scripts/restore.sh restores it)
-bun run test:scripts      # backup/restore round trip against compose Postgres
+bun run test:scripts      # deployment-script regressions and backup/restore against compose Postgres
 bun run k6:availability   # also k6:contention, k6:mixed (see k6/README.md)
 docker compose up -d --build   # full stack (postgres, valkey, api, web)
 ```

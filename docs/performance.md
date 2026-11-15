@@ -42,6 +42,12 @@ See the section at the end of this file.
 - The DB pool is the default 10 connections per process; the 200-racer run was served by one API process.
 - Numbers will differ on your hardware, with a remote database, or with a larger catalogue and appointment history. Re-run `bun run k6:*` after changes that touch the booking or availability path.
 
+### Release-readiness recheck (2026-11-15)
+
+On the same host, with a fresh scratch database, 50 racers across 10 slots again produced exactly 10 creates, 490 `409 slot_taken` responses and no unexpected responses. The SQL overlap check remained zero, including after the desktop's four real-API offline-sync tests. Booking p95 was 784 ms, passing the unchanged 1,000 ms threshold. This run used the host's Bun 1.4.5 canary; the production-image smoke test separately passed on pinned Bun 1.4.4.
+
+An earlier run during simultaneous API tests and Rust compilation preserved correctness but failed the latency threshold (p95 2.83 s). The recheck followed completion of the API suite and GPUI build; Playwright was still running. These measurements include competing local work and are not isolated capacity benchmarks. No threshold was relaxed and no booking-path optimization was claimed.
+
 ### Lighthouse (mobile preset, performance category, Lighthouse 13.6, production build)
 
 Measured against the production-mode stack on the machine above, signed in as the owner for the admin pages (the cookie is sent as a header; the calendar URL includes `?view=day` so the redirect to it does not drop it). Five runs per page; the median is shown.

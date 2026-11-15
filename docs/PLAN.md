@@ -60,7 +60,7 @@ Each phase ends green (lint, typecheck, `bun test`, and the listed checks) and i
 
 | #   | Phase                                                                                                  | Status                            | Caveats                                                                                                                                                                                                                     |
 | --- | ------------------------------------------------------------------------------------------------------ | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0   | Foundations: monorepo, compose, CI, ADR 0001                                                           | Done                              | The plan called for a `.env.example`; writing `.env*` files was not possible in the authoring environment, so [docs/env-reference.md](env-reference.md) carries the template instead.                                       |
+| 0   | Foundations: monorepo, compose, CI, ADR 0001                                                           | Done                              | Production template: [`.env.example`](../.env.example); complete variable reference: [docs/env-reference.md](env-reference.md).                                                                                             |
 | 1   | Data and core API: schema, exclusion constraint, availability, appointments, seed                      | Done                              | [ADR 0002](adr/0002-data-model-and-availability.md).                                                                                                                                                                        |
 | 2   | Auth and RBAC: Better Auth, Valkey sessions, rate limits, audit log                                    | Done                              | [ADR 0003](adr/0003-auth-rbac-sessions.md). No MFA, no account lockout beyond rate limiting.                                                                                                                                |
 | 3   | Web: booking flow, account area, admin dashboard, design system                                        | Done                              | ADRs [0005](adr/0005-web-app.md), [0006](adr/0006-admin-dashboard.md), [0004](adr/0004-admin-api-and-reporting.md). Guest booking is out of scope; the week view shows one team member at a time.                           |
@@ -103,7 +103,6 @@ Not in 0.1.0, roughly in the order we would tackle them:
 - **Online payments and deposits**, guest booking, loyalty and marketing campaigns (non-goals for v1).
 - **OAuth extras**: an account screen to list and revoke grants, verified client identity (CIMD), DPoP (ADR 0009).
 - **Release automation** is written but unproven; the first tag will be its test.
-- **Dead configuration.** `SALON_TIMEZONE` is passed by Compose and Turborepo but nothing reads it (the timezone lives in settings); remove it in a cleanup.
 
 ## Open risks
 
@@ -111,3 +110,15 @@ Not in 0.1.0, roughly in the order we would tackle them:
 - Better Auth's OAuth plugin API moves between versions: the version is pinned.
 - "Latest everything" raises breakage risk: exact pins in lockfiles, upgrades through Dependabot pull requests.
 - Reminders by SMS need a provider and local regulatory checks ([notifications.md](notifications.md)).
+
+## Release-readiness verification — 2026-11-15
+
+The local production Compose smoke test passed with the pinned Bun 1.4.4 images: fresh migrations, owner bootstrap and sign-in, a client booking, duplicate rejection, public metrics isolation, security headers, non-root processes and read-only filesystems. Smoke runs now use unique projects and image tags, ignore deployment `.env` files, disable SMS and remove only their own resources. CI is configured to run this smoke test after the integration suite.
+
+Uncached lint, TypeScript checks and production builds passed. The API passed 673 tests; web components and server helpers passed 604; contracts passed 113; the database package passed 47; deployment scripts and backup/restore passed 7. Rust formatting and Clippy passed, along with 102 core tests, 9 GPUI interaction tests and all 4 real-API headless sync tests. Five new regression tests cover smoke isolation and Turbo environment filtering, with failure observed before each corresponding correction. The restore test now proves the non-empty-target guard using an intact dump.
+
+Functional Playwright coverage totals 169 passing cases across mobile and desktop, with 3 platform-specific skips; the 6 screenshot-capture cases were excluded from this final functional check. These results aggregate the completed mobile coverage, a separate desktop run and the corrected fixture rerun, because the combined process received SIGTERM after mobile completed. The desktop run exposed a calendar-audit fixture collision: light and dark reused a client name and could randomly book on the same day. Forcing both themes onto the same date reproduced the failure; unique client identities fixed it, and all 8 repeated theme/viewport combinations passed without relaxing axe assertions.
+
+Load verification produced 10 bookings and 490 expected conflicts from 500 attempts, with zero overlaps and p95 784 ms (unchanged threshold: 1,000 ms); competing-work caveats are recorded in [performance.md](performance.md). Host-side checks used the installed Bun 1.4.5 canary, separately from the production-image smoke. The production dependency audit reported no vulnerabilities; the full development audit still reports an esbuild advisory through drizzle-kit tooling.
+
+The repository has no remote, published release or production domain yet. No push, tag publication or external deployment was performed. The existing MIT license is unchanged. Before opening a real salon, configure stable secrets, the public domain and sender/SMTP, verify delivery and HTTPS on that host, and run the GitHub release workflow after configuring the repository.

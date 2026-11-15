@@ -6,7 +6,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **Operations**: isolate production smoke runs with unique Compose projects and image tags, ignore deployment `.env` files, disable inherited SMS providers, clean up temporary credentials, and allow realistic backup/restore integration-test durations.
+- **Tooling**: preserve runtime configuration in `bun run dev` and custom service settings in the root E2E task; exclude Rust build outputs, browser traces, screenshots and backups from Docker contexts; remove unused timezone configuration and lint warnings.
+- **Tests**: give each accessibility-audit appointment its own client identity so light and dark audits remain unambiguous even when they book on the same day; apply the API integration-test timeout through the test command.
 - **Web**: a page whose server-side API calls are rate limited is now answered with `429` and `Retry-After` and a notice in the visitor's language (English or es-AR), instead of a `500`. A signed-in visitor who hits the limit is no longer rendered or redirected as signed out.
+
+### Added
+
+- **Deployment**: a production `.env.example` with required secrets left blank and documented generation commands.
 
 ## [0.1.0] - 2026-11-14
 
@@ -28,6 +35,3 @@ First release: a self-hostable booking and salon-management platform for one sal
 ### Known limitations
 
 See "Known limitations and roadmap" in [docs/PLAN.md](docs/PLAN.md): no MFA, account emails are not on a durable queue, no OpenTelemetry tracing, single location, no online payments, the desktop client signs in with a session (OAuth loopback login is a documented follow-up) and has UI gaps, sync tombstones are never purged.
-
-[Unreleased]: https://github.com/OWNER/REPO/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/OWNER/REPO/releases/tag/v0.1.0

@@ -25,10 +25,10 @@ What the production stack is (`compose.prod.yaml`): Postgres 18, Valkey 9, the A
 
 ```bash
 git clone <your fork or this repository> /srv/sob && cd /srv/sob
-git checkout v0.1.0                      # deploy a tag, not a moving branch
+git checkout <reviewed-release-tag-or-commit>  # pin the exact revision being deployed
 ```
 
-Create `/srv/sob/.env` (it is git-ignored; `chmod 600`). Generate the secrets once and **keep them stable**: changing `BETTER_AUTH_SECRET` signs everyone out and breaks old unsubscribe links.
+Copy [`.env.example`](../.env.example) to `/srv/sob/.env` (it is git-ignored; `chmod 600`) and fill the required values, or generate a minimal file below. Generate the secrets once and **keep them stable**: changing `BETTER_AUTH_SECRET` signs everyone out and breaks old unsubscribe links.
 
 ```bash
 umask 077
@@ -39,7 +39,7 @@ PUBLIC_URL=https://salon.example
 SMTP_URL=smtps://user:password@smtp.example:465
 NOTIFY_EMAIL_FROM=Sisters of Beauty <no-reply@salon.example>
 SITE_ADDRESS=salon.example
-SOB_TAG=0.1.0
+SOB_TAG=local
 EOF
 ```
 
@@ -75,7 +75,7 @@ OWNER_EMAIL=you@salon.example OWNER_PASSWORD='a long passphrase of your own' OWN
 
 Then open `https://salon.example/sign-in`, sign in, and go to **Admin**:
 
-1. **Settings**: salon name, timezone (this is where the timezone lives; the `SALON_TIMEZONE` environment variable is not read), slot interval, minimum notice, booking window, reminder lead times.
+1. **Settings**: salon name, timezone, slot interval, minimum notice, booking window, reminder lead times.
 2. **Services**: the catalogue. A fresh database is empty. To start from generic placeholder data instead of typing everything, run once: `docker compose -f compose.prod.yaml run --rm --no-deps migrate bun packages/db/src/scripts/seed.ts` and then edit or deactivate the sample services and stylists (the seed is idempotent and is meant for trying the product).
 3. **Team**: add staff (they get an invitation email and choose their own password), their weekly hours and time off.
 
