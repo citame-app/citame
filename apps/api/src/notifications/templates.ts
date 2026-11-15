@@ -248,9 +248,13 @@ ${footer}
 
 export function renderSms(d: MessageData): string {
   const c = COPY[d.locale];
-  const body = c.sms[d.kind]
-    .replace("{salon}", d.salonName)
-    .replace("{when}", formatWhen(d, "short"));
+  // One pass with a function replacer: the values are inserted literally (a `$&` in the salon
+  // name is not a replacement pattern) and a placeholder inside a value is never expanded.
+  const values: Record<string, string> = { salon: d.salonName, when: formatWhen(d, "short") };
+  const body = c.sms[d.kind].replace(
+    /\{(salon|when)\}/g,
+    (_match, key: string) => values[key] ?? "",
+  );
   return isReminder(d.kind) ? `${body} ${c.smsStop}` : body;
 }
 
@@ -260,8 +264,13 @@ const icsStamp = (date: Date) =>
     .replace(/[-:]/g, "")
     .replace(/\.\d{3}/, "");
 
+/** RFC 5545 TEXT escaping. Every kind of line break (CRLF, LF, lone CR) becomes the two characters `\n`: a raw one would end the property and let the value inject new ones. */
 const icsEscape = (value: string) =>
-  value.replace(/\\/g, "\\\\").replace(/;/g, ";").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
+  value
+    .replace(/\\/g, "\\\\")
+    .replace(/;/g, "\\;")
+    .replace(/,/g, "\\,")
+    .replace(/\r\n|\r|\n/g, "\\n");
 
 /** RFC 5545 section 3.1: at most 75 octets per line, continuation lines start with a space. */
 function fold(line: string): string[] {

@@ -84,6 +84,13 @@ describe("renderSms", () => {
     expect(body).toContain("STOP");
     expect(body).toContain("Sisters of Beauty");
   });
+
+  test("inserts the salon name literally, even when it looks like a replacement pattern", () => {
+    const body = renderSms(data({ kind: "confirmation", salonName: "Tom & Jerry $& $1 {when}" }));
+    expect(body).toContain("Tom & Jerry $& $1 {when}");
+    // `{when}` inside the name must not be expanded on a second pass either.
+    expect(body.match(/\{when\}/g)).toHaveLength(1);
+  });
 });
 
 describe("buildIcs", () => {
@@ -93,8 +100,22 @@ describe("buildIcs", () => {
     expect(ics).toContain("SEQUENCE:2");
     expect(ics).toContain("DTSTART:20260309T120000Z");
     expect(ics).toContain("DTEND:20260309T130000Z");
-    expect(ics).toContain("Cut\\, wash; style");
+    expect(ics).toContain("Cut\\, wash\\; style");
     expect(ics.split("\r\n").every((l) => new TextEncoder().encode(l).length <= 75)).toBe(true);
     expect(ics.endsWith("END:VCALENDAR\r\n")).toBe(true);
+  });
+
+  test("a salon or service name cannot inject calendar properties (CR, LF or lone CR)", () => {
+    for (const evil of [
+      "x\r\nATTENDEE:mailto:evil@example.com",
+      "x\rATTENDEE:evil",
+      "x\nBEGIN:VALARM",
+    ]) {
+      const ics = buildIcs(data({ salonName: evil, services: [evil], staffName: evil }));
+      const lines = ics.split("\r\n");
+      expect(lines.some((l) => l.startsWith("ATTENDEE"))).toBe(false);
+      expect(lines.some((l) => l.startsWith("BEGIN:VALARM"))).toBe(false);
+      expect(ics.replace(/\r\n/g, "")).not.toMatch(/[\r\n]/);
+    }
   });
 });
