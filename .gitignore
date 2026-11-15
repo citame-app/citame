@@ -13,3 +13,4 @@ apps/web/e2e/screenshots/
 apps/web/test-results/
 apps/web/playwright-report/
 backups/
+.release/

@@ -26,7 +26,11 @@
     "k6:mixed": "k6 run k6/mixed.js",
     "k6:overlaps": "bun k6/check-overlaps.ts",
     "test:scripts": "bun test scripts",
-    "backup": "bash scripts/backup.sh"
+    "backup": "bash scripts/backup.sh",
+    "release:check": "bun scripts/release.ts validate"
+  },
+  "overrides": {
+    "esbuild": "0.28.2"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.7",

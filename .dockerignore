@@ -6,6 +6,7 @@
 **/playwright-report
 apps/web/e2e/screenshots
 backups
+.release
 .git
 .env
 .env.*
