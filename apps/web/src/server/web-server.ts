@@ -41,6 +41,11 @@ const QUIET_PATHS = new Set(["/healthz"]);
 const COMPRESSIBLE = /^(text\/|application\/(json|javascript|xml)|image\/svg\+xml)/;
 const IMMUTABLE = "public, max-age=31536000, immutable";
 
+/** Single-use secrets can travel as a path segment (`/api/auth/reset-password/<token>`): never log them. */
+function redactPath(path: string): string {
+  return path.replace(/(\/reset-password\/)[^/]+/g, "$1[redacted]");
+}
+
 /** A small, dependency-free production server: health, API proxy, static files, then SSR. */
 export function createWebServer({
   clientDir,
@@ -161,7 +166,7 @@ export function createWebServer({
           component: "web",
           requestId,
           method: request.method,
-          path: url.pathname,
+          path: redactPath(url.pathname),
           status: out.status,
           durationMs: Math.round((performance.now() - started) * 10) / 10,
         });

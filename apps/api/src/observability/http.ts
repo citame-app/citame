@@ -9,6 +9,14 @@ export { currentRequestId };
 /** Inbound ids from the web tier are kept when they are boring enough to log verbatim. */
 const SAFE_REQUEST_ID = /^[A-Za-z0-9._-]{8,128}$/;
 
+/**
+ * Paths that carry a single-use secret as a segment (Better Auth's reset link is
+ * `/api/auth/reset-password/<token>`). Logs keep the route but never the secret.
+ */
+export function redactPath(path: string): string {
+  return path.replace(/(\/reset-password\/)[^/]+/g, "$1[redacted]");
+}
+
 export function createHttpMetrics(registry: Registry) {
   return {
     requests: registry.counter("sob_http_requests_total", "HTTP requests handled.", [
@@ -66,7 +74,7 @@ export function requestContext({
       const status = c.res.status;
       http.requests.inc({ method: c.req.method, route, status: String(status) });
       http.duration.observe({ method: c.req.method, route }, seconds);
-      const path = new URL(c.req.url).pathname;
+      const path = redactPath(new URL(c.req.url).pathname);
       if (quietPaths.includes(path) && status < 400) return;
       const fields = {
         method: c.req.method,

@@ -270,6 +270,13 @@ describe("request ids and access log", () => {
     expect(JSON.stringify(entry)).not.toContain("a=b");
   });
 
+  test("never logs a single-use token carried in the path", async () => {
+    const { handler, lines } = logged();
+    await get(handler, "/api/auth/reset-password/SECRETTOKEN123?callbackURL=%2Fx");
+    expect(lines[0]?.path).toBe("/api/auth/reset-password/[redacted]");
+    expect(JSON.stringify(lines)).not.toContain("SECRETTOKEN123");
+  });
+
   test("probes are not logged", async () => {
     const { handler, lines } = logged();
     await get(handler, "/healthz");

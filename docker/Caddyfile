@@ -2,10 +2,21 @@
 # compose.prod.yaml. Set SITE_ADDRESS to your public host name (DNS must point at this machine
 # and ports 80/443 must be reachable). For a local smoke test over plain http use
 # SITE_ADDRESS=:80.
-# To receive certificate expiry notices add a global block at the top of this file:
-#   {
-#       email you@salon.example
-#   }
+# To receive certificate expiry notices add `email you@salon.example` to the global block below.
+
+# Single-use secrets travel in URLs (`?token=` on verify-email and the reminder opt-out,
+# `/reset-password/<token>` in the reset link). Both the access log (site block) and Caddy's own
+# default log (which records failed requests, for example an unreachable upstream) redact them.
+{
+	log {
+		output stdout
+		format filter {
+			wrap json
+			request>uri regexp "(/reset-password/|[?&]token=)[^/?&#]*" "${1}REDACTED"
+			request>headers>Referer regexp "(/reset-password/|[?&]token=)[^/?&#]*" "${1}REDACTED"
+		}
+	}
+}
 
 {$SITE_ADDRESS:localhost} {
 	encode zstd gzip
@@ -23,8 +34,14 @@
 	@internal path /api/metrics /api/metrics/*
 	respond @internal 404
 
+	# Single-use secrets travel in URLs (`?token=` on verify-email and the reminder opt-out,
+	# `/reset-password/<token>` in the reset link): keep them out of the access log.
 	log {
 		output stdout
-		format json
+		format filter {
+			wrap json
+			request>uri regexp "(/reset-password/|[?&]token=)[^/?&#]*" "${1}REDACTED"
+			request>headers>Referer regexp "(/reset-password/|[?&]token=)[^/?&#]*" "${1}REDACTED"
+		}
 	}
 }

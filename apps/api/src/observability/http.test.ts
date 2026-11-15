@@ -16,6 +16,7 @@ function setup() {
     seenInHandler = currentRequestId();
     return c.json({ ok: true });
   });
+  app.get("/api/auth/reset-password/:token", (c) => c.json({ ok: true }));
   app.get("/boom", () => {
     throw new Error("kaboom for ana@example.com");
   });
@@ -70,6 +71,14 @@ describe("request context", () => {
     for (const leaked of ["SECRET", "ana@example.com", "session=abc", "203.0.113.9"]) {
       expect(text).not.toContain(leaked);
     }
+  });
+
+  test("never logs a single-use token carried in the path", async () => {
+    const { app, logs } = setup();
+    await app.request("/api/auth/reset-password/SECRETTOKEN123?callbackURL=%2Freset-password");
+    const entry = logs().at(-1) as Record<string, unknown>;
+    expect(entry.path).toBe("/api/auth/reset-password/[redacted]");
+    expect(JSON.stringify(entry)).not.toContain("SECRETTOKEN123");
   });
 
   test("counts requests and observes latency by route pattern, never by raw path", async () => {
