@@ -9,6 +9,13 @@ const envSchema = z.object({
   /** Prefix for every Valkey key, so several environments (or test runs) can share a server. */
   VALKEY_KEY_PREFIX: z.string().default("sob:"),
   PORT: positiveInt.default(3000),
+  /**
+   * Seconds a connection may idle before the listener closes it (Bun's own default is 10, below the
+   * 15 s SSE heartbeat; `/sync/stream` is exempt either way). 0 disables, 255 is Bun's maximum.
+   */
+  HTTP_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().min(0).max(255).default(30),
+  /** Largest request body in bytes; bigger ones are answered 413. Default 1 MiB. */
+  HTTP_MAX_BODY_BYTES: positiveInt.default(1_048_576),
   NODE_ENV: z.string().optional(),
 
   /** Better Auth signing/encryption secret. 32+ characters; generate with `openssl rand -base64 32`. */
@@ -139,6 +146,7 @@ export interface AppConfig {
   valkeyUrl: string;
   valkeyKeyPrefix: string;
   port: number;
+  http: { idleTimeoutSeconds: number; maxRequestBodyBytes: number };
   auth: {
     secret: string;
     baseURL: string;
@@ -231,6 +239,10 @@ export function loadConfig(input: Record<string, string | undefined> = process.e
     valkeyUrl: e.VALKEY_URL,
     valkeyKeyPrefix: e.VALKEY_KEY_PREFIX,
     port: e.PORT,
+    http: {
+      idleTimeoutSeconds: e.HTTP_IDLE_TIMEOUT_SECONDS,
+      maxRequestBodyBytes: e.HTTP_MAX_BODY_BYTES,
+    },
     auth: {
       secret: e.BETTER_AUTH_SECRET,
       baseURL: e.BETTER_AUTH_URL,

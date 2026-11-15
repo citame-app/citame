@@ -6,6 +6,7 @@
  */
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { serveWeb } from "./src/server/listener";
 import { createProxy } from "./src/server/proxy";
 import { createWebServer } from "./src/server/web-server";
 
@@ -32,17 +33,11 @@ const web = createWebServer({
   log: (entry) => process.stdout.write(`${JSON.stringify(entry)}\n`),
 });
 
-const server = Bun.serve({
+const server = serveWeb(web, {
   port,
   hostname,
-  fetch: (request, bunServer) => web.fetch(request, bunServer.requestIP(request)),
-  error(error) {
-    console.error(error);
-    return Response.json(
-      { error: { code: "internal_error", message: "Internal server error" } },
-      { status: 500 },
-    );
-  },
+  idleTimeoutSeconds: Number(process.env.WEB_IDLE_TIMEOUT_SECONDS ?? 30),
+  maxRequestBodyBytes: Number(process.env.WEB_MAX_BODY_BYTES ?? 1_048_576),
 });
 
 console.log(`web listening on http://${server.hostname}:${server.port} (api: ${apiUrl})`);

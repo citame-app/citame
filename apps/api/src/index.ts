@@ -6,6 +6,7 @@ import { startMaintenance } from "./maintenance";
 import { createProviders } from "./notifications/providers";
 import { startNotificationRuntime } from "./notifications/runtime";
 import { rootLogger } from "./observability/logger";
+import { serveApi } from "./server";
 
 // Fails fast (with every problem listed) when the environment is incomplete.
 const config = loadConfig();
@@ -31,10 +32,10 @@ const maintenance =
       })
     : null;
 
-const server = Bun.serve({
+const server = serveApi(app, {
   port: config.port,
-  // Bun passes the server as the second argument; Hono exposes it as `c.env` (client IP).
-  fetch: (request, bunServer) => app.fetch(request, bunServer),
+  idleTimeoutSeconds: config.http.idleTimeoutSeconds,
+  maxRequestBodyBytes: config.http.maxRequestBodyBytes,
 });
 rootLogger.info("api listening", { port: server.port });
 

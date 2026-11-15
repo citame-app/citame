@@ -10,6 +10,7 @@ describe("loadConfig", () => {
   test("applies defaults and requires only the auth secret", () => {
     const config = loadConfig({ BETTER_AUTH_SECRET: SECRET });
     expect(config.port).toBe(3000);
+    expect(config.http).toEqual({ idleTimeoutSeconds: 30, maxRequestBodyBytes: 1_048_576 });
     expect(config.valkeyKeyPrefix).toBe("sob:");
     expect(config.trustProxy).toBe(false);
     expect(config.auth.trustedOrigins).toEqual([]);
