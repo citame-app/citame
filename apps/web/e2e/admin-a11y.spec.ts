@@ -53,6 +53,8 @@ test.describe("admin accessibility (axe: zero serious or critical violations)", 
         });
         await signInAs(page, OWNER_EMAIL, `/admin/calendar?date=${date}`);
         await expect(page.getByRole("button", { name: new RegExp(`Axe ${stamp}`) })).toBeVisible();
+        // Same settle step as every other audit here: the grid keeps fetching after the first block paints.
+        await page.waitForLoadState("networkidle");
         await expectNoSeriousA11yViolations(page, `calendar (${scheme})`);
         await page.getByRole("button", { name: new RegExp(`Axe ${stamp}`) }).click();
         await expect(page.getByRole("dialog", { name: `Axe ${stamp}` })).toBeVisible();
