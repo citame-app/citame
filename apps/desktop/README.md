@@ -18,6 +18,8 @@ sudo apt install build-essential cmake pkg-config libasound2-dev libfontconfig-d
   libxkbcommon-x11-dev libssl-dev libzstd-dev libvulkan1 mesa-vulkan-drivers
 ```
 
+The running app needs a Linux graphical session with Vulkan presentation support. A plain Xvfb display may lack DRI3: in this session it could not create the GPUI surface. GPUI interaction tests use their deterministic test platform and do not establish real-driver compatibility.
+
 ```bash
 cd apps/desktop
 export CARGO_TARGET_DIR=$PWD/target        # already git-ignored; a debug GUI build is ~2 GB

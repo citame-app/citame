@@ -47,6 +47,8 @@ The workflow has not been executed on GitHub because this checkout has no remote
 - Production smoke: passed on the pinned Bun 1.4.4 images, including migration `0008`, authentication, booking conflicts, proxy isolation and container hardening.
 - JavaScript audit: zero reported vulnerabilities in both production and full dependency trees. The older Rust advisory review and its upstream warnings remain documented in [security-review.md](security-review.md).
 - Formatting, lint, TypeScript checks, production builds and Clippy: passed.
+- Optimized Linux x86_64 executable: built successfully (33 MB); its local archive is about 11 MB and the generated SHA-256 checksum verifies.
+- A real executable launch under Xvfb could not create the Vulkan surface (`No DRI3 support`, `PlatformNotSupported`). No working graphical session is available here, so real-driver rendering remains unverified; deterministic GPUI layout/input tests pass.
 - Two startup-date regressions cover a salon whose day differs from UTC, including initial catalog synchronization and preservation of explicit dates.
 - A GPUI regression first reproduced inaccessible late-week columns at 800 px; horizontal scrolling now keeps day headers aligned with the calendar body.
 
