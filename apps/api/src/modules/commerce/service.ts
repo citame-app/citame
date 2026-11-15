@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomInt } from "node:crypto";
 import type { Checkout, CreateCheckoutInput, StartPaymentInput } from "@sob/contracts";
+import { permissionsFor } from "@sob/contracts";
 import {
   appointment,
   appointmentService,
@@ -14,6 +15,7 @@ import {
 } from "@sob/db";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
+import { requirePermission } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import type { PaymentGateway } from "../../payments/types";
@@ -30,10 +32,10 @@ import { allocateDiscount } from "./money";
 type Connection = Database | Tx;
 const hash = (data: unknown) => createHash("sha256").update(JSON.stringify(data)).digest("hex");
 const idemHash = ({ idempotencyKey: _, ...body }: Record<string, unknown>) => hash(body);
-export function requireOperator(principal: Principal, ownerOnly = false) {
-  if (principal.role === "client" || (ownerOnly && principal.role !== "owner"))
-    throw new DomainError("forbidden", "This operation requires a salon operator");
+export function requireOperator(principal: Principal, refundAccess = false) {
+  requirePermission(principal, refundAccess ? "refunds" : "commerce");
 }
+
 function checkReplay(row: { requestHash: string }, requestHash: string) {
   if (row.requestHash !== requestHash)
     throw new DomainError(
@@ -42,9 +44,20 @@ function checkReplay(row: { requestHash: string }, requestHash: string) {
     );
 }
 async function saleRow(db: Connection, id: string, principal: Principal, lock = false) {
+  if (principal.role !== "client") requireOperator(principal);
   const query = db.select().from(checkout).where(eq(checkout.id, id));
   const [row] = await (lock ? query.for("update") : query);
-  if (!row || (principal.role === "client" && row.clientId !== principal.clientId))
+  const restricted =
+    principal.role === "staff" && !permissionsFor(principal.role, principal.accessPreset).allSales;
+  const ownSale =
+    row &&
+    ((row.staffId !== null && row.staffId === principal.staffId) ||
+      (row.staffId === null && row.createdBy === principal.userId));
+  if (
+    !row ||
+    (principal.role === "client" && row.clientId !== principal.clientId) ||
+    (restricted && !ownSale)
+  )
     throw new DomainError("not_found", "Checkout not found");
   return row;
 }
@@ -137,6 +150,11 @@ export async function listCheckouts(db: Database, principal: Principal) {
       const rows = await tx
         .select()
         .from(checkout)
+        .where(
+          permissionsFor(principal.role, principal.accessPreset).allSales
+            ? undefined
+            : sql`(${checkout.staffId} = ${principal.staffId} or (${checkout.staffId} is null and ${checkout.createdBy} = ${principal.userId}))`,
+        )
         .orderBy(desc(checkout.createdAt), desc(checkout.id))
         .limit(100);
       const results: Checkout[] = [];
@@ -209,6 +227,7 @@ export async function createCheckout(
     (!input.appointmentId || input.lines.length || input.discountCents || input.staffId)
   )
     throw new DomainError("forbidden", "Clients can check out only their own appointment");
+  if (principal.role !== "client") requireOperator(principal);
   return db.transaction(async (tx) => {
     // Serialize repeated creates before looking up idempotency or the unique appointment.
     await tx.execute(
@@ -230,7 +249,12 @@ export async function createCheckout(
     }
     let clientId = input.clientId ?? null;
     let staffId = input.staffId ?? (principal.role === "staff" ? principal.staffId : null);
-    if (principal.role === "staff" && input.staffId && input.staffId !== principal.staffId)
+    if (
+      principal.role === "staff" &&
+      !permissionsFor(principal.role, principal.accessPreset).allSales &&
+      input.staffId &&
+      input.staffId !== principal.staffId
+    )
       throw new DomainError("forbidden", "Staff can only attribute sales to themselves");
     if (staffId && !input.appointmentId) {
       const [seller] = await tx
@@ -266,7 +290,10 @@ export async function createCheckout(
       if (
         !booking ||
         booking.deletedAt ||
-        (principal.role === "client" && booking.clientId !== principal.clientId)
+        (principal.role === "client" && booking.clientId !== principal.clientId) ||
+        (principal.role === "staff" &&
+          !permissionsFor(principal.role, principal.accessPreset).allSales &&
+          booking.staffId !== principal.staffId)
       )
         throw new DomainError("not_found", "Appointment not found");
       if (booking.status === "cancelled")
@@ -688,7 +715,7 @@ async function cashView(tx: Connection, row: typeof cashSession.$inferSelect) {
   };
 }
 export async function currentCashSession(db: Database, principal: Principal) {
-  requireOperator(principal);
+  requirePermission(principal, "manageCash");
   return db.transaction(
     async (tx) => {
       const [row] = await tx
@@ -702,7 +729,7 @@ export async function currentCashSession(db: Database, principal: Principal) {
   );
 }
 export async function openCashSession(db: Database, openingCents: number, principal: Principal) {
-  requireOperator(principal, true);
+  requirePermission(principal, "manageCash");
   return db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('sob.cash-session', 0))`);
     if ((await tx.select().from(cashSession).where(isNull(cashSession.closedAt))).length)
@@ -728,7 +755,7 @@ export async function closeCashSession(
   countedCents: number,
   principal: Principal,
 ) {
-  requireOperator(principal, true);
+  requirePermission(principal, "manageCash");
   return db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('sob.cash-session', 0))`);
     const [row] = await tx.select().from(cashSession).where(eq(cashSession.id, id)).for("update");
@@ -770,7 +797,7 @@ export async function adjustCash(
   },
   principal: Principal,
 ) {
-  requireOperator(principal, true);
+  requirePermission(principal, "manageCash");
   return db.transaction(async (tx) => {
     const session = await openSession(tx);
     const requestHash = idemHash(input);

@@ -1,3 +1,4 @@
+import { permissionsFor } from "@sob/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { ClientDetail } from "~/features/admin/clients/client-detail";
 import { adminHead } from "~/features/admin/route-head";
@@ -15,7 +16,11 @@ function ClientPage() {
   return (
     <ClientDetail
       clientId={id}
-      role={session.user.role}
+      role={
+        permissionsFor(session.user.role, session.accessPreset).deleteClients
+          ? "owner"
+          : session.user.role
+      }
       onDeleted={() =>
         void navigate({ to: "/admin/clients", search: { page: 1, sort: "name", order: "asc" } })
       }

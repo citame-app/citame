@@ -74,3 +74,13 @@ test("operators can reach the sales register, clients cannot", () => {
   expect(adminGuard("/admin/commerce", "staff")).toEqual({ type: "allow" });
   expect(adminGuard("/admin/commerce", "client").type).toBe("redirect");
 });
+test("access presets expose permitted sections without granting owner account or settings control", () => {
+  expect(adminNavFor("staff", "manager").map((item) => item.section)).toContain("services");
+  expect(adminNavFor("staff", "manager").map((item) => item.section)).not.toContain("settings");
+  expect(adminNavFor("staff", "restricted").map((item) => item.section)).toEqual([
+    "today",
+    "calendar",
+    "staff",
+  ]);
+  expect(adminGuard("/admin/commerce", "staff", "restricted").type).toBe("redirect");
+});

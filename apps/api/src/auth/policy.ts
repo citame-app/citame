@@ -7,6 +7,7 @@ import type {
   UpdateAppointmentRequest,
   UserRole,
 } from "@sob/contracts";
+import { permissionsFor, type StaffPermissions } from "@sob/contracts";
 import { DomainError } from "../errors";
 import type { Principal } from "./principal";
 
@@ -29,6 +30,11 @@ export function requireRole(principal: Principal, ...roles: UserRole[]): void {
   }
 }
 
+export function requirePermission(principal: Principal, permission: keyof StaffPermissions): void {
+  if (!permissionsFor(principal.role, principal.accessPreset)[permission])
+    throw forbidden("Your access profile does not permit this operation");
+}
+
 /**
  * Returns the request to execute. Clients are pinned to their own booking profile (an inline
  * `client` payload is dropped, so they cannot mint or impersonate profiles); staff are pinned
@@ -42,6 +48,8 @@ export function authorizeAppointmentCreate(
     case "owner":
       return request;
     case "staff":
+      requirePermission(principal, "editCalendar");
+      if (permissionsFor(principal.role, principal.accessPreset).allCalendars) return request;
       if (!principal.staffId || request.staffId !== principal.staffId) {
         throw forbidden("Staff can only book into their own calendar");
       }
@@ -74,6 +82,8 @@ export function authorizeAppointmentChange(
     case "owner":
       return;
     case "staff":
+      requirePermission(principal, "editCalendar");
+      if (permissionsFor(principal.role, principal.accessPreset).allCalendars) return;
       if (!principal.staffId || appointment.staffId !== principal.staffId) {
         throw forbidden("This appointment is not on your calendar");
       }
@@ -114,6 +124,7 @@ export function authorizeAppointmentList(
     case "owner":
       return { query };
     case "staff":
+      if (permissionsFor(principal.role, principal.accessPreset).allCalendars) return { query };
       if (!principal.staffId) throw forbidden("Your account has no calendar");
       if (query.staffId !== undefined && query.staffId !== principal.staffId) {
         throw forbidden("Staff can only list their own calendar");
@@ -127,18 +138,18 @@ export function authorizeAppointmentList(
 
 /** Service catalog administration (create, edit, deactivate, assign performers). */
 export function authorizeServiceAdmin(principal: Principal): void {
-  requireRole(principal, "owner");
+  requirePermission(principal, "editCatalog");
 }
 
 /** Staff profile administration and weekly hours replacement. */
 export function authorizeStaffAdmin(principal: Principal): void {
-  requireRole(principal, "owner");
+  requirePermission(principal, "editSchedules");
 }
 
 /** Narrows the admin staff listing: the owner sees everyone, staff only themselves. */
 export function authorizeStaffList(principal: Principal): { staffId?: string } {
   requireRole(principal, "owner", "staff");
-  if (principal.role === "owner") return {};
+  if (permissionsFor(principal.role, principal.accessPreset).allCalendars) return {};
   if (!principal.staffId) throw forbidden("Your account has no calendar");
   return { staffId: principal.staffId };
 }
@@ -146,7 +157,11 @@ export function authorizeStaffList(principal: Principal): { staffId?: string } {
 /** Owner: any staff member. Staff: only their own calendar. */
 function requireOwnCalendarOrOwner(principal: Principal, staffId: string): void {
   requireRole(principal, "owner", "staff");
-  if (principal.role === "staff" && (!principal.staffId || principal.staffId !== staffId)) {
+  if (
+    principal.role === "staff" &&
+    !permissionsFor(principal.role, principal.accessPreset).allCalendars &&
+    (!principal.staffId || principal.staffId !== staffId)
+  ) {
     throw forbidden("This is not your calendar");
   }
 }
@@ -158,17 +173,23 @@ export function authorizeStaffScheduleRead(principal: Principal, staffId: string
 
 /** Creating, editing or removing time off. */
 export function authorizeTimeOffManage(principal: Principal, staffId: string): void {
+  requirePermission(principal, "editCalendar");
+  if (
+    !permissionsFor(principal.role, principal.accessPreset).editSchedules &&
+    principal.staffId !== staffId
+  )
+    throw forbidden("You can only manage your own time off");
   requireOwnCalendarOrOwner(principal, staffId);
 }
 
 /** Client directory: the front desk (owner and staff) sees every client. */
 export function authorizeClientAccess(principal: Principal): void {
-  requireRole(principal, "owner", "staff");
+  requirePermission(principal, "clients");
 }
 
 /** Only the owner removes (soft-deletes) clients. */
 export function authorizeClientDelete(principal: Principal): void {
-  requireRole(principal, "owner");
+  requirePermission(principal, "deleteClients");
 }
 
 /**
@@ -176,8 +197,8 @@ export function authorizeClientDelete(principal: Principal): void {
  * own numbers (the query is pinned to their calendar); clients get none.
  */
 export function authorizeReportQuery(principal: Principal, query: ReportQuery): ReportQuery {
-  requireRole(principal, "owner", "staff");
-  if (principal.role === "owner") return query;
+  requirePermission(principal, "operationalReports");
+  if (permissionsFor(principal.role, principal.accessPreset).allCalendars) return query;
   if (!principal.staffId) throw forbidden("Your account has no calendar");
   if (query.staffId !== undefined && query.staffId !== principal.staffId) {
     throw forbidden("Staff can only see their own reports");
@@ -194,7 +215,8 @@ export function authorizeCalendarQuery(
   query: CalendarQuery,
 ): { staffIds?: string[] } {
   requireRole(principal, "owner", "staff");
-  if (principal.role === "owner") return query.staffIds ? { staffIds: query.staffIds } : {};
+  if (permissionsFor(principal.role, principal.accessPreset).allCalendars)
+    return query.staffIds ? { staffIds: query.staffIds } : {};
   if (!principal.staffId) throw forbidden("Your account has no calendar");
   if (query.staffIds?.some((staffId) => staffId !== principal.staffId)) {
     throw forbidden("Staff can only see their own calendar");

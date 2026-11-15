@@ -231,3 +231,19 @@ describe("CalendarView", () => {
     expect(await screen.findByRole("dialog", { name: "Lucia" })).toBeInTheDocument();
   });
 });
+test("read-only calendar access hides create and mutation controls including keyboard creation", async () => {
+  renderApp(
+    <CalendarView
+      search={{ view: "day", date: "2026-03-09" }}
+      onSearchChange={() => {}}
+      role="staff"
+      ownStaffId={ANA}
+      readOnly
+      now={NOW}
+    />,
+  );
+  await screen.findByRole("button", { name: /Lucia/ });
+  expect(screen.queryByRole("button", { name: "New appointment" })).toBeNull();
+  fireEvent.keyDown(document, { key: "n" });
+  expect(screen.queryByRole("dialog")).toBeNull();
+});

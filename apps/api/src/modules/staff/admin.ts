@@ -19,6 +19,8 @@ function toAdminStaff(row: StaffRow, serviceIds: string[]): AdminStaff {
     displayName: row.displayName,
     active: row.active,
     userId: row.userId,
+    accessPreset: row.accessPreset,
+    accessVersion: row.accessVersion,
     serviceIds,
   };
 }

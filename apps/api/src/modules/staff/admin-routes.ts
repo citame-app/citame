@@ -3,6 +3,7 @@ import {
   idSchema,
   listTimeOffQuerySchema,
   setWorkingHoursRequestSchema,
+  staffAccessInputSchema,
   updateStaffRequestSchema,
   updateTimeOffRequestSchema,
 } from "@sob/contracts";
@@ -13,9 +14,11 @@ import {
   authorizeStaffList,
   authorizeStaffScheduleRead,
   authorizeTimeOffManage,
+  requireRole,
 } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
+import { getStaffAccess, setStaffAccess } from "./access";
 import { listAdminStaff, updateStaff } from "./admin";
 import {
   createTimeOff,
@@ -39,6 +42,21 @@ export function staffAdminRoutes({ db, now = () => new Date() }: AppDeps) {
       const scope = authorizeStaffList(c.get("principal"));
       return c.json({ staff: await listAdminStaff(db, scope) });
     })
+    .get("/:id/access", async (c) =>
+      c.json(await getStaffAccess(db, staffId(c.req.param("id")), c.get("principal"))),
+    )
+    .put("/:id/access", async (c) => {
+      const principal = c.get("principal");
+      requireRole(principal, "owner");
+      return c.json(
+        await setStaffAccess(
+          db,
+          staffId(c.req.param("id")),
+          parseOrThrow(staffAccessInputSchema, await readJson(c)),
+          principal,
+        ),
+      );
+    })
     .patch("/:id", async (c) => {
       const principal = c.get("principal");
       authorizeStaffAdmin(principal);
@@ -59,7 +77,7 @@ export function staffAdminRoutes({ db, now = () => new Date() }: AppDeps) {
     })
     .get("/:id/time-off", async (c) => {
       const id = staffId(c.req.param("id"));
-      authorizeTimeOffManage(c.get("principal"), id);
+      authorizeStaffScheduleRead(c.get("principal"), id);
       const query = parseOrThrow(listTimeOffQuerySchema, c.req.query());
       return c.json({ timeOff: await listTimeOff(db, id, query) });
     })

@@ -1,4 +1,4 @@
-import type { UserRole } from "@sob/contracts";
+import { permissionsFor, type StaffAccessPreset, type UserRole } from "@sob/contracts";
 
 export type AdminSection =
   | "today"
@@ -35,8 +35,29 @@ export function sectionOfPath(pathname: string): AdminSection {
   return SECTIONS.find((s) => s.to === `/admin/${segment}`)?.section ?? "today";
 }
 
-export function adminNavFor(role: UserRole): { section: AdminSection; to: string }[] {
-  return SECTIONS.filter((s) => s.roles.includes(role)).map(({ section, to }) => ({
+export function adminNavFor(
+  role: UserRole,
+  preset?: StaffAccessPreset | null,
+): { section: AdminSection; to: string }[] {
+  const permissions = permissionsFor(role, preset);
+  const allowed = (s: SectionConfig) => {
+    if (role === "client") return false;
+    switch (s.section) {
+      case "services":
+        return permissions.editCatalog;
+      case "settings":
+        return permissions.manageSettings;
+      case "commerce":
+        return permissions.commerce;
+      case "clients":
+        return permissions.clients;
+      case "reports":
+        return permissions.operationalReports;
+      default:
+        return s.roles.includes(role);
+    }
+  };
+  return SECTIONS.filter(allowed).map(({ section, to }) => ({
     section,
     to,
   }));
@@ -46,9 +67,14 @@ export type AdminGuardDecision =
   | { type: "allow" }
   | { type: "redirect"; to: "/admin" | "/account"; notice: "forbidden" };
 
-export function adminGuard(pathname: string, role: UserRole): AdminGuardDecision {
+export function adminGuard(
+  pathname: string,
+  role: UserRole,
+  preset?: StaffAccessPreset | null,
+): AdminGuardDecision {
   if (role === "client") return { type: "redirect", to: "/account", notice: "forbidden" };
   const config = SECTIONS.find((s) => s.section === sectionOfPath(pathname));
-  if (config?.roles.includes(role)) return { type: "allow" };
+  if (adminNavFor(role, preset).some((item) => item.section === config?.section))
+    return { type: "allow" };
   return { type: "redirect", to: "/admin", notice: "forbidden" };
 }

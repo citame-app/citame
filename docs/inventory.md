@@ -1,6 +1,6 @@
 # Retail inventory
 
-Open **Sales & register → Inventory**. The owner can create/edit/archive products, record supplier deliveries, salon consumption and physical counts, and inspect stock history. Staff can read the catalog and availability; unit costs are excluded from their API responses. Clients have no inventory access.
+Open **Sales & register → Inventory**. The owner and managers can create/edit/archive products, record supplier deliveries, salon consumption and physical counts, and inspect stock history. Reception and professionals can read the catalog and availability; unit costs are excluded from their API responses. Clients have no inventory access.
 
 Catalog prices are EUR amounts including the configured tax percentage. An empty unit cost means unknown, not zero. SKU values are normalized to uppercase and unique; optional barcodes are also unique. Archived products remain in historical receipts and movements.
 
@@ -10,7 +10,7 @@ In **New sale**, search for products, add quantities, and optionally add a custo
 
 Unpaid product checkouts expire after 30 minutes if they have no captured or unresolved payments. The API and standalone worker sweep up to 50 expired carts per minute; multiple replicas are safe. An operator can explicitly void an unpaid checkout from its receipt. Bank attempts and partially collected payments must be resolved first. A signed bank success arriving after a checkout was voided is retained as captured money for reconciliation/refund; it does not sell inventory already released to another cart.
 
-A financial refund does not imply a physical product return. The owner can record a physical return from a fulfilled receipt, specifying the product, quantity and reason. Repeated requests with the same key do not duplicate stock. Total physical returns cannot exceed the quantity originally sold. Refund money separately using the receipt's payment history.
+A financial refund does not imply a physical product return. The owner or a manager can record a physical return from a fulfilled receipt, specifying the product, quantity and reason. Repeated requests with the same key do not duplicate stock. Total physical returns cannot exceed the quantity originally sold. Refund money separately using the receipt's payment history.
 
 Migration `0010_retail_inventory.sql` adds the product, reservation and stock-movement ledgers. Settled historical receipts receive a fulfillment marker without retroactively creating inventory movements. Voided appointment receipts remain in history; a replacement active receipt can be created for the same appointment.
 

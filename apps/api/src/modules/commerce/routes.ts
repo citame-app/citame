@@ -4,6 +4,7 @@ import {
   cashOpenSchema,
   createCheckoutSchema,
   idSchema,
+  permissionsFor,
   reconcileRefundSchema,
   refundRequestSchema,
   startPaymentSchema,
@@ -51,6 +52,7 @@ export function commerceAdminRoutes(deps: AppDeps) {
     .use("*", operator)
     .get("/capabilities", (c) =>
       c.json({
+        permissions: permissionsFor(c.get("principal").role, c.get("principal").accessPreset),
         provider: deps.config.payments.provider,
         environment: gateway?.environment ?? null,
         card: Boolean(gateway),
@@ -164,6 +166,7 @@ export function commerceClientRoutes(deps: AppDeps) {
   return new Hono<AppEnv>()
     .get("/commerce/capabilities", (c) =>
       c.json({
+        permissions: permissionsFor(c.get("principal").role, c.get("principal").accessPreset),
         provider: deps.config.payments.provider,
         environment: gateway?.environment ?? null,
         card: Boolean(gateway),

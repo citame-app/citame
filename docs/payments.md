@@ -19,7 +19,7 @@ Default endpoints, signing version and the public reference vector follow the cu
 
 ## Operator workflow
 
-Open **Sales & register**. An owner opens the cash register with the physically counted opening cash. Operators create a sale or open checkout from an EUR appointment; appointment prices come from its saved service snapshots. Discounts and tips are integer cents, and prices include the configured tax component. Receipts are accounting receipts, not a separately certified fiscal-invoicing integration.
+Open **Sales & register**. The owner, a manager or reception opens the cash register with the physically counted opening cash. Operators create a sale or open checkout from an EUR appointment; appointment prices come from its saved service snapshots. Discounts and tips are integer cents, and prices include the configured tax component. Receipts are accounting receipts, not a separately certified fiscal-invoicing integration.
 
 Cash payments require an open drawer. External-card records mean a payment already collected on an external terminal; recording one does not charge a card. Split payments cannot exceed the balance. One unresolved online attempt blocks another collection until the result is known. Closing the register records the expected cash, actual count and difference; that count cannot subsequently be rewritten. Cash withdrawals and refunds cannot spend cash absent from the drawer.
 
@@ -30,8 +30,8 @@ Printing uses an isolated receipt document. It excludes register balances, other
 - Browser return/query parameters cannot mark an order paid. A signed server notification must match the persisted order, amount, currency, merchant, terminal and operation.
 - Replayed notifications and repeated payment requests do not add another capture. Concurrent partial payments serialize against the checkout. Idempotency keys reject changed request bodies.
 - Late/contradictory successful bank results are retained as received funds needing reconciliation/refund, rather than disappearing from the ledger. Excess money is visible on the receipt.
-- If a customer abandons an online attempt, an owner can reconcile it after the initial processing window and checking the bank portal. A reference is required and the change is audited. Do not assume an abandoned browser means the bank did not collect.
-- An owner requests a refund against a captured payment. Cash refunds are recorded against the current drawer; online refunds are reserved first and then sent to Redsys once. Pending reservations count against the refundable balance.
+- If a customer abandons an online attempt, the owner or a manager can reconcile it after the initial processing window and checking the bank portal. A reference is required and the change is audited. Do not assume an abandoned browser means the bank did not collect.
+- The owner or a manager requests a refund against a captured payment. Cash refunds are recorded against the current drawer; online refunds are reserved first and then sent to Redsys once. Pending reservations count against the refundable balance.
 - A lost/invalid bank refund response is ambiguous: it may follow a completed refund. Such a request is not retried automatically. Reconcile it against the bank portal with a reference. A crash after dispatch also requires this recovery; in-flight work cannot be reconciled immediately.
 - Keep the same merchant/terminal/signing key while attempts are unresolved. Plan bank-credential changes after reconciling the outstanding queue.
 
@@ -41,4 +41,4 @@ All financial mutations are audited. No raw bank notification, card details, sig
 
 Reference signing and refund-adapter tests pass on the pinned Bun 1.4.4 image with networking disabled. Real-Postgres tests cover ownership/RBAC, CSRF, immutable appointment prices, idempotency, callback tampering, bank declines, late captures, overcollection races, refunds, uncertain dispatches and cash reconciliation. React tests cover the forms and print isolation. A real Chromium mobile exploration and four mobile/desktop light/dark Playwright cases verify partial cash/card payments, receipts, refunds, register differences, no horizontal overflow and no serious/critical axe findings.
 
-No real bank charge, refund, enrollment or production callback has been performed. Deposits/booking holds, inventory fulfillment, entitlements and advanced financial reports are separate remaining items in [FEATURE-EXPANSION.md](FEATURE-EXPANSION.md).
+No real bank charge, refund, enrollment or production callback has been performed. Inventory fulfillment and commission/financial reports are now implemented. Deposits/booking holds and entitlements are separate remaining items in [FEATURE-EXPANSION.md](FEATURE-EXPANSION.md).

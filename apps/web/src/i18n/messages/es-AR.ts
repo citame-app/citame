@@ -1,3 +1,4 @@
+import { accessEsAR } from "./access";
 import { accountSecurityEsAR } from "./account-security";
 import { accountingEsAR } from "./accounting";
 import { adminEsAR } from "./admin";
@@ -227,6 +228,7 @@ export const esAR: Record<MessageKey, string> = {
   "account.profile.failed": "No pudimos guardar tu perfil",
   "account.signOut": "Cerrar sesión",
   ...adminEsAR,
+  ...accessEsAR,
   ...accountingEsAR,
   ...inventoryEsAR,
   ...commerceEsAR,

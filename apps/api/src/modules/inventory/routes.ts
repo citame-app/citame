@@ -8,7 +8,7 @@ import {
 } from "@sob/contracts";
 import { Hono } from "hono";
 import type { AppDeps } from "../../app";
-import { requireRole } from "../../auth/policy";
+import { requirePermission } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
 import {
@@ -23,8 +23,8 @@ import {
 export function inventoryRoutes(deps: AppDeps) {
   return new Hono<AppEnv>()
     .use("*", async (c, next) => {
-      requireRole(c.get("principal"), "owner", "staff");
-      if (c.req.method !== "GET") requireRole(c.get("principal"), "owner");
+      requirePermission(c.get("principal"), "readInventory");
+      if (c.req.method !== "GET") requirePermission(c.get("principal"), "writeInventory");
       await next();
     })
     .get("/products", async (c) =>

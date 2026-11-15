@@ -50,12 +50,14 @@ export function CalendarView({
   onSearchChange,
   role,
   ownStaffId,
+  readOnly = false,
   now: fixedNow,
 }: {
   search: CalendarSearch;
   onSearchChange: (search: CalendarSearch) => void;
   role: UserRole;
   ownStaffId: string | null;
+  readOnly?: boolean;
   now?: Date;
 }) {
   const { t, locale, timeZone } = useI18n();
@@ -107,8 +109,8 @@ export function CalendarView({
 
   const openAppointment = calendar?.appointments.find((a) => a.id === openId) ?? null;
   const canMove = useCallback(
-    (a: CalendarAppointment) => availableActions(role, a, now, ownStaffId).reschedule,
-    [role, now, ownStaffId],
+    (a: CalendarAppointment) => availableActions(role, a, now, ownStaffId, !readOnly).reschedule,
+    [role, now, ownStaffId, readOnly],
   );
 
   const go = useCallback(
@@ -124,12 +126,13 @@ export function CalendarView({
   const today = localDateOf(now.toISOString(), timeZone);
   const openNew = useCallback(
     (slot?: Partial<NewAppointmentInitial>) =>
+      !readOnly &&
       setCreating({
         staffId: slot?.staffId ?? (role === "staff" ? (ownStaffId ?? undefined) : weekStaffId),
         date: slot?.date ?? search.date,
         minutesOfDay: slot?.minutesOfDay,
       }),
-    [role, ownStaffId, weekStaffId, search.date],
+    [role, ownStaffId, weekStaffId, search.date, readOnly],
   );
 
   const handlers = useRef({
@@ -250,10 +253,12 @@ export function CalendarView({
             onChange={(ids) => go({ staff: ids.length > 0 ? ids.join(",") : undefined })}
           />
         )}
-        <Button onClick={() => openNew()}>
-          <PlusIcon />
-          {t("calendar.newAppointment")}
-        </Button>
+        {!readOnly && (
+          <Button onClick={() => openNew()}>
+            <PlusIcon />
+            {t("calendar.newAppointment")}
+          </Button>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted">
@@ -344,11 +349,12 @@ export function CalendarView({
         staffName={openAppointment ? staffName(openAppointment.staffId) : ""}
         onClose={() => setOpenId(null)}
         role={role}
+        readOnly={readOnly}
         ownStaffId={ownStaffId}
         now={now}
         onReload={() => void queryClient.invalidateQueries({ queryKey: ["admin"] })}
       />
-      {creating && (
+      {creating && !readOnly && (
         <NewAppointmentSheet
           open
           onOpenChange={(open) => !open && setCreating(null)}

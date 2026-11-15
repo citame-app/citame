@@ -1,3 +1,4 @@
+import { permissionsFor } from "@sob/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { PageHeading } from "~/components/pages";
 import { adminHead } from "~/features/admin/route-head";
@@ -16,7 +17,7 @@ function StaffPage() {
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
   if (!session) return null;
-  const own = session.user.role === "staff";
+  const own = !permissionsFor(session.user.role, session.accessPreset).editSchedules;
   return (
     <>
       <PageHeading
@@ -27,6 +28,7 @@ function StaffPage() {
         search={search}
         onSearchChange={(next) => void navigate({ search: next })}
         role={session.user.role}
+        accessPreset={session.accessPreset}
         ownStaffId={session.staffId}
       />
     </>

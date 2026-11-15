@@ -1,3 +1,4 @@
+import { permissionsFor } from "@sob/contracts";
 import { createFileRoute } from "@tanstack/react-router";
 import { PageHeading } from "~/components/pages";
 import { AlertIcon } from "~/components/ui/icons";
@@ -16,6 +17,7 @@ function AdminHome() {
   const { session } = Route.useRouteContext();
   const { notice } = Route.useSearch();
   if (!session) return null;
+  const permissions = permissionsFor(session.user.role, session.accessPreset);
   const today = formatDateLong(localDateOf(new Date().toISOString(), timeZone), locale);
   return (
     <>
@@ -32,7 +34,11 @@ function AdminHome() {
           {t("admin.notice.forbidden")}
         </p>
       )}
-      <TodayView role={session.user.role} ownStaffId={session.staffId} />
+      <TodayView
+        role={permissions.allCalendars ? "owner" : session.user.role}
+        readOnly={!permissions.editCalendar}
+        ownStaffId={session.staffId}
+      />
     </>
   );
 }

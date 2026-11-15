@@ -1,4 +1,4 @@
-import { idSchema, type UserRole } from "@sob/contracts";
+import { idSchema, permissionsFor, type StaffAccessPreset, type UserRole } from "@sob/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "~/components/ui/button";
 import { ChevronLeftIcon } from "~/components/ui/icons";
@@ -6,6 +6,7 @@ import { ErrorState, Skeleton } from "~/components/ui/states";
 import { TabPanel, Tabs } from "~/components/ui/tabs";
 import { useI18n } from "~/i18n/react";
 import { adminStaffQuery } from "~/lib/admin-queries";
+import { AccessPanel } from "./access-panel";
 import { HoursEditor } from "./hours-editor";
 import { TeamList } from "./team-list";
 import { TimeOffPanel } from "./time-off-panel";
@@ -28,18 +29,26 @@ export function StaffView({
   onSearchChange,
   role,
   ownStaffId,
+  accessPreset,
 }: {
   search: StaffSearch;
   onSearchChange: (search: StaffSearch) => void;
   role: UserRole;
   ownStaffId: string | null;
+  accessPreset?: StaffAccessPreset | null;
 }) {
   const { t } = useI18n();
   const staff = useQuery(adminStaffQuery);
-  const memberId = role === "staff" ? ownStaffId : (search.member ?? null);
+  const permissions = permissionsFor(role, accessPreset);
+  const memberId = permissions.editSchedules ? (search.member ?? null) : ownStaffId;
 
-  if (role === "owner" && !memberId) {
-    return <TeamList onOpenMember={(member) => onSearchChange({ member, tab: search.tab })} />;
+  if (permissions.editSchedules && !memberId) {
+    return (
+      <TeamList
+        canManageAccounts={permissions.manageAccounts}
+        onOpenMember={(member) => onSearchChange({ member, tab: search.tab })}
+      />
+    );
   }
   if (staff.isPending) return <Skeleton className="h-96" />;
   if (staff.isError) return <ErrorState error={staff.error} onRetry={() => void staff.refetch()} />;
@@ -50,7 +59,7 @@ export function StaffView({
   return (
     <div className="space-y-5">
       <div>
-        {role === "owner" && (
+        {permissions.editSchedules && (
           <Button
             variant="ghost"
             className="-ml-3"
@@ -62,6 +71,7 @@ export function StaffView({
         )}
         <h2 className="font-display text-2xl font-semibold">{member.displayName}</h2>
       </div>
+      {permissions.manageAccounts && <AccessPanel staffId={member.id} />}
       <Tabs
         label={t("staff.tab.label")}
         items={[
@@ -77,13 +87,15 @@ export function StaffView({
         }
       >
         <TabPanel value="hours">
-          <HoursEditor key={member.id} staffId={member.id} editable={role === "owner"} />
+          <HoursEditor key={member.id} staffId={member.id} editable={permissions.editSchedules} />
         </TabPanel>
         <TabPanel value="timeoff">
           <TimeOffPanel
             key={member.id}
             staffId={member.id}
-            editable={role === "owner" || member.id === ownStaffId}
+            editable={
+              permissions.editSchedules || (permissions.editCalendar && member.id === ownStaffId)
+            }
           />
         </TabPanel>
       </Tabs>

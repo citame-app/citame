@@ -1,4 +1,5 @@
 import type { SyncChange, SyncEntity, SyncPullQuery, SyncPullResponse } from "@sob/contracts";
+import { permissionsFor } from "@sob/contracts";
 import {
   appointment,
   clientProfile,
@@ -49,7 +50,9 @@ async function loadVisible(
   const out: Visible = new Map();
   const put = (id: string, data: unknown) => out.set(id, { entity, id, op: "upsert", data });
   const owner = principal.role === "owner";
-  const ownCalendar = (staffId: string) => owner || staffId === principal.staffId;
+  const permissions = permissionsFor(principal.role, principal.accessPreset);
+  const ownCalendar = (staffId: string) =>
+    permissions.allCalendars || staffId === principal.staffId;
 
   switch (entity) {
     case "appointment": {
@@ -66,6 +69,7 @@ async function loadVisible(
       break;
     }
     case "client": {
+      if (!permissions.clients) break;
       const rows = await db
         .select()
         .from(clientProfile)

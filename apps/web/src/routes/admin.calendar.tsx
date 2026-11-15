@@ -1,3 +1,4 @@
+import { permissionsFor } from "@sob/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { PageHeading } from "~/components/pages";
 import { CalendarView } from "~/features/admin/calendar/calendar-view";
@@ -29,6 +30,7 @@ function CalendarPage() {
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
   if (!session) return null;
+  const permissions = permissionsFor(session.user.role, session.accessPreset);
   const date = search.date ?? localDateOf(new Date().toISOString(), timeZone);
   return (
     <>
@@ -40,7 +42,8 @@ function CalendarPage() {
           ...(search.staff ? { staff: search.staff } : {}),
         }}
         onSearchChange={(next) => void navigate({ search: next, replace: true })}
-        role={session.user.role}
+        role={permissions.allCalendars ? "owner" : session.user.role}
+        readOnly={!permissions.editCalendar}
         ownStaffId={session.staffId}
       />
     </>

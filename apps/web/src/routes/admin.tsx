@@ -12,7 +12,11 @@ export const Route = createFileRoute("/admin")({
       throw redirect({ to: "/sign-in", search: { redirect: location.href } });
     }
     if (decision.type === "forbidden" || !context.session) throw redirect({ to: "/account" });
-    const guard = adminGuard(location.pathname, context.session.user.role);
+    const guard = adminGuard(
+      location.pathname,
+      context.session.user.role,
+      context.session.accessPreset,
+    );
     if (guard.type === "redirect") {
       throw redirect(
         guard.to === "/account"
@@ -30,7 +34,11 @@ function AdminLayout() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   if (!session) return null;
   return (
-    <AdminShell role={session.user.role} active={sectionOfPath(pathname)}>
+    <AdminShell
+      role={session.user.role}
+      accessPreset={session.accessPreset}
+      active={sectionOfPath(pathname)}
+    >
       <Outlet />
     </AdminShell>
   );

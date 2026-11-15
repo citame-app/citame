@@ -19,6 +19,7 @@ export * from "./inventory";
 export * from "./mcp";
 export * from "./notifications";
 export * from "./oauth";
+export * from "./permissions";
 export * from "./reports";
 export * from "./salon";
 export * from "./services";

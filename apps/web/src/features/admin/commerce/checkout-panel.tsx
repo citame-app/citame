@@ -72,6 +72,8 @@ export function CheckoutPanel({
   if (sale.isError) return <ErrorState error={sale.error} onRetry={() => void sale.refetch()} />;
   const order = sale.data;
   const money = (value: number) => formatMoney(value, order.currency, locale);
+  const canRefund = capabilities.data?.permissions?.refunds ?? role === "owner";
+  const canReturn = capabilities.data?.permissions?.writeInventory ?? role === "owner";
   const pending = order.payments.some((p) => p.status === "pending");
   const refundedFor = (id: string) =>
     order.refunds
@@ -136,7 +138,7 @@ export function CheckoutPanel({
           </details>
         )}
       {mode === "admin" &&
-        role === "owner" &&
+        canReturn &&
         order.fulfilledAt &&
         order.lines.some((line) => line.kind === "product") && <StockReturn checkout={order} />}
       <ul className="divide-y divide-line">
@@ -272,7 +274,7 @@ export function CheckoutPanel({
                         : t("commerce.pending")}
               </p>
               {mode === "admin" &&
-                role === "owner" &&
+                canRefund &&
                 ["succeeded", "reconciliation"].includes(payment.status) &&
                 refundableFor(payment.id, payment.amountCents) > 0 && (
                   <RefundForm
@@ -281,7 +283,7 @@ export function CheckoutPanel({
                   />
                 )}
               {mode === "admin" &&
-                role === "owner" &&
+                canRefund &&
                 payment.status === "pending" &&
                 Date.now() - Date.parse(payment.updatedAt ?? payment.createdAt) >= 60000 && (
                   <PaymentReconciliation paymentId={payment.id} />
@@ -293,11 +295,7 @@ export function CheckoutPanel({
       {order.refunds.length > 0 && (
         <div className="space-y-3">
           {order.refunds.map((refund) => (
-            <RefundStatus
-              key={refund.id}
-              refund={refund}
-              owner={mode === "admin" && role === "owner"}
-            />
+            <RefundStatus key={refund.id} refund={refund} owner={mode === "admin" && canRefund} />
           ))}
         </div>
       )}

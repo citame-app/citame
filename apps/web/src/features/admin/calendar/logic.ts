@@ -157,6 +157,7 @@ export function availableActions(
   appointment: Actionable,
   now: Date,
   ownStaffId: string | null,
+  canEdit = true,
 ): AvailableActions {
   const none: AvailableActions = {
     complete: false,
@@ -164,7 +165,7 @@ export function availableActions(
     cancel: false,
     reschedule: false,
   };
-  if (role === "client") return none;
+  if (!canEdit || role === "client") return none;
   if (role === "staff" && appointment.staffId !== ownStaffId) return none;
   const started = Date.parse(appointment.startsAt) <= now.getTime();
   switch (appointment.status) {

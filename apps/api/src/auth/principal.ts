@@ -1,4 +1,4 @@
-import type { UserRole } from "@sob/contracts";
+import type { StaffAccessPreset, UserRole } from "@sob/contracts";
 import { clientProfile, type Database, staffProfile, user } from "@sob/db";
 import { and, eq, isNull } from "drizzle-orm";
 import type { MiddlewareHandler } from "hono";
@@ -13,6 +13,7 @@ export interface Principal {
   role: UserRole;
   /** Calendar profile, when the account is (or was made) staff. */
   staffId: string | null;
+  accessPreset?: StaffAccessPreset;
   /** Booking profile, when the account is a client. */
   clientId: string | null;
 }
@@ -29,7 +30,7 @@ export async function loadPrincipal(db: Database, userId: string): Promise<Princ
   if (!row) return null;
 
   const [staff] = await db
-    .select({ id: staffProfile.id })
+    .select({ id: staffProfile.id, accessPreset: staffProfile.accessPreset })
     .from(staffProfile)
     .where(and(eq(staffProfile.userId, userId), isNull(staffProfile.deletedAt)));
   let [client] = await db
@@ -65,6 +66,7 @@ export async function loadPrincipal(db: Database, userId: string): Promise<Princ
     name: row.name,
     role: row.role,
     staffId: staff?.id ?? null,
+    accessPreset: staff?.accessPreset,
     clientId: client?.id ?? null,
   };
 }

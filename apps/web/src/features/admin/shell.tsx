@@ -1,4 +1,4 @@
-import type { UserRole } from "@sob/contracts";
+import { permissionsFor, type StaffAccessPreset, type UserRole } from "@sob/contracts";
 import { Link } from "@tanstack/react-router";
 import { type ComponentType, type ReactNode, useEffect, useState } from "react";
 import {
@@ -47,16 +47,18 @@ function useNavLabel() {
 
 export function AdminShell({
   role,
+  accessPreset,
   active,
   children,
 }: {
   role: UserRole;
+  accessPreset?: StaffAccessPreset | null;
   active: AdminSection;
   children: ReactNode;
 }) {
   const { t } = useI18n();
   const label = useNavLabel();
-  const items = adminNavFor(role);
+  const items = adminNavFor(role, accessPreset);
   const fits = items.length <= BOTTOM_BAR_MAX;
   const inline = fits ? items : items.filter((i) => BOTTOM_BAR_PRIORITY.includes(i.section));
   const overflow = fits ? [] : items.filter((i) => !BOTTOM_BAR_PRIORITY.includes(i.section));
@@ -94,7 +96,10 @@ export function AdminShell({
                 )}
               >
                 <Icon width={20} height={20} />
-                {label(item.section, role)}
+                {label(
+                  item.section,
+                  permissionsFor(role, accessPreset).editSchedules ? "owner" : role,
+                )}
               </Link>
             );
           })}
@@ -122,7 +127,12 @@ export function AdminShell({
                   )}
                 >
                   <Icon width={22} height={22} />
-                  <span className="max-w-full truncate">{label(item.section, role)}</span>
+                  <span className="max-w-full truncate">
+                    {label(
+                      item.section,
+                      permissionsFor(role, accessPreset).editSchedules ? "owner" : role,
+                    )}
+                  </span>
                 </Link>
               </li>
             );
@@ -158,7 +168,10 @@ export function AdminShell({
                   className="flex min-h-12 items-center gap-3 rounded-md px-3 font-medium hover:bg-sunken"
                 >
                   <Icon width={22} height={22} />
-                  {label(item.section, role)}
+                  {label(
+                    item.section,
+                    permissionsFor(role, accessPreset).editSchedules ? "owner" : role,
+                  )}
                 </Link>
               </li>
             );

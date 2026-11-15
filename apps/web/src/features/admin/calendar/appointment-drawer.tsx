@@ -31,6 +31,7 @@ export function AppointmentDrawer({
   ownStaffId,
   now,
   onReload,
+  readOnly = false,
 }: {
   appointment: CalendarAppointment | null;
   staffName: string;
@@ -40,6 +41,7 @@ export function AppointmentDrawer({
   now: Date;
   /** Refetch the calendar so the drawer shows the latest version after a conflict. */
   onReload?: () => void;
+  readOnly?: boolean;
 }) {
   const { t } = useI18n();
   return (
@@ -59,6 +61,7 @@ export function AppointmentDrawer({
           now={now}
           onClose={onClose}
           onReload={onReload}
+          readOnly={readOnly}
         />
       )}
     </Sheet>
@@ -73,6 +76,7 @@ function DrawerBody({
   now,
   onClose,
   onReload,
+  readOnly = false,
 }: {
   appointment: CalendarAppointment;
   staffName: string;
@@ -81,11 +85,12 @@ function DrawerBody({
   now: Date;
   onClose: () => void;
   onReload?: () => void;
+  readOnly?: boolean;
 }) {
   const { t, locale, timeZone } = useI18n();
   const toast = useToast();
   const queryClient = useQueryClient();
-  const client = useQuery(clientDetailQuery(appointment.clientId));
+  const client = useQuery({ ...clientDetailQuery(appointment.clientId), enabled: !readOnly });
   const salon = useQuery(salonQuery);
   const [notes, setNotes] = useState(appointment.notes ?? "");
   const [problem, setProblem] = useState<Problem | null>(null);
@@ -94,7 +99,7 @@ function DrawerBody({
   const [date, setDate] = useState<string | undefined>();
   const [slot, setSlot] = useState<Slot | undefined>();
   const [override, setOverride] = useState(false);
-  const actions = availableActions(role, appointment, now, ownStaffId);
+  const actions = availableActions(role, appointment, now, ownStaffId, !readOnly);
   const totalCents = appointment.services.reduce((sum, s) => sum + s.priceCents, 0);
   const currency = appointment.services[0]?.currency ?? "ARS";
   const minutes = Math.round(
@@ -224,56 +229,61 @@ function DrawerBody({
         </dd>
       </dl>
 
-      <section
-        aria-labelledby="drawer-client"
-        className="rounded-xl border border-line bg-sunken p-4"
-      >
-        <h3 id="drawer-client" className="mb-2 font-medium">
-          {t("drawer.client")}
-        </h3>
-        {client.isPending ? (
-          <Skeleton className="h-16" />
-        ) : client.data ? (
-          <dl className="grid grid-cols-[6rem_1fr] gap-x-3 gap-y-1 text-sm">
-            <dt className="text-muted">{t("drawer.client.phone")}</dt>
-            <dd>{client.data.client.phone ?? "-"}</dd>
-            <dt className="text-muted">{t("drawer.client.email")}</dt>
-            <dd className="break-all">{client.data.client.email ?? "-"}</dd>
-            <dt className="text-muted">{t("drawer.client.notes")}</dt>
-            <dd className="whitespace-pre-wrap">{client.data.client.notes ?? "-"}</dd>
-          </dl>
-        ) : null}
-        <Link
-          to="/admin/clients/$id"
-          params={{ id: appointment.clientId }}
-          className="mt-3 inline-flex min-h-11 items-center text-sm font-medium text-accent-text hover:underline"
+      {!readOnly && (
+        <section
+          aria-labelledby="drawer-client"
+          className="rounded-xl border border-line bg-sunken p-4"
         >
-          {t("drawer.client.open")}
-        </Link>
-      </section>
+          <h3 id="drawer-client" className="mb-2 font-medium">
+            {t("drawer.client")}
+          </h3>
+          {client.isPending ? (
+            <Skeleton className="h-16" />
+          ) : client.data ? (
+            <dl className="grid grid-cols-[6rem_1fr] gap-x-3 gap-y-1 text-sm">
+              <dt className="text-muted">{t("drawer.client.phone")}</dt>
+              <dd>{client.data.client.phone ?? "-"}</dd>
+              <dt className="text-muted">{t("drawer.client.email")}</dt>
+              <dd className="break-all">{client.data.client.email ?? "-"}</dd>
+              <dt className="text-muted">{t("drawer.client.notes")}</dt>
+              <dd className="whitespace-pre-wrap">{client.data.client.notes ?? "-"}</dd>
+            </dl>
+          ) : null}
+          <Link
+            to="/admin/clients/$id"
+            params={{ id: appointment.clientId }}
+            className="mt-3 inline-flex min-h-11 items-center text-sm font-medium text-accent-text hover:underline"
+          >
+            {t("drawer.client.open")}
+          </Link>
+        </section>
+      )}
 
       <div className="space-y-3">
         <TextAreaField
           label={t("drawer.notes")}
           value={notes}
+          readOnly={readOnly}
           onChange={(e) => setNotes(e.target.value)}
         />
         <Button
           variant="secondary"
           loading={saveNotes.isPending}
-          disabled={notes === (appointment.notes ?? "")}
+          disabled={readOnly || notes === (appointment.notes ?? "")}
           onClick={() => saveNotes.mutate()}
         >
           {t("drawer.notes.save")}
         </Button>
       </div>
 
-      {appointment.status !== "cancelled" &&
+      {!readOnly &&
+        appointment.status !== "cancelled" &&
         appointment.services.length > 0 &&
         appointment.services.every((service) => service.currency === "EUR") && (
           <AppointmentCheckout appointmentId={appointment.id} mode="admin" role={role} />
         )}
       <AppointmentActions
+        readOnly={readOnly}
         appointment={appointment}
         role={role}
         ownStaffId={ownStaffId}

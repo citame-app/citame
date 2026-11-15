@@ -27,7 +27,9 @@ import {
   reportSummarySchema,
   type SetServiceStaffRequest,
   type SetWorkingHoursRequest,
+  type StaffAccessPreset,
   salonResponseSchema,
+  staffAccessSchema,
   staffAccountResponseSchema,
   timeOffResponseSchema,
   type UpdateAppointmentRequest,
@@ -150,6 +152,9 @@ export function createEndpoints(client: ApiClient) {
           client.put(`/admin/services/${id}/staff`, request, adminServiceSchema),
       },
       staff: {
+        access: (id: string) => client.get(`/admin/staff/${id}/access`, staffAccessSchema),
+        setAccess: (id: string, body: { preset: StaffAccessPreset; version: number }) =>
+          client.put(`/admin/staff/${id}/access`, body, staffAccessSchema),
         list: () => client.get("/admin/staff", listAdminStaffResponseSchema),
         create: (request: CreateStaffAccountRequest) =>
           client.post("/admin/staff-accounts", request, staffAccountResponseSchema),

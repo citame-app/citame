@@ -7,6 +7,7 @@ import type {
   StockReturnInput,
   UpdateProductInput,
 } from "@sob/contracts";
+import { permissionsFor } from "@sob/contracts";
 import {
   checkout,
   checkoutLine,
@@ -17,7 +18,7 @@ import {
 } from "@sob/db";
 import { and, asc, count, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
-import { requireRole } from "../../auth/policy";
+import { requirePermission } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
@@ -47,7 +48,9 @@ export function productView(row: ProductRow, principal: Principal): Product {
     description: row.description,
     currency: "EUR",
     priceCents: row.priceCents,
-    ...(principal.role === "owner" ? { costCents: row.costCents } : {}),
+    ...(permissionsFor(principal.role, principal.accessPreset).readCosts
+      ? { costCents: row.costCents }
+      : {}),
     taxBasisPoints: row.taxBasisPoints,
     unitLabel: row.unitLabel,
     storageLocation: row.storageLocation,
@@ -69,11 +72,11 @@ export async function productRow(db: Connection, id: string, lock = false): Prom
   return row;
 }
 export async function getProduct(db: Database, id: string, principal: Principal) {
-  requireRole(principal, "owner", "staff");
+  requirePermission(principal, "readInventory");
   return productView(await productRow(db, id), principal);
 }
 export async function listProducts(db: Database, query: ProductQuery, principal: Principal) {
-  requireRole(principal, "owner", "staff");
+  requirePermission(principal, "readInventory");
   const escaped = query.search.replace(/[\\%_]/g, "\\$&");
   const where = and(
     query.active === "all" ? undefined : eq(retailProduct.active, query.active === "active"),
@@ -107,7 +110,7 @@ export async function listProducts(db: Database, query: ProductQuery, principal:
   );
 }
 export async function createProduct(db: Database, input: CreateProductInput, principal: Principal) {
-  requireRole(principal, "owner");
+  requirePermission(principal, "writeInventory");
   try {
     return await db.transaction(async (tx) => {
       await tx.execute(
@@ -169,7 +172,7 @@ export async function updateProduct(
   input: UpdateProductInput,
   principal: Principal,
 ) {
-  requireRole(principal, "owner");
+  requirePermission(principal, "writeInventory");
   try {
     return await db.transaction(async (tx) => {
       const row = await productRow(tx, id, true);
@@ -201,7 +204,7 @@ export async function moveStock(
   input: StockMovementInput,
   principal: Principal,
 ) {
-  requireRole(principal, "owner");
+  requirePermission(principal, "writeInventory");
   return db.transaction(async (tx) => {
     const row = await productRow(tx, id, true);
     const requestHash = fingerprint(input);
@@ -265,7 +268,7 @@ export async function listMovements(
   pageSize: number,
   principal: Principal,
 ) {
-  requireRole(principal, "owner", "staff");
+  requirePermission(principal, "readInventory");
   await productRow(db, id);
   return db.transaction(
     async (tx) => {
@@ -287,7 +290,9 @@ export async function listMovements(
           kind: row.kind,
           quantityDelta: row.quantityDelta,
           reason: row.reason,
-          ...(principal.role === "owner" ? { unitCostCents: row.unitCostCents } : {}),
+          ...(permissionsFor(principal.role, principal.accessPreset).readCosts
+            ? { unitCostCents: row.unitCostCents }
+            : {}),
           checkoutLineId: row.checkoutLineId,
           createdAt: row.createdAt.toISOString(),
         })),
@@ -298,7 +303,7 @@ export async function listMovements(
   );
 }
 export async function returnStock(db: Database, input: StockReturnInput, principal: Principal) {
-  requireRole(principal, "owner");
+  requirePermission(principal, "writeInventory");
   return db.transaction(async (tx) => {
     const [line] = await tx
       .select()

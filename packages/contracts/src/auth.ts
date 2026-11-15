@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { idSchema, LIMITS } from "./common";
+import { staffAccessPresetSchema } from "./permissions";
 
 export const userRoleSchema = z.enum(["owner", "staff", "client"]);
 export type UserRole = z.infer<typeof userRoleSchema>;
@@ -13,6 +14,7 @@ export const meResponseSchema = z.object({
     role: userRoleSchema,
   }),
   staffId: idSchema.nullable(),
+  accessPreset: staffAccessPresetSchema.nullable().optional(),
   clientId: idSchema.nullable(),
   /** Phone on the booking profile; null for accounts without one. */
   phone: z.string().nullable(),

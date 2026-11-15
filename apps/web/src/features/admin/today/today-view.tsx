@@ -17,10 +17,12 @@ import { buildOverview } from "./overview";
 export function TodayView({
   role,
   ownStaffId,
+  readOnly = false,
   now: fixedNow,
 }: {
   role: UserRole;
   ownStaffId: string | null;
+  readOnly?: boolean;
   /** Fixed clock for tests; defaults to a ticking clock. */
   now?: Date;
 }) {
@@ -149,6 +151,7 @@ export function TodayView({
                       <div className="min-w-0">{summary(a)}</div>
                     </div>
                     <AppointmentActions
+                      readOnly={readOnly}
                       appointment={a}
                       role={role}
                       ownStaffId={ownStaffId}

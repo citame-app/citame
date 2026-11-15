@@ -1,4 +1,4 @@
-import type { UserRole } from "@sob/contracts";
+import { permissionsFor, type StaffAccessPreset, type UserRole } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Button } from "~/components/ui/button";
@@ -16,7 +16,14 @@ import { InventoryView } from "./inventory-view";
 import { inputCents } from "./money";
 import { type CartProduct, ProductCart } from "./product-cart";
 
-export function CommerceView({ role }: { role: UserRole }) {
+export function CommerceView({
+  role,
+  accessPreset,
+}: {
+  role: UserRole;
+  accessPreset?: StaffAccessPreset | null;
+}) {
+  const permissions = permissionsFor(role, accessPreset);
   const { t, locale } = useI18n();
   const sales = useQuery({ queryKey: ["commerce", "sales"], queryFn: () => api().commerce.list() });
   const [selected, setSelected] = useState<string | null>(null);
@@ -29,7 +36,7 @@ export function CommerceView({ role }: { role: UserRole }) {
         <Button variant="ghost" onClick={() => setAccounting(false)}>
           {t("commerce.back")}
         </Button>
-        <AccountingView role={role} />
+        <AccountingView role={permissions.financialReports ? "owner" : role} />
       </div>
     );
   if (inventory)
@@ -38,7 +45,7 @@ export function CommerceView({ role }: { role: UserRole }) {
         <Button variant="ghost" onClick={() => setInventory(false)}>
           {t("commerce.back")}
         </Button>
-        <InventoryView role={role} />
+        <InventoryView role={permissions.writeInventory ? "owner" : role} />
       </div>
     );
   return (
@@ -47,9 +54,9 @@ export function CommerceView({ role }: { role: UserRole }) {
         {t("inventory.title")}
       </Button>
       <Button variant="secondary" onClick={() => setAccounting(true)}>
-        {t(role === "owner" ? "accounting.title" : "accounting.own")}
+        {t(permissions.financialReports ? "accounting.title" : "accounting.own")}
       </Button>
-      <CashRegister role={role} />
+      {permissions.manageCash && <CashRegister role="owner" />}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-heading">{t("commerce.history")}</h2>
         <Button
@@ -63,7 +70,7 @@ export function CommerceView({ role }: { role: UserRole }) {
       </div>
       {creating && (
         <NewSale
-          role={role}
+          role={permissions.allSales ? "owner" : role}
           onCreated={(id) => {
             setCreating(false);
             setSelected(id);

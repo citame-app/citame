@@ -20,7 +20,13 @@ import { BlockedPanel } from "./blocked-panel";
 
 const helper = createColumnHelper<DataTableFeatures, AdminStaff>();
 
-export function TeamList({ onOpenMember }: { onOpenMember: (id: string) => void }) {
+export function TeamList({
+  onOpenMember,
+  canManageAccounts = true,
+}: {
+  onOpenMember: (id: string) => void;
+  canManageAccounts?: boolean;
+}) {
   const { t } = useI18n();
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -139,10 +145,12 @@ export function TeamList({ onOpenMember }: { onOpenMember: (id: string) => void 
         paginate={false}
         loading={staff.isPending}
         actions={
-          <Button onClick={() => setCreating(true)}>
-            <PlusIcon />
-            {t("staff.new")}
-          </Button>
+          canManageAccounts && (
+            <Button onClick={() => setCreating(true)}>
+              <PlusIcon />
+              {t("staff.new")}
+            </Button>
+          )
         }
         sorting={sorting}
         onSortingChange={setSorting}

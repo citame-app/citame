@@ -3,6 +3,8 @@ import {
   boolean,
   check,
   index,
+  integer,
+  pgEnum,
   pgTable,
   smallint,
   text,
@@ -14,6 +16,13 @@ import { user } from "./auth";
 import { createdAt, deletedAt, primaryId, timestamptz, updatedAt } from "./helpers";
 import { service } from "./service";
 
+export const staffAccessPreset = pgEnum("staff_access_preset", [
+  "manager",
+  "receptionist",
+  "professional",
+  "restricted",
+]);
+
 export const staffProfile = pgTable(
   "staff_profile",
   {
@@ -22,6 +31,8 @@ export const staffProfile = pgTable(
     /** Login account of this staff member, if any. One account links to at most one profile. */
     userId: text().references(() => user.id, { onDelete: "set null" }),
     active: boolean().notNull().default(true),
+    accessPreset: staffAccessPreset().notNull().default("professional"),
+    accessVersion: integer().notNull().default(1),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     deletedAt: deletedAt(),

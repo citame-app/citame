@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { idSchema, instantSchema, LIMITS } from "./common";
+import { staffAccessPresetSchema } from "./permissions";
 
 export const staffSchema = z.object({
   id: idSchema,
@@ -19,6 +20,8 @@ export const adminStaffSchema = z.object({
   active: z.boolean(),
   /** Login account linked to the calendar, if any. */
   userId: z.string().nullable(),
+  accessPreset: staffAccessPresetSchema.optional(),
+  accessVersion: z.number().int().positive().optional(),
   serviceIds: z.array(idSchema),
 });
 export type AdminStaff = z.infer<typeof adminStaffSchema>;

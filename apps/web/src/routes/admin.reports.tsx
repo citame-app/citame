@@ -1,3 +1,4 @@
+import { permissionsFor } from "@sob/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { PageHeading } from "~/components/pages";
 import { validateReportsSearch } from "~/features/admin/reports/range";
@@ -17,16 +18,14 @@ function ReportsPage() {
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
   if (!session) return null;
+  const all = permissionsFor(session.user.role, session.accessPreset).allCalendars;
   return (
     <>
-      <PageHeading
-        title={t("reports.title")}
-        lead={t(session.user.role === "owner" ? "reports.lead" : "reports.leadOwn")}
-      />
+      <PageHeading title={t("reports.title")} lead={t(all ? "reports.lead" : "reports.leadOwn")} />
       <ReportsView
         search={search}
         onSearchChange={(next) => void navigate({ search: next, replace: true })}
-        role={session.user.role}
+        role={all ? "owner" : session.user.role}
       />
     </>
   );

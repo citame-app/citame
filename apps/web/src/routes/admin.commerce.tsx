@@ -14,7 +14,7 @@ function SalesPage() {
   return (
     <>
       <PageHeading title={t("commerce.title")} lead={t("commerce.lead")} />
-      <CommerceView role={session.user.role} />
+      <CommerceView role={session.user.role} accessPreset={session.accessPreset} />
     </>
   );
 }

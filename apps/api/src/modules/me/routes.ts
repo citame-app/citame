@@ -17,6 +17,7 @@ export function meRoutes({ db }: Pick<AppDeps, "db">) {
       role: principal.role,
     },
     staffId: principal.staffId,
+    accessPreset: principal.role === "staff" ? (principal.accessPreset ?? "professional") : null,
     clientId: principal.clientId,
     phone: await getPhone(db, principal),
   });

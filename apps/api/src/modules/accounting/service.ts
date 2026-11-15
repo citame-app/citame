@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { CommissionPayoutInput, CommissionPolicyInput, ReportQuery } from "@sob/contracts";
+import { permissionsFor } from "@sob/contracts";
 import {
   cashSession,
   checkout,
@@ -11,7 +12,7 @@ import {
 } from "@sob/db";
 import { and, count, desc, eq, gte, lt, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
-import { requireRole } from "../../auth/policy";
+import { requirePermission } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
@@ -21,8 +22,11 @@ import { requireStaff } from "../staff/admin";
 
 type Connection = Database | Tx;
 function ownStatement(principal: Principal, staffId: string) {
-  requireRole(principal, "owner", "staff");
-  if (principal.role === "staff" && principal.staffId !== staffId)
+  requirePermission(principal, "commerce");
+  if (
+    !permissionsFor(principal.role, principal.accessPreset).financialReports &&
+    principal.staffId !== staffId
+  )
     throw new DomainError("forbidden", "Only your own commission statement is available");
 }
 export async function getPolicy(db: Database, staffId: string, principal: Principal) {
@@ -47,7 +51,7 @@ export async function setPolicy(
   input: CommissionPolicyInput,
   principal: Principal,
 ) {
-  requireRole(principal, "owner");
+  requirePermission(principal, "manageCommissions");
   await requireStaff(db, staffId);
   return db.transaction(async (tx) => {
     await tx.execute(
@@ -203,7 +207,7 @@ export async function recordPayout(
   input: CommissionPayoutInput,
   principal: Principal,
 ) {
-  requireRole(principal, "owner");
+  requirePermission(principal, "manageCommissions");
   await requireStaff(db, staffId);
   return db.transaction(async (tx) => {
     await tx.execute(
@@ -245,7 +249,7 @@ export async function recordPayout(
   });
 }
 export async function salesReport(db: Database, query: ReportQuery, principal: Principal) {
-  requireRole(principal, "owner");
+  requirePermission(principal, "financialReports");
   const settings = await getSalonSettings(db);
   const timezone = settings.timezone;
   const fromAt = new Date(

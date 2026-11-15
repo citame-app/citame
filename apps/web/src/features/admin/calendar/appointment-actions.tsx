@@ -71,6 +71,7 @@ export function AppointmentActions({
   timeZone = "America/Argentina/Buenos_Aires",
   onChanged,
   layout = "row",
+  readOnly = false,
 }: {
   appointment: CalendarAppointment;
   role: UserRole;
@@ -79,11 +80,12 @@ export function AppointmentActions({
   timeZone?: string;
   onChanged?: () => void;
   layout?: "row" | "stack";
+  readOnly?: boolean;
 }) {
   const { t, locale } = useI18n();
   const change = useStatusChange();
   const [confirmingCancel, setConfirmingCancel] = useState(false);
-  const actions = availableActions(role, appointment, now, ownStaffId);
+  const actions = availableActions(role, appointment, now, ownStaffId, !readOnly);
 
   const run = (status: Transition) =>
     change.mutate({ appointment, status }, { onSuccess: onChanged });

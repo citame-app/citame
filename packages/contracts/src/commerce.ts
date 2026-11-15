@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { idSchema, instantSchema } from "./common";
+import { staffPermissionsSchema } from "./permissions";
 
 export const moneyCentsSchema = z.number().int().min(0).max(999_999_999);
 export const paymentMethodSchema = z.enum([
@@ -131,6 +132,7 @@ export type StartPaymentInput = z.infer<typeof startPaymentSchema>;
 export type Checkout = z.infer<typeof checkoutSchema>;
 
 export const paymentCapabilitiesSchema = z.object({
+  permissions: staffPermissionsSchema.optional(),
   provider: z.enum(["none", "redsys"]),
   environment: z.enum(["test", "live"]).nullable(),
   card: z.boolean(),
