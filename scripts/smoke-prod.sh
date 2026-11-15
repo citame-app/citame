@@ -13,6 +13,8 @@ export BETTER_AUTH_SECRET="$(openssl rand -base64 32)"
 export PUBLIC_URL="http://localhost:8088"
 export SITE_ADDRESS=":80" CADDY_HTTP_PORT=8088 CADDY_HTTPS_PORT=8443
 export WEB_PUBLISH="127.0.0.1:4173"
+# Caddy (profile tls) is the trusted edge in front of web.
+export WEB_TRUST_PROXY=true
 # The smoke environment has no mail server: opt out of verification explicitly (production
 # refuses to start with verification required and no provider, see ADR 0011).
 export AUTH_REQUIRE_EMAIL_VERIFICATION=false NOTIFY_EMAIL_PROVIDER=none

@@ -74,6 +74,8 @@ export async function runMaintenance(
     );
     if (!lock?.locked) return { ...EMPTY, skipped: true };
 
+    // Housekeeping can legitimately outlast the API's per-statement limit on a large backlog.
+    await tx.execute(sql`select set_config('statement_timeout', '0', true)`);
     const done = { ...EMPTY };
     const removed = async (query: ReturnType<typeof sql>) => (await tx.execute(query)).length;
 

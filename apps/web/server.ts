@@ -8,7 +8,10 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { serveWeb } from "./src/server/listener";
 import { createProxy } from "./src/server/proxy";
+import { assertSafeProxyConfig } from "./src/server/proxy-config";
 import { createWebServer } from "./src/server/web-server";
+
+assertSafeProxyConfig(process.env);
 
 const port = Number(process.env.PORT ?? 4173);
 const hostname = process.env.HOST ?? "0.0.0.0";

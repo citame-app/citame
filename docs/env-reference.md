@@ -32,6 +32,12 @@ SITE_ADDRESS=salon.example
 | `TRUSTED_ORIGINS`                                        | empty                                    | Comma-separated browser origins allowed to send cookies (the web app origin).                                                                                                    |
 | `AUTH_REQUIRE_EMAIL_VERIFICATION`                        | `true` (compose.yaml dev: `false`)       | Clients confirm their email before signing in. Production refuses to boot with it on and `NOTIFY_EMAIL_PROVIDER=none`.                                                           |
 | `TRUST_PROXY`                                            | `false`                                  | Take the client IP from the last `X-Forwarded-For` entry. `true` only behind a proxy you operate.                                                                                |
+| `HTTP_IDLE_TIMEOUT_SECONDS`                              | `30`                                     | Idle connection timeout (0 disables, max 255). `/sync/stream` is exempt: its 15 s heartbeat is longer than Bun's 10 s default.                                                   |
+| `HTTP_MAX_BODY_BYTES`                                    | `1048576`                                | Largest request body; bigger ones are answered `413` before the app sees them.                                                                                                   |
+| `DB_POOL_MAX`                                            | `10`                                     | Postgres pool size per process (API and worker each).                                                                                                                            |
+| `DB_STATEMENT_TIMEOUT_MS`                                | `10000`                                  | Server-side cap per statement; `0` disables. Migrations, the seed script and `bun run maintenance` run without it.                                                               |
+| `DB_LOCK_TIMEOUT_MS`                                     | `5000`                                   | How long a statement waits for a lock; `0` disables.                                                                                                                             |
+| `DB_IDLE_IN_TRANSACTION_TIMEOUT_MS`                      | `30000`                                  | Ends sessions idle inside an open transaction; `0` disables.                                                                                                                     |
 | `METRICS_TOKEN`                                          | unset                                    | Bearer token for `/metrics`, 16+ characters. Unset: only requests that did not come through the public proxy are answered. Secret (`_FILE` supported).                           |
 | `SHUTDOWN_GRACE_MS`                                      | `0` (compose: `5000`)                    | `/ready` is 503 for this long after SIGTERM before the listener closes.                                                                                                          |
 | `LOG_LEVEL`                                              | info                                     | `silent` mutes the JSON logger (used by tests).                                                                                                                                  |
@@ -70,13 +76,16 @@ SITE_ADDRESS=salon.example
 
 ## Web server (`apps/web/server.ts`)
 
-| Variable           | Default                        | Notes                                                                                                           |
-| ------------------ | ------------------------------ | --------------------------------------------------------------------------------------------------------------- |
-| `PORT`, `HOST`     | `4173`, `0.0.0.0`              |                                                                                                                 |
-| `API_INTERNAL_URL` | `http://localhost:3000`        | Where the web server reaches the API (proxy and SSR). Read at runtime. Compose: `http://api:3000`.              |
-| `PUBLIC_URL`       | unset                          | Public origin. An https value enables HSTS and `upgrade-insecure-requests` in the CSP and feeds canonical URLs. |
-| `WEB_HSTS`         | unset                          | `true` forces HSTS without an https `PUBLIC_URL`.                                                               |
-| `WEB_TRUST_PROXY`  | `false` (prod compose: `true`) | Visitor address from the last `X-Forwarded-For` entry; only behind a proxy you operate.                         |
+| Variable                   | Default                 | Notes                                                                                                                                                                                       |
+| -------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PORT`, `HOST`             | `4173`, `0.0.0.0`       |                                                                                                                                                                                             |
+| `API_INTERNAL_URL`         | `http://localhost:3000` | Where the web server reaches the API (proxy and SSR). Read at runtime. Compose: `http://api:3000`.                                                                                          |
+| `PUBLIC_URL`               | unset                   | Public origin. An https value enables HSTS and `upgrade-insecure-requests` in the CSP and feeds canonical URLs.                                                                             |
+| `WEB_HSTS`                 | unset                   | `true` forces HSTS without an https `PUBLIC_URL`.                                                                                                                                           |
+| `WEB_TRUST_PROXY`          | `false`                 | Visitor address from the last `X-Forwarded-For` entry; only behind a proxy you operate. Refused at startup when `WEB_PUBLISH` is not loopback (`WEB_TRUST_PROXY_UNSAFE_OK=true` overrides). |
+| `WEB_PUBLISH`              | unset                   | Host binding of the published port; compose passes it so the check above can run.                                                                                                           |
+| `WEB_IDLE_TIMEOUT_SECONDS` | `30`                    | Idle connection timeout. `/api/sync/stream` is exempt (its heartbeat is longer than Bun's 10 s default).                                                                                    |
+| `WEB_MAX_BODY_BYTES`       | `1048576`               | Largest request body; bigger ones get `413`.                                                                                                                                                |
 
 ## Production compose (`compose.prod.yaml`)
 

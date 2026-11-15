@@ -160,8 +160,11 @@ services:
       API_INTERNAL_URL: http://api:3000
       PORT: "4173"
       PUBLIC_URL: ${PUBLIC_URL}
-      # True when a proxy you operate (Caddy below, nginx, a cloud LB) sits in front.
-      WEB_TRUST_PROXY: ${WEB_TRUST_PROXY:-true}
+      # Off by default: with it on, anyone who can reach the port directly can spoof their address.
+      # Set true when a proxy you operate (Caddy via the tls profile, nginx, a cloud LB) sits in front.
+      WEB_TRUST_PROXY: ${WEB_TRUST_PROXY:-false}
+      # Lets the web server refuse WEB_TRUST_PROXY=true on a publicly published port.
+      WEB_PUBLISH: ${WEB_PUBLISH:-127.0.0.1:4173}
     depends_on:
       api:
         condition: service_healthy
