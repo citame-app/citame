@@ -23,6 +23,7 @@ import {
   releaseCheckoutInventory,
   reserveCheckoutProducts,
 } from "../inventory/reservations";
+import { allocateDiscount } from "./money";
 
 type Connection = Database | Tx;
 const hash = (data: unknown) => createHash("sha256").update(JSON.stringify(data)).digest("hex");
@@ -320,18 +321,14 @@ export async function createCheckout(
     )
       throw new DomainError("validation_error", "Invalid checkout total or discount");
     // Prices include tax. Discounts are allocated proportionally in integer cents.
-    let remainingDiscount = input.discountCents;
+    const discounts = allocateDiscount(
+      lines.map((line) => line.quantity * line.unitAmountCents),
+      input.discountCents,
+    );
     let taxCents = 0;
     for (const [index, line] of lines.entries()) {
       const gross = line.quantity * line.unitAmountCents;
-      const discount =
-        index === lines.length - 1
-          ? remainingDiscount
-          : Math.min(
-              remainingDiscount,
-              subtotalCents ? Math.floor((input.discountCents * gross) / subtotalCents) : 0,
-            );
-      remainingDiscount -= discount;
+      const discount = discounts[index] ?? 0;
       taxCents += Math.round(
         ((gross - discount) * line.taxBasisPoints) / (10000 + line.taxBasisPoints),
       );

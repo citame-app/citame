@@ -419,3 +419,40 @@ test("a cash refund cannot spend cash absent from a newly opened drawer", async 
     ).status,
   ).toBe(409);
 });
+test("discount tax allocation stays within each line and uses exact integer ratios", async () => {
+  const response = await call(owner, "/admin/commerce/checkouts", "POST", {
+    lines: [
+      {
+        kind: "custom",
+        description: "Bulk retail",
+        quantity: 3,
+        unitAmountCents: 666666665,
+        taxBasisPoints: 10000,
+      },
+      {
+        kind: "custom",
+        description: "Small item",
+        quantity: 1,
+        unitAmountCents: 2,
+        taxBasisPoints: 10000,
+      },
+    ],
+    discountCents: 999999999,
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(response.status).toBe(201);
+  expect(await response.json()).toMatchObject({ totalCents: 999999998, taxCents: 499999999 });
+  const pennies = await call(owner, "/admin/commerce/checkouts", "POST", {
+    lines: [1, 2, 3].map((i) => ({
+      kind: "custom",
+      description: `Item ${i}`,
+      quantity: 1,
+      unitAmountCents: 1,
+      taxBasisPoints: 10000,
+    })),
+    discountCents: 2,
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(pennies.status).toBe(201);
+  expect(await pennies.json()).toMatchObject({ totalCents: 1, taxCents: 1 });
+});
