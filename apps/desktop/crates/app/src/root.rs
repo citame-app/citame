@@ -95,6 +95,7 @@ pub struct Root {
     week_views: Vec<DayView>,
     week_staff_id: String,
     theme_override: Option<bool>,
+    pending_local_today: bool,
     status: SyncStatus,
     summary: SyncSummary,
     conflicts: Vec<Conflict>,
@@ -118,6 +119,9 @@ impl Root {
         let start_date = config.start_date;
         let start_view = config.start_view.clone();
         let svc = Services::open(config).expect("open the local database");
+        let tz = calendar::salon_tz(&svc.store).unwrap_or(Tz::UTC);
+        let pending_local_today =
+            start_date.is_none() && svc.store.salon_settings().ok().flatten().is_none();
         let t = |k| i18n::t(locale, k);
         let email = cx.new(|cx| TextField::new(t(Key::Email), false, cx));
         let password = cx.new(|cx| TextField::new(t(Key::Password), true, cx));
@@ -141,13 +145,14 @@ impl Root {
                 busy: false,
                 error: None,
             },
-            date: start_date.unwrap_or_else(|| Utc::now().date_naive()),
-            tz: Tz::UTC,
+            date: start_date.unwrap_or_else(|| Utc::now().with_timezone(&tz).date_naive()),
+            tz,
             view: None,
             week_mode: false,
             week_views: vec![],
             week_staff_id: String::new(),
             theme_override,
+            pending_local_today,
             status: SyncStatus::default(),
             summary: SyncSummary::default(),
             conflicts: vec![],
@@ -314,6 +319,13 @@ impl Root {
     fn reload(&mut self, cx: &mut Context<Self>) {
         let store = &self.svc.store;
         self.tz = calendar::salon_tz(store).unwrap_or(Tz::UTC);
+        if self.pending_local_today && store.salon_settings().ok().flatten().is_some() {
+            self.date = Utc::now().with_timezone(&self.tz).date_naive();
+            if self.week_mode {
+                self.date -= Span::days(self.date.weekday().num_days_from_monday().into());
+            }
+            self.pending_local_today = false;
+        }
         self.view = calendar::day_view(store, self.date).ok();
         if !self.view.as_ref().is_some_and(|view| {
             view.columns
@@ -354,6 +366,7 @@ impl Root {
     }
 
     fn shift_day(&mut self, days: i64, cx: &mut Context<Self>) {
+        self.pending_local_today = false;
         self.date += Span::days(days * if self.week_mode { 7 } else { 1 });
         self.reload(cx);
     }
@@ -2028,6 +2041,68 @@ mod tests {
             assert_eq!(view.columns[0].items[0].client_name, "Lucia");
         })
         .unwrap();
+    }
+
+    #[gpui::test]
+    async fn startup_opens_today_in_the_salons_timezone_not_the_utc_day(cx: &mut TestAppContext) {
+        let (_dir, mut config) = desk();
+        config.start_date = None;
+        let zone = if Utc::now().hour() < 10 {
+            "Pacific/Honolulu"
+        } else {
+            "Pacific/Kiritimati"
+        };
+        let tz: Tz = zone.parse().unwrap();
+        let mut store = Store::open(&config.db_path()).unwrap();
+        store.apply_page(&[up(10, "salon_settings", "1", json!({"name": "SoB", "timezone": zone,
+            "slotGranularityMinutes": 15, "minNoticeMinutes": 60, "maxDaysAhead": 60, "updatedAt": T0}))], 10).unwrap();
+        drop(store);
+        let before = Utc::now().with_timezone(&tz).date_naive();
+        let win = cx.add_window(|window, cx| Root::new(config, window, cx));
+        let after = Utc::now().with_timezone(&tz).date_naive();
+        win.update(cx, |root, _, _| {
+            assert!(
+                root.date == before || root.date == after,
+                "startup should show the salons local day"
+            )
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    async fn first_sync_uses_local_today_but_preserves_a_deliberately_chosen_day(
+        cx: &mut TestAppContext,
+    ) {
+        for (navigate, explicit) in [
+            (false, None),
+            (true, None),
+            (false, Some("2026-01-01".parse().unwrap())),
+        ] {
+            let (_dir, mut config) = desk();
+            config.start_date = explicit;
+            Store::open(&config.db_path())
+                .unwrap()
+                .reset_replica()
+                .unwrap();
+            let zone = if Utc::now().hour() < 10 {
+                "Pacific/Honolulu"
+            } else {
+                "Pacific/Kiritimati"
+            };
+            let tz: Tz = zone.parse().unwrap();
+            let win = cx.add_window(|window, cx| Root::new(config, window, cx));
+            win.update(cx, |root, _, cx| {
+                if navigate { root.shift_day(-30, cx); }
+                let chosen = root.date;
+                root.svc.store.apply_page(&[up(1, "salon_settings", "1", json!({"name": "SoB", "timezone": zone,
+                    "slotGranularityMinutes": 15, "minNoticeMinutes": 60, "maxDaysAhead": 60, "updatedAt": T0}))], 1).unwrap();
+                let before = Utc::now().with_timezone(&tz).date_naive();
+                root.reload(cx);
+                let after = Utc::now().with_timezone(&tz).date_naive();
+                if navigate || explicit.is_some() { assert_eq!(root.date, chosen); }
+                else { assert!(root.date == before || root.date == after, "first synced catalog should open local today"); }
+            }).unwrap();
+        }
     }
 
     #[gpui::test]

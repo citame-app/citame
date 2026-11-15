@@ -43,10 +43,11 @@ The workflow has not been executed on GitHub because this checkout has no remote
 
 - API: 686 tests; web: 604; contracts: 113; database: 47; scripts/backup/release: 24.
 - Playwright: 175 passed, 3 platform-specific skips, including all six screenshot-capture cases.
-- Rust: 104 core and 19 GUI tests, plus 4 headless sync tests against the real API.
+- Rust: 104 core and 21 GUI tests, plus 4 headless sync tests against the real API.
 - Production smoke: passed on the pinned Bun 1.4.4 images, including migration `0008`, authentication, booking conflicts, proxy isolation and container hardening.
 - JavaScript audit: zero reported vulnerabilities in both production and full dependency trees. The older Rust advisory review and its upstream warnings remain documented in [security-review.md](security-review.md).
 - Formatting, lint, TypeScript checks, production builds and Clippy: passed.
+- Two startup-date regressions cover a salon whose day differs from UTC, including initial catalog synchronization and preservation of explicit dates.
 - A GPUI regression first reproduced inaccessible late-week columns at 800 px; horizontal scrolling now keeps day headers aligned with the calendar body.
 
 Real SMTP/SMS delivery, production HTTPS and third-party MCP hosts require the corresponding external accounts/environment. Configure and verify those when available; the repository contains the deployment configuration and local adapters/tests.
