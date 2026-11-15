@@ -70,14 +70,15 @@ describe("AdminShell", () => {
     }
   });
 
-  test("a staff bottom bar fits without More", () => {
+  test("a staff bottom bar keeps daily work including checkout and puts secondary tools in More", () => {
     renderApp(
       <AdminShell role="staff" active="today">
         <p>content</p>
       </AdminShell>,
     );
     const bar = screen.getByRole("navigation", { name: "Dashboard sections (mobile)" });
-    expect(within(bar).getAllByRole("link")).toHaveLength(5);
-    expect(within(bar).queryByRole("button", { name: "More" })).toBeNull();
+    expect(within(bar).getAllByRole("link")).toHaveLength(4);
+    expect(within(bar).getByRole("link", { name: "Sales & register" })).toBeInTheDocument();
+    expect(within(bar).getByRole("button", { name: "More" })).toBeInTheDocument();
   });
 });

@@ -20,6 +20,7 @@ describe("adminNavFor", () => {
     expect(adminNavFor("owner").map((item) => item.section)).toEqual([
       "today",
       "calendar",
+      "commerce",
       "clients",
       "services",
       "staff",
@@ -32,6 +33,7 @@ describe("adminNavFor", () => {
     expect(adminNavFor("staff").map((item) => item.section)).toEqual([
       "today",
       "calendar",
+      "commerce",
       "clients",
       "staff",
       "reports",
@@ -65,4 +67,10 @@ describe("adminGuard", () => {
       notice: "forbidden",
     });
   });
+});
+
+test("operators can reach the sales register, clients cannot", () => {
+  expect(sectionOfPath("/admin/commerce")).toBe("commerce");
+  expect(adminGuard("/admin/commerce", "staff")).toEqual({ type: "allow" });
+  expect(adminGuard("/admin/commerce", "client").type).toBe("redirect");
 });

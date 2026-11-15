@@ -122,3 +122,16 @@ The production services also receive `AUTH_REQUIRE_EMAIL_VERIFICATION`, `NOTIFY_
 | `SOB_LANG` / `LANG`                | English                                    | `es*` selects neutral es-AR.                                             |
 | `SOB_THEME`                        | saved choice, otherwise system appearance  | `light`, `dark`, `system`; header toggle persists in the data directory. |
 | `SOB_START_DATE`, `SOB_START_VIEW` | today, none                                | QA helpers: open on a day or in a dialog.                                |
+
+## Payments
+
+Online payments are disabled by default. See [payments.md](payments.md) for workflow and bank activation.
+
+| Variable                      | Default | Purpose                                                                                  |
+| ----------------------------- | ------- | ---------------------------------------------------------------------------------------- |
+| `PAYMENT_PROVIDER`            | `none`  | `none` or `redsys`; enabling requires the complete merchant configuration.               |
+| `REDSYS_ENVIRONMENT`          | `test`  | `test` or `live`; live requires an HTTPS public origin.                                  |
+| `REDSYS_MERCHANT_CODE`        | unset   | Bank-provided 9-digit FUC.                                                               |
+| `REDSYS_TERMINAL`             | unset   | Bank-provided terminal, 1–3 digits.                                                      |
+| `REDSYS_SECRET_KEY` / `_FILE` | unset   | Private bank-provided signing key. `_FILE` needs a corresponding container secret mount. |
+| `REDSYS_BIZUM_ENABLED`        | `false` | Enable only when the bank has activated Bizum on this terminal.                          |

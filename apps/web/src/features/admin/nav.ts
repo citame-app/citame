@@ -3,6 +3,7 @@ import type { UserRole } from "@sob/contracts";
 export type AdminSection =
   | "today"
   | "calendar"
+  | "commerce"
   | "clients"
   | "services"
   | "staff"
@@ -21,6 +22,7 @@ const BOTH = ["owner", "staff"] as const;
 const SECTIONS: readonly SectionConfig[] = [
   { section: "today", to: "/admin", roles: BOTH },
   { section: "calendar", to: "/admin/calendar", roles: BOTH },
+  { section: "commerce", to: "/admin/commerce", roles: BOTH },
   { section: "clients", to: "/admin/clients", roles: BOTH },
   { section: "services", to: "/admin/services", roles: ["owner"] },
   { section: "staff", to: "/admin/staff", roles: BOTH },

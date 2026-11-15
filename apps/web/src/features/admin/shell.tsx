@@ -4,6 +4,7 @@ import { type ComponentType, type ReactNode, useEffect, useState } from "react";
 import {
   CalendarIcon,
   ChartIcon,
+  CreditCardIcon,
   HomeIcon,
   MenuIcon,
   ScissorsIcon,
@@ -20,6 +21,7 @@ import { type AdminSection, adminNavFor } from "./nav";
 const ICONS: Record<AdminSection, ComponentType<{ width?: number; height?: number }>> = {
   today: HomeIcon,
   calendar: CalendarIcon,
+  commerce: CreditCardIcon,
   clients: UserIcon,
   services: ScissorsIcon,
   staff: UsersIcon,
@@ -30,7 +32,7 @@ const ICONS: Record<AdminSection, ComponentType<{ width?: number; height?: numbe
 /** Phones fit this many sections in the bottom bar before the rest move behind "More". */
 const BOTTOM_BAR_MAX = 5;
 /** What the front desk reaches for most; the rest of the owner sections live under "More". */
-const BOTTOM_BAR_PRIORITY: readonly AdminSection[] = ["today", "calendar", "clients", "reports"];
+const BOTTOM_BAR_PRIORITY: readonly AdminSection[] = ["today", "calendar", "commerce", "clients"];
 
 function useNavLabel() {
   const { t } = useI18n();

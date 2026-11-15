@@ -26,7 +26,7 @@ export function buildCsp({ nonce, https }: { nonce: string; https: boolean }): s
     "manifest-src 'self'",
     "object-src 'none'",
     "base-uri 'self'",
-    "form-action 'self'",
+    "form-action 'self' https://sis.redsys.es https://sis-t.redsys.es:25443",
     "frame-ancestors 'none'",
   ];
   if (https) directives.push("upgrade-insecure-requests");

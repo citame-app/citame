@@ -1,5 +1,7 @@
 # Sisters of Beauty — open-source Booksy alternative (plan)
 
+Current expansion: [operational feature delivery checklist](FEATURE-EXPANSION.md). The owner has expanded the original v1 scope to include commerce and salon-growth features for a single business/location. Original v1 history below remains a record of the previous scope.
+
 ## Context
 
 Sisters of Beauty needs a booking and salon-management platform in the spirit of Booksy: online booking for clients, a calendar and CRM for the salon, and reminders. It will be open source, self-hosted with Docker, and use a single modern TypeScript stack plus a **client-first, offline-capable desktop app** for the salon's front desk (GPUI, chosen by the user).

@@ -2,6 +2,7 @@ import type { Appointment } from "@sob/contracts";
 import { Badge, statusTone } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { ClockIcon, UserIcon } from "~/components/ui/icons";
+import { AppointmentCheckout } from "~/features/admin/commerce/appointment-checkout";
 import { useI18n } from "~/i18n/react";
 import { cn } from "~/lib/cn";
 import { formatDateLong, formatMoney, formatTime, localDateOf } from "~/lib/format";
@@ -111,6 +112,18 @@ export function AppointmentCard({
           )}
         </div>
       )}
+      {appointment.status !== "cancelled" &&
+        appointment.services.length > 0 &&
+        appointment.services.every((service) => service.currency === "EUR") && (
+          <div className="mt-4">
+            <AppointmentCheckout
+              appointmentId={appointment.id}
+              mode="client"
+              role="client"
+              disabled={pending}
+            />
+          </div>
+        )}
     </article>
   );
 }

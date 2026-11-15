@@ -24,6 +24,7 @@ import { Route as AccountNotificationsRouteImport } from './routes/account.notif
 import { Route as AccountProfileRouteImport } from './routes/account.profile'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as AdminCalendarRouteImport } from './routes/admin.calendar'
+import { Route as AdminCommerceRouteImport } from './routes/admin.commerce'
 import { Route as AdminReportsRouteImport } from './routes/admin.reports'
 import { Route as AdminServicesRouteImport } from './routes/admin.services'
 import { Route as AdminSettingsRouteImport } from './routes/admin.settings'
@@ -33,6 +34,7 @@ import { Route as BookProfessionalRouteImport } from './routes/book.professional
 import { Route as BookReviewRouteImport } from './routes/book.review'
 import { Route as BookTimeRouteImport } from './routes/book.time'
 import { Route as NotificationsOptOutRouteImport } from './routes/notifications.opt-out'
+import { Route as PaymentsOrderRouteImport } from './routes/payments.$order'
 import { Route as AdminClientsIndexRouteImport } from './routes/admin.clients.index'
 import { Route as AdminClientsIdRouteImport } from './routes/admin.clients.$id'
 import { Route as BookConfirmedAppointmentIdRouteImport } from './routes/book.confirmed.$appointmentId'
@@ -113,6 +115,11 @@ const AdminCalendarRoute = AdminCalendarRouteImport.update({
   path: '/calendar',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminCommerceRoute = AdminCommerceRouteImport.update({
+  id: '/commerce',
+  path: '/commerce',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AdminReportsRoute = AdminReportsRouteImport.update({
   id: '/reports',
   path: '/reports',
@@ -158,6 +165,11 @@ const NotificationsOptOutRoute = NotificationsOptOutRouteImport.update({
   path: '/notifications/opt-out',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PaymentsOrderRoute = PaymentsOrderRouteImport.update({
+  id: '/payments/$order',
+  path: '/payments/$order',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminClientsIndexRoute = AdminClientsIndexRouteImport.update({
   id: '/clients/',
   path: '/clients/',
@@ -195,6 +207,7 @@ export interface FileRoutesByFullPath {
   '/account/notifications': typeof AccountNotificationsRoute
   '/account/profile': typeof AccountProfileRoute
   '/admin/calendar': typeof AdminCalendarRoute
+  '/admin/commerce': typeof AdminCommerceRoute
   '/admin/reports': typeof AdminReportsRoute
   '/admin/services': typeof AdminServicesRoute
   '/admin/settings': typeof AdminSettingsRoute
@@ -203,6 +216,7 @@ export interface FileRoutesByFullPath {
   '/book/review': typeof BookReviewRoute
   '/book/time': typeof BookTimeRoute
   '/notifications/opt-out': typeof NotificationsOptOutRoute
+  '/payments/$order': typeof PaymentsOrderRoute
   '/account/': typeof AccountIndexRoute
   '/admin/': typeof AdminIndexRoute
   '/book/': typeof BookIndexRoute
@@ -222,6 +236,7 @@ export interface FileRoutesByTo {
   '/account/notifications': typeof AccountNotificationsRoute
   '/account/profile': typeof AccountProfileRoute
   '/admin/calendar': typeof AdminCalendarRoute
+  '/admin/commerce': typeof AdminCommerceRoute
   '/admin/reports': typeof AdminReportsRoute
   '/admin/services': typeof AdminServicesRoute
   '/admin/settings': typeof AdminSettingsRoute
@@ -230,6 +245,7 @@ export interface FileRoutesByTo {
   '/book/review': typeof BookReviewRoute
   '/book/time': typeof BookTimeRoute
   '/notifications/opt-out': typeof NotificationsOptOutRoute
+  '/payments/$order': typeof PaymentsOrderRoute
   '/account': typeof AccountIndexRoute
   '/admin': typeof AdminIndexRoute
   '/book': typeof BookIndexRoute
@@ -253,6 +269,7 @@ export interface FileRoutesById {
   '/account/notifications': typeof AccountNotificationsRoute
   '/account/profile': typeof AccountProfileRoute
   '/admin/calendar': typeof AdminCalendarRoute
+  '/admin/commerce': typeof AdminCommerceRoute
   '/admin/reports': typeof AdminReportsRoute
   '/admin/services': typeof AdminServicesRoute
   '/admin/settings': typeof AdminSettingsRoute
@@ -261,6 +278,7 @@ export interface FileRoutesById {
   '/book/review': typeof BookReviewRoute
   '/book/time': typeof BookTimeRoute
   '/notifications/opt-out': typeof NotificationsOptOutRoute
+  '/payments/$order': typeof PaymentsOrderRoute
   '/account/': typeof AccountIndexRoute
   '/admin/': typeof AdminIndexRoute
   '/book/': typeof BookIndexRoute
@@ -285,6 +303,7 @@ export interface FileRouteTypes {
     | '/account/notifications'
     | '/account/profile'
     | '/admin/calendar'
+    | '/admin/commerce'
     | '/admin/reports'
     | '/admin/services'
     | '/admin/settings'
@@ -293,6 +312,7 @@ export interface FileRouteTypes {
     | '/book/review'
     | '/book/time'
     | '/notifications/opt-out'
+    | '/payments/$order'
     | '/account/'
     | '/admin/'
     | '/book/'
@@ -312,6 +332,7 @@ export interface FileRouteTypes {
     | '/account/notifications'
     | '/account/profile'
     | '/admin/calendar'
+    | '/admin/commerce'
     | '/admin/reports'
     | '/admin/services'
     | '/admin/settings'
@@ -320,6 +341,7 @@ export interface FileRouteTypes {
     | '/book/review'
     | '/book/time'
     | '/notifications/opt-out'
+    | '/payments/$order'
     | '/account'
     | '/admin'
     | '/book'
@@ -342,6 +364,7 @@ export interface FileRouteTypes {
     | '/account/notifications'
     | '/account/profile'
     | '/admin/calendar'
+    | '/admin/commerce'
     | '/admin/reports'
     | '/admin/services'
     | '/admin/settings'
@@ -350,6 +373,7 @@ export interface FileRouteTypes {
     | '/book/review'
     | '/book/time'
     | '/notifications/opt-out'
+    | '/payments/$order'
     | '/account/'
     | '/admin/'
     | '/book/'
@@ -371,6 +395,7 @@ export interface RootRouteChildren {
   SignUpRoute: typeof SignUpRoute
   VerifyEmailRoute: typeof VerifyEmailRoute
   NotificationsOptOutRoute: typeof NotificationsOptOutRoute
+  PaymentsOrderRoute: typeof PaymentsOrderRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -480,6 +505,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminCalendarRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/commerce': {
+      id: '/admin/commerce'
+      path: '/commerce'
+      fullPath: '/admin/commerce'
+      preLoaderRoute: typeof AdminCommerceRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/admin/reports': {
       id: '/admin/reports'
       path: '/reports'
@@ -543,6 +575,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof NotificationsOptOutRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/payments/$order': {
+      id: '/payments/$order'
+      path: '/payments/$order'
+      fullPath: '/payments/$order'
+      preLoaderRoute: typeof PaymentsOrderRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/clients/': {
       id: '/admin/clients/'
       path: '/clients'
@@ -593,6 +632,7 @@ const AccountRouteWithChildren =
 
 interface AdminRouteChildren {
   AdminCalendarRoute: typeof AdminCalendarRoute
+  AdminCommerceRoute: typeof AdminCommerceRoute
   AdminReportsRoute: typeof AdminReportsRoute
   AdminServicesRoute: typeof AdminServicesRoute
   AdminSettingsRoute: typeof AdminSettingsRoute
@@ -604,6 +644,7 @@ interface AdminRouteChildren {
 
 const AdminRouteChildren: AdminRouteChildren = {
   AdminCalendarRoute: AdminCalendarRoute,
+  AdminCommerceRoute: AdminCommerceRoute,
   AdminReportsRoute: AdminReportsRoute,
   AdminServicesRoute: AdminServicesRoute,
   AdminSettingsRoute: AdminSettingsRoute,
@@ -645,6 +686,7 @@ const rootRouteChildren: RootRouteChildren = {
   SignUpRoute: SignUpRoute,
   VerifyEmailRoute: VerifyEmailRoute,
   NotificationsOptOutRoute: NotificationsOptOutRoute,
+  PaymentsOrderRoute: PaymentsOrderRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

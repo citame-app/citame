@@ -20,7 +20,9 @@ describe("buildCsp", () => {
     expect(directive(csp, "frame-ancestors")).toBe("frame-ancestors 'none'");
     expect(directive(csp, "base-uri")).toBe("base-uri 'self'");
     expect(directive(csp, "object-src")).toBe("object-src 'none'");
-    expect(directive(csp, "form-action")).toBe("form-action 'self'");
+    expect(directive(csp, "form-action")).toBe(
+      "form-action 'self' https://sis.redsys.es https://sis-t.redsys.es:25443",
+    );
   });
 
   test("everything else is same-origin; data: only for images", () => {
@@ -48,4 +50,12 @@ describe("createNonce", () => {
     expect(a).not.toBe(b);
     expect(a).toMatch(/^[A-Za-z0-9_-]{22,}$/);
   });
+});
+
+test("hosted Redsys checkout permits only the explicit bank origins alongside the salon", () => {
+  const csp = buildCsp({ nonce: "test-nonce", https: true });
+  expect(directive(csp, "form-action")).toBe(
+    "form-action 'self' https://sis.redsys.es https://sis-t.redsys.es:25443",
+  );
+  expect(csp).not.toContain("https:;");
 });

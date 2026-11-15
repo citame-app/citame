@@ -14,6 +14,7 @@ import { clientDetailQuery } from "~/lib/admin-queries";
 import { api } from "~/lib/api/instance";
 import { formatDateLong, formatDuration, formatMoney, formatTime, localDateOf } from "~/lib/format";
 import { salonQuery } from "~/lib/queries";
+import { AppointmentCheckout } from "../commerce/appointment-checkout";
 import { describeProblem, type Problem } from "../problems";
 import { AppointmentActions } from "./appointment-actions";
 import { mergeAppointment } from "./cache";
@@ -267,6 +268,11 @@ function DrawerBody({
         </Button>
       </div>
 
+      {appointment.status !== "cancelled" &&
+        appointment.services.length > 0 &&
+        appointment.services.every((service) => service.currency === "EUR") && (
+          <AppointmentCheckout appointmentId={appointment.id} mode="admin" role={role} />
+        )}
       <AppointmentActions
         appointment={appointment}
         role={role}

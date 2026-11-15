@@ -225,3 +225,10 @@ export const ArrowUpDownIcon = (p: IconProps) => (
     <path d="M8 4v16M8 4 5 7M8 4l3 3M16 20V4M16 20l-3-3M16 20l3-3" />
   </Icon>
 );
+
+export const CreditCardIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="3" y="5" width="18" height="14" rx="3" />
+    <path d="M3 10h18M7 15h3" />
+  </Icon>
+);

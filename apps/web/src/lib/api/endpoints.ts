@@ -42,6 +42,7 @@ import {
 } from "@sob/contracts";
 import { z } from "zod";
 import type { ApiClient } from "./client";
+import { commerceEndpoints } from "./commerce-endpoints";
 
 /** Better Auth answers with extra fields we do not depend on. */
 const authAck = z.looseObject({});
@@ -78,6 +79,7 @@ type CreateBooking = Omit<CreateAppointmentRequest, "clientId" | "client">;
 /** Every call the web app makes, typed from the shared contracts and validated at runtime. */
 export function createEndpoints(client: ApiClient) {
   return {
+    commerce: commerceEndpoints(client),
     salon: () => client.get("/salon", salonResponseSchema),
     services: () => client.get("/services", listServicesResponseSchema),
     staff: () => client.get("/staff", listStaffResponseSchema),

@@ -1,0 +1,175 @@
+import { afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderApp } from "../../../../test/render";
+import { CheckoutPanel } from "./checkout-panel";
+
+const id = "0198f5a0-7b1c-7000-8000-000000000100";
+const realFetch = globalThis.fetch;
+let requests: { method: string; path: string; body: unknown }[];
+let paid = false;
+let online = false;
+let refunds: Record<string, unknown>[] = [];
+let payments: Record<string, unknown>[] = [];
+const sale = () => ({
+  id,
+  appointmentId: null,
+  clientId: null,
+  currency: "EUR",
+  status: paid ? "paid" : "open",
+  subtotalCents: 2500,
+  discountCents: 0,
+  tipCents: 0,
+  taxCents: 0,
+  totalCents: 2500,
+  paidCents: paid ? 2500 : 0,
+  refundedCents: 0,
+  balanceCents: paid ? 0 : 2500,
+  lines: [
+    {
+      id,
+      kind: "custom",
+      description: "Haircut",
+      quantity: 1,
+      unitAmountCents: 2500,
+      taxBasisPoints: 0,
+    },
+  ],
+  payments,
+  refunds,
+  createdAt: "2026-03-09T12:00:00.000Z",
+});
+const reply = (data: unknown) => Response.json(data);
+beforeEach(() => {
+  requests = [];
+  paid = false;
+  online = false;
+  refunds = [];
+  payments = [];
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    const path = new URL(String(input), "http://localhost").pathname;
+    const method = init?.method ?? "GET";
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    requests.push({ method, path, body });
+    if (path.endsWith("/capabilities"))
+      return reply({
+        provider: online ? "redsys" : "none",
+        environment: online ? "test" : null,
+        card: online,
+        bizum: online,
+        currency: "EUR",
+      });
+    if (path.endsWith("/payments") && method === "POST") {
+      if (body.method === "cash") {
+        paid = true;
+        return reply({
+          payment: { id, status: "succeeded", method: "cash", amountCents: 2500, order: null },
+          form: null,
+        });
+      }
+      return reply({
+        payment: {
+          id,
+          status: "pending",
+          method: "redsys_card",
+          amountCents: 2500,
+          order: "1234567890",
+        },
+        form: {
+          action: "https://sis-t.redsys.es:25443/sis/realizarPago",
+          fields: {
+            Ds_MerchantParameters: "encoded",
+            Ds_Signature: "signed",
+            Ds_SignatureVersion: "HMAC_SHA512_V2",
+          },
+        },
+      });
+    }
+    if (path.endsWith(`/checkouts/${id}`)) return reply(sale());
+    return reply({});
+  }) as unknown as typeof fetch;
+});
+afterEach(() => {
+  globalThis.fetch = realFetch;
+});
+test("shows the server receipt and records a cash payment once", async () => {
+  renderApp(<CheckoutPanel id={id} mode="admin" role="owner" />);
+  await screen.findByText("Haircut");
+  fireEvent.change(screen.getByLabelText("Payment method"), { target: { value: "cash" } });
+  fireEvent.click(screen.getByRole("button", { name: "Record payment" }));
+  await screen.findByText("Paid", { selector: "p" });
+  const posted = requests.filter((r) => r.method === "POST");
+  expect(posted).toHaveLength(1);
+  expect(posted[0]?.body).toMatchObject({ amountCents: 2500, method: "cash" });
+  expect(screen.queryByRole("button", { name: "Record payment" })).toBeNull();
+});
+test("a hosted payment shows the bank form without claiming the order is paid", async () => {
+  online = true;
+  renderApp(<CheckoutPanel id={id} mode="client" role="client" />);
+  await screen.findByText("Haircut");
+  await waitFor(() =>
+    expect(
+      screen.getByRole("option", { name: "Card — secure online payment" }),
+    ).toBeInTheDocument(),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Continue to payment" }));
+  const button = await screen.findByRole("button", { name: "Pay securely with Redsys" });
+  const form = button.closest("form");
+  if (!form) throw new Error("Hosted bank form missing");
+  expect(form.getAttribute("action")).toBe("https://sis-t.redsys.es:25443/sis/realizarPago");
+  expect(form.getAttribute("method")).toBe("post");
+  expect(form.querySelector('input[name="Ds_Signature"]')).toHaveValue("signed");
+  expect(screen.queryByText("Paid", { selector: "p" })).toBeNull();
+  expect(screen.queryByRole("option", { name: "Cash" })).toBeNull();
+});
+test("Spanish users get a clear unavailable state when online payments have not been configured", async () => {
+  renderApp(<CheckoutPanel id={id} mode="client" role="client" />, { locale: "es-AR" });
+  await screen.findByText("Haircut");
+  await screen.findByText("El pago online todavía no está disponible. Contacta con el salón.");
+  expect(screen.queryByRole("button", { name: /Continuar al pago/ })).toBeNull();
+});
+
+test("an unresolved bank refund remains visible after reopening a receipt", async () => {
+  paid = true;
+  refunds = [
+    {
+      id,
+      paymentId: id,
+      amountCents: 500,
+      status: "reconciliation",
+      reason: "Customer request",
+      createdAt: "2026-03-09T12:00:00.000Z",
+    },
+  ];
+  renderApp(<CheckoutPanel id={id} mode="admin" role="owner" />);
+  await screen.findByText(
+    "The bank result is uncertain. Check the bank portal and reconcile it before retrying.",
+  );
+  expect(screen.getByLabelText("Bank confirmation reference")).toBeInTheDocument();
+});
+
+test("clearing the amount does not silently charge the full balance", async () => {
+  renderApp(<CheckoutPanel id={id} mode="admin" role="owner" />);
+  await screen.findByText("Haircut");
+  const input = await screen.findByLabelText("Amount");
+  fireEvent.change(input, { target: { value: "" } });
+  expect(input).toHaveValue("");
+  fireEvent.click(screen.getByRole("button", { name: "Record payment" }));
+  await screen.findByText("Enter an amount greater than zero and no more than the balance due.");
+  expect(requests.filter((request) => request.method === "POST")).toHaveLength(0);
+});
+
+test("only an owner is offered bank reconciliation for a stale pending attempt", async () => {
+  payments = [
+    {
+      id,
+      method: "redsys_card",
+      amountCents: 2500,
+      status: "pending",
+      order: "1234567890",
+      createdAt: "2026-03-09T12:00:00.000Z",
+    },
+  ];
+  renderApp(<CheckoutPanel id={id} mode="admin" role="owner" />);
+  await screen.findByLabelText("Bank confirmation reference");
+  expect(screen.queryByRole("button", { name: "Record payment" })).toBeNull();
+});

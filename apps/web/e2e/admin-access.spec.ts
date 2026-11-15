@@ -30,7 +30,15 @@ test.describe("role access matrix", () => {
     const nav = page.getByRole("navigation", { name: "Dashboard sections" });
     const mobileNav = page.getByRole("navigation", { name: "Dashboard sections (mobile)" });
     const visibleNav = (await nav.isVisible()) ? nav : mobileNav;
-    await expect(visibleNav.getByRole("link", { name: "My schedule" })).toBeVisible();
+    if (await nav.isVisible())
+      await expect(nav.getByRole("link", { name: "My schedule" })).toBeVisible();
+    else {
+      await mobileNav.getByRole("button", { name: "More" }).click();
+      await expect(
+        page.getByRole("dialog", { name: "More" }).getByRole("link", { name: "My schedule" }),
+      ).toBeVisible();
+      await page.keyboard.press("Escape");
+    }
     await expect(visibleNav.getByRole("link", { name: "Services" })).toHaveCount(0);
     await expect(visibleNav.getByRole("link", { name: "Settings" })).toHaveCount(0);
     for (const path of ["/admin/services", "/admin/settings"]) {
@@ -40,7 +48,13 @@ test.describe("role access matrix", () => {
         page.getByRole("alert").filter({ hasText: "You do not have access to that page" }),
       ).toBeVisible();
     }
-    for (const path of ["/admin/calendar", "/admin/clients", "/admin/staff", "/admin/reports"]) {
+    for (const path of [
+      "/admin/calendar",
+      "/admin/clients",
+      "/admin/staff",
+      "/admin/reports",
+      "/admin/commerce",
+    ]) {
       await page.goto(path);
       await expect(page).toHaveURL(new RegExp(`${path}`));
       await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
