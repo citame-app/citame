@@ -1,4 +1,5 @@
 import type { RedisClient } from "bun";
+import { rootLogger } from "../../observability/logger";
 
 /**
  * Fans Valkey pub/sub nudges out to the SSE connections of this process. One dedicated
@@ -16,23 +17,51 @@ export function createSyncHub(options: { valkey: RedisClient; keyPrefix: string 
 
   async function start() {
     const sub = await options.valkey.duplicate();
-    await sub.subscribe(channel, (message: string) => {
-      const seq = Number(message);
-      if (Number.isFinite(seq)) for (const listener of listeners) listener(seq);
-    });
+    try {
+      await sub.subscribe(channel, (message: string) => {
+        const seq = Number(message);
+        if (Number.isFinite(seq)) for (const listener of listeners) listener(seq);
+      });
+    } catch (error) {
+      sub.close();
+      throw error;
+    }
     if (closed) {
       sub.close();
       return;
     }
+    // A dropped subscriber would leave every open stream deaf to nudges: forget it and, if anyone
+    // is listening, subscribe again right away (the next stream retries too if this fails).
+    sub.onclose = () => {
+      if (subscriber !== sub) return;
+      subscriber = undefined;
+      starting = undefined;
+      if (!closed && listeners.size > 0) {
+        ensureStarted().catch((error) =>
+          rootLogger.error("sync hub could not re-subscribe", { err: error }),
+        );
+      }
+    };
     subscriber = sub;
+  }
+
+  /** One in-flight start at a time. A failed start is forgotten so the next caller retries. */
+  function ensureStarted(): Promise<void> {
+    if (!starting) {
+      const attempt = start();
+      starting = attempt;
+      attempt.catch(() => {
+        if (starting === attempt) starting = undefined;
+      });
+    }
+    return starting;
   }
 
   return {
     /** Registers a nudge listener (subscribing to Valkey first if needed); returns its remover. */
     async subscribe(listener: (seq: number) => void, onShutdown: () => void) {
       if (closed) throw new Error("sync hub is closed");
-      starting ??= start();
-      await starting;
+      await ensureStarted();
       listeners.add(listener);
       closers.add(onShutdown);
       return () => {
