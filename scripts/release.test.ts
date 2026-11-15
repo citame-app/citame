@@ -124,7 +124,7 @@ test("offline metadata records a dirty worktree instead of attributing it to HEA
       ...process.env,
       GITHUB_ACTIONS: "false",
       GITHUB_REPOSITORY: "Test/Repo",
-      GITHUB_OUTPUT: "",
+      GITHUB_OUTPUT: join(root, ".release/github-output"),
       RELEASE_TAG: "v0.1.0",
       RELEASE_OUTPUT_DIR: ".release",
     },
@@ -135,6 +135,9 @@ test("offline metadata records a dirty worktree instead of attributing it to HEA
   expect(exit, errors).toBe(0);
   const metadata = JSON.parse(readFileSync(join(root, ".release/metadata.json"), "utf8"));
   expect(metadata.dirty).toBe(true);
+  expect(readFileSync(join(root, ".release/github-output"), "utf8")).toContain(
+    `revision=${metadata.revision}\n`,
+  );
 });
 
 test("publication requires CI and a successful desktop artifact build", () => {
@@ -143,7 +146,8 @@ test("publication requires CI and a successful desktop artifact build", () => {
     needs?: string | string[];
     uses?: string;
     "continue-on-error"?: boolean;
-    steps?: { uses?: string }[];
+    outputs?: Record<string, string>;
+    steps?: { uses?: string; with?: Record<string, string> }[];
   };
   const root = join(import.meta.dirname, "..");
   const workflow = Bun.YAML.parse(
@@ -164,7 +168,16 @@ test("publication requires CI and a successful desktop artifact build", () => {
   };
   expect(workflow.jobs.checks?.uses).toBe("./.github/workflows/ci.yml");
   // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression.
-  expect(workflow.jobs.checks?.with?.ref).toBe("${{ needs.meta.outputs.tag }}");
+  expect(workflow.jobs.checks?.with?.ref).toBe("${{ needs.meta.outputs.revision }}");
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression.
+  expect(workflow.jobs.meta?.outputs?.revision).toBe("${{ steps.v.outputs.revision }}");
+  for (const job of ["desktop-linux", "images", "release"]) {
+    const checkout = workflow.jobs[job]?.steps?.find((step) =>
+      step.uses?.startsWith("actions/checkout@"),
+    );
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression.
+    expect(checkout?.with?.ref).toBe("${{ needs.meta.outputs.revision }}");
+  }
   expect(Object.hasOwn(ci.on, "workflow_call")).toBe(true);
   for (const job of ["images", "release"]) {
     expect(ancestors(job)).toContain("checks");

@@ -25,7 +25,7 @@ The archive contains the executable, MIT license, desktop usage guide and releas
 
 ## GitHub gate, once a repository exists
 
-The release workflow derives GHCR paths from `GITHUB_REPOSITORY`, checks out the requested tag and validates it before any publication. The reusable CI workflow receives that same tag, including for manual dispatch from another branch.
+The release workflow derives GHCR paths from `GITHUB_REPOSITORY`, checks out the requested tag and validates it before any publication. The validator resolves that tag to a commit SHA. The reusable CI workflow, desktop build, image builds and final release job all check out that immutable revision, including for manual dispatch from another branch; moving a tag cannot change the source between jobs.
 
 Publication requires all of these to succeed:
 

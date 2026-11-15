@@ -102,7 +102,7 @@ if (import.meta.main) {
     if (process.env.GITHUB_OUTPUT) {
       await appendFile(
         process.env.GITHUB_OUTPUT,
-        `tag=${info.tag}\nversion=${info.version}\nimage_prefix=${info.imagePrefix ?? ""}\nprerelease=${info.prerelease}\n`,
+        `tag=${info.tag}\nversion=${info.version}\nimage_prefix=${info.imagePrefix ?? ""}\nprerelease=${info.prerelease}\nrevision=${revision.stdout.toString().trim()}\n`,
       );
     }
     console.log(
