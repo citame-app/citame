@@ -182,7 +182,7 @@ export async function sendInvitation(
     expiresAt: new Date(Date.now() + INVITE_LINK_SECONDS * 1000),
   });
   const callback = encodeURIComponent("/reset-password?invited=1");
-  auth.mailer.send({
+  await auth.mailer.send({
     kind: "staff_invite",
     to: target.email,
     url: `${ctx.baseURL}/reset-password/${token}?callbackURL=${callback}`,

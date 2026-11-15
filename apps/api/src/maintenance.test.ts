@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { DESKTOP_CLIENT_ID } from "@sob/contracts";
+import { accountEmailOutbox } from "@sob/db";
 import { sql } from "drizzle-orm";
 import {
   actor,
@@ -33,6 +34,39 @@ const rows = async <T>(query: ReturnType<typeof sql>) =>
   (await t.db.execute(query)) as unknown as T[];
 const count = async (table: string) =>
   (await rows<{ n: number }>(sql.raw(`select count(*)::int as n from ${table}`)))[0]?.n ?? -1;
+
+test("account-email housekeeping erases expired capabilities and removes old terminal records", async () => {
+  const values = (
+    id: string,
+    status: "pending" | "sent" | "failed",
+    age: number,
+    expired = true,
+  ) => ({
+    idempotencyKey: id,
+    throttleKey: id,
+    payload: "encrypted-capability",
+    status,
+    expiresAt: expired ? daysAgo(1) : new Date(NOW.getTime() + 3_600_000),
+    scheduledFor: NOW,
+    updatedAt: daysAgo(age),
+  });
+  await t.db
+    .insert(accountEmailOutbox)
+    .values([
+      values("expired", "pending", 0),
+      values("live", "pending", 0, false),
+      values("old-sent", "sent", 120),
+      values("old-failed", "failed", 200),
+      values("recent-failed", "failed", 5),
+    ]);
+  const report = await runMaintenance(t.db, { now: NOW, logger: silent });
+  expect(report.accountEmailsRemoved).toBe(2);
+  const remaining = await t.db.select().from(accountEmailOutbox);
+  expect(remaining).toHaveLength(3);
+  expect(remaining.find((row) => row.idempotencyKey === "expired")?.payload).toBe("");
+  expect(remaining.find((row) => row.idempotencyKey === "expired")?.status).toBe("skipped");
+  expect(remaining.find((row) => row.idempotencyKey === "live")?.status).toBe("pending");
+});
 
 describe("sync log compaction", () => {
   test("old superseded entries go, the latest entry of every row stays", async () => {

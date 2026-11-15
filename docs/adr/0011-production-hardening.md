@@ -15,13 +15,19 @@ Better Auth 1.7.23 already implements both; we configure instead of building.
 - `emailAndPassword.requireEmailVerification` (env `AUTH_REQUIRE_EMAIL_VERIFICATION`, default **true**): a client gets no session until the emailed link is followed, so booking (which needs a session) requires a confirmed address. `emailVerification.autoSignInAfterVerification` makes the link also sign the person in and return them to where they were (`/verify-email?next=...`, the booking review step keeps its selection in the URL). `sendOnSignIn` sends a fresh link to an unconfirmed person who tries to sign in.
 - **No user enumeration.** With verification required, Better Auth answers a duplicate sign-up like a fresh one; we add an `account_exists` email to the real owner of the address ("you already have an account, reset your password here"). `request-password-reset` and `send-verification-email` answer identically for known and unknown addresses (asserted by tests). Sign-in only reveals "not confirmed" after a correct password.
 - Reset links live 1 hour, are single-use, and `revokeSessionsOnPasswordReset` ends every existing session. Following a reset link also marks the address verified (it proves mailbox control).
-- Rate limits: the strict `auth` budget, counted in its own `auth-email` scope, covers `request-password-reset`, `reset-password`, `send-verification-email` and `verify-email`. On top of that each (kind, address) pair gets at most one email per 60 s (a Valkey `SET NX EX` keyed by a hash of the address) so the endpoints cannot be used to mail-bomb a person.
+- Rate limits: the strict `auth` budget, counted in its own `auth-email` scope, covers `request-password-reset`, `reset-password`, `send-verification-email` and `verify-email`. On top of that each (kind, address) pair gets at most one email per 60 s (a Postgres transaction/advisory lock keyed by a hash of the kind and address) so the endpoints cannot be used to mail-bomb a person.
 - Production refuses to boot with verification required but no email provider (`NOTIFY_EMAIL_PROVIDER=none`): every client would be locked out. Opting out is explicit (`AUTH_REQUIRE_EMAIL_VERIFICATION=false`).
 - Owners and staff are trusted accounts: bootstrap and owner-created accounts are verified from the start; migration `0007` marks the existing ones verified so nobody is locked out by the upgrade. Existing clients confirm on their next sign-in.
 
-### Account emails go straight through the EmailProvider, not the reminder table
+### Account emails use a separate durable, encrypted outbox
 
-They use the same `EmailProvider` (SMTP) and settings as reminders, and templates in `notifications/auth-emails.ts` (en and es-AR, one link each, HTML escaped). They are deliberately **not** rows in `reminder`: that table is keyed by appointment, and a durable queue for a link that expires within an hour buys little. Sends are detached from the request (an awaited send would leak, through response time, which addresses have accounts), retried twice in process (0.5 s, 2 s), and failures are logged without addresses. If the provider is down the person asks again. Accepted cost: an API crash between the response and the send loses that one email. The language comes from the `sob_locale` cookie, then `Accept-Language`, then `NOTIFY_DEFAULT_LOCALE`.
+Revised 2026-11-15: verification, reset, existing-account and invitation messages are committed to `account_email_outbox` before the HTTP request completes. SMTP runs in the background, keeping provider latency out of the response. A failed enqueue fails the request instead of acknowledging a volatile send. The queue is separate from appointment reminders because account messages have expiring action links and no appointment id.
+
+The entire rendered message is encrypted using AES-256-GCM with a domain-separated key derived from `BETTER_AUTH_SECRET`, a random nonce and the row id as authenticated data. Idempotency and mailbox throttle keys are hashed. Terminal rows have their payload erased; neither provider exceptions nor addresses/action links are persisted as error messages.
+
+The API polls whenever an email provider is configured; the standalone notification worker can also drain the queue. `SKIP LOCKED`, renewable visibility leases and fenced updates allow multiple processes. Delivery is at least once: SMTP acceptance followed by a crash before acknowledgement can duplicate a message. The stable message idempotency key helps a supporting provider deduplicate; it cannot make SMTP exactly once. Retries use the existing notification backoff/attempt settings, expired links are skipped, and shutdown waits for active work. Pending encrypted rows survive a restart; terminal retention uses the existing reminder/dead-letter windows. Rotating the secret makes queued payloads unreadable: drain first when possible, or let people request fresh links after rotation.
+
+Language still comes from `sob_locale`, then `Accept-Language`, then `NOTIFY_DEFAULT_LOCALE`. Templates remain in `notifications/auth-emails.ts` (English and es-AR).
 
 ### Staff invitations reuse the reset-token mechanism
 
@@ -52,5 +58,5 @@ They use the same `EmailProvider` (SMTP) and settings as reminders, and template
 ## Consequences
 
 - Fresh deployments need a mail provider (or an explicit opt-out). Local development without mail sets `AUTH_REQUIRE_EMAIL_VERIFICATION=false` or runs Mailpit (`--profile mail`).
-- Multi-process deployments keep working: the metrics are per process (scrape every replica), the throttle and rate limits live in Valkey.
-- Not done, tracked: MFA, account lockout beyond rate limiting, a durable queue for account emails, OpenTelemetry tracing.
+- Multi-process deployments keep working: the metrics are per process (scrape every replica), rate limits live in Valkey and account-mail throttling is durable in Postgres.
+- Not done, tracked: MFA, account lockout beyond rate limiting, OpenTelemetry tracing.

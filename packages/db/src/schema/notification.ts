@@ -35,6 +35,33 @@ export const reminderStatus = pgEnum("reminder_status", [
 
 export const notificationCategory = pgEnum("notification_category", ["transactional", "reminder"]);
 
+/** Durable account-email jobs. Contact details and action links are encrypted, never synced. */
+export const accountEmailOutbox = pgTable(
+  "account_email_outbox",
+  {
+    id: primaryId(),
+    idempotencyKey: text().notNull().unique(),
+    throttleKey: text().notNull(),
+    payload: text().notNull(),
+    expiresAt: timestamptz().notNull(),
+    scheduledFor: timestamptz().notNull(),
+    status: reminderStatus().notNull().default("pending"),
+    attempts: integer().notNull().default(0),
+    lastError: text(),
+    lockedUntil: timestamptz(),
+    lockedBy: text(),
+    sentAt: timestamptz(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("account_email_due_idx")
+      .on(t.scheduledFor)
+      .where(sql`${t.status} in ('pending', 'processing')`),
+    index("account_email_throttle_idx").on(t.throttleKey, t.createdAt),
+  ],
+);
+
 /**
  * Outbox of notifications, also the job queue (ADR 0010). Rows are written in the same
  * transaction as the appointment change that causes them; the worker claims due rows with

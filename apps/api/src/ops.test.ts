@@ -132,6 +132,7 @@ describe("/metrics", () => {
       "sob_db_connections",
       "sob_db_pool_max_connections 10",
       "sob_valkey_up 1",
+      'sob_account_email_queue{status="pending"} 0',
       "process_resident_memory_bytes",
     ]) {
       expect(text).toContain(name);

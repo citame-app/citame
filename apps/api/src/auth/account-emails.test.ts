@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { auditLog, clientProfile, user } from "@sob/db";
+import { accountEmailOutbox, auditLog, clientProfile, user } from "@sob/db";
 import { eq } from "drizzle-orm";
 import {
   actor,
@@ -49,6 +49,31 @@ const sessionCookie = (res: Response) =>
   res.headers.getSetCookie().find((c) => c.includes("session_token") && !c.includes("=;"));
 
 describe("email verification", () => {
+  test("sign-up commits the encrypted delivery job before responding, without waiting for SMTP", async () => {
+    let release = () => {};
+    let watchdogFired = false;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mail.beforeDeliver = () => held;
+    const watchdog = setTimeout(() => {
+      watchdogFired = true;
+      release();
+    }, 5000);
+    try {
+      const res = await signUpRaw("durable@example.com");
+      expect(res.status).toBe(200);
+      const jobs = await t.db.select().from(accountEmailOutbox);
+      expect(jobs).toHaveLength(1);
+      expect(JSON.stringify(jobs)).not.toContain("durable@example.com");
+      expect(watchdogFired).toBe(false);
+    } finally {
+      clearTimeout(watchdog);
+      release();
+      mail.beforeDeliver = undefined;
+    }
+  });
+
   test("sign-up creates the account but no session, and sends one verification email", async () => {
     const res = await signUpRaw("ana.client@example.com");
     expect(res.status).toBe(200);

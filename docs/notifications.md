@@ -21,7 +21,7 @@ Times in messages are always in the salon timezone. Language comes from the clie
 Nothing is sent by default. Two switches:
 
 1. A provider: `NOTIFY_EMAIL_PROVIDER=smtp` + `SMTP_URL`, and/or `NOTIFY_SMS_PROVIDER=twilio` + Twilio keys.
-2. A worker: `NOTIFY_WORKER_ENABLED=true` (inside the API process) **or** run `bun run worker` / `docker compose --profile worker up -d worker` (keep the flag `false` on the API in that case, though running both is safe: workers never double-send).
+2. A worker: `NOTIFY_WORKER_ENABLED=true` (inside the API process) **or** run `bun run worker` / `docker compose --profile worker up -d worker` (keep the flag `false` on the API in that case, though running both is safe under normal operation: leases coordinate claims; crash recovery remains at least once).
 
 Scheduling happens regardless (rows are written with every booking), so enabling the worker later delivers what is due; reminders whose time passed while it was off are still sent if the appointment has not started (confirmations for appointments that already started are skipped).
 
@@ -43,6 +43,16 @@ Scheduling happens regardless (rows are written with every booking), so enabling
 | `NOTIFY_MAX_ATTEMPTS`                                       | `5`                                      | Attempts before dead-lettering.                                                                  |
 | `NOTIFY_BACKOFF_BASE_SECONDS`, `NOTIFY_BACKOFF_MAX_SECONDS` | `30`, `3600`                             | Exponential backoff bounds (with jitter).                                                        |
 
+## Account security emails
+
+Verification, password reset, existing-account notices and staff invitations use a separate durable `account_email_outbox`. The API commits an encrypted message before returning, then delivers without waiting for SMTP. Its account-mail worker starts whenever SMTP is configured, independently of `NOTIFY_WORKER_ENABLED`; the standalone worker also processes these jobs. Appointment reminders still need one of the worker switches above.
+
+Jobs survive API restarts. Concurrent workers use leased, fenced claims and renew leases while sending. Delivery is **at least once**: an SMTP acceptance followed by a crash can produce a duplicate. Retries stop at `NOTIFY_MAX_ATTEMPTS` or when the action link expires. The per-kind/mailbox 60-second throttle and idempotency survive restarts. Terminal jobs erase their encrypted payload; housekeeping removes sent/skipped rows after `REMINDER_RETENTION_DAYS` and failed rows after `DEAD_LETTER_RETENTION_DAYS`.
+
+Owner queue stats include `accountEmails`; Prometheus exposes `sob_account_email_queue{status="pending|processing|sent|failed|skipped|cancelled|overdue"}`. To investigate, query only metadata: `SELECT id, status, attempts, last_error, scheduled_for FROM account_email_outbox ORDER BY created_at DESC LIMIT 20;`. Safe error codes include `delivery_retry`, `delivery_failed`, `attempts_exhausted`, `link_expired` and `payload_unreadable`. Failed/expired payloads are erased, so request a fresh verification/reset/invitation instead of requeueing a terminal account-email row.
+
+Encryption derives from `BETTER_AUTH_SECRET`. Drain pending mail before a planned rotation; after rotation old ciphertext cannot be delivered, and users must request new action links. Keep the same secret on API and standalone workers.
+
 ## Local development with Mailpit
 
 ```sh
@@ -55,12 +65,12 @@ Book an appointment as a client whose profile has an email: the confirmation sho
 
 ## Operating it
 
-- Queue depth: `GET /admin/notifications/stats` (owner session): counts per status plus `overdue` (pending for more than five minutes: the worker is down or stuck) and this process's counters. Counters in Prometheus text form: `processMetrics.toPrometheus()` in `apps/api/src/notifications/metrics.ts` (an HTTP exposition endpoint arrives with Phase 8).
+- Queue depth: `GET /admin/notifications/stats` (owner session): counts per status plus `overdue` (pending for more than five minutes: the worker is down or stuck) and this process's counters. Prometheus exposition is available at the protected `/metrics` endpoint (see [operations.md](operations.md)).
 - Logs: JSON lines, `component: "notifications"`, with `reminderId`, `kind`, `channel`, `attempt`, `workerId`. No addresses or bodies.
 - Failed messages (dead letters): `SELECT id, kind, channel, attempts, last_error FROM reminder WHERE status = 'failed';`. After fixing the cause, requeue with `UPDATE reminder SET status = 'pending', attempts = 0, scheduled_for = now() WHERE id = '...';`.
 - Why was a message not sent? `SELECT kind, channel, last_error FROM reminder WHERE appointment_id = '...' AND status = 'skipped';` Reasons: `channel_disabled`, `opted_out`, `no_address`, `invalid_phone`, `appointment_not_booked`, `appointment_gone`, `already_started`, `not_cancelled`, `client_gone`.
 - Crash safety: kill the worker at any time. Its jobs reappear after `NOTIFY_VISIBILITY_TIMEOUT_SECONDS`. SIGTERM waits for the job in flight.
-- Rotating `BETTER_AUTH_SECRET` invalidates the unsubscribe links in emails already sent.
+- Rotating `BETTER_AUTH_SECRET` invalidates existing unsubscribe links and queued account-email ciphertext (see above).
 
 ## Opt-out
 

@@ -1,6 +1,7 @@
 import type { Database } from "@sob/db";
 import type { RedisClient } from "bun";
 import { sql } from "drizzle-orm";
+import { accountEmailQueueStats } from "../auth/outbox";
 import { processMetrics } from "../notifications/metrics";
 import { createHttpMetrics } from "./http";
 import { createRegistry, type Registry } from "./metrics";
@@ -58,6 +59,16 @@ export function registerRuntimeGauges(
 ) {
   const timeoutMs = options.timeoutMs ?? 2000;
   const { registry } = metrics;
+
+  registry.gauge(
+    "sob_account_email_queue",
+    "Durable account email jobs by status (overdue is a subset of pending).",
+    ["status"],
+    async () => {
+      const stats = await withTimeout(accountEmailQueueStats(deps.db), timeoutMs);
+      return Object.entries(stats).map(([status, value]) => ({ labels: { status }, value }));
+    },
+  );
 
   registry.gauge("sob_db_up", "1 when Postgres answered a trivial query.", [], async () => {
     try {

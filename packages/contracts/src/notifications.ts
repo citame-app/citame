@@ -61,6 +61,7 @@ export const reminderLeadSchema = z
 
 export const notificationStatsSchema = z.object({
   queue: z.record(z.string(), z.number().int()),
+  accountEmails: z.record(z.string(), z.number().int()),
   worker: z.record(z.string(), z.number().int()),
   channels: z.object({ email: z.boolean(), sms: z.boolean() }),
 });

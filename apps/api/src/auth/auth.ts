@@ -56,8 +56,8 @@ export function createAuth({ db, valkey, config, emailProvider = null, logger }:
   const mailer: AuthMailer = createAuthMailer({
     provider: emailProvider,
     db,
-    valkey,
-    keyPrefix: config.valkeyKeyPrefix,
+    secret: config.notifications.signingSecret,
+    config: config.notifications,
     logger: log,
   });
   const defaultLocale = config.notifications.defaultLocale;
@@ -109,7 +109,7 @@ export function createAuth({ db, valkey, config, emailProvider = null, logger }:
       // A reset is usually "someone else may have my password": end every existing session.
       revokeSessionsOnPasswordReset: true,
       sendResetPassword: async ({ user: target, url, token }, request) => {
-        mailer.send({
+        await mailer.send({
           kind: "reset_password",
           to: target.email,
           url,
@@ -123,7 +123,7 @@ export function createAuth({ db, valkey, config, emailProvider = null, logger }:
         await db.update(user).set({ emailVerified: true }).where(eq(user.id, target.id));
       },
       onExistingUserSignUp: async ({ user: target }, request) => {
-        mailer.send({
+        await mailer.send({
           kind: "account_exists",
           to: target.email,
           url: `${config.notifications.publicUrl}/reset-password`,
@@ -141,7 +141,7 @@ export function createAuth({ db, valkey, config, emailProvider = null, logger }:
       autoSignInAfterVerification: true,
       expiresIn: VERIFY_LINK_SECONDS,
       sendVerificationEmail: async ({ user: target, url, token }, request) => {
-        mailer.send({
+        await mailer.send({
           kind: "verify_email",
           to: target.email,
           url,

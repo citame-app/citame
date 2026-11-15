@@ -89,9 +89,12 @@ export function createApp(input: AppDeps): App {
     draining = true;
   };
   app.shutdown = async () => {
-    await Promise.all([hub.close(), auth.mailer.flush()]);
+    await Promise.all([hub.close(), auth.mailer.stop()]);
   };
-  app.ready = () => ensureOAuthSeeds(deps.db, deps.config);
+  app.ready = async () => {
+    await ensureOAuthSeeds(deps.db, deps.config);
+    auth.mailer.start();
+  };
 
   app.onError((error, c) => {
     if (error instanceof DomainError) return respondError(c, error);

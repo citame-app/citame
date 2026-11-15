@@ -6,7 +6,7 @@ import {
   optOutPreviewSchema,
   ownerSalonSettingsSchema,
 } from "@sob/contracts";
-import { auditLog, clientProfile, notificationPreference } from "@sob/db";
+import { accountEmailOutbox, auditLog, clientProfile, notificationPreference } from "@sob/db";
 import { eq } from "drizzle-orm";
 import {
   type Actor,
@@ -210,6 +210,13 @@ describe("owner settings: reminder lead times", () => {
 
 describe("GET /admin/notifications/stats", () => {
   test("is owner-only and reports queue depth by status", async () => {
+    await t.db.insert(accountEmailOutbox).values({
+      idempotencyKey: "stats",
+      throttleKey: "stats",
+      payload: "opaque",
+      scheduledFor: NOW,
+      expiresAt: new Date(NOW.getTime() + 3_600_000),
+    });
     await t.db
       .update(clientProfile)
       .set({ email: "c@example.com" })
@@ -227,6 +234,7 @@ describe("GET /admin/notifications/stats", () => {
     expect(res.status).toBe(200);
     const body = notificationStatsSchema.parse(await res.json());
     expect(body.queue.pending).toBe(3);
+    expect(body.accountEmails.pending).toBe(1);
     expect(body.channels).toEqual({ email: false, sms: false });
     expect(body.worker).toHaveProperty("sent");
   });

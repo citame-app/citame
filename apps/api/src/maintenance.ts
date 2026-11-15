@@ -40,6 +40,7 @@ export interface MaintenanceReport {
   skipped: boolean;
   syncLogRemoved: number;
   remindersRemoved: number;
+  accountEmailsRemoved: number;
   oauthTokensRemoved: number;
   oauthClientsRemoved: number;
   verificationsRemoved: number;
@@ -52,6 +53,7 @@ const EMPTY: MaintenanceReport = {
   skipped: false,
   syncLogRemoved: 0,
   remindersRemoved: 0,
+  accountEmailsRemoved: 0,
   oauthTokensRemoved: 0,
   oauthClientsRemoved: 0,
   verificationsRemoved: 0,
@@ -78,6 +80,16 @@ export async function runMaintenance(
     await tx.execute(sql`select set_config('statement_timeout', '0', true)`);
     const done = { ...EMPTY };
     const removed = async (query: ReturnType<typeof sql>) => (await tx.execute(query)).length;
+
+    done.accountEmailsRemoved = await removed(sql`
+      delete from account_email_outbox
+      where (status in ('sent', 'skipped', 'cancelled') and updated_at < ${daysBefore(now, r.reminderDays)})
+         or (status = 'failed' and updated_at < ${daysBefore(now, r.deadLetterDays)})
+      returning id`);
+    await tx.execute(sql`
+      update account_email_outbox set status = 'skipped', payload = '', last_error = 'link_expired',
+        locked_until = null, updated_at = ${now}
+      where expires_at <= ${now} and (status = 'pending' or (status = 'processing' and locked_until < ${now}))`);
 
     done.syncLogRemoved = await compactSyncLog(tx as unknown as Database, {
       olderThan: daysBefore(now, r.syncLogDays),

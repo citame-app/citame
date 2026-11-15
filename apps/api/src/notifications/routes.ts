@@ -5,6 +5,7 @@ import {
 } from "@sob/contracts";
 import { Hono } from "hono";
 import type { AppDeps } from "../app";
+import { accountEmailQueueStats } from "../auth/outbox";
 import { requireRole } from "../auth/policy";
 import type { AppEnv } from "../auth/principal";
 import { DomainError } from "../errors";
@@ -63,6 +64,7 @@ export function notificationAdminRoutes({ db, config }: Pick<AppDeps, "db" | "co
     return c.json(
       notificationStatsSchema.parse({
         queue: await queueStats(db),
+        accountEmails: await accountEmailQueueStats(db),
         worker: processMetrics.snapshot(),
         channels: {
           email: config.notifications.email.provider !== "none",
