@@ -2,6 +2,19 @@ import { z } from "zod";
 
 export const idSchema = z.uuid();
 
+/**
+ * Maximum lengths of free text a caller can submit. Every request schema that accepts text uses
+ * them, so one oversized field cannot bloat rows, sync payloads or notification emails.
+ */
+export const LIMITS = {
+  name: 200,
+  phone: 32,
+  email: 254,
+  notes: 2000,
+  description: 2000,
+  reason: 500,
+} as const;
+
 /** ISO 8601 instant with an explicit offset (usually `Z`). */
 export const instantSchema = z.iso.datetime({ offset: true });
 

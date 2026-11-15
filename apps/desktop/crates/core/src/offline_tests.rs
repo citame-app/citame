@@ -504,3 +504,30 @@ fn booking_requires_the_staff_member_to_perform_every_selected_service() {
     assert!(create_appointment(&mut s, with_ana).is_ok());
     assert_eq!(performed_services(&s, BEA).unwrap(), vec![CUT.to_string()]);
 }
+
+#[test]
+fn free_text_beyond_the_server_limits_is_rejected_before_it_is_queued() {
+    let mut s = seeded();
+    let before = s.outbox_len().unwrap();
+
+    // The API contract caps names at 200, phones at 32 and notes at 2000 UTF-16 units.
+    assert!(create_client(&mut s, &"n".repeat(200), None).is_ok());
+    assert!(create_client(&mut s, &"n".repeat(201), None).is_err());
+    assert!(create_client(&mut s, "Ana", Some(&"1".repeat(33))).is_err());
+
+    let booking = |notes: String| NewAppointment {
+        staff_id: ANA.into(),
+        service_ids: vec![CUT.into()],
+        starts_at: at("2026-03-10T13:00:00Z"),
+        client_id: LUCIA.into(),
+        notes: Some(notes),
+        override_notice: false,
+    };
+    assert!(create_appointment(&mut s, booking("n".repeat(2000))).is_ok());
+    assert!(create_appointment(&mut s, booking("n".repeat(2001))).is_err());
+    // Counted the way the server counts (UTF-16 code units): an emoji is two.
+    assert!(create_appointment(&mut s, booking("😀".repeat(1001))).is_err());
+
+    // Only the two valid mutations were queued (the client of the first assertion and the booking).
+    assert_eq!(s.outbox_len().unwrap(), before + 2);
+}

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { appointmentSchema, createAppointmentBaseSchema } from "./appointments";
-import { idSchema, instantSchema } from "./common";
+import { idSchema, instantSchema, LIMITS } from "./common";
 import { salonResponseSchema, updateSalonSettingsRequestSchema } from "./salon";
 import { serviceSchema, updateServiceRequestSchema } from "./services";
 import { timeOfDaySchema, timeOffSchema, weekdaySchema } from "./staff";
@@ -70,7 +70,7 @@ const appointmentReschedule = z.object({
       version: z.number().int().positive(),
       startsAt: instantSchema.optional(),
       staffId: idSchema.optional(),
-      notes: z.string().optional(),
+      notes: z.string().max(LIMITS.notes).optional(),
       override: z.boolean().optional(),
     })
     .refine((v) => v.startsAt !== undefined || v.staffId !== undefined, {
@@ -92,7 +92,7 @@ const appointmentSetStatus = z.object({
     id: idSchema,
     version: z.number().int().positive(),
     status: z.enum(["completed", "no_show"]),
-    notes: z.string().optional(),
+    notes: z.string().max(LIMITS.notes).optional(),
   }),
 });
 
@@ -101,10 +101,10 @@ const clientCreate = z.object({
   kind: z.literal("client.create"),
   payload: z.object({
     id: idSchema,
-    name: z.string().trim().min(1),
-    phone: z.string().trim().min(3).optional(),
-    email: z.email().optional(),
-    notes: z.string().optional(),
+    name: z.string().trim().min(1).max(LIMITS.name),
+    phone: z.string().trim().min(3).max(LIMITS.phone).optional(),
+    email: z.email().max(LIMITS.email).optional(),
+    notes: z.string().max(LIMITS.notes).optional(),
   }),
 });
 
@@ -114,9 +114,9 @@ const clientUpdate = z.object({
   payload: z
     .object({
       id: idSchema,
-      name: z.string().trim().min(1).optional(),
-      phone: z.string().trim().min(3).nullable().optional(),
-      notes: z.string().nullable().optional(),
+      name: z.string().trim().min(1).max(LIMITS.name).optional(),
+      phone: z.string().trim().min(3).max(LIMITS.phone).nullable().optional(),
+      notes: z.string().max(LIMITS.notes).nullable().optional(),
     })
     .refine(oneChange, { message: "Provide at least one change", path: ["name"] }),
 });
@@ -130,7 +130,7 @@ const timeOffCreate = z.object({
       staffId: idSchema,
       startsAt: instantSchema,
       endsAt: instantSchema,
-      reason: z.string().trim().min(1).optional(),
+      reason: z.string().trim().min(1).max(LIMITS.reason).optional(),
     })
     .refine((v) => Date.parse(v.endsAt) > Date.parse(v.startsAt), {
       message: "`endsAt` must be after `startsAt`",
@@ -147,7 +147,7 @@ const timeOffUpdate = z.object({
       staffId: idSchema,
       startsAt: instantSchema.optional(),
       endsAt: instantSchema.optional(),
-      reason: z.string().trim().min(1).nullable().optional(),
+      reason: z.string().trim().min(1).max(LIMITS.reason).nullable().optional(),
     })
     .refine(oneChange, { message: "Provide at least one change", path: ["startsAt"] }),
 });
@@ -172,7 +172,7 @@ const staffUpdate = z.object({
   payload: z
     .object({
       id: idSchema,
-      displayName: z.string().trim().min(1).optional(),
+      displayName: z.string().trim().min(1).max(LIMITS.name).optional(),
       active: z.boolean().optional(),
     })
     .refine(oneChange, { message: "Provide at least one change", path: ["displayName"] }),

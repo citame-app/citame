@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { idSchema, instantSchema } from "./common";
+import { idSchema, instantSchema, LIMITS } from "./common";
 
 export const staffSchema = z.object({
   id: idSchema,
@@ -27,7 +27,7 @@ export const listAdminStaffResponseSchema = z.object({ staff: z.array(adminStaff
 export type ListAdminStaffResponse = z.infer<typeof listAdminStaffResponseSchema>;
 
 export const updateStaffRequestSchema = z
-  .object({ displayName: z.string().trim().min(1), active: z.boolean() })
+  .object({ displayName: z.string().trim().min(1).max(LIMITS.name), active: z.boolean() })
   .partial()
   .refine((value) => Object.values(value).some((v) => v !== undefined), {
     message: "Provide at least one change",
@@ -124,7 +124,7 @@ export const createTimeOffRequestSchema = z
   .object({
     startsAt: instantSchema,
     endsAt: instantSchema,
-    reason: z.string().trim().min(1).optional(),
+    reason: z.string().trim().min(1).max(LIMITS.reason).optional(),
   })
   .refine(forwardRange, { message: "`endsAt` must be after `startsAt`", path: ["endsAt"] });
 export type CreateTimeOffRequest = z.infer<typeof createTimeOffRequestSchema>;
@@ -133,7 +133,7 @@ export const updateTimeOffRequestSchema = z
   .object({
     startsAt: instantSchema,
     endsAt: instantSchema,
-    reason: z.string().trim().min(1).nullable(),
+    reason: z.string().trim().min(1).max(LIMITS.reason).nullable(),
   })
   .partial()
   .refine((value) => Object.values(value).some((v) => v !== undefined), {

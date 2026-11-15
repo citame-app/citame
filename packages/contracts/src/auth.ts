@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { idSchema } from "./common";
+import { idSchema, LIMITS } from "./common";
 
 export const userRoleSchema = z.enum(["owner", "staff", "client"]);
 export type UserRole = z.infer<typeof userRoleSchema>;
@@ -27,11 +27,11 @@ export const passwordSchema = z.string().min(8).max(128);
  * `password` the person is invited: they receive an email link and choose their own.
  */
 export const createStaffAccountRequestSchema = z.object({
-  email: z.email(),
-  name: z.string().min(1),
+  email: z.email().max(LIMITS.email),
+  name: z.string().min(1).max(LIMITS.name),
   password: passwordSchema.optional(),
   /** Name shown in the booking flow; defaults to `name`. */
-  displayName: z.string().min(1).optional(),
+  displayName: z.string().min(1).max(LIMITS.name).optional(),
 });
 export type CreateStaffAccountRequest = z.infer<typeof createStaffAccountRequestSchema>;
 

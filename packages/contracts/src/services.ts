@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { idSchema } from "./common";
+import { idSchema, LIMITS } from "./common";
 
 export const serviceSchema = z.object({
   id: idSchema,
@@ -29,8 +29,8 @@ export type ListAdminServicesResponse = z.infer<typeof listAdminServicesResponse
 const MAX_DURATION_MINUTES = 24 * 60;
 
 const serviceFields = {
-  name: z.string().trim().min(1),
-  description: z.string().nullable(),
+  name: z.string().trim().min(1).max(LIMITS.name),
+  description: z.string().max(LIMITS.description).nullable(),
   durationMinutes: z.number().int().positive().max(MAX_DURATION_MINUTES),
   bufferMinutes: z.number().int().min(0).max(MAX_DURATION_MINUTES),
   priceCents: z.number().int().min(0),

@@ -1,5 +1,12 @@
 import { z } from "zod";
-import { idSchema, instantSchema, pageInfoSchema, pageSchema, pageSizeSchema } from "./common";
+import {
+  idSchema,
+  instantSchema,
+  LIMITS,
+  pageInfoSchema,
+  pageSchema,
+  pageSizeSchema,
+} from "./common";
 
 export const appointmentStatusSchema = z.enum(["booked", "completed", "cancelled", "no_show"]);
 export type AppointmentStatus = z.infer<typeof appointmentStatusSchema>;
@@ -30,9 +37,9 @@ export const appointmentSchema = z.object({
 export type Appointment = z.infer<typeof appointmentSchema>;
 
 export const inlineClientSchema = z.object({
-  name: z.string().min(1),
-  phone: z.string().min(3).optional(),
-  email: z.email().optional(),
+  name: z.string().min(1).max(LIMITS.name),
+  phone: z.string().min(3).max(LIMITS.phone).optional(),
+  email: z.email().max(LIMITS.email).optional(),
 });
 
 /**
@@ -47,7 +54,7 @@ export const createAppointmentBaseSchema = z.object({
   startsAt: instantSchema,
   clientId: idSchema.optional(),
   client: inlineClientSchema.optional(),
-  notes: z.string().optional(),
+  notes: z.string().max(LIMITS.notes).optional(),
   /**
    * Staff and owners only: book inside the minimum-notice window. It never bypasses working
    * hours, time off or the maximum advance window, and the use is audited.
@@ -82,7 +89,7 @@ export const updateAppointmentRequestSchema = z
     status: appointmentTransitionSchema.optional(),
     startsAt: instantSchema.optional(),
     staffId: idSchema.optional(),
-    notes: z.string().optional(),
+    notes: z.string().max(LIMITS.notes).optional(),
     override: z.boolean().optional(),
   })
   .refine(

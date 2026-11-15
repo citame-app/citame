@@ -2,7 +2,7 @@
 
 Audience: implementers of the desktop client (Phase 5). Rationale and trade-offs: [ADR 0007](adr/0007-sync-protocol.md). The machine-readable definition is `packages/contracts/src/sync.ts` (zod); this document is the contract in prose plus examples.
 
-All endpoints live on the API origin, require a session (the same Better Auth session or OAuth bearer token as the rest of the API) and are available to roles `owner` and `staff`. Anonymous calls get `401`, the `client` role gets `403`. All bodies are JSON (UTF-8), all timestamps ISO 8601 with offset, all ids UUIDs. Errors use the usual envelope `{ "error": { "code", "message" } }`.
+All endpoints live on the API origin, require a session (the same Better Auth session cookie as the rest of the REST API; OAuth bearer tokens are accepted only at `/mcp`, not here) and are available to roles `owner` and `staff`. Anonymous calls get `401`, the `client` role gets `403`. All bodies are JSON (UTF-8), all timestamps ISO 8601 with offset, all ids UUIDs. Errors use the usual envelope `{ "error": { "code", "message" } }`.
 
 ## Concepts
 
@@ -87,6 +87,8 @@ Response `200`:
 ```
 
 One result per mutation, in request order. `appliedSeq` is the last log seq the mutation wrote (null if it changed nothing); once your cursor reaches it, your pull has seen the mutation's effect. `replayed: true` means the server already had a result for this `mutationId` and returned it unchanged.
+
+Free text is capped (the same limits as the REST API, counted in UTF-16 code units, so an emoji counts as two): names (client `name`, inline client `name`, staff `displayName`) 200, `phone` 32, `email` 254, `notes` 2000, time-off `reason` 500. A longer value makes the mutation `invalid`. The whole request body is capped at 1 MiB (`HTTP_MAX_BODY_BYTES`): bigger bodies are answered `413`.
 
 A malformed envelope (no `deviceId`, empty or more than 100 mutations, an element without a UUIDv7 `mutationId`) fails the whole request with `400 validation_error`. A malformed individual mutation (unknown `kind`, bad payload) is `rejected` with reason `invalid`.
 
@@ -226,7 +228,7 @@ data: {"seq":415}
 - A `change` event is sent right after connecting (current head) and after every committed write made through the API. It only means "pull now"; compare `seq` with your cursor to skip needless pulls.
 - `: ping` comment lines arrive every 15 s; if nothing arrives for 45 s, reconnect.
 - Reconnect with the same backoff as above, then pull. `Last-Event-ID` is not needed: the cursor is the source of truth.
-- Authentication is the session cookie or bearer token. Rate limited per caller: `429` with `Retry-After` (default 30 new connections per minute). `401`/`403` as for the other endpoints.
+- Authentication is the session cookie (bearer tokens are not accepted on `/sync/*`). Rate limited per caller: `429` with `Retry-After` (default 30 new connections per minute). `401`/`403` as for the other endpoints.
 - The server closes streams when it shuts down; treat a closed stream like any disconnect.
 
 ## Error summary

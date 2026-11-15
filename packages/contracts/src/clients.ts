@@ -1,6 +1,13 @@
 import { z } from "zod";
 import { appointmentSchema } from "./appointments";
-import { idSchema, instantSchema, pageInfoSchema, pageSchema, pageSizeSchema } from "./common";
+import {
+  idSchema,
+  instantSchema,
+  LIMITS,
+  pageInfoSchema,
+  pageSchema,
+  pageSizeSchema,
+} from "./common";
 
 export const CLIENT_PAGE_SIZE_DEFAULT = 20;
 export const CLIENT_PAGE_SIZE_MAX = 100;
@@ -48,9 +55,9 @@ export type ClientDetailResponse = z.infer<typeof clientDetailResponseSchema>;
 /** Identity (email, login link) is deliberately not editable here. */
 export const updateClientRequestSchema = z
   .object({
-    name: z.string().trim().min(1),
-    phone: z.string().trim().min(3).nullable(),
-    notes: z.string().nullable(),
+    name: z.string().trim().min(1).max(LIMITS.name),
+    phone: z.string().trim().min(3).max(LIMITS.phone).nullable(),
+    notes: z.string().max(LIMITS.notes).nullable(),
   })
   .partial()
   .refine((value) => Object.values(value).some((v) => v !== undefined), {

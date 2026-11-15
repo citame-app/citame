@@ -8,6 +8,21 @@ use crate::error::{CoreError, Result};
 use crate::model::AppointmentStatus;
 use crate::store::Store;
 
+/// Longest free text the API accepts (`LIMITS` in `packages/contracts`). Counted in UTF-16 code
+/// units, the way the server's validation counts, so an emoji costs two.
+const MAX_NAME: usize = 200;
+const MAX_PHONE: usize = 32;
+const MAX_NOTES: usize = 2000;
+
+fn check_len(what: &str, value: &str, max: usize) -> Result<()> {
+    if value.encode_utf16().count() > max {
+        return Err(CoreError::Invalid(format!(
+            "{what} is longer than {max} characters"
+        )));
+    }
+    Ok(())
+}
+
 fn iso(t: DateTime<Utc>) -> String {
     t.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
@@ -80,6 +95,9 @@ pub fn create_appointment(store: &mut Store, new: NewAppointment) -> Result<Stri
             new.client_id
         )));
     }
+    if let Some(notes) = &new.notes {
+        check_len("notes", notes, MAX_NOTES)?;
+    }
     let id = uuid::Uuid::now_v7().to_string();
     let mut p = Map::new();
     p.insert("id".into(), json!(id));
@@ -149,6 +167,10 @@ pub fn create_client(store: &mut Store, name: &str, phone: Option<&str>) -> Resu
     let name = name.trim();
     if name.is_empty() {
         return Err(CoreError::Invalid("a client needs a name".into()));
+    }
+    check_len("name", name, MAX_NAME)?;
+    if let Some(ph) = phone {
+        check_len("phone", ph.trim(), MAX_PHONE)?;
     }
     let id = uuid::Uuid::now_v7().to_string();
     let mut p = Map::new();
