@@ -1,0 +1,2 @@
+
+== /tmp/taste-skill-consistency/localhost-4281/rendered.html  (181 words)  0 FAIL, 0 WARN

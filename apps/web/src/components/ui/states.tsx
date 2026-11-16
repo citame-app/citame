@@ -21,7 +21,7 @@ export function EmptyState({
   icon?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center rounded-xl border border-dashed border-line-strong bg-surface px-6 py-10 text-center">
+    <div className="empty-state flex flex-col items-center rounded-xl border border-line bg-surface px-6 py-10 text-center">
       <span className="mb-4 grid size-12 place-items-center rounded-full bg-accent-soft text-accent-soft-fg">
         {icon ?? <SparkleIcon width={24} height={24} />}
       </span>

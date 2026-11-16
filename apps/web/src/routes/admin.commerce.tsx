@@ -12,9 +12,9 @@ function SalesPage() {
   const { session } = Route.useRouteContext();
   if (!session) return null;
   return (
-    <>
+    <div className="view-commerce">
       <PageHeading title={t("commerce.title")} lead={t("commerce.lead")} />
       <CommerceView role={session.user.role} accessPreset={session.accessPreset} />
-    </>
+    </div>
   );
 }

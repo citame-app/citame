@@ -1,0 +1,42 @@
+{
+  "source": ".agents/skills/design-taste-frontend/assets",
+  "version": "2.5.1",
+  "note": "Selected motion and picture-develops files copied unchanged. Other assets and checker scripts are not application runtime dependencies.",
+  "files": [
+    {
+      "path": "apps/web/public/taste/moments/lib.js",
+      "unchanged": true,
+      "sha256": "22c172166ded3c0ea70925e9a04c37baac291ca6fa9b5a0e4c487a52acf69220"
+    },
+    {
+      "path": "apps/web/public/taste/moments/moments.js",
+      "unchanged": true,
+      "sha256": "5c38a832b7e7b4e561c4336c75628e36915dab6f1b64ffa7af50b6b1f49766da"
+    },
+    {
+      "path": "apps/web/public/taste/motion/motion.css",
+      "unchanged": true,
+      "sha256": "948bfb7192c908934206ef5776ac28bdd8c3499483d7347cbb24e7b6fb5c6810"
+    },
+    {
+      "path": "apps/web/public/taste/motion/motion.js",
+      "unchanged": true,
+      "sha256": "e4453f1ac91d81002c5a75dccc1263285267999a8bb2453278ab63232e7062cc"
+    },
+    {
+      "path": "apps/web/public/taste/moments/picture-develops/meta.json",
+      "unchanged": true,
+      "sha256": "445636c01360436d32edc284bedbb894200c6b6fd409b42e23afd937f03cdcad"
+    },
+    {
+      "path": "apps/web/public/taste/moments/picture-develops/moment.js",
+      "unchanged": true,
+      "sha256": "dbb1d080df3b2ed139850f863ae3b5ac25d5191f1c1fb7092591bb6a404910c4"
+    },
+    {
+      "path": "apps/web/public/taste/moments/picture-develops/moment.css",
+      "unchanged": true,
+      "sha256": "953f260d8501a9b3fb621cbd0dbf99512457ed41365bfe1c8d74814d5af6968e"
+    }
+  ]
+}

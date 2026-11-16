@@ -77,12 +77,18 @@ export function AdminShell({
   }, []);
 
   return (
-    <div className="mx-auto w-full max-w-[96rem] md:grid md:grid-cols-[14.5rem_minmax(0,1fr)]">
-      <aside className="hidden md:block">
+    <div
+      className="admin-shell mx-auto w-full max-w-[100rem] md:grid md:grid-cols-[14.5rem_minmax(0,1fr)]"
+      data-section={active}
+    >
+      <aside className="admin-sidebar hidden md:block">
         <nav
           aria-label={t("admin.nav.label")}
-          className="sticky top-16 flex max-h-[calc(100dvh-4rem)] flex-col gap-1 overflow-y-auto border-r border-line px-3 py-6"
+          className="sticky top-16 flex max-h-[calc(100dvh-4rem)] min-h-[calc(100dvh-4rem)] flex-col gap-1 overflow-y-auto border-r border-line px-4 py-7"
         >
+          <p className="sidebar-label mb-4 px-3 text-xs font-semibold uppercase tracking-widest text-muted">
+            {t("admin.nav.label")}
+          </p>
           {items.map((item) => {
             const Icon = ICONS[item.section];
             const current = item.section === active;
@@ -90,12 +96,11 @@ export function AdminShell({
               <Link
                 key={item.section}
                 to={item.to}
+                activeOptions={{ exact: true }}
                 aria-current={current ? "page" : undefined}
                 className={cn(
                   "flex min-h-11 items-center gap-3 rounded-md px-3 text-[0.95rem] font-medium transition-colors",
-                  current
-                    ? "bg-accent-soft text-accent-soft-fg"
-                    : "text-muted hover:bg-sunken hover:text-fg",
+                  current ? "bg-accent text-accent-fg" : "text-muted hover:bg-sunken hover:text-fg",
                 )}
               >
                 <Icon width={20} height={20} />
@@ -109,11 +114,13 @@ export function AdminShell({
         </nav>
       </aside>
 
-      <div className="min-w-0 px-4 pt-6 pb-28 sm:px-6 md:pb-12 lg:px-8">{children}</div>
+      <div className="admin-workspace min-w-0 px-4 pt-7 pb-28 sm:px-6 md:pb-12 lg:px-10">
+        {children}
+      </div>
 
       <nav
         aria-label={`${t("admin.nav.label")} (mobile)`}
-        className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-surface pb-[env(safe-area-inset-bottom)] md:hidden"
       >
         <ul className="mx-auto flex max-w-xl">
           {inline.map((item) => {
@@ -123,6 +130,7 @@ export function AdminShell({
               <li key={item.section} className="flex-1">
                 <Link
                   to={item.to}
+                  activeOptions={{ exact: true }}
                   aria-current={current ? "page" : undefined}
                   className={cn(
                     "flex min-h-14 flex-col items-center justify-center gap-0.5 px-1 text-[0.7rem] font-medium",
@@ -145,6 +153,9 @@ export function AdminShell({
               <button
                 type="button"
                 onClick={() => setMoreOpen(true)}
+                aria-current={overflow.some((item) => item.section === active) ? "page" : undefined}
+                aria-haspopup="dialog"
+                aria-expanded={moreOpen}
                 className={cn(
                   "flex min-h-14 w-full flex-col items-center justify-center gap-0.5 px-1 text-[0.7rem] font-medium",
                   overflow.some((o) => o.section === active) ? "text-accent-text" : "text-muted",
@@ -166,6 +177,7 @@ export function AdminShell({
               <li key={item.section}>
                 <Link
                   to={item.to}
+                  activeOptions={{ exact: true }}
                   onClick={() => setMoreOpen(false)}
                   aria-current={item.section === active ? "page" : undefined}
                   className="flex min-h-12 items-center gap-3 rounded-md px-3 font-medium hover:bg-sunken"

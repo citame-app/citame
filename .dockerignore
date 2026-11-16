@@ -13,3 +13,7 @@ backups
 !.env.example
 docs
 .atl
+# Local agent tooling and browser profiles are never application runtime inputs.
+.agents
+.taste-skill
+skills-lock.json

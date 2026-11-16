@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { PageHeading } from "~/components/pages";
+import { SectionIndex } from "~/components/section-index";
 import { adminHead } from "~/features/admin/route-head";
 import { BookingPolicyForm } from "~/features/admin/settings/booking-policy-form";
 import { SettingsView } from "~/features/admin/settings/settings-view";
@@ -20,11 +21,21 @@ function SettingsPage() {
     <>
       <UnsavedGuard dirty={intakeDirty} />
       <PageHeading title={t("settings.title")} lead={t("settings.lead")} />
-      <SettingsView />
-      <div className="mt-8">
+      <SectionIndex
+        label={t("settings.title")}
+        items={[
+          { id: "salon-settings", label: t("settings.title") },
+          { id: "booking-policy", label: t("protection.title") },
+          { id: "intake-settings", label: t("intake.title") },
+        ]}
+      />
+      <div id="salon-settings" className="settings-section">
+        <SettingsView />
+      </div>
+      <div id="booking-policy" className="settings-section mt-8">
         <BookingPolicyForm />
       </div>
-      <div className="mt-8">
+      <div id="intake-settings" className="settings-section mt-8">
         <IntakeAdmin onDirtyChange={setIntakeDirty} />
       </div>
     </>

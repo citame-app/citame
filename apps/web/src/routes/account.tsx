@@ -52,13 +52,13 @@ function AccountLayout() {
             : t("account.title");
   const { session } = Route.useRouteContext();
   return (
-    <PageContainer width="max-w-3xl">
-      <div className="py-8 sm:py-12">
+    <PageContainer width="max-w-6xl">
+      <div className="account-layout py-8 sm:py-12">
         <PageHeading
           title={title}
           lead={session ? t("common.greeting", { name: session.user.name }) : undefined}
         />
-        <div className="mb-8 flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
+        <div className="account-navigation mb-8 flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
           <nav aria-label={t("account.nav.label")} className="-ml-4 flex flex-wrap gap-1">
             <Link to="/account" activeOptions={{ exact: true }} className={tabClass}>
               {t("account.nav.appointments")}
@@ -94,7 +94,9 @@ function AccountLayout() {
             {t("account.signOut")}
           </Button>
         </div>
-        <Outlet />
+        <div className="account-content min-w-0">
+          <Outlet />
+        </div>
       </div>
     </PageContainer>
   );

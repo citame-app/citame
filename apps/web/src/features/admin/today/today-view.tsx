@@ -96,7 +96,7 @@ export function TodayView({
   );
 
   return (
-    <div className="space-y-6">
+    <div className="today-dashboard space-y-6">
       {/* biome-ignore lint/a11y/useSemanticElements: a labelled group of figures, not a form fieldset */}
       <div role="group" aria-label={t("today.statsLabel")}>
         <dl className="grid grid-cols-2 gap-3 lg:grid-cols-5">

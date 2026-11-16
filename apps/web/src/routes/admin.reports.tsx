@@ -20,13 +20,13 @@ function ReportsPage() {
   if (!session) return null;
   const all = permissionsFor(session.user.role, session.accessPreset).allCalendars;
   return (
-    <>
+    <div className="view-reports">
       <PageHeading title={t("reports.title")} lead={t(all ? "reports.lead" : "reports.leadOwn")} />
       <ReportsView
         search={search}
         onSearchChange={(next) => void navigate({ search: next, replace: true })}
         role={all ? "owner" : session.user.role}
       />
-    </>
+    </div>
   );
 }

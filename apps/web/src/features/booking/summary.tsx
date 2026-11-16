@@ -72,7 +72,7 @@ export function BookingSummary({
       ref={panel}
       aria-label={t("booking.summary.title")}
       className={cn(
-        "fixed inset-x-0 bottom-0 z-40 border-t border-line bg-surface shadow-lg",
+        "booking-summary fixed inset-x-0 bottom-0 z-40 border-t border-line bg-surface shadow-lg",
         "pb-[env(safe-area-inset-bottom)]",
         "lg:sticky lg:top-24 lg:inset-x-auto lg:bottom-auto lg:rounded-xl lg:border lg:pb-0 lg:shadow-md",
       )}

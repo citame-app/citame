@@ -122,7 +122,7 @@ export function SettingsView() {
   return (
     <form
       noValidate
-      className="max-w-2xl space-y-8"
+      className="settings-editor max-w-2xl space-y-8"
       onSubmit={(event) => {
         event.preventDefault();
         submit();

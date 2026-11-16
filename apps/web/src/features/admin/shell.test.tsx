@@ -82,3 +82,19 @@ describe("AdminShell", () => {
     expect(within(bar).getByRole("button", { name: "More" })).toBeInTheDocument();
   });
 });
+
+test("More identifies a current secondary section and exposes whether its navigation dialog is open", async () => {
+  renderApp(
+    <AdminShell role="owner" active="settings">
+      <p>content</p>
+    </AdminShell>,
+  );
+  const bar = screen.getByRole("navigation", { name: "Dashboard sections (mobile)" });
+  const more = within(bar).getByRole("button", { name: "More" });
+  expect(more).toHaveAttribute("aria-current", "page");
+  expect(more).toHaveAttribute("aria-haspopup", "dialog");
+  expect(more).toHaveAttribute("aria-expanded", "false");
+  fireEvent.click(more);
+  await screen.findByRole("dialog", { name: "More" });
+  expect(more).toHaveAttribute("aria-expanded", "true");
+});

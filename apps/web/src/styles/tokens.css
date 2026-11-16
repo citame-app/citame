@@ -12,16 +12,16 @@
   --border: #e6dfd8;
   --border-strong: #857b73;
 
-  --fg: #2a2326;
-  --fg-muted: #5f5459;
+  --fg: #2c2325;
+  --fg-muted: #65585c;
 
-  --accent: #a24a68;
-  --accent-hover: #8b3d58;
+  --accent: #8f3c50;
+  --accent-hover: #763043;
   --accent-fg: #ffffff;
-  --accent-text: #8f3c5a;
-  --accent-soft: #f7e7ec;
-  --accent-soft-fg: #7a2f4a;
-  --ring: #a24a68;
+  --accent-text: #8f3c50;
+  --accent-soft: #f6e8ea;
+  --accent-soft-fg: #743143;
+  --ring: #8f3c50;
 
   --danger-soft: #fce8e6;
   --danger-fg: #8c1d18;

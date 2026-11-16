@@ -1,0 +1,17 @@
+
+Running 8 tests using 1 worker
+
+(node:1749619) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [mobile] › e2e/ui-redesign.spec.ts:28:5 › redesigned UI — light › public navigation, editorial assets and forms work across breakpoints (3.7s)
+  ✓  2 [mobile] › e2e/ui-redesign.spec.ts:84:5 › redesigned UI — light › all owner sections keep one current destination and settings drafts survive fragment navigation (10.6s)
+  ✓  3 [mobile] › e2e/ui-redesign.spec.ts:28:5 › redesigned UI — dark › public navigation, editorial assets and forms work across breakpoints (3.6s)
+  ✓  4 [mobile] › e2e/ui-redesign.spec.ts:84:5 › redesigned UI — dark › all owner sections keep one current destination and settings drafts survive fragment navigation (10.1s)
+(node:1752745) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  5 [desktop] › e2e/ui-redesign.spec.ts:28:5 › redesigned UI — light › public navigation, editorial assets and forms work across breakpoints (5.2s)
+  ✓  6 [desktop] › e2e/ui-redesign.spec.ts:84:5 › redesigned UI — light › all owner sections keep one current destination and settings drafts survive fragment navigation (12.1s)
+  ✓  7 [desktop] › e2e/ui-redesign.spec.ts:28:5 › redesigned UI — dark › public navigation, editorial assets and forms work across breakpoints (6.5s)
+  ✓  8 [desktop] › e2e/ui-redesign.spec.ts:84:5 › redesigned UI — dark › all owner sections keep one current destination and settings drafts survive fragment navigation (13.9s)
+
+  8 passed (1.3m)

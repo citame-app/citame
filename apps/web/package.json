@@ -36,12 +36,14 @@
     "e2e:timed-promotions": "E2E_TIMED_PROMOTIONS_FIXTURE=true playwright test",
     "e2e:timed-promotions:production": "E2E_TIMED_PROMOTIONS_FIXTURE=true E2E_WEB_IMAGE=true playwright test",
     "e2e:booking-promotions": "E2E_BOOKING_PROMOTIONS_FIXTURE=true playwright test",
-    "e2e:booking-promotions:production": "E2E_BOOKING_PROMOTIONS_FIXTURE=true E2E_WEB_IMAGE=true playwright test"
+    "e2e:booking-promotions:production": "E2E_BOOKING_PROMOTIONS_FIXTURE=true E2E_WEB_IMAGE=true playwright test",
+    "e2e:ui": "E2E_UI_REDESIGN_FIXTURE=true playwright test",
+    "e2e:ui:production": "E2E_UI_REDESIGN_FIXTURE=true E2E_WEB_IMAGE=true playwright test"
   },
   "dependencies": {
     "@base-ui/react": "1.9.0",
-    "@fontsource-variable/fraunces": "5.3.0",
-    "@fontsource-variable/inter": "5.3.0",
+    "@fontsource-variable/lora": "5.3.0",
+    "@fontsource-variable/nunito-sans": "5.3.0",
     "@sob/contracts": "workspace:*",
     "@tanstack/react-query": "5.107.1",
     "@tanstack/react-router": "1.170.46",

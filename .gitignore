@@ -14,3 +14,5 @@ apps/web/test-results/
 apps/web/playwright-report/
 backups/
 .release/
+# Local browser profiles and generated visual audit captures (may contain demo sessions).
+.taste-skill/

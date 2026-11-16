@@ -1,0 +1,47 @@
+
+1440x900  lines x 120 and 1320, nav 65px, one screen 835px
+  hero 835 tall; h1 56px/1.1, 1 lines, 487x62 at 120,602; lead -; buttons 1 x 50; visual 1200x450 at 120,89
+  stress: place h1 at 47 of 48 characters takes 3 lines, hero 835 tall
+  section section.hero.hero--place section.hero.hero--place "Sisters o y    65  h   835  content 653
+  section #services section.salon-offer.editorial-section "Tratamiento y   900  h   900  content 745
+  section section.salon-close.editorial-section section.salon-close.ed y  1800  h   900  content 780
+  screen-height    #services section.salon-offer.editorial-section "Tratamientos de belle: 900px, 1.08 screens; a section is exactly one or two (--h)
+  screen-height    section.salon-close.editorial-section section.salon-close.editorial-se: 900px, 1.08 screens; a section is exactly one or two (--h)
+  hero-lines       section.hero h1: the check fills the h1 to 47 characters (this hero's maxChars in heroes.json), not the page's own: it takes 3 lines at 1440, 2 at most
+
+1024x768  lines x 24 and 1000, nav 110px, one screen 658px
+  hero 659 tall; h1 50.432px/1.1, 1 lines, 438x55 at 24,581; lead -; buttons 1 x 50; visual 976x384 at 24,134
+  stress: place h1 at 47 of 48 characters takes 3 lines, hero 677 tall
+  section section.hero.hero--place section.hero.hero--place "Sisters o y   110  h   659  content 587
+  section #services section.salon-offer.editorial-section "Tratamiento y   769  h   859  content 737
+  section section.salon-close.editorial-section section.salon-close.ed y  1628  h   768  content 648
+  hero-maxchars    section.hero.hero--place section.hero.hero--place "Sisters of BeautyTu: with a 47-character h1 (heroes.json maxChars): ends at y 787, past the fold (768): 1.03 screens tall
+
+820x1180  lines x 24 and 796, nav 110px, one screen 1070px
+  hero 1071 tall; h1 46.76px/1.1, 2 lines, 374x103 at 24,763; lead -; buttons 1 x 50; visual 772x566 at 24,134
+  stress: place h1 at 47 of 48 characters takes 4 lines, hero 1071 tall
+  section section.hero.hero--place section.hero.hero--place "Sisters o y   110  h  1071  content 769
+  section #services section.salon-offer.editorial-section "Tratamiento y  1181  h  1650  content 1528
+  section section.salon-close.editorial-section section.salon-close.ed y  2831  h   820  content 700
+  neighbour        #services section.salon-offer.editorial-section "Tratamientos de belle: framed, 109px of section.salon-close.editorial-section section.salon-close.editorial-section "Tu cita, paso a paso01Elige los " shows
+  screen-short     section.salon-close.editorial-section section.salon-close.editorial-se: 820px tall; one screen under the nav is 1070px
+  neighbour        section.salon-close.editorial-section section.salon-close.editorial-se: framed, 250px of the footer shows
+
+768x1024  lines x 24 and 744, nav 110px, one screen 914px
+  hero 915 tall; h1 45.824px/1.1, 2 lines, 348x101 at 24,688; lead -; buttons 1 x 50; visual 720x492 at 24,134
+  stress: place h1 at 47 of 48 characters takes 4 lines, hero 915 tall
+  section section.hero.hero--place section.hero.hero--place "Sisters o y   110  h   915  content 694
+  section #services section.salon-offer.editorial-section "Tratamiento y  1025  h  1597  content 1475
+  section section.salon-close.editorial-section section.salon-close.ed y  2622  h   820  content 700
+  neighbour        #services section.salon-offer.editorial-section "Tratamientos de belle: framed, 90px of section.salon-close.editorial-section section.salon-close.editorial-section "Tu cita, paso a paso01Elige los " shows
+  screen-short     section.salon-close.editorial-section section.salon-close.editorial-se: 820px tall; one screen under the nav is 914px
+  neighbour        section.salon-close.editorial-section section.salon-close.editorial-se: framed, 94px of the footer shows
+
+390x844  lines x 24 and 366, nav 110px, one screen 734px
+  hero 735 tall; h1 39.02px/1.1, 1 lines, 339x43 at 24,569; lead -; buttons 1 x 50; visual 342x388 at 24,126
+  stress: place h1 at 47 of 48 characters takes 3 lines, hero 806 tall
+  section section.hero.hero--place section.hero.hero--place "Sisters o y   110  h   735  content 681
+  section #services section.salon-offer.editorial-section "Tratamiento y   845  h  1227  content 1129
+  section section.salon-close.editorial-section section.salon-close.ed y  2072  h   944  content 848
+  neighbour        #services section.salon-offer.editorial-section "Tratamientos de belle: framed, 83px of section.salon-close.editorial-section section.salon-close.editorial-section "Tu cita, paso a paso01Elige los " shows
+  hero-maxchars    section.hero.hero--place section.hero.hero--place "Sisters of BeautyTu: with a 47-character h1 (heroes.json maxChars): ends at y 916, past the fold (844): 1.10 screens tall

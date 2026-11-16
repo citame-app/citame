@@ -52,7 +52,7 @@ export function Tabs({
       <BaseTabs.List
         ref={listRef}
         aria-label={label}
-        className="mb-5 flex gap-1 overflow-x-auto border-b border-line"
+        className="app-tabs mb-5 flex gap-1 overflow-x-auto border-b border-line"
       >
         {items.map((item) => (
           <BaseTabs.Tab

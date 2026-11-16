@@ -1,5 +1,6 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
-import { PageContainer, PageHeading } from "~/components/pages";
+import { AuthFrame } from "~/components/auth-frame";
+import { PageHeading } from "~/components/pages";
 import { AuthForm } from "~/features/auth/auth-form";
 import { useAuth } from "~/features/auth/use-auth";
 import { parseOAuthRequest } from "~/features/oauth/logic";
@@ -44,7 +45,7 @@ function SignInPage() {
   const searchStr = useRawSearch();
   const oauth = parseOAuthRequest(searchStr);
   return (
-    <PageContainer width="max-w-md">
+    <AuthFrame>
       <div className="py-10 sm:py-16">
         <PageHeading
           title={t("auth.signIn.title")}
@@ -78,6 +79,6 @@ function SignInPage() {
           />
         </div>
       </div>
-    </PageContainer>
+    </AuthFrame>
   );
 }

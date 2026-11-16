@@ -19,7 +19,7 @@ function ClientsPage() {
   const { session } = Route.useRouteContext();
   const navigate = useNavigate({ from: Route.fullPath });
   return (
-    <>
+    <div className="view-clients">
       <PageHeading title={t("clients.title")} lead={t("clients.lead")} />
       {session && permissionsFor(session.user.role, session.accessPreset).deleteClients && (
         <ClientTransfer search={search.q} />
@@ -29,6 +29,6 @@ function ClientsPage() {
         onSearchChange={(next) => void navigate({ search: next, replace: true })}
         onOpenClient={(id) => void navigate({ to: "/admin/clients/$id", params: { id } })}
       />
-    </>
+    </div>
   );
 }

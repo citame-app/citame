@@ -19,7 +19,7 @@ function StaffPage() {
   if (!session) return null;
   const own = !permissionsFor(session.user.role, session.accessPreset).editSchedules;
   return (
-    <>
+    <div className="view-staff">
       <PageHeading
         title={t(own ? "staff.titleOwn" : "staff.title")}
         lead={t(own ? "staff.leadOwn" : "staff.lead")}
@@ -31,6 +31,6 @@ function StaffPage() {
         accessPreset={session.accessPreset}
         ownStaffId={session.staffId}
       />
-    </>
+    </div>
   );
 }

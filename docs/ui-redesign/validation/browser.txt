@@ -1,0 +1,21 @@
+
+Running 12 tests using 1 worker
+
+(node:1787220) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 [mobile] › e2e/ui-redesign.spec.ts:28:5 › redesigned UI — light › public navigation, editorial assets and forms work across breakpoints (3.8s)
+  ✓   2 [mobile] › e2e/ui-redesign.spec.ts:84:5 › redesigned UI — light › all owner sections keep one current destination and settings drafts survive fragment navigation (10.4s)
+  ✓   3 [mobile] › e2e/ui-redesign.spec.ts:127:5 › redesigned UI — light › booking, confirmation and customer account retain the complete workflow (7.6s)
+  ✓   4 [mobile] › e2e/ui-redesign.spec.ts:28:5 › redesigned UI — dark › public navigation, editorial assets and forms work across breakpoints (3.6s)
+  ✓   5 [mobile] › e2e/ui-redesign.spec.ts:84:5 › redesigned UI — dark › all owner sections keep one current destination and settings drafts survive fragment navigation (10.5s)
+  ✓   6 [mobile] › e2e/ui-redesign.spec.ts:127:5 › redesigned UI — dark › booking, confirmation and customer account retain the complete workflow (9.8s)
+(node:1792881) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   7 [desktop] › e2e/ui-redesign.spec.ts:28:5 › redesigned UI — light › public navigation, editorial assets and forms work across breakpoints (6.5s)
+  ✓   8 [desktop] › e2e/ui-redesign.spec.ts:84:5 › redesigned UI — light › all owner sections keep one current destination and settings drafts survive fragment navigation (13.2s)
+  ✓   9 [desktop] › e2e/ui-redesign.spec.ts:127:5 › redesigned UI — light › booking, confirmation and customer account retain the complete workflow (9.2s)
+  ✓  10 [desktop] › e2e/ui-redesign.spec.ts:28:5 › redesigned UI — dark › public navigation, editorial assets and forms work across breakpoints (6.3s)
+  ✓  11 [desktop] › e2e/ui-redesign.spec.ts:84:5 › redesigned UI — dark › all owner sections keep one current destination and settings drafts survive fragment navigation (13.1s)
+  ✓  12 [desktop] › e2e/ui-redesign.spec.ts:127:5 › redesigned UI — dark › booking, confirmation and customer account retain the complete workflow (9.2s)
+
+  12 passed (1.9m)

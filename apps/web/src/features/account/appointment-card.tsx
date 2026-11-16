@@ -45,7 +45,7 @@ export function AppointmentCard({
       data-appointment-id={appointment.id}
       aria-label={formatDateLong(localDateOf(appointment.startsAt, timeZone), locale)}
       className={cn(
-        "rounded-xl border bg-surface p-5 shadow-sm transition-colors",
+        "client-appointment rounded-xl border bg-surface p-5 shadow-sm transition-colors",
         highlighted ? "border-accent ring-2 ring-accent/30" : "border-line",
       )}
     >

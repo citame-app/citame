@@ -27,7 +27,9 @@
     "k6:overlaps": "bun k6/check-overlaps.ts",
     "test:scripts": "bun test scripts",
     "backup": "bash scripts/backup.sh",
-    "release:check": "bun scripts/release.ts validate"
+    "release:check": "bun scripts/release.ts validate",
+    "test:ui": "bun run --cwd apps/web e2e:ui",
+    "test:ui:production": "bun run --cwd apps/web e2e:ui:production"
   },
   "overrides": {
     "esbuild": "0.28.2"

@@ -1,0 +1,882 @@
+/* biome-ignore-all lint/style/noDescendingSpecificity: independent route families intentionally use separate descendant compositions */
+/* Sisters of Beauty: warm editorial public pages and a quiet, functional workspace. */
+:root {
+  --p-bg: #fbf8f5;
+  --p-surface: #ffffff;
+  --p-ink: #2c2325;
+  --p-muted: #65585c;
+  --p-accent: #8f3c50;
+  --p-accent-ink: #fbf8f5;
+  --p-action: #8f3c50;
+  --p-action-ink: #fbf8f5;
+  --p-inv-bg: #2c2325;
+  --p-inv-surface: #382f31;
+  --p-inv-ink: #fbf8f5;
+  --p-inv-muted: #a6a09f;
+  --p-inv-accent: #fbf8f5;
+  --p-inv-accent-ink: #2c2325;
+  --p-inv-action: #fbf8f5;
+  --p-inv-action-ink: #2c2325;
+  --font-display: "Lora Variable", Georgia, serif;
+  --font-text: "Nunito Sans Variable", system-ui, sans-serif;
+  --display-weight: 400;
+  --display-tracking: -0.015em;
+}
+
+.btn {
+  line-height: 1.35;
+  font-weight: 650;
+}
+.btn--primary {
+  box-shadow: none;
+}
+.btn--secondary {
+  border-color: var(--border);
+}
+.site-header {
+  isolation: isolate;
+}
+.brand-wordmark {
+  font-weight: 400;
+  white-space: nowrap;
+}
+.brand-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.brand-mark i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.brand-mark i:nth-child(2) {
+  transform: translateY(-4px);
+}
+.header-discovery {
+  font-size: 0.875rem;
+  color: var(--fg-muted);
+}
+.header-discovery a,
+.site-footer nav a {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+.header-discovery a:hover,
+.site-footer a:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 5px;
+}
+.site-footer {
+  margin-top: 0;
+}
+.page-heading {
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.page-heading h1 {
+  font-size: clamp(1.8rem, 1.3rem + 1.5vw, 2.65rem);
+  line-height: 1.2;
+}
+.page-heading > p:last-child {
+  font-size: 1rem;
+  max-width: 60ch;
+}
+.empty-state {
+  min-height: 17rem;
+  justify-content: center;
+}
+.empty-state h2 {
+  font-family: var(--font-text);
+  font-weight: 650;
+}
+.app-tabs {
+  padding: 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 0.625rem;
+  background: var(--surface);
+  gap: 0.25rem;
+}
+.app-tabs [role="tab"] {
+  margin: 0;
+  border: 0;
+  border-radius: 0.375rem;
+}
+.app-tabs [role="tab"][aria-selected="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-soft-fg);
+}
+:where(input:not([type="checkbox"], [type="radio"], [type="hidden"]), select, textarea) {
+  font-family: var(--font-text);
+}
+:where(input, select, textarea):focus-visible {
+  outline-offset: 3px;
+}
+:where([role="dialog"]) {
+  font-family: var(--font-text);
+}
+:where([role="dialog"]) :where(h2, h3) {
+  font-family: var(--font-text);
+  font-weight: 650;
+}
+:where([data-area="admin"], [data-area="account"], [data-area="booking"]) :where(h2, h3) {
+  font-family: var(--font-text);
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+:where([data-area="admin"], [data-area="account"]) table {
+  font-size: 0.9rem;
+}
+:where([data-area="admin"], [data-area="account"]) thead {
+  background: var(--surface-sunken);
+}
+:where([data-area="admin"], [data-area="account"]) th {
+  font-weight: 650;
+  font-size: 0.8rem;
+}
+:where([data-area="admin"], [data-area="account"]) tbody tr:hover {
+  background: color-mix(in srgb, var(--accent-soft) 30%, var(--surface));
+}
+:where([data-area="admin"], [data-area="account"]) :where(.shadow-sm, .shadow-md) {
+  box-shadow: none;
+}
+.admin-sidebar {
+  background: var(--surface);
+}
+.admin-sidebar nav > a {
+  position: relative;
+}
+.admin-sidebar nav > a[aria-current="page"]::after {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  margin-left: auto;
+}
+.admin-workspace > .page-heading {
+  margin-bottom: 1.75rem;
+}
+.admin-workspace :where(section, form)[class*="border-line"][class*="bg-surface"] {
+  border-radius: 0.75rem;
+}
+.admin-workspace > :where(section, div) {
+  scroll-margin-top: 6rem;
+}
+.today-dashboard > [role="group"] > dl {
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  overflow: hidden;
+  background: var(--surface);
+}
+.today-dashboard > [role="group"] > dl > div {
+  border: 0;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  padding: 1.25rem;
+}
+.today-dashboard dt {
+  font-size: 0.8rem;
+}
+.today-dashboard dd {
+  font-family: var(--font-text);
+  font-weight: 600;
+  font-size: 1.75rem;
+}
+.salon-calendar {
+  box-shadow: 0 4px 20px rgb(44 35 37 / 0.025);
+}
+.salon-calendar > div > div:first-child > div {
+  min-height: 60px;
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+.section-index {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1.75rem;
+}
+.section-index a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.section-index a:hover {
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+.settings-section {
+  scroll-margin-top: 6rem;
+}
+.account-content {
+  max-width: 52rem;
+}
+.account-navigation nav {
+  margin-left: 0;
+}
+.account-navigation a.active {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+.booking-frame {
+  padding-top: 2rem;
+}
+.booking-progress {
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.booking-progress > ol {
+  flex-wrap: wrap;
+  row-gap: 0.5rem;
+}
+.booking-content > header {
+  padding: 1rem 0 0.75rem;
+}
+.booking-content > header h1 {
+  font-size: clamp(1.9rem, 1.4rem + 1.5vw, 2.7rem);
+}
+.booking-choice {
+  padding: 1.25rem;
+  border-radius: 0.625rem;
+}
+.booking-choice > span:last-child {
+  font-family: var(--font-text);
+  font-weight: 650;
+}
+.booking-summary {
+  box-shadow: 0 -8px 30px rgb(44 35 37 / 0.05);
+}
+.booking-summary > div > h2 {
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.auth-editorial {
+  min-height: 38rem;
+}
+.auth-editorial img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.auth-content > div {
+  padding-top: 1.25rem;
+  padding-bottom: 1.25rem;
+}
+.auth-content .page-heading {
+  border: 0;
+  margin-bottom: 1rem;
+}
+.auth-content .page-heading h1 {
+  font-size: 2.35rem;
+}
+.auth-content > div > div[class*="bg-surface"] {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.auth-content form {
+  max-width: 28rem;
+}
+.editorial-wrap {
+  width: 100%;
+  max-width: 1280px;
+  margin-inline: auto;
+  padding-inline: 24px;
+}
+.salon-hero {
+  min-height: calc(100svh - 64px);
+  padding-block: 24px 40px;
+}
+.salon-hero-media {
+  overflow: hidden;
+  height: clamp(270px, 44svh, 440px);
+}
+.salon-hero-media img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 48%;
+}
+.salon-hero-copy {
+  display: grid;
+  gap: 1.5rem;
+  padding-top: 2rem;
+}
+.editorial-kicker {
+  margin-bottom: 0.75rem;
+  color: var(--accent-text);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.salon-hero h1 {
+  max-width: 14ch;
+  font-size: clamp(2.35rem, 2rem + 2.3vw, 4.3rem);
+  line-height: 1.1;
+  letter-spacing: -0.04em;
+}
+.salon-hero-action {
+  display: grid;
+  justify-items: start;
+  align-content: start;
+  gap: 1rem;
+}
+.salon-hero-action > p:first-child {
+  max-width: 42ch;
+  font-size: 1.05rem;
+  color: var(--fg-muted);
+}
+.salon-hero .hero-fact {
+  max-width: 55ch;
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+}
+.editorial-section {
+  min-height: 100svh;
+  padding-block: 60px;
+  scroll-margin-top: 64px;
+}
+.editorial-section-heading {
+  margin-bottom: 2.5rem;
+}
+.editorial-section-heading h2 {
+  font-size: clamp(2rem, 1.2rem + 2.2vw, 3rem);
+  line-height: 1.15;
+}
+.editorial-section-heading p {
+  margin-top: 0.75rem;
+  color: var(--fg-muted);
+  max-width: 48ch;
+}
+.salon-offer {
+  background: var(--surface);
+  border-block: 1px solid var(--border);
+}
+.salon-offer-grid {
+  display: grid;
+  gap: 2.5rem;
+  align-items: start;
+}
+.service-menu {
+  border-top: 1px solid var(--border);
+}
+.service-menu li {
+  border-bottom: 1px solid var(--border);
+}
+.service-menu-row {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1.25rem;
+  padding: 1.5rem 0;
+}
+.service-menu-name {
+  font-weight: 650;
+  font-size: 1.1rem;
+}
+.service-menu-price {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  align-items: end;
+  font-size: 1.2rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.service-menu-row:hover .service-menu-name {
+  color: var(--accent-text);
+}
+.salon-offer-photo {
+  aspect-ratio: 1;
+  overflow: hidden;
+  margin: 0;
+}
+.salon-offer-photo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.booking-instructions {
+  display: grid;
+  gap: 1.75rem;
+}
+.booking-instructions li {
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+.booking-instructions li > span {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--accent-text);
+  margin-bottom: 1rem;
+}
+.booking-instructions p {
+  max-width: 30ch;
+  font-size: 1.05rem;
+}
+.salon-team {
+  margin-top: 2.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem 2.5rem;
+}
+.salon-team h3 {
+  font-family: var(--font-text);
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+.salon-team ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.5rem;
+}
+.salon-team li {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  font-size: 0.9rem;
+}
+.salon-team li > span {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--accent-text);
+}
+.salon-signoff {
+  margin-top: 3rem;
+  padding-top: 2.5rem;
+  border-top: 1px solid var(--border);
+}
+.salon-wordmark {
+  max-width: 13ch;
+  font-family: var(--font-display);
+  font-size: clamp(3rem, 6vw, 6rem);
+  letter-spacing: -0.06em;
+  line-height: 1.05;
+}
+.salon-signoff > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.25rem;
+  margin-top: 2rem;
+}
+.salon-signoff h3 {
+  font-size: 1.35rem;
+}
+
+@media (min-width: 768px) {
+  .salon-hero-copy {
+    grid-template-columns: 1.15fr 1fr;
+    gap: 4rem;
+  }
+  .booking-instructions {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2rem;
+  }
+  .account-layout {
+    display: grid;
+    grid-template-columns: 13rem minmax(0, 1fr);
+    gap: 0 2.5rem;
+  }
+  .account-layout > .page-heading {
+    grid-column: 1 / -1;
+  }
+  .account-navigation {
+    align-self: start;
+    position: sticky;
+    top: 6rem;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    border: 0;
+    gap: 1rem;
+  }
+  .account-navigation nav {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .account-navigation > button {
+    justify-content: start;
+    border-top: 1px solid var(--border);
+    padding-top: 1rem;
+    border-radius: 0;
+  }
+}
+@media (min-width: 1024px) {
+  .editorial-wrap,
+  .header-bar {
+    padding-inline: 40px;
+  }
+  .salon-offer-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 5rem;
+  }
+  .editorial-section {
+    padding-block: 60px;
+  }
+  .booking-summary {
+    border-top: 3px solid var(--accent);
+    box-shadow: none;
+  }
+  .today-dashboard > [role="group"] > dl > div {
+    border-bottom: 0;
+  }
+  .today-dashboard > [role="group"] > dl > div:last-child {
+    border-right: 0;
+  }
+}
+@media (max-width: 767px) {
+  .auth-frame {
+    max-width: 30rem;
+  }
+  .auth-content .page-heading h1 {
+    font-size: 2rem;
+  }
+  .booking-frame {
+    padding-top: 1rem;
+  }
+  .booking-choice {
+    padding: 1rem;
+  }
+  .account-navigation {
+    padding-bottom: 1rem;
+  }
+  .account-navigation nav {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    width: 100%;
+  }
+  .account-navigation nav a {
+    padding-inline: 0.75rem;
+  }
+  .salon-hero {
+    padding-top: 16px;
+  }
+  .salon-hero-copy {
+    padding-top: 1.5rem;
+  }
+  .salon-hero-media {
+    height: clamp(220px, 32svh, 300px);
+  }
+  .editorial-section {
+    min-height: auto;
+    padding-block: 3rem;
+  }
+  .salon-offer-photo {
+    max-height: 32rem;
+  }
+}
+@media (max-width: 359px) {
+  .header-bar {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0;
+    padding-block: 0.25rem;
+  }
+  .brand-wordmark {
+    width: 100%;
+    justify-content: center;
+    min-height: 36px;
+  }
+  .header-bar > nav:last-child {
+    justify-content: center;
+  }
+  .editorial-wrap {
+    padding-inline: 16px;
+  }
+}
+/* Page-specific composition, in addition to the shared controls. */
+
+.settings-editor > section {
+  padding: 1.5rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 0.75rem;
+}
+.settings-editor > section > h2 {
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.settings-editor > section > :where(p, div) {
+  max-width: 42rem;
+}
+.client-appointment {
+  padding: 1.5rem;
+  border-left: 3px solid var(--accent);
+}
+.client-appointment > div:first-child {
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.client-appointment > div:first-child h3 {
+  max-width: 24ch;
+  font-size: 1.1rem;
+}
+.client-appointment > div:first-child p {
+  font-size: 0.875rem;
+}
+.client-appointment > ul {
+  padding-block: 0.25rem;
+}
+.reports-toolbar {
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  background: var(--surface);
+}
+.commerce-destinations {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.commerce-destinations > button {
+  justify-content: start;
+  min-height: 64px;
+  border-color: var(--border);
+  white-space: normal;
+  padding: 1rem;
+}
+
+.view-reports [role="group"] dd:first-of-type {
+  font-family: var(--font-text);
+  font-weight: 650;
+}
+.view-services > div:nth-child(2) {
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.public-collection {
+  padding-block: clamp(2rem, 5vw, 4.5rem);
+}
+.public-collection .page-heading {
+  max-width: 52rem;
+  border: 0;
+  padding-bottom: 0;
+  margin-bottom: 2.5rem;
+}
+.public-collection .page-heading h1 {
+  font-size: clamp(2.25rem, 2rem + 2vw, 4rem);
+}
+.salon-close {
+  background: var(--accent-soft);
+}
+.salon-close > .wrap {
+  min-height: calc(100svh - 120px);
+  display: flex;
+  flex-direction: column;
+}
+.salon-signoff {
+  margin-top: auto;
+}
+.salon-wordmark {
+  max-width: none;
+  font-size: clamp(3.75rem, 7.7vw, 7.75rem);
+}
+
+@media (min-width: 1024px) {
+  .settings-editor {
+    max-width: none;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+  }
+  .settings-editor > :where(section, div) {
+    margin-top: 0;
+  }
+  .settings-editor > section:first-of-type {
+    grid-row: auto;
+    align-self: start;
+  }
+  .settings-editor > div:last-child {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 767px) {
+  .commerce-destinations {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+  .commerce-destinations > button {
+    min-height: 52px;
+    padding: 0.75rem 1rem;
+  }
+  .salon-close > .wrap {
+    min-height: auto;
+  }
+  .salon-signoff {
+    margin-top: 2.5rem;
+  }
+}
+
+.editorial-wrap,
+.header-bar.wrap {
+  width: calc(100% - 48px);
+  max-width: 1200px;
+  padding-inline: 0;
+}
+.salon-hero-media {
+  height: clamp(300px, 50svh, 500px);
+}
+.salon-hero-action > p:first-child {
+  color: var(--fg);
+}
+.salon-offer-grid {
+  gap: 24px;
+}
+.salon-team .team-label {
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+.salon-signoff {
+  border-top: 0;
+}
+.salon-signoff > div {
+  justify-content: start;
+  gap: 2rem;
+}
+
+@media (min-width: 768px) {
+  .salon-hero-copy {
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+}
+@media (max-width: 1279px) {
+  .site-header[data-discovery] .header-bar {
+    flex-wrap: wrap;
+    gap: 0;
+  }
+  .header-discovery {
+    order: 3;
+    width: 100%;
+    min-height: 44px;
+    border-top: 1px solid var(--border);
+    gap: 1.5rem;
+    font-size: 0.875rem;
+  }
+  .site-header[data-discovery] ~ main .salon-hero {
+    min-height: calc(100svh - 108px);
+  }
+}
+@media (min-width: 768px) and (max-width: 1023px) {
+  .salon-hero-media {
+    height: 48svh;
+    max-height: 600px;
+  }
+  .salon-close {
+    min-height: auto;
+  }
+  .salon-close > .wrap {
+    min-height: 700px;
+  }
+}
+@media (max-width: 767px) {
+  .salon-hero-media {
+    height: clamp(200px, 28svh, 270px);
+  }
+}
+@media (max-width: 359px) {
+  .editorial-wrap,
+  .header-bar.wrap {
+    width: calc(100% - 32px);
+  }
+  .header-discovery {
+    justify-content: center;
+    gap: 1rem;
+  }
+}
+
+@media (min-width: 1280px) {
+  .settings-editor {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: start;
+    gap: 1.25rem;
+  }
+}
+
+/* The public discovery row adds its own touch-sized line beneath the utility controls. */
+@media (max-width: 1279px) {
+  .site-header[data-discovery] .brand-wordmark {
+    min-height: 64px;
+  }
+}
+@media (max-width: 359px) {
+  .site-header[data-discovery] .brand-wordmark {
+    min-height: 36px;
+  }
+  .site-header[data-discovery] ~ main .salon-hero {
+    min-height: calc(100svh - 136px);
+  }
+}
+
+/* Match the measured header rows without shrinking any touch controls. */
+.salon-hero {
+  min-height: calc(100svh - 65px);
+}
+.salon-hero h1 {
+  font-size: clamp(2.25rem, 2rem + 1.8vw, 3.5rem);
+}
+.salon-offer .service-menu-row {
+  padding-block: 1.35rem;
+}
+.salon-team {
+  display: block;
+}
+.salon-team ul {
+  margin-top: 1rem;
+}
+@media (max-width: 1279px) {
+  .site-header[data-discovery] ~ main .salon-hero {
+    min-height: calc(100svh - 109px);
+  }
+}
+@media (max-width: 639px) {
+  .header-bar .brand-wordmark {
+    font-size: 1rem;
+  }
+  .header-bar .brand-mark {
+    display: none;
+  }
+  .header-bar > nav:last-child {
+    gap: 0;
+  }
+}
+@media (max-width: 359px) {
+  .header-bar {
+    padding-block: 0;
+  }
+  .site-header[data-discovery] ~ main .salon-hero {
+    min-height: calc(100svh - 131px);
+  }
+}
+@media (min-width: 360px) and (max-width: 767px) {
+  .salon-hero-media {
+    height: clamp(240px, 46svh, 400px);
+  }
+  .salon-hero {
+    padding-bottom: 24px;
+  }
+}

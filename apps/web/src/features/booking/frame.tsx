@@ -39,7 +39,7 @@ export function BookingFrame({
 
   return (
     <PageContainer width="max-w-6xl">
-      <div className="pt-6 pb-56 lg:pb-16">
+      <div className="booking-frame pt-6 pb-56 lg:pb-16" data-booking-step={step}>
         <Stepper
           steps={steps}
           label={t("booking.stepper.label")}
@@ -58,7 +58,7 @@ export function BookingFrame({
           }
         />
         <div className="mt-6 grid gap-8 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start">
-          <section aria-labelledby="step-title" className="min-w-0">
+          <section aria-labelledby="step-title" className="booking-content min-w-0">
             <header className="mb-6">
               <h1 id="step-title" className="text-title">
                 {title}

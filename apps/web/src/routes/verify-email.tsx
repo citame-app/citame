@@ -1,5 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
-import { PageContainer, PageHeading } from "~/components/pages";
+import { AuthFrame } from "~/components/auth-frame";
+import { PageHeading } from "~/components/pages";
 import { buttonClasses } from "~/components/ui/button";
 import { ResendVerificationForm } from "~/features/auth/recovery-forms";
 import { verificationCallback } from "~/features/auth/use-auth";
@@ -49,7 +50,7 @@ function VerifyEmailPage() {
   const { t } = useI18n();
   const { error, next } = Route.useSearch();
   return (
-    <PageContainer width="max-w-md">
+    <AuthFrame>
       <div className="py-10 sm:py-16">
         {error ? (
           <>
@@ -74,6 +75,6 @@ function VerifyEmailPage() {
           </>
         )}
       </div>
-    </PageContainer>
+    </AuthFrame>
   );
 }

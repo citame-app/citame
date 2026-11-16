@@ -4,6 +4,7 @@ import { defineConfig, devices } from "@playwright/test";
  * End-to-end tests run against a REAL stack: Postgres, Valkey, the Hono API and the built web
  * server (see README, "End-to-end tests"). Nothing is mocked except where a test says so.
  */
+const uiRedesignFixture = process.env.E2E_UI_REDESIGN_FIXTURE === "true";
 const optionsFixture = process.env.E2E_OPTIONS_FIXTURE === "true";
 const crmFixture = process.env.E2E_CRM_FIXTURE === "true";
 const mergeFixture = process.env.E2E_MERGE_FIXTURE === "true";
@@ -24,6 +25,7 @@ const seriesFixture = process.env.E2E_SERIES_FIXTURE === "true";
 const rewardsFixture = process.env.E2E_REWARDS_FIXTURE === "true";
 const recurringFixture =
   process.env.E2E_RECURRING_FIXTURE === "true" ||
+  uiRedesignFixture ||
   depositFixture ||
   rewardsFixture ||
   seriesFixture ||
@@ -49,41 +51,43 @@ export default defineConfig({
   testDir: "./e2e",
   ...(recurringFixture
     ? {
-        testMatch: mergeFixture
-          ? "**/client-merge.spec.ts"
-          : bookingPromotionsFixture
-            ? "**/booking-promotions.spec.ts"
-            : timedPromotionsFixture
-              ? "**/timed-promotions.spec.ts"
-              : processingFixture
-                ? "**/processing.spec.ts"
-                : combinationFixture
-                  ? "**/combinations.spec.ts"
-                  : socialFixture
-                    ? "**/social-creative.spec.ts"
-                    : acquisitionFixture
-                      ? "**/acquisition.spec.ts"
-                      : reputationFixture
-                        ? ["**/reputation.spec.ts", "**/portfolio.spec.ts"]
-                        : shiftsFixture
-                          ? "**/date-shifts.spec.ts"
-                          : intakeFixture
-                            ? "**/intake.spec.ts"
-                            : crmFixture
-                              ? ["**/client-transfer.spec.ts", "**/client-photos.spec.ts"]
-                              : optionsFixture
-                                ? "**/service-options.spec.ts"
-                                : resourcesFixture
-                                  ? "**/resources.spec.ts"
-                                  : waitlistFixture
-                                    ? "**/waitlist.spec.ts"
-                                    : seriesFixture
-                                      ? "**/appointment-series.spec.ts"
-                                      : rewardsFixture
-                                        ? "**/rewards.spec.ts"
-                                        : depositFixture
-                                          ? "**/booking-protection.spec.ts"
-                                          : "**/recurring.spec.ts",
+        testMatch: uiRedesignFixture
+          ? "**/ui-redesign.spec.ts"
+          : mergeFixture
+            ? "**/client-merge.spec.ts"
+            : bookingPromotionsFixture
+              ? "**/booking-promotions.spec.ts"
+              : timedPromotionsFixture
+                ? "**/timed-promotions.spec.ts"
+                : processingFixture
+                  ? "**/processing.spec.ts"
+                  : combinationFixture
+                    ? "**/combinations.spec.ts"
+                    : socialFixture
+                      ? "**/social-creative.spec.ts"
+                      : acquisitionFixture
+                        ? "**/acquisition.spec.ts"
+                        : reputationFixture
+                          ? ["**/reputation.spec.ts", "**/portfolio.spec.ts"]
+                          : shiftsFixture
+                            ? "**/date-shifts.spec.ts"
+                            : intakeFixture
+                              ? "**/intake.spec.ts"
+                              : crmFixture
+                                ? ["**/client-transfer.spec.ts", "**/client-photos.spec.ts"]
+                                : optionsFixture
+                                  ? "**/service-options.spec.ts"
+                                  : resourcesFixture
+                                    ? "**/resources.spec.ts"
+                                    : waitlistFixture
+                                      ? "**/waitlist.spec.ts"
+                                      : seriesFixture
+                                        ? "**/appointment-series.spec.ts"
+                                        : rewardsFixture
+                                          ? "**/rewards.spec.ts"
+                                          : depositFixture
+                                            ? "**/booking-protection.spec.ts"
+                                            : "**/recurring.spec.ts",
         webServer: [
           {
             command: "NODE_ENV=test bun ../api/test/recurring-browser.ts",
@@ -106,6 +110,7 @@ export default defineConfig({
       }
     : {
         testIgnore: [
+          "**/ui-redesign.spec.ts",
           "**/recurring.spec.ts",
           "**/booking-protection.spec.ts",
           "**/rewards.spec.ts",

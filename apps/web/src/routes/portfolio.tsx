@@ -32,7 +32,7 @@ function Page() {
   const { t } = useI18n();
   return (
     <PageContainer>
-      <div className="py-8 sm:py-12">
+      <div className="public-collection py-8 sm:py-12">
         <PageHeading title={t("portfolio.title")} />
         <PublicPortfolio />
       </div>

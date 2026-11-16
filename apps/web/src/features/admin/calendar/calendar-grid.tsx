@@ -187,7 +187,7 @@ export function CalendarGrid(props: CalendarGridProps) {
       aria-label={t("calendar.title")}
       // biome-ignore lint/a11y/noNoninteractiveTabindex: a horizontally scrollable region must be keyboard reachable
       tabIndex={0}
-      className="overflow-x-auto rounded-xl border border-line bg-surface"
+      className="salon-calendar overflow-x-auto rounded-xl border border-line bg-surface"
     >
       <div className="min-w-fit">
         <div

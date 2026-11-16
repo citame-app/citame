@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 
-import frauncesLatin from "@fontsource-variable/fraunces/files/fraunces-latin-wght-normal.woff2?url";
-import interLatin from "@fontsource-variable/inter/files/inter-latin-wght-normal.woff2?url";
+import frauncesLatin from "@fontsource-variable/lora/files/lora-latin-wght-normal.woff2?url";
+import interLatin from "@fontsource-variable/nunito-sans/files/nunito-sans-latin-wght-normal.woff2?url";
 import type { QueryClient } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -13,11 +13,11 @@ import {
   useRouterState,
 } from "@tanstack/react-router";
 import { type ReactNode, useEffect, useRef } from "react";
-import { Footer, Header } from "~/components/layout";
+import { Footer, Header, SkipLink } from "~/components/layout";
 import { OfflineBanner } from "~/components/ui/states";
 import { ToastHost } from "~/components/ui/toast";
 import { createTranslator, DEFAULT_LOCALE, type Locale } from "~/i18n";
-import { I18nProvider, useI18n } from "~/i18n/react";
+import { I18nProvider } from "~/i18n/react";
 import { buildCsp } from "~/lib/csp";
 import { salonQuery } from "~/lib/queries";
 import { pageMeta } from "~/lib/seo";
@@ -69,6 +69,9 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       meta: [
         { charSet: "utf-8" },
         { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover" },
+        { name: "page-type", content: "place" },
+        { name: "site-kind", content: "other" },
+        { name: "page-kind", content: "place" },
         { name: "theme-color", content: "#fbf8f5", media: "(prefers-color-scheme: light)" },
         { name: "theme-color", content: "#171214", media: "(prefers-color-scheme: dark)" },
         ...pageMeta({
@@ -94,6 +97,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
           crossOrigin: "anonymous",
         },
         { rel: "stylesheet", href: appCss },
+        { rel: "stylesheet", href: "/taste/motion/motion.css" },
         { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },
         { rel: "icon", href: "/favicon-32.png", type: "image/png", sizes: "32x32" },
         { rel: "apple-touch-icon", href: "/apple-touch-icon.png" },
@@ -110,11 +114,20 @@ function RootDocument({ children }: { children: ReactNode }) {
     | { locale?: Locale; theme?: "light" | "dark" }
     | undefined;
   return (
-    <html lang={state?.locale ?? DEFAULT_LOCALE} data-theme={state?.theme}>
+    <html
+      lang={state?.locale ?? DEFAULT_LOCALE}
+      data-theme={state?.theme}
+      data-type="place"
+      data-radius="soft"
+      data-buttons="block"
+      data-motion="true"
+      suppressHydrationWarning
+    >
       <head>
         <HeadContent />
+        <script src="/taste-head.js" />
       </head>
-      <body>
+      <body className="flex min-h-dvh flex-col">
         {children}
         <Scripts />
       </body>
@@ -175,7 +188,6 @@ function Chrome({
   onLocaleChange: (locale: Locale) => void;
   onThemeChange: (theme: Theme) => void;
 }) {
-  const { t } = useI18n();
   const mainRef = useRef<HTMLElement>(null);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const firstRender = useRef(true);
@@ -194,16 +206,12 @@ function Chrome({
   }, [pathname]);
 
   return (
-    <div className="flex min-h-dvh flex-col">
-      <a
-        href="#main"
-        className="sr-only z-[70] rounded-md bg-accent px-4 py-3 font-medium text-accent-fg focus:not-sr-only focus:fixed focus:top-2 focus:left-2"
-      >
-        {t("a11y.skip")}
-      </a>
+    <>
+      {inWidget && <SkipLink />}
       <OfflineBanner />
       {!inWidget && (
         <Header
+          showDiscovery={["/", "/reviews", "/portfolio"].includes(pathname)}
           salonName={salonName}
           session={session}
           theme={theme}
@@ -212,10 +220,24 @@ function Chrome({
           onThemeChange={onThemeChange}
         />
       )}
-      <main id="main" ref={mainRef} tabIndex={-1} className="flex-1 outline-none">
+      <main
+        id="main"
+        ref={mainRef}
+        tabIndex={-1}
+        data-area={
+          inAdmin
+            ? "admin"
+            : pathname.startsWith("/account")
+              ? "account"
+              : pathname.startsWith("/book")
+                ? "booking"
+                : "public"
+        }
+        className="flex-1 outline-none"
+      >
         <Outlet />
       </main>
       {!inAdmin && !inWidget && <Footer salonName={salonName} timeZone={timeZone} />}
-    </div>
+    </>
   );
 }

@@ -28,7 +28,7 @@ function Page() {
   const navigate = useNavigate({ from: Route.fullPath });
   const tab = search.tab ?? "reviews";
   return (
-    <>
+    <div className="view-reputation">
       <PageHeading title={t("admin.nav.reputation")} />
       <Tabs
         value={tab}
@@ -65,6 +65,6 @@ function Page() {
           <SocialCreative salonName={salon.name} />
         </TabPanel>
       </Tabs>
-    </>
+    </div>
   );
 }

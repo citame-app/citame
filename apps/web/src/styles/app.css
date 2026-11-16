@@ -1,7 +1,8 @@
 @import "tailwindcss";
-@import "@fontsource-variable/inter/wght.css";
-@import "@fontsource-variable/fraunces/wght.css";
+@import "@fontsource-variable/nunito-sans/wght.css";
+@import "@fontsource-variable/lora/wght.css";
 @import "./tokens.css";
+@import "./redesign.css";
 
 @theme inline {
   --color-canvas: var(--bg);
@@ -27,8 +28,8 @@
   --color-scrim: var(--scrim);
 
   --font-sans:
-    "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-display: "Fraunces Variable", ui-serif, "Iowan Old Style", Georgia, serif;
+    "Nunito Sans Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Lora Variable", ui-serif, "Iowan Old Style", Georgia, serif;
 
   --radius-sm: 0.5rem;
   --radius-md: 0.75rem;
@@ -70,7 +71,7 @@
   h2,
   h3 {
     font-family: var(--font-display);
-    font-weight: 560;
+    font-weight: 400;
     letter-spacing: -0.01em;
     text-wrap: balance;
   }

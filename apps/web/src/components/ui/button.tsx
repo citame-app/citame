@@ -6,7 +6,7 @@ export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 export type ButtonSize = "md" | "lg";
 
 const base =
-  "inline-flex items-center justify-center gap-2 rounded-md font-medium whitespace-nowrap select-none " +
+  "btn inline-flex items-center justify-center gap-2 rounded-md font-medium whitespace-nowrap select-none " +
   "transition-[background-color,color,box-shadow,transform,opacity] duration-150 " +
   "active:scale-[0.98] disabled:opacity-60 disabled:active:scale-100 aria-disabled:opacity-60";
 
@@ -31,7 +31,7 @@ export function buttonClasses({
   size?: ButtonSize;
   fullWidth?: boolean;
 } = {}): string {
-  return cn(base, variants[variant], sizes[size], fullWidth && "w-full");
+  return cn(base, `btn--${variant}`, variants[variant], sizes[size], fullWidth && "w-full");
 }
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {

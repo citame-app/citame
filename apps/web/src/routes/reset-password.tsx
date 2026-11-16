@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { PageContainer, PageHeading } from "~/components/pages";
+import { AuthFrame } from "~/components/auth-frame";
+import { PageHeading } from "~/components/pages";
 import { InvalidResetLink, ResetPasswordForm } from "~/features/auth/recovery-forms";
 import { createTranslator } from "~/i18n";
 import { useI18n } from "~/i18n/react";
@@ -43,7 +44,7 @@ function ResetPasswordPage() {
   const { token, error, invited } = Route.useSearch();
   const usable = token && !error;
   return (
-    <PageContainer width="max-w-md">
+    <AuthFrame>
       <div className="py-10 sm:py-16">
         <PageHeading
           title={invited ? t("auth.reset.invite.title") : t("auth.reset.title")}
@@ -61,6 +62,6 @@ function ResetPasswordPage() {
           )}
         </div>
       </div>
-    </PageContainer>
+    </AuthFrame>
   );
 }

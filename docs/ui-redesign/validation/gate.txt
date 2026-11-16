@@ -1,0 +1,36 @@
+gate: rounds used up; 9 FAIL open (page unchanged since the last run)
+  FAIL section-height   footer.site-footer.border-t "Sisters of BeautyPeluquería, uñas y ceja"  [1440]
+       the section is 314px tall (0.3 screens), 586px short of one screen (900px): every section after the hero is one screen or two, 2px either way (SR-2)
+       fix: set the section to one screen or two (height: calc(var(--h,1) * 100vh), --h 1 or 2) and cut or split its content to fit
+  FAIL section-height   main#main > section.hero.hero--place "Sisters of BeautyTu salón de belleza.Eli"  [1440]
+       the section starts at 65px, 65px below the screen grid (0 x 900px): sections start on whole screens (SR-2)
+       fix: make every section above it exactly one or two screens tall, so this one starts on a whole screen
+  FAIL one-section      footer.site-footer.border-t "Sisters of BeautyPeluquería, uñas y ceja"  [1440]
+       the screen at scroll 2114px (the top of section 4) shows 314px of section 4 and the content of 2 sections, over 24px each beside section 3: a screen shows one section (another may peek 8px, 24px WARN) (SR-4)
+       fix: make each section exactly one screen or two, so a screen shows one section and no neighbour peeks
+  FAIL container-edges  a.sr-only.rounded-md "Saltar al contenido principal"  [1440]
+       a <a> at the top of the page, outside header.nav, main, footer.closing and nav.actionbar (SR-6)
+       fix: build the page as header.nav, a main of sections (each one in-flow .wrap plus background layers) and footer.closing
+  FAIL container-edges  footer.site-footer.border-t "Sisters of BeautyPeluquería, uñas y ceja"  [1440]
+       a <footer> at the top of the page, outside header.nav, main, footer.closing and nav.actionbar (SR-6)
+       fix: build the page as header.nav, a main of sections (each one in-flow .wrap plus background layers) and footer.closing
+  FAIL section-gaps     main#main > section.hero.hero--place / section#services  [390]
+       238px between these sections, +153% against the median 94px
+       fix: use one gap between sections (all within 25% of each other)
+  FAIL screen-height    #services section.salon-offer.editorial-section "Tratamientos de bellezaElige uno"  [1440]
+       900px, 1.08 screens; a section is exactly one or two (--h)
+       fix: make the section exactly one or two screens (--h: 1 or 2)
+  FAIL screen-height    section.salon-close.editorial-section section.salon-close.editorial-section "Tu cita, paso  [1440]
+       900px, 1.08 screens; a section is exactly one or two (--h)
+       fix: make the section exactly one or two screens (--h: 1 or 2)
+  FAIL neighbour        #services section.salon-offer.editorial-section "Tratamientos de bellezaElige uno"  [390]
+       framed, 83px of section.salon-close.editorial-section section.salon-close.editorial-section "Tu cita, paso a paso01Elige los " shows
+       fix: keep the next section's heading and picture out of this screen
+  WAIVED text-only main#main > section.salon-close.editorial-section "Tu cita, paso a paso": The dealt place plan explicitly uses the salon name as a large type moment in its closing brand band. This is intentional typography, with the two editorial photographs in the preceding sections, rather than a missing visual.
+  WAIVED focus-visible input#locale-es-AR: The native transparent radio is stretched over its visible label. Playwright verifies keyboard focus draws a solid 3px outline on both associated labels in light and dark themes; the checker evaluates the transparent input alone.
+  WAIVED hero-lines section.hero h1: The final approved category heading, Tu salón de belleza / Your beauty salon, fits the actual responsive layout. The synthetic 47-character stress heading is not application copy; the skill explicitly allows waiving this case when the final heading fits.
+  waiver ignored (matches no open finding): section-height "footer.closing.site-footer"
+  waiver ignored (matches no open finding): one-section "footer.closing.site-footer"
+  13 WARN (not blocking), first: scroll-reveal section#services > div.wrap.editorial-wr; copy-headings h2#how-title "Tu cita, paso a paso"; copy-buttons header.nav.site-header > div.wrap.header; section-gaps main#main > section.salon-close.editoria; section-gaps section#services / main#main > section.s
+Stop fixing: put these open FAILs and the waivers in your report, then finish.
+GATE: OPEN 9 (rounds used up)

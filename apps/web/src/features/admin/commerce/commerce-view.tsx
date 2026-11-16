@@ -62,7 +62,7 @@ export function CommerceView({
     );
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap gap-3">
+      <div className="commerce-destinations flex flex-wrap gap-3">
         <Button variant="secondary" onClick={() => setInventory(true)}>
           {t("inventory.title")}
         </Button>

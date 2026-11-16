@@ -12,7 +12,7 @@ function WaitlistPage() {
   const { session } = Route.useRouteContext();
   if (!session) return null;
   return (
-    <>
+    <div className="view-waitlist">
       <PageHeading title={t("waitlist.title")} lead={t("waitlist.lead")} />
       <WaitlistView
         mode="admin"
@@ -20,6 +20,6 @@ function WaitlistPage() {
         accessPreset={session.accessPreset}
         ownStaffId={session.staffId}
       />
-    </>
+    </div>
   );
 }

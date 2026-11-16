@@ -1,8 +1,9 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { useEffect, useRef } from "react";
 import { PageContainer } from "~/components/pages";
 import { buttonClasses } from "~/components/ui/button";
-import { ChevronRightIcon, ClockIcon, SparkleIcon } from "~/components/ui/icons";
+import { ChevronRightIcon, ClockIcon } from "~/components/ui/icons";
 import { Skeleton } from "~/components/ui/states";
 import { createTranslator } from "~/i18n";
 import { useI18n } from "~/i18n/react";
@@ -53,163 +54,170 @@ function Home() {
   const { data: services } = useSuspenseQuery(servicesQuery);
   const { data: staff } = useSuspenseQuery(staffQuery);
   const steps = ["home.how.one", "home.how.two", "home.how.three"] as const;
+  const momentRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const element = momentRef.current;
+    const entryId = "salon-motion-entry";
+    if (!document.getElementById(entryId)) {
+      const script = document.createElement("script");
+      script.id = entryId;
+      script.type = "module";
+      script.src = "/taste-entry.js";
+      document.head.appendChild(script);
+    }
+    window.dispatchEvent(new Event("sob:public-mounted"));
+    return () => {
+      window.dispatchEvent(new CustomEvent("sob:public-unmounted", { detail: element }));
+    };
+  }, []);
 
   return (
     <>
-      <section className="relative overflow-hidden">
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute -top-32 -right-24 size-[28rem] rounded-full bg-accent-soft opacity-70 blur-3xl"
-        />
-        <PageContainer width="max-w-6xl">
-          <div className="relative grid items-center gap-10 py-12 sm:py-20 lg:grid-cols-[1.2fr_0.8fr]">
-            <div className="sob-rise">
-              <p className="mb-4 text-sm font-semibold uppercase tracking-[0.18em] text-accent-text">
-                {t("home.eyebrow")}
-              </p>
-              <h1 className="text-display">{t("home.title")}</h1>
-              <p className="mt-5 max-w-lg text-lg text-muted">
-                {t("home.lead", { name: salon.name })}
-              </p>
-              <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+      <section className="hero hero--place salon-hero" data-enter="" aria-labelledby="home-title">
+        <div className="wrap editorial-wrap">
+          <div className="hero-text">
+            <div className="hero__media salon-hero-media m-zoom" data-enter-media="">
+              <img
+                src="/images/editorial/hair-v1-1536.webp"
+                srcSet="/images/editorial/hair-v1-640.webp 640w, /images/editorial/hair-v1-1024.webp 1024w, /images/editorial/hair-v1-1536.webp 1536w"
+                sizes="(min-width: 1280px) 1152px, calc(100vw - 48px)"
+                width="1536"
+                height="1024"
+                fetchPriority="high"
+                alt={
+                  locale === "en"
+                    ? "Hair being gently combed, beauty editorial illustration"
+                    : "Cuidado del cabello con un peine, ilustración editorial de belleza"
+                }
+              />
+            </div>
+            <div className="salon-hero-copy">
+              <div>
+                <p className="editorial-kicker">{salon.name}</p>
+                <h1 id="home-title" data-enter-whole="">
+                  {t("home.title")}
+                </h1>
+              </div>
+              <div className="salon-hero-action">
+                <p>{t("home.lead", { name: salon.name })}</p>
                 <Link to="/book" className={buttonClasses({ size: "lg" })}>
                   {t("home.cta")}
                   <ChevronRightIcon />
                 </Link>
-                <a href="#services" className={buttonClasses({ size: "lg", variant: "secondary" })}>
-                  {t("home.ctaSecondary")}
-                </a>
+                <p className="hero-fact">
+                  {t("home.window", {
+                    days: salon.maxDaysAhead,
+                    timezone: salon.timezone.replaceAll("_", " "),
+                  })}
+                </p>
               </div>
-              <p className="mt-5 text-sm text-muted">
-                {t("home.window", {
-                  days: salon.maxDaysAhead,
-                  timezone: salon.timezone.replaceAll("_", " "),
-                })}
-              </p>
-              <Link
-                to="/reviews"
-                className="mt-4 inline-flex min-h-11 items-center text-accent-text underline underline-offset-4"
-              >
-                {t("reviews.title")}
-              </Link>
-              <Link
-                to="/portfolio"
-                className="ml-5 mt-4 inline-flex min-h-11 items-center text-accent-text underline underline-offset-4"
-              >
-                {t("portfolio.title")}
-              </Link>
-            </div>
-            <div
-              aria-hidden="true"
-              className="relative mx-auto hidden aspect-[4/5] w-full max-w-sm lg:block"
-            >
-              <div className="absolute inset-0 rounded-t-[999px] rounded-b-3xl bg-gradient-to-b from-accent-soft via-sunken to-surface shadow-md" />
-              <div className="absolute inset-6 rounded-t-[999px] rounded-b-2xl border border-accent/30" />
-              <span className="absolute inset-0 grid place-items-center text-accent-text">
-                <SparkleIcon width={72} height={72} strokeWidth={1.1} />
-              </span>
             </div>
           </div>
-        </PageContainer>
+        </div>
       </section>
 
-      <section id="services" aria-labelledby="services-title" className="scroll-mt-20 py-12">
-        <PageContainer width="max-w-6xl">
-          <h2 id="services-title" className="text-title">
-            {t("home.services.title")}
-          </h2>
-          <p className="mt-2 max-w-prose text-muted">{t("home.services.lead")}</p>
-          <ul className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {services.map((service) => (
-              <li key={service.id}>
-                <Link
-                  to="/book"
-                  search={{ services: service.id }}
-                  className="group flex h-full flex-col rounded-xl border border-line bg-surface p-5 shadow-sm transition-[border-color,box-shadow,transform] hover:-translate-y-0.5 hover:border-accent hover:shadow-md"
-                >
-                  <span className="flex items-start justify-between gap-3">
-                    <span className="font-display text-xl font-semibold">{service.name}</span>
-                    <span className="font-display text-xl text-accent-text">
-                      {formatMoney(service.priceCents, service.currency, locale)}
-                    </span>
-                  </span>
-                  {service.description && (
-                    <span className="mt-1 text-muted">{service.description}</span>
-                  )}
-                  <span className="mt-4 flex items-center justify-between text-sm">
-                    <span className="flex items-center gap-1.5 text-muted">
-                      <ClockIcon width={16} height={16} />
-                      {formatDuration(service.durationMinutes, locale)}
-                    </span>
-                    <span className="inline-flex items-center gap-1 font-medium text-accent-text">
-                      {t("home.services.book")}
-                      <ChevronRightIcon
-                        width={16}
-                        height={16}
-                        className="transition-transform group-hover:translate-x-0.5"
-                      />
-                    </span>
-                  </span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </PageContainer>
-      </section>
-
-      <section aria-labelledby="how-title" className="py-12">
-        <PageContainer width="max-w-6xl">
-          <h2 id="how-title" className="text-title">
-            {t("home.how.title")}
-          </h2>
-          <ol className="mt-8 grid gap-4 sm:grid-cols-3">
-            {steps.map((key, index) => (
-              <li key={key} className="rounded-xl border border-line bg-surface p-5">
-                <span className="mb-3 grid size-9 place-items-center rounded-full bg-accent-soft font-display text-lg font-semibold text-accent-soft-fg">
-                  {index + 1}
-                </span>
-                <p className="font-medium">{t(key)}</p>
-              </li>
-            ))}
-          </ol>
-        </PageContainer>
-      </section>
-
-      {staff.length > 0 && (
-        <section aria-labelledby="team-title" className="py-12">
-          <PageContainer width="max-w-6xl">
-            <h2 id="team-title" className="text-title">
-              {t("home.team.title")}
-            </h2>
-            <ul className="mt-6 flex flex-wrap gap-3">
-              {staff.map((member) => (
-                <li
-                  key={member.id}
-                  className="flex items-center gap-3 rounded-full border border-line bg-surface py-1.5 pr-5 pl-1.5"
-                >
-                  <span
-                    aria-hidden="true"
-                    className="grid size-10 place-items-center rounded-full bg-accent-soft font-display text-lg font-semibold text-accent-soft-fg"
+      <section
+        id="services"
+        aria-labelledby="services-title"
+        className="salon-offer editorial-section"
+      >
+        <div className="wrap editorial-wrap">
+          <header className="editorial-section-heading">
+            <h2 id="services-title">{t("home.services.title")}</h2>
+            <p>{t("home.services.lead")}</p>
+          </header>
+          <div className="salon-offer-grid">
+            <ul className="service-menu">
+              {services.map((service) => (
+                <li key={service.id}>
+                  <Link
+                    to="/book"
+                    search={{ services: service.id }}
+                    className="service-menu-row group"
                   >
-                    {member.displayName.slice(0, 1).toUpperCase()}
-                  </span>
-                  <span className="font-medium">{member.displayName}</span>
+                    <span className="min-w-0">
+                      <span className="service-menu-name">{service.name}</span>
+                      {service.description && (
+                        <span className="mt-1 block text-muted">{service.description}</span>
+                      )}
+                      <span className="mt-2 flex items-center gap-1.5 text-sm text-muted">
+                        <ClockIcon width={16} height={16} />
+                        {formatDuration(service.durationMinutes, locale)}
+                      </span>
+                    </span>
+                    <span className="service-menu-price">
+                      {formatMoney(service.priceCents, service.currency, locale)}
+                      <span className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-accent-text">
+                        {t("home.services.book")}
+                        <ChevronRightIcon width={16} height={16} />
+                      </span>
+                    </span>
+                  </Link>
                 </li>
               ))}
             </ul>
-          </PageContainer>
-        </section>
-      )}
-
-      <section className="py-12">
-        <PageContainer width="max-w-6xl">
-          <div className="rounded-2xl bg-accent-soft p-8 text-center sm:p-12">
-            <h2 className="text-title text-accent-soft-fg">{t("home.final.title")}</h2>
-            <Link to="/book" className={`${buttonClasses({ size: "lg" })} mt-6`}>
-              {t("home.cta")}
-            </Link>
+            <figure
+              ref={momentRef}
+              className="frame frame--photo salon-offer-photo m-zoom"
+              data-moment="picture-develops"
+              data-moment-opts='{"look":"film","duration":1600}'
+            >
+              <img
+                src="/images/editorial/nails-v1-800.webp"
+                srcSet="/images/editorial/nails-v1-480.webp 480w, /images/editorial/nails-v1-800.webp 800w"
+                sizes="(min-width: 1024px) 45vw, 100vw"
+                width="800"
+                height="800"
+                loading="lazy"
+                decoding="async"
+                alt={
+                  locale === "en"
+                    ? "Rose manicure on ivory linen, editorial illustration"
+                    : "Manicura rosa sobre lino marfil, ilustración editorial"
+                }
+              />
+            </figure>
           </div>
-        </PageContainer>
+        </div>
+      </section>
+
+      <section aria-labelledby="how-title" className="salon-close editorial-section">
+        <div className="wrap editorial-wrap">
+          <header className="editorial-section-heading">
+            <h2 id="how-title">{t("home.how.title")}</h2>
+          </header>
+          <ol className="booking-instructions">
+            {steps.map((key, index) => (
+              <li key={key}>
+                <span aria-hidden="true">0{index + 1}</span>
+                <p>{t(key)}</p>
+              </li>
+            ))}
+          </ol>
+          {staff.length > 0 && (
+            <div className="salon-team">
+              <p className="team-label">{t("home.team.title")}</p>
+              <ul>
+                {staff.map((member) => (
+                  <li key={member.id}>
+                    <span aria-hidden="true">{member.displayName.slice(0, 1).toUpperCase()}</span>
+                    {member.displayName}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div className="salon-signoff">
+            <p className="salon-wordmark">{salon.name}</p>
+            <div>
+              <h3>{t("home.final.title")}</h3>
+              <Link to="/book" className={buttonClasses({ size: "lg" })}>
+                {t("home.cta")}
+                <ChevronRightIcon />
+              </Link>
+            </div>
+          </div>
+        </div>
       </section>
     </>
   );

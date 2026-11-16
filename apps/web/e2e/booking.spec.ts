@@ -15,7 +15,7 @@ test.describe("public booking flow", () => {
     page,
   }) => {
     await page.goto("/");
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Beauty, booked in a minute.");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Your beauty salon.");
     await page.getByRole("link", { name: "Book an appointment" }).first().click();
     await expect(page).toHaveURL(/\/book$/);
 

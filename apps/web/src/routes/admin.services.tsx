@@ -15,7 +15,7 @@ export const Route = createFileRoute("/admin/services")({
 function ServicesPage() {
   const { t } = useI18n();
   return (
-    <>
+    <div className="view-services">
       <PageHeading title={t("services.title")} lead={t("services.lead")} />
       <div className="mb-6 flex flex-wrap gap-3">
         <a
@@ -34,6 +34,6 @@ function ServicesPage() {
       <ServicesView />
       <CombinationsPanel />
       <ProcessingPanel />
-    </>
+    </div>
   );
 }

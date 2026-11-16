@@ -1,0 +1,54 @@
+
+perf /localhost:4281/ @ 1440px
+  PASS  host CPU load (before/after)               8/7 %
+  PASS  total transfer                             750.6 KiB      html 7.3K  css 23.6K  js 358K  font 68.2K  img 281.5K  other 12K
+  PASS  requests                                   42             41 by load
+  PASS  images bytes                               281.5 KiB      2 files
+  PASS  largest image                              161.4 KiB      editorial/hair-v1-1536.webp
+  FAIL  JS parsed                                  1093 KiB       30 files, 358K gz
+  PASS  CSS                                        23.6 KiB       3 files
+  PASS  font families                              2              Nunito Sans Variable, Lora Variable
+  PASS  font files                                 2              68.2K
+  PASS  font bytes                                 68.2 KiB
+  PASS  images without width+height                0
+  PASS  below-fold images not lazy                 0
+  PASS  oversized images (natural > 2.2x shown)    0
+  PASS  WebGL live at load                         0
+  PASS  WebGL live at bottom                       0
+  PASS  WebGL peak live                            0              0 contexts made in all
+  PASS  long tasks                                 1              runs 3, 1..1, max 84ms
+  PASS  blocking time                              31 ms          runs 3, 31..34 ms; at load 31ms
+  PASS  FCP (CPU, relative)                        152 ms         runs 3, 144..212
+  PASS  LCP (CPU, relative)                        152 ms         runs 3, 144..212, img
+  PASS  layout shift                               0.000          runs 3, 0.000..0.000; at load 0.000
+  PASS  modules loaded, never mounted              0
+  PASS  broken requests                            0
+  PASS  page height                                3.3 screens    DOM 229 nodes
+
+perf /localhost:4281/ @ 390px
+  PASS  host CPU load (before/after)               8/7 %
+  PASS  total transfer                             537.1 KiB      html 7.3K  css 23.6K  js 358K  font 68.2K  img 68.7K  other 11.4K
+  PASS  requests                                   41             40 by load
+  PASS  images bytes                               68.7 KiB       2 files
+  PASS  largest image                              36.4 KiB       editorial/nails-v1-480.webp
+  FAIL  JS parsed                                  1093 KiB       30 files, 358K gz
+  PASS  CSS                                        23.6 KiB       3 files
+  PASS  font families                              2              Nunito Sans Variable, Lora Variable
+  PASS  font files                                 2              68.2K
+  PASS  font bytes                                 68.2 KiB
+  PASS  images without width+height                0
+  PASS  below-fold images not lazy                 0
+  PASS  oversized images (natural > 2.2x shown)    0
+  PASS  WebGL live at load                         0
+  PASS  WebGL live at bottom                       0
+  PASS  WebGL peak live                            0              0 contexts made in all
+  PASS  long tasks                                 1              runs 3, 1..1, max 92ms
+  PASS  blocking time                              33 ms          runs 3, 33..42 ms; at load 33ms
+  PASS  FCP (CPU, relative)                        156 ms         runs 3, 96..196
+  PASS  LCP (CPU, relative)                        156 ms         runs 3, 96..196, img
+  PASS  layout shift                               0.000          runs 3, 0.000..0.000; at load 0.000
+  PASS  modules loaded, never mounted              0
+  PASS  broken requests                            0
+  PASS  page height                                4.1 screens    DOM 229 nodes
+
+SUMMARY /localhost:4281/: 2 FAIL, 0 WARN  -> FAIL

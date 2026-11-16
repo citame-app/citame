@@ -1,0 +1,27 @@
+[
+  {
+    "check": "text-only",
+    "target": "section.salon-close.editorial-section",
+    "reason": "The dealt place plan explicitly uses the salon name as a large type moment in its closing brand band. This is intentional typography, with the two editorial photographs in the preceding sections, rather than a missing visual."
+  },
+  {
+    "check": "focus-visible",
+    "target": "input#locale-es-AR",
+    "reason": "The native transparent radio is stretched over its visible label. Playwright verifies keyboard focus draws a solid 3px outline on both associated labels in light and dark themes; the checker evaluates the transparent input alone."
+  },
+  {
+    "check": "section-height",
+    "target": "footer.closing.site-footer",
+    "reason": "This existing booking application shares a compact navigation and illustration-credit footer across public, booking and account routes. Stretching it to a full viewport adds empty space without helping salon customers."
+  },
+  {
+    "check": "one-section",
+    "target": "footer.closing.site-footer",
+    "reason": "The shared application footer intentionally follows the closing brand section as a compact footer, rather than consuming another full marketing screen. Its links and provenance remain visible and accessible."
+  },
+  {
+    "check": "hero-lines",
+    "target": "section.hero h1",
+    "reason": "The final approved category heading, Tu salón de belleza / Your beauty salon, fits the actual responsive layout. The synthetic 47-character stress heading is not application copy; the skill explicitly allows waiving this case when the final heading fits."
+  }
+]

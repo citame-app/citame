@@ -19,7 +19,7 @@ const HIDDEN_INPUT =
   "peer absolute inset-0 z-10 m-0 size-full cursor-pointer opacity-0 disabled:cursor-not-allowed";
 
 const choiceCard =
-  "relative flex min-h-11 w-full cursor-pointer items-start gap-3 rounded-lg border bg-surface p-4 " +
+  "booking-choice relative flex min-h-11 w-full cursor-pointer items-start gap-3 rounded-lg border bg-surface p-4 " +
   "transition-[border-color,background-color,box-shadow] duration-150 " +
   "border-line hover:border-line-strong peer-focus-visible:outline-3 peer-focus-visible:outline-offset-2 " +
   "peer-focus-visible:outline-ring peer-checked:border-accent peer-checked:bg-accent-soft " +
@@ -164,7 +164,7 @@ export function Stepper({
   renderStep?: (step: StepperStep, content: ReactNode) => ReactNode;
 }) {
   return (
-    <nav aria-label={label}>
+    <nav className="booking-progress" aria-label={label}>
       <ol className="flex items-center gap-2">
         {steps.map((step, index) => {
           const content = (

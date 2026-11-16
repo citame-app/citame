@@ -167,7 +167,7 @@ export function ReportsView({
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-end gap-3">
+      <div className="reports-toolbar flex flex-wrap items-end gap-3">
         <fieldset className="inline-flex flex-wrap rounded-md border border-line p-0.5">
           <legend className="sr-only">{t("reports.preset.label")}</legend>
           {[...REPORT_PRESETS, "custom" as const].map((preset) => (

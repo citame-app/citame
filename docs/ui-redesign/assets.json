@@ -1,0 +1,30 @@
+{
+  "mode": "Built-in imagegen; no API key or external provider configuration",
+  "referenceBoards": [
+    "public-reference-v1.png",
+    "booking-account-reference-v1.png",
+    "admin-calendar-crm-reference-v1.png",
+    "admin-commerce-settings-reference-v1.png"
+  ],
+  "constraints": "All reference prices, names, dates, statistics and contact details are sample artwork, never application data. Photographs are anonymous generated editorial illustrations, never actual client work, salon premises or staff.",
+  "assets": [
+    {
+      "id": "hair-editorial-v1",
+      "prompt": "Use case: photorealistic-natural. Asset type: wide beauty-salon website editorial hero photograph, 3:2 landscape composition. Primary request: an anonymous adult woman's long healthy chestnut hair being gently finished with a simple comb by a stylist's hands, intimate close crop from the back and side, the hair and professional care action are the subject. Soft daylight, warm ivory backdrop, natural skin and hair detail, subtle rose-beige tones, editorial fashion photography, generous clean framing, real texture. This is illustrative art, not a photograph of a specific salon or staff member. No face identity, no text, logos, branding, lettering, watermark, graphic layouts, borders, gradients, or plastic skin. Anatomically correct hands and tools.",
+      "mode": "built-in imagegen",
+      "use": "public homepage"
+    },
+    {
+      "id": "nails-editorial-v1",
+      "prompt": "Use case: photorealistic-natural. Asset type: beauty editorial photograph for a salon website, square composition. Primary request: close crop of two relaxed anatomically correct adult hands with an understated deep rose manicure, resting on warm ivory linen; natural well cared-for nails, subtle realistic skin texture, warm window light, elegant restrained editorial styling. Only hands and linen, no face, jewelry, flowers or products. Deep rose, warm beige and ivory. Illustrative anonymous beauty art. No text, logos, watermark, graphics, framing or gradients.",
+      "mode": "built-in imagegen",
+      "use": "public homepage"
+    },
+    {
+      "id": "care-editorial-v1",
+      "prompt": "Use case: photorealistic-natural. Asset type: beauty-salon editorial photograph, portrait 4:5 composition. Primary request: close crop of an anonymous adult woman's closed eye and natural eyebrow while a beautician's hand gently brushes the brow with a small spoolie. Realistic skin texture, restrained beauty editorial, warm soft daylight, ivory backdrop, clean precise professional care. Frame from eyebrow to cheek, no full identifiable face. Natural warm brown tones and subtle rose beige. Anatomically correct hand. No makeup packaging, text, logos, watermark, frames or graphic layout. Illustrative art, not an actual customer or staff portrait.",
+      "mode": "built-in imagegen",
+      "use": "authentication"
+    }
+  ]
+}

@@ -10,7 +10,7 @@ export function PageContainer({
   children: React.ReactNode;
   width?: string;
 }) {
-  return <div className={`mx-auto w-full ${width} px-4 sm:px-6`}>{children}</div>;
+  return <div className={`page-container mx-auto w-full ${width} px-4 sm:px-6`}>{children}</div>;
 }
 
 export function NotFoundPage() {
@@ -56,7 +56,7 @@ export function PageHeading({
   eyebrow?: string;
 }) {
   return (
-    <header className="mb-8">
+    <header className="page-heading mb-8">
       {eyebrow && (
         <p className="mb-2 text-sm font-semibold uppercase tracking-[0.14em] text-accent-text">
           {eyebrow}
