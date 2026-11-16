@@ -52,6 +52,7 @@ import { assertClientCanBook } from "../clients/controls";
 import { prepareBookingIntake, recordBookingIntake } from "../clients/intake-booking";
 import { refreshAppointmentCheckout } from "../commerce/service";
 import { reassignAppointmentResources, reserveResources } from "../resources/reservations";
+import { applyBookingPromotion } from "../rewards/booking";
 import { assertPromotionReschedule } from "../rewards/timing";
 import { releaseUnfulfilledAppointmentRewards } from "../rewards/value";
 import { getBookableServices } from "../services/service";
@@ -60,6 +61,7 @@ import { loadDatedHours } from "../staff/date-hours";
 import { assertStaffActive } from "../staff/guards";
 import { assertStaffExists } from "../staff/service";
 import { appointmentIntentFingerprint } from "./intent";
+import { loadBookingPrices } from "./pricing";
 import { loadSeriesReferences } from "./series-references";
 
 const UNIQUE_VIOLATION = "23505";
@@ -127,7 +129,7 @@ function mapWriteError(error: unknown): never {
   throw error;
 }
 
-async function assertStaffPerforms(
+export async function assertStaffPerforms(
   db: Pick<Database, "select">,
   staffId: string,
   serviceIds: string[],
@@ -229,6 +231,7 @@ export async function createAppointment(
           startsAt,
           endsAt,
           notes: request.notes,
+          ...(request.promotion ? { createdAt: now } : {}),
           ...(services.some((s) => s.processing)
             ? { workWindows: sql`${JSON.stringify(serviceWorkWindows(services))}::jsonb` }
             : {}),
@@ -271,6 +274,7 @@ export async function createAppointment(
             intakeConfirmed: Boolean(
               request.intakeResponses?.length || request.intakeSubmissionIds?.length,
             ),
+            ...(request.promotion ? { promotionConfirmed: true } : {}),
             staffId: row.staffId,
             clientId: row.clientId,
             startsAt: row.startsAt.toISOString(),
@@ -281,9 +285,17 @@ export async function createAppointment(
           },
         });
       }
+      await applyBookingPromotion(tx, row, request, actor?.userId, now);
       const protection = await createProtection(tx, row, request, actor, now);
+      // A zero-total promotional receipt cannot fulfill before its deposit policy exists.
+      if (request.promotion) await refreshAppointmentCheckout(tx, row.id, now);
       if (!protection || protection.state === "waived") await scheduleNewAppointment(tx, row, now);
-      return { ...toAppointment(row, snapshots), ...(protection ? { protection } : {}) };
+      const bookingPrice = (await loadBookingPrices(tx, [row.id])).get(row.id);
+      return {
+        ...toAppointment(row, snapshots),
+        ...(protection ? { protection } : {}),
+        ...(bookingPrice ? { bookingPrice } : {}),
+      };
     });
   } catch (error) {
     return mapWriteError(error);
@@ -485,6 +497,10 @@ export async function listAppointments(
       .offset((page - 1) * pageSize),
     db.select({ total: count() }).from(appointment).where(where),
   ]);
+  const prices = await loadBookingPrices(
+    db,
+    rows.map((row) => row.id),
+  );
   const snapshots = await loadSnapshots(
     db,
     rows.map((r) => r.id),
@@ -498,6 +514,7 @@ export async function listAppointments(
       rows.map(async (row) => ({
         ...toAppointment(row, snapshots.get(row.id) ?? [], series.get(row.id)),
         protection: await protectionView(db, row.id),
+        ...(prices.has(row.id) ? { bookingPrice: prices.get(row.id) } : {}),
       })),
     ),
     page,
@@ -516,6 +533,10 @@ export async function listClientAppointments(
     .from(appointment)
     .where(and(eq(appointment.clientId, clientId), isNull(appointment.deletedAt)))
     .orderBy(desc(appointment.startsAt), desc(appointment.id));
+  const prices = await loadBookingPrices(
+    db,
+    rows.map((row) => row.id),
+  );
   const snapshots = await loadSnapshots(
     db,
     rows.map((r) => r.id),
@@ -528,6 +549,7 @@ export async function listClientAppointments(
     rows.map(async (row) => ({
       ...toAppointment(row, snapshots.get(row.id) ?? [], series.get(row.id)),
       protection: await protectionView(db, row.id),
+      ...(prices.has(row.id) ? { bookingPrice: prices.get(row.id) } : {}),
     })),
   );
 }
@@ -702,7 +724,12 @@ export async function updateAppointment(
     if (!row) throw versionConflict();
     const protection = await protectionView(db, id);
     const series = (await loadSeriesReferences(db, [id])).get(id);
-    return { ...toAppointment(row, snapshots, series), ...(protection ? { protection } : {}) };
+    const bookingPrice = (await loadBookingPrices(db, [id])).get(id);
+    return {
+      ...toAppointment(row, snapshots, series),
+      ...(protection ? { protection } : {}),
+      ...(bookingPrice ? { bookingPrice } : {}),
+    };
   } catch (error) {
     if (error instanceof DomainError) throw error;
     return mapWriteError(error);

@@ -4,7 +4,7 @@ import { bookingPolicySchema } from "./booking-protection";
 import { idSchema, instantSchema } from "./common";
 
 export const appointmentSeriesInputSchema = createAppointmentBaseSchema
-  .omit({ id: true })
+  .omit({ id: true, promotion: true })
   .extend({
     cadence: z.enum(["weekly", "monthly"]),
     interval: z.number().int().min(1).max(12),

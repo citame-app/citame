@@ -3,6 +3,7 @@ import { accountSecurityEn } from "./account-security";
 import { accountingEn } from "./accounting";
 import { acquisitionEn } from "./acquisition";
 import { adminEn } from "./admin";
+import { bookingPromotionsEn } from "./booking-promotions";
 import { bookingProtectionEn } from "./booking-protection";
 import { clientControlsEn } from "./client-controls";
 import { clientPhotosEn } from "./client-photos";
@@ -26,6 +27,7 @@ import { timingEn } from "./timing";
 import { waitlistEn } from "./waitlist";
 /** English is the source catalog: its keys define what every other catalog must provide. */
 export const en = {
+  ...bookingPromotionsEn,
   ...timedPromotionsEn,
   ...combinationsEn,
   ...timingEn,

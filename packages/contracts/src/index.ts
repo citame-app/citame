@@ -12,6 +12,7 @@ export * from "./appointments";
 export * from "./auth";
 export * from "./availability";
 export * from "./booking-intent";
+export * from "./booking-promotions";
 export * from "./booking-protection";
 export * from "./calendar";
 export * from "./client-controls";

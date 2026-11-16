@@ -142,8 +142,14 @@ for (const scheme of ["light", "dark"] as const) {
         });
         await page.getByRole("button", { name: "Confirm booking", exact: true }).click();
         await expect(
-          page.getByText("We could not confirm your booking", { exact: true }),
+          page.getByText(
+            "The booking response is uncertain. Retry the same booking to recover its result before editing or making another reservation.",
+            { exact: true },
+          ),
         ).toBeVisible();
+        await expect(
+          page.getByLabel("Notes for the salon (optional)", { exact: true }),
+        ).toBeDisabled();
         await expect(page).toHaveURL(/\/book\/review/);
         const booked = page.waitForResponse(
           (r) => r.url().endsWith("/api/appointments") && r.request().method() === "POST",

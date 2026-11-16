@@ -77,32 +77,50 @@ export async function assertRewardPayment(
       "The reward reservation expired; create another receipt",
     );
 }
-async function rewardPricing(
+export type RewardPricingLine = Pick<
+  typeof checkoutLine.$inferSelect,
+  "id" | "kind" | "quantity" | "unitAmountCents" | "discountCents" | "serviceId" | "taxBasisPoints"
+>;
+export async function rewardPricing(
   tx: Tx,
-  row: typeof checkout.$inferSelect,
+  row: Pick<
+    typeof checkout.$inferSelect,
+    "id" | "clientId" | "status" | "fulfilledAt" | "appointmentId" | "totalCents" | "tipCents"
+  >,
   choice: RewardChoice,
   now: Date,
   lock = false,
+  booking?: {
+    lines: RewardPricingLine[];
+    visit: { startsAt: Date; createdAt: Date };
+    timeZone: string;
+  },
 ) {
   if (!row.clientId || row.status !== "open" || row.fulfilledAt)
     throw new DomainError("invalid_state", "Rewards need an open customer receipt");
-  const attempts = await tx
-    .select({ id: checkoutPayment.id })
-    .from(checkoutPayment)
-    .where(eq(checkoutPayment.checkoutId, row.id))
-    .limit(1);
-  const previous = await tx
-    .select({ id: checkoutReward.id })
-    .from(checkoutReward)
-    .where(eq(checkoutReward.checkoutId, row.id))
-    .limit(1);
+  const attempts = booking
+    ? []
+    : await tx
+        .select({ id: checkoutPayment.id })
+        .from(checkoutPayment)
+        .where(eq(checkoutPayment.checkoutId, row.id))
+        .limit(1);
+  const previous = booking
+    ? []
+    : await tx
+        .select({ id: checkoutReward.id })
+        .from(checkoutReward)
+        .where(eq(checkoutReward.checkoutId, row.id))
+        .limit(1);
   if (attempts.length || previous.length)
     throw new DomainError("invalid_state", "Apply a reward once before any payment attempt");
-  const lines = await tx
-    .select()
-    .from(checkoutLine)
-    .where(eq(checkoutLine.checkoutId, row.id))
-    .orderBy(asc(checkoutLine.createdAt), asc(checkoutLine.id));
+  const lines =
+    booking?.lines ??
+    (await tx
+      .select()
+      .from(checkoutLine)
+      .where(eq(checkoutLine.checkoutId, row.id))
+      .orderBy(asc(checkoutLine.createdAt), asc(checkoutLine.id)));
   let eligible = lines.filter((l) => ordinary(l.kind));
   const extra = new Map<string, number>();
   let promo: typeof promotion.$inferSelect | undefined;
@@ -148,11 +166,17 @@ async function rewardPricing(
       throw new DomainError("invalid_state", "This promotion is unavailable");
     const terms = promo.terms;
     if (terms.timing) {
-      const [visit] = row.appointmentId
+      const [storedVisit] = row.appointmentId
         ? await tx.select().from(appointment).where(eq(appointment.id, row.appointmentId))
         : [];
-      const { timezone } = await getSalonSettings(tx);
-      if (!appointmentMatchesPromotionTiming(terms.timing, visit ?? null, timezone))
+      const timezone = booking?.timeZone ?? (await getSalonSettings(tx)).timezone;
+      if (
+        !appointmentMatchesPromotionTiming(
+          terms.timing,
+          booking?.visit ?? storedVisit ?? null,
+          timezone,
+        )
+      )
         throw new DomainError(
           "promotion_timing_mismatch",
           "This appointment does not meet the promotion's local start or booking lead conditions",
@@ -238,6 +262,8 @@ export async function applyCheckoutReward(
   id: string,
   input: ApplyRewardInput,
   principal: Principal,
+  now = new Date(),
+  options: { deferFulfillment?: boolean } = {},
 ) {
   const row = await saleRow(tx, id, principal, true);
   if (!row.clientId) throw new DomainError("invalid_state", "A reward needs a customer account");
@@ -256,7 +282,6 @@ export async function applyCheckoutReward(
       "version_conflict",
       "Receipt total changed; review the reward quote again",
     );
-  const now = new Date();
   const choice: RewardChoice =
     input.kind === "points"
       ? { kind: "points", points: input.points }
@@ -336,6 +361,9 @@ export async function applyCheckoutReward(
       discountCents: row.discountCents + priced.quote.discountCents,
       totalCents: priced.quote.newTotalCents,
       taxCents,
+      ...(options.deferFulfillment && priced.quote.newTotalCents === 0
+        ? { status: "paid" as const }
+        : {}),
     })
     .where(eq(checkout.id, id));
   const [protectedBooking] = await tx
@@ -367,6 +395,6 @@ export async function applyCheckoutReward(
       discountCents: priced.quote.discountCents,
     },
   });
-  await refreshStatus(tx, id);
+  if (!options.deferFulfillment) await refreshStatus(tx, id, now);
   return getCheckoutInTransaction(tx, id, principal);
 }

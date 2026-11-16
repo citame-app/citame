@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { bookingPriceSchema, bookingPromotionReviewSchema } from "./booking-promotions";
 import { bookingProtectionSchema } from "./booking-protection";
 import {
   idSchema,
@@ -44,6 +45,7 @@ export const appointmentSchema = z.object({
   createdAt: instantSchema,
   updatedAt: instantSchema,
   protection: bookingProtectionSchema.nullable().optional(),
+  bookingPrice: bookingPriceSchema.optional(),
   series: z
     .object({
       id: idSchema,
@@ -90,6 +92,7 @@ export const createAppointmentBaseSchema = z.object({
   protectionAcceptedVersion: z.number().int().positive().optional(),
   protectionAcceptedTotalCents: z.number().int().min(0).max(999999999).optional(),
   protectionWaiverReason: z.string().trim().min(8).max(300).optional(),
+  promotion: bookingPromotionReviewSchema.optional(),
 });
 
 /** Staff and owners must say who the appointment is for: exactly one of `clientId` / `client`. */

@@ -1,5 +1,7 @@
 import {
   type ApplyRewardInput,
+  type BookingPromotionQuoteRequest,
+  bookingPromotionQuoteSchema,
   checkoutSchema,
   type LoyaltyPolicy,
   loyaltyPolicySchema,
@@ -16,6 +18,8 @@ import type { CommerceMode } from "./commerce-endpoints";
 const base = (mode: CommerceMode) => (mode === "admin" ? "/admin/commerce" : "/me");
 export function rewardEndpoints(client: ApiClient) {
   return {
+    bookingQuote: (input: BookingPromotionQuoteRequest) =>
+      client.post("/appointments/promotion-quote", input, bookingPromotionQuoteSchema),
     policy: () => client.get("/admin/rewards/policy", loyaltyPolicySchema),
     savePolicy: (input: LoyaltyPolicy) =>
       client.put("/admin/rewards/policy", input, loyaltyPolicySchema),

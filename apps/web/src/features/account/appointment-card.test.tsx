@@ -75,3 +75,24 @@ describe("AppointmentCard", () => {
     expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
   });
 });
+
+test("a promotional visit keeps its service snapshot and displays the agreed discounted booking total", () => {
+  renderApp(
+    <AppointmentCard
+      {...base}
+      appointment={{
+        ...appointment,
+        services: appointment.services.map((service) => ({ ...service, currency: "EUR" })),
+        bookingPrice: {
+          subtotalCents: 3000,
+          discountCents: 500,
+          totalCents: 2500,
+          currency: "EUR",
+        },
+      }}
+    />,
+  );
+  expect(screen.getByText("€30")).toBeInTheDocument();
+  expect(screen.getByText("€25")).toBeInTheDocument();
+  expect(screen.getByText("−€5")).toBeInTheDocument();
+});

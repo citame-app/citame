@@ -3,6 +3,7 @@ import {
   appointmentSeriesCreateSchema,
   appointmentSeriesInputSchema,
   availabilityQuerySchema,
+  bookingPromotionQuoteRequestSchema,
   calendarQuerySchema,
   createAppointmentBaseSchema,
   createAppointmentRequestSchema,
@@ -22,6 +23,7 @@ import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
 import { bookingOutcome } from "../../observability/booking";
 import { findAvailability } from "../availability/service";
+import { quoteBookingPromotion } from "../rewards/booking";
 import { getCalendar } from "./calendar";
 import { findAppointmentReplay } from "./replay";
 import { createAppointmentSeries, getAppointmentSeries, previewAppointmentSeries } from "./series";
@@ -37,6 +39,16 @@ import {
 export function appointmentsRoutes({ db, now = () => new Date(), metrics }: AppDeps) {
   return (
     new Hono<AppEnv>()
+      .post("/promotion-quote", async (c) =>
+        c.json(
+          await quoteBookingPromotion(
+            db,
+            parseOrThrow(bookingPromotionQuoteRequestSchema, await readJson(c)),
+            c.get("principal"),
+            now(),
+          ),
+        ),
+      )
       .post("/series/preview", async (c) => {
         const input = parseOrThrow(appointmentSeriesInputSchema, await readJson(c));
         const scoped = authorizeAppointmentCreate(c.get("principal"), input);

@@ -110,11 +110,6 @@ export async function createProtection(
     .from(appointmentService)
     .where(eq(appointmentService.appointmentId, booking.id));
   const subtotalCents = snapshots.reduce((sum, s) => sum + s.priceCents, 0);
-  if (!waived && request.protectionAcceptedTotalCents !== subtotalCents)
-    throw new DomainError(
-      "invalid_state",
-      "Service prices changed; review the current total and accept again",
-    );
   const discounts = await membershipDiscounts(
     tx,
     booking.clientId,
@@ -126,8 +121,21 @@ export async function createProtection(
       unitAmountCents: s.priceCents,
     })),
   );
-  const discountCents = discounts.reduce((sum, d) => sum + d.amountCents, 0);
-  const totalCents = subtotalCents - discountCents;
+  const [promotionalSale] = request.promotion
+    ? await tx.select().from(checkout).where(eq(checkout.appointmentId, booking.id))
+    : [];
+  if (request.promotion && !promotionalSale) throw new Error("Missing reviewed promotion receipt");
+  const discountCents =
+    promotionalSale?.discountCents ?? discounts.reduce((sum, d) => sum + d.amountCents, 0);
+  const totalCents = promotionalSale?.totalCents ?? subtotalCents - discountCents;
+  if (
+    !waived &&
+    request.protectionAcceptedTotalCents !== (request.promotion ? totalCents : subtotalCents)
+  )
+    throw new DomainError(
+      "invalid_state",
+      "Service prices changed; review the current total and accept again",
+    );
   if (
     !snapshots.length ||
     snapshots.some((s) => s.currency !== "EUR") ||
@@ -147,34 +155,38 @@ export async function createProtection(
           ? policy.depositValue
           : Math.max(1, Math.ceil((totalCents * policy.depositValue) / 10000)),
       );
-  const [sale] = await tx
-    .insert(checkout)
-    .values({
-      appointmentId: booking.id,
-      clientId: booking.clientId,
-      staffId: booking.staffId,
-      subtotalCents,
-      discountCents,
-      totalCents,
-      status: totalCents === 0 ? "paid" : "open",
-      createdBy: actor?.userId,
-      idempotencyKey: `booking-${booking.id}`,
-      requestHash: createHash("sha256").update(`booking:${booking.id}`).digest("hex"),
-    })
-    .returning();
-  if (!sale) throw new Error("Protected receipt insert failed");
-  await tx.insert(checkoutLine).values(
-    snapshots.map((s, index) => ({
-      checkoutId: sale.id,
-      kind: "service",
-      serviceId: s.serviceId,
-      description: s.name,
-      quantity: 1,
-      unitAmountCents: s.priceCents,
-      discountCents: discounts[index]?.amountCents ?? 0,
-      membershipPeriodId: discounts[index]?.periodId,
-    })),
-  );
+  let sale = promotionalSale;
+  if (!sale) {
+    const [created] = await tx
+      .insert(checkout)
+      .values({
+        appointmentId: booking.id,
+        clientId: booking.clientId,
+        staffId: booking.staffId,
+        subtotalCents,
+        discountCents,
+        totalCents,
+        status: totalCents === 0 ? "paid" : "open",
+        createdBy: actor?.userId,
+        idempotencyKey: `booking-${booking.id}`,
+        requestHash: createHash("sha256").update(`booking:${booking.id}`).digest("hex"),
+      })
+      .returning();
+    if (!created) throw new Error("Protected receipt insert failed");
+    await tx.insert(checkoutLine).values(
+      snapshots.map((s, index) => ({
+        checkoutId: created.id,
+        kind: "service",
+        serviceId: s.serviceId,
+        description: s.name,
+        quantity: 1,
+        unitAmountCents: s.priceCents,
+        discountCents: discounts[index]?.amountCents ?? 0,
+        membershipPeriodId: discounts[index]?.periodId,
+      })),
+    );
+    sale = created;
+  }
   const expiresAt = new Date(
     Math.min(now.getTime() + policy.holdMinutes * 60000, booking.startsAt.getTime()),
   );
@@ -269,8 +281,11 @@ export async function canFulfillProtected(tx: Tx, sale: typeof checkout.$inferSe
     .select()
     .from(bookingProtection)
     .where(eq(bookingProtection.checkoutId, sale.id));
-  if (!p) return true;
-  const [a] = await tx.select().from(appointment).where(eq(appointment.id, p.appointmentId));
+  if (!p && sale.idempotencyKey !== `booking-promotion-${sale.appointmentId}`) return true;
+  const [a] = await tx
+    .select()
+    .from(appointment)
+    .where(eq(appointment.id, p?.appointmentId ?? sale.appointmentId));
   return a?.status === "completed";
 }
 /** Called under the receipt lock after every payment/refund state change. */

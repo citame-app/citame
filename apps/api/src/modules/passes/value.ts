@@ -503,10 +503,15 @@ export async function membershipDiscounts(
   clientId: string | null,
   appointmentId: string | undefined,
   lines: { kind: string; serviceId?: string | null; quantity: number; unitAmountCents: number }[],
+  proposedStartsAt?: Date,
 ) {
-  if (!clientId || !appointmentId)
+  if (!clientId || (!appointmentId && !proposedStartsAt))
     return lines.map(() => ({ amountCents: 0, periodId: null as string | null }));
-  const [booking] = await tx.select().from(appointment).where(eq(appointment.id, appointmentId));
+  const [booking] = proposedStartsAt
+    ? [{ startsAt: proposedStartsAt }]
+    : appointmentId
+      ? await tx.select().from(appointment).where(eq(appointment.id, appointmentId))
+      : [];
   if (!booking) return lines.map(() => ({ amountCents: 0, periodId: null as string | null }));
   const candidates = await tx
     .select({ contract: passContract, period: passPeriod })

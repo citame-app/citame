@@ -89,7 +89,9 @@ function ConfirmedView({
 }) {
   const { t, locale } = useI18n();
   const localDate = localDateOf(appointment.startsAt, timeZone);
-  const total = appointment.services.reduce((sum, s) => sum + s.priceCents, 0);
+  const total =
+    appointment.bookingPrice?.totalCents ??
+    appointment.services.reduce((sum, s) => sum + s.priceCents, 0);
   const currency = appointment.services[0]?.currency ?? "ARS";
   const pendingDeposit = appointment.protection?.state === "pending";
   const closed = appointment.status === "cancelled";
@@ -190,6 +192,19 @@ function ConfirmedView({
               </li>
             ))}
           </ul>
+          {appointment.bookingPrice && appointment.bookingPrice.discountCents > 0 && (
+            <p className="flex justify-between border-t border-line py-3">
+              <span>{t("bookingPromotion.discount")}</span>
+              <span>
+                −
+                {formatMoney(
+                  appointment.bookingPrice.discountCents,
+                  appointment.bookingPrice.currency,
+                  locale,
+                )}
+              </span>
+            </p>
+          )}
           <p className="flex justify-between border-t border-line pt-3 font-display text-xl font-semibold">
             <span>{t("booking.review.total")}</span>
             <span>{formatMoney(total, currency, locale)}</span>

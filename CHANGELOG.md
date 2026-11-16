@@ -4,6 +4,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- Single-location checkout, cash sessions, receipt/refund reconciliation, retail stock and staff commissions; configurable deposits and a hosted Redsys card/Bizum adapter, with optional explicitly consented membership renewal.
+- Gift cards, prepaid plans, memberships, loyalty points and bounded promotion codes. Customer booking reviews bind the offer, discounted total and deposit; uncertain requests recover their original visit.
+- Recurring appointment series, held waitlist offers, shared room/equipment capacity, service variants/extras/combinations, date-specific shifts, treatment processing intervals and explicitly configured concurrent professional work.
+- Client controls/tags, reviewed CSV transfer, private photos and versioned intake forms; completed-visit reviews, moderated public portfolio, booking links/QR/widget and separately consented local social creative.
+- Scoped staff access and English/Spanish operational interfaces, with regression coverage for mobile/desktop, light/dark, accessibility and uncertain-response recovery.
+
+### Changed
+
+- Scheduling protects frozen active-work intervals independently from a visit's full client span. Rooms and equipment remain occupied during processing; legacy visits keep continuous blocking.
+- Offline desktop proposals retain reviewed catalog terms and timing across sync. Changed terms require a new proposal; rescheduling cannot silently accept them.
+
+### Delivery status
+
+- This expansion remains in development. [The delivery checklist](docs/FEATURE-EXPANSION.md) tracks unfinished CRM, marketing, mobile and additional single-business features. Vendor credentials, a production domain and verified salon content remain external activation steps; no deployment or bank activation is implied.
+
 ## [0.1.0] - 2026-11-15
 
 First release: a self-hostable booking and salon-management platform for one salon.

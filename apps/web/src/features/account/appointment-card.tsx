@@ -32,8 +32,10 @@ export function AppointmentCard({
   onReschedule,
 }: AppointmentCardProps) {
   const { t, locale } = useI18n();
-  const total = appointment.services.reduce((sum, s) => sum + s.priceCents, 0);
-  const currency = appointment.services[0]?.currency;
+  const total =
+    appointment.bookingPrice?.totalCents ??
+    appointment.services.reduce((sum, s) => sum + s.priceCents, 0);
+  const currency = appointment.bookingPrice?.currency ?? appointment.services[0]?.currency;
   const actionable = appointment.status === "booked" && !past;
   const statusLabel =
     appointment.status === "booked" && past ? t("status.past") : t(`status.${appointment.status}`);
@@ -82,6 +84,19 @@ export function AppointmentCard({
           </li>
         ))}
       </ul>
+      {appointment.bookingPrice && appointment.bookingPrice.discountCents > 0 && (
+        <p className="mt-3 flex justify-between text-sm">
+          <span>{t("bookingPromotion.discount")}</span>
+          <span>
+            −
+            {formatMoney(
+              appointment.bookingPrice.discountCents,
+              appointment.bookingPrice.currency,
+              locale,
+            )}
+          </span>
+        </p>
+      )}
 
       <div className="mt-4 flex items-center justify-between border-t border-line pt-3 text-[0.95rem]">
         <span className="flex items-center gap-1.5 text-muted">

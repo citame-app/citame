@@ -8,6 +8,12 @@ import {
 export function appointmentIntentFingerprint(request: CreateAppointmentRequest): string {
   const intake = intakeBookingIdentity(request);
   return createHash("sha256")
-    .update(bookingIntentKey(request) + (intake ? `\nintake:${intake}` : ""))
+    .update(
+      bookingIntentKey(request) +
+        (intake ? `\nintake:${intake}` : "") +
+        (request.promotion
+          ? `\npromotion:${request.promotion.code}:${request.promotion.reviewHash}`
+          : ""),
+    )
     .digest("hex");
 }

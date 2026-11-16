@@ -4,6 +4,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { DomainError } from "../../errors";
 import { protectionView } from "../booking-protection/value";
 import { appointmentIntentFingerprint } from "./intent";
+import { loadBookingPrices } from "./pricing";
 import { loadSeriesReferences } from "./series-references";
 import { loadSnapshots, toAppointment } from "./service";
 
@@ -44,7 +45,12 @@ export async function findAppointmentReplay(
   );
   if (created.metadata.requestFingerprint !== undefined) {
     if (created.metadata.requestFingerprint !== appointmentIntentFingerprint(request)) {
-      if (created.metadata.intakeConfirmed || intakeBookingIdentity(request))
+      if (
+        created.metadata.intakeConfirmed ||
+        intakeBookingIdentity(request) ||
+        created.metadata.promotionConfirmed ||
+        request.promotion
+      )
         throw new DomainError(
           "booking_intent_conflict",
           "This booking identifier already contains a different confirmed statement",
@@ -59,5 +65,10 @@ export async function findAppointmentReplay(
   )
     return null;
   const series = (await loadSeriesReferences(db, [row.id])).get(row.id);
-  return { ...toAppointment(row, snapshots, series), protection: await protectionView(db, row.id) };
+  const bookingPrice = (await loadBookingPrices(db, [row.id])).get(row.id);
+  return {
+    ...toAppointment(row, snapshots, series),
+    protection: await protectionView(db, row.id),
+    ...(bookingPrice ? { bookingPrice } : {}),
+  };
 }

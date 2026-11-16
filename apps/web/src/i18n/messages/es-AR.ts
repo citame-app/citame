@@ -3,6 +3,7 @@ import { accountSecurityEsAR } from "./account-security";
 import { accountingEsAR } from "./accounting";
 import { acquisitionEsAR } from "./acquisition";
 import { adminEsAR } from "./admin";
+import { bookingPromotionsEs } from "./booking-promotions";
 import { bookingProtectionEsAR } from "./booking-protection";
 import { clientControlsEsAR } from "./client-controls";
 import { clientPhotosEsAR } from "./client-photos";
@@ -29,6 +30,7 @@ import { waitlistEsAR } from "./waitlist";
 /** Neutral, professional Spanish for Argentina. */
 export const esAR: Record<MessageKey, string> = {
   ...combinationsEs,
+  ...bookingPromotionsEs,
   ...timedPromotionsEs,
   ...timingEs,
   ...socialEsAR,

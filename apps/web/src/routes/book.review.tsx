@@ -8,8 +8,10 @@ import { useToast } from "~/components/ui/toast";
 import { InlineAuth } from "~/features/booking/auth-panel";
 import { BookingFrame } from "~/features/booking/frame";
 import { createBookingIntent } from "~/features/booking/intent";
+import { BookingPromotionReview, useBookingPromotion } from "~/features/booking/promotion";
 import { BookingPolicyConsent } from "~/features/booking/protection";
 import { acceptedServiceQuotes } from "~/features/booking/quotes";
+import { BookingRecoveryGuard } from "~/features/booking/recovery-guard";
 import {
   canEnterStep,
   parseBookingSearch,
@@ -20,7 +22,7 @@ import { BookingSummary } from "~/features/booking/summary";
 import { useBooking } from "~/features/booking/use-booking";
 import { BookingForms, useBookingForms } from "~/features/intake/booking-forms";
 import { useI18n } from "~/i18n/react";
-import { ApiError } from "~/lib/api/client";
+import { ApiError, NetworkError, ResponseShapeError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { bootstrapQuery } from "~/server/request";
 
@@ -56,6 +58,35 @@ function ReviewStep() {
   const [acceptedTotal, setAcceptedTotal] = useState<number | null>(null);
   const [acceptedVersion, setAcceptedVersion] = useState<number | null>(null);
   const [intent] = useState(() => createBookingIntent());
+  const [uncertain, setUncertain] = useState(false);
+  const packet = useRef<Parameters<ReturnType<typeof api>["appointments"]["create"]>[0] | null>(
+    null,
+  );
+  const recoveryPending = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const isClient = session?.user.role === "client";
+  const isStaff = session !== null && !isClient;
+  const quotes = acceptedServiceQuotes(selectedServices);
+  const promotion = useBookingPromotion(
+    isClient && quotes && search.slot && search.slotStaff
+      ? {
+          staffId: search.slotStaff,
+          serviceIds: search.services,
+          serviceQuotes: quotes,
+          startsAt: search.slot,
+        }
+      : null,
+    session?.user.id ?? "guest",
+  );
+  const reviewTotal = promotion.quote?.newTotalCents ?? totals.priceCents;
+  const [acceptedPromotionHash, setAcceptedPromotionHash] = useState<string | null>(null);
+
   const policy = useQuery({
     queryKey: ["booking-policy"],
     queryFn: () => api().bookingPolicy.get(),
@@ -64,14 +95,14 @@ function ReviewStep() {
   const policyAccepted =
     policy.isSuccess &&
     (!policy.data.enabled ||
-      (acceptedVersion === policy.data.version && acceptedTotal === totals.priceCents));
+      (acceptedVersion === policy.data.version &&
+        acceptedTotal === reviewTotal &&
+        acceptedPromotionHash === (promotion.payload?.reviewHash ?? null)));
 
   useEffect(() => {
     bookingActions.restore();
   }, []);
 
-  const isClient = session?.user.role === "client";
-  const isStaff = session !== null && !isClient;
   const intake = useBookingForms({
     serviceIds: search.services,
     enabled: Boolean(isClient),
@@ -80,11 +111,14 @@ function ReviewStep() {
 
   const confirm = useMutation({
     mutationFn: () => {
+      if (packet.current) return api().appointments.create(packet.current);
+      if (!promotion.ready) throw new Error("Review the current promotion");
       if (!policyAccepted) throw new Error("Review current booking policy");
       if (!intake.ready) throw new Error("Complete the current forms");
       if (!search.slot || !search.slotStaff) throw new Error("incomplete booking");
       const request = {
         ...intake.payload,
+        ...(promotion.payload ? { promotion: promotion.payload } : {}),
         staffId: search.slotStaff,
         serviceIds: search.services,
         serviceQuotes: acceptedServiceQuotes(selectedServices),
@@ -95,9 +129,15 @@ function ReviewStep() {
           ? (acceptedVersion ?? undefined)
           : undefined,
       };
-      return api().appointments.create({ ...request, id: intent(request) });
+      packet.current = { ...request, id: intent(request) };
+      recoveryPending.current = true;
+      return api().appointments.create(packet.current);
     },
     onSuccess: (appointment) => {
+      packet.current = null;
+      recoveryPending.current = false;
+      if (!mounted.current) return;
+      setUncertain(false);
       bookingActions.recordBooked(appointment);
       void queryClient.invalidateQueries({ queryKey: ["appointments"] });
       void queryClient.invalidateQueries({ queryKey: ["availability"] });
@@ -107,6 +147,24 @@ function ReviewStep() {
       });
     },
     onError: (error) => {
+      if (!mounted.current) return;
+      const unknown =
+        uncertain ||
+        error instanceof NetworkError ||
+        error instanceof ResponseShapeError ||
+        (error instanceof ApiError && error.status >= 500);
+      setUncertain(unknown);
+      if (unknown) return;
+      packet.current = null;
+      recoveryPending.current = false;
+      if (error instanceof ApiError && error.code === "booking_promotion_changed") {
+        promotion.resetReview();
+        setAcceptedVersion(null);
+        setAcceptedTotal(null);
+        setAcceptedPromotionHash(null);
+        toast.error(t("bookingPromotion.changed"));
+        return;
+      }
       if (error instanceof ApiError && error.code === "intake_required") {
         void intake.refresh();
         toast.error(t("intake.changed"));
@@ -167,7 +225,7 @@ function ReviewStep() {
       authRef.current?.focus();
       return;
     }
-    if (policyAccepted && intake.ready) confirm.mutate();
+    if (uncertain || (policyAccepted && intake.ready && promotion.ready)) confirm.mutate();
   }
 
   return (
@@ -179,37 +237,72 @@ function ReviewStep() {
       summary={
         <BookingSummary
           services={selectedServices}
-          totals={totals}
+          totals={{ ...totals, priceCents: reviewTotal }}
           staffName={booking.staffName}
           slot={search.slot ? { startsAt: search.slot } : undefined}
           timeZone={salon.timezone}
           ctaLabel={session ? t("booking.cta.confirm") : t("booking.cta.signInToConfirm")}
           ctaLoading={confirm.isPending}
-          ctaDisabled={isStaff || !policyAccepted || !intake.ready}
+          ctaDisabled={
+            isStaff || (!uncertain && (!policyAccepted || !intake.ready || !promotion.ready))
+          }
           onCta={onCta}
         />
       }
     >
       <div className="space-y-6">
-        <BookingForms state={intake} />
+        <BookingRecoveryGuard pending={recoveryPending} />
+        {uncertain && (
+          <div className="space-y-3">
+            <p role="alert">{t("bookingPromotion.uncertain")}</p>
+            <Link
+              to="/account"
+              className={buttonClasses({ variant: "secondary" })}
+              onClick={() => {
+                recoveryPending.current = false;
+              }}
+            >
+              {t("bookingPromotion.checkAppointments")}
+            </Link>
+          </div>
+        )}
+        {confirm.error instanceof ApiError &&
+          confirm.error.code === "booking_promotion_changed" &&
+          !promotion.quote && <p role="alert">{t("bookingPromotion.changed")}</p>}
+        <fieldset disabled={confirm.isPending || uncertain} className="min-w-0">
+          <BookingForms state={intake} />
+        </fieldset>
+        {isClient && (
+          <BookingPromotionReview state={promotion} disabled={confirm.isPending || uncertain} />
+        )}
         {policy.isError && (
           <ErrorState error={policy.error} onRetry={() => void policy.refetch()} />
         )}
         {policy.data && (
-          <BookingPolicyConsent
-            policy={policy.data}
-            totalCents={totals.priceCents}
-            acceptedVersion={acceptedTotal === totals.priceCents ? acceptedVersion : null}
-            onAccept={(version) => {
-              setAcceptedVersion(version);
-              setAcceptedTotal(totals.priceCents);
-            }}
-          />
+          <fieldset disabled={confirm.isPending || uncertain} className="min-w-0">
+            <BookingPolicyConsent
+              policy={policy.data}
+              totalCents={reviewTotal}
+              acceptedVersion={
+                acceptedTotal === reviewTotal &&
+                acceptedPromotionHash === (promotion.payload?.reviewHash ?? null)
+                  ? acceptedVersion
+                  : null
+              }
+              onAccept={(version) => {
+                setAcceptedVersion(version);
+                setAcceptedTotal(reviewTotal);
+                setAcceptedPromotionHash(promotion.payload?.reviewHash ?? null);
+              }}
+            />
+          </fieldset>
         )}
         {confirm.isError &&
-          !(confirm.error instanceof ApiError && confirm.error.code === "unauthorized") && (
-            <ErrorState error={confirm.error} onRetry={() => confirm.mutate()} />
-          )}
+          !(
+            confirm.error instanceof ApiError &&
+            (confirm.error.code === "unauthorized" ||
+              confirm.error.code === "booking_promotion_changed")
+          ) && <ErrorState error={confirm.error} onRetry={() => confirm.mutate()} />}
 
         {isStaff && (
           <div
@@ -230,6 +323,7 @@ function ReviewStep() {
           </label>
           <textarea
             id="booking-notes"
+            disabled={confirm.isPending || uncertain}
             rows={3}
             maxLength={500}
             value={notes}
