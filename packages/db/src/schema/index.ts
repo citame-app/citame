@@ -19,6 +19,7 @@ export * from "./oauth";
 export * from "./pass";
 export * from "./pass-ledger";
 export * from "./resources";
+export * from "./review";
 export * from "./rewards";
 export * from "./salon-settings";
 export * from "./service";

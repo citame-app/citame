@@ -32,6 +32,7 @@ export * from "./passes";
 export * from "./permissions";
 export * from "./reports";
 export * from "./resources";
+export * from "./reviews";
 export * from "./rewards";
 export * from "./salon";
 export * from "./service-options";

@@ -86,6 +86,12 @@ function Home() {
                   timezone: salon.timezone.replaceAll("_", " "),
                 })}
               </p>
+              <Link
+                to="/reviews"
+                className="mt-4 inline-flex min-h-11 items-center text-accent-text underline underline-offset-4"
+              >
+                {t("reviews.title")}
+              </Link>
             </div>
             <div
               aria-hidden="true"

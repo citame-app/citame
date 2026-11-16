@@ -1,6 +1,15 @@
 /** Explicit test executable; it is never imported by the production entry point. */
 
-import { passContract, passPeriod, service, waitlistOffer } from "@sob/db";
+import {
+  appointment,
+  appointmentService,
+  clientProfile,
+  passContract,
+  passPeriod,
+  service,
+  staffProfile,
+  waitlistOffer,
+} from "@sob/db";
 import { seedSampleData } from "@sob/db/seed";
 import { createTestDatabase } from "@sob/db/testing";
 import { eq } from "drizzle-orm";
@@ -59,6 +68,38 @@ await createAccount(
   },
 );
 await auth.mailer.stop();
+if (process.env.E2E_REPUTATION_FIXTURE === "true") {
+  const [client] = await database.db
+    .select()
+    .from(clientProfile)
+    .where(eq(clientProfile.email, fixture.clientEmail));
+  const [staff] = await database.db.select().from(staffProfile).limit(1);
+  if (!client || !staff) throw new Error("Missing reputation fixture profiles");
+  for (let day = 1; day <= 8; day++) {
+    const startsAt = new Date(Date.now() - day * 86400000);
+    const [visit] = await database.db
+      .insert(appointment)
+      .values({
+        clientId: client.id,
+        staffId: staff.id,
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + 1800000),
+        status: "completed",
+      })
+      .returning();
+    if (!visit) throw new Error("Missing reputation fixture visit");
+    await database.db.insert(appointmentService).values({
+      appointmentId: visit.id,
+      serviceId: fixture.haircut,
+      position: 0,
+      name: "Fixture haircut",
+      durationMinutes: 30,
+      bufferMinutes: 0,
+      priceCents: 2000,
+      currency: "EUR",
+    });
+  }
+}
 const bank = new RedsysGateway(
   config.payments.redsys ?? {
     secret: fixture.secret,

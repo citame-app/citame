@@ -26,6 +26,7 @@ describe("adminNavFor", () => {
       "services",
       "staff",
       "reports",
+      "reputation",
       "settings",
     ]);
   });
@@ -92,4 +93,9 @@ test("the waitlist is available to booking operators and hidden from restricted 
   expect(adminNavFor("staff", "receptionist").map((item) => item.section)).toContain("waitlist");
   expect(adminNavFor("staff", "restricted").map((item) => item.section)).not.toContain("waitlist");
   expect(adminGuard("/admin/waitlist", "staff", "restricted").type).toBe("redirect");
+});
+
+test("reputation moderation is available only to owners and managers", () => {
+  expect(adminGuard("/admin/reputation", "staff", "receptionist").type).toBe("redirect");
+  expect(adminGuard("/admin/reputation", "staff", "manager").type).toBe("allow");
 });

@@ -16,18 +16,21 @@ import { Route as BookRouteImport } from './routes/book'
 import { Route as ConsentRouteImport } from './routes/consent'
 import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as ResetPasswordRouteImport } from './routes/reset-password'
+import { Route as ReviewsRouteImport } from './routes/reviews'
 import { Route as SignInRouteImport } from './routes/sign-in'
 import { Route as SignUpRouteImport } from './routes/sign-up'
 import { Route as VerifyEmailRouteImport } from './routes/verify-email'
 import { Route as AccountIndexRouteImport } from './routes/account.index'
 import { Route as AccountNotificationsRouteImport } from './routes/account.notifications'
 import { Route as AccountProfileRouteImport } from './routes/account.profile'
+import { Route as AccountReviewsRouteImport } from './routes/account.reviews'
 import { Route as AccountRewardsRouteImport } from './routes/account.rewards'
 import { Route as AccountWaitlistRouteImport } from './routes/account.waitlist'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as AdminCalendarRouteImport } from './routes/admin.calendar'
 import { Route as AdminCommerceRouteImport } from './routes/admin.commerce'
 import { Route as AdminReportsRouteImport } from './routes/admin.reports'
+import { Route as AdminReputationRouteImport } from './routes/admin.reputation'
 import { Route as AdminServicesRouteImport } from './routes/admin.services'
 import { Route as AdminSettingsRouteImport } from './routes/admin.settings'
 import { Route as AdminStaffRouteImport } from './routes/admin.staff'
@@ -78,6 +81,11 @@ const ResetPasswordRoute = ResetPasswordRouteImport.update({
   path: '/reset-password',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ReviewsRoute = ReviewsRouteImport.update({
+  id: '/reviews',
+  path: '/reviews',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SignInRoute = SignInRouteImport.update({
   id: '/sign-in',
   path: '/sign-in',
@@ -108,6 +116,11 @@ const AccountProfileRoute = AccountProfileRouteImport.update({
   path: '/profile',
   getParentRoute: () => AccountRoute,
 } as any)
+const AccountReviewsRoute = AccountReviewsRouteImport.update({
+  id: '/reviews',
+  path: '/reviews',
+  getParentRoute: () => AccountRoute,
+} as any)
 const AccountRewardsRoute = AccountRewardsRouteImport.update({
   id: '/rewards',
   path: '/rewards',
@@ -136,6 +149,11 @@ const AdminCommerceRoute = AdminCommerceRouteImport.update({
 const AdminReportsRoute = AdminReportsRouteImport.update({
   id: '/reports',
   path: '/reports',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminReputationRoute = AdminReputationRouteImport.update({
+  id: '/reputation',
+  path: '/reputation',
   getParentRoute: () => AdminRoute,
 } as any)
 const AdminServicesRoute = AdminServicesRouteImport.update({
@@ -219,16 +237,19 @@ export interface FileRoutesByFullPath {
   '/consent': typeof ConsentRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/reset-password': typeof ResetPasswordRoute
+  '/reviews': typeof ReviewsRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
   '/verify-email': typeof VerifyEmailRoute
   '/account/notifications': typeof AccountNotificationsRoute
   '/account/profile': typeof AccountProfileRoute
+  '/account/reviews': typeof AccountReviewsRoute
   '/account/rewards': typeof AccountRewardsRoute
   '/account/waitlist': typeof AccountWaitlistRoute
   '/admin/calendar': typeof AdminCalendarRoute
   '/admin/commerce': typeof AdminCommerceRoute
   '/admin/reports': typeof AdminReportsRoute
+  '/admin/reputation': typeof AdminReputationRoute
   '/admin/services': typeof AdminServicesRoute
   '/admin/settings': typeof AdminSettingsRoute
   '/admin/staff': typeof AdminStaffRoute
@@ -251,16 +272,19 @@ export interface FileRoutesByTo {
   '/consent': typeof ConsentRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/reset-password': typeof ResetPasswordRoute
+  '/reviews': typeof ReviewsRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
   '/verify-email': typeof VerifyEmailRoute
   '/account/notifications': typeof AccountNotificationsRoute
   '/account/profile': typeof AccountProfileRoute
+  '/account/reviews': typeof AccountReviewsRoute
   '/account/rewards': typeof AccountRewardsRoute
   '/account/waitlist': typeof AccountWaitlistRoute
   '/admin/calendar': typeof AdminCalendarRoute
   '/admin/commerce': typeof AdminCommerceRoute
   '/admin/reports': typeof AdminReportsRoute
+  '/admin/reputation': typeof AdminReputationRoute
   '/admin/services': typeof AdminServicesRoute
   '/admin/settings': typeof AdminSettingsRoute
   '/admin/staff': typeof AdminStaffRoute
@@ -287,16 +311,19 @@ export interface FileRoutesById {
   '/consent': typeof ConsentRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/reset-password': typeof ResetPasswordRoute
+  '/reviews': typeof ReviewsRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
   '/verify-email': typeof VerifyEmailRoute
   '/account/notifications': typeof AccountNotificationsRoute
   '/account/profile': typeof AccountProfileRoute
+  '/account/reviews': typeof AccountReviewsRoute
   '/account/rewards': typeof AccountRewardsRoute
   '/account/waitlist': typeof AccountWaitlistRoute
   '/admin/calendar': typeof AdminCalendarRoute
   '/admin/commerce': typeof AdminCommerceRoute
   '/admin/reports': typeof AdminReportsRoute
+  '/admin/reputation': typeof AdminReputationRoute
   '/admin/services': typeof AdminServicesRoute
   '/admin/settings': typeof AdminSettingsRoute
   '/admin/staff': typeof AdminStaffRoute
@@ -324,16 +351,19 @@ export interface FileRouteTypes {
     | '/consent'
     | '/forgot-password'
     | '/reset-password'
+    | '/reviews'
     | '/sign-in'
     | '/sign-up'
     | '/verify-email'
     | '/account/notifications'
     | '/account/profile'
+    | '/account/reviews'
     | '/account/rewards'
     | '/account/waitlist'
     | '/admin/calendar'
     | '/admin/commerce'
     | '/admin/reports'
+    | '/admin/reputation'
     | '/admin/services'
     | '/admin/settings'
     | '/admin/staff'
@@ -356,16 +386,19 @@ export interface FileRouteTypes {
     | '/consent'
     | '/forgot-password'
     | '/reset-password'
+    | '/reviews'
     | '/sign-in'
     | '/sign-up'
     | '/verify-email'
     | '/account/notifications'
     | '/account/profile'
+    | '/account/reviews'
     | '/account/rewards'
     | '/account/waitlist'
     | '/admin/calendar'
     | '/admin/commerce'
     | '/admin/reports'
+    | '/admin/reputation'
     | '/admin/services'
     | '/admin/settings'
     | '/admin/staff'
@@ -391,16 +424,19 @@ export interface FileRouteTypes {
     | '/consent'
     | '/forgot-password'
     | '/reset-password'
+    | '/reviews'
     | '/sign-in'
     | '/sign-up'
     | '/verify-email'
     | '/account/notifications'
     | '/account/profile'
+    | '/account/reviews'
     | '/account/rewards'
     | '/account/waitlist'
     | '/admin/calendar'
     | '/admin/commerce'
     | '/admin/reports'
+    | '/admin/reputation'
     | '/admin/services'
     | '/admin/settings'
     | '/admin/staff'
@@ -427,6 +463,7 @@ export interface RootRouteChildren {
   ConsentRoute: typeof ConsentRoute
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
+  ReviewsRoute: typeof ReviewsRoute
   SignInRoute: typeof SignInRoute
   SignUpRoute: typeof SignUpRoute
   VerifyEmailRoute: typeof VerifyEmailRoute
@@ -485,6 +522,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ResetPasswordRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/reviews': {
+      id: '/reviews'
+      path: '/reviews'
+      fullPath: '/reviews'
+      preLoaderRoute: typeof ReviewsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/sign-in': {
       id: '/sign-in'
       path: '/sign-in'
@@ -527,6 +571,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AccountProfileRouteImport
       parentRoute: typeof AccountRoute
     }
+    '/account/reviews': {
+      id: '/account/reviews'
+      path: '/reviews'
+      fullPath: '/account/reviews'
+      preLoaderRoute: typeof AccountReviewsRouteImport
+      parentRoute: typeof AccountRoute
+    }
     '/account/rewards': {
       id: '/account/rewards'
       path: '/rewards'
@@ -567,6 +618,13 @@ declare module '@tanstack/react-router' {
       path: '/reports'
       fullPath: '/admin/reports'
       preLoaderRoute: typeof AdminReportsRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/reputation': {
+      id: '/admin/reputation'
+      path: '/reputation'
+      fullPath: '/admin/reputation'
+      preLoaderRoute: typeof AdminReputationRouteImport
       parentRoute: typeof AdminRoute
     }
     '/admin/services': {
@@ -673,6 +731,7 @@ declare module '@tanstack/react-router' {
 interface AccountRouteChildren {
   AccountNotificationsRoute: typeof AccountNotificationsRoute
   AccountProfileRoute: typeof AccountProfileRoute
+  AccountReviewsRoute: typeof AccountReviewsRoute
   AccountRewardsRoute: typeof AccountRewardsRoute
   AccountWaitlistRoute: typeof AccountWaitlistRoute
   AccountIndexRoute: typeof AccountIndexRoute
@@ -682,6 +741,7 @@ interface AccountRouteChildren {
 const AccountRouteChildren: AccountRouteChildren = {
   AccountNotificationsRoute: AccountNotificationsRoute,
   AccountProfileRoute: AccountProfileRoute,
+  AccountReviewsRoute: AccountReviewsRoute,
   AccountRewardsRoute: AccountRewardsRoute,
   AccountWaitlistRoute: AccountWaitlistRoute,
   AccountIndexRoute: AccountIndexRoute,
@@ -695,6 +755,7 @@ interface AdminRouteChildren {
   AdminCalendarRoute: typeof AdminCalendarRoute
   AdminCommerceRoute: typeof AdminCommerceRoute
   AdminReportsRoute: typeof AdminReportsRoute
+  AdminReputationRoute: typeof AdminReputationRoute
   AdminServicesRoute: typeof AdminServicesRoute
   AdminSettingsRoute: typeof AdminSettingsRoute
   AdminStaffRoute: typeof AdminStaffRoute
@@ -708,6 +769,7 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminCalendarRoute: AdminCalendarRoute,
   AdminCommerceRoute: AdminCommerceRoute,
   AdminReportsRoute: AdminReportsRoute,
+  AdminReputationRoute: AdminReputationRoute,
   AdminServicesRoute: AdminServicesRoute,
   AdminSettingsRoute: AdminSettingsRoute,
   AdminStaffRoute: AdminStaffRoute,
@@ -745,6 +807,7 @@ const rootRouteChildren: RootRouteChildren = {
   ConsentRoute: ConsentRoute,
   ForgotPasswordRoute: ForgotPasswordRoute,
   ResetPasswordRoute: ResetPasswordRoute,
+  ReviewsRoute: ReviewsRoute,
   SignInRoute: SignInRoute,
   SignUpRoute: SignUpRoute,
   VerifyEmailRoute: VerifyEmailRoute,

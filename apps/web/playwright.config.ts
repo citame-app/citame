@@ -8,6 +8,7 @@ const optionsFixture = process.env.E2E_OPTIONS_FIXTURE === "true";
 const crmFixture = process.env.E2E_CRM_FIXTURE === "true";
 const intakeFixture = process.env.E2E_INTAKE_FIXTURE === "true";
 const shiftsFixture = process.env.E2E_SHIFTS_FIXTURE === "true";
+const reputationFixture = process.env.E2E_REPUTATION_FIXTURE === "true";
 const resourcesFixture = process.env.E2E_RESOURCES_FIXTURE === "true";
 const depositFixture = process.env.E2E_DEPOSIT_FIXTURE === "true";
 const waitlistFixture = process.env.E2E_WAITLIST_FIXTURE === "true";
@@ -23,7 +24,8 @@ const recurringFixture =
   optionsFixture ||
   crmFixture ||
   intakeFixture ||
-  shiftsFixture;
+  shiftsFixture ||
+  reputationFixture;
 const baseURL = recurringFixture
   ? "http://localhost:4273"
   : (process.env.E2E_BASE_URL ?? "http://localhost:4173");
@@ -32,25 +34,27 @@ export default defineConfig({
   testDir: "./e2e",
   ...(recurringFixture
     ? {
-        testMatch: shiftsFixture
-          ? "**/date-shifts.spec.ts"
-          : intakeFixture
-            ? "**/intake.spec.ts"
-            : crmFixture
-              ? ["**/client-transfer.spec.ts", "**/client-photos.spec.ts"]
-              : optionsFixture
-                ? "**/service-options.spec.ts"
-                : resourcesFixture
-                  ? "**/resources.spec.ts"
-                  : waitlistFixture
-                    ? "**/waitlist.spec.ts"
-                    : seriesFixture
-                      ? "**/appointment-series.spec.ts"
-                      : rewardsFixture
-                        ? "**/rewards.spec.ts"
-                        : depositFixture
-                          ? "**/booking-protection.spec.ts"
-                          : "**/recurring.spec.ts",
+        testMatch: reputationFixture
+          ? "**/reputation.spec.ts"
+          : shiftsFixture
+            ? "**/date-shifts.spec.ts"
+            : intakeFixture
+              ? "**/intake.spec.ts"
+              : crmFixture
+                ? ["**/client-transfer.spec.ts", "**/client-photos.spec.ts"]
+                : optionsFixture
+                  ? "**/service-options.spec.ts"
+                  : resourcesFixture
+                    ? "**/resources.spec.ts"
+                    : waitlistFixture
+                      ? "**/waitlist.spec.ts"
+                      : seriesFixture
+                        ? "**/appointment-series.spec.ts"
+                        : rewardsFixture
+                          ? "**/rewards.spec.ts"
+                          : depositFixture
+                            ? "**/booking-protection.spec.ts"
+                            : "**/recurring.spec.ts",
         webServer: [
           {
             command: "NODE_ENV=test bun ../api/test/recurring-browser.ts",
@@ -80,6 +84,7 @@ export default defineConfig({
           "**/client-photos.spec.ts",
           "**/intake.spec.ts",
           "**/date-shifts.spec.ts",
+          "**/reputation.spec.ts",
         ],
       }),
   outputDir: "./test-results",

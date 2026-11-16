@@ -15,12 +15,14 @@ import { inventoryEsAR } from "./inventory";
 import { loyaltyEsAR } from "./loyalty";
 import { notificationsEsAR } from "./notifications";
 import { passesEsAR } from "./passes";
+import { reputationEsAR } from "./reputation";
 import { schedulingEsAR } from "./scheduling";
 import { serviceOptionsEsAR } from "./service-options";
 import { waitlistEsAR } from "./waitlist";
 
 /** Neutral, professional Spanish for Argentina. */
 export const esAR: Record<MessageKey, string> = {
+  ...reputationEsAR,
   ...dateShiftsEsAR,
   ...intakeEsAR,
   ...bookingProtectionEsAR,

@@ -28,6 +28,7 @@ const ICONS: Record<AdminSection, ComponentType<{ width?: number; height?: numbe
   services: ScissorsIcon,
   staff: UsersIcon,
   reports: ChartIcon,
+  reputation: ChartIcon,
   settings: SettingsIcon,
 };
 

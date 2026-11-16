@@ -9,6 +9,7 @@ export type AdminSection =
   | "services"
   | "staff"
   | "reports"
+  | "reputation"
   | "settings";
 
 interface SectionConfig {
@@ -29,6 +30,7 @@ const SECTIONS: readonly SectionConfig[] = [
   { section: "services", to: "/admin/services", roles: ["owner"] },
   { section: "staff", to: "/admin/staff", roles: BOTH },
   { section: "reports", to: "/admin/reports", roles: BOTH },
+  { section: "reputation", to: "/admin/reputation", roles: BOTH },
   { section: "settings", to: "/admin/settings", roles: ["owner"] },
 ];
 
@@ -48,6 +50,7 @@ export function adminNavFor(
       case "waitlist":
         return permissions.clients && permissions.editCalendar;
       case "services":
+      case "reputation":
         return permissions.editCatalog;
       case "settings":
         return permissions.manageSettings;

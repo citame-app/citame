@@ -31,6 +31,11 @@ import { inventoryRoutes } from "./modules/inventory/routes";
 import { meRoutes } from "./modules/me/routes";
 import { passRoutes, planAdminRoutes, publicPlanRoutes } from "./modules/passes/routes";
 import { reportRoutes } from "./modules/reports/routes";
+import {
+  reviewAdminRoutes,
+  reviewPublicRoutes,
+  reviewSelfRoutes,
+} from "./modules/reputation/routes";
 import { resourceRoutes } from "./modules/resources/routes";
 import { rewardsAdminRoutes, rewardsClientRoutes } from "./modules/rewards/routes";
 import { serviceAdminRoutes } from "./modules/services/admin-routes";
@@ -280,6 +285,7 @@ export function createApp(input: AppDeps): App {
   app.route("/me", rewardsClientRoutes(deps));
   app.route("/me/waitlist", waitlistClientRoutes(deps));
   app.route("/me/intake", intakeSelfRoutes(deps));
+  app.route("/me/reviews", reviewSelfRoutes(deps));
   app.use("/intake/*", requireAuth(auth, deps.db));
   app.route("/intake", intakeRoutes(deps));
 
@@ -291,6 +297,7 @@ export function createApp(input: AppDeps): App {
   app.route("/admin/rewards", rewardsAdminRoutes(deps));
   app.route("/admin/waitlist", waitlistAdminRoutes(deps));
   app.route("/admin/resources", resourceRoutes(deps));
+  app.route("/admin/reviews", reviewAdminRoutes(deps));
   app.route("/benefit-plans", publicPlanRoutes(deps));
   app.route("/admin/benefit-plans", planAdminRoutes(deps));
   app.route("/admin/passes", passRoutes(deps));
@@ -308,6 +315,7 @@ export function createApp(input: AppDeps): App {
 
   // Public catalog and availability: anonymous visitors browse before they sign up.
   app.route("/salon", salonRoutes(deps));
+  app.route("/reviews", reviewPublicRoutes(deps));
   app.route("/services", servicesRoutes(deps));
   app.route("/staff", staffRoutes(deps));
   app.route("/availability", availabilityRoutes(deps));

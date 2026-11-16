@@ -225,6 +225,13 @@
       "when": 1794825842180,
       "tag": "0031_even_leech",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1794828433763,
+      "tag": "0032_giant_hawkeye",
+      "breakpoints": true
     }
   ]
 }

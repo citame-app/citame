@@ -64,6 +64,7 @@ import { intakeEndpoints } from "./intake-endpoints";
 import { inventoryEndpoints } from "./inventory-endpoints";
 import { passEndpoints } from "./pass-endpoints";
 import { resourceEndpoints } from "./resource-endpoints";
+import { reviewEndpoints } from "./review-endpoints";
 import { rewardEndpoints } from "./reward-endpoints";
 import { seriesEndpoints } from "./series-endpoints";
 import { waitlistEndpoints } from "./waitlist-endpoints";
@@ -105,6 +106,7 @@ type CreateBooking = Omit<CreateAppointmentRequest, "clientId" | "client">;
 export function createEndpoints(client: ApiClient) {
   return {
     dateShifts: dateShiftEndpoints(client),
+    reviews: reviewEndpoints(client),
     intake: intakeEndpoints(client),
     commerce: commerceEndpoints(client),
     bookingPolicy: bookingPolicyEndpoints(client),

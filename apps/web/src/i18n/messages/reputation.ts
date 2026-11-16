@@ -1,0 +1,123 @@
+export const reputationEn = {
+  "admin.nav.reputation": "Reputation",
+  "reviews.title": "Reviews",
+  "reviews.lead":
+    "Feedback from completed appointments. Every new or edited review is moderated before publication.",
+  "reviews.publicLead":
+    "Experiences shared after completed appointments. The salon moderates submissions; this is not an independent review platform.",
+  "reviews.empty": "No published reviews yet",
+  "reviews.ownEmpty": "Complete a visit to share your experience",
+  "reviews.manageEmpty": "No reviews in this view",
+  "reviews.write": "Write a review",
+  "reviews.edit": "Edit review",
+  "reviews.publicName": "Public name",
+  "reviews.publicNameHint":
+    "Choose how you appear publicly, for example your first name or initials.",
+  "reviews.rating": "Rating out of 5",
+  "reviews.body": "Your review",
+  "reviews.share": "Show the booked treatments publicly",
+  "reviews.confirm": "I agree to publish this name, rating and review on the salon website.",
+  "reviews.privacy":
+    "Keep contact details, medical information and other people's details out of public feedback. Treatment names are optional. Visitors can copy published content.",
+  "reviews.send": "Send for moderation",
+  "reviews.close": "Close",
+  "reviews.discard": "Discard this draft?",
+  "reviews.discardBody":
+    "Your unsent changes will be lost. An uncertain submission may already be saved; reload the list before starting again.",
+  "reviews.discardConfirm": "Discard and reload",
+  "reviews.stay": "Keep editing",
+  "reviews.reload": "Reload reviews",
+  "reviews.more": "More reviews",
+  "reviews.moreVisits": "More visits",
+  "reviews.pending": "Awaiting moderation",
+  "reviews.published": "Published",
+  "reviews.hidden": "Hidden by the salon",
+  "reviews.withdrawn": "Withdrawn",
+  "reviews.withdraw": "Withdraw review",
+  "reviews.withdrawBody":
+    "Your public name, review, rating and salon reply will be erased from this review. A private visit record remains. Copies already made by visitors cannot be removed here.",
+  "reviews.reason": "Reason for hiding",
+  "reviews.publish": "Publish reviewed content",
+  "reviews.hide": "Hide review",
+  "reviews.manage": "Review and moderate",
+  "reviews.reply": "Public salon reply",
+  "reviews.replyHint":
+    "Do not disclose private client or appointment details. Leave blank to remove your reply.",
+  "reviews.replySave": "Save public reply",
+  "reviews.replyBy": "Salon reply",
+  "reviews.filter": "Review status",
+  "reviews.all": "All statuses",
+  "reviews.service": "Treatments shared publicly",
+  "reviews.allServices": "All treatments",
+  "reviews.score_one": "{average} out of 5 · {count} published review",
+  "reviews.score_other": "{average} out of 5 · {count} published reviews",
+  "reviews.completed": "Completed appointment",
+  "reviews.sourceInvalid":
+    "This appointment is no longer completed and elapsed. Its review is excluded from public results.",
+  "reviews.changed":
+    "This review changed or already exists. Close and reload the list before making a new change.",
+  "reviews.uncertain":
+    "The response was not received. Fields are locked so you can safely retry the same submission, or discard and reload to check whether it was saved.",
+  "reviews.saved": "Review saved",
+} as const;
+export const reputationEsAR: Record<keyof typeof reputationEn, string> = {
+  "admin.nav.reputation": "Reputación",
+  "reviews.title": "Reseñas",
+  "reviews.lead":
+    "Opiniones de citas completadas. Cada reseña nueva o editada se modera antes de publicarse.",
+  "reviews.publicLead":
+    "Experiencias compartidas tras citas completadas. El salón modera las opiniones; esta no es una plataforma independiente de reseñas.",
+  "reviews.empty": "Todavía no hay reseñas publicadas",
+  "reviews.ownEmpty": "Completa una visita para compartir tu experiencia",
+  "reviews.manageEmpty": "No hay reseñas en esta vista",
+  "reviews.write": "Escribir una reseña",
+  "reviews.edit": "Editar reseña",
+  "reviews.publicName": "Nombre público",
+  "reviews.publicNameHint": "Elige cómo aparecer, por ejemplo tu nombre de pila o tus iniciales.",
+  "reviews.rating": "Puntuación sobre 5",
+  "reviews.body": "Tu reseña",
+  "reviews.share": "Mostrar públicamente los tratamientos reservados",
+  "reviews.confirm": "Acepto publicar este nombre, puntuación y reseña en la web del salón.",
+  "reviews.privacy":
+    "No incluyas datos de contacto, información médica ni datos de otras personas. Mostrar los tratamientos es opcional. Los visitantes pueden copiar el contenido publicado.",
+  "reviews.send": "Enviar a moderación",
+  "reviews.close": "Cerrar",
+  "reviews.discard": "¿Descartar este borrador?",
+  "reviews.discardBody":
+    "Se perderán los cambios sin enviar. Un envío sin respuesta podría estar guardado; recarga la lista antes de empezar de nuevo.",
+  "reviews.discardConfirm": "Descartar y recargar",
+  "reviews.stay": "Seguir editando",
+  "reviews.reload": "Recargar reseñas",
+  "reviews.more": "Más reseñas",
+  "reviews.moreVisits": "Más visitas",
+  "reviews.pending": "Pendiente de moderación",
+  "reviews.published": "Publicada",
+  "reviews.hidden": "Ocultada por el salón",
+  "reviews.withdrawn": "Retirada",
+  "reviews.withdraw": "Retirar reseña",
+  "reviews.withdrawBody":
+    "Se borrarán el nombre público, texto, puntuación y respuesta del salón de esta reseña. Se conserva el registro privado de la visita. Aquí no se pueden borrar las copias que ya hayan hecho los visitantes.",
+  "reviews.reason": "Motivo para ocultarla",
+  "reviews.publish": "Publicar el contenido revisado",
+  "reviews.hide": "Ocultar reseña",
+  "reviews.manage": "Revisar y moderar",
+  "reviews.reply": "Respuesta pública del salón",
+  "reviews.replyHint":
+    "No reveles datos privados de la clienta ni de la cita. Déjala vacía para borrar tu respuesta.",
+  "reviews.replySave": "Guardar respuesta pública",
+  "reviews.replyBy": "Respuesta del salón",
+  "reviews.filter": "Estado de la reseña",
+  "reviews.all": "Todos los estados",
+  "reviews.service": "Tratamientos compartidos públicamente",
+  "reviews.allServices": "Todos los tratamientos",
+  "reviews.score_one": "{average} sobre 5 · {count} reseña publicada",
+  "reviews.score_other": "{average} sobre 5 · {count} reseñas publicadas",
+  "reviews.completed": "Cita completada",
+  "reviews.sourceInvalid":
+    "Esta cita ya no figura como completada y finalizada. Su reseña queda excluida de los resultados públicos.",
+  "reviews.changed":
+    "La reseña ha cambiado o ya existe. Cierra y recarga la lista antes de hacer otro cambio.",
+  "reviews.uncertain":
+    "No se ha recibido la respuesta. Los campos quedan bloqueados para repetir el mismo envío con seguridad, o descartar y recargar para comprobar si se guardó.",
+  "reviews.saved": "Reseña guardada",
+};

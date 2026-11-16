@@ -39,15 +39,17 @@ function AccountLayout() {
   const { t } = useI18n();
   const auth = useAuth();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const title = pathname.endsWith("/waitlist")
-    ? t("waitlist.title")
-    : pathname.endsWith("/rewards")
-      ? t("rewards.title")
-      : pathname.endsWith("/profile")
-        ? t("account.profile.title")
-        : pathname.endsWith("/notifications")
-          ? t("notify.title")
-          : t("account.title");
+  const title = pathname.endsWith("/reviews")
+    ? t("reviews.title")
+    : pathname.endsWith("/waitlist")
+      ? t("waitlist.title")
+      : pathname.endsWith("/rewards")
+        ? t("rewards.title")
+        : pathname.endsWith("/profile")
+          ? t("account.profile.title")
+          : pathname.endsWith("/notifications")
+            ? t("notify.title")
+            : t("account.title");
   const { session } = Route.useRouteContext();
   return (
     <PageContainer width="max-w-3xl">
@@ -69,6 +71,11 @@ function AccountLayout() {
             <Link to="/account/profile" className={tabClass}>
               {t("account.nav.profile")}
             </Link>
+            {session?.user.role === "client" && (
+              <Link to="/account/reviews" className={tabClass}>
+                {t("reviews.title")}
+              </Link>
+            )}
             {session?.clientId && (
               <Link to="/account/notifications" className={tabClass}>
                 {t("account.nav.notifications")}

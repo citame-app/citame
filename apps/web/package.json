@@ -21,7 +21,8 @@
     "e2e:options": "E2E_OPTIONS_FIXTURE=true playwright test",
     "e2e:crm": "E2E_CRM_FIXTURE=true playwright test",
     "e2e:intake": "E2E_INTAKE_FIXTURE=true playwright test",
-    "e2e:shifts": "E2E_SHIFTS_FIXTURE=true playwright test"
+    "e2e:shifts": "E2E_SHIFTS_FIXTURE=true playwright test",
+    "e2e:reputation": "E2E_REPUTATION_FIXTURE=true playwright test"
   },
   "dependencies": {
     "@base-ui/react": "1.9.0",
