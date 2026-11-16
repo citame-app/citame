@@ -5,6 +5,7 @@ export * from "./audit";
 export * from "./auth";
 export * from "./booking-protection";
 export * from "./client";
+export * from "./client-import";
 export * from "./commerce";
 export * from "./gift-card";
 export * from "./gift-card-ledger";

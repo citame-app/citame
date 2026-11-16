@@ -4,6 +4,7 @@ import { accountingEn } from "./accounting";
 import { adminEn } from "./admin";
 import { bookingProtectionEn } from "./booking-protection";
 import { clientControlsEn } from "./client-controls";
+import { clientTransferEn } from "./client-transfer";
 import { commerceEn } from "./commerce";
 import { giftCardsEn } from "./gift-cards";
 import { inventoryEn } from "./inventory";
@@ -17,6 +18,7 @@ import { waitlistEn } from "./waitlist";
 export const en = {
   ...bookingProtectionEn,
   ...clientControlsEn,
+  ...clientTransferEn,
   ...passesEn,
   ...loyaltyEn,
   ...schedulingEn,

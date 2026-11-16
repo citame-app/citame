@@ -190,6 +190,13 @@
       "when": 1794810239741,
       "tag": "0026_romantic_doomsday",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1794815477500,
+      "tag": "0027_known_silverclaw",
+      "breakpoints": true
     }
   ]
 }

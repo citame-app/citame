@@ -112,3 +112,26 @@ Interactive bookings now bind every selected service to its reviewed price/durat
 Local verification after variants/extras: the complete API suite passed 901 tests, web 689, contracts 134, database 47, forced type checks and repository lint. Subsequent reviewed-quote and notification regressions passed 47 targeted API tests (including MCP), 693 web tests, and four real browser cases that reject a changed price then confirm only after a fresh review. These counts describe tested local code; the unchecked delivery blocks above remain open.
 
 Interactive booking retries now retain an intent UUID and recover only the original creator's matching visit, including uncertain responses and concurrent walk-ins. The four option-booking browser cases pass with a deliberately lost post-commit response and recovery of the same visit. Targeted REST/MCP/audit verification passed 45 tests; full web 696, contracts 136, forced type checks and repository lint passed. This closes the retry correction without checking off any remaining feature block.
+
+### Reviewed client transfer progress
+
+Owner/manager CSV transfer now provides UTF-8/file/record limits, selected-row previews, normalized duplicate/conflicting-contact detection, stale-review fencing, atomic idempotent import, searched private export and reversible spreadsheet protection. Spanish/English forms preserve drafts on failures and collapse the source when reviewing rows. [Operator guide and limits](client-transfer.md). This adds import/export; merging, photos and versioned forms/waivers remain open.
+
+Four real mobile/desktop light/dark browser cases pass for CSV upload, rejected/repeated rows, explicit selection, lost post-commit response recovery, searched download and exported-file duplicate review; axe and horizontal overflow pass. Full web 699, contracts 138 and database 47 tests pass; forced type checks and repository lint pass.
+
+## Booksy reference cross-check
+
+The [official Spanish feature catalog](https://biz.booksy.com/es-es/funcionalidades), reviewed 2026-11-16, also identifies these single-business gaps beyond the original grouped checklist. They remain required work rather than implied parity:
+
+- [ ] Delegated booking and management for family/friends with explicit account ownership and scoped permissions.
+- [ ] Parallel-client service capacity in addition to resources, combinations and processing gaps.
+- [ ] Optional home appointments with reviewed travel area/fees and protected travel time.
+- [ ] Calendar import from Google/Apple-compatible feeds/files, with duplicate/conflict handling; external account activation requires its credentials.
+- [ ] Date-specific staff shifts and safe copying to future dates/weeks, beyond weekly hours/time-off.
+- [ ] Time-specific happy-hour and last-minute promotions, beyond existing validity windows and generic offers.
+- [ ] Unlimited-visit membership terms and usage safeguards, beyond the implemented discrete prepaid visits.
+- [ ] Shareable social creative for services/offers/reviews, plus moderated portfolio and booking/QR/widget entry.
+
+The public multi-business marketplace, paid discovery/Boost and multisite remain outside the owner's confirmed current scope. External Instagram/Google booking activation, signing and bank/provider enrollment await actual accounts and approval; preparing local adapters is separate from claiming activation. This list does not claim equivalence with Booksy's network or proprietary integrations.
+
+Full API verification after reviewed booking retries and client transfer passed **927 tests across 93 files** (0 failures). This includes the existing payment, resource, recurrence, waitlist, reward, permission and sync regressions. The broader unchecked feature blocks remain unfinished.

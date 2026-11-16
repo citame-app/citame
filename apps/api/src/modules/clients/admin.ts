@@ -32,7 +32,7 @@ function visitStats(db: Pick<Database, "select">) {
 /** Escapes LIKE wildcards so user input is always matched literally. */
 const escapeLike = (value: string) => value.replace(/[\\%_]/g, (char) => `\\${char}`);
 
-function searchFilter(term: string | undefined) {
+export function searchFilter(term: string | undefined) {
   if (!term) return undefined;
   const like = `%${escapeLike(term)}%`;
   const digits = term.replace(/\D/g, "");

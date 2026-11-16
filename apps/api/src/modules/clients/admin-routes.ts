@@ -1,5 +1,8 @@
 import {
   clientControlsInputSchema,
+  clientExportQuerySchema,
+  clientImportInputSchema,
+  clientImportPreviewInputSchema,
   clientListQuerySchema,
   idSchema,
   updateClientRequestSchema,
@@ -11,10 +14,32 @@ import type { AppEnv } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
 import { deleteClient, getClientDetail, listClients, updateClient } from "./admin";
 import { getClientControls, updateClientControls } from "./controls";
+import { exportClients, importClients, previewClientImport } from "./transfer";
 
 /** Client directory, mounted at `/admin/clients` behind `requireAuth`. */
 export function clientAdminRoutes({ db, now = () => new Date() }: AppDeps) {
   return new Hono<AppEnv>()
+    .get("/export", async (c) => {
+      const principal = c.get("principal");
+      authorizeClientDelete(principal);
+      const query = parseOrThrow(clientExportQuerySchema, c.req.query());
+      c.header("cache-control", "private, no-store");
+      return c.json(await exportClients(db, query.search, principal, now()));
+    })
+    .post("/import/preview", async (c) => {
+      const principal = c.get("principal");
+      authorizeClientDelete(principal);
+      const input = parseOrThrow(clientImportPreviewInputSchema, await readJson(c));
+      c.header("cache-control", "private, no-store");
+      return c.json(await previewClientImport(db, input.csv, principal));
+    })
+    .post("/import", async (c) => {
+      const principal = c.get("principal");
+      authorizeClientDelete(principal);
+      const input = parseOrThrow(clientImportInputSchema, await readJson(c));
+      c.header("cache-control", "private, no-store");
+      return c.json(await importClients(db, input, principal), 201);
+    })
     .get("/", async (c) => {
       authorizeClientAccess(c.get("principal"));
       const query = parseOrThrow(clientListQuerySchema, c.req.query());

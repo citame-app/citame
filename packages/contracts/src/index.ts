@@ -15,6 +15,7 @@ export * from "./booking-intent";
 export * from "./booking-protection";
 export * from "./calendar";
 export * from "./client-controls";
+export * from "./client-transfer";
 export * from "./clients";
 export * from "./commerce";
 export * from "./common";

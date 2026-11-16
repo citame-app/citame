@@ -4,6 +4,7 @@ import { accountingEsAR } from "./accounting";
 import { adminEsAR } from "./admin";
 import { bookingProtectionEsAR } from "./booking-protection";
 import { clientControlsEsAR } from "./client-controls";
+import { clientTransferEsAR } from "./client-transfer";
 import { commerceEsAR } from "./commerce";
 import type { MessageKey } from "./en";
 import { giftCardsEsAR } from "./gift-cards";
@@ -19,6 +20,7 @@ import { waitlistEsAR } from "./waitlist";
 export const esAR: Record<MessageKey, string> = {
   ...bookingProtectionEsAR,
   ...clientControlsEsAR,
+  ...clientTransferEsAR,
   ...passesEsAR,
   ...loyaltyEsAR,
   ...schedulingEsAR,

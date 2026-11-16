@@ -7,6 +7,7 @@ import {
   availabilityResponseSchema,
   type CalendarQuery,
   type ClientControlsInput,
+  type ClientImportInput,
   type ClientListQuery,
   type CreateAppointmentRequest,
   type CreateServiceRequest,
@@ -15,6 +16,9 @@ import {
   calendarResponseSchema,
   clientControlsSchema,
   clientDetailResponseSchema,
+  clientExportSchema,
+  clientImportPreviewSchema,
+  clientImportResultSchema,
   listAdminServicesResponseSchema,
   listAdminStaffResponseSchema,
   listAppointmentsResponseSchema,
@@ -159,6 +163,12 @@ export function createEndpoints(client: ApiClient) {
           query: { from: query.from, to: query.to, staffIds: query.staffIds?.join(",") },
         }),
       clients: {
+        previewImport: (csv: string) =>
+          client.post("/admin/clients/import/preview", { csv }, clientImportPreviewSchema),
+        import: (input: ClientImportInput) =>
+          client.post("/admin/clients/import", input, clientImportResultSchema),
+        export: (search?: string) =>
+          client.get("/admin/clients/export", clientExportSchema, { query: { search } }),
         controls: (id: string) => client.get(`/admin/clients/${id}/controls`, clientControlsSchema),
         updateControls: (id: string, input: ClientControlsInput) =>
           client.patch(`/admin/clients/${id}/controls`, input, clientControlsSchema),
