@@ -6,6 +6,7 @@ import { adminEsAR } from "./admin";
 import { bookingPromotionsEs } from "./booking-promotions";
 import { bookingProtectionEsAR } from "./booking-protection";
 import { clientControlsEsAR } from "./client-controls";
+import { clientMergeEs } from "./client-merge";
 import { clientPhotosEsAR } from "./client-photos";
 import { clientTransferEsAR } from "./client-transfer";
 import { combinationsEs } from "./combinations";
@@ -41,6 +42,7 @@ export const esAR: Record<MessageKey, string> = {
   ...intakeEsAR,
   ...bookingProtectionEsAR,
   ...clientControlsEsAR,
+  ...clientMergeEs,
   ...clientPhotosEsAR,
   ...clientTransferEsAR,
   ...passesEsAR,

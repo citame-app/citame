@@ -4,6 +4,8 @@ import {
   clientImportInputSchema,
   clientImportPreviewInputSchema,
   clientListQuerySchema,
+  clientMergeInputSchema,
+  clientMergePairSchema,
   clientPhotoDeleteQuerySchema,
   clientPhotoUpdateSchema,
   clientPhotoUploadSchema,
@@ -17,6 +19,8 @@ import type { AppEnv } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
 import { deleteClient, getClientDetail, listClients, updateClient } from "./admin";
 import { getClientControls, updateClientControls } from "./controls";
+import { clientDuplicates } from "./duplicates";
+import { mergeClients, previewClientMerge } from "./merge";
 import {
   deleteClientPhoto,
   listClientPhotos,
@@ -29,6 +33,26 @@ import { exportClients, importClients, previewClientImport } from "./transfer";
 /** Client directory, mounted at `/admin/clients` behind `requireAuth`. */
 export function clientAdminRoutes({ db, now = () => new Date() }: AppDeps) {
   return new Hono<AppEnv>()
+    .post("/merge/preview", async (c) =>
+      c.json(
+        await previewClientMerge(
+          db,
+          parseOrThrow(clientMergePairSchema, await readJson(c)),
+          c.get("principal"),
+        ),
+      ),
+    )
+    .post("/merge", async (c) =>
+      c.json(
+        await mergeClients(
+          db,
+          parseOrThrow(clientMergeInputSchema, await readJson(c)),
+          c.get("principal"),
+          now(),
+        ),
+        201,
+      ),
+    )
     .get("/export", async (c) => {
       const principal = c.get("principal");
       authorizeClientDelete(principal);
@@ -54,6 +78,12 @@ export function clientAdminRoutes({ db, now = () => new Date() }: AppDeps) {
       authorizeClientAccess(c.get("principal"));
       const query = parseOrThrow(clientListQuerySchema, c.req.query());
       return c.json(await listClients(db, query));
+    })
+    .get("/:id/duplicates", async (c) => {
+      c.header("cache-control", "private, no-store");
+      return c.json(
+        await clientDuplicates(db, parseOrThrow(idSchema, c.req.param("id")), c.get("principal")),
+      );
     })
     .get("/:id/photos", async (c) => {
       c.header("cache-control", "private, no-store");

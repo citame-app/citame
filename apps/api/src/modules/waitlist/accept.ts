@@ -12,6 +12,7 @@ import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { authorizeAppointmentCreate, authorizeAppointmentList } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
+import { clientRoot } from "../../client-identity";
 import { DomainError } from "../../errors";
 import { lockCalendars, lockScheduling, type Tx } from "../../tx";
 import { createAppointment, loadSnapshots, toAppointment } from "../appointments/service";
@@ -35,7 +36,7 @@ async function bookedView(tx: Tx, id: string, p: Principal) {
   });
   if (
     (scope.query.staffId && scope.query.staffId !== row.staffId) ||
-    (scope.clientId && scope.clientId !== row.clientId)
+    (scope.clientId && !(scope.clientIds ?? [scope.clientId]).includes(row.clientId))
   )
     throw new DomainError("forbidden", "This appointment is not available on your calendar");
   const snapshots = (await loadSnapshots(tx, [id])).get(id) ?? [];
@@ -60,12 +61,17 @@ export async function acceptWaitlist(
       .where(and(eq(waitlistOffer.id, input.offerId), eq(waitlistOffer.entryId, id)))
       .for("update");
     if (!offer) throw versionConflict();
+    if (offer.state !== "accepted" && (await clientRoot(tx, entry.clientId)).id !== entry.clientId)
+      throw new DomainError(
+        "client_merged",
+        "Cancel this old waitlist entry and review a new request on the surviving profile",
+      );
     const booking = authorizeAppointmentCreate(p, {
       intakeResponses: input.intakeResponses,
       intakeSubmissionIds: input.intakeSubmissionIds,
       intakeReviewHash: input.intakeReviewHash,
       staffId: offer.staffId,
-      clientId: entry.clientId,
+      clientId: p.role === "client" ? (p.clientId ?? entry.clientId) : entry.clientId,
       serviceIds: entry.serviceIds,
       startsAt: offer.startsAt.toISOString(),
       ...(input.protectionAcceptedVersion

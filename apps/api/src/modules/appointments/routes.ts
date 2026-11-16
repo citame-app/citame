@@ -86,7 +86,12 @@ export function appointmentsRoutes({ db, now = () => new Date(), metrics }: AppD
       .get("/", async (c) => {
         const query = parseOrThrow(appointmentListQuerySchema, c.req.query());
         const scoped = authorizeAppointmentList(c.get("principal"), query);
-        return c.json(await listAppointments(db, scoped.query, { clientId: scoped.clientId }));
+        return c.json(
+          await listAppointments(db, scoped.query, {
+            clientId: scoped.clientId,
+            clientIds: scoped.clientIds,
+          }),
+        );
       })
       // Registered before any `/:id` route so "calendar" is never read as an id.
       .get("/calendar", async (c) => {

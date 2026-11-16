@@ -2,6 +2,7 @@ import type { StaffAccessPreset, UserRole } from "@sob/contracts";
 import { clientProfile, type Database, staffProfile, user } from "@sob/db";
 import { and, eq, isNull } from "drizzle-orm";
 import type { MiddlewareHandler } from "hono";
+import { clientIdentityIds } from "../client-identity";
 import { DomainError } from "../errors";
 import type { Tx } from "../tx";
 import type { Auth } from "./auth";
@@ -17,7 +18,12 @@ export interface Principal {
   accessPreset?: StaffAccessPreset;
   /** Booking profile, when the account is a client. */
   clientId: string | null;
+  clientIds?: string[];
 }
+export const ownsClient = (principal: Pick<Principal, "clientId" | "clientIds">, id: string) =>
+  principal.clientId === id || Boolean(principal.clientIds?.includes(id));
+export const ownedClientIds = (principal: Pick<Principal, "clientId" | "clientIds">) =>
+  principal.clientIds ?? (principal.clientId ? [principal.clientId] : []);
 
 export type AppEnv = { Variables: { principal: Principal } };
 
@@ -61,6 +67,7 @@ export async function loadPrincipal(db: Database | Tx, userId: string): Promise<
       .where(and(eq(clientProfile.userId, userId), isNull(clientProfile.deletedAt)));
   }
 
+  const identities = client ? await clientIdentityIds(db, client.id) : [];
   return {
     userId: row.id,
     email: row.email,
@@ -69,6 +76,7 @@ export async function loadPrincipal(db: Database | Tx, userId: string): Promise<
     staffId: staff?.id ?? null,
     accessPreset: staff?.accessPreset,
     clientId: client?.id ?? null,
+    ...(identities.length > 1 ? { clientIds: identities } : {}),
   };
 }
 

@@ -8,11 +8,12 @@ import {
   type ClientPhotoUpload,
   permissionsFor,
 } from "@sob/contracts";
-import { clientPhoto, clientProfile, type Database } from "@sob/db";
+import { clientPhoto, type Database } from "@sob/db";
 import { and, count, desc, eq, isNull, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
+import { clientRoot, lockClientRoot } from "../../client-identity";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
 import { normalizeClientPhoto } from "./photo-image";
@@ -36,19 +37,12 @@ const view = (
   createdAt: row.createdAt.toISOString(),
   updatedAt: row.updatedAt.toISOString(),
 });
-async function activeClient(db: Database | Tx, id: string, lock = false) {
-  const query = db
-    .select({ id: clientProfile.id })
-    .from(clientProfile)
-    .where(and(eq(clientProfile.id, id), isNull(clientProfile.deletedAt)));
-  if (!(await (lock ? query.for("share") : query))[0])
-    throw new DomainError("not_found", "Client not found");
-}
+const activeClient = clientRoot;
 async function lockPhotos(tx: Tx, clientId: string) {
   await tx.execute(
     sql`select pg_advisory_xact_lock(hashtextextended('sob-client-photo-capacity-v1',0))`,
   );
-  await activeClient(tx, clientId, true);
+  return lockClientRoot(tx, clientId);
 }
 async function replay(
   db: Database | Tx,
@@ -82,7 +76,12 @@ export async function listClientPhotos(db: Database, id: string, p: Principal) {
   const rows = await db
     .select(fields)
     .from(clientPhoto)
-    .where(and(eq(clientPhoto.clientId, id), isNull(clientPhoto.deletedAt)))
+    .where(
+      and(
+        sql`${clientPhoto.clientId} in(select client_identity_ids(${id}::uuid))`,
+        isNull(clientPhoto.deletedAt),
+      ),
+    )
     .orderBy(desc(clientPhoto.createdAt), desc(clientPhoto.id));
   return {
     photos: rows.map(view),
@@ -107,9 +106,11 @@ export async function uploadClientPhoto(
   if (previous) return previous;
   const image = await normalizeClientPhoto(input.imageBase64);
   return db.transaction(async (tx) => {
-    await lockPhotos(tx, id);
+    const root = await lockPhotos(tx, id);
     const previous = await replay(tx, id, input, p, fingerprint);
     if (previous) return previous;
+    if (root.id !== id)
+      throw new DomainError("client_merged", "Open the surviving profile before uploading a photo");
     const [total] = await tx
       .select({ count: count() })
       .from(clientPhoto)
@@ -117,7 +118,12 @@ export async function uploadClientPhoto(
     const [clientTotal] = await tx
       .select({ count: count() })
       .from(clientPhoto)
-      .where(and(eq(clientPhoto.clientId, id), isNull(clientPhoto.deletedAt)));
+      .where(
+        and(
+          sql`${clientPhoto.clientId} in(select client_identity_ids(${id}::uuid))`,
+          isNull(clientPhoto.deletedAt),
+        ),
+      );
     if (
       (total?.count ?? 0) >= CLIENT_PHOTO_SALON_LIMIT ||
       (clientTotal?.count ?? 0) >= CLIENT_PHOTO_PER_CLIENT_LIMIT
@@ -160,7 +166,12 @@ async function photoRow(tx: Tx, clientId: string, id: string) {
   const [row] = await tx
     .select({ ...fields, deletedAt: clientPhoto.deletedAt })
     .from(clientPhoto)
-    .where(and(eq(clientPhoto.id, id), eq(clientPhoto.clientId, clientId)))
+    .where(
+      and(
+        eq(clientPhoto.id, id),
+        sql`${clientPhoto.clientId} in(select client_identity_ids(${clientId}::uuid))`,
+      ),
+    )
     .for("update");
   if (!row) throw new DomainError("not_found", "Photo not found");
   return row;
@@ -252,7 +263,7 @@ export async function readClientPhotoImage(
     .where(
       and(
         eq(clientPhoto.id, id),
-        eq(clientPhoto.clientId, clientId),
+        sql`${clientPhoto.clientId} in(select client_identity_ids(${clientId}::uuid))`,
         isNull(clientPhoto.deletedAt),
       ),
     );

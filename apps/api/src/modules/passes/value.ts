@@ -13,6 +13,7 @@ import {
 import { and, asc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import type { Principal } from "../../auth/principal";
+import { clientIdentityIds, lockClientRoot } from "../../client-identity";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
 import { allocateDiscount, multiplyDivide } from "../commerce/money";
@@ -157,8 +158,11 @@ export async function redeemPass(
     .from(appointment)
     .where(eq(appointment.id, sale.appointmentId));
   const { contract, period } = await lockPeriod(tx, input.passPeriodId ?? "");
+  if (!sale.clientId) throw new DomainError("invalid_state", "Pass redemption requires a client");
+  const root = await lockClientRoot(tx, sale.clientId);
+  const identities = await clientIdentityIds(tx, root.id);
   if (
-    contract.clientId !== sale.clientId ||
+    !identities.includes(contract.clientId) ||
     contract.kind !== input.method ||
     !booking ||
     booking.status === "cancelled" ||
@@ -519,7 +523,7 @@ export async function membershipDiscounts(
     .innerJoin(passContract, eq(passContract.id, passPeriod.contractId))
     .where(
       and(
-        eq(passContract.clientId, clientId),
+        sql`${passContract.clientId} in(select client_identity_ids(${clientId}::uuid))`,
         eq(passContract.kind, "membership"),
         eq(passPeriod.status, "active"),
         sql`not exists (select 1 from pass_refund_allocation a join checkout_refund r on r.id=a.refund_id where a.period_id=${passPeriod.id} and a.status='held' and r.amount_cents>a.excess_cents)`,
@@ -564,7 +568,12 @@ export async function eligiblePasses(tx: Tx, checkoutId: string, p: Principal) {
     .select({ contract: passContract, period: passPeriod })
     .from(passPeriod)
     .innerJoin(passContract, eq(passContract.id, passPeriod.contractId))
-    .where(and(eq(passContract.clientId, sale.clientId), eq(passPeriod.status, "active")))
+    .where(
+      and(
+        sql`${passContract.clientId} in(select client_identity_ids(${sale.clientId}::uuid))`,
+        eq(passPeriod.status, "active"),
+      ),
+    )
     .orderBy(asc(passPeriod.endsAt), asc(passPeriod.createdAt));
   const eligible = [];
   for (const c of candidates) {

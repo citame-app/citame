@@ -12,7 +12,6 @@ import {
 } from "@sob/contracts";
 import {
   appointment,
-  clientProfile,
   type Database,
   intakeAppointment,
   intakeForm,
@@ -22,7 +21,8 @@ import {
 import { and, asc, count, desc, eq, gte, inArray, isNull, lte } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
-import { loadPrincipal, type Principal } from "../../auth/principal";
+import { loadPrincipal, ownedClientIds, ownsClient, type Principal } from "../../auth/principal";
+import { clientIdentityIds, clientRoot, lockClientRoot } from "../../client-identity";
 import { DomainError } from "../../errors";
 import { lockScheduling, type Tx } from "../../tx";
 import { getBookableServices, getServicesByIds } from "../services/service";
@@ -343,16 +343,11 @@ export async function getIntakeRequirements(
   };
 }
 async function activeClient(db: Connection, id: string, lock = false) {
-  const query = db
-    .select({ id: clientProfile.id })
-    .from(clientProfile)
-    .where(and(eq(clientProfile.id, id), isNull(clientProfile.deletedAt)));
-  if (!(await (lock ? query.for("share") : query))[0])
-    throw new DomainError("not_found", "Client not found");
+  return lock ? lockClientRoot(db as Tx, id) : clientRoot(db, id);
 }
 function authorizeSubject(p: Principal, clientId: string, write = false) {
   if (p.role === "client") {
-    if (!p.clientId || p.clientId !== clientId)
+    if (!p.clientId || !ownsClient(p, clientId))
       throw new DomainError("not_found", "Form response not found");
   } else requirePermission(p, write ? "editClients" : "clients");
 }
@@ -407,7 +402,7 @@ export async function submitIntakeResponse(
     await lockScheduling(tx);
     const principal = await livePrincipal(tx, p);
     authorizeSubject(principal, clientId, true);
-    await activeClient(tx, clientId, true);
+    const subject = await activeClient(tx, clientId, true);
     const revision = await revisionRow(tx, input.revisionId);
     const definition = intakeDefinitionSchema.parse(revision.definition);
     const answers = normalizedIntakeAnswers(definition, input.answers);
@@ -434,6 +429,11 @@ export async function submitIntakeResponse(
         );
       return submissionView(tx, previous);
     }
+    if (subject.id !== clientId)
+      throw new DomainError(
+        "client_merged",
+        "Review the surviving subject before recording a new response",
+      );
     const form = await formRow(tx, revision.formId);
     if (!form.active || form.currentRevisionId !== revision.id)
       throw new DomainError(
@@ -458,7 +458,7 @@ export async function submitIntakeResponse(
     const [clientCount] = await tx
       .select({ count: count() })
       .from(intakeSubmission)
-      .where(eq(intakeSubmission.clientId, clientId));
+      .where(inArray(intakeSubmission.clientId, await clientIdentityIds(tx, clientId)));
     const [total] = await tx.select({ count: count() }).from(intakeSubmission);
     if ((clientCount?.count ?? 0) >= 1000 || (total?.count ?? 0) >= 50000)
       throw new DomainError("storage_limit", "The form response storage capacity has been reached");
@@ -513,9 +513,7 @@ export async function getIntakeSubmission(db: Database, id: string, p: Principal
     .where(
       and(
         eq(intakeSubmission.id, id),
-        p.role === "client"
-          ? eq(intakeSubmission.clientId, p.clientId ?? "00000000-0000-4000-8000-000000000000")
-          : undefined,
+        p.role === "client" ? inArray(intakeSubmission.clientId, ownedClientIds(p)) : undefined,
       ),
     );
   if (!row) throw new DomainError("not_found", "Form response not found");
@@ -548,7 +546,7 @@ export async function listIntakeSubmissions(
     .innerJoin(intakeRevision, eq(intakeRevision.id, intakeSubmission.revisionId))
     .where(
       and(
-        eq(intakeSubmission.clientId, clientId),
+        inArray(intakeSubmission.clientId, await clientIdentityIds(db, clientId)),
         before ? lt(intakeSubmission.id, before) : undefined,
       ),
     )

@@ -23,6 +23,7 @@ import {
 } from "@sob/db";
 import { and, asc, count, desc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
+import { clientIdentityIds, requireClientRoot } from "../../client-identity";
 import { DomainError } from "../../errors";
 import {
   closeAppointment,
@@ -213,7 +214,7 @@ export async function createAppointment(
         workWindows: serviceWorkWindows(services),
       });
       const clientId = await resolveClient(tx, request);
-      await assertClientCanBook(tx, clientId);
+      await assertClientCanBook(tx, clientId, true);
       const intake = await prepareBookingIntake(
         tx,
         request,
@@ -411,10 +412,11 @@ export async function assertBookable(
 async function resolveClient(tx: Tx, request: CreateAppointmentRequest): Promise<string> {
   if (request.clientId) {
     const [existing] = await tx
-      .select({ id: clientProfile.id })
+      .select({ id: clientProfile.id, mergedIntoId: clientProfile.mergedIntoId })
       .from(clientProfile)
       .where(and(eq(clientProfile.id, request.clientId), isNull(clientProfile.deletedAt)));
     if (!existing) throw new DomainError("not_found", `Client ${request.clientId} not found`);
+    requireClientRoot(existing);
     return existing.id;
   }
   const inline = request.client;
@@ -440,7 +442,9 @@ async function resolveClient(tx: Tx, request: CreateAppointmentRequest): Promise
       .select({ id: clientProfile.id })
       .from(clientProfile)
       .leftJoin(user, eq(user.id, clientProfile.userId))
-      .where(and(isNull(clientProfile.deletedAt), or(...candidates)))
+      .where(
+        and(isNull(clientProfile.deletedAt), isNull(clientProfile.mergedIntoId), or(...candidates)),
+      )
       // Several duplicates are possible; always pick the oldest so the result is repeatable.
       .orderBy(asc(clientProfile.createdAt), asc(clientProfile.id))
       .limit(1);
@@ -475,7 +479,7 @@ export async function getAppointmentOwnership(
 export async function listAppointments(
   db: Database,
   query: AppointmentListQuery,
-  scope: { clientId?: string } = {},
+  scope: { clientId?: string; clientIds?: string[] } = {},
 ): Promise<ListAppointmentsResponse> {
   const page = query.page ?? 1;
   const pageSize = query.pageSize ?? APPOINTMENT_PAGE_SIZE_DEFAULT;
@@ -485,7 +489,11 @@ export async function listAppointments(
     gt(appointment.endsAt, new Date(query.from)),
     query.staffId ? eq(appointment.staffId, query.staffId) : undefined,
     query.status ? inArray(appointment.status, query.status) : undefined,
-    scope.clientId ? eq(appointment.clientId, scope.clientId) : undefined,
+    scope.clientIds
+      ? inArray(appointment.clientId, scope.clientIds)
+      : scope.clientId
+        ? eq(appointment.clientId, scope.clientId)
+        : undefined,
   );
   const [rows, totals] = await Promise.all([
     db
@@ -525,13 +533,14 @@ export async function listAppointments(
 
 /** Every appointment of one client, newest first (the CRM history view). */
 export async function listClientAppointments(
-  db: Database,
+  db: Database | Tx,
   clientId: string,
 ): Promise<Appointment[]> {
+  const identities = await clientIdentityIds(db, clientId);
   const rows = await db
     .select()
     .from(appointment)
-    .where(and(eq(appointment.clientId, clientId), isNull(appointment.deletedAt)))
+    .where(and(inArray(appointment.clientId, identities), isNull(appointment.deletedAt)))
     .orderBy(desc(appointment.startsAt), desc(appointment.id));
   const prices = await loadBookingPrices(
     db,

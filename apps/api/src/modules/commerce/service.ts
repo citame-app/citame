@@ -16,7 +16,8 @@ import {
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
-import type { Principal } from "../../auth/principal";
+import { ownsClient, type Principal } from "../../auth/principal";
+import { lockClientRoot } from "../../client-identity";
 import { DomainError } from "../../errors";
 import type { BankNotification } from "../../payments/redsys";
 import type { PaymentGateway, RecurringPaymentSettings } from "../../payments/types";
@@ -94,7 +95,7 @@ export async function saleRow(db: Connection, id: string, principal: Principal, 
       (row.staffId === null && row.createdBy === principal.userId));
   if (
     !row ||
-    (principal.role === "client" && row.clientId !== principal.clientId) ||
+    (principal.role === "client" && (!row.clientId || !ownsClient(principal, row.clientId))) ||
     (restricted && !ownSale)
   )
     throw new DomainError("not_found", "Checkout not found");
@@ -403,7 +404,7 @@ export async function createCheckoutInTransaction(
     if (
       !booking ||
       booking.deletedAt ||
-      (principal.role === "client" && booking.clientId !== principal.clientId) ||
+      (principal.role === "client" && !ownsClient(principal, booking.clientId)) ||
       (principal.role === "staff" &&
         !permissionsFor(principal.role, principal.accessPreset).allSales &&
         booking.staffId !== principal.staffId)
@@ -453,6 +454,11 @@ export async function createCheckoutInTransaction(
     );
   }
   const products = await loadCheckoutProducts(tx, input.lines);
+  if (clientId && !input.appointmentId) {
+    const root = await lockClientRoot(tx, clientId);
+    if (root.id !== clientId)
+      throw new DomainError("client_merged", "Review the surviving client before creating a sale");
+  }
   for (const line of input.lines) {
     if (line.kind === "gift_card") {
       const card = await pendingGiftForCheckout(tx, line.giftCardId ?? "", principal);

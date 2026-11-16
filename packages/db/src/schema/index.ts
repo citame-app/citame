@@ -6,6 +6,7 @@ export * from "./auth";
 export * from "./booking-protection";
 export * from "./client";
 export * from "./client-import";
+export * from "./client-merge";
 export * from "./client-photo";
 export * from "./commerce";
 export * from "./date-shifts";

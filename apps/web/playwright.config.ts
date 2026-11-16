@@ -6,6 +6,7 @@ import { defineConfig, devices } from "@playwright/test";
  */
 const optionsFixture = process.env.E2E_OPTIONS_FIXTURE === "true";
 const crmFixture = process.env.E2E_CRM_FIXTURE === "true";
+const mergeFixture = process.env.E2E_MERGE_FIXTURE === "true";
 const intakeFixture = process.env.E2E_INTAKE_FIXTURE === "true";
 const shiftsFixture = process.env.E2E_SHIFTS_FIXTURE === "true";
 const bookingPromotionsFixture = process.env.E2E_BOOKING_PROMOTIONS_FIXTURE === "true";
@@ -30,6 +31,7 @@ const recurringFixture =
   resourcesFixture ||
   optionsFixture ||
   crmFixture ||
+  mergeFixture ||
   intakeFixture ||
   shiftsFixture ||
   reputationFixture ||
@@ -47,39 +49,41 @@ export default defineConfig({
   testDir: "./e2e",
   ...(recurringFixture
     ? {
-        testMatch: bookingPromotionsFixture
-          ? "**/booking-promotions.spec.ts"
-          : timedPromotionsFixture
-            ? "**/timed-promotions.spec.ts"
-            : processingFixture
-              ? "**/processing.spec.ts"
-              : combinationFixture
-                ? "**/combinations.spec.ts"
-                : socialFixture
-                  ? "**/social-creative.spec.ts"
-                  : acquisitionFixture
-                    ? "**/acquisition.spec.ts"
-                    : reputationFixture
-                      ? ["**/reputation.spec.ts", "**/portfolio.spec.ts"]
-                      : shiftsFixture
-                        ? "**/date-shifts.spec.ts"
-                        : intakeFixture
-                          ? "**/intake.spec.ts"
-                          : crmFixture
-                            ? ["**/client-transfer.spec.ts", "**/client-photos.spec.ts"]
-                            : optionsFixture
-                              ? "**/service-options.spec.ts"
-                              : resourcesFixture
-                                ? "**/resources.spec.ts"
-                                : waitlistFixture
-                                  ? "**/waitlist.spec.ts"
-                                  : seriesFixture
-                                    ? "**/appointment-series.spec.ts"
-                                    : rewardsFixture
-                                      ? "**/rewards.spec.ts"
-                                      : depositFixture
-                                        ? "**/booking-protection.spec.ts"
-                                        : "**/recurring.spec.ts",
+        testMatch: mergeFixture
+          ? "**/client-merge.spec.ts"
+          : bookingPromotionsFixture
+            ? "**/booking-promotions.spec.ts"
+            : timedPromotionsFixture
+              ? "**/timed-promotions.spec.ts"
+              : processingFixture
+                ? "**/processing.spec.ts"
+                : combinationFixture
+                  ? "**/combinations.spec.ts"
+                  : socialFixture
+                    ? "**/social-creative.spec.ts"
+                    : acquisitionFixture
+                      ? "**/acquisition.spec.ts"
+                      : reputationFixture
+                        ? ["**/reputation.spec.ts", "**/portfolio.spec.ts"]
+                        : shiftsFixture
+                          ? "**/date-shifts.spec.ts"
+                          : intakeFixture
+                            ? "**/intake.spec.ts"
+                            : crmFixture
+                              ? ["**/client-transfer.spec.ts", "**/client-photos.spec.ts"]
+                              : optionsFixture
+                                ? "**/service-options.spec.ts"
+                                : resourcesFixture
+                                  ? "**/resources.spec.ts"
+                                  : waitlistFixture
+                                    ? "**/waitlist.spec.ts"
+                                    : seriesFixture
+                                      ? "**/appointment-series.spec.ts"
+                                      : rewardsFixture
+                                        ? "**/rewards.spec.ts"
+                                        : depositFixture
+                                          ? "**/booking-protection.spec.ts"
+                                          : "**/recurring.spec.ts",
         webServer: [
           {
             command: "NODE_ENV=test bun ../api/test/recurring-browser.ts",
@@ -115,6 +119,7 @@ export default defineConfig({
           "**/booking-promotions.spec.ts",
           "**/client-transfer.spec.ts",
           "**/client-photos.spec.ts",
+          "**/client-merge.spec.ts",
           "**/intake.spec.ts",
           "**/date-shifts.spec.ts",
           "**/social-creative.spec.ts",

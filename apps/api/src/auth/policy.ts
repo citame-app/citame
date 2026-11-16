@@ -9,7 +9,7 @@ import type {
 } from "@sob/contracts";
 import { permissionsFor, type StaffPermissions } from "@sob/contracts";
 import { DomainError } from "../errors";
-import type { Principal } from "./principal";
+import { ownsClient, type Principal } from "./principal";
 
 /**
  * Authorization policy for appointments, as pure functions over a principal. They carry no
@@ -96,7 +96,7 @@ export function authorizeAppointmentChange(
       }
       return;
     case "client":
-      if (!principal.clientId || appointment.clientId !== principal.clientId) {
+      if (!principal.clientId || !ownsClient(principal, appointment.clientId)) {
         throw forbidden("This is not your appointment");
       }
       if (marking) throw forbidden("Clients can only cancel their appointments");
@@ -119,7 +119,7 @@ export function authorizeAppointmentChange(
 export function authorizeAppointmentList(
   principal: Principal,
   query: AppointmentListQuery,
-): { query: AppointmentListQuery; clientId?: string } {
+): { query: AppointmentListQuery; clientId?: string; clientIds?: string[] } {
   switch (principal.role) {
     case "owner":
       return { query };
@@ -132,7 +132,11 @@ export function authorizeAppointmentList(
       return { query: { ...query, staffId: principal.staffId } };
     case "client":
       if (!principal.clientId) throw forbidden("Your account has no booking profile");
-      return { query, clientId: principal.clientId };
+      return {
+        query,
+        clientId: principal.clientId,
+        ...(principal.clientIds ? { clientIds: principal.clientIds } : {}),
+      };
   }
 }
 

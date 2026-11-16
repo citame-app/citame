@@ -6,7 +6,7 @@ import {
   salonSettings,
   staffProfile,
 } from "@sob/db";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import type { NotificationConfig } from "../config";
 import { type Metrics, processMetrics } from "./metrics";
 import { categoryOf, isEnabled } from "./preferences";
@@ -65,7 +65,10 @@ async function prepare(
     if (appt.startsAt.getTime() <= now.getTime()) return { skip: "already_started" };
   }
 
-  const [client] = await db.select().from(clientProfile).where(eq(clientProfile.id, appt.clientId));
+  const [client] = await db
+    .select()
+    .from(clientProfile)
+    .where(eq(clientProfile.id, sql`client_root_id(${appt.clientId}::uuid)`));
   if (!client || client.deletedAt) return { skip: "client_gone" };
   const rawAddress = row.channel === "email" ? client.email : client.phone;
   if (!rawAddress) return { skip: "no_address" };

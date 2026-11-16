@@ -20,6 +20,8 @@
     "e2e:resources": "E2E_RESOURCES_FIXTURE=true playwright test",
     "e2e:options": "E2E_OPTIONS_FIXTURE=true playwright test",
     "e2e:crm": "E2E_CRM_FIXTURE=true playwright test",
+    "e2e:merge": "E2E_MERGE_FIXTURE=true playwright test",
+    "e2e:merge:production": "E2E_MERGE_FIXTURE=true E2E_WEB_IMAGE=true playwright test",
     "e2e:intake": "E2E_INTAKE_FIXTURE=true playwright test",
     "e2e:shifts": "E2E_SHIFTS_FIXTURE=true playwright test",
     "e2e:reputation": "E2E_REPUTATION_FIXTURE=true playwright test",

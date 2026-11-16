@@ -1,5 +1,6 @@
 import { type Database, notificationPreference } from "@sob/db";
-import { and, eq } from "drizzle-orm";
+import { sql } from "drizzle-orm";
+import { clientRoot } from "../client-identity";
 
 export type Channel = "email" | "sms";
 export type Category = "transactional" | "reminder";
@@ -18,21 +19,35 @@ export const DEFAULT_PREFERENCES: Record<Channel, Record<Category, boolean>> = {
 export const categoryOf = (kind: string): Category =>
   kind === "reminder_24h" || kind === "reminder_2h" ? "reminder" : "transactional";
 
+export function effectivePreference(
+  rows: Pick<
+    typeof notificationPreference.$inferSelect,
+    "clientId" | "channel" | "category" | "enabled"
+  >[],
+  rootId: string,
+  channel: Channel,
+  category: Category,
+) {
+  const choices = rows.filter((row) => row.channel === channel && row.category === category);
+  const root = choices.find((row) => row.clientId === rootId);
+  return (
+    (root?.enabled ?? DEFAULT_PREFERENCES[channel][category]) &&
+    !choices.some((row) => !row.enabled)
+  );
+}
+
 export async function isEnabled(
   db: Pick<Database, "select">,
   clientId: string,
   channel: Channel,
   category: Category,
 ): Promise<boolean> {
-  const [row] = await db
-    .select({ enabled: notificationPreference.enabled })
+  const root = await clientRoot(db, clientId);
+  const rows = await db
+    .select()
     .from(notificationPreference)
     .where(
-      and(
-        eq(notificationPreference.clientId, clientId),
-        eq(notificationPreference.channel, channel),
-        eq(notificationPreference.category, category),
-      ),
+      sql`${notificationPreference.clientId} in(select client_identity_ids(${root.id}::uuid))`,
     );
-  return row?.enabled ?? DEFAULT_PREFERENCES[channel][category];
+  return effectivePreference(rows, root.id, channel, category);
 }

@@ -6,14 +6,13 @@ import type {
 import { clientProfile, type Database, notificationPreference, reminder } from "@sob/db";
 import { and, count, eq, sql } from "drizzle-orm";
 import { recordAudit } from "../audit";
+import { clientRoot, lockClientRoot } from "../client-identity";
 import { DomainError } from "../errors";
-import { DEFAULT_PREFERENCES } from "./preferences";
+import { effectivePreference } from "./preferences";
 import { type OptOutClaims, verifyOptOutToken } from "./tokens";
 
 async function loadClient(db: Pick<Database, "select">, clientId: string) {
-  const [client] = await db.select().from(clientProfile).where(eq(clientProfile.id, clientId));
-  if (!client || client.deletedAt) throw new DomainError("not_found", "Client not found");
-  return client;
+  return clientRoot(db, clientId);
 }
 
 export async function getPreferences(
@@ -24,14 +23,12 @@ export async function getPreferences(
   const rows = await db
     .select()
     .from(notificationPreference)
-    .where(eq(notificationPreference.clientId, clientId));
+    .where(
+      sql`${notificationPreference.clientId} in(select client_identity_ids(${client.id}::uuid))`,
+    );
   const pick = (channel: "email" | "sms") => ({
-    transactional:
-      rows.find((r) => r.channel === channel && r.category === "transactional")?.enabled ??
-      DEFAULT_PREFERENCES[channel].transactional,
-    reminder:
-      rows.find((r) => r.channel === channel && r.category === "reminder")?.enabled ??
-      DEFAULT_PREFERENCES[channel].reminder,
+    transactional: effectivePreference(rows, client.id, channel, "transactional"),
+    reminder: effectivePreference(rows, client.id, channel, "reminder"),
   });
   const locale = client.locale === "en" || client.locale === "es-AR" ? client.locale : null;
   return {
@@ -70,7 +67,12 @@ export async function updatePreferences(
   request: UpdateNotificationPreferencesRequest,
 ): Promise<NotificationPreferences> {
   await db.transaction(async (tx) => {
-    await loadClient(tx, clientId);
+    const client = await lockClientRoot(tx, clientId);
+    if (client.id !== clientId)
+      throw new DomainError(
+        "client_merged",
+        "Open the current profile before changing preferences",
+      );
     if (request.locale !== undefined) {
       await tx
         .update(clientProfile)
@@ -80,7 +82,20 @@ export async function updatePreferences(
     for (const channel of ["email", "sms"] as const) {
       for (const category of ["transactional", "reminder"] as const) {
         const value = request[channel]?.[category];
-        if (value !== undefined) await setPreference(tx, clientId, channel, category, value);
+        if (value !== undefined) {
+          // A fresh authenticated choice supersedes the group's earlier channel choices.
+          await tx
+            .update(notificationPreference)
+            .set({ enabled: value, updatedAt: new Date() })
+            .where(
+              and(
+                sql`${notificationPreference.clientId} in(select client_identity_ids(${client.id}::uuid))`,
+                eq(notificationPreference.channel, channel),
+                eq(notificationPreference.category, category),
+              ),
+            );
+          await setPreference(tx, clientId, channel, category, value);
+        }
       }
     }
     await recordAudit(tx, {
@@ -126,10 +141,10 @@ export async function applyOptOut(
 ): Promise<OptOutPreview> {
   const claims = claimsOrThrow(secret, token);
   await db.transaction(async (tx) => {
-    await loadClient(tx, claims.clientId).catch(() => {
+    const client = await lockClientRoot(tx, claims.clientId).catch(() => {
       throw new DomainError("validation_error", "This unsubscribe link is not valid");
     });
-    await setPreference(tx, claims.clientId, claims.channel, "reminder", false);
+    await setPreference(tx, client.id, claims.channel, "reminder", false);
     await recordAudit(tx, {
       actorUserId: null,
       action: "notifications.opt_out",

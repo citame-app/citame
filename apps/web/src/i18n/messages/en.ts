@@ -6,6 +6,7 @@ import { adminEn } from "./admin";
 import { bookingPromotionsEn } from "./booking-promotions";
 import { bookingProtectionEn } from "./booking-protection";
 import { clientControlsEn } from "./client-controls";
+import { clientMergeEn } from "./client-merge";
 import { clientPhotosEn } from "./client-photos";
 import { clientTransferEn } from "./client-transfer";
 import { combinationsEn } from "./combinations";
@@ -39,6 +40,7 @@ export const en = {
   ...intakeEn,
   ...bookingProtectionEn,
   ...clientControlsEn,
+  ...clientMergeEn,
   ...clientPhotosEn,
   ...clientTransferEn,
   ...passesEn,

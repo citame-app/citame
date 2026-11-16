@@ -15,10 +15,11 @@ import {
   passPeriod,
   passUnit,
 } from "@sob/db";
-import { and, asc, count, desc, eq, ilike, isNull, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
-import type { Principal } from "../../auth/principal";
+import { ownedClientIds, type Principal } from "../../auth/principal";
+import { lockClientRoot } from "../../client-identity";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
 import { getCheckoutInTransaction } from "../commerce/service";
@@ -36,7 +37,7 @@ function scope(p: Principal) {
     ? undefined
     : or(
         eq(passContract.createdBy, p.userId),
-        p.clientId ? eq(passContract.clientId, p.clientId) : undefined,
+        p.clientId ? inArray(passContract.clientId, ownedClientIds(p)) : undefined,
       );
 }
 export async function visiblePass(db: Connection, id: string, p: Principal, lock = false) {
@@ -141,7 +142,9 @@ export async function listPasses(
 ) {
   const where = and(
     scope(p),
-    clientId ? eq(passContract.clientId, clientId) : undefined,
+    clientId
+      ? sql`${passContract.clientId} in(select client_identity_ids(${clientId}::uuid))`
+      : undefined,
     search ? ilike(passContract.name, `%${search.replace(/[\\%_]/g, "\\$&")}%`) : undefined,
   );
   return db.transaction(
@@ -277,11 +280,9 @@ export async function purchasePass(
           "Review and accept the current membership payment terms",
         );
     }
-    const [buyer] = await tx
-      .select({ id: clientProfile.id })
-      .from(clientProfile)
-      .where(and(eq(clientProfile.id, clientId), isNull(clientProfile.deletedAt)));
-    if (!buyer) throw new DomainError("not_found", "Buyer not found");
+    const buyer = await lockClientRoot(tx, clientId);
+    if (buyer.id !== clientId)
+      throw new DomainError("client_merged", "Review the surviving buyer before purchasing a pass");
     await validateServices(tx, plan.serviceIds);
     const settings = await getSalonSettings(tx);
     const [contract] = await tx

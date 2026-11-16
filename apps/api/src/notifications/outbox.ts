@@ -1,5 +1,5 @@
 import { type appointment, clientProfile, reminder } from "@sob/db";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { getSalonSettings } from "../modules/settings/service";
 import type { Tx } from "../tx";
 import { planReminders } from "./schedule";
@@ -20,7 +20,7 @@ async function channelsFor(tx: Tx, clientId: string): Promise<Channel[]> {
   const [client] = await tx
     .select({ email: clientProfile.email, phone: clientProfile.phone })
     .from(clientProfile)
-    .where(eq(clientProfile.id, clientId));
+    .where(eq(clientProfile.id, sql`client_root_id(${clientId}::uuid)`));
   const channels: Channel[] = [];
   if (client?.email) channels.push("email");
   if (client?.phone) channels.push("sms");

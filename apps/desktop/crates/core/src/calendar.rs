@@ -216,6 +216,13 @@ fn client_names(store: &Store) -> Result<HashMap<String, String>> {
 pub fn known_clients(store: &Store) -> Result<Vec<(String, String)>> {
     let mut names = client_names(store)?;
     overlay(store, &mut HashMap::new(), &mut names)?;
+    for alias in store
+        .clients()?
+        .into_iter()
+        .filter(|c| c.merged_into_id.is_some())
+    {
+        names.remove(&alias.id);
+    }
     let mut v: Vec<_> = names.into_iter().collect();
     v.sort_by(|a, b| {
         a.1.to_lowercase()

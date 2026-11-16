@@ -16,6 +16,7 @@ export * from "./booking-promotions";
 export * from "./booking-protection";
 export * from "./calendar";
 export * from "./client-controls";
+export * from "./client-merge";
 export * from "./client-photos";
 export * from "./client-transfer";
 export * from "./clients";

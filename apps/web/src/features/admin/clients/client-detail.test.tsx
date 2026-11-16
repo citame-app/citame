@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import type { ClientDetailResponse } from "@sob/contracts";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderApp } from "../../../../test/render";
 import { ClientDetail } from "./client-detail";
@@ -31,7 +32,11 @@ const appt = (n: number, startsAt: string, status: string) => ({
   updatedAt: startsAt,
 });
 
-let detail: { client: Record<string, unknown>; appointments: unknown[] };
+let detail: {
+  client: Record<string, unknown>;
+  appointments: unknown[];
+  identity?: ClientDetailResponse["identity"];
+};
 let patches: unknown[];
 let deleteReply: { status: number; body: unknown };
 let deletes: number;
@@ -200,4 +205,33 @@ test("a controls-only timestamp update preserves an unsaved contact draft", asyn
   await waitFor(() =>
     expect(screen.getByLabelText("Full name")).toHaveValue("Unsaved contact draft"),
   );
+});
+
+test("a newly linked historical profile freezes its edits and preserves the user's contact draft", async () => {
+  const view = open();
+  fireEvent.change(await screen.findByLabelText("Full name"), {
+    target: { value: "Original unsaved name" },
+  });
+  detail = {
+    ...detail,
+    identity: {
+      rootId: "0198f5a0-7b1c-7000-8000-0000000000c2",
+      profiles: [
+        {
+          id: CLIENT,
+          name: "Lucia Perez",
+          email: null,
+          phone: null,
+          notes: "Original private note",
+        },
+      ],
+    },
+  };
+  await act(async () => {
+    await view.queryClient.invalidateQueries({ queryKey: ["admin", "client", CLIENT] });
+  });
+  await screen.findByText(/This is a historical profile/);
+  expect(screen.getByLabelText("Full name")).toHaveValue("Original unsaved name");
+  expect(screen.getByLabelText("Full name")).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Review duplicate profiles" })).toBeDisabled();
 });

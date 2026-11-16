@@ -47,6 +47,22 @@ export type ListClientsResponse = z.infer<typeof listClientsResponseSchema>;
 
 export const clientDetailResponseSchema = z.object({
   client: adminClientSchema,
+  identity: z
+    .object({
+      rootId: idSchema,
+      profiles: z
+        .array(
+          z.object({
+            id: idSchema,
+            name: z.string(),
+            email: z.string().nullable(),
+            phone: z.string().nullable(),
+            notes: z.string().nullable(),
+          }),
+        )
+        .max(20),
+    })
+    .optional(),
   /** Every appointment of the client, newest first. */
   appointments: z.array(appointmentSchema),
 });

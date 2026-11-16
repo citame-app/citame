@@ -20,6 +20,7 @@ import { describeProblem } from "../problems";
 import { UnsavedGuard } from "../unsaved-guard";
 import { useNow } from "../use-now";
 import { ClientControlsEditor } from "./client-controls";
+import { ClientMerge } from "./client-merge";
 import { ClientPhotos } from "./client-photos";
 
 export function ClientDetail({
@@ -47,6 +48,7 @@ export function ClientDetail({
   const [controlsDirty, setControlsDirty] = useState(false);
   const [photosDirty, setPhotosDirty] = useState(false);
   const [intakeDirty, setIntakeDirty] = useState(false);
+  const [mergeDirty, setMergeDirty] = useState(false);
 
   const client = query.data?.client;
   // Refresh contact values when those values change; metadata timestamps must preserve the draft.
@@ -98,6 +100,8 @@ export function ClientDetail({
 
   const staffName = (id: string) => staff.data?.find((s) => s.id === id)?.displayName ?? "";
   const appointments = query.data?.appointments ?? [];
+  const identity = query.data?.identity;
+  const isAlias = Boolean(identity && identity.rootId !== clientId);
   const upcoming = appointments
     .filter((a) => a.status === "booked" && Date.parse(a.endsAt) > now.getTime())
     .sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt));
@@ -141,8 +145,8 @@ export function ClientDetail({
   );
 
   return (
-    <div className="space-y-8">
-      <UnsavedGuard dirty={dirty || controlsDirty || photosDirty || intakeDirty} />
+    <div className="min-w-0 space-y-8">
+      <UnsavedGuard dirty={dirty || controlsDirty || photosDirty || intakeDirty || mergeDirty} />
       <div>
         <Link
           to="/admin/clients"
@@ -152,59 +156,109 @@ export function ClientDetail({
           <ChevronLeftIcon width={18} height={18} />
           {t("clients.detail.back")}
         </Link>
-        <h2 className="mt-1 font-display text-2xl font-semibold">{client.name}</h2>
+        <h2 className="mt-1 break-words font-display text-2xl font-semibold [overflow-wrap:anywhere]">
+          {client.name}
+        </h2>
         <p className="text-muted">
           {t("clients.detail.stats", { count: client.appointmentCount })}
         </p>
       </div>
 
-      <form
-        noValidate
-        className="max-w-xl space-y-4"
-        onSubmit={(event) => {
-          event.preventDefault();
-          submit();
-        }}
-        aria-label={t("clients.detail.contact")}
-      >
-        <TextField
-          label={t("clients.detail.name")}
-          value={form.name}
-          onChange={(e) => {
-            setForm({ ...form, name: e.target.value });
-            setErrors(({ name: _cleared, ...rest }) => rest);
-          }}
-          error={errors.name}
-        />
-        <TextField
-          label={t("clients.detail.phone")}
-          type="tel"
-          value={form.phone}
-          onChange={(e) => {
-            setForm({ ...form, phone: e.target.value });
-            setErrors(({ phone: _cleared, ...rest }) => rest);
-          }}
-          error={errors.phone}
-        />
-        <TextField label={t("clients.detail.email")} value={client.email ?? ""} readOnly />
-        <TextAreaField
-          label={t("clients.detail.notes")}
-          hint={t("clients.detail.notes.hint")}
-          value={form.notes}
-          onChange={(e) => setForm({ ...form, notes: e.target.value })}
-          rows={5}
-        />
-        <div className="flex flex-wrap items-center gap-3">
-          <Button type="submit" disabled={!dirty} loading={save.isPending}>
-            {t("admin.save")}
-          </Button>
-          {dirty && <span className="text-sm text-warning-fg">{t("admin.unsaved.badge")}</span>}
+      {isAlias && identity && (
+        <div
+          role="status"
+          className="max-w-xl space-y-2 rounded-xl border border-line bg-surface p-4"
+        >
+          <p>{t("merge.alias")}</p>
+          <Link
+            to="/admin/clients/$id"
+            params={{ id: identity.rootId }}
+            className="inline-flex min-h-11 items-center text-accent-text underline"
+          >
+            {t("merge.openSurvivor")}
+          </Link>
         </div>
-      </form>
+      )}
+      <fieldset disabled={isAlias || mergeDirty} className="min-w-0 space-y-8">
+        <form
+          noValidate
+          className="max-w-xl space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            submit();
+          }}
+          aria-label={t("clients.detail.contact")}
+        >
+          <TextField
+            label={t("clients.detail.name")}
+            value={form.name}
+            onChange={(e) => {
+              setForm({ ...form, name: e.target.value });
+              setErrors(({ name: _cleared, ...rest }) => rest);
+            }}
+            error={errors.name}
+          />
+          <TextField
+            label={t("clients.detail.phone")}
+            type="tel"
+            value={form.phone}
+            onChange={(e) => {
+              setForm({ ...form, phone: e.target.value });
+              setErrors(({ phone: _cleared, ...rest }) => rest);
+            }}
+            error={errors.phone}
+          />
+          <TextField label={t("clients.detail.email")} value={client.email ?? ""} readOnly />
+          <TextAreaField
+            label={t("clients.detail.notes")}
+            hint={t("clients.detail.notes.hint")}
+            value={form.notes}
+            onChange={(e) => setForm({ ...form, notes: e.target.value })}
+            rows={5}
+          />
+          <div className="flex flex-wrap items-center gap-3">
+            <Button type="submit" disabled={!dirty} loading={save.isPending}>
+              {t("admin.save")}
+            </Button>
+            {dirty && <span className="text-sm text-warning-fg">{t("admin.unsaved.badge")}</span>}
+          </div>
+        </form>
 
-      <ClientControlsEditor clientId={clientId} onDirtyChange={setControlsDirty} />
-      <ClientPhotos clientId={clientId} onDirtyChange={setPhotosDirty} />
-      <IntakeRecord clientId={clientId} onDirtyChange={setIntakeDirty} />
+        <ClientControlsEditor clientId={clientId} onDirtyChange={setControlsDirty} />
+        <ClientPhotos clientId={clientId} onDirtyChange={setPhotosDirty} />
+        <IntakeRecord clientId={clientId} onDirtyChange={setIntakeDirty} />
+      </fieldset>
+
+      {identity && (
+        <details className="max-w-xl rounded-xl border border-line bg-surface p-4">
+          <summary className="min-h-11 cursor-pointer font-semibold">
+            {t("merge.originals")}
+          </summary>
+          <ul className="mt-3 space-y-4">
+            {identity.profiles.map((profile) => (
+              <li
+                key={profile.id}
+                className="min-w-0 space-y-1 break-words [overflow-wrap:anywhere]"
+              >
+                <p className="font-medium">{profile.name}</p>
+                <p className="text-sm">{profile.email}</p>
+                <p className="text-sm">{profile.phone}</p>
+                {profile.notes && (
+                  <p className="whitespace-pre-wrap text-sm text-muted">{profile.notes}</p>
+                )}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {role === "owner" && (
+        <ClientMerge
+          clientId={clientId}
+          clientName={client.name}
+          disabled={isAlias || dirty || controlsDirty || photosDirty || intakeDirty}
+          onDirtyChange={setMergeDirty}
+        />
+      )}
 
       <section aria-labelledby="client-upcoming" className="space-y-3">
         <h3 id="client-upcoming" className="text-heading">
@@ -248,7 +302,11 @@ export function ClientDetail({
 
       {role === "owner" && (
         <div className="border-t border-line pt-6">
-          <Button variant="secondary" onClick={() => setConfirmDelete(true)}>
+          <Button
+            variant="secondary"
+            disabled={isAlias || mergeDirty}
+            onClick={() => setConfirmDelete(true)}
+          >
             {t("clients.delete")}
           </Button>
         </div>

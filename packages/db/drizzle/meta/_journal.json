@@ -281,6 +281,13 @@
       "when": 1794842107468,
       "tag": "0039_robust_ozymandias",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1794847484430,
+      "tag": "0040_dark_wither",
+      "breakpoints": true
     }
   ]
 }

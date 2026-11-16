@@ -176,7 +176,10 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
           page: args.page,
           pageSize: args.pageSize ?? MCP_PAGE_SIZE_DEFAULT,
         });
-        const result = await listAppointments(db, scoped.query, { clientId: scoped.clientId });
+        const result = await listAppointments(db, scoped.query, {
+          clientId: scoped.clientId,
+          clientIds: scoped.clientIds,
+        });
         return {
           ...result,
           appointments: result.appointments.map((a) => redactNotes(principal, a)),

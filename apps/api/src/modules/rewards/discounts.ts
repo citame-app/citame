@@ -202,7 +202,7 @@ export async function rewardPricing(
     const [usage] = await tx
       .select({
         total: count(),
-        own: sql<number>`count(*) filter (where ${checkoutReward.clientId}=${row.clientId})::int`,
+        own: sql<number>`count(*) filter (where ${checkoutReward.clientId} in(select client_identity_ids(${row.clientId}::uuid)))::int`,
       })
       .from(checkoutReward)
       .where(

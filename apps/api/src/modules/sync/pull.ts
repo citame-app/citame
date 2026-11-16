@@ -79,6 +79,7 @@ async function loadVisible(
       for (const r of rows) {
         put(r.id, {
           id: r.id,
+          ...(r.mergedIntoId ? { mergedIntoId: r.mergedIntoId } : {}),
           name: r.name,
           phone: r.phone,
           email: r.email,

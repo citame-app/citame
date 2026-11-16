@@ -12,6 +12,7 @@ import {
 } from "@sob/contracts";
 import { clientImport, clientProfile, type Database } from "@sob/db";
 import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
@@ -60,6 +61,7 @@ async function prepare(db: Connection, csv: string, lock = false) {
   const phones = parsed.flatMap((row) =>
     row.input?.phone ? [row.input.phone.replace(/\D/g, "")] : [],
   );
+  const survivor = alias(clientProfile, "survivor");
   const query = db
     .select({
       id: clientProfile.id,
@@ -67,11 +69,15 @@ async function prepare(db: Connection, csv: string, lock = false) {
       email: clientProfile.email,
       phone: clientProfile.phone,
       updatedAt: clientProfile.updatedAt,
+      rootId: survivor.id,
+      rootName: survivor.name,
     })
     .from(clientProfile)
+    .innerJoin(survivor, eq(survivor.id, sql`client_root_id(${clientProfile.id})`))
     .where(
       and(
         isNull(clientProfile.deletedAt),
+        isNull(survivor.deletedAt),
         or(
           emails.length
             ? inArray(sql<string>`lower(normalize(btrim(${clientProfile.email}),NFKC))`, emails)
@@ -87,7 +93,16 @@ async function prepare(db: Connection, csv: string, lock = false) {
     )
     .orderBy(asc(clientProfile.id))
     .limit(CLIENT_EXPORT_MAX_ROWS + 1);
-  const existing = emails.length || phones.length ? await (lock ? query.for("share") : query) : [];
+  let existing = emails.length || phones.length ? await query : [];
+  if (lock && existing.length) {
+    await db
+      .select({ id: clientProfile.id })
+      .from(clientProfile)
+      .where(inArray(clientProfile.id, [...new Set(existing.map((row) => row.rootId))]))
+      .orderBy(asc(clientProfile.id))
+      .for("share");
+    existing = await query;
+  }
   if (existing.length > CLIENT_EXPORT_MAX_ROWS)
     throw new DomainError("validation_error", "Too many repeated contacts; review a smaller file");
   const claimed = new Map<string, number>();
@@ -97,13 +112,18 @@ async function prepare(db: Connection, csv: string, lock = false) {
       input.phone ? `phone:${contactPhone(input.phone)}` : null,
     ].filter((key): key is string => key !== null);
   const rows: ClientImportPreview["rows"] = parsed.map(({ raw, input, issues }) => {
-    const matches = input
+    const contactsMatched = input
       ? existing.filter(
           (row) =>
             (input.email && contactEmail(row.email) === input.email) ||
             (input.phone && contactPhone(row.phone) === contactPhone(input.phone)),
         )
       : [];
+    const matches = [
+      ...new Map(
+        contactsMatched.map((row) => [row.rootId, { id: row.rootId, name: row.rootName }]),
+      ).values(),
+    ];
     const priorRows = new Set(
       input
         ? contacts(input).flatMap((key) => {
@@ -155,6 +175,9 @@ export async function importClients(db: Database, input: ClientImportInput, prin
   return db.transaction(async (tx) => {
     // Same coordinator as walk-in booking: contact lookup and profile insertion cannot race.
     await lockScheduling(tx);
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended('sob-client-identity-links-v1',0))`,
+    );
     const [previous] = await tx
       .select()
       .from(clientImport)
@@ -219,7 +242,13 @@ export async function exportClients(
     const rows = await tx
       .select()
       .from(clientProfile)
-      .where(and(isNull(clientProfile.deletedAt), searchFilter(search)))
+      .where(
+        and(
+          isNull(clientProfile.deletedAt),
+          isNull(clientProfile.mergedIntoId),
+          searchFilter(search),
+        ),
+      )
       .orderBy(asc(clientProfile.name), asc(clientProfile.id))
       .limit(CLIENT_EXPORT_MAX_ROWS + 1);
     if (rows.length > CLIENT_EXPORT_MAX_ROWS)

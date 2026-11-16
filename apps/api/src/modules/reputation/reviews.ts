@@ -17,7 +17,7 @@ import { and, asc, avg, count, desc, eq, inArray, isNull, lt, lte, or, sql } fro
 import type { z } from "zod";
 import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
-import { loadPrincipal, type Principal } from "../../auth/principal";
+import { loadPrincipal, ownedClientIds, ownsClient, type Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
 
@@ -46,6 +46,7 @@ const eligibleSql = (now: Date) =>
     isNull(appointment.deletedAt),
     lte(appointment.endsAt, now),
     isNull(clientProfile.deletedAt),
+    sql`exists(select 1 from client_profile survivor where survivor.id=client_root_id(${clientProfile.id}) and survivor.deleted_at is null)`,
   );
 async function snapshot(db: Connection, ids: string[]) {
   if (!ids.length) return new Map<string, { id: string | null; name: string }[]>();
@@ -115,13 +116,14 @@ export async function createReview(db: Database, input: ReviewCreate, p: Princip
     )
     .digest("hex");
   return db.transaction(async (tx) => {
-    const clientId = ownClient(await lockReviews(tx, p));
+    const current = await lockReviews(tx, p);
+    ownClient(current);
     const [previous] = await tx
       .select()
       .from(review)
       .where(and(eq(review.createdBy, p.userId), eq(review.idempotencyKey, input.idempotencyKey)));
     if (previous) {
-      if (previous.clientId !== clientId || previous.requestFingerprint !== fingerprint)
+      if (!ownsClient(current, previous.clientId) || previous.requestFingerprint !== fingerprint)
         throw new DomainError(
           "invalid_state",
           "This review identifier already belongs to another submission",
@@ -136,7 +138,12 @@ export async function createReview(db: Database, input: ReviewCreate, p: Princip
     const [a] = await tx
       .select()
       .from(appointment)
-      .where(and(eq(appointment.id, input.appointmentId), eq(appointment.clientId, clientId)))
+      .where(
+        and(
+          eq(appointment.id, input.appointmentId),
+          inArray(appointment.clientId, ownedClientIds(current)),
+        ),
+      )
       .for("update");
     if (!a) throw new DomainError("not_found", "Appointment not found");
     if (!eligible(a, now))
@@ -160,7 +167,7 @@ export async function createReview(db: Database, input: ReviewCreate, p: Princip
       .insert(review)
       .values({
         appointmentId: a.id,
-        clientId,
+        clientId: a.clientId,
         createdBy: p.userId,
         idempotencyKey: input.idempotencyKey,
         requestFingerprint: fingerprint,
@@ -204,7 +211,12 @@ export async function changeReview(
     const [row] = await tx
       .select()
       .from(review)
-      .where(and(eq(review.id, id), team ? undefined : eq(review.clientId, ownClient(current))))
+      .where(
+        and(
+          eq(review.id, id),
+          team ? undefined : inArray(review.clientId, ownedClientIds(current)),
+        ),
+      )
       .for("update");
     if (!row) throw new DomainError("not_found", "Review not found");
     const [a] = await tx
@@ -300,14 +312,14 @@ export async function ownReviews(
   query: z.infer<typeof reviewPrivateQuerySchema>,
   now: Date,
 ) {
-  const clientId = ownClient(p);
+  ownClient(p);
   const rows = await db
     .select({ a: appointment, r: review })
     .from(appointment)
     .leftJoin(review, eq(review.appointmentId, appointment.id))
     .where(
       and(
-        eq(appointment.clientId, clientId),
+        inArray(appointment.clientId, ownedClientIds(p)),
         query.before ? lt(appointment.id, query.before) : undefined,
         or(
           and(

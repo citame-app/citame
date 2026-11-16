@@ -6,8 +6,23 @@ import type {
   UpdateClientRequest,
 } from "@sob/contracts";
 import { appointment, clientProfile, type Database } from "@sob/db";
-import { and, asc, count, desc, eq, gt, ilike, isNull, max, ne, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gt,
+  ilike,
+  inArray,
+  isNull,
+  max,
+  ne,
+  or,
+  sql,
+} from "drizzle-orm";
 import { recordAudit } from "../../audit";
+import { clientIdentityIds, clientRoot, requireClientRoot } from "../../client-identity";
 import { DomainError } from "../../errors";
 import { listClientAppointments } from "../appointments/service";
 
@@ -17,7 +32,7 @@ export interface AdminActor {
 
 /** Visit statistics over non-cancelled appointments, joined onto the client rows. */
 function visitStats(db: Pick<Database, "select">) {
-  return db
+  const individual = db
     .select({
       clientId: appointment.clientId,
       visits: count().as("visits"),
@@ -26,6 +41,16 @@ function visitStats(db: Pick<Database, "select">) {
     .from(appointment)
     .where(and(ne(appointment.status, "cancelled"), isNull(appointment.deletedAt)))
     .groupBy(appointment.clientId)
+    .as("individual_visits");
+  const root = sql<string>`client_root_id(${individual.clientId})`;
+  return db
+    .select({
+      clientId: root.as("client_id"),
+      visits: sql<number>`sum(${individual.visits})`.mapWith(Number).as("visits"),
+      lastVisit: max(individual.lastVisit).as("last_visit"),
+    })
+    .from(individual)
+    .groupBy(root)
     .as("visit_stats");
 }
 
@@ -45,6 +70,10 @@ export function searchFilter(term: string | undefined) {
     digits.length >= 3
       ? sql`regexp_replace(${clientProfile.phone}, '[^0-9]', '', 'g') like ${`%${digits}%`}`
       : undefined,
+    sql`exists(select 1 from client_profile historical where historical.id in(select client_identity_ids(${clientProfile.id})) and historical.id<>${clientProfile.id} and (
+      historical.name ilike ${like} or historical.email ilike ${like} or historical.phone ilike ${like}
+      ${digits.length >= 3 ? sql`or regexp_replace(historical.phone,'[^0-9]','','g') like ${`%${digits}%`}` : sql``}
+    ))`,
   );
 }
 
@@ -53,7 +82,11 @@ export async function listClients(
   query: ClientListQuery,
 ): Promise<ListClientsResponse> {
   const stats = visitStats(db);
-  const where = and(isNull(clientProfile.deletedAt), searchFilter(query.search));
+  const where = and(
+    isNull(clientProfile.deletedAt),
+    isNull(clientProfile.mergedIntoId),
+    searchFilter(query.search),
+  );
   const direction = query.order === "desc" ? desc : asc;
   const byName = sql`lower(${clientProfile.name})`;
 
@@ -143,8 +176,33 @@ export async function getAdminClient(
 }
 
 export async function getClientDetail(db: Database, id: string): Promise<ClientDetailResponse> {
-  const client = await getAdminClient(db, id);
-  return { client, appointments: await listClientAppointments(db, id) };
+  return db.transaction(
+    async (tx) => {
+      const root = await clientRoot(tx, id);
+      const client = await getAdminClient(tx, id);
+      const identities = await clientIdentityIds(tx, id);
+      const profiles =
+        identities.length > 1
+          ? await tx
+              .select({
+                id: clientProfile.id,
+                name: clientProfile.name,
+                email: clientProfile.email,
+                phone: clientProfile.phone,
+                notes: clientProfile.notes,
+              })
+              .from(clientProfile)
+              .where(inArray(clientProfile.id, identities))
+              .orderBy(asc(clientProfile.createdAt), asc(clientProfile.id))
+          : [];
+      return {
+        client,
+        appointments: await listClientAppointments(tx, id),
+        ...(profiles.length ? { identity: { rootId: root.id, profiles } } : {}),
+      };
+    },
+    { isolationLevel: "repeatable read", accessMode: "read only" },
+  );
 }
 
 const EDITABLE = ["name", "phone", "notes"] as const;
@@ -160,9 +218,11 @@ export async function updateClient(
     const [current] = await tx
       .select()
       .from(clientProfile)
-      .where(and(eq(clientProfile.id, id), isNull(clientProfile.deletedAt)));
+      .where(and(eq(clientProfile.id, id), isNull(clientProfile.deletedAt)))
+      .for("update");
     if (!current) throw new DomainError("not_found", `Client ${id} not found`);
 
+    requireClientRoot(current);
     const changes: Partial<Pick<typeof clientProfile.$inferInsert, (typeof EDITABLE)[number]>> = {};
     if (input.name !== undefined && input.name !== current.name) changes.name = input.name;
     if (input.phone !== undefined && input.phone !== current.phone) changes.phone = input.phone;
@@ -191,17 +251,20 @@ export async function deleteClient(
 ): Promise<void> {
   await db.transaction(async (tx) => {
     const [current] = await tx
-      .select({ id: clientProfile.id })
+      .select()
       .from(clientProfile)
-      .where(and(eq(clientProfile.id, id), isNull(clientProfile.deletedAt)));
+      .where(and(eq(clientProfile.id, id), isNull(clientProfile.deletedAt)))
+      .for("update");
     if (!current) throw new DomainError("not_found", `Client ${id} not found`);
 
+    requireClientRoot(current);
+    const identities = await clientIdentityIds(tx, id);
     const [upcoming] = await tx
       .select({ id: appointment.id })
       .from(appointment)
       .where(
         and(
-          eq(appointment.clientId, id),
+          inArray(appointment.clientId, identities),
           ne(appointment.status, "cancelled"),
           isNull(appointment.deletedAt),
           gt(appointment.endsAt, now),

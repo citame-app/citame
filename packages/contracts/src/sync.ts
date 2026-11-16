@@ -288,6 +288,7 @@ export type SyncPullQuery = z.infer<typeof syncPullQuerySchema>;
 
 export const syncClientSchema = z.object({
   id: idSchema,
+  mergedIntoId: idSchema.nullable().optional(),
   name: z.string(),
   phone: z.string().nullable(),
   email: z.string().nullable(),

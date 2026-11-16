@@ -1,10 +1,10 @@
 import { createHash, randomBytes } from "node:crypto";
 import { type GiftCard, permissionsFor } from "@sob/contracts";
 import { checkoutLine, type Database, giftCard, giftCardMovement } from "@sob/db";
-import { and, asc, count, desc, eq, ilike, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, or } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
-import type { Principal } from "../../auth/principal";
+import { ownedClientIds, type Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
 import { giftCode, giftCodeHash } from "./code";
@@ -19,7 +19,7 @@ export function giftScope(principal: Principal) {
     ? undefined
     : or(
         eq(giftCard.createdBy, principal.userId),
-        principal.clientId ? eq(giftCard.buyerClientId, principal.clientId) : undefined,
+        principal.clientId ? inArray(giftCard.buyerClientId, ownedClientIds(principal)) : undefined,
       );
 }
 export async function visibleGift(db: Connection, id: string, principal: Principal, lock = false) {

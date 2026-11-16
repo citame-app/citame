@@ -4,6 +4,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+Reviewed client identity links now join duplicate salon profiles while preserving original history, balances, expiry dates and permissions. The EN/ES review supports uncertain-request recovery; search, CSV review, private history and offline pickers recognize surviving identities. [Operation and limits](docs/client-merging.md).
+
 ### Added
 
 - Single-location checkout, cash sessions, receipt/refund reconciliation, retail stock and staff commissions; configurable deposits and a hosted Redsys card/Bizum adapter, with optional explicitly consented membership renewal.
@@ -19,7 +21,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Delivery status
 
-- This expansion remains in development. [The delivery checklist](docs/FEATURE-EXPANSION.md) tracks unfinished CRM, marketing, mobile and additional single-business features. Vendor credentials, a production domain and verified salon content remain external activation steps; no deployment or bank activation is implied.
+- This expansion remains in development. [The delivery checklist](docs/FEATURE-EXPANSION.md) tracks unfinished marketing, mobile and additional single-business features. Vendor credentials, a production domain and verified salon content remain external activation steps; no deployment or bank activation is implied.
 
 ## [0.1.0] - 2026-11-15
 

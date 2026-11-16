@@ -384,6 +384,28 @@ fn offline_clients_can_be_created_and_booked_in_order() {
     assert_eq!(item.client_name, "Marta");
 }
 
+#[test]
+fn merged_aliases_leave_the_picker_without_erasing_history_or_queued_proposals() {
+    let mut s = seeded();
+    create_appointment(&mut s, new_appt("2026-03-10T13:00:00Z")).unwrap();
+    let pending = s.outbox(10).unwrap();
+    let target = "01a1d81e-0000-7000-8000-0000000000c2";
+    s.apply_page(&[
+        up(8, "client", target, json!({"id": target, "name": "Surviving Lucia", "phone": null, "email": null, "notes": null, "createdAt": T0, "updatedAt": T0})),
+        up(9, "client", LUCIA, json!({"id": LUCIA, "name": "Lucia", "phone": null, "email": null, "notes": null, "mergedIntoId": target, "createdAt": T0, "updatedAt": T0})),
+    ], 9).unwrap();
+    let choices = known_clients(&s).unwrap();
+    assert!(!choices.iter().any(|(id, _)| id == LUCIA));
+    assert!(choices.iter().any(|(id, _)| id == target));
+    assert_eq!(s.cursor().unwrap(), 9);
+    assert_eq!(s.outbox(10).unwrap()[0].payload, pending[0].payload);
+    assert_eq!(
+        column(&day_view(&s, day("2026-03-09")).unwrap(), "Ana").items[0].client_name,
+        "Lucia"
+    );
+    assert!(create_appointment(&mut s, new_appt("2026-03-11T13:00:00Z")).is_err());
+}
+
 fn reject(s: &mut Store, entry: &OutboxEntry, reason: &str) {
     let r = MutationResult::Rejected {
         mutation_id: entry.mutation_id.clone(),

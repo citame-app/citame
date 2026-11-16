@@ -4,6 +4,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
+import { requireClientRoot } from "../../client-identity";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
 
@@ -41,6 +42,7 @@ export async function updateClientControls(
   if (input.bookingAccess !== undefined) requirePermission(p, "deleteClients");
   return db.transaction(async (tx) => {
     const current = await row(tx, id, true);
+    requireClientRoot(current);
     if (current.controlsVersion !== input.version)
       throw new DomainError("version_conflict", "Client controls changed; reload before saving");
     const [saved] = await tx
@@ -72,11 +74,21 @@ export async function updateClientControls(
   });
 }
 /** Shared by REST, delegated MCP and offline replay via the appointment domain service. */
-export async function assertClientCanBook(tx: Tx, id: string) {
-  const client = await row(tx, id, true);
-  if (client.bookingAccess === "blocked")
-    throw new DomainError(
-      "forbidden",
-      "This profile cannot book or move appointments. Contact the salon.",
-    );
+export async function assertClientCanBook(tx: Tx, id: string, requireSurvivingProfile = false) {
+  let currentId = id;
+  for (let depth = 0; depth < 20; depth++) {
+    const client = await row(tx, currentId, true);
+    if (client.mergedIntoId) {
+      if (requireSurvivingProfile) requireClientRoot(client);
+      currentId = client.mergedIntoId;
+      continue;
+    }
+    if (client.bookingAccess === "blocked")
+      throw new DomainError(
+        "forbidden",
+        "This profile cannot book or move appointments. Contact the salon.",
+      );
+    return;
+  }
+  throw new DomainError("invalid_state", "Invalid client identity group");
 }

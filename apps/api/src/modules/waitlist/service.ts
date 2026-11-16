@@ -18,7 +18,7 @@ import {
 import { and, count, desc, eq, inArray, isNull, or, type SQL, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requirePermission, requireRole } from "../../auth/policy";
-import type { Principal } from "../../auth/principal";
+import { ownedClientIds, ownsClient, type Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { lockCalendars, lockScheduling, type Tx } from "../../tx";
 import { assertClientCanBook } from "../clients/controls";
@@ -91,7 +91,7 @@ export async function setWaitlistPolicy(db: Database, input: WaitlistPolicy, p: 
 export function waitlistScope(p: Principal): SQL | undefined {
   if (p.role === "client") {
     if (!p.clientId) throw new DomainError("forbidden", "Your account has no booking profile");
-    return eq(waitlistEntry.clientId, p.clientId);
+    return inArray(waitlistEntry.clientId, ownedClientIds(p));
   }
   requirePermission(p, "clients");
   requirePermission(p, "editCalendar");
@@ -156,7 +156,7 @@ export async function entryView(
   const visibleBooking =
     booked &&
     (p.role === "client"
-      ? booked.clientId === p.clientId
+      ? ownsClient(p, booked.clientId)
       : permissionsFor(p.role, p.accessPreset).allCalendars || booked.staffId === p.staffId)
       ? booked
       : null;
@@ -297,7 +297,7 @@ export async function joinWaitlist(
         "validation_error",
         "Choose services with a supported total in one currency",
       );
-    await assertClientCanBook(tx, clientId);
+    await assertClientCanBook(tx, clientId, true);
     const [active] = await tx
       .select({ n: count() })
       .from(waitlistEntry)

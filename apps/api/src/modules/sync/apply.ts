@@ -58,6 +58,7 @@ export function rejectionReason(
       invalid_state: "invalid_state",
       promotion_timing_mismatch: "invalid_state",
       booking_promotion_changed: "invalid_state",
+      client_merged: "conflict",
       intake_required: "intake_required",
       booking_intent_conflict: "booking_intent_conflict",
       has_future_appointments: "invalid_state",

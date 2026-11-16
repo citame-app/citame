@@ -7,6 +7,8 @@ import { rootLogger } from "../observability/logger";
  * message to a program; here the reader is a model, so each failure also says what to do next.
  */
 const NEXT_STEP: Partial<Record<ErrorCode, string>> = {
+  client_merged:
+    "This client profile has been merged. Open the surviving profile in the salon directory and ask the user to review a fresh proposal. Preserve the old request and do not silently replace its client id.",
   booking_promotion_changed:
     "Ask the customer to review the current offer and discounted deposit in the web booking confirmation. Preserve the request identifier; do not silently remove the promotion or create another visit.",
   promotion_timing_mismatch:

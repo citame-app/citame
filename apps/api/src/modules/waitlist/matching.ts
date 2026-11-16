@@ -77,6 +77,7 @@ export async function expireWaitlistOffers(db: Database, now: Date, limit = 100)
           lte(waitlistOffer.expiresAt, now),
           invalidOptions,
           sql`${clientProfile.deletedAt} is not null`,
+          sql`${clientProfile.mergedIntoId} is not null`,
           eq(clientProfile.bookingAccess, "blocked"),
           eq(staffProfile.active, false),
           sql`${staffProfile.deletedAt} is not null`,
@@ -129,6 +130,7 @@ export async function expireWaitlistOffers(db: Database, now: Date, limit = 100)
       const unavailable =
         !client ||
         Boolean(client.deletedAt) ||
+        Boolean(client.mergedIntoId) ||
         client.bookingAccess === "blocked" ||
         !performer?.active ||
         Boolean(performer.deletedAt) ||
@@ -196,6 +198,7 @@ async function matchEntry(db: Database, id: string, now: Date): Promise<boolean>
     if (
       !client ||
       client.deletedAt ||
+      client.mergedIntoId ||
       client.bookingAccess === "blocked" ||
       entry.timezone !== settings.timezone
     ) {

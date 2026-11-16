@@ -82,6 +82,8 @@ pub struct Appointment {
 #[serde(rename_all = "camelCase")]
 pub struct Client {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merged_into_id: Option<String>,
     pub name: String,
     pub phone: Option<String>,
     pub email: Option<String>,

@@ -9,6 +9,8 @@ import {
   type ClientControlsInput,
   type ClientImportInput,
   type ClientListQuery,
+  type ClientMergeInput,
+  type ClientMergePair,
   type ClientPhotoUpdate,
   type ClientPhotoUpload,
   type CreateAppointmentRequest,
@@ -18,9 +20,12 @@ import {
   calendarResponseSchema,
   clientControlsSchema,
   clientDetailResponseSchema,
+  clientDuplicatesSchema,
   clientExportSchema,
   clientImportPreviewSchema,
   clientImportResultSchema,
+  clientMergePreviewSchema,
+  clientMergeSchema,
   clientPhotoSchema,
   clientPhotosSchema,
   listAdminServicesResponseSchema,
@@ -183,6 +188,12 @@ export function createEndpoints(client: ApiClient) {
           query: { from: query.from, to: query.to, staffIds: query.staffIds?.join(",") },
         }),
       clients: {
+        duplicates: (id: string) =>
+          client.get(`/admin/clients/${id}/duplicates`, clientDuplicatesSchema),
+        previewMerge: (input: ClientMergePair) =>
+          client.post("/admin/clients/merge/preview", input, clientMergePreviewSchema),
+        merge: (input: ClientMergeInput) =>
+          client.post("/admin/clients/merge", input, clientMergeSchema),
         photos: (id: string) => client.get(`/admin/clients/${id}/photos`, clientPhotosSchema),
         uploadPhoto: (id: string, input: ClientPhotoUpload) =>
           client.post(`/admin/clients/${id}/photos`, input, clientPhotoSchema),
