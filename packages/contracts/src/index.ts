@@ -36,6 +36,7 @@ export * from "./resources";
 export * from "./reviews";
 export * from "./rewards";
 export * from "./salon";
+export * from "./service-combinations";
 export * from "./service-options";
 export * from "./services";
 export * from "./staff";

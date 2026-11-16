@@ -246,6 +246,20 @@
       "when": 1794833468126,
       "tag": "0034_fancy_white_tiger",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1794836300470,
+      "tag": "0035_jazzy_ego",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1794836374028,
+      "tag": "0036_demonic_ozymandias",
+      "breakpoints": true
     }
   ]
 }

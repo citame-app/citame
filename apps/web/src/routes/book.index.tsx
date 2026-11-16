@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { EmptyState } from "~/components/ui/states";
 import { CatalogChoices } from "~/features/booking/catalog-choices";
 import { toggleCatalogSelection } from "~/features/booking/catalog-selection";
+import { CombinationChoices } from "~/features/booking/combination-choices";
 import { BookingFrame } from "~/features/booking/frame";
 import { BookingSummary } from "~/features/booking/summary";
 import { useBooking } from "~/features/booking/use-booking";
@@ -44,11 +45,19 @@ function ServicesStep() {
           description={t("booking.services.empty.body")}
         />
       ) : (
-        <CatalogChoices
-          catalog={catalog}
-          selected={search.services}
-          onChange={(services) => booking.go("services", { services }, { replace: true })}
-        />
+        <div className="space-y-6">
+          <CombinationChoices
+            catalog={catalog}
+            staff={booking.staff}
+            selected={search.services}
+            onChange={(services) => booking.go("services", { services }, { replace: true })}
+          />
+          <CatalogChoices
+            catalog={catalog}
+            selected={search.services}
+            onChange={(services) => booking.go("services", { services }, { replace: true })}
+          />
+        </div>
       )}
     </BookingFrame>
   );

@@ -24,6 +24,7 @@ export * from "./review";
 export * from "./rewards";
 export * from "./salon-settings";
 export * from "./service";
+export * from "./service-combination";
 export * from "./staff";
 export * from "./sync";
 export * from "./waitlist";

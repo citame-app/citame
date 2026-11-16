@@ -1,4 +1,6 @@
 import {
+  combinationCreateSchema,
+  combinationUpdateSchema,
   createServiceRequestSchema,
   idSchema,
   serviceCatalogUpdateSchema,
@@ -24,6 +26,8 @@ import {
   updateServiceConfiguration,
 } from "./admin";
 
+import { listCombinations, saveCombination } from "./combinations";
+
 const ownerOnly = createMiddleware<AppEnv>(async (c, next) => {
   authorizeServiceAdmin(c.get("principal"));
   await next();
@@ -32,6 +36,31 @@ const ownerOnly = createMiddleware<AppEnv>(async (c, next) => {
 /** Owner-only catalog administration, mounted at `/admin/services` behind `requireAuth`. */
 export function serviceAdminRoutes({ db, now = () => new Date() }: AppDeps) {
   return new Hono<AppEnv>()
+    .get("/combinations", ownerOnly, async (c) =>
+      c.json(await listCombinations(db, c.get("principal"))),
+    )
+    .post("/combinations", ownerOnly, async (c) =>
+      c.json(
+        await saveCombination(
+          db,
+          parseOrThrow(combinationCreateSchema, await readJson(c)),
+          c.get("principal"),
+          now(),
+        ),
+        201,
+      ),
+    )
+    .put("/combinations/:combinationId", ownerOnly, async (c) =>
+      c.json(
+        await saveCombination(
+          db,
+          parseOrThrow(combinationUpdateSchema, await readJson(c)),
+          c.get("principal"),
+          now(),
+          parseOrThrow(idSchema, c.req.param("combinationId")),
+        ),
+      ),
+    )
     .get("/", ownerOnly, async (c) => c.json({ services: await listAdminServices(db) }))
     .post("/", ownerOnly, async (c) => {
       const body = parseOrThrow(createServiceRequestSchema, await readJson(c));

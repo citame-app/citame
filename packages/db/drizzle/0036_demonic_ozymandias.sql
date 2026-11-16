@@ -1,0 +1,1 @@
+ALTER TABLE "service_combination" ADD CONSTRAINT "service_combination_actor_key_unique" UNIQUE("created_by","idempotency_key");

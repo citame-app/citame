@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { PageHeading } from "~/components/pages";
 import { adminHead } from "~/features/admin/route-head";
+import { CombinationsPanel } from "~/features/admin/services/combinations-panel";
 import { ServicesView } from "~/features/admin/services/services-view";
 import { useI18n } from "~/i18n/react";
 
@@ -15,6 +16,7 @@ function ServicesPage() {
     <>
       <PageHeading title={t("services.title")} lead={t("services.lead")} />
       <ServicesView />
+      <CombinationsPanel />
     </>
   );
 }

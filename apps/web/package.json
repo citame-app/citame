@@ -23,6 +23,8 @@
     "e2e:intake": "E2E_INTAKE_FIXTURE=true playwright test",
     "e2e:shifts": "E2E_SHIFTS_FIXTURE=true playwright test",
     "e2e:reputation": "E2E_REPUTATION_FIXTURE=true playwright test",
+    "e2e:combinations": "E2E_COMBINATIONS_FIXTURE=true playwright test",
+    "e2e:combinations:production": "E2E_COMBINATIONS_FIXTURE=true E2E_WEB_IMAGE=true playwright test",
     "e2e:social": "E2E_SOCIAL_FIXTURE=true playwright test",
     "e2e:social:production": "E2E_SOCIAL_FIXTURE=true E2E_WEB_IMAGE=true playwright test",
     "e2e:acquisition": "E2E_ACQUISITION_FIXTURE=true playwright test",

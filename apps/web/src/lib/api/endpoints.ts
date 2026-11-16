@@ -57,6 +57,7 @@ import { z } from "zod";
 import { accountingEndpoints } from "./accounting-endpoints";
 import { bookingPolicyEndpoints } from "./booking-policy-endpoints";
 import type { ApiClient } from "./client";
+import { combinationEndpoints } from "./combination-endpoints";
 import { commerceEndpoints } from "./commerce-endpoints";
 import { dateShiftEndpoints } from "./date-shift-endpoints";
 import { giftCardEndpoints } from "./gift-card-endpoints";
@@ -112,6 +113,7 @@ export function createEndpoints(client: ApiClient) {
     intake: intakeEndpoints(client),
     commerce: commerceEndpoints(client),
     bookingPolicy: bookingPolicyEndpoints(client),
+    combinations: combinationEndpoints(client),
     inventory: inventoryEndpoints(client),
     accounting: accountingEndpoints(client),
     giftCards: giftCardEndpoints(client),
