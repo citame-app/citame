@@ -108,8 +108,9 @@ async function assertStaffPerforms(
   db: Pick<Database, "select">,
   staffId: string,
   serviceIds: string[],
+  lock = false,
 ) {
-  const links = await db
+  const query = db
     .select({ serviceId: serviceStaff.serviceId })
     .from(serviceStaff)
     .where(
@@ -119,6 +120,7 @@ async function assertStaffPerforms(
         isNull(serviceStaff.deletedAt),
       ),
     );
+  const links = await (lock ? query.for("share") : query);
   if (new Set(links.map((l) => l.serviceId)).size !== new Set(serviceIds).size) {
     throw new DomainError(
       "validation_error",
@@ -169,6 +171,12 @@ export async function createAppointment(
     return await db.transaction(async (tx) => {
       await lockScheduling(tx);
       await lockCalendars(tx, [request.staffId]);
+      await assertStaffPerforms(
+        tx,
+        request.staffId,
+        services.map((s) => s.id),
+        true,
+      );
       const noticeOverridden = await assertBookable(tx, {
         staffId: request.staffId,
         startsAt,
@@ -546,6 +554,13 @@ export async function updateAppointment(
       await lockProtectionReceipt(tx, id);
       await lockScheduling(tx);
       await lockCalendars(tx, [current.staffId, staffId]);
+      if (slotChanges)
+        await assertStaffPerforms(
+          tx,
+          staffId,
+          snapshots.flatMap((s) => (s.serviceId ? [s.serviceId] : [])),
+          true,
+        );
       if (slotChanges) await assertClientCanBook(tx, current.clientId);
       const noticeOverridden =
         settings !== undefined &&

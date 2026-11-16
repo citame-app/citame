@@ -24,6 +24,7 @@ import { lockCalendars, lockScheduling, type Tx } from "../../tx";
 import { totalBlockMinutes } from "../availability/compute";
 import { getBookingPolicy } from "../booking-protection/policy";
 import { protectionView } from "../booking-protection/value";
+import { filterResourceAvailability } from "../resources/reservations";
 import { getServicesByIds } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { staffQualifiedFor } from "../staff/service";
@@ -101,6 +102,17 @@ async function previewInTransaction(
     }
     occurrences.push({ startsAt: value, endsAt: endsAt.toISOString(), available });
   }
+  const resourceSlots = await filterResourceAvailability(
+    tx,
+    services,
+    occurrences
+      .filter((o) => o.available)
+      .map((o) => ({ startsAt: new Date(o.startsAt), endsAt: new Date(o.endsAt) })),
+    now,
+  );
+  const resourceStarts = new Set(resourceSlots.map((s) => s.startsAt.toISOString()));
+  for (const occurrence of occurrences)
+    occurrence.available &&= resourceStarts.has(occurrence.startsAt);
   return {
     timezone: settings.timezone,
     reviewHash: hash({ input, services, settings, policy, starts }),
