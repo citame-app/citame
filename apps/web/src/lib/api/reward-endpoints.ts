@@ -31,14 +31,14 @@ export function rewardEndpoints(client: ApiClient) {
         input,
         z.object({ id: z.string(), points: z.number().int() }),
       ),
-    promotions: (page = 1, search = "") =>
+    promotions: (page = 1, search = "", fresh = false) =>
       client.get(
         "/admin/rewards/promotions",
         z.object({
           promotions: z.array(promotionSchema),
           pagination: z.object({ page: z.number(), pageSize: z.number(), total: z.number() }),
         }),
-        { query: { page, search } },
+        { query: { page, search }, cache: fresh ? "no-store" : undefined },
       ),
     savePromotion: (id: string | null, input: PromotionInput) =>
       id

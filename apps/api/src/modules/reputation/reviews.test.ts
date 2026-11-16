@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { publicReviewsSchema, reviewPrivateSchema } from "@sob/contracts";
 import {
   appointment,
@@ -405,4 +406,116 @@ test("a queued moderator loses write access if demoted before acquiring the revi
   expect(await (await call("/admin/reviews", "GET", undefined, owner)).json()).toMatchObject({
     reviews: [{ status: "pending", version: 1 }],
   });
+});
+
+test("only explicitly consented, currently published completed-visit reviews can supply social creative", async () => {
+  const ordinary = await created((await visit()).id);
+  await publish(ordinary.review);
+  expect(
+    (await call(`/admin/reviews/${ordinary.review.id}/social`, "GET", undefined, owner)).status,
+  ).toBe(404);
+  expect(
+    (
+      await call(
+        `/admin/reviews/${ordinary.review.id}/moderation`,
+        "PUT",
+        { version: 2, status: "published", allowSocialUse: true },
+        owner,
+      )
+    ).status,
+  ).toBe(400);
+  const allowed = await created((await visit()).id, { allowSocialUse: true });
+  expect(
+    (await call(`/admin/reviews/${allowed.review.id}/social`, "GET", undefined, owner)).status,
+  ).toBe(404);
+  const current = await publish(allowed.review);
+  const response = await call(
+    `/admin/reviews/${allowed.review.id}/social`,
+    "GET",
+    undefined,
+    owner,
+  );
+  expect(response.status).toBe(200);
+  expect(response.headers.get("cache-control")).toContain("no-store");
+  const content = await response.json();
+  expect(content).toMatchObject({
+    publicName: "A.",
+    body: "A lovely completed visit.",
+    rating: 5,
+    services: [],
+    permissionVersion: "public-review-social-v1",
+  });
+  expect(JSON.stringify(content)).not.toContain(customer.clientId ?? "missing");
+  for (const who of [customer, await actor(t, "staff", "creative-staff@reviews.test")])
+    expect(
+      (await call(`/admin/reviews/${allowed.review.id}/social`, "GET", undefined, who)).status,
+    ).toBe(403);
+  const { appointmentId: _visit, idempotencyKey: _key, ...wording } = allowed.input;
+  const edited = await call(`/me/reviews/${allowed.review.id}`, "PUT", {
+    ...wording,
+    version: current.version,
+    allowSocialUse: false,
+  });
+  expect(edited.status).toBe(200);
+  expect(await edited.json()).toMatchObject({ status: "pending", allowSocialUse: false });
+  expect(
+    (await call(`/admin/reviews/${allowed.review.id}/social`, "GET", undefined, owner)).status,
+  ).toBe(404);
+  const repeated = await call("/me/reviews", "POST", { ...allowed.input, allowSocialUse: false });
+  expect(repeated.status).toBe(409);
+});
+
+test("social reuse stops immediately after an outcome correction or withdrawal", async () => {
+  const a = await visit();
+  const allowed = await created(a.id, { allowSocialUse: true });
+  const published = await publish(allowed.review);
+  await t.db.update(appointment).set({ status: "no_show" }).where(eq(appointment.id, a.id));
+  expect(
+    (await call(`/admin/reviews/${allowed.review.id}/social`, "GET", undefined, owner)).status,
+  ).toBe(404);
+  const withdrawn = await call(`/me/reviews/${allowed.review.id}/withdraw`, "POST", {
+    version: published.version,
+  });
+  expect(await withdrawn.json()).toMatchObject({ status: "withdrawn", allowSocialUse: false });
+  expect(
+    (await call(`/admin/reviews/${allowed.review.id}/social`, "GET", undefined, owner)).status,
+  ).toBe(404);
+});
+
+test("a client can revoke social reuse without unpublishing their website feedback", async () => {
+  const allowed = await created((await visit()).id, { allowSocialUse: true });
+  const current = await publish(allowed.review);
+  const revoked = await call(`/me/reviews/${allowed.review.id}/revoke-social`, "POST", {
+    version: current.version,
+  });
+  expect(revoked.status).toBe(200);
+  expect(await revoked.json()).toMatchObject({
+    status: "published",
+    allowSocialUse: false,
+    socialPermissionVersion: null,
+    body: "A lovely completed visit.",
+  });
+  expect(await (await json(t.app, "/reviews", "GET")).json()).toMatchObject({ total: 1 });
+  expect(
+    (await call(`/admin/reviews/${allowed.review.id}/social`, "GET", undefined, owner)).status,
+  ).toBe(404);
+});
+
+test("website-only review retries preserve the original receipt fingerprint across the social-permission upgrade", async () => {
+  const { input, review: createdReview } = await created((await visit()).id);
+  const legacy = createHash("sha256")
+    .update(
+      JSON.stringify([
+        input.appointmentId,
+        input.publicName,
+        input.rating,
+        input.body,
+        input.shareServices,
+        "public-appointment-review-v1",
+      ]),
+    )
+    .digest("hex");
+  const [stored] = await t.db.select().from(review).where(eq(review.id, createdReview.id));
+  expect(stored?.requestFingerprint).toBe(legacy);
+  expect((await call("/me/reviews", "POST", input)).status).toBe(201);
 });

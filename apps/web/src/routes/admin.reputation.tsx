@@ -2,17 +2,22 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { PageHeading } from "~/components/pages";
 import { TabPanel, Tabs } from "~/components/ui/tabs";
 import { BookingLinks } from "~/features/acquisition/booking-links";
+import { SocialCreative } from "~/features/acquisition/social-creative";
 import { adminHead } from "~/features/admin/route-head";
 import { PortfolioAdmin } from "~/features/reputation/portfolio";
 import { ReviewModeration } from "~/features/reputation/reviews";
 import { useI18n } from "~/i18n/react";
 export const Route = createFileRoute("/admin/reputation")({
-  validateSearch: (search: Record<string, unknown>): { tab?: "reviews" | "portfolio" | "entry" } =>
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { tab?: "reviews" | "portfolio" | "entry" | "creative" } =>
     search.tab === "portfolio"
       ? { tab: "portfolio" }
-      : search.tab === "entry"
-        ? { tab: "entry" }
-        : {},
+      : search.tab === "creative"
+        ? { tab: "creative" }
+        : search.tab === "entry"
+          ? { tab: "entry" }
+          : {},
   head: adminHead("admin.nav.reputation"),
   component: Page,
 });
@@ -32,9 +37,11 @@ function Page() {
             search:
               value === "portfolio"
                 ? { tab: "portfolio" }
-                : value === "entry"
-                  ? { tab: "entry" }
-                  : {},
+                : value === "creative"
+                  ? { tab: "creative" }
+                  : value === "entry"
+                    ? { tab: "entry" }
+                    : {},
           })
         }
         label={t("admin.nav.reputation")}
@@ -42,6 +49,7 @@ function Page() {
           { value: "reviews", label: t("reviews.title") },
           { value: "portfolio", label: t("portfolio.title") },
           { value: "entry", label: t("acquisition.title") },
+          { value: "creative", label: t("social.title") },
         ]}
       >
         <TabPanel value="reviews">
@@ -52,6 +60,9 @@ function Page() {
         </TabPanel>
         <TabPanel value="entry">
           <BookingLinks salonName={salon.name} />
+        </TabPanel>
+        <TabPanel value="creative">
+          <SocialCreative salonName={salon.name} />
         </TabPanel>
       </Tabs>
     </>

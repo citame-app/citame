@@ -39,3 +39,19 @@ test("hiding requires a reason and public filtering and paging are bounded", () 
   expect(reviewPublicQuerySchema.parse({})).toMatchObject({ limit: 12 });
   expect(reviewPublicQuerySchema.safeParse({ limit: 1000 }).success).toBe(false);
 });
+
+test("website publication never implies social reuse permission", () => {
+  const input = {
+    appointmentId: crypto.randomUUID(),
+    idempotencyKey: crypto.randomUUID(),
+    publicName: "A.",
+    rating: 5,
+    body: "Lovely visit",
+    publicationConfirmed: true,
+  };
+  expect(reviewCreateSchema.parse(input)).toMatchObject({ allowSocialUse: false });
+  expect(reviewCreateSchema.parse({ ...input, allowSocialUse: true })).toMatchObject({
+    allowSocialUse: true,
+  });
+  expect(reviewCreateSchema.safeParse({ ...input, allowSocialUse: "yes" }).success).toBe(false);
+});

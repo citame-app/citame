@@ -24,6 +24,11 @@ test("publication is opt-in and an uncertain response retains the exact reviewed
   fireEvent.change(screen.getByLabelText("Public name"), { target: { value: "A." } });
   fireEvent.change(screen.getByLabelText("Your review"), { target: { value: "A lovely visit" } });
   expect(screen.getByLabelText("Show the booked treatments publicly")).not.toBeChecked();
+  expect(
+    screen.getByLabelText(
+      "Allow the salon to reuse this review and public name in its own social posts (optional).",
+    ),
+  ).not.toBeChecked();
   expect(screen.getByRole("button", { name: "Send for moderation" })).toBeDisabled();
   fireEvent.click(
     screen.getByLabelText("I agree to publish this name, rating and review on the salon website."),

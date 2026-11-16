@@ -32,6 +32,8 @@ export const review = pgTable(
     rating: integer(),
     body: text(),
     shareServices: boolean().notNull().default(false),
+    allowSocialUse: boolean().notNull().default(false),
+    socialPermissionVersion: text(),
     services: jsonb().$type<{ id: string | null; name: string }[]>().notNull(),
     status: text().notNull().default("pending"),
     moderationReason: text(),
@@ -49,7 +51,7 @@ export const review = pgTable(
     index("review_client_id_idx").on(t.clientId, t.id),
     check(
       "review_valid",
-      sql`${t.version}>0 and ${t.status} in ('pending','published','hidden','withdrawn') and ${t.requestFingerprint} ~ '^[a-f0-9]{64}$' and ((${t.status}='withdrawn' and ${t.publicName} is null and ${t.body} is null and ${t.rating} is null and ${t.reply} is null and ${t.moderationReason} is null and ${t.shareServices}=false) or (${t.status}<>'withdrawn' and ${t.publicName} is not null and length(btrim(${t.publicName})) between 1 and 80 and ${t.body} is not null and length(btrim(${t.body})) between 1 and 2000 and ${t.rating} is not null and ${t.rating} between 1 and 5)) and (${t.reply} is null or length(btrim(${t.reply})) between 1 and 1000) and (${t.status}<>'published' or ${t.publishedAt} is not null) and (${t.status}<>'hidden' or (${t.moderationReason} is not null and length(btrim(${t.moderationReason})) between 1 and 300))`,
+      sql`${t.version}>0 and (${t.allowSocialUse}=false or (${t.socialPermissionVersion} is not null and ${t.socialPermissionVersion}='public-review-social-v1')) and ${t.status} in ('pending','published','hidden','withdrawn') and ${t.requestFingerprint} ~ '^[a-f0-9]{64}$' and ((${t.status}='withdrawn' and ${t.publicName} is null and ${t.body} is null and ${t.rating} is null and ${t.reply} is null and ${t.moderationReason} is null and ${t.shareServices}=false and ${t.allowSocialUse}=false) or (${t.status}<>'withdrawn' and ${t.publicName} is not null and length(btrim(${t.publicName})) between 1 and 80 and ${t.body} is not null and length(btrim(${t.body})) between 1 and 2000 and ${t.rating} is not null and ${t.rating} between 1 and 5)) and (${t.reply} is null or length(btrim(${t.reply})) between 1 and 1000) and (${t.status}<>'published' or ${t.publishedAt} is not null) and (${t.status}<>'hidden' or (${t.moderationReason} is not null and length(btrim(${t.moderationReason})) between 1 and 300))`,
     ),
   ],
 );

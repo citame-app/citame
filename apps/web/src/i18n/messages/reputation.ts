@@ -1,4 +1,14 @@
 export const reputationEn = {
+  "reviews.social":
+    "Allow the salon to reuse this review and public name in its own social posts (optional).",
+  "reviews.socialHelp":
+    "Optional. Confirm this again when editing the wording. You can withdraw social permission without removing the website review.",
+  "reviews.socialAllowed": "Social reuse is allowed",
+  "reviews.socialDenied": "Social reuse is not allowed",
+  "reviews.revokeSocial": "Withdraw social permission",
+  "reviews.revokeSocialBody":
+    "New social exports will be blocked. Your website review stays published. Copies already downloaded or published outside this application cannot be recalled here.",
+
   "admin.nav.reputation": "Reputation",
   "reviews.title": "Reviews",
   "reviews.lead":
@@ -61,6 +71,16 @@ export const reputationEn = {
   "reviews.saved": "Review saved",
 } as const;
 export const reputationEsAR: Record<keyof typeof reputationEn, string> = {
+  "reviews.social":
+    "Permito que el salón reutilice esta reseña y mi nombre público en sus propias publicaciones en redes (opcional).",
+  "reviews.socialHelp":
+    "Es opcional. Confírmalo de nuevo al editar el texto. Puedes retirar este permiso sin quitar la reseña de la web.",
+  "reviews.socialAllowed": "Se permite la reutilización en redes",
+  "reviews.socialDenied": "No se permite la reutilización en redes",
+  "reviews.revokeSocial": "Retirar permiso para redes",
+  "reviews.revokeSocialBody":
+    "Se bloquearán nuevas exportaciones para redes. Tu reseña seguirá publicada en la web. Aquí no se pueden retirar las copias ya descargadas o publicadas fuera de esta aplicación.",
+
   "admin.nav.reputation": "Reputación",
   "reviews.title": "Reseñas",
   "reviews.lead":

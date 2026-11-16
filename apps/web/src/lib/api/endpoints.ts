@@ -121,8 +121,12 @@ export function createEndpoints(client: ApiClient) {
     appointmentSeries: seriesEndpoints(client),
     waitlist: waitlistEndpoints(client),
     salon: () => client.get("/salon", salonResponseSchema),
-    services: () => client.get("/services", listServicesResponseSchema),
-    staff: () => client.get("/staff", listStaffResponseSchema),
+    services: (fresh = false) =>
+      client.get("/services", listServicesResponseSchema, {
+        cache: fresh ? "no-store" : undefined,
+      }),
+    staff: (fresh = false) =>
+      client.get("/staff", listStaffResponseSchema, { cache: fresh ? "no-store" : undefined }),
     availability: (
       { serviceIds, staffId, date, appointmentId }: AvailabilityParams,
       signal?: AbortSignal,

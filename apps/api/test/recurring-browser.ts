@@ -68,7 +68,7 @@ await createAccount(
   },
 );
 await auth.mailer.stop();
-if (process.env.E2E_REPUTATION_FIXTURE === "true") {
+if (process.env.E2E_REPUTATION_FIXTURE === "true" || process.env.E2E_SOCIAL_FIXTURE === "true") {
   const [client] = await database.db
     .select()
     .from(clientProfile)

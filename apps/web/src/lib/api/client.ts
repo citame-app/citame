@@ -71,6 +71,7 @@ export interface ApiClientOptions {
 export interface RequestOptions {
   query?: Record<string, string | number | undefined>;
   signal?: AbortSignal;
+  cache?: RequestCache;
 }
 
 function toApiError(status: number, body: unknown, retryAfter: string | null): ApiError {
@@ -132,6 +133,7 @@ export function createApiClient(options: ApiClientOptions) {
         body: body === undefined ? undefined : JSON.stringify(body),
         credentials: "include",
         signal: requestOptions.signal,
+        ...(requestOptions.cache ? { cache: requestOptions.cache } : {}),
       });
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") throw error;

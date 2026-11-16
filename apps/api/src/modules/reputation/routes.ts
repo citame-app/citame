@@ -13,7 +13,14 @@ import { Hono } from "hono";
 import type { AppDeps } from "../../app";
 import type { AppEnv } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
-import { adminReviews, changeReview, createReview, ownReviews, publicReviews } from "./reviews";
+import {
+  adminReviews,
+  changeReview,
+  createReview,
+  ownReviews,
+  publicReviews,
+  reviewForSocial,
+} from "./reviews";
 
 const router = () =>
   new Hono<AppEnv>().use("*", async (c, next) => {
@@ -27,6 +34,17 @@ export function reviewPublicRoutes({ db, now = () => new Date() }: AppDeps) {
 }
 export function reviewSelfRoutes({ db, now = () => new Date() }: AppDeps) {
   return router()
+    .post("/:id/revoke-social", async (c) =>
+      c.json(
+        await changeReview(
+          db,
+          parseOrThrow(idSchema, c.req.param("id")),
+          { kind: "revokeSocial", input: parseOrThrow(reviewVersionSchema, await readJson(c)) },
+          c.get("principal"),
+          now(),
+        ),
+      ),
+    )
     .get("/", async (c) =>
       c.json(
         await ownReviews(
@@ -73,6 +91,16 @@ export function reviewSelfRoutes({ db, now = () => new Date() }: AppDeps) {
 }
 export function reviewAdminRoutes({ db, now = () => new Date() }: AppDeps) {
   return router()
+    .get("/:id/social", async (c) =>
+      c.json(
+        await reviewForSocial(
+          db,
+          parseOrThrow(idSchema, c.req.param("id")),
+          c.get("principal"),
+          now(),
+        ),
+      ),
+    )
     .get("/", async (c) =>
       c.json(
         await adminReviews(

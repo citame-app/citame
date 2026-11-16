@@ -6,6 +6,7 @@ import {
   type ReviewEdit,
   type ReviewModeration,
   reviewPrivateSchema,
+  reviewSocialSchema,
 } from "@sob/contracts";
 import type { ApiClient } from "./client";
 export function reviewEndpoints(client: ApiClient) {
@@ -18,6 +19,10 @@ export function reviewEndpoints(client: ApiClient) {
       client.put(`/me/reviews/${id}`, input, reviewPrivateSchema),
     withdraw: (id: string, version: number) =>
       client.post(`/me/reviews/${id}/withdraw`, { version }, reviewPrivateSchema),
+    revokeSocial: (id: string, version: number) =>
+      client.post(`/me/reviews/${id}/revoke-social`, { version }, reviewPrivateSchema),
+    social: (id: string) =>
+      client.get(`/admin/reviews/${id}/social`, reviewSocialSchema, { cache: "no-store" }),
     admin: (query: { before?: string; status?: string } = {}) =>
       client.get("/admin/reviews", adminReviewsSchema, { query }),
     moderate: (id: string, input: ReviewModeration) =>

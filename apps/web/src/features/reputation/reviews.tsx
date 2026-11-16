@@ -130,6 +130,8 @@ export function OwnReviews() {
   const [dirty, setDirty] = useState(false);
   const [discard, setDiscard] = useState(false);
   const [withdraw, setWithdraw] = useState<ReviewPrivate>();
+  const [revokeSocial, setRevokeSocial] = useState<ReviewPrivate>();
+  const [socialError, setSocialError] = useState<unknown>();
   const [pending, setPending] = useState(false);
   const [withdrawError, setWithdrawError] = useState<unknown>();
   const client = useQueryClient();
@@ -174,6 +176,11 @@ export function OwnReviews() {
                   {t(`reviews.${visit.review.status}`)}
                 </p>
                 <ReviewContent review={visit.review} />
+                <p className="text-sm text-muted">
+                  {t(
+                    visit.review.allowSocialUse ? "reviews.socialAllowed" : "reviews.socialDenied",
+                  )}
+                </p>
                 {visit.review.moderationReason && (
                   <p className="text-sm text-muted">{visit.review.moderationReason}</p>
                 )}
@@ -203,6 +210,17 @@ export function OwnReviews() {
                   }}
                 >
                   {t("reviews.withdraw")}
+                </Button>
+              )}
+              {visit.review?.allowSocialUse && (
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setRevokeSocial(visit.review ?? undefined);
+                    setSocialError(undefined);
+                  }}
+                >
+                  {t("reviews.revokeSocial")}
                 </Button>
               )}
             </div>
@@ -288,6 +306,35 @@ export function OwnReviews() {
         }}
       >
         {withdrawError !== undefined && <ReviewFailure error={withdrawError} />}
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={Boolean(revokeSocial)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRevokeSocial(undefined);
+            void reload();
+          }
+        }}
+        title={t("reviews.revokeSocial")}
+        description={t("reviews.revokeSocialBody")}
+        confirmLabel={t("reviews.revokeSocial")}
+        cancelLabel={t("reviews.close")}
+        pending={pending}
+        onConfirm={() => {
+          if (!revokeSocial) return;
+          setPending(true);
+          setSocialError(undefined);
+          void api()
+            .reviews.revokeSocial(revokeSocial.id, revokeSocial.version)
+            .then(() => {
+              setRevokeSocial(undefined);
+              void reload();
+            })
+            .catch(setSocialError)
+            .finally(() => setPending(false));
+        }}
+      >
+        {socialError !== undefined && <ReviewFailure error={socialError} />}
       </ConfirmDialog>
     </div>
   );

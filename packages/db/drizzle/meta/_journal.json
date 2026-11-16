@@ -239,6 +239,13 @@
       "when": 1794829393900,
       "tag": "0033_milky_the_fury",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1794833468126,
+      "tag": "0034_fancy_white_tiger",
+      "breakpoints": true
     }
   ]
 }

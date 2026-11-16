@@ -30,6 +30,11 @@ function clientWith(respond: (call: Call) => Response | Promise<Response>) {
 const thing = z.object({ id: z.number() });
 
 describe("api client requests", () => {
+  test("fresh source checks explicitly bypass HTTP caches", async () => {
+    const { client, calls } = clientWith(() => json({ id: 7 }));
+    await client.get("/services", thing, { cache: "no-store" });
+    expect(calls[0]?.init.cache).toBe("no-store");
+  });
   test("prefixes REST paths with the same-origin base and validates the response", async () => {
     const { client, calls } = clientWith(() => json({ id: 7 }));
     expect(await client.get("/services", thing)).toEqual({ id: 7 });

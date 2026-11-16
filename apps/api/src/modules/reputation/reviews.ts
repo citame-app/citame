@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  REVIEW_SOCIAL_PERMISSION_VERSION,
   type ReviewCreate,
   type ReviewEdit,
   type ReviewModeration,
@@ -9,6 +10,7 @@ import {
   type reviewPublicQuerySchema,
   reviewPublicSchema,
   reviewServicesSchema,
+  reviewSocialSchema,
 } from "@sob/contracts";
 import { appointment, appointmentService, clientProfile, type Database, review } from "@sob/db";
 import { and, asc, avg, count, desc, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
@@ -68,6 +70,11 @@ function privateView(row: Row, a: Visit, now: Date): ReviewPrivate {
     body: row.body,
     rating: row.rating,
     shareServices: row.shareServices,
+    allowSocialUse: row.allowSocialUse,
+    socialPermissionVersion:
+      row.socialPermissionVersion === REVIEW_SOCIAL_PERMISSION_VERSION
+        ? REVIEW_SOCIAL_PERMISSION_VERSION
+        : null,
     services: reviewServicesSchema.parse(row.services),
     status: row.status as ReviewPrivate["status"],
     moderationReason: row.moderationReason,
@@ -84,7 +91,12 @@ async function audit(tx: Tx, p: Principal, row: Row, action: string) {
     action: `review.${action}`,
     entity: "review",
     entityId: row.id,
-    metadata: { version: row.version, status: row.status },
+    metadata: {
+      version: row.version,
+      status: row.status,
+      allowSocialUse: row.allowSocialUse,
+      socialPermissionVersion: row.socialPermissionVersion,
+    },
   });
 }
 export async function createReview(db: Database, input: ReviewCreate, p: Principal, now: Date) {
@@ -98,6 +110,7 @@ export async function createReview(db: Database, input: ReviewCreate, p: Princip
         input.body,
         input.shareServices,
         PERMISSION,
+        ...(input.allowSocialUse ? [REVIEW_SOCIAL_PERMISSION_VERSION] : []),
       ]),
     )
     .digest("hex");
@@ -155,6 +168,8 @@ export async function createReview(db: Database, input: ReviewCreate, p: Princip
         body: input.body,
         rating: input.rating,
         shareServices: input.shareServices,
+        allowSocialUse: input.allowSocialUse,
+        socialPermissionVersion: input.allowSocialUse ? REVIEW_SOCIAL_PERMISSION_VERSION : null,
         services: (await snapshot(tx, [a.id])).get(a.id) ?? [],
         publicationVersion: PERMISSION,
         createdAt: now,
@@ -169,6 +184,7 @@ export async function createReview(db: Database, input: ReviewCreate, p: Princip
 type Change =
   | { kind: "edit"; input: ReviewEdit }
   | { kind: "withdraw"; input: { version: number } }
+  | { kind: "revokeSocial"; input: { version: number } }
   | { kind: "moderate"; input: ReviewModeration }
   | { kind: "reply"; input: { version: number; reply: string | null } };
 export async function changeReview(
@@ -215,6 +231,10 @@ export async function changeReview(
           rating: change.input.rating,
           body: change.input.body,
           shareServices: change.input.shareServices,
+          allowSocialUse: change.input.allowSocialUse,
+          socialPermissionVersion: change.input.allowSocialUse
+            ? REVIEW_SOCIAL_PERMISSION_VERSION
+            : null,
           publicationVersion: PERMISSION,
           status: "pending",
           reply: null,
@@ -228,11 +248,16 @@ export async function changeReview(
           rating: null,
           body: null,
           shareServices: false,
+          allowSocialUse: false,
+          socialPermissionVersion: null,
           status: "withdrawn",
           reply: null,
           moderationReason: null,
           publishedAt: null,
         };
+        break;
+      case "revokeSocial":
+        changes = { allowSocialUse: false, socialPermissionVersion: null };
         break;
       case "moderate":
         if (row.status === "withdrawn")
@@ -385,5 +410,37 @@ export async function publicReviews(
       average: summary?.average ? Number(summary.average) : null,
       nextBefore: rows.length > query.limit ? (rows[query.limit - 1]?.r.id ?? null) : null,
     };
+  });
+}
+
+export async function reviewForSocial(db: Database, id: string, p: Principal, now: Date) {
+  requirePermission(p, "editCatalog");
+  const [row] = await db
+    .select({ r: review })
+    .from(review)
+    .innerJoin(appointment, eq(appointment.id, review.appointmentId))
+    .innerJoin(clientProfile, eq(clientProfile.id, review.clientId))
+    .where(
+      and(
+        eq(review.id, id),
+        eq(review.status, "published"),
+        eq(review.allowSocialUse, true),
+        eq(review.socialPermissionVersion, REVIEW_SOCIAL_PERMISSION_VERSION),
+        eligibleSql(now),
+      ),
+    );
+  if (!row)
+    throw new DomainError("not_found", "This review is not currently available for social reuse");
+  const r = row.r;
+  return reviewSocialSchema.parse({
+    id: r.id,
+    publicName: r.publicName,
+    rating: r.rating,
+    body: r.body,
+    services: r.shareServices ? reviewServicesSchema.parse(r.services) : [],
+    reply: r.reply,
+    publishedAt: r.publishedAt?.toISOString(),
+    permissionVersion: REVIEW_SOCIAL_PERMISSION_VERSION,
+    reviewVersion: r.version,
   });
 }

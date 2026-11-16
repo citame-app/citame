@@ -10,11 +10,13 @@ const text = (max: number) =>
     // biome-ignore lint/suspicious/noControlCharactersInRegex: reject control bytes before PostgreSQL text writes.
     .regex(/^[^\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]*$/u, "Unsupported control characters");
 export const reviewStatusSchema = z.enum(["pending", "published", "hidden", "withdrawn"]);
+export const REVIEW_SOCIAL_PERMISSION_VERSION = "public-review-social-v1";
 const content = {
   publicName: text(80),
   rating: z.number().int().min(1).max(5),
   body: text(2000),
   shareServices: z.boolean().default(false),
+  allowSocialUse: z.boolean().default(false),
   publicationConfirmed: z.literal(true),
 };
 export const reviewCreateSchema = z
@@ -61,6 +63,10 @@ export const reviewPublicSchema = z.object({
   reply: text(1000).nullable(),
   publishedAt: instantSchema,
 });
+export const reviewSocialSchema = reviewPublicSchema.extend({
+  permissionVersion: z.literal(REVIEW_SOCIAL_PERMISSION_VERSION),
+  reviewVersion: z.number().int().positive(),
+});
 export const publicReviewsSchema = z.object({
   reviews: z.array(reviewPublicSchema),
   nextBefore: idSchema.nullable(),
@@ -74,6 +80,8 @@ export const reviewPrivateSchema = z.object({
   rating: z.number().int().min(1).max(5).nullable(),
   body: text(2000).nullable(),
   shareServices: z.boolean(),
+  allowSocialUse: z.boolean().default(false),
+  socialPermissionVersion: z.literal(REVIEW_SOCIAL_PERMISSION_VERSION).nullable().default(null),
   services: reviewServicesSchema,
   status: reviewStatusSchema,
   moderationReason: text(300).nullable(),
@@ -103,3 +111,4 @@ export type ReviewEdit = z.infer<typeof reviewEditSchema>;
 export type ReviewModeration = z.infer<typeof reviewModerationSchema>;
 export type ReviewPublic = z.infer<typeof reviewPublicSchema>;
 export type ReviewPrivate = z.infer<typeof reviewPrivateSchema>;
+export type ReviewSocial = z.infer<typeof reviewSocialSchema>;

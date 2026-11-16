@@ -1,6 +1,6 @@
 import { type ReviewCreate, type ReviewPrivate, reviewEditSchema } from "@sob/contracts";
 import { useMutation } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { TextField } from "~/components/ui/field";
 import { SelectField, TextAreaField } from "~/components/ui/select-field";
@@ -54,6 +54,8 @@ export function ReviewEditor({
   const [body, setBody] = useState(review?.body ?? "");
   const [share, setShare] = useState(review?.shareServices ?? false);
   const [confirmed, setConfirmed] = useState(false);
+  const [social, setSocial] = useState(false);
+  const socialHint = useId();
   const [uncertain, setUncertain] = useState(false);
   const key = useRef(crypto.randomUUID());
   const packet = useRef<ReviewCreate | null>(null);
@@ -63,6 +65,7 @@ export function ReviewEditor({
     rating: Number(rating),
     body,
     shareServices: share,
+    allowSocialUse: social,
     publicationConfirmed: confirmed,
   };
   const parsed = reviewEditSchema.safeParse(input);
@@ -164,6 +167,22 @@ export function ReviewEditor({
         />
         <span>{t("reviews.confirm")}</span>
       </label>
+      <label className="flex min-h-11 items-center gap-3">
+        <input
+          type="checkbox"
+          checked={social}
+          disabled={disabled}
+          aria-describedby={socialHint}
+          onChange={(event) => {
+            setSocial(event.target.checked);
+            changed();
+          }}
+        />
+        <span>{t("reviews.social")}</span>
+      </label>
+      <p id={socialHint} className="text-sm text-muted">
+        {t("reviews.socialHelp")}
+      </p>
       {mutation.isError && <ReviewFailure error={mutation.error} />}
       {uncertain && (
         <p role="status" className="text-sm text-muted">
