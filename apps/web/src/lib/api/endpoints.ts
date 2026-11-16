@@ -9,6 +9,8 @@ import {
   type ClientControlsInput,
   type ClientImportInput,
   type ClientListQuery,
+  type ClientPhotoUpdate,
+  type ClientPhotoUpload,
   type CreateAppointmentRequest,
   type CreateServiceRequest,
   type CreateStaffAccountRequest,
@@ -19,6 +21,8 @@ import {
   clientExportSchema,
   clientImportPreviewSchema,
   clientImportResultSchema,
+  clientPhotoSchema,
+  clientPhotosSchema,
   listAdminServicesResponseSchema,
   listAdminStaffResponseSchema,
   listAppointmentsResponseSchema,
@@ -163,6 +167,15 @@ export function createEndpoints(client: ApiClient) {
           query: { from: query.from, to: query.to, staffIds: query.staffIds?.join(",") },
         }),
       clients: {
+        photos: (id: string) => client.get(`/admin/clients/${id}/photos`, clientPhotosSchema),
+        uploadPhoto: (id: string, input: ClientPhotoUpload) =>
+          client.post(`/admin/clients/${id}/photos`, input, clientPhotoSchema),
+        updatePhoto: (id: string, photoId: string, input: ClientPhotoUpdate) =>
+          client.patch(`/admin/clients/${id}/photos/${photoId}`, input, clientPhotoSchema),
+        removePhoto: (id: string, photoId: string, version: number) =>
+          client.delete(`/admin/clients/${id}/photos/${photoId}`, deletedAck, {
+            query: { version },
+          }),
         previewImport: (csv: string) =>
           client.post("/admin/clients/import/preview", { csv }, clientImportPreviewSchema),
         import: (input: ClientImportInput) =>

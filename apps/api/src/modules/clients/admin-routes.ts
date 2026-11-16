@@ -4,6 +4,9 @@ import {
   clientImportInputSchema,
   clientImportPreviewInputSchema,
   clientListQuerySchema,
+  clientPhotoDeleteQuerySchema,
+  clientPhotoUpdateSchema,
+  clientPhotoUploadSchema,
   idSchema,
   updateClientRequestSchema,
 } from "@sob/contracts";
@@ -14,6 +17,13 @@ import type { AppEnv } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
 import { deleteClient, getClientDetail, listClients, updateClient } from "./admin";
 import { getClientControls, updateClientControls } from "./controls";
+import {
+  deleteClientPhoto,
+  listClientPhotos,
+  readClientPhotoImage,
+  updateClientPhoto,
+  uploadClientPhoto,
+} from "./photos";
 import { exportClients, importClients, previewClientImport } from "./transfer";
 
 /** Client directory, mounted at `/admin/clients` behind `requireAuth`. */
@@ -44,6 +54,65 @@ export function clientAdminRoutes({ db, now = () => new Date() }: AppDeps) {
       authorizeClientAccess(c.get("principal"));
       const query = parseOrThrow(clientListQuerySchema, c.req.query());
       return c.json(await listClients(db, query));
+    })
+    .get("/:id/photos", async (c) => {
+      c.header("cache-control", "private, no-store");
+      return c.json(
+        await listClientPhotos(db, parseOrThrow(idSchema, c.req.param("id")), c.get("principal")),
+      );
+    })
+    .post("/:id/photos", async (c) => {
+      const principal = c.get("principal");
+      const input = parseOrThrow(clientPhotoUploadSchema, await readJson(c));
+      c.header("cache-control", "private, no-store");
+      return c.json(
+        await uploadClientPhoto(
+          db,
+          parseOrThrow(idSchema, c.req.param("id")),
+          input,
+          principal,
+          now(),
+        ),
+        201,
+      );
+    })
+    .patch("/:id/photos/:photoId", async (c) => {
+      c.header("cache-control", "private, no-store");
+      return c.json(
+        await updateClientPhoto(
+          db,
+          parseOrThrow(idSchema, c.req.param("id")),
+          parseOrThrow(idSchema, c.req.param("photoId")),
+          parseOrThrow(clientPhotoUpdateSchema, await readJson(c)),
+          c.get("principal"),
+          now(),
+        ),
+      );
+    })
+    .delete("/:id/photos/:photoId", async (c) =>
+      c.json(
+        await deleteClientPhoto(
+          db,
+          parseOrThrow(idSchema, c.req.param("id")),
+          parseOrThrow(idSchema, c.req.param("photoId")),
+          parseOrThrow(clientPhotoDeleteQuerySchema, c.req.query()).version,
+          c.get("principal"),
+          now(),
+        ),
+      ),
+    )
+    .get("/:id/photos/:photoId/image", async (c) => {
+      const image = await readClientPhotoImage(
+        db,
+        parseOrThrow(idSchema, c.req.param("id")),
+        parseOrThrow(idSchema, c.req.param("photoId")),
+        c.get("principal"),
+      );
+      return c.body(Buffer.from(image), 200, {
+        "content-type": "image/jpeg",
+        "cache-control": "private, no-store",
+        "content-disposition": 'inline; filename="client-photo.jpg"',
+      });
     })
     .get("/:id/controls", async (c) =>
       c.json(

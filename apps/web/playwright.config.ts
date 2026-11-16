@@ -29,7 +29,7 @@ export default defineConfig({
   ...(recurringFixture
     ? {
         testMatch: crmFixture
-          ? "**/client-transfer.spec.ts"
+          ? ["**/client-transfer.spec.ts", "**/client-photos.spec.ts"]
           : optionsFixture
             ? "**/service-options.spec.ts"
             : resourcesFixture
@@ -69,6 +69,7 @@ export default defineConfig({
           "**/resources.spec.ts",
           "**/service-options.spec.ts",
           "**/client-transfer.spec.ts",
+          "**/client-photos.spec.ts",
         ],
       }),
   outputDir: "./test-results",

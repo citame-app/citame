@@ -1,8 +1,9 @@
 import { Dialog } from "@base-ui/react/dialog";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { useI18n } from "~/i18n/react";
 import { cn } from "~/lib/cn";
 import { CloseIcon } from "./icons";
+import { useSheetFooterInset } from "./sheet-footer-inset";
 
 export interface SheetProps {
   open: boolean;
@@ -30,6 +31,8 @@ export function Sheet({
   size = "md",
 }: SheetProps) {
   const { t } = useI18n();
+  const [footerNode, setFooterNode] = useState<HTMLElement | null>(null);
+  useSheetFooterInset(open, footerNode);
   return (
     <Dialog.Root open={open} onOpenChange={(next) => onOpenChange(next)}>
       <Dialog.Portal>
@@ -63,7 +66,10 @@ export function Sheet({
             </header>
             <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">{children}</div>
             {footer && (
-              <footer className="border-t border-line bg-surface px-5 py-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+              <footer
+                ref={setFooterNode}
+                className="border-t border-line bg-surface px-5 py-4 pb-[calc(1rem+env(safe-area-inset-bottom))]"
+              >
                 {footer}
               </footer>
             )}

@@ -19,6 +19,7 @@ import { describeProblem } from "../problems";
 import { UnsavedGuard } from "../unsaved-guard";
 import { useNow } from "../use-now";
 import { ClientControlsEditor } from "./client-controls";
+import { ClientPhotos } from "./client-photos";
 
 export function ClientDetail({
   clientId,
@@ -43,6 +44,7 @@ export function ClientDetail({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [blocked, setBlocked] = useState(false);
   const [controlsDirty, setControlsDirty] = useState(false);
+  const [photosDirty, setPhotosDirty] = useState(false);
 
   const client = query.data?.client;
   // Refresh contact values when those values change; metadata timestamps must preserve the draft.
@@ -138,7 +140,7 @@ export function ClientDetail({
 
   return (
     <div className="space-y-8">
-      <UnsavedGuard dirty={dirty || controlsDirty} />
+      <UnsavedGuard dirty={dirty || controlsDirty || photosDirty} />
       <div>
         <Link
           to="/admin/clients"
@@ -199,6 +201,7 @@ export function ClientDetail({
       </form>
 
       <ClientControlsEditor clientId={clientId} onDirtyChange={setControlsDirty} />
+      <ClientPhotos clientId={clientId} onDirtyChange={setPhotosDirty} />
 
       <section aria-labelledby="client-upcoming" className="space-y-3">
         <h3 id="client-upcoming" className="text-heading">

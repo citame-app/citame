@@ -135,3 +135,11 @@ The [official Spanish feature catalog](https://biz.booksy.com/es-es/funcionalida
 The public multi-business marketplace, paid discovery/Boost and multisite remain outside the owner's confirmed current scope. External Instagram/Google booking activation, signing and bank/provider enrollment await actual accounts and approval; preparing local adapters is separate from claiming activation. This list does not claim equivalence with Booksy's network or proprietary integrations.
 
 Full API verification after reviewed booking retries and client transfer passed **927 tests across 93 files** (0 failures). This includes the existing payment, resource, recurrence, waitlist, reward, permission and sync regressions. The broader unchecked feature blocks remain unfinished.
+
+### Private client photo progress
+
+Client records now provide a team-only JPEG/PNG/WebP gallery with explicit storage confirmation, normalized metadata-free pixels, scoped reads, bounded concurrent processing/storage, revision-fenced editing, retained uncertain-upload drafts and confirmed image/caption/date erasure. [Operator guide and operational limits](client-photos.md). Public portfolio publishing, native photo presentation, deduplication/merging and versioned intake forms remain unfinished.
+
+The production API image builds and passes nine photo/image integration tests on pinned Bun 1.4.4 with a read-only filesystem. Thirty-six focused client tests passed before the final quota/error refinements. Eight real photo/CSV browser workflows pass across light/dark and mobile/desktop, with axe, overflow, uncertain-response recovery and photo revision checks. A reproduced notification overlap now has a live browser hit-target regression and measured sheet-footer handling. Full integration counts follow after the running suite completes.
+
+Private-photo integration verification completed with **936 API, 704 web, 140 contract and 47 database tests passing**. Eight photo/CSV browser workflows and four booking-option regressions passed. Forced type checks and repository lint passed; the rebuilt production API image passed the nine photo/image cases on Bun 1.4.4, including capacity limits and confirmed erasure. Images were synthetic fixtures. No external service or real personal data was activated.

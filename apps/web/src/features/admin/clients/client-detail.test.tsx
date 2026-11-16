@@ -70,6 +70,8 @@ beforeEach(() => {
         version: 1,
         canManageBookingAccess: true,
       });
+    if (url.pathname === `/api/admin/clients/${CLIENT}/photos`)
+      return json({ photos: [], canEdit: true, limit: 20 });
     if (url.pathname === "/api/admin/staff")
       return json({
         staff: [{ id: STAFF, displayName: "Ana", active: true, userId: null, serviceIds: [] }],
