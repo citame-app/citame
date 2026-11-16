@@ -42,3 +42,11 @@ All financial mutations are audited. No raw bank notification, card details, sig
 Reference signing and refund-adapter tests pass on the pinned Bun 1.4.4 image with networking disabled. Real-Postgres tests cover ownership/RBAC, CSRF, immutable appointment prices, idempotency, callback tampering, bank declines, late captures, overcollection races, refunds, uncertain dispatches and cash reconciliation. React tests cover the forms and print isolation. A real Chromium mobile exploration and four mobile/desktop light/dark Playwright cases verify partial cash/card payments, receipts, refunds, register differences, no horizontal overflow and no serious/critical axe findings.
 
 No real bank charge, refund, enrollment or production callback has been performed. Inventory fulfillment and commission/financial reports are now implemented. Deposits/booking holds and entitlements are separate remaining items in [FEATURE-EXPANSION.md](FEATURE-EXPANSION.md).
+
+## Recurring Redsys groundwork (not yet activated)
+
+The adapter can request an initial recurring card reference through hosted COF checkout and send subsequent signed MIT REST requests. It is disabled by default. Bizum cannot initialize this card reference. Returned identifiers are bounded and separate from card numbers; incomplete reference metadata does not discard a confirmed payment. A purpose-specific AES-GCM vault binds each encrypted reference to its contract, merchant, terminal, environment and currency. Unknown charge outcomes require reconciliation and are never retried by the adapter.
+
+This adapter groundwork alone does not enable automatic subscription billing. Enrollment consent, reference persistence, period scheduling, dispatch claims, cancellation races and customer presentation must be integrated and tested before activating recurring charges. Existing membership renewals remain manual.
+
+Primary specifications: [Redsys MIT integration](https://pagosonline.redsys.es/desarrolladores-inicio/documentacion-funcionalidades-avanzadas/tokenizacion/tokenizacion-mit/), [CIT integration](https://pagosonline.redsys.es/desarrolladores-inicio/documentacion-funcionalidades-avanzadas/tokenizacion/tokenizacion-cit/) and [parameter definitions](https://pagosonline.redsys.es/desarrolladores-inicio/integrate-con-nosotros/parametros-de-entrada-y-salida/).

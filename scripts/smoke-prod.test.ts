@@ -14,6 +14,7 @@ async function failedValidation() {
 printf '%s\\n' "$*" >> "$SMOKE_COMMAND_LOG"
 printf 'sms=%s tag=%s\\n' "$NOTIFY_SMS_PROVIDER" "$SOB_TAG" >> "$SMOKE_COMMAND_LOG"
 printf 'payments=%s\\n' "$PAYMENT_PROVIDER" >> "$SMOKE_COMMAND_LOG"
+printf 'recurring=%s\\n' "$REDSYS_RECURRING_ENABLED" >> "$SMOKE_COMMAND_LOG"
 exit 23
 `,
   );
@@ -27,6 +28,7 @@ exit 23
         COMPOSE_PROJECT_NAME: "real-salon",
         NOTIFY_SMS_PROVIDER: "twilio",
         PAYMENT_PROVIDER: "redsys",
+        REDSYS_RECURRING_ENABLED: "true",
         SOB_TAG: "live",
       },
       stdout: "pipe",
@@ -80,4 +82,11 @@ test("production smoke never enables an inherited bank gateway", async () => {
   const settings = lines.filter((line) => line.startsWith("payments="));
   expect(settings).toHaveLength(3);
   for (const line of settings) expect(line).toBe("payments=none");
+});
+
+test("production smoke disables inherited automatic bank billing", async () => {
+  const lines = await failedValidation();
+  const settings = lines.filter((line) => line.startsWith("recurring="));
+  expect(settings).toHaveLength(3);
+  for (const line of settings) expect(line).toBe("recurring=false");
 });

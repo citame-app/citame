@@ -189,3 +189,34 @@ test("payment gateways are disabled by default and enabled Redsys requires compl
     }),
   ).toThrow("HTTPS");
 });
+test("recurring payment configuration is opt-in and requires a separate valid encryption key", () => {
+  const base = {
+    BETTER_AUTH_SECRET: SECRET,
+    PAYMENT_PROVIDER: "redsys",
+    REDSYS_MERCHANT_CODE: "999008881",
+    REDSYS_TERMINAL: "001",
+    REDSYS_SECRET_KEY: "public-test-key",
+    REDSYS_ENVIRONMENT: "test",
+  };
+  expect(loadConfig(base).payments.recurringEnabled).toBe(false);
+  expect(() => loadConfig({ ...base, REDSYS_RECURRING_ENABLED: "true" })).toThrow(
+    "PAYMENT_TOKEN_ENCRYPTION_KEY",
+  );
+  expect(() =>
+    loadConfig({
+      ...base,
+      REDSYS_RECURRING_ENABLED: "true",
+      PAYMENT_TOKEN_ENCRYPTION_KEY: "private-invalid-key",
+    }),
+  ).toThrow("Payment encryption key unavailable");
+  const ready = loadConfig({
+    ...base,
+    REDSYS_RECURRING_ENABLED: "true",
+    PAYMENT_TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
+  });
+  expect(ready.payments.recurringEnabled).toBe(true);
+  expect(ready.payments.redsys?.recurringEnabled).toBe(true);
+  expect(() =>
+    loadConfig({ BETTER_AUTH_SECRET: SECRET, REDSYS_RECURRING_ENABLED: "true" }),
+  ).toThrow("requires Redsys");
+});

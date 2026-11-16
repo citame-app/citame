@@ -1,4 +1,5 @@
 import { createCipheriv, createHmac, timingSafeEqual } from "node:crypto";
+import { type MandateReference, mandateReferenceSchema } from "./mandate-types";
 
 export class InvalidBankNotificationError extends Error {
   constructor() {
@@ -14,6 +15,7 @@ export interface RedsysConfig {
   terminal: string;
   environment: RedsysEnvironment;
   publicURL: string;
+  recurringEnabled?: boolean;
 }
 export interface HostedPaymentForm {
   action: string;
@@ -27,6 +29,8 @@ export interface BankNotification {
   responseCode: string;
   success: boolean;
   authorizationCode: string | null;
+  /** Sensitive opaque reference: callers must encrypt it and must not log it. */
+  mandate?: MandateReference;
 }
 const validOrder = (order: string) => /^\d{4}[A-Za-z0-9]{0,8}$/.test(order);
 const validAmount = (amount: number) => Number.isSafeInteger(amount) && amount > 0 && amount < 1e12;
@@ -53,6 +57,7 @@ export class RedsysGateway {
   constructor(
     config: RedsysConfig,
     private readonly transport: (url: string, init: RequestInit) => Promise<Response> = fetch,
+    private readonly now: () => Date = () => new Date(),
   ) {
     if (
       !/^\d{9}$/.test(config.merchantCode) ||
@@ -89,6 +94,9 @@ export class RedsysGateway {
   get environment() {
     return this.config.environment;
   }
+  get supportsRecurring() {
+    return this.config.recurringEnabled === true;
+  }
   private signed(parameters: Record<string, string>): HostedPaymentForm["fields"] {
     const encoded = Buffer.from(JSON.stringify(parameters), "utf8").toString("base64url");
     return {
@@ -106,6 +114,7 @@ export class RedsysGateway {
     amountCents: number;
     currency: string;
     method: "card" | "bizum";
+    createMandate?: boolean;
   }): HostedPaymentForm {
     if (!validOrder(input.order) || !validAmount(input.amountCents))
       throw new Error("Invalid payment order or amount");
@@ -113,6 +122,8 @@ export class RedsysGateway {
       throw new Error("Redsys currency must match the EUR merchant account");
     if (input.method !== "card" && input.method !== "bizum")
       throw new Error("Invalid payment method");
+    if (input.createMandate && (!this.supportsRecurring || input.method !== "card"))
+      throw new Error("Recurring card payments are not configured");
     const root = this.config.publicURL;
     return {
       action:
@@ -130,8 +141,81 @@ export class RedsysGateway {
         DS_MERCHANT_URLOK: `${root}/payments/${input.order}`,
         DS_MERCHANT_URLKO: `${root}/payments/${input.order}`,
         ...(input.method === "bizum" ? { DS_MERCHANT_PAYMETHODS: "z" } : {}),
+        ...(input.createMandate
+          ? {
+              DS_MERCHANT_IDENTIFIER: "REQUIRED",
+              DS_MERCHANT_COF_INI: "S",
+              DS_MERCHANT_COF_TYPE: "R",
+            }
+          : {}),
       }),
     };
+  }
+  async chargeRecurring(input: {
+    order: string;
+    amountCents: number;
+    currency: string;
+    mandate: MandateReference;
+  }): Promise<BankNotification> {
+    const reference = mandateReferenceSchema.safeParse(input.mandate);
+    const month = Temporal.Instant.from(this.now().toISOString())
+      .toZonedDateTimeISO("Europe/Madrid")
+      .toPlainDate()
+      .toString()
+      .slice(2, 7)
+      .replace("-", "");
+    if (
+      !this.supportsRecurring ||
+      !validOrder(input.order) ||
+      !validAmount(input.amountCents) ||
+      input.currency !== "EUR" ||
+      !reference.success ||
+      reference.data.expiry < month
+    )
+      throw new Error("Invalid recurring payment request");
+    const fields = this.signed({
+      DS_MERCHANT_ORDER: input.order,
+      DS_MERCHANT_AMOUNT: String(input.amountCents),
+      DS_MERCHANT_CURRENCY: "978",
+      DS_MERCHANT_TRANSACTIONTYPE: "0",
+      DS_MERCHANT_MERCHANTCODE: this.config.merchantCode,
+      DS_MERCHANT_TERMINAL: this.config.terminal,
+      DS_MERCHANT_IDENTIFIER: reference.data.reference,
+      ...(reference.data.transactionId
+        ? { DS_MERCHANT_COF_TXNID: reference.data.transactionId }
+        : {}),
+      DS_MERCHANT_COF_INI: "N",
+      DS_MERCHANT_COF_TYPE: "R",
+      DS_MERCHANT_EXCEP_SCA: "MIT",
+      DS_MERCHANT_DIRECTPAYMENT: "true",
+      DS_MERCHANT_MERCHANTURL: `${this.config.publicURL}/api/payments/redsys/notify`,
+    });
+    try {
+      const origin =
+        this.config.environment === "test"
+          ? "https://sis-t.redsys.es:25443"
+          : "https://sis.redsys.es";
+      const response = await this.transport(`${origin}/sis/rest/trataPeticionREST`, {
+        method: "POST",
+        redirect: "error",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(fields),
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!response.ok) throw new Error();
+      const body = await response.text();
+      if (body.length > 16000) throw new Error();
+      const result = this.verify(JSON.parse(body), "0");
+      if (
+        result.order !== input.order ||
+        result.amountCents !== input.amountCents ||
+        result.currency !== input.currency
+      )
+        throw new Error();
+      return result;
+    } catch {
+      throw new Error("Bank recurring payment requires reconciliation");
+    }
   }
   async refund(input: {
     order: string;
@@ -210,6 +294,12 @@ export class RedsysGateway {
       throw new Error("Invalid bank notification");
     const params: Record<string, string> = {};
     const seen = new Set<string>();
+    const optional = new Set([
+      "ds_merchant_identifier",
+      "ds_merchant_cof_txnid",
+      "ds_expirydate",
+      "ds_card_last4",
+    ]);
     const required = new Set([
       "ds_order",
       "ds_amount",
@@ -224,6 +314,7 @@ export class RedsysGateway {
       const name = key.toLowerCase();
       if (seen.has(name)) throw new Error("Invalid bank notification");
       seen.add(name);
+      if (optional.has(name) && typeof value === "string") params[name] = value;
       if (required.has(name)) {
         if (typeof value !== "string") throw new Error("Invalid bank notification");
         params[name] = value;
@@ -246,6 +337,15 @@ export class RedsysGateway {
     )
       throw new Error("Bank notification does not match merchant or operation");
     const responseCode = params.ds_response ?? "";
+    const mandate =
+      expectedType === "0" && Number(responseCode) < 100 && this.supportsRecurring
+        ? mandateReferenceSchema.safeParse({
+            reference: params.ds_merchant_identifier,
+            transactionId: params.ds_merchant_cof_txnid ?? null,
+            expiry: params.ds_expirydate,
+            last4: params.ds_card_last4 ?? null,
+          })
+        : null;
     return {
       order,
       amountCents,
@@ -254,6 +354,7 @@ export class RedsysGateway {
       responseCode,
       success: expectedType === "0" ? Number(responseCode) < 100 : responseCode === "0900",
       authorizationCode: params.ds_authorisationcode?.slice(0, 16) ?? null,
+      ...(mandate?.success ? { mandate: mandate.data } : {}),
     };
   }
 }

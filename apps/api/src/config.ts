@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
+import { paymentEncryptionKey } from "./payments/mandate-vault";
 import { type RedsysConfig, RedsysGateway } from "./payments/redsys";
 
 const positiveInt = z.coerce.number().int().positive();
@@ -80,6 +81,8 @@ const envSchema = z.object({
   REDSYS_SECRET_KEY: z.string().optional(),
   REDSYS_ENVIRONMENT: z.enum(["test", "live"]).default("test"),
   REDSYS_BIZUM_ENABLED: z.stringbool().default(false),
+  REDSYS_RECURRING_ENABLED: z.stringbool().default(false),
+  PAYMENT_TOKEN_ENCRYPTION_KEY: z.string().optional(),
 
   /** Runs the notification worker inside the API process (see also `bun run worker`). */
   NOTIFY_WORKER_ENABLED: z.stringbool().default(false),
@@ -150,7 +153,13 @@ export interface MaintenanceConfig {
 }
 
 export interface AppConfig {
-  payments: { provider: "none" | "redsys"; redsys: RedsysConfig | null; bizumEnabled: boolean };
+  payments: {
+    provider: "none" | "redsys";
+    redsys: RedsysConfig | null;
+    bizumEnabled: boolean;
+    recurringEnabled: boolean;
+    tokenEncryptionKey: string | null;
+  };
   databaseUrl: string;
   valkeyUrl: string;
   valkeyKeyPrefix: string;
@@ -193,6 +202,7 @@ const FILE_BACKED = [
   "TWILIO_AUTH_TOKEN",
   "METRICS_TOKEN",
   "REDSYS_SECRET_KEY",
+  "PAYMENT_TOKEN_ENCRYPTION_KEY",
 ] as const;
 
 /** A plain variable wins; otherwise the file's content (minus the trailing newline) is used. */
@@ -244,6 +254,14 @@ export function loadConfig(input: Record<string, string | undefined> = process.e
       "Invalid environment configuration:\n  - TWILIO_*: ACCOUNT_SID, AUTH_TOKEN and FROM are required when NOTIFY_SMS_PROVIDER=twilio",
     );
   }
+  let tokenEncryptionKey: string | null = null;
+  if (e.REDSYS_RECURRING_ENABLED) {
+    if (e.PAYMENT_PROVIDER !== "redsys") throw new Error("Recurring payments requires Redsys");
+    if (!e.PAYMENT_TOKEN_ENCRYPTION_KEY)
+      throw new Error("PAYMENT_TOKEN_ENCRYPTION_KEY is required for recurring payments");
+    paymentEncryptionKey(e.PAYMENT_TOKEN_ENCRYPTION_KEY);
+    tokenEncryptionKey = e.PAYMENT_TOKEN_ENCRYPTION_KEY;
+  }
   let redsys: RedsysConfig | null = null;
   if (e.PAYMENT_PROVIDER === "redsys") {
     if (!e.REDSYS_MERCHANT_CODE || !e.REDSYS_TERMINAL || !e.REDSYS_SECRET_KEY)
@@ -256,11 +274,18 @@ export function loadConfig(input: Record<string, string | undefined> = process.e
       secret: e.REDSYS_SECRET_KEY,
       environment: e.REDSYS_ENVIRONMENT,
       publicURL: e.NOTIFY_PUBLIC_URL || e.BETTER_AUTH_URL,
+      recurringEnabled: e.REDSYS_RECURRING_ENABLED,
     };
     new RedsysGateway(redsys); // Validate before accepting traffic; never performs a bank request.
   }
   return {
-    payments: { provider: e.PAYMENT_PROVIDER, redsys, bizumEnabled: e.REDSYS_BIZUM_ENABLED },
+    payments: {
+      provider: e.PAYMENT_PROVIDER,
+      redsys,
+      bizumEnabled: e.REDSYS_BIZUM_ENABLED,
+      recurringEnabled: e.REDSYS_RECURRING_ENABLED,
+      tokenEncryptionKey,
+    },
     databaseUrl: e.DATABASE_URL,
     valkeyUrl: e.VALKEY_URL,
     valkeyKeyPrefix: e.VALKEY_KEY_PREFIX,
