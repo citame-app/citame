@@ -9,6 +9,7 @@ import { Skeleton } from "~/components/ui/states";
 import { useToast } from "~/components/ui/toast";
 import { buildDateStrip } from "~/features/booking/logic";
 import { BookingProtectionNotice } from "~/features/booking/protection";
+import { SeriesVisits } from "~/features/booking/series-visits";
 import { SlotPicker } from "~/features/booking/slot-picker";
 import { useI18n } from "~/i18n/react";
 import { clientDetailQuery } from "~/lib/admin-queries";
@@ -18,7 +19,7 @@ import { salonQuery } from "~/lib/queries";
 import { AppointmentCheckout } from "../commerce/appointment-checkout";
 import { describeProblem, type Problem } from "../problems";
 import { AppointmentActions } from "./appointment-actions";
-import { mergeAppointment } from "./cache";
+import { invalidateCalendarData, mergeAppointment } from "./cache";
 import { availableActions } from "./logic";
 import { StatusBadge } from "./status-badge";
 
@@ -116,7 +117,7 @@ function DrawerBody({
       { queryKey: ["admin", "calendar"] },
       (data) => (data ? mergeAppointment(data, saved) : data),
     );
-    void queryClient.invalidateQueries({ queryKey: ["admin"] });
+    void invalidateCalendarData(queryClient);
   };
 
   const saveNotes = useMutation({
@@ -170,6 +171,9 @@ function DrawerBody({
 
   return (
     <div className="space-y-6">
+      {appointment.series && (
+        <SeriesVisits series={appointment.series} admin onNavigate={onClose} />
+      )}
       {appointment.protection && (
         <BookingProtectionNotice protection={appointment.protection} mode="admin" role={role} />
       )}

@@ -1,5 +1,7 @@
 import {
   type Appointment,
+  type AppointmentSeriesInput,
+  type AppointmentSeriesPreview,
   permissionsFor,
   type StaffAccessPreset,
   type UserRole,
@@ -14,9 +16,9 @@ import { useToast } from "~/components/ui/toast";
 import { useI18n } from "~/i18n/react";
 import { adminStaffQuery, clientsQuery } from "~/lib/admin-queries";
 import { api } from "~/lib/api/instance";
-import { formatDuration, formatMoney } from "~/lib/format";
+import { formatDateLong, formatDuration, formatMoney, formatTime, localDateOf } from "~/lib/format";
 import { salonQuery, servicesQuery } from "~/lib/queries";
-import { zonedInstant } from "~/lib/zoned";
+import { minutesIntoLocalDay, zonedInstant } from "~/lib/zoned";
 import { describeProblem } from "../problems";
 import { useDebounced } from "../use-debounced";
 import {
@@ -79,6 +81,42 @@ export function NewAppointmentSheet({
   const [pickedName, setPickedName] = useState("");
   const [errors, setErrors] = useState<WalkInErrors>({});
   const [failure, setFailure] = useState<ReturnType<typeof describeProblem> | null>(null);
+  const [cadence, setCadence] = useState<"none" | "weekly" | "monthly">("none");
+  const [interval, setInterval] = useState("1");
+  const [count, setCount] = useState("3");
+  const [seriesError, setSeriesError] = useState(false);
+  const [review, setReview] = useState<{
+    signature: string;
+    input: AppointmentSeriesInput;
+    data: AppointmentSeriesPreview;
+    key: string;
+  } | null>(null);
+  function resolveStart(): string {
+    if (!date || !time) return "";
+    try {
+      const value = zonedInstant(date, time, timeZone);
+      const [hour = "", minute = ""] = time.split(":");
+      if (
+        localDateOf(value, timeZone) !== date ||
+        minutesIntoLocalDay(value, timeZone) !== Number(hour) * 60 + Number(minute)
+      )
+        return "";
+      return value;
+    } catch {
+      return "";
+    }
+  }
+  const signature = JSON.stringify({
+    values,
+    date,
+    time,
+    waiver,
+    cadence,
+    interval,
+    count,
+    timeZone,
+  });
+  const reviewed = review?.signature === signature ? review : null;
 
   // A new slot click reuses the sheet: refill from it.
   // biome-ignore lint/correctness/useExhaustiveDependencies: only the slot identity resets the form
@@ -94,6 +132,11 @@ export function NewAppointmentSheet({
     setErrors({});
     setFailure(null);
     setWaiver("");
+    setCadence("none");
+    setInterval("1");
+    setCount("3");
+    setReview(null);
+    setSeriesError(false);
   }, [open, initial.date, initial.minutesOfDay, initial.staffId]);
 
   const debounced = useDebounced(search.trim());
@@ -109,32 +152,85 @@ export function NewAppointmentSheet({
   const totalMinutes = chosen.reduce((sum, s) => sum + s.durationMinutes, 0);
   const totalCents = chosen.reduce((sum, s) => sum + s.priceCents, 0);
 
+  const preview = useMutation({
+    mutationFn: async (request: { signature: string; input: AppointmentSeriesInput }) => ({
+      ...request,
+      data: await api().appointmentSeries.preview(request.input),
+      key: review?.signature === request.signature ? review.key : crypto.randomUUID(),
+    }),
+    onSuccess: setReview,
+    onError: (error) => setFailure(describeProblem(error)),
+  });
   const create = useMutation({
-    mutationFn: () =>
-      api().appointments.create({
-        ...buildWalkInRequest({ ...values, startsAt: zonedInstant(date, time, timeZone) }),
+    mutationFn: async () => {
+      if (cadence !== "none") {
+        if (!reviewed) throw new Error("Review the recurring visits first");
+        const series = await api().appointmentSeries.create({
+          ...reviewed.input,
+          reviewHash: reviewed.data.reviewHash,
+          idempotencyKey: reviewed.key,
+        });
+        const first = series.appointments[0];
+        if (!first) throw new Error("The series has no appointments");
+        return first;
+      }
+      return api().appointments.create({
+        ...buildWalkInRequest({ ...values, startsAt: resolveStart() }),
         ...(waiver.trim() ? { protectionWaiverReason: waiver.trim() } : {}),
-      }),
+      });
+    },
     onSuccess: (appointment) => {
-      toast.success(t("calendar.toast.created"));
+      toast.success(
+        cadence === "none"
+          ? t("calendar.toast.created")
+          : t("series.created", { count: Number(count) }),
+      );
       void queryClient.invalidateQueries({ queryKey: ["admin"] });
+      void queryClient.invalidateQueries({ queryKey: ["appointments"] });
+      void queryClient.invalidateQueries({ queryKey: ["availability"] });
       onCreated?.(appointment);
       onOpenChange(false);
     },
     onError: (error) => {
       const problem = describeProblem(error);
       setFailure(problem);
+      if (
+        cadence !== "none" &&
+        (problem.recovery === "reload" || problem.recovery === "pickAnotherTime")
+      )
+        setReview(null);
       if (problem.recovery === "pickAnotherTime") timeRef.current?.focus();
       void queryClient.invalidateQueries({ queryKey: ["admin", "calendar"] });
     },
   });
 
   function submit() {
-    const startsAt = date && time ? zonedInstant(date, time, timeZone) : "";
+    const startsAt = resolveStart();
     const found = validateWalkIn({ ...values, startsAt });
     setErrors(found);
     setFailure(null);
-    if (Object.keys(found).length === 0) create.mutate();
+    const validSeries =
+      Number.isInteger(Number(interval)) &&
+      Number(interval) >= 1 &&
+      Number(interval) <= 12 &&
+      Number.isInteger(Number(count)) &&
+      Number(count) >= 2 &&
+      Number(count) <= 12;
+    setSeriesError(cadence !== "none" && !validSeries);
+    if (Object.keys(found).length !== 0 || (cadence !== "none" && !validSeries)) return;
+    if (cadence !== "none" && !reviewed) {
+      const { id: _id, ...booking } = buildWalkInRequest({ ...values, startsAt });
+      preview.mutate({
+        signature,
+        input: {
+          ...booking,
+          cadence,
+          interval: Number(interval),
+          count: Number(count),
+          ...(waiver.trim() ? { protectionWaiverReason: waiver.trim() } : {}),
+        },
+      });
+    } else create.mutate();
   }
 
   // After a failed submit, keep the messages in step with what the form holds now.
@@ -142,7 +238,7 @@ export function NewAppointmentSheet({
   useEffect(() => {
     setErrors((current) => {
       if (Object.keys(current).length === 0) return current;
-      const startsAt = date && time ? zonedInstant(date, time, timeZone) : "";
+      const startsAt = resolveStart();
       return validateWalkIn({ ...values, startsAt });
     });
   }, [values, date, time]);
@@ -163,8 +259,16 @@ export function NewAppointmentSheet({
           <Button variant="secondary" onClick={() => onOpenChange(false)}>
             {t("admin.cancel")}
           </Button>
-          <Button loading={create.isPending} onClick={submit}>
-            {t("walkin.submit")}
+          <Button
+            loading={create.isPending || preview.isPending}
+            disabled={Boolean(reviewed?.data.occurrences.some((o) => !o.available))}
+            onClick={submit}
+          >
+            {cadence === "none"
+              ? t("walkin.submit")
+              : reviewed
+                ? t("series.confirm", { count: Number(count) })
+                : t("series.review")}
           </Button>
         </div>
       }
@@ -290,7 +394,7 @@ export function NewAppointmentSheet({
         <SelectField
           label={t("walkin.staff")}
           value={values.staffId}
-          disabled={role === "staff"}
+          disabled={role === "staff" && !permissionsFor(role, accessPreset).allCalendars}
           options={[
             { value: "", label: "-", disabled: true },
             ...activeStaff.map((s) => ({ value: s.id, label: s.displayName })),
@@ -373,6 +477,85 @@ export function NewAppointmentSheet({
           value={values.notes}
           onChange={(e) => set("notes", e.target.value)}
         />
+
+        <fieldset className="min-w-0 space-y-4 rounded-lg border border-line p-4">
+          <legend className="px-1 text-sm font-medium">{t("series.repeat")}</legend>
+          <SelectField
+            label={t("series.repeat")}
+            value={cadence}
+            onChange={(v) => setCadence(v as typeof cadence)}
+            options={[
+              { value: "none", label: t("series.none") },
+              { value: "weekly", label: t("series.weekly") },
+              { value: "monthly", label: t("series.monthly") },
+            ]}
+          />
+          {cadence !== "none" && (
+            <>
+              <p className="text-sm text-muted">{t("series.help")}</p>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <TextField
+                  label={t("series.interval")}
+                  hint={t(cadence === "weekly" ? "series.intervalWeeks" : "series.intervalMonths")}
+                  type="number"
+                  min={1}
+                  max={12}
+                  step={1}
+                  value={interval}
+                  onChange={(e) => setInterval(e.target.value)}
+                />
+                <TextField
+                  label={t("series.count")}
+                  type="number"
+                  min={2}
+                  max={12}
+                  step={1}
+                  value={count}
+                  onChange={(e) => setCount(e.target.value)}
+                />
+              </div>
+              {seriesError && (
+                <p role="alert" className="text-sm text-danger-fg">
+                  {t("series.validation")}
+                </p>
+              )}
+              {reviewed && (
+                <section aria-label={t("series.dates")} className="space-y-3" aria-live="polite">
+                  <p className="text-sm font-medium">
+                    {t("series.price", {
+                      price: formatMoney(
+                        reviewed.data.perVisitCents,
+                        reviewed.data.currency,
+                        locale,
+                      ),
+                    })}
+                  </p>
+                  <ol className="space-y-2">
+                    {reviewed.data.occurrences.map((o) => (
+                      <li key={o.startsAt} className="rounded-md bg-sunken p-3 text-sm">
+                        <p>
+                          {formatDateLong(localDateOf(o.startsAt, reviewed.data.timezone), locale)}{" "}
+                          · {formatTime(o.startsAt, reviewed.data.timezone, locale)}
+                        </p>
+                        <p className={o.available ? "text-success-fg" : "text-danger-fg"}>
+                          {t(o.available ? "series.available" : "series.unavailable")}
+                        </p>
+                      </li>
+                    ))}
+                  </ol>
+                  <Button
+                    variant="secondary"
+                    loading={preview.isPending}
+                    disabled={create.isPending}
+                    onClick={() => preview.mutate({ signature, input: reviewed.input })}
+                  >
+                    {t("series.refresh")}
+                  </Button>
+                </section>
+              )}
+            </>
+          )}
+        </fieldset>
 
         <label className="flex items-start gap-3">
           <input

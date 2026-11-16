@@ -4,6 +4,7 @@ import { Button } from "~/components/ui/button";
 import { ClockIcon, UserIcon } from "~/components/ui/icons";
 import { AppointmentCheckout } from "~/features/admin/commerce/appointment-checkout";
 import { BookingProtectionNotice } from "~/features/booking/protection";
+import { SeriesVisits } from "~/features/booking/series-visits";
 import { useI18n } from "~/i18n/react";
 import { cn } from "~/lib/cn";
 import { formatDateLong, formatMoney, formatTime, localDateOf } from "~/lib/format";
@@ -95,6 +96,11 @@ export function AppointmentCard({
         )}
       </div>
 
+      {appointment.series && (
+        <div className="mt-4">
+          <SeriesVisits series={appointment.series} />
+        </div>
+      )}
       {actionable && (onCancel || onReschedule) && (
         <div className="mt-4 flex flex-wrap gap-3">
           {onReschedule && (

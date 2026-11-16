@@ -128,3 +128,18 @@ describe("AppointmentActions", () => {
     expect(screen.queryByRole("button", { name: "Mark completed" })).toBeNull();
   });
 });
+
+test("a status change invalidates the linked series and the slots that may have been released", async () => {
+  const { queryClient } = setup();
+  queryClient.setQueryData(["appointments", "series", "series-id"], {
+    appointments: [appointment],
+  });
+  queryClient.setQueryData(["availability", "slots"], { slots: [] });
+  fireEvent.click(screen.getByRole("button", { name: "Mark completed" }));
+  await waitFor(() =>
+    expect(queryClient.getQueryState(["appointments", "series", "series-id"])?.isInvalidated).toBe(
+      true,
+    ),
+  );
+  expect(queryClient.getQueryState(["availability", "slots"])?.isInvalidated).toBe(true);
+});

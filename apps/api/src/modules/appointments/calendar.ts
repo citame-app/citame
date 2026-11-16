@@ -13,6 +13,7 @@ import { DomainError } from "../../errors";
 import { workingWindows } from "../availability/windows";
 import { protectionView } from "../booking-protection/value";
 import { getSalonSettings } from "../settings/service";
+import { loadSeriesReferences } from "./series-references";
 
 /**
  * Everything a day/week calendar draws, in one round of queries: the columns (staff), the
@@ -100,6 +101,10 @@ export async function getCalendar(
         )
     : [];
 
+  const series = await loadSeriesReferences(
+    db,
+    rows.map((r) => r.row.id),
+  );
   return {
     timezone: settings.timezone,
     from: query.from,
@@ -111,6 +116,7 @@ export async function getCalendar(
           .filter((s) => s.appointmentId === row.id)
           .sort((a, b) => a.position - b.position);
         return {
+          ...(series.has(row.id) ? { series: series.get(row.id) } : {}),
           id: row.id,
           staffId: row.staffId,
           clientId: row.clientId,

@@ -1,4 +1,10 @@
 import type { Appointment, CalendarAppointment, CalendarResponse } from "@sob/contracts";
+import type { QueryClient } from "@tanstack/react-query";
+import { invalidateCommerce } from "../commerce/invalidate";
+
+export function invalidateCalendarData(client: QueryClient) {
+  return invalidateCommerce(client);
+}
 
 /** Immutable edits of a cached calendar response, used by optimistic updates and rollbacks. */
 export function patchAppointment(

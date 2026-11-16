@@ -8,7 +8,7 @@ import { useI18n } from "~/i18n/react";
 import { api } from "~/lib/api/instance";
 import { formatTime } from "~/lib/format";
 import { describeProblem } from "../problems";
-import { mergeAppointment, patchAppointment } from "./cache";
+import { invalidateCalendarData, mergeAppointment, patchAppointment } from "./cache";
 import { availableActions } from "./logic";
 
 type Transition = "completed" | "no_show" | "cancelled";
@@ -59,7 +59,7 @@ export function useStatusChange() {
         ),
       );
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ["admin"] }),
+    onSettled: () => invalidateCalendarData(queryClient),
   });
 }
 

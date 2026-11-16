@@ -44,6 +44,7 @@ import { getServicesByIds } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { assertStaffActive } from "../staff/guards";
 import { assertStaffExists } from "../staff/service";
+import { loadSeriesReferences } from "./series-references";
 
 const UNIQUE_VIOLATION = "23505";
 
@@ -59,8 +60,13 @@ export interface Actor {
 type AppointmentRow = typeof appointment.$inferSelect;
 type SnapshotRow = typeof appointmentService.$inferSelect;
 
-export function toAppointment(row: AppointmentRow, snapshots: SnapshotRow[]): Appointment {
+export function toAppointment(
+  row: AppointmentRow,
+  snapshots: SnapshotRow[],
+  series?: Appointment["series"],
+): Appointment {
   return {
+    ...(series ? { series } : {}),
     id: row.id,
     staffId: row.staffId,
     clientId: row.clientId,
@@ -96,7 +102,11 @@ function mapWriteError(error: unknown): never {
   throw error;
 }
 
-async function assertStaffPerforms(db: Database, staffId: string, serviceIds: string[]) {
+async function assertStaffPerforms(
+  db: Pick<Database, "select">,
+  staffId: string,
+  serviceIds: string[],
+) {
   const links = await db
     .select({ serviceId: serviceStaff.serviceId })
     .from(serviceStaff)
@@ -115,7 +125,7 @@ async function assertStaffPerforms(db: Database, staffId: string, serviceIds: st
   }
 }
 
-export async function loadSnapshots(db: Database, appointmentIds: string[]) {
+export async function loadSnapshots(db: Pick<Database, "select">, appointmentIds: string[]) {
   if (appointmentIds.length === 0) return new Map<string, SnapshotRow[]>();
   const rows = await db
     .select()
@@ -135,7 +145,7 @@ export async function loadSnapshots(db: Database, appointmentIds: string[]) {
  * one transaction so a rejected booking leaves nothing behind.
  */
 export async function createAppointment(
-  db: Database,
+  db: Database | Tx,
   request: CreateAppointmentRequest,
   actor?: Actor,
   options: { now?: Date } = {},
@@ -232,7 +242,7 @@ const VIOLATION_MESSAGES: Record<BookingViolation, (minNotice: number, maxDays: 
  * constraint remains the source of truth for overlaps; these are the rules it cannot express.
  * Returns whether `override` actually bypassed the min-notice rule.
  */
-async function assertBookable(
+export async function assertBookable(
   tx: Tx,
   input: {
     staffId: string;
@@ -374,10 +384,14 @@ export async function listAppointments(
     db,
     rows.map((r) => r.id),
   );
+  const series = await loadSeriesReferences(
+    db,
+    rows.map((r) => r.id),
+  );
   return {
     appointments: await Promise.all(
       rows.map(async (row) => ({
-        ...toAppointment(row, snapshots.get(row.id) ?? []),
+        ...toAppointment(row, snapshots.get(row.id) ?? [], series.get(row.id)),
         protection: await protectionView(db, row.id),
       })),
     ),
@@ -401,9 +415,13 @@ export async function listClientAppointments(
     db,
     rows.map((r) => r.id),
   );
+  const series = await loadSeriesReferences(
+    db,
+    rows.map((r) => r.id),
+  );
   return Promise.all(
     rows.map(async (row) => ({
-      ...toAppointment(row, snapshots.get(row.id) ?? []),
+      ...toAppointment(row, snapshots.get(row.id) ?? [], series.get(row.id)),
       protection: await protectionView(db, row.id),
     })),
   );
@@ -562,7 +580,8 @@ export async function updateAppointment(
     });
     if (!row) throw versionConflict();
     const protection = await protectionView(db, id);
-    return { ...toAppointment(row, snapshots), ...(protection ? { protection } : {}) };
+    const series = (await loadSeriesReferences(db, [id])).get(id);
+    return { ...toAppointment(row, snapshots, series), ...(protection ? { protection } : {}) };
   } catch (error) {
     if (error instanceof DomainError) throw error;
     return mapWriteError(error);

@@ -34,6 +34,13 @@ export const appointmentSchema = z.object({
   createdAt: instantSchema,
   updatedAt: instantSchema,
   protection: bookingProtectionSchema.nullable().optional(),
+  series: z
+    .object({
+      id: idSchema,
+      position: z.number().int().nonnegative(),
+      count: z.number().int().positive(),
+    })
+    .optional(),
 });
 
 export type Appointment = z.infer<typeof appointmentSchema>;

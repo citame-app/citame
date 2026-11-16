@@ -11,6 +11,7 @@ import { inventoryEsAR } from "./inventory";
 import { loyaltyEsAR } from "./loyalty";
 import { notificationsEsAR } from "./notifications";
 import { passesEsAR } from "./passes";
+import { schedulingEsAR } from "./scheduling";
 
 /** Neutral, professional Spanish for Argentina. */
 export const esAR: Record<MessageKey, string> = {
@@ -18,6 +19,7 @@ export const esAR: Record<MessageKey, string> = {
   ...clientControlsEsAR,
   ...passesEsAR,
   ...loyaltyEsAR,
+  ...schedulingEsAR,
   "common.greeting": "Hola, {name}",
   "booking.summary.services_one": "{count} servicio",
   "booking.summary.services_other": "{count} servicios",

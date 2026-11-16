@@ -1,5 +1,7 @@
 import {
   appointmentListQuerySchema,
+  appointmentSeriesCreateSchema,
+  appointmentSeriesInputSchema,
   calendarQuerySchema,
   createAppointmentBaseSchema,
   createAppointmentRequestSchema,
@@ -18,6 +20,7 @@ import type { AppEnv } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
 import { bookingOutcome } from "../../observability/booking";
 import { getCalendar } from "./calendar";
+import { createAppointmentSeries, getAppointmentSeries, previewAppointmentSeries } from "./series";
 import {
   createAppointment,
   getAppointmentOwnership,
@@ -29,6 +32,40 @@ import {
 export function appointmentsRoutes({ db, now = () => new Date(), metrics }: AppDeps) {
   return (
     new Hono<AppEnv>()
+      .post("/series/preview", async (c) => {
+        const input = parseOrThrow(appointmentSeriesInputSchema, await readJson(c));
+        const scoped = authorizeAppointmentCreate(c.get("principal"), input);
+        return c.json(
+          await previewAppointmentSeries(
+            db,
+            { ...input, ...scoped, client: scoped.client, clientId: scoped.clientId },
+            now(),
+          ),
+        );
+      })
+      .post("/series", async (c) => {
+        const input = parseOrThrow(appointmentSeriesCreateSchema, await readJson(c));
+        const principal = c.get("principal");
+        const scoped = authorizeAppointmentCreate(principal, input);
+        return c.json(
+          await createAppointmentSeries(
+            db,
+            { ...input, ...scoped, client: scoped.client, clientId: scoped.clientId },
+            principal,
+            now(),
+          ),
+          201,
+        );
+      })
+      .get("/series/:id", async (c) =>
+        c.json(
+          await getAppointmentSeries(
+            db,
+            parseOrThrow(idSchema, c.req.param("id")),
+            c.get("principal"),
+          ),
+        ),
+      )
       .get("/", async (c) => {
         const query = parseOrThrow(appointmentListQuerySchema, c.req.query());
         const scoped = authorizeAppointmentList(c.get("principal"), query);

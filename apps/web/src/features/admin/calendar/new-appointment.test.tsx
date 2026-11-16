@@ -185,3 +185,108 @@ describe("NewAppointmentSheet", () => {
     expect(await screen.findByLabelText("Team member")).toBeDisabled();
   });
 });
+
+test("a recurring appointment reviews dates and never submits a stale preview after an edit", async () => {
+  const current = globalThis.fetch;
+  const previews: unknown[] = [];
+  const series: unknown[] = [];
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    const path = new URL(String(input), "http://localhost").pathname;
+    if (path === "/api/appointments/series/preview") {
+      previews.push(JSON.parse(String(init?.body)));
+      return json({
+        reviewHash: "a".repeat(64),
+        timezone: "America/Argentina/Buenos_Aires",
+        perVisitCents: 1500000,
+        currency: "ARS",
+        policy: {
+          enabled: false,
+          depositKind: "percent",
+          depositValue: 2500,
+          holdMinutes: 15,
+          cancellationWindowMinutes: 1440,
+          lateCancellationBasisPoints: 0,
+          noShowBasisPoints: 0,
+          trustedExempt: true,
+          version: 1,
+        },
+        occurrences: [
+          {
+            startsAt: "2026-03-09T12:00:00.000Z",
+            endsAt: "2026-03-09T13:00:00.000Z",
+            available: true,
+          },
+          {
+            startsAt: "2026-03-16T12:00:00.000Z",
+            endsAt: "2026-03-16T13:00:00.000Z",
+            available: true,
+          },
+        ],
+      });
+    }
+    if (path === "/api/appointments/series") {
+      series.push(JSON.parse(String(init?.body)));
+      return json(
+        {
+          id: crypto.randomUUID(),
+          timezone: "America/Argentina/Buenos_Aires",
+          cadence: "weekly",
+          interval: 1,
+          appointments: [postReply.body, postReply.body],
+        },
+        201,
+      );
+    }
+    return current(input, init);
+  }) as unknown as typeof fetch;
+  open();
+  fireEvent.click(await screen.findByRole("radio", { name: "New client" }));
+  fireEvent.change(screen.getByLabelText("Full name"), { target: { value: "Recurring customer" } });
+  fireEvent.click(await screen.findByRole("checkbox", { name: /Haircut/ }));
+  fireEvent.change(screen.getByLabelText("Repeat appointment"), { target: { value: "weekly" } });
+  fireEvent.change(screen.getByLabelText("Number of visits"), { target: { value: "2" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review recurring visits" }));
+  expect(await screen.findByRole("button", { name: "Create 2 appointments" })).toBeInTheDocument();
+  expect(previews).toHaveLength(1);
+  expect(series).toHaveLength(0);
+  fireEvent.change(screen.getByLabelText("Start time"), { target: { value: "10:00" } });
+  expect(screen.queryByRole("button", { name: "Create 2 appointments" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Review recurring visits" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Create 2 appointments" }));
+  await waitFor(() => expect(series).toHaveLength(1));
+  expect(series[0]).toMatchObject({
+    cadence: "weekly",
+    interval: 1,
+    count: 2,
+    reviewHash: "a".repeat(64),
+    startsAt: "2026-03-09T13:00:00.000Z",
+    client: { name: "Recurring customer" },
+  });
+  expect(posts).toHaveLength(0);
+});
+
+test("a nonexistent salon-local time is rejected instead of silently moving the requested visit", async () => {
+  renderApp(
+    <NewAppointmentSheet
+      open
+      onOpenChange={() => {}}
+      initial={{ staffId: ANA, date: "2026-03-29", minutesOfDay: 150 }}
+      role="owner"
+      ownStaffId={null}
+    />,
+    { timeZone: "Europe/Madrid" },
+  );
+  fireEvent.click(await screen.findByRole("radio", { name: "New client" }));
+  fireEvent.change(screen.getByLabelText("Full name"), { target: { value: "DST customer" } });
+  fireEvent.click(await screen.findByRole("checkbox", { name: /Haircut/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Create appointment" }));
+  await waitFor(() =>
+    expect(screen.getByLabelText("Date")).toHaveAttribute("aria-invalid", "true"),
+  );
+  expect(posts).toHaveLength(0);
+});
+
+test("a manager can choose any calendar without being pinned to their own", async () => {
+  open({ role: "staff", ownStaffId: ANA, accessPreset: "manager" });
+  expect(await screen.findByLabelText("Team member")).not.toBeDisabled();
+});

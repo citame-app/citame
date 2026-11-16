@@ -43,6 +43,7 @@ function CalendarPage() {
         }}
         onSearchChange={(next) => void navigate({ search: next, replace: true })}
         role={permissions.allCalendars ? "owner" : session.user.role}
+        bookingRole={session.user.role}
         readOnly={!permissions.editCalendar}
         ownStaffId={session.staffId}
         accessPreset={session.accessPreset}

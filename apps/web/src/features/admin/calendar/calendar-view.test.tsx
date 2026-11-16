@@ -247,3 +247,21 @@ test("read-only calendar access hides create and mutation controls including key
   fireEvent.keyDown(document, { key: "n" });
   expect(screen.queryByRole("dialog")).toBeNull();
 });
+
+test("a receptionist's effective all-calendar view does not grant deposit-waiver controls", async () => {
+  renderApp(
+    <CalendarView
+      search={{ date: "2026-03-09", view: "day" }}
+      onSearchChange={() => {}}
+      role="owner"
+      bookingRole="staff"
+      accessPreset="receptionist"
+      ownStaffId={ANA}
+      now={NOW}
+    />,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "New appointment" }));
+  await screen.findByRole("dialog", { name: "New appointment" });
+  expect(screen.queryByLabelText("Deposit waiver reason (manager only)")).toBeNull();
+  expect(screen.getByLabelText("Team member")).not.toBeDisabled();
+});

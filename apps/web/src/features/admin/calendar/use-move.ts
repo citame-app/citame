@@ -5,7 +5,7 @@ import { useToast } from "~/components/ui/toast";
 import { useI18n } from "~/i18n/react";
 import { api } from "~/lib/api/instance";
 import { describeProblem, type Problem } from "../problems";
-import { mergeAppointment, patchAppointment } from "./cache";
+import { invalidateCalendarData, mergeAppointment, patchAppointment } from "./cache";
 
 export interface Conflict {
   appointmentId: string;
@@ -66,7 +66,7 @@ export function useMoveAppointment() {
       );
       toast.success(t("calendar.toast.rescheduled"));
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ["admin"] }),
+    onSettled: () => invalidateCalendarData(queryClient),
   });
 
   return {

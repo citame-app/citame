@@ -49,6 +49,7 @@ export function CalendarView({
   search,
   onSearchChange,
   role,
+  bookingRole = role,
   ownStaffId,
   accessPreset,
   readOnly = false,
@@ -57,6 +58,7 @@ export function CalendarView({
   search: CalendarSearch;
   onSearchChange: (search: CalendarSearch) => void;
   role: UserRole;
+  bookingRole?: UserRole;
   ownStaffId: string | null;
   accessPreset?: import("@sob/contracts").StaffAccessPreset | null;
   readOnly?: boolean;
@@ -361,7 +363,7 @@ export function CalendarView({
           open
           onOpenChange={(open) => !open && setCreating(null)}
           initial={creating}
-          role={role}
+          role={bookingRole}
           ownStaffId={ownStaffId}
           accessPreset={accessPreset}
         />

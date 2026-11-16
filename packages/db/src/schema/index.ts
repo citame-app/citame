@@ -1,5 +1,6 @@
 export * from "./accounting";
 export * from "./appointment";
+export * from "./appointment-series";
 export * from "./audit";
 export * from "./auth";
 export * from "./booking-protection";

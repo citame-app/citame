@@ -25,7 +25,10 @@ export type ServiceRow = Service;
  * Loads the requested active services in request order (duplicates collapsed).
  * Throws `not_found` when any of them is missing, inactive or deleted.
  */
-export async function getServicesByIds(db: Database, ids: string[]): Promise<ServiceRow[]> {
+export async function getServicesByIds(
+  db: Pick<Database, "select">,
+  ids: string[],
+): Promise<ServiceRow[]> {
   const unique = [...new Set(ids)];
   const rows = await db
     .select({

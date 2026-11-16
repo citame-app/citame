@@ -21,7 +21,10 @@ export async function listStaff(db: Database): Promise<Staff[]> {
   }));
 }
 
-export async function assertStaffExists(db: Database, staffId: string): Promise<void> {
+export async function assertStaffExists(
+  db: Pick<Database, "select">,
+  staffId: string,
+): Promise<void> {
   const [row] = await db
     .select({ id: staffProfile.id })
     .from(staffProfile)
@@ -36,7 +39,10 @@ export async function assertStaffExists(db: Database, staffId: string): Promise<
 }
 
 /** Ids of active staff who perform every one of the given services. */
-export async function staffQualifiedFor(db: Database, serviceIds: string[]): Promise<string[]> {
+export async function staffQualifiedFor(
+  db: Pick<Database, "select">,
+  serviceIds: string[],
+): Promise<string[]> {
   const rows = await db
     .select({ staffId: serviceStaff.staffId, serviceId: serviceStaff.serviceId })
     .from(serviceStaff)
