@@ -22,7 +22,13 @@ export const staffQuery = queryOptions({
 
 export const availabilityQuery = (params: AvailabilityParams) =>
   queryOptions({
-    queryKey: ["availability", params.date, params.serviceIds.join(","), params.staffId ?? "any"],
+    queryKey: [
+      "availability",
+      params.date,
+      params.serviceIds.join(","),
+      params.staffId ?? "any",
+      params.appointmentId ?? "new",
+    ],
     queryFn: ({ signal }) => api().availability(params, signal),
     staleTime: 30_000,
   });

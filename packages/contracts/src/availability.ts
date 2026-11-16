@@ -5,7 +5,7 @@ export const availabilityQuerySchema = z.object({
   serviceIds: z
     .string()
     .transform((value) => value.split(",").filter((part) => part.length > 0))
-    .pipe(z.array(idSchema).min(1)),
+    .pipe(z.array(idSchema).min(1).max(24)),
   staffId: idSchema.optional(),
   date: localDateSchema,
 });

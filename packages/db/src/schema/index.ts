@@ -14,10 +14,10 @@ export * from "./notification";
 export * from "./oauth";
 export * from "./pass";
 export * from "./pass-ledger";
+export * from "./resources";
 export * from "./rewards";
 export * from "./salon-settings";
 export * from "./service";
 export * from "./staff";
 export * from "./sync";
-
 export * from "./waitlist";

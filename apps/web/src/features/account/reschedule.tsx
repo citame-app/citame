@@ -102,6 +102,7 @@ export function RescheduleView({
       )}
 
       <SlotPicker
+        appointmentId={appointment.id}
         serviceIds={serviceIds}
         staffId={appointment.staffId}
         dates={dates}

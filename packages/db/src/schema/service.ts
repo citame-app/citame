@@ -13,6 +13,7 @@ export const service = pgTable(
     bufferMinutes: integer().notNull().default(0),
     priceCents: integer().notNull(),
     currency: text().notNull().default("ARS"),
+    resourceVersion: integer().notNull().default(1),
     active: boolean().notNull().default(true),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

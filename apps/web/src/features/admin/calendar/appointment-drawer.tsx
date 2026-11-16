@@ -235,6 +235,20 @@ function DrawerBody({
             <span className="tabular-nums">{formatMoney(totalCents, currency, locale)}</span>
           </p>
         </dd>
+        {Boolean(appointment.resources?.length) && (
+          <>
+            <dt className="text-muted">{t("resources.title")}</dt>
+            <dd>
+              <ul className="space-y-1">
+                {appointment.resources?.map((r) => (
+                  <li key={r.name}>
+                    {r.name} × {r.quantity}
+                  </li>
+                ))}
+              </ul>
+            </dd>
+          </>
+        )}
       </dl>
 
       {!readOnly && (
@@ -317,6 +331,7 @@ function DrawerBody({
                 <p className="text-sm text-muted">{t("drawer.reschedule.hint")}</p>
               </div>
               <SlotPicker
+                appointmentId={appointment.id}
                 serviceIds={serviceIds}
                 staffId={appointment.staffId}
                 dates={dates}

@@ -2,6 +2,7 @@ import {
   appointmentListQuerySchema,
   appointmentSeriesCreateSchema,
   appointmentSeriesInputSchema,
+  availabilityQuerySchema,
   calendarQuerySchema,
   createAppointmentBaseSchema,
   createAppointmentRequestSchema,
@@ -17,14 +18,17 @@ import {
   authorizeCalendarQuery,
 } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
+import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
 import { bookingOutcome } from "../../observability/booking";
+import { findAvailability } from "../availability/service";
 import { getCalendar } from "./calendar";
 import { createAppointmentSeries, getAppointmentSeries, previewAppointmentSeries } from "./series";
 import {
   createAppointment,
   getAppointmentOwnership,
   listAppointments,
+  loadSnapshots,
   updateAppointment,
 } from "./service";
 
@@ -102,6 +106,38 @@ export function appointmentsRoutes({ db, now = () => new Date(), metrics }: AppD
           metrics?.booking.inc({ source: "rest", outcome: bookingOutcome(error) });
           throw error;
         }
+      })
+      .get("/:id/availability", async (c) => {
+        const id = parseOrThrow(idSchema, c.req.param("id"));
+        const query = parseOrThrow(availabilityQuerySchema, c.req.query());
+        const ownership = await getAppointmentOwnership(db, id);
+        authorizeAppointmentChange(
+          c.get("principal"),
+          ownership,
+          {
+            version: 1,
+            staffId: query.staffId,
+          },
+          now(),
+        );
+        const snapshots = (await loadSnapshots(db, [id])).get(id) ?? [];
+        snapshots.sort((a, b) => a.position - b.position);
+        if (
+          !snapshots.length ||
+          snapshots.length !== query.serviceIds.length ||
+          snapshots.some((s, i) => !s.serviceId || s.serviceId !== query.serviceIds[i])
+        )
+          throw new DomainError("validation_error", "Rescheduling must retain the booked services");
+        return c.json(
+          await findAvailability(db, query, now(), {
+            excludeAppointmentId: id,
+            services: snapshots.map((s) => ({
+              id: s.serviceId ?? s.id,
+              durationMinutes: s.durationMinutes,
+              bufferMinutes: s.bufferMinutes,
+            })),
+          }),
+        );
       })
       .patch("/:id", async (c) => {
         const id = parseOrThrow(idSchema, c.req.param("id"));

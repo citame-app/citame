@@ -1,6 +1,8 @@
 import type { AvailabilityQuery, AvailabilityResponse } from "@sob/contracts";
 import { appointment, type Database, timeOff, waitlistOffer, workingHours } from "@sob/db";
 import { and, eq, gt, inArray, isNull, lt, ne } from "drizzle-orm";
+import type { TimedService } from "../resources/reservations";
+import { filterResourceAvailability } from "../resources/reservations";
 import { getServicesByIds } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { assertStaffExists, staffQualifiedFor } from "../staff/service";
@@ -11,9 +13,10 @@ export async function findAvailability(
   db: Database,
   query: AvailabilityQuery,
   now: Date,
+  options: { excludeAppointmentId?: string; services?: TimedService[] } = {},
 ): Promise<AvailabilityResponse> {
   const settings = await getSalonSettings(db);
-  const services = await getServicesByIds(db, query.serviceIds);
+  const services = options.services ?? (await getServicesByIds(db, query.serviceIds));
   if (query.staffId) await assertStaffExists(db, query.staffId);
 
   let staffIds = await staffQualifiedFor(
@@ -64,6 +67,9 @@ export async function findAvailability(
         and(
           inArray(appointment.staffId, staffIds),
           ne(appointment.status, "cancelled"),
+          options.excludeAppointmentId
+            ? ne(appointment.id, options.excludeAppointmentId)
+            : undefined,
           isNull(appointment.deletedAt),
           lt(appointment.startsAt, windowEnd),
           gt(appointment.endsAt, windowStart),
@@ -71,7 +77,7 @@ export async function findAvailability(
       ),
   ]);
 
-  const slots = computeAvailability({
+  const computed = computeAvailability({
     date: query.date,
     timeZone: settings.timezone,
     granularityMinutes: settings.slotGranularityMinutes,
@@ -93,6 +99,13 @@ export async function findAvailability(
     })),
   });
 
+  const slots = await filterResourceAvailability(
+    db,
+    services,
+    computed,
+    now,
+    options.excludeAppointmentId,
+  );
   return {
     ...base,
     slots: slots.map((s) => ({

@@ -52,6 +52,7 @@ import { commerceEndpoints } from "./commerce-endpoints";
 import { giftCardEndpoints } from "./gift-card-endpoints";
 import { inventoryEndpoints } from "./inventory-endpoints";
 import { passEndpoints } from "./pass-endpoints";
+import { resourceEndpoints } from "./resource-endpoints";
 import { rewardEndpoints } from "./reward-endpoints";
 import { seriesEndpoints } from "./series-endpoints";
 import { waitlistEndpoints } from "./waitlist-endpoints";
@@ -81,6 +82,7 @@ export type OAuthClientInfo = z.infer<typeof oauthClientSchema>;
 const deletedAck = z.object({ id: z.string(), deleted: z.literal(true) });
 
 export interface AvailabilityParams {
+  appointmentId?: string;
   serviceIds: string[];
   staffId?: string;
   date: string;
@@ -98,16 +100,24 @@ export function createEndpoints(client: ApiClient) {
     giftCards: giftCardEndpoints(client),
     passes: passEndpoints(client),
     rewards: rewardEndpoints(client),
+    resources: resourceEndpoints(client),
     appointmentSeries: seriesEndpoints(client),
     waitlist: waitlistEndpoints(client),
     salon: () => client.get("/salon", salonResponseSchema),
     services: () => client.get("/services", listServicesResponseSchema),
     staff: () => client.get("/staff", listStaffResponseSchema),
-    availability: ({ serviceIds, staffId, date }: AvailabilityParams, signal?: AbortSignal) =>
-      client.get("/availability", availabilityResponseSchema, {
-        query: { serviceIds: serviceIds.join(","), staffId, date },
-        signal,
-      }),
+    availability: (
+      { serviceIds, staffId, date, appointmentId }: AvailabilityParams,
+      signal?: AbortSignal,
+    ) =>
+      client.get(
+        appointmentId ? `/appointments/${appointmentId}/availability` : "/availability",
+        availabilityResponseSchema,
+        {
+          query: { serviceIds: serviceIds.join(","), staffId, date },
+          signal,
+        },
+      ),
     me: () => client.get("/me", meResponseSchema),
     updateProfile: (request: UpdateProfileRequest) =>
       client.patch("/me", request, meResponseSchema),

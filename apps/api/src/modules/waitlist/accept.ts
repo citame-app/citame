@@ -13,7 +13,7 @@ import { recordAudit } from "../../audit";
 import { authorizeAppointmentCreate, authorizeAppointmentList } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
-import { lockCalendars, type Tx } from "../../tx";
+import { lockCalendars, lockScheduling, type Tx } from "../../tx";
 import { createAppointment, loadSnapshots, toAppointment } from "../appointments/service";
 import { getBookingPolicy } from "../booking-protection/policy";
 import { protectionView } from "../booking-protection/value";
@@ -53,6 +53,7 @@ export async function acceptWaitlist(
   const hash = selectionHash(input);
   return db.transaction(async (tx) => {
     const entry = await entryRow(tx, id, p, true);
+    await lockScheduling(tx);
     const [offer] = await tx
       .select()
       .from(waitlistOffer)

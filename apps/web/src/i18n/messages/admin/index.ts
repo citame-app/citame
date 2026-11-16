@@ -4,6 +4,7 @@ import { clientsEn, clientsEsAR } from "./clients";
 import { commonEn, commonEsAR } from "./common";
 import { drawerEn, drawerEsAR } from "./drawer";
 import { reportsEn, reportsEsAR } from "./reports";
+import { resourcesEn, resourcesEsAR } from "./resources";
 import { servicesEn, servicesEsAR } from "./services";
 import { settingsEn, settingsEsAR } from "./settings";
 import { staffEn, staffEsAR } from "./staff";
@@ -21,6 +22,7 @@ export const adminEn = {
   ...drawerEn,
   ...clientsEn,
   ...servicesEn,
+  ...resourcesEn,
   ...staffEn,
   ...reportsEn,
   ...settingsEn,
@@ -35,6 +37,7 @@ export const adminEsAR: Record<keyof typeof adminEn, string> = {
   ...drawerEsAR,
   ...clientsEsAR,
   ...servicesEsAR,
+  ...resourcesEsAR,
   ...staffEsAR,
   ...reportsEsAR,
   ...settingsEsAR,

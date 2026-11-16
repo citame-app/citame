@@ -227,3 +227,16 @@ describe("notification endpoints", () => {
     expect(seen[3]?.body).toEqual({ token: "abc def" });
   });
 });
+
+test("rescheduling availability uses the authenticated appointment path", async () => {
+  const { api, calls } = setup({ date: "2026-03-09", timezone: "UTC", slots: [] });
+  await api.availability({
+    appointmentId: ID,
+    serviceIds: [ID],
+    staffId: STAFF,
+    date: "2026-03-09",
+  });
+  expect(calls[0]?.url).toBe(
+    `/api/appointments/${ID}/availability?serviceIds=${ID}&staffId=${STAFF}&date=2026-03-09`,
+  );
+});

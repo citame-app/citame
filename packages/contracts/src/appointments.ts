@@ -59,7 +59,7 @@ export const createAppointmentBaseSchema = z.object({
   /** Optional client-generated UUID (v7) so offline clients can pre-assign ids. */
   id: idSchema.optional(),
   staffId: idSchema,
-  serviceIds: z.array(idSchema).min(1),
+  serviceIds: z.array(idSchema).min(1).max(24),
   startsAt: instantSchema,
   clientId: idSchema.optional(),
   client: inlineClientSchema.optional(),

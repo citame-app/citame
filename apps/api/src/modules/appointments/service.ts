@@ -29,7 +29,7 @@ import {
   rescheduleAppointment,
   scheduleNewAppointment,
 } from "../../notifications/outbox";
-import { lockCalendars, type Tx } from "../../tx";
+import { lockCalendars, lockScheduling, type Tx } from "../../tx";
 import { totalBlockMinutes } from "../availability/compute";
 import { type BookingViolation, bookingViolations } from "../availability/rules";
 import {
@@ -40,6 +40,7 @@ import {
 } from "../booking-protection/value";
 import { assertClientCanBook } from "../clients/controls";
 import { refreshAppointmentCheckout } from "../commerce/service";
+import { reassignAppointmentResources, reserveResources } from "../resources/reservations";
 import { releaseUnfulfilledAppointmentRewards } from "../rewards/value";
 import { getServicesByIds } from "../services/service";
 import { getSalonSettings } from "../settings/service";
@@ -166,6 +167,7 @@ export async function createAppointment(
 
   try {
     return await db.transaction(async (tx) => {
+      await lockScheduling(tx);
       await lockCalendars(tx, [request.staffId]);
       const noticeOverridden = await assertBookable(tx, {
         staffId: request.staffId,
@@ -204,6 +206,12 @@ export async function createAppointment(
           })),
         )
         .returning();
+      await reserveResources(
+        tx,
+        { appointmentId: row.id, startsAt: row.startsAt, endsAt: row.endsAt },
+        services,
+        now,
+      );
       if (actor) {
         await recordAudit(tx, {
           actorUserId: actor.userId,
@@ -536,6 +544,7 @@ export async function updateAppointment(
   try {
     const row = await db.transaction(async (tx) => {
       await lockProtectionReceipt(tx, id);
+      await lockScheduling(tx);
       await lockCalendars(tx, [current.staffId, staffId]);
       if (slotChanges) await assertClientCanBook(tx, current.clientId);
       const noticeOverridden =
@@ -560,6 +569,7 @@ export async function updateAppointment(
         })
         .where(and(eq(appointment.id, id), eq(appointment.version, request.version)))
         .returning();
+      if (updated && slotChanges) await reassignAppointmentResources(tx, id, now);
       if (updated && actor) {
         await recordAudit(tx, {
           actorUserId: actor.userId,

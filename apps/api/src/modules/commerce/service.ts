@@ -20,7 +20,7 @@ import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import type { BankNotification } from "../../payments/redsys";
 import type { PaymentGateway, RecurringPaymentSettings } from "../../payments/types";
-import type { Tx } from "../../tx";
+import { lockScheduling, type Tx } from "../../tx";
 import { accrueCommissions } from "../accounting/service";
 import {
   assertProtectedPayment,
@@ -70,6 +70,18 @@ function checkReplay(row: { requestHash: string }, requestHash: string) {
       "Idempotency key already belongs to a different request",
     );
 }
+export function saleRow(
+  db: Tx,
+  id: string,
+  principal: Principal,
+  lock: true,
+): Promise<typeof checkout.$inferSelect>;
+export function saleRow(
+  db: Connection,
+  id: string,
+  principal: Principal,
+  lock?: false,
+): Promise<typeof checkout.$inferSelect>;
 export async function saleRow(db: Connection, id: string, principal: Principal, lock = false) {
   if (principal.role !== "client") requireOperator(principal);
   const query = db.select().from(checkout).where(eq(checkout.id, id));
@@ -86,6 +98,13 @@ export async function saleRow(db: Connection, id: string, principal: Principal, 
     (restricted && !ownSale)
   )
     throw new DomainError("not_found", "Checkout not found");
+  // Receipt first, scheduling next, then client/value/inventory and appointment rows.
+  if (lock && row.appointmentId) await lockScheduling(db as Tx);
+  return row;
+}
+async function lockReceipt(tx: Tx, id: string) {
+  const [row] = await tx.select().from(checkout).where(eq(checkout.id, id)).for("update");
+  if (row?.appointmentId) await lockScheduling(tx);
   return row;
 }
 async function snapshot(
@@ -318,6 +337,9 @@ export async function createCheckoutInTransaction(
   )
     throw new DomainError("forbidden", "Clients can check out only their own appointment");
   if (principal.role !== "client") requireOperator(principal);
+  // New receipts have no existing receipt lock. Coordinate before the appointment-specific
+  // create lock, which booking creation may already hold under the scheduling lock.
+  if (input.appointmentId) await lockScheduling(tx);
   // Serialize repeated creates before looking up idempotency or the unique appointment.
   await tx.execute(
     sql`select pg_advisory_xact_lock(hashtextextended(${`checkout:${input.appointmentId ?? `${principal.userId}:${input.idempotencyKey}`}`}, 0))`,
@@ -717,11 +739,7 @@ export async function settleVerifiedBankPayment(
       .from(checkoutPayment)
       .where(eq(checkoutPayment.bankOrder, bank.order));
     if (!found) throw new DomainError("validation_error", "Unknown bank order");
-    const [sale] = await tx
-      .select()
-      .from(checkout)
-      .where(eq(checkout.id, found.checkoutId))
-      .for("update");
+    const sale = await lockReceipt(tx, found.checkoutId);
     const [payment] = await tx
       .select()
       .from(checkoutPayment)
@@ -776,7 +794,7 @@ export async function manualRefund(
       .from(checkoutPayment)
       .where(eq(checkoutPayment.id, paymentId));
     if (!initial) throw new DomainError("not_found", "Payment not found");
-    await tx.select().from(checkout).where(eq(checkout.id, initial.checkoutId)).for("update");
+    await lockReceipt(tx, initial.checkoutId);
     const [payment] = await tx
       .select()
       .from(checkoutPayment)
@@ -1019,7 +1037,7 @@ export async function executeRefund(
       .from(checkoutPayment)
       .where(eq(checkoutPayment.id, initial.paymentId));
     if (!payment) throw new DomainError("not_found", "Payment not found");
-    await tx.select().from(checkout).where(eq(checkout.id, payment.checkoutId)).for("update");
+    await lockReceipt(tx, payment.checkoutId);
     const [refund] = await tx
       .select()
       .from(checkoutRefund)
@@ -1058,7 +1076,7 @@ export async function executeRefund(
     /* A lost bank response must stay reserved until reconciled. */
   }
   return db.transaction(async (tx) => {
-    await tx.select().from(checkout).where(eq(checkout.id, work.payment.checkoutId)).for("update");
+    await lockReceipt(tx, work.payment.checkoutId);
     const [row] = await tx
       .select()
       .from(checkoutRefund)
@@ -1097,7 +1115,7 @@ export async function reconcileRefund(
       .from(checkoutPayment)
       .where(eq(checkoutPayment.id, initial.paymentId));
     if (!payment) throw new DomainError("not_found", "Payment not found");
-    await tx.select().from(checkout).where(eq(checkout.id, payment.checkoutId)).for("update");
+    await lockReceipt(tx, payment.checkoutId);
     const [refund] = await tx
       .select()
       .from(checkoutRefund)
@@ -1137,11 +1155,7 @@ export async function reconcilePayment(
   return db.transaction(async (tx) => {
     const [initial] = await tx.select().from(checkoutPayment).where(eq(checkoutPayment.id, id));
     if (!initial) throw new DomainError("not_found", "Payment not found");
-    const [sale] = await tx
-      .select()
-      .from(checkout)
-      .where(eq(checkout.id, initial.checkoutId))
-      .for("update");
+    const sale = await lockReceipt(tx, initial.checkoutId);
     const [payment] = await tx
       .select()
       .from(checkoutPayment)

@@ -17,6 +17,7 @@ import { adminServicesQuery, adminStaffQuery } from "~/lib/admin-queries";
 import { api } from "~/lib/api/instance";
 import { formatDuration, formatMoney } from "~/lib/format";
 import { describeProblem } from "../problems";
+import { ResourcesPanel } from "../resources/resources-panel";
 import {
   centsToInput,
   parsePrice,
@@ -179,6 +180,7 @@ export function ServicesView() {
 
   return (
     <div className="space-y-4">
+      <ResourcesPanel services={services.data ?? []} />
       <DataTable
         label={t("services.table")}
         columns={columns}

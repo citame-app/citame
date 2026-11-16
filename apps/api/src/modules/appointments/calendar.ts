@@ -12,6 +12,7 @@ import { and, asc, eq, gt, inArray, isNull, lt } from "drizzle-orm";
 import { DomainError } from "../../errors";
 import { workingWindows } from "../availability/windows";
 import { protectionView } from "../booking-protection/value";
+import { calendarResources } from "../resources/reservations";
 import { getSalonSettings } from "../settings/service";
 import { loadSeriesReferences } from "./series-references";
 
@@ -101,6 +102,10 @@ export async function getCalendar(
         )
     : [];
 
+  const resources = await calendarResources(
+    db,
+    rows.map((r) => r.row.id),
+  );
   const series = await loadSeriesReferences(
     db,
     rows.map((r) => r.row.id),
@@ -136,6 +141,7 @@ export async function getCalendar(
           createdAt: row.createdAt.toISOString(),
           updatedAt: row.updatedAt.toISOString(),
           protection: await protectionView(db, row.id),
+          resources: resources.get(row.id) ?? [],
           clientName,
           serviceNames: own.map((s) => s.name),
         };

@@ -20,7 +20,7 @@ import { recordAudit } from "../../audit";
 import { requirePermission, requireRole } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
-import { lockCalendars, type Tx } from "../../tx";
+import { lockCalendars, lockScheduling, type Tx } from "../../tx";
 import { assertClientCanBook } from "../clients/controls";
 import { getServicesByIds } from "../services/service";
 import { getSalonSettings } from "../settings/service";
@@ -380,6 +380,7 @@ export async function endWaitlist(
 ) {
   return db.transaction(async (tx) => {
     const entry = await entryRow(tx, id, p, true);
+    await lockScheduling(tx);
     const offer = await activeOffer(tx, id);
     if (
       p.role !== "client" &&

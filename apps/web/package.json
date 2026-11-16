@@ -16,7 +16,8 @@
     "e2e:deposits": "E2E_DEPOSIT_FIXTURE=true playwright test",
     "e2e:waitlist": "E2E_WAITLIST_FIXTURE=true playwright test",
     "e2e:series": "E2E_SERIES_FIXTURE=true playwright test",
-    "e2e:rewards": "E2E_REWARDS_FIXTURE=true playwright test"
+    "e2e:rewards": "E2E_REWARDS_FIXTURE=true playwright test",
+    "e2e:resources": "E2E_RESOURCES_FIXTURE=true playwright test"
   },
   "dependencies": {
     "@base-ui/react": "1.9.0",

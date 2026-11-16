@@ -20,7 +20,7 @@ import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { DomainError } from "../../errors";
 import { closeAppointment, scheduleNewAppointment } from "../../notifications/outbox";
-import type { Tx } from "../../tx";
+import { lockScheduling, type Tx } from "../../tx";
 import type { Actor } from "../appointments/service";
 import { membershipDiscounts } from "../passes/value";
 import { releaseCheckoutReward } from "../rewards/value";
@@ -219,6 +219,7 @@ export async function lockProtectionReceipt(tx: Tx, appointmentId: string) {
     .where(eq(checkout.appointmentId, appointmentId))
     .orderBy(asc(checkout.id))
     .for("update");
+  await lockScheduling(tx);
 }
 export async function protectedPayable(
   db: Connection,

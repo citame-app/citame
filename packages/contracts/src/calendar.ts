@@ -44,6 +44,9 @@ export type CalendarQuery = z.infer<typeof calendarQuerySchema>;
 
 export const calendarAppointmentSchema = appointmentSchema.extend({
   clientName: z.string(),
+  resources: z
+    .array(z.object({ name: z.string(), quantity: z.number().int().positive() }))
+    .optional(),
   /** In booking order. */
   serviceNames: z.array(z.string()),
 });

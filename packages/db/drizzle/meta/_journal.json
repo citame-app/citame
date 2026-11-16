@@ -162,6 +162,20 @@
       "when": 1794802317997,
       "tag": "0022_heavy_catseye",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1794805138656,
+      "tag": "0023_goofy_sunset_bain",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1794805314005,
+      "tag": "0024_lean_mad_thinker",
+      "breakpoints": true
     }
   ]
 }

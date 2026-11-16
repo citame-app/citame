@@ -10,6 +10,7 @@ import { DateStrip, TimeSlotGrid } from "./components";
 import { firstAvailableDate, groupSlots } from "./logic";
 
 export interface SlotPickerProps {
+  appointmentId?: string;
   serviceIds: string[];
   /** A specific professional, or undefined for "any available". */
   staffId: string | undefined;
@@ -25,6 +26,7 @@ export interface SlotPickerProps {
 
 /** Date strip plus grouped time slots, shared by the booking flow and rescheduling. */
 export function SlotPicker({
+  appointmentId,
   serviceIds,
   staffId,
   dates,
@@ -38,7 +40,7 @@ export function SlotPicker({
   const { t, locale } = useI18n();
   const queryClient = useQueryClient();
   const results = useQueries({
-    queries: dates.map((date) => availabilityQuery({ serviceIds, staffId, date })),
+    queries: dates.map((date) => availabilityQuery({ serviceIds, staffId, date, appointmentId })),
   });
 
   const slotCounts: Record<string, number | undefined> = {};

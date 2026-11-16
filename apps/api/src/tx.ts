@@ -4,6 +4,13 @@ import { sql } from "drizzle-orm";
 /** The transaction handle passed to `db.transaction` callbacks. */
 export type Tx = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
+/** One salon: serialize capacity allocation and catalog changes before taking calendar locks. */
+export async function lockScheduling(tx: Tx) {
+  await tx.execute(
+    sql`select pg_advisory_xact_lock(hashtextextended('sob-scheduling-capacity-v1',0))`,
+  );
+}
+
 /**
  * Serializes writers that touch the same staff calendars. The exclusion constraint alone is
  * enough for correctness, but concurrent inserts with partially overlapping ranges can

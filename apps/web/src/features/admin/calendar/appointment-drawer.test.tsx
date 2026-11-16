@@ -70,7 +70,7 @@ beforeEach(() => {
         minNoticeMinutes: 60,
         maxDaysAhead: 60,
       });
-    if (url.pathname === "/api/availability") {
+    if (url.pathname === `/api/appointments/${appointment.id}/availability`) {
       return json({
         date: url.searchParams.get("date"),
         timezone: "America/Argentina/Buenos_Aires",

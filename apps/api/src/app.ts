@@ -25,6 +25,7 @@ import { inventoryRoutes } from "./modules/inventory/routes";
 import { meRoutes } from "./modules/me/routes";
 import { passRoutes, planAdminRoutes, publicPlanRoutes } from "./modules/passes/routes";
 import { reportRoutes } from "./modules/reports/routes";
+import { resourceRoutes } from "./modules/resources/routes";
 import { rewardsAdminRoutes, rewardsClientRoutes } from "./modules/rewards/routes";
 import { serviceAdminRoutes } from "./modules/services/admin-routes";
 import { servicesRoutes } from "./modules/services/routes";
@@ -280,6 +281,7 @@ export function createApp(input: AppDeps): App {
   app.route("/admin/accounting", accountingRoutes(deps));
   app.route("/admin/rewards", rewardsAdminRoutes(deps));
   app.route("/admin/waitlist", waitlistAdminRoutes(deps));
+  app.route("/admin/resources", resourceRoutes(deps));
   app.route("/benefit-plans", publicPlanRoutes(deps));
   app.route("/admin/benefit-plans", planAdminRoutes(deps));
   app.route("/admin/passes", passRoutes(deps));

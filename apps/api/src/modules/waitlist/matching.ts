@@ -12,11 +12,12 @@ import {
 import { and, asc, count, eq, gt, gte, inArray, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { DomainError } from "../../errors";
-import { lockCalendars, type Tx } from "../../tx";
+import { lockCalendars, lockScheduling, type Tx } from "../../tx";
 import { assertBookable } from "../appointments/service";
 import { findAvailability } from "../availability/service";
 import { getBookingPolicy } from "../booking-protection/policy";
 import { assertClientCanBook } from "../clients/controls";
+import { reserveResources } from "../resources/reservations";
 import { getServicesByIds, type ServiceRow } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { staffQualifiedFor } from "../staff/service";
@@ -78,6 +79,7 @@ export async function expireWaitlistOffers(db: Database, now: Date, limit = 100)
         .where(eq(waitlistEntry.id, candidate.entryId))
         .for("update");
       if (!entry) return null;
+      await lockScheduling(tx);
       await lockCalendars(tx, [candidate.staffId]);
       const [offer] = await tx
         .select()
@@ -160,6 +162,7 @@ async function matchEntry(db: Database, id: string, now: Date): Promise<boolean>
       )
       .for("update", { skipLocked: true });
     if (!entry) return false;
+    await lockScheduling(tx);
     await tx.select().from(salonSettings).for("share");
     const settings = await getSalonSettings(tx);
     const today = localToday(now, settings.timezone);
@@ -328,6 +331,12 @@ async function matchEntry(db: Database, id: string, now: Date): Promise<boolean>
           })
           .returning();
         if (!offer) throw new Error("Waitlist offer insert returned no row");
+        await reserveResources(
+          tx,
+          { offerId: offer.id, startsAt: offer.startsAt, endsAt: offer.endsAt },
+          snapshots,
+          now,
+        );
         await tx
           .update(waitlistEntry)
           .set({ state: "offered", version: entry.version + 1 })

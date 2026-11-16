@@ -20,7 +20,7 @@ import { recordAudit } from "../../audit";
 import { authorizeAppointmentList } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
-import { lockCalendars, type Tx } from "../../tx";
+import { lockCalendars, lockScheduling, type Tx } from "../../tx";
 import { totalBlockMinutes } from "../availability/compute";
 import { getBookingPolicy } from "../booking-protection/policy";
 import { protectionView } from "../booking-protection/value";
@@ -190,6 +190,7 @@ export async function createAppointmentSeries(
         throw new DomainError("invalid_state", "This series request key has already been used");
       return getAppointmentSeriesFromTransaction(tx, prior.id, principal);
     }
+    await lockScheduling(tx);
     await lockCalendars(tx, [input.staffId]);
     // Freeze exactly the reviewed catalog/settings while each visit is materialized.
     await tx
