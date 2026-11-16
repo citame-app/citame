@@ -8,6 +8,7 @@ import { Sheet } from "~/components/ui/sheet";
 import { Skeleton } from "~/components/ui/states";
 import { useToast } from "~/components/ui/toast";
 import { buildDateStrip } from "~/features/booking/logic";
+import { BookingProtectionNotice } from "~/features/booking/protection";
 import { SlotPicker } from "~/features/booking/slot-picker";
 import { useI18n } from "~/i18n/react";
 import { clientDetailQuery } from "~/lib/admin-queries";
@@ -169,6 +170,9 @@ function DrawerBody({
 
   return (
     <div className="space-y-6">
+      {appointment.protection && (
+        <BookingProtectionNotice protection={appointment.protection} mode="admin" role={role} />
+      )}
       <div className="flex items-center gap-2">
         <StatusBadge status={appointment.status} />
       </div>

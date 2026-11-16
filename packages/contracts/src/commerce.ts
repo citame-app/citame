@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { bookingProtectionSchema } from "./booking-protection";
 import { idSchema, instantSchema } from "./common";
 import { giftCardCodeSchema } from "./gift-card-code";
 import { staffPermissionsSchema } from "./permissions";
@@ -161,6 +162,8 @@ export const checkoutSchema = z.object({
   fulfilledAt: instantSchema.nullable().optional(),
   overpaidCents: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).default(0),
   balanceCents: moneyCentsSchema,
+  payableCents: moneyCentsSchema.optional(),
+  protection: bookingProtectionSchema.nullable().optional(),
   lines: z.array(checkoutLineSchema),
   payments: z.array(checkoutPaymentSchema),
   refunds: z.array(z.lazy(() => checkoutRefundSchema)).default([]),

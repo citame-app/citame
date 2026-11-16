@@ -23,7 +23,7 @@ export function MyAppointments({
   highlightId?: string;
   onReschedule: (appointment: Appointment) => void;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const toast = useToast();
   const queryClient = useQueryClient();
   const query = useQuery(myAppointmentsQuery);
@@ -153,7 +153,18 @@ export function MyAppointments({
         onOpenChange={(open) => !open && setToCancel(null)}
         onConfirm={() => toCancel && cancel.mutate(toCancel)}
         title={t("account.cancel.title")}
-        description={t("account.cancel.body")}
+        description={
+          toCancel?.protection
+            ? t("protection.cancelWarning", {
+                date: new Intl.DateTimeFormat(locale, {
+                  dateStyle: "medium",
+                  timeStyle: "short",
+                  timeZone,
+                }).format(new Date(toCancel.protection.cancellationCutoff)),
+                percent: toCancel.protection.lateCancellationBasisPoints / 100,
+              })
+            : t("account.cancel.body")
+        }
         confirmLabel={t("account.cancel.confirm")}
         cancelLabel={t("account.cancel.keep")}
         destructive

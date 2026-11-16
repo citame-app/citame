@@ -46,6 +46,7 @@ import {
 } from "@sob/contracts";
 import { z } from "zod";
 import { accountingEndpoints } from "./accounting-endpoints";
+import { bookingPolicyEndpoints } from "./booking-policy-endpoints";
 import type { ApiClient } from "./client";
 import { commerceEndpoints } from "./commerce-endpoints";
 import { giftCardEndpoints } from "./gift-card-endpoints";
@@ -88,6 +89,7 @@ type CreateBooking = Omit<CreateAppointmentRequest, "clientId" | "client">;
 export function createEndpoints(client: ApiClient) {
   return {
     commerce: commerceEndpoints(client),
+    bookingPolicy: bookingPolicyEndpoints(client),
     inventory: inventoryEndpoints(client),
     accounting: accountingEndpoints(client),
     giftCards: giftCardEndpoints(client),

@@ -7,6 +7,7 @@ import { Button, buttonClasses } from "~/components/ui/button";
 import { CalendarIcon, CheckIcon, ClockIcon, DownloadIcon, UserIcon } from "~/components/ui/icons";
 import { ErrorState, Skeleton } from "~/components/ui/states";
 import { buildIcs, icsFileName } from "~/features/booking/ics";
+import { BookingProtectionNotice } from "~/features/booking/protection";
 import { bookingStore } from "~/features/booking/store";
 import { createTranslator } from "~/i18n";
 import { useI18n } from "~/i18n/react";
@@ -39,9 +40,9 @@ function Confirmed() {
   const { salon } = Route.useRouteContext();
   const justBooked = useStore(bookingStore, (state) => state.lastBooked);
   const known = justBooked?.id === appointmentId ? justBooked : undefined;
-  const mine = useQuery({ ...myAppointmentsQuery, enabled: !known });
+  const mine = useQuery({ ...myAppointmentsQuery, refetchInterval: 3000 });
   const staff = useQuery(staffQuery);
-  const appointment = known ?? mine.data?.find((item) => item.id === appointmentId);
+  const appointment = mine.data?.find((item) => item.id === appointmentId) ?? known;
 
   if (!appointment && mine.isPending) {
     return (
@@ -90,6 +91,8 @@ function ConfirmedView({
   const localDate = localDateOf(appointment.startsAt, timeZone);
   const total = appointment.services.reduce((sum, s) => sum + s.priceCents, 0);
   const currency = appointment.services[0]?.currency ?? "ARS";
+  const pendingDeposit = appointment.protection?.state === "pending";
+  const closed = appointment.status === "cancelled";
 
   function downloadIcs() {
     const names = appointment.services.map((s) => s.name).join(", ");
@@ -118,13 +121,29 @@ function ConfirmedView({
       <div className="py-10 sm:py-16">
         <div className="sob-rise text-center">
           <span className="mx-auto grid size-16 place-items-center rounded-full bg-success-soft text-success-fg">
-            <CheckIcon width={32} height={32} strokeWidth={2.25} />
+            {pendingDeposit || closed ? (
+              <ClockIcon width={32} height={32} />
+            ) : (
+              <CheckIcon width={32} height={32} strokeWidth={2.25} />
+            )}
           </span>
           <h1 className="mt-5 text-title" tabIndex={-1}>
-            {t("booking.confirmed.title")}
+            {t(
+              pendingDeposit
+                ? "protection.pendingTitle"
+                : closed
+                  ? "protection.state.cancelled"
+                  : "booking.confirmed.title",
+            )}
           </h1>
           <p className="mt-2 text-muted" role="status">
-            {t("booking.confirmed.lead")}
+            {t(
+              pendingDeposit
+                ? "protection.pendingLead"
+                : closed && appointment.protection
+                  ? `protection.state.${appointment.protection.state}`
+                  : "booking.confirmed.lead",
+            )}
           </p>
         </div>
 
@@ -177,8 +196,18 @@ function ConfirmedView({
           </p>
         </div>
 
+        {appointment.protection && (
+          <div className="mt-6">
+            <BookingProtectionNotice protection={appointment.protection} />
+          </div>
+        )}
         <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
-          <Button variant="secondary" size="lg" onClick={downloadIcs}>
+          <Button
+            variant="secondary"
+            size="lg"
+            onClick={downloadIcs}
+            disabled={pendingDeposit || closed}
+          >
             <DownloadIcon />
             {t("booking.confirmed.calendar")}
           </Button>

@@ -9,6 +9,7 @@ let requests: { method: string; path: string; body: unknown }[];
 let paid = false;
 let online = false;
 let giftAvailable = false;
+let payable: number | undefined;
 let refunds: Record<string, unknown>[] = [];
 let payments: Record<string, unknown>[] = [];
 const sale = () => ({
@@ -25,6 +26,7 @@ const sale = () => ({
   paidCents: paid ? 2500 : 0,
   refundedCents: 0,
   balanceCents: paid ? 0 : 2500,
+  payableCents: payable,
   lines: [
     {
       id,
@@ -45,6 +47,7 @@ beforeEach(() => {
   paid = false;
   online = false;
   giftAvailable = false;
+  payable = undefined;
   refunds = [];
   payments = [];
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
@@ -90,6 +93,29 @@ beforeEach(() => {
     if (path.endsWith(`/checkouts/${id}`)) return reply(sale());
     return reply({});
   }) as unknown as typeof fetch;
+});
+
+test("a booking signal uses the payable deposit instead of charging the entire service balance", async () => {
+  payable = 500;
+  online = true;
+  renderApp(<CheckoutPanel id={id} mode="client" role="client" />);
+  expect(await screen.findByLabelText("Amount")).toHaveValue("5.00");
+  fireEvent.click(screen.getByRole("button", { name: "Continue to payment" }));
+  await waitFor(() =>
+    expect(
+      requests.some(
+        (r) => r.method === "POST" && (r.body as { amountCents?: number })?.amountCents === 500,
+      ),
+    ).toBe(true),
+  );
+});
+
+test("a confirmed signal with nothing payable now hides payment entry while retaining the remaining balance", async () => {
+  payable = 0;
+  online = true;
+  renderApp(<CheckoutPanel id={id} mode="client" role="client" />);
+  await screen.findByText("No payment is due before your visit.");
+  expect(screen.queryByLabelText("Amount")).toBeNull();
 });
 afterEach(() => {
   globalThis.fetch = realFetch;

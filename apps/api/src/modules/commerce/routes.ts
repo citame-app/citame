@@ -77,7 +77,14 @@ export function commerceAdminRoutes(deps: AppDeps) {
       ),
     )
     .get("/checkouts/:id", async (c) =>
-      c.json(await getCheckout(deps.db, checkoutId(c.req.param("id")), c.get("principal"))),
+      c.json(
+        await getCheckout(
+          deps.db,
+          checkoutId(c.req.param("id")),
+          c.get("principal"),
+          deps.now?.() ?? new Date(),
+        ),
+      ),
     )
     .post("/checkouts/:id/void", async (c) =>
       c.json(await voidCheckout(deps.db, checkoutId(c.req.param("id")), c.get("principal"))),
@@ -92,6 +99,7 @@ export function commerceAdminRoutes(deps: AppDeps) {
           gateway,
           deps.config.payments.bizumEnabled,
           recurringSettings(deps.config, gateway),
+          deps.now?.() ?? new Date(),
         ),
         201,
       ),
@@ -114,6 +122,7 @@ export function commerceAdminRoutes(deps: AppDeps) {
           checkoutId(c.req.param("id")),
           parseOrThrow(reconcileRefundSchema, await readJson(c)),
           c.get("principal"),
+          deps.now?.() ?? new Date(),
         ),
       ),
     )
@@ -191,7 +200,14 @@ export function commerceClientRoutes(deps: AppDeps) {
       ),
     )
     .get("/checkouts/:id", async (c) =>
-      c.json(await getCheckout(deps.db, checkoutId(c.req.param("id")), c.get("principal"))),
+      c.json(
+        await getCheckout(
+          deps.db,
+          checkoutId(c.req.param("id")),
+          c.get("principal"),
+          deps.now?.() ?? new Date(),
+        ),
+      ),
     )
     .get("/payments/by-order/:order", async (c) => {
       const [payment] = await deps.db
@@ -199,7 +215,14 @@ export function commerceClientRoutes(deps: AppDeps) {
         .from(checkoutPayment)
         .where(eq(checkoutPayment.bankOrder, c.req.param("order")));
       if (!payment) throw new DomainError("not_found", "Payment not found");
-      return c.json(await getCheckout(deps.db, payment.checkoutId, c.get("principal")));
+      return c.json(
+        await getCheckout(
+          deps.db,
+          payment.checkoutId,
+          c.get("principal"),
+          deps.now?.() ?? new Date(),
+        ),
+      );
     })
     .post("/checkouts/:id/void", async (c) =>
       c.json(await voidCheckout(deps.db, checkoutId(c.req.param("id")), c.get("principal"))),
@@ -214,6 +237,7 @@ export function commerceClientRoutes(deps: AppDeps) {
           gateway,
           deps.config.payments.bizumEnabled,
           recurringSettings(deps.config, gateway),
+          deps.now?.() ?? new Date(),
         ),
         201,
       ),
@@ -239,6 +263,7 @@ export function redsysNotificationRoutes(deps: AppDeps) {
         gateway,
         fields,
         recurringSettings(deps.config, gateway),
+        deps.now?.() ?? new Date(),
       );
       return c.text("OK", 200);
     } catch (error) {

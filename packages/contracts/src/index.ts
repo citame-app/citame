@@ -10,6 +10,7 @@ export * from "./accounting";
 export * from "./appointments";
 export * from "./auth";
 export * from "./availability";
+export * from "./booking-protection";
 export * from "./calendar";
 export * from "./client-controls";
 export * from "./clients";

@@ -440,6 +440,7 @@ function SalesReport() {
                     prepaid_visits_allocated: report.data.prepaidAllocatedCents,
                     prepaid_visits_allocation_returned: report.data.prepaidAllocationReturnedCents,
                     membership_access_fees: report.data.membershipAccessFeesCents,
+                    booking_fees: report.data.bookingFeesCents,
                   }).map(([metric, value]) => [
                     report.data.from,
                     report.data.to,
@@ -501,6 +502,7 @@ function SalesReport() {
               ["passes.allocatedApplied", report.data.prepaidAllocatedCents],
               ["passes.allocatedReturned", report.data.prepaidAllocationReturnedCents],
               ["passes.fees", report.data.membershipAccessFeesCents],
+              ["protection.feesReport", report.data.bookingFeesCents],
             ].map(([label, value]) => (
               <div key={label} className="rounded-xl border border-line bg-surface p-4">
                 <dt className="text-sm text-muted">{t(label as "accounting.collected")}</dt>

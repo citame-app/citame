@@ -2,6 +2,7 @@ import { accessEn } from "./access";
 import { accountSecurityEn } from "./account-security";
 import { accountingEn } from "./accounting";
 import { adminEn } from "./admin";
+import { bookingProtectionEn } from "./booking-protection";
 import { clientControlsEn } from "./client-controls";
 import { commerceEn } from "./commerce";
 import { giftCardsEn } from "./gift-cards";
@@ -10,6 +11,7 @@ import { notificationsEn } from "./notifications";
 import { passesEn } from "./passes";
 /** English is the source catalog: its keys define what every other catalog must provide. */
 export const en = {
+  ...bookingProtectionEn,
   ...clientControlsEn,
   ...passesEn,
   "common.greeting": "Hello, {name}",

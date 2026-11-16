@@ -3,6 +3,7 @@ import { Badge, statusTone } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { ClockIcon, UserIcon } from "~/components/ui/icons";
 import { AppointmentCheckout } from "~/features/admin/commerce/appointment-checkout";
+import { BookingProtectionNotice } from "~/features/booking/protection";
 import { useI18n } from "~/i18n/react";
 import { cn } from "~/lib/cn";
 import { formatDateLong, formatMoney, formatTime, localDateOf } from "~/lib/format";
@@ -38,11 +39,11 @@ export function AppointmentCard({
 
   return (
     <article
+      data-appointment-id={appointment.id}
       aria-label={formatDateLong(localDateOf(appointment.startsAt, timeZone), locale)}
       className={cn(
         "rounded-xl border bg-surface p-5 shadow-sm transition-colors",
         highlighted ? "border-accent ring-2 ring-accent/30" : "border-line",
-        appointment.status === "cancelled" && "opacity-80",
       )}
     >
       <div className="flex items-start justify-between gap-3">
@@ -112,7 +113,13 @@ export function AppointmentCard({
           )}
         </div>
       )}
-      {appointment.status !== "cancelled" &&
+      {appointment.protection && (
+        <div className="mt-4">
+          <BookingProtectionNotice protection={appointment.protection} />
+        </div>
+      )}
+      {!appointment.protection &&
+        appointment.status !== "cancelled" &&
         appointment.services.length > 0 &&
         appointment.services.every((service) => service.currency === "EUR") && (
           <div className="mt-4">

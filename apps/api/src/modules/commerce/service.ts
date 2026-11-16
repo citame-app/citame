@@ -23,6 +23,14 @@ import type { PaymentGateway, RecurringPaymentSettings } from "../../payments/ty
 import type { Tx } from "../../tx";
 import { accrueCommissions } from "../accounting/service";
 import {
+  assertProtectedPayment,
+  canFulfillProtected,
+  closeExpiredProtection,
+  protectedPayable,
+  protectionView,
+  syncProtectionPayment,
+} from "../booking-protection/value";
+import {
   activateCheckoutGifts,
   pendingGiftForCheckout,
   redeemGift,
@@ -78,7 +86,11 @@ async function saleRow(db: Connection, id: string, principal: Principal, lock = 
     throw new DomainError("not_found", "Checkout not found");
   return row;
 }
-async function snapshot(db: Connection, row: typeof checkout.$inferSelect): Promise<Checkout> {
+async function snapshot(
+  db: Connection,
+  row: typeof checkout.$inferSelect,
+  now = new Date(),
+): Promise<Checkout> {
   const lines = await db
     .select()
     .from(checkoutLine)
@@ -108,6 +120,8 @@ async function snapshot(db: Connection, row: typeof checkout.$inferSelect): Prom
   const refundedCents = refunds
     .filter((refund) => refund.status === "succeeded")
     .reduce((a, b) => a + b.amountCents, 0);
+  const balanceCents = row.status === "void" ? 0 : Math.max(0, row.totalCents - paidCents);
+  const protection = row.appointmentId ? await protectionView(db, row.appointmentId) : null;
   return {
     id: row.id,
     appointmentId: row.appointmentId,
@@ -124,7 +138,10 @@ async function snapshot(db: Connection, row: typeof checkout.$inferSelect): Prom
     paidCents,
     refundedCents,
     overpaidCents: Math.max(0, paidCents - refundedCents - row.totalCents),
-    balanceCents: row.status === "void" ? 0 : Math.max(0, row.totalCents - paidCents),
+    balanceCents,
+    ...(protection
+      ? { protection, payableCents: await protectedPayable(db, row, balanceCents, now) }
+      : {}),
     lines: lines.map((line) => ({
       id: line.id,
       kind: line.kind,
@@ -157,8 +174,13 @@ async function snapshot(db: Connection, row: typeof checkout.$inferSelect): Prom
     createdAt: row.createdAt.toISOString(),
   };
 }
-export async function getCheckout(db: Database, id: string, principal: Principal) {
-  return db.transaction(async (tx) => snapshot(tx, await saleRow(tx, id, principal)), {
+export async function getCheckout(
+  db: Database,
+  id: string,
+  principal: Principal,
+  now = new Date(),
+) {
+  return db.transaction(async (tx) => snapshot(tx, await saleRow(tx, id, principal), now), {
     isolationLevel: "repeatable read",
     accessMode: "read only",
   });
@@ -184,7 +206,8 @@ export async function listCheckouts(db: Database, principal: Principal) {
     { isolationLevel: "repeatable read", accessMode: "read only" },
   );
 }
-async function refreshStatus(tx: Tx, id: string) {
+async function refreshStatus(tx: Tx, id: string, now = new Date()) {
+  await syncProtectionPayment(tx, id, now);
   const [row] = await tx.select().from(checkout).where(eq(checkout.id, id));
   if (!row || row.status === "void") return;
   if (await syncCheckoutPassRefunds(tx, id)) return;
@@ -200,7 +223,8 @@ async function refreshStatus(tx: Tx, id: string) {
       : view.paidCents >= view.totalCents
         ? "paid"
         : "open";
-  if (status === "paid" && !row.fulfilledAt) await fulfillCheckout(tx, id);
+  if (status === "paid" && !row.fulfilledAt && (await canFulfillProtected(tx, row)))
+    await fulfillCheckout(tx, id);
   await tx.update(checkout).set({ status }).where(eq(checkout.id, id));
 }
 async function fulfillCheckout(tx: Tx, id: string) {
@@ -212,10 +236,19 @@ async function fulfillCheckout(tx: Tx, id: string) {
   await tx.update(checkout).set({ fulfilledAt }).where(eq(checkout.id, id));
   return fulfilledAt;
 }
+export async function refreshAppointmentCheckout(tx: Tx, appointmentId: string, now: Date) {
+  const rows = await tx
+    .select()
+    .from(checkout)
+    .where(and(eq(checkout.appointmentId, appointmentId), sql`${checkout.status} <> 'void'`));
+  for (const row of rows) await refreshStatus(tx, row.id, now);
+}
 export async function voidCheckout(db: Database, id: string, principal: Principal) {
   return db.transaction(async (tx) => {
     const row = await saleRow(tx, id, principal, true);
     if (row.status === "void") return snapshot(tx, row);
+    if (row.appointmentId && (await protectionView(tx, row.appointmentId)))
+      throw new DomainError("invalid_state", "Cancel the appointment to release its deposit hold");
     const payments = await tx
       .select()
       .from(checkoutPayment)
@@ -521,6 +554,7 @@ export async function startPayment(
   gateway: PaymentGateway | null,
   bizumEnabled = false,
   recurring: RecurringPaymentSettings | null = null,
+  now = new Date(),
 ) {
   if (
     principal.role === "client" &&
@@ -546,6 +580,14 @@ export async function startPayment(
     if (previous) checkReplay(previous, requestHash);
     else {
       const view = await snapshot(tx, sale);
+      await assertProtectedPayment(
+        tx,
+        sale,
+        input.amountCents,
+        input.method,
+        view.balanceCents,
+        now,
+      );
       if (
         sale.status !== "open" ||
         input.amountCents > view.balanceCents ||
@@ -610,7 +652,7 @@ export async function startPayment(
           requestHash,
           createdBy: principal.userId,
         });
-      await refreshStatus(tx, id);
+      await refreshStatus(tx, id, now);
       await recordAudit(tx, {
         actorUserId: principal.userId,
         action: "commerce.payment_started",
@@ -651,14 +693,16 @@ export async function receiveBankNotification(
   gateway: PaymentGateway,
   fields: Record<string, unknown>,
   recurring: RecurringPaymentSettings | null = null,
+  now = new Date(),
 ) {
-  return settleVerifiedBankPayment(db, gateway.verify(fields), recurring);
+  return settleVerifiedBankPayment(db, gateway.verify(fields), recurring, now);
 }
 /** Trusted adapter boundary; bank authenticity is checked before this function is called. */
 export async function settleVerifiedBankPayment(
   db: Database,
   bank: BankNotification,
   recurring: RecurringPaymentSettings | null = null,
+  now = new Date(),
 ) {
   return db.transaction(async (tx) => {
     const [found] = await tx
@@ -689,9 +733,10 @@ export async function settleVerifiedBankPayment(
       (payment.status === "failed" && !bank.success && payment.bankResponse === bank.responseCode)
     )
       return;
+    const closedProtection = await closeExpiredProtection(tx, sale, now);
     const view = await snapshot(tx, sale);
     const status = bank.success
-      ? sale.status === "void" || bank.amountCents > view.balanceCents
+      ? closedProtection || sale.status === "void" || bank.amountCents > view.balanceCents
         ? "reconciliation"
         : "succeeded"
       : "failed";
@@ -699,7 +744,7 @@ export async function settleVerifiedBankPayment(
       .update(checkoutPayment)
       .set({ status, bankResponse: bank.responseCode, authorizationCode: bank.authorizationCode })
       .where(eq(checkoutPayment.id, payment.id));
-    await refreshStatus(tx, sale.id);
+    await refreshStatus(tx, sale.id, now);
     if (status === "succeeded" && bank.mandate && recurring)
       await storeCardMandate(tx, sale.id, payment, bank.mandate, recurring);
     await recordAudit(tx, {
@@ -1079,6 +1124,7 @@ export async function reconcilePayment(
   id: string,
   input: { outcome: "succeeded" | "failed"; reference: string },
   principal: Principal,
+  now = new Date(),
 ) {
   requireOperator(principal, true);
   return db.transaction(async (tx) => {
@@ -1100,11 +1146,12 @@ export async function reconcilePayment(
         "invalid_state",
         "Only a pending bank payment outside its initial processing window can be reconciled",
       );
+    const closedProtection = await closeExpiredProtection(tx, sale, now);
     const view = await snapshot(tx, sale);
     const status =
       input.outcome === "failed"
         ? "failed"
-        : sale.status === "void" || payment.amountCents > view.balanceCents
+        : closedProtection || sale.status === "void" || payment.amountCents > view.balanceCents
           ? "reconciliation"
           : "succeeded";
     const [updated] = await tx
@@ -1112,7 +1159,7 @@ export async function reconcilePayment(
       .set({ status })
       .where(eq(checkoutPayment.id, id))
       .returning();
-    await refreshStatus(tx, sale.id);
+    await refreshStatus(tx, sale.id, now);
     await recordAudit(tx, {
       actorUserId: principal.userId,
       action: "commerce.payment_reconciled",

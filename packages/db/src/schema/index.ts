@@ -2,6 +2,7 @@ export * from "./accounting";
 export * from "./appointment";
 export * from "./audit";
 export * from "./auth";
+export * from "./booking-protection";
 export * from "./client";
 export * from "./commerce";
 export * from "./gift-card";

@@ -1,12 +1,13 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router";
 import { useStore } from "@tanstack/react-store";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { buttonClasses } from "~/components/ui/button";
 import { ErrorState } from "~/components/ui/states";
 import { useToast } from "~/components/ui/toast";
 import { InlineAuth } from "~/features/booking/auth-panel";
 import { BookingFrame } from "~/features/booking/frame";
+import { BookingPolicyConsent } from "~/features/booking/protection";
 import {
   canEnterStep,
   parseBookingSearch,
@@ -49,6 +50,17 @@ function ReviewStep() {
   const notes = useStore(bookingStore, (state) => state.notes);
   const authRef = useRef<HTMLElement>(null);
   const { search, selectedServices, totals, salon } = booking;
+  const [acceptedTotal, setAcceptedTotal] = useState<number | null>(null);
+  const [acceptedVersion, setAcceptedVersion] = useState<number | null>(null);
+  const policy = useQuery({
+    queryKey: ["booking-policy"],
+    queryFn: () => api().bookingPolicy.get(),
+    refetchInterval: 30000,
+  });
+  const policyAccepted =
+    policy.isSuccess &&
+    (!policy.data.enabled ||
+      (acceptedVersion === policy.data.version && acceptedTotal === totals.priceCents));
 
   useEffect(() => {
     bookingActions.restore();
@@ -59,12 +71,17 @@ function ReviewStep() {
 
   const confirm = useMutation({
     mutationFn: () => {
+      if (!policyAccepted) throw new Error("Review current booking policy");
       if (!search.slot || !search.slotStaff) throw new Error("incomplete booking");
       return api().appointments.create({
         staffId: search.slotStaff,
         serviceIds: search.services,
         startsAt: search.slot,
         notes: notes.trim() || undefined,
+        protectionAcceptedTotalCents: acceptedTotal ?? undefined,
+        protectionAcceptedVersion: policy.data?.enabled
+          ? (acceptedVersion ?? undefined)
+          : undefined,
       });
     },
     onSuccess: (appointment) => {
@@ -77,6 +94,12 @@ function ReviewStep() {
       });
     },
     onError: (error) => {
+      if (error instanceof ApiError && error.code === "invalid_state") {
+        setAcceptedVersion(null);
+        setAcceptedTotal(null);
+        void policy.refetch();
+        void queryClient.invalidateQueries({ queryKey: ["services"] });
+      }
       if (
         error instanceof ApiError &&
         (error.code === "slot_taken" || error.code === "slot_unavailable")
@@ -104,7 +127,7 @@ function ReviewStep() {
       authRef.current?.focus();
       return;
     }
-    confirm.mutate();
+    if (policyAccepted) confirm.mutate();
   }
 
   return (
@@ -122,12 +145,26 @@ function ReviewStep() {
           timeZone={salon.timezone}
           ctaLabel={session ? t("booking.cta.confirm") : t("booking.cta.signInToConfirm")}
           ctaLoading={confirm.isPending}
-          ctaDisabled={isStaff}
+          ctaDisabled={isStaff || !policyAccepted}
           onCta={onCta}
         />
       }
     >
       <div className="space-y-6">
+        {policy.isError && (
+          <ErrorState error={policy.error} onRetry={() => void policy.refetch()} />
+        )}
+        {policy.data && (
+          <BookingPolicyConsent
+            policy={policy.data}
+            totalCents={totals.priceCents}
+            acceptedVersion={acceptedTotal === totals.priceCents ? acceptedVersion : null}
+            onAccept={(version) => {
+              setAcceptedVersion(version);
+              setAcceptedTotal(totals.priceCents);
+            }}
+          />
+        )}
         {confirm.isError &&
           !(confirm.error instanceof ApiError && confirm.error.code === "unauthorized") && (
             <ErrorState error={confirm.error} onRetry={() => confirm.mutate()} />

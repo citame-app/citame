@@ -2,6 +2,7 @@ import { accessEsAR } from "./access";
 import { accountSecurityEsAR } from "./account-security";
 import { accountingEsAR } from "./accounting";
 import { adminEsAR } from "./admin";
+import { bookingProtectionEsAR } from "./booking-protection";
 import { clientControlsEsAR } from "./client-controls";
 import { commerceEsAR } from "./commerce";
 import type { MessageKey } from "./en";
@@ -12,6 +13,7 @@ import { passesEsAR } from "./passes";
 
 /** Neutral, professional Spanish for Argentina. */
 export const esAR: Record<MessageKey, string> = {
+  ...bookingProtectionEsAR,
   ...clientControlsEsAR,
   ...passesEsAR,
   "common.greeting": "Hola, {name}",

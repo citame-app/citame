@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { bookingProtectionSchema } from "./booking-protection";
 import {
   idSchema,
   instantSchema,
@@ -32,6 +33,7 @@ export const appointmentSchema = z.object({
   services: z.array(appointmentServiceSchema),
   createdAt: instantSchema,
   updatedAt: instantSchema,
+  protection: bookingProtectionSchema.nullable().optional(),
 });
 
 export type Appointment = z.infer<typeof appointmentSchema>;
@@ -60,6 +62,9 @@ export const createAppointmentBaseSchema = z.object({
    * hours, time off or the maximum advance window, and the use is audited.
    */
   override: z.boolean().optional(),
+  protectionAcceptedVersion: z.number().int().positive().optional(),
+  protectionAcceptedTotalCents: z.number().int().min(0).max(999999999).optional(),
+  protectionWaiverReason: z.string().trim().min(8).max(300).optional(),
 });
 
 /** Staff and owners must say who the appointment is for: exactly one of `clientId` / `client`. */

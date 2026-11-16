@@ -45,6 +45,8 @@ import {
   updateAppointment,
 } from "../modules/appointments/service";
 import { findAvailability } from "../modules/availability/service";
+import { getBookingPolicy } from "../modules/booking-protection/policy";
+import { protectionView } from "../modules/booking-protection/value";
 import { listClients } from "../modules/clients/admin";
 import { listServices } from "../modules/services/service";
 import { listStaff } from "../modules/staff/service";
@@ -130,6 +132,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
     guarded(ctx, "list_services", async () => ({
       services: await listServices(db),
       staff: await listStaff(db),
+      bookingPolicy: await getBookingPolicy(db),
     })),
   );
 
@@ -362,5 +365,5 @@ async function findOwnedReplay(ctx: ToolContext, id: string, request: CreateAppo
     row.clientId === request.clientId;
   if (!same) return null;
   const snapshots = (await loadSnapshots(ctx.db, [id])).get(id) ?? [];
-  return toAppointment(row, snapshots);
+  return { ...toAppointment(row, snapshots), protection: await protectionView(ctx.db, row.id) };
 }

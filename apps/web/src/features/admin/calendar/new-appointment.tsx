@@ -1,4 +1,9 @@
-import type { Appointment, UserRole } from "@sob/contracts";
+import {
+  type Appointment,
+  permissionsFor,
+  type StaffAccessPreset,
+  type UserRole,
+} from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
@@ -36,6 +41,7 @@ export function NewAppointmentSheet({
   initial,
   role,
   ownStaffId,
+  accessPreset,
   onCreated,
 }: {
   open: boolean;
@@ -43,6 +49,7 @@ export function NewAppointmentSheet({
   initial: NewAppointmentInitial;
   role: UserRole;
   ownStaffId: string | null;
+  accessPreset?: StaffAccessPreset | null;
   onCreated?: (appointment: Appointment) => void;
 }) {
   const { t, locale, timeZone } = useI18n();
@@ -65,6 +72,7 @@ export function NewAppointmentSheet({
     notes: "",
     override: true,
   });
+  const [waiver, setWaiver] = useState("");
   const [date, setDate] = useState(initial.date);
   const [time, setTime] = useState(hhmm(initial.minutesOfDay ?? 9 * 60));
   const [search, setSearch] = useState("");
@@ -85,6 +93,7 @@ export function NewAppointmentSheet({
     }));
     setErrors({});
     setFailure(null);
+    setWaiver("");
   }, [open, initial.date, initial.minutesOfDay, initial.staffId]);
 
   const debounced = useDebounced(search.trim());
@@ -102,9 +111,10 @@ export function NewAppointmentSheet({
 
   const create = useMutation({
     mutationFn: () =>
-      api().appointments.create(
-        buildWalkInRequest({ ...values, startsAt: zonedInstant(date, time, timeZone) }),
-      ),
+      api().appointments.create({
+        ...buildWalkInRequest({ ...values, startsAt: zonedInstant(date, time, timeZone) }),
+        ...(waiver.trim() ? { protectionWaiverReason: waiver.trim() } : {}),
+      }),
     onSuccess: (appointment) => {
       toast.success(t("calendar.toast.created"));
       void queryClient.invalidateQueries({ queryKey: ["admin"] });
@@ -176,6 +186,15 @@ export function NewAppointmentSheet({
           </div>
         )}
 
+        {permissionsFor(role, accessPreset).refunds && (
+          <TextField
+            label={t("protection.waiver")}
+            value={waiver}
+            maxLength={300}
+            hint={t("protection.waiverHelp")}
+            onChange={(e) => setWaiver(e.target.value)}
+          />
+        )}
         <fieldset className="space-y-3">
           <legend className="mb-1 text-sm font-medium">{t("walkin.client")}</legend>
           <div className="flex gap-2">

@@ -11,6 +11,7 @@ import {
 import { and, asc, eq, gt, inArray, isNull, lt } from "drizzle-orm";
 import { DomainError } from "../../errors";
 import { workingWindows } from "../availability/windows";
+import { protectionView } from "../booking-protection/value";
 import { getSalonSettings } from "../settings/service";
 
 /**
@@ -104,33 +105,36 @@ export async function getCalendar(
     from: query.from,
     to: query.to,
     staff: columns,
-    appointments: rows.map(({ row, clientName }) => {
-      const own = snapshots
-        .filter((s) => s.appointmentId === row.id)
-        .sort((a, b) => a.position - b.position);
-      return {
-        id: row.id,
-        staffId: row.staffId,
-        clientId: row.clientId,
-        startsAt: row.startsAt.toISOString(),
-        endsAt: row.endsAt.toISOString(),
-        status: row.status,
-        notes: row.notes,
-        version: row.version,
-        services: own.map((s) => ({
-          serviceId: s.serviceId,
-          name: s.name,
-          durationMinutes: s.durationMinutes,
-          bufferMinutes: s.bufferMinutes,
-          priceCents: s.priceCents,
-          currency: s.currency,
-        })),
-        createdAt: row.createdAt.toISOString(),
-        updatedAt: row.updatedAt.toISOString(),
-        clientName,
-        serviceNames: own.map((s) => s.name),
-      };
-    }),
+    appointments: await Promise.all(
+      rows.map(async ({ row, clientName }) => {
+        const own = snapshots
+          .filter((s) => s.appointmentId === row.id)
+          .sort((a, b) => a.position - b.position);
+        return {
+          id: row.id,
+          staffId: row.staffId,
+          clientId: row.clientId,
+          startsAt: row.startsAt.toISOString(),
+          endsAt: row.endsAt.toISOString(),
+          status: row.status,
+          notes: row.notes,
+          version: row.version,
+          services: own.map((s) => ({
+            serviceId: s.serviceId,
+            name: s.name,
+            durationMinutes: s.durationMinutes,
+            bufferMinutes: s.bufferMinutes,
+            priceCents: s.priceCents,
+            currency: s.currency,
+          })),
+          createdAt: row.createdAt.toISOString(),
+          updatedAt: row.updatedAt.toISOString(),
+          protection: await protectionView(db, row.id),
+          clientName,
+          serviceNames: own.map((s) => s.name),
+        };
+      }),
+    ),
     timeOff: offs.map((o) => ({
       id: o.id,
       staffId: o.staffId,

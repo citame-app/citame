@@ -38,6 +38,7 @@ const config = loadConfig({
   RATE_LIMIT_GLOBAL_MAX: "1000000",
 });
 await seedSampleData(database.db);
+await database.db.update(service).set({ currency: "EUR" });
 await database.db
   .update(service)
   .set({ currency: "EUR", priceCents: 2000 })
@@ -74,9 +75,14 @@ const gateway: PaymentGateway = {
   supportsRecurring: true,
   checkout: (input) => bank.checkout(input),
   verify: (fields, type) => bank.verify(fields, type),
-  refund: async () => {
-    throw new Error("Unexpected fixture refund request");
-  },
+  refund: async (input) => ({
+    ...input,
+    currency: "EUR",
+    transactionType: "3",
+    responseCode: "0900",
+    success: true,
+    authorizationCode: null,
+  }),
   chargeRecurring: async (input) => {
     bankCalls++;
     const encoded = Buffer.from(
@@ -106,12 +112,15 @@ app.post("/__recurring-fixture/settle", async (c) => {
   const encoded = fields.Ds_MerchantParameters ?? "";
   const request = JSON.parse(Buffer.from(encoded, "base64url").toString());
   const order = String(request.DS_MERCHANT_ORDER ?? "");
+  const deposit = c.req.header("x-fixture-purpose") === "deposit";
   if (
     fields.Ds_SignatureVersion !== "HMAC_SHA512_V2" ||
     fields.Ds_Signature !== redsysSignature(fixture.secret, order, encoded) ||
-    request.DS_MERCHANT_IDENTIFIER !== "REQUIRED" ||
-    request.DS_MERCHANT_COF_INI !== "S" ||
-    request.DS_MERCHANT_COF_TYPE !== "R"
+    (!deposit &&
+      (request.DS_MERCHANT_IDENTIFIER !== "REQUIRED" ||
+        request.DS_MERCHANT_COF_INI !== "S" ||
+        request.DS_MERCHANT_COF_TYPE !== "R")) ||
+    (deposit && request.DS_MERCHANT_IDENTIFIER !== undefined)
   )
     return c.text("Invalid fixture bank request", 400);
   const expiry = `${String(new Date().getUTCFullYear() + 2).slice(-2)}12`;
@@ -124,10 +133,14 @@ app.post("/__recurring-fixture/settle", async (c) => {
       Ds_Terminal: "1",
       Ds_Response: "0000",
       Ds_TransactionType: "0",
-      Ds_Merchant_Identifier: fixture.reference,
-      Ds_Merchant_Cof_Txnid: "2006031152000",
-      Ds_ExpiryDate: expiry,
-      Ds_Card_Last4: "0003",
+      ...(!deposit
+        ? {
+            Ds_Merchant_Identifier: fixture.reference,
+            Ds_Merchant_Cof_Txnid: "2006031152000",
+            Ds_ExpiryDate: expiry,
+            Ds_Card_Last4: "0003",
+          }
+        : {}),
     }),
   ).toString("base64url");
   const response = await app.request("/payments/redsys/notify", {

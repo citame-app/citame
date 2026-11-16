@@ -1,0 +1,98 @@
+export const bookingProtectionEn = {
+  "protection.title": "Booking deposits & cancellation",
+  "protection.enabled": "Require a booking deposit",
+  "protection.kind": "Deposit calculation",
+  "protection.percent": "Percentage of service price",
+  "protection.fixed": "Fixed amount, capped at service price",
+  "protection.value": "Deposit (% or EUR)",
+  "protection.hold": "Time to pay (minutes)",
+  "protection.window": "Free cancellation notice (minutes)",
+  "protection.late": "Late cancellation fee (% of service price)",
+  "protection.noShow": "No-show fee (% of service price)",
+  "protection.trusted": "Exempt trusted customers",
+  "protection.save": "Save booking policy",
+  "protection.saved": "Booking policy saved",
+  "protection.error":
+    "Could not save. Check the values and reload the current policy if it changed.",
+  "protection.reload": "Reload current policy",
+  "protection.help":
+    "New bookings keep their accepted policy. Fees are capped at the paid deposit; no extra automatic charge is made. Active services must use EUR. Configure online payments before requiring customer deposits.",
+  "protection.accept": "I accept this deposit and cancellation policy.",
+  "protection.terms":
+    "Pay a deposit of {amount} within {minutes} minutes to confirm. The rest is paid at the visit. Cancel at least {notice} minutes before your appointment for a full deposit refund. Late cancellation: {late}% of the service price. No-show: {noShow}%. Each fee is capped at the deposit paid.",
+  "protection.termsExemption":
+    "The salon may exempt trusted customers. Prepaid visits need a salon deposit waiver before booking; ask the salon if you plan to use a pass.",
+  "protection.changed": "Review and accept the current policy before confirming.",
+  "protection.pendingTitle": "Complete your reservation",
+  "protection.pendingLead": "The time is held while your deposit is awaiting payment.",
+  "protection.state.pending": "Deposit awaiting payment",
+  "protection.state.confirmed": "Deposit confirmed",
+  "protection.state.waived": "Deposit not required",
+  "protection.state.completed": "Deposit included in your service payment",
+  "protection.state.cancelled": "Reservation cancelled",
+  "protection.state.expired": "Reservation expired — time released",
+  "protection.state.no_show": "Appointment missed",
+  "protection.deposit": "Required deposit: {amount}",
+  "protection.deadline": "Pay before: {date}",
+  "protection.cutoff": "Free cancellation deadline: {date}",
+  "protection.fee": "Retained cancellation/no-show fee: {amount}",
+  "protection.refund":
+    "Still due back: {amount}. The salon processes the refund to the original payment method.",
+  "protection.receipt": "View reservation receipt",
+  "protection.notDue": "No payment is due before your visit.",
+  "protection.waiver": "Deposit waiver reason (manager only)",
+  "protection.waiverHelp":
+    "If deposits are enabled, a manager must explicitly waive them for a salon-created booking. Customers accept and pay online. Trusted customers may be exempt.",
+  "protection.cancelWarning":
+    "The accepted deposit policy applies. Free cancellation ends {date}; a later cancellation can retain up to {percent}% of the service price, capped at the deposit paid. A refund is processed by the salon.",
+  "protection.feesReport": "Booking fees (net recognized in this period)",
+} as const;
+export const bookingProtectionEsAR: Record<keyof typeof bookingProtectionEn, string> = {
+  "protection.title": "Señales y cancelación de reservas",
+  "protection.enabled": "Exigir una señal al reservar",
+  "protection.kind": "Cálculo de la señal",
+  "protection.percent": "Porcentaje del precio del servicio",
+  "protection.fixed": "Importe fijo, limitado al precio del servicio",
+  "protection.value": "Señal (% o EUR)",
+  "protection.hold": "Plazo para pagar (minutos)",
+  "protection.window": "Antelación para cancelar gratis (minutos)",
+  "protection.late": "Penalización por cancelación tardía (% del servicio)",
+  "protection.noShow": "Penalización por ausencia (% del servicio)",
+  "protection.trusted": "Eximir a clientes de confianza",
+  "protection.save": "Guardar política de reservas",
+  "protection.saved": "Política de reservas guardada",
+  "protection.error":
+    "No pudimos guardar. Revisa los valores y recarga la política actual si ha cambiado.",
+  "protection.reload": "Recargar política actual",
+  "protection.help":
+    "Cada reserva conserva la política aceptada. Las penalizaciones se limitan a la señal pagada; no se cobra nada adicional automáticamente. Los servicios activos deben usar EUR. Configura el pago online antes de exigir señales a clientes.",
+  "protection.accept": "Acepto esta política de señal y cancelación.",
+  "protection.terms":
+    "Paga una señal de {amount} en {minutes} minutos para confirmar. El resto se paga en la visita. Cancela con al menos {notice} minutos de antelación para recuperar toda la señal. Cancelación tardía: {late}% del servicio. Ausencia: {noShow}%. Cada penalización se limita a la señal pagada.",
+  "protection.termsExemption":
+    "El salón puede eximir a clientes de confianza. Las visitas de bonos requieren que el salón exima la señal antes de reservar; consulta si vas a usar un bono.",
+  "protection.changed": "Revisa y acepta la política actual antes de confirmar.",
+  "protection.pendingTitle": "Completa tu reserva",
+  "protection.pendingLead": "El horario se mantiene mientras la señal está pendiente de pago.",
+  "protection.state.pending": "Señal pendiente de pago",
+  "protection.state.confirmed": "Señal confirmada",
+  "protection.state.waived": "Señal no requerida",
+  "protection.state.completed": "Señal incluida en el pago del servicio",
+  "protection.state.cancelled": "Reserva cancelada",
+  "protection.state.expired": "Reserva caducada: horario liberado",
+  "protection.state.no_show": "Ausencia a la cita",
+  "protection.deposit": "Señal requerida: {amount}",
+  "protection.deadline": "Paga antes de: {date}",
+  "protection.cutoff": "Plazo para cancelar gratis: {date}",
+  "protection.fee": "Penalización retenida por cancelación o ausencia: {amount}",
+  "protection.refund":
+    "Pendiente de devolver: {amount}. El salón tramita la devolución al medio de pago original.",
+  "protection.receipt": "Ver recibo de la reserva",
+  "protection.notDue": "No hay ningún pago pendiente antes de tu visita.",
+  "protection.waiver": "Motivo de exención de señal (solo responsables)",
+  "protection.waiverHelp":
+    "Si las señales están activadas, un responsable debe eximirlas expresamente en una reserva creada por el salón. Los clientes aceptan y pagan online. Los clientes de confianza pueden estar exentos.",
+  "protection.cancelWarning":
+    "Se aplica la política de señal aceptada. La cancelación gratuita termina el {date}; después se puede retener hasta un {percent}% del servicio, limitado a la señal pagada. El salón tramita la devolución.",
+  "protection.feesReport": "Penalizaciones de reservas (neto reconocido en el periodo)",
+};

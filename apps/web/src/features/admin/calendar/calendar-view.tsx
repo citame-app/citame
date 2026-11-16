@@ -50,6 +50,7 @@ export function CalendarView({
   onSearchChange,
   role,
   ownStaffId,
+  accessPreset,
   readOnly = false,
   now: fixedNow,
 }: {
@@ -57,6 +58,7 @@ export function CalendarView({
   onSearchChange: (search: CalendarSearch) => void;
   role: UserRole;
   ownStaffId: string | null;
+  accessPreset?: import("@sob/contracts").StaffAccessPreset | null;
   readOnly?: boolean;
   now?: Date;
 }) {
@@ -361,6 +363,7 @@ export function CalendarView({
           initial={creating}
           role={role}
           ownStaffId={ownStaffId}
+          accessPreset={accessPreset}
         />
       )}
       <ShortcutsHelp open={helpOpen} onOpenChange={setHelpOpen} />

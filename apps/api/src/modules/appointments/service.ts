@@ -31,7 +31,14 @@ import {
 import { lockCalendars, type Tx } from "../../tx";
 import { totalBlockMinutes } from "../availability/compute";
 import { type BookingViolation, bookingViolations } from "../availability/rules";
+import {
+  createProtection,
+  lockProtectionReceipt,
+  protectionView,
+  updateProtection,
+} from "../booking-protection/value";
 import { assertClientCanBook } from "../clients/controls";
+import { refreshAppointmentCheckout } from "../commerce/service";
 import { getServicesByIds } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { assertStaffActive } from "../staff/guards";
@@ -202,8 +209,9 @@ export async function createAppointment(
           },
         });
       }
-      await scheduleNewAppointment(tx, row, now);
-      return toAppointment(row, snapshots);
+      const protection = await createProtection(tx, row, request, actor, now);
+      if (!protection || protection.state === "waived") await scheduleNewAppointment(tx, row, now);
+      return { ...toAppointment(row, snapshots), ...(protection ? { protection } : {}) };
     });
   } catch (error) {
     return mapWriteError(error);
@@ -366,7 +374,12 @@ export async function listAppointments(
     rows.map((r) => r.id),
   );
   return {
-    appointments: rows.map((row) => toAppointment(row, snapshots.get(row.id) ?? [])),
+    appointments: await Promise.all(
+      rows.map(async (row) => ({
+        ...toAppointment(row, snapshots.get(row.id) ?? []),
+        protection: await protectionView(db, row.id),
+      })),
+    ),
     page,
     pageSize,
     total: totals[0]?.total ?? 0,
@@ -387,7 +400,12 @@ export async function listClientAppointments(
     db,
     rows.map((r) => r.id),
   );
-  return rows.map((row) => toAppointment(row, snapshots.get(row.id) ?? []));
+  return Promise.all(
+    rows.map(async (row) => ({
+      ...toAppointment(row, snapshots.get(row.id) ?? []),
+      protection: await protectionView(db, row.id),
+    })),
+  );
 }
 
 type TransitionAction =
@@ -479,6 +497,7 @@ export async function updateAppointment(
 
   try {
     const row = await db.transaction(async (tx) => {
+      await lockProtectionReceipt(tx, id);
       await lockCalendars(tx, [current.staffId, staffId]);
       if (slotChanges) await assertClientCanBook(tx, current.clientId);
       const noticeOverridden =
@@ -522,18 +541,25 @@ export async function updateAppointment(
         });
       }
       if (updated) {
+        await updateProtection(tx, current, updated, now, actor);
+        if (updated.status === "completed") await refreshAppointmentCheckout(tx, id, now);
         if (updated.status === "cancelled" && current.status !== "cancelled") {
           await closeAppointment(tx, updated, now, { notify: true });
         } else if (updated.status !== "booked" && current.status === "booked") {
           await closeAppointment(tx, updated, now, { notify: false });
-        } else if (updated.status === "booked" && slotChanges) {
+        } else if (
+          updated.status === "booked" &&
+          slotChanges &&
+          (await protectionView(tx, id))?.state !== "pending"
+        ) {
           await rescheduleAppointment(tx, updated, now);
         }
       }
       return updated;
     });
     if (!row) throw versionConflict();
-    return toAppointment(row, snapshots);
+    const protection = await protectionView(db, id);
+    return { ...toAppointment(row, snapshots), ...(protection ? { protection } : {}) };
   } catch (error) {
     if (error instanceof DomainError) throw error;
     return mapWriteError(error);

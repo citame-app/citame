@@ -302,6 +302,9 @@ export async function salesReport(db: Database, query: ReportQuery, principal: P
       const [fees] = await tx.execute<{ amount: string | number }>(
         sql`select coalesce(sum(l.unit_amount_cents),0)::bigint as amount from checkout_line l join checkout c on c.id=l.checkout_id join pass_period pp on pp.id=l.pass_period_id join pass_contract pc on pc.id=pp.contract_id where pc.included_uses=0 and c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt} ${staff}`,
       );
+      const [bookingFees] = await tx.execute<{ amount: string | number }>(
+        sql`select coalesce(sum(m.amount_cents),0)::bigint as amount from booking_fee_movement m join checkout c on c.id=m.checkout_id where m.created_at >= ${fromAt} and m.created_at < ${toAt} ${staff}`,
+      );
       const sessions = query.staffId
         ? []
         : await tx
@@ -343,6 +346,7 @@ export async function salesReport(db: Database, query: ReportQuery, principal: P
         prepaidAllocatedCents: Number(prepaid?.applied ?? 0),
         prepaidAllocationReturnedCents: Number(prepaid?.returned ?? 0),
         membershipAccessFeesCents: Number(fees?.amount ?? 0),
+        bookingFeesCents: Number(bookingFees?.amount ?? 0),
         soldCents: Number(sales?.sold ?? 0),
         includedTaxCents: Number(sales?.tax ?? 0),
         tipsCents: Number(sales?.tips ?? 0),

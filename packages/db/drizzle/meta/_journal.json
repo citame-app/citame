@@ -127,6 +127,13 @@
       "when": 1794789327884,
       "tag": "0017_mighty_mesmero",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1794793417013,
+      "tag": "0018_public_paladin",
+      "breakpoints": true
     }
   ]
 }

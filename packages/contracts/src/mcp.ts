@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { appointmentSchema, appointmentStatusSchema } from "./appointments";
+import { bookingPolicySchema } from "./booking-protection";
 import { adminClientSchema } from "./clients";
 import { idSchema, instantSchema, localDateSchema } from "./common";
 import { serviceSchema } from "./services";
@@ -18,6 +19,7 @@ export { MCP_PAGE_SIZE_DEFAULT, MCP_PAGE_SIZE_MAX };
 
 export const mcpListServicesInput = z.object({});
 export const mcpListServicesOutput = z.object({
+  bookingPolicy: bookingPolicySchema.optional(),
   services: z.array(serviceSchema),
   staff: z.array(staffSchema).describe("Professionals who can be booked. Use their id as staffId."),
 });
@@ -55,6 +57,30 @@ export const mcpCreateAppointmentInput = z.object({
       "Staff and owners only: the client being booked, from find_client. Clients book for themselves and must omit this.",
     ),
   notes: z.string().trim().max(500).optional().describe("Optional note for the salon."),
+  protectionAcceptedVersion: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(
+      "Only after the customer explicitly accepts the current deposit and cancellation policy from list_services.",
+    ),
+  protectionAcceptedTotalCents: z
+    .number()
+    .int()
+    .min(0)
+    .max(999999999)
+    .optional()
+    .describe(
+      "Service total shown to and accepted by the customer, before any membership discount. Never infer acceptance.",
+    ),
+  protectionWaiverReason: z
+    .string()
+    .trim()
+    .min(8)
+    .max(300)
+    .optional()
+    .describe("Managers only: explicit reason to waive a deposit for a salon booking."),
   requestId: idSchema
     .optional()
     .describe(

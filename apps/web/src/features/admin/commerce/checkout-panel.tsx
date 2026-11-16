@@ -112,6 +112,7 @@ export function CheckoutPanel({
   if (sale.isPending) return <Skeleton className="h-72" />;
   if (sale.isError) return <ErrorState error={sale.error} onRetry={() => void sale.refetch()} />;
   const order = sale.data;
+  const payableCents = order.payableCents ?? order.balanceCents;
   const money = (value: number) => formatMoney(value, order.currency, locale);
   const canRefund = capabilities.data?.permissions?.refunds ?? role === "owner";
   const clientPurchase =
@@ -155,6 +156,7 @@ export function CheckoutPanel({
       </div>
       {(mode === "admin" || clientPurchase) &&
         order.status === "open" &&
+        !order.protection &&
         !order.payments.some((p) => p.status !== "failed") && (
           <details>
             <summary className="cursor-pointer py-2 font-medium">
@@ -221,6 +223,9 @@ export function CheckoutPanel({
           {t("commerce.review")}
         </p>
       )}
+      {payableCents === 0 && order.status === "open" && order.balanceCents > 0 && (
+        <p role="status">{t("protection.notDue")}</p>
+      )}
       {pending && order.balanceCents > 0 && <p role="status">{t("commerce.pending")}</p>}
       {!pending && order.balanceCents > 0 && order.payments.some((p) => p.status === "failed") && (
         <p role="status">{t("commerce.declined")}</p>
@@ -237,12 +242,13 @@ export function CheckoutPanel({
         </form>
       ) : null}
       {order.status === "open" &&
+        payableCents > 0 &&
         !pending &&
         !review &&
         !form &&
         order.appointmentId &&
         order.clientId && <PassTender checkoutId={order.id} mode={mode} />}
-      {order.status === "open" && !pending && !review && !form && (
+      {order.status === "open" && payableCents > 0 && !pending && !review && !form && (
         <div>
           {capabilities.isPending ? (
             <Skeleton className="h-20" />
@@ -251,8 +257,8 @@ export function CheckoutPanel({
               className="grid gap-4 sm:grid-cols-2"
               onSubmit={(event) => {
                 event.preventDefault();
-                const cents = inputCents(amount ?? centsInput(order.balanceCents));
-                if (cents === null || cents <= 0 || cents > order.balanceCents) {
+                const cents = inputCents(amount ?? centsInput(payableCents));
+                if (cents === null || cents <= 0 || cents > payableCents) {
                   setAmountError(true);
                   return;
                 }
@@ -268,7 +274,7 @@ export function CheckoutPanel({
               <TextField
                 label={t("commerce.amount")}
                 inputMode="decimal"
-                value={amount ?? centsInput(order.balanceCents)}
+                value={amount ?? centsInput(payableCents)}
                 onChange={(event) => {
                   setAmount(event.target.value);
                   setAmountError(false);

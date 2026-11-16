@@ -69,6 +69,7 @@ export const salesReportSchema = z.object({
   prepaidAllocatedCents: aggregateMoney.default(0),
   prepaidAllocationReturnedCents: aggregateMoney.default(0),
   membershipAccessFeesCents: aggregateMoney.default(0),
+  bookingFeesCents: signedMoney.default(0),
   soldCents: aggregateMoney,
   includedTaxCents: aggregateMoney,
   tipsCents: aggregateMoney,
