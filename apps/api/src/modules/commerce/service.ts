@@ -34,6 +34,14 @@ import {
   releaseCheckoutInventory,
   reserveCheckoutProducts,
 } from "../inventory/reservations";
+import {
+  activateCheckoutPasses,
+  membershipDiscounts,
+  preparePassRefund,
+  redeemPass,
+  syncCheckoutPassRefunds,
+  voidCheckoutPasses,
+} from "../passes/value";
 import { allocateDiscount } from "./money";
 
 type Connection = Database | Tx;
@@ -122,6 +130,8 @@ async function snapshot(db: Connection, row: typeof checkout.$inferSelect): Prom
       quantity: line.quantity,
       unitAmountCents: line.unitAmountCents,
       taxBasisPoints: line.taxBasisPoints,
+      passPeriodId: line.passPeriodId,
+      discountCents: line.discountCents,
     })),
     payments: payments.map((payment) => ({
       id: payment.id,
@@ -174,6 +184,7 @@ export async function listCheckouts(db: Database, principal: Principal) {
 async function refreshStatus(tx: Tx, id: string) {
   const [row] = await tx.select().from(checkout).where(eq(checkout.id, id));
   if (!row || row.status === "void") return;
+  if (await syncCheckoutPassRefunds(tx, id)) return;
   if (await syncCheckoutGiftRefunds(tx, id)) return;
   const view = await snapshot(tx, row);
   const status =
@@ -193,6 +204,7 @@ async function fulfillCheckout(tx: Tx, id: string) {
   await consumeReservedInventory(tx, id);
   await accrueCommissions(tx, id);
   await activateCheckoutGifts(tx, id);
+  await activateCheckoutPasses(tx, id);
   const fulfilledAt = new Date();
   await tx.update(checkout).set({ fulfilledAt }).where(eq(checkout.id, id));
   return fulfilledAt;
@@ -212,6 +224,7 @@ export async function voidCheckout(db: Database, id: string, principal: Principa
       );
     await releaseCheckoutInventory(tx, id);
     await voidCheckoutGifts(tx, id);
+    await voidCheckoutPasses(tx, id);
     const [updated] = await tx
       .update(checkout)
       .set({ status: "void" })
@@ -309,6 +322,7 @@ export async function createCheckoutInTransaction(
     giftCardId?: string;
     unitCostCents?: number | null;
     serviceId?: string | null;
+    membershipPeriodId?: string | null;
     description: string;
     quantity: number;
     unitAmountCents: number;
@@ -413,9 +427,19 @@ export async function createCheckoutInTransaction(
     });
   }
   const subtotalCents = lines.reduce((a, b) => a + b.quantity * b.unitAmountCents, 0);
-  const totalCents = subtotalCents - input.discountCents + input.tipCents;
+  const manualDiscounts = allocateDiscount(
+    lines.map((line) => line.quantity * line.unitAmountCents),
+    Math.min(input.discountCents, subtotalCents),
+  );
+  const memberDiscounts = await membershipDiscounts(tx, clientId, input.appointmentId, lines);
+  const effectiveDiscounts = lines.map((_, index) =>
+    Math.max(manualDiscounts[index] ?? 0, memberDiscounts[index]?.amountCents ?? 0),
+  );
+  const discountCents = effectiveDiscounts.reduce((sum, n) => sum + n, 0);
+  const totalCents = subtotalCents - discountCents + input.tipCents;
   if (
     !lines.length ||
+    subtotalCents > 2147483647 ||
     input.discountCents > subtotalCents ||
     !Number.isSafeInteger(totalCents) ||
     totalCents < 0 ||
@@ -423,15 +447,17 @@ export async function createCheckoutInTransaction(
   )
     throw new DomainError("validation_error", "Invalid checkout total or discount");
   // Prices include tax. Discounts are allocated proportionally in integer cents.
-  const discounts = allocateDiscount(
-    lines.map((line) => line.quantity * line.unitAmountCents),
-    input.discountCents,
-  );
+  const discounts = effectiveDiscounts;
   let taxCents = 0;
   for (const [index, line] of lines.entries()) {
     const gross = line.quantity * line.unitAmountCents;
     const discount = discounts[index] ?? 0;
     line.discountCents = discount;
+    if (
+      (memberDiscounts[index]?.amountCents ?? 0) > 0 &&
+      discount === memberDiscounts[index]?.amountCents
+    )
+      line.membershipPeriodId = memberDiscounts[index]?.periodId ?? null;
     line.taxCents = Math.round(
       ((gross - discount) * line.taxBasisPoints) / (10000 + line.taxBasisPoints),
     );
@@ -444,7 +470,7 @@ export async function createCheckoutInTransaction(
       clientId,
       staffId,
       subtotalCents,
-      discountCents: input.discountCents,
+      discountCents,
       tipCents: input.tipCents,
       taxCents,
       totalCents,
@@ -494,7 +520,7 @@ export async function startPayment(
 ) {
   if (
     principal.role === "client" &&
-    !["redsys_card", "redsys_bizum", "gift_card"].includes(input.method)
+    !["redsys_card", "redsys_bizum", "gift_card", "package", "membership"].includes(input.method)
   )
     throw new DomainError("forbidden", "Clients cannot record manual payments");
   const bank = input.method === "redsys_card" || input.method === "redsys_bizum";
@@ -552,6 +578,8 @@ export async function startPayment(
       }
       if (!payment)
         throw new DomainError("invalid_state", "Could not allocate a unique payment order");
+      if (input.method === "package" || input.method === "membership")
+        await redeemPass(tx, input, payment.id, id, principal);
       if (input.method === "gift_card")
         await redeemGift(
           tx,
@@ -733,6 +761,7 @@ export async function manualRefund(
       })
       .returning();
     if (!refund) throw new Error("Refund insert failed");
+    await preparePassRefund(tx, refund, payment);
     if (session)
       await tx.insert(cashMovement).values({
         sessionId: session.id,

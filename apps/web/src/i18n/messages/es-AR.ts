@@ -7,9 +7,11 @@ import type { MessageKey } from "./en";
 import { giftCardsEsAR } from "./gift-cards";
 import { inventoryEsAR } from "./inventory";
 import { notificationsEsAR } from "./notifications";
+import { passesEsAR } from "./passes";
 
 /** Neutral, professional Spanish for Argentina. */
 export const esAR: Record<MessageKey, string> = {
+  ...passesEsAR,
   "common.greeting": "Hola, {name}",
   "booking.summary.services_one": "{count} servicio",
   "booking.summary.services_other": "{count} servicios",

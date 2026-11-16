@@ -16,6 +16,7 @@ import { clientProfile } from "./client";
 import { giftCard } from "./gift-card";
 import { createdAt, primaryId, timestamptz, updatedAt } from "./helpers";
 import { retailProduct } from "./inventory-product";
+import { passPeriod } from "./pass";
 import { staffProfile } from "./staff";
 
 export const checkoutStatus = pgEnum("checkout_status", [
@@ -44,6 +45,8 @@ export const paymentMethod = pgEnum("payment_method", [
   "redsys_card",
   "redsys_bizum",
   "gift_card",
+  "package",
+  "membership",
 ]);
 export const checkout = pgTable(
   "checkout",
@@ -91,6 +94,10 @@ export const checkoutLine = pgTable(
     giftCardId: uuid()
       .references(() => giftCard.id)
       .unique(),
+    passPeriodId: uuid()
+      .references(() => passPeriod.id)
+      .unique(),
+    membershipPeriodId: uuid().references(() => passPeriod.id),
     serviceId: uuid(),
     description: text().notNull(),
     quantity: integer().notNull(),

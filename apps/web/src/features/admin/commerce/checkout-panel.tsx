@@ -17,6 +17,7 @@ import { api } from "~/lib/api/instance";
 import { formatMoney } from "~/lib/format";
 import { invalidateCommerce } from "./invalidate";
 import { centsInput, inputCents } from "./money";
+import { PassPurchaseRefund, PassTender } from "./pass-tender";
 import { printReceipt } from "./print-receipt";
 import { StockReturn } from "./stock-return";
 
@@ -226,6 +227,12 @@ export function CheckoutPanel({
           </Button>
         </form>
       ) : null}
+      {order.status === "open" &&
+        !pending &&
+        !review &&
+        !form &&
+        order.appointmentId &&
+        order.clientId && <PassTender checkoutId={order.id} mode={mode} />}
       {order.status === "open" && !pending && !review && !form && (
         <div>
           {capabilities.isPending ? (
@@ -328,12 +335,20 @@ export function CheckoutPanel({
               {mode === "admin" &&
                 canRefund &&
                 ["succeeded", "reconciliation"].includes(payment.status) &&
-                refundableFor(payment.id, payment.amountCents) > 0 && (
+                refundableFor(payment.id, payment.amountCents) > 0 &&
+                (order.lines[0]?.passPeriodId ? (
+                  <PassPurchaseRefund
+                    periodId={order.lines[0].passPeriodId}
+                    paymentId={payment.id}
+                    maximumCents={refundableFor(payment.id, payment.amountCents)}
+                  />
+                ) : (
                   <RefundForm
                     paymentId={payment.id}
                     amountCents={refundableFor(payment.id, payment.amountCents)}
+                    wholeVisit={payment.method === "package" || payment.method === "membership"}
                   />
-                )}
+                ))}
               {mode === "admin" &&
                 canRefund &&
                 payment.status === "pending" &&
@@ -357,7 +372,15 @@ export function CheckoutPanel({
     </section>
   );
 }
-function RefundForm({ paymentId, amountCents }: { paymentId: string; amountCents: number }) {
+function RefundForm({
+  paymentId,
+  amountCents,
+  wholeVisit = false,
+}: {
+  paymentId: string;
+  amountCents: number;
+  wholeVisit?: boolean;
+}) {
   const { t } = useI18n();
   const queries = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -366,7 +389,7 @@ function RefundForm({ paymentId, amountCents }: { paymentId: string; amountCents
   const [key, setKey] = useState(() => crypto.randomUUID());
   const request = useMutation({
     mutationFn: async () => {
-      const cents = inputCents(amount);
+      const cents = wholeVisit ? amountCents : inputCents(amount);
       if (cents === null || cents <= 0 || cents > amountCents || reason.trim().length < 3)
         throw new Error("Invalid refund");
       return api().commerce.refund(paymentId, {
@@ -404,7 +427,8 @@ function RefundForm({ paymentId, amountCents }: { paymentId: string; amountCents
           <TextField
             label={t("commerce.refundAmount")}
             inputMode="decimal"
-            value={amount}
+            value={wholeVisit ? centsInput(amountCents) : amount}
+            readOnly={wholeVisit}
             onChange={(event) => {
               setAmount(event.target.value);
               request.reset();

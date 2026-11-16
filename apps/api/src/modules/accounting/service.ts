@@ -9,6 +9,7 @@ import {
   commissionPayout,
   commissionPolicy,
   type Database,
+  passRedemption,
 } from "@sob/db";
 import { and, count, desc, eq, gte, lt, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
@@ -103,7 +104,15 @@ export async function accrueCommissions(tx: Tx, checkoutId: string) {
   const lines = await tx.select().from(checkoutLine).where(eq(checkoutLine.checkoutId, checkoutId));
   for (const line of lines) {
     if (line.kind !== "service" && line.kind !== "product") continue;
-    const basisCents = line.quantity * line.unitAmountCents - line.discountCents - line.taxCents;
+    const [redemption] = await tx
+      .select()
+      .from(passRedemption)
+      .where(
+        and(eq(passRedemption.checkoutLineId, line.id), sql`${passRedemption.refundedAt} is null`),
+      );
+    const basisCents = redemption
+      ? redemption.allocatedCents - redemption.taxCents
+      : line.quantity * line.unitAmountCents - line.discountCents - line.taxCents;
     const rateBasisPoints =
       line.kind === "service" ? policy.serviceBasisPoints : policy.productBasisPoints;
     const earnedCents = multiplyDivide(basisCents, rateBasisPoints, 10000);
@@ -118,9 +127,12 @@ export async function accrueCommissions(tx: Tx, checkoutId: string) {
   }
 }
 // Net earned commission follows retained sale money. Excess captures never earn more commission.
-const adjustedEarned = sql`coalesce(round(a.earned_cents * least(1::numeric, greatest(0::numeric,
- ((select coalesce(sum(p.amount_cents),0) from checkout_payment p where p.checkout_id = c.id and p.status in ('succeeded','reconciliation')) -
- (select coalesce(sum(r.amount_cents),0) from checkout_refund r join checkout_payment p on p.id = r.payment_id where p.checkout_id = c.id and r.status = 'succeeded'))::numeric / nullif(c.total_cents,0)))),0)::bigint`;
+const adjustedEarned = sql`case when exists(select 1 from pass_redemption pr where pr.checkout_line_id=a.checkout_line_id) then
+ coalesce((select case when pr.refunded_at is null then a.earned_cents else 0 end from pass_redemption pr where pr.checkout_line_id=a.checkout_line_id order by pr.created_at desc, pr.id desc limit 1),0)::bigint
+ else coalesce(round(a.earned_cents * least(1::numeric, greatest(0::numeric,
+ ((select coalesce(sum(p.amount_cents),0) from checkout_payment p where p.checkout_id=c.id and p.status in ('succeeded','reconciliation') and p.method not in ('package','membership')) -
+ (select coalesce(sum(r.amount_cents),0) from checkout_refund r join checkout_payment p on p.id=r.payment_id where p.checkout_id=c.id and r.status='succeeded' and p.method not in ('package','membership')))::numeric /
+ nullif(c.total_cents-(select coalesce(sum(pr.amount_cents),0) from pass_redemption pr where pr.checkout_id=c.id),0)))),0)::bigint end`;
 async function balances(db: Connection, staffId: string) {
   const [earned] = await db.execute<{ amount: string | number }>(
     sql`select coalesce(sum(${adjustedEarned}),0)::bigint as amount from commission_accrual a join checkout c on c.id = a.checkout_id where a.staff_id = ${staffId}`,
@@ -272,13 +284,23 @@ export async function salesReport(db: Database, query: ReportQuery, principal: P
         tax: string | number;
         tips: string | number;
       }>(
-        sql`select coalesce(sum(c.total_cents),0)::bigint as sold, coalesce(sum(c.tax_cents),0)::bigint as tax, coalesce(sum(c.tip_cents),0)::bigint as tips from checkout c where c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt} and not exists (select 1 from checkout_line gl where gl.checkout_id = c.id and gl.kind = 'gift_card') ${staff}`,
+        sql`select coalesce(sum(c.total_cents - (select coalesce(sum(pr.amount_cents-pr.allocated_cents),0) from pass_redemption pr where pr.checkout_id=c.id)),0)::bigint as sold, coalesce(sum(c.tax_cents - (select coalesce(sum(l.tax_cents-pr.tax_cents),0) from pass_redemption pr join checkout_line l on l.id=pr.checkout_line_id where pr.checkout_id=c.id)),0)::bigint as tax, coalesce(sum(c.tip_cents),0)::bigint as tips from checkout c where c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt} and not exists (select 1 from checkout_line gl where gl.checkout_id = c.id and gl.kind in ('gift_card','package_purchase','membership_period')) ${staff}`,
       );
       const [costs] = await tx.execute<{ cost: string | number; unknown: number }>(
         sql`select coalesce(sum(l.quantity * l.unit_cost_cents::bigint),0)::bigint as cost, count(*) filter (where l.unit_cost_cents is null)::int as unknown from checkout_line l join checkout c on c.id = l.checkout_id where l.kind = 'product' and c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt} ${staff}`,
       );
       const [giftIssued] = await tx.execute<{ amount: string | number }>(
         sql`select coalesce(sum(m.amount_cents),0)::bigint as amount from gift_card_movement m join checkout c on c.id = m.checkout_id where m.kind = 'activation' and m.created_at >= ${fromAt} and m.created_at < ${toAt} ${staff}`,
+      );
+      const [prepaid] = await tx.execute<{
+        applied: string | number;
+        returned: string | number;
+      }>(sql`select
+ coalesce(sum(pr.allocated_cents) filter (where c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt}),0)::bigint as applied,
+ coalesce(sum(pr.allocated_cents) filter (where c.fulfilled_at is not null and pr.refunded_at >= ${fromAt} and pr.refunded_at < ${toAt}),0)::bigint as returned
+ from pass_redemption pr join checkout c on c.id=pr.checkout_id where true ${staff}`);
+      const [fees] = await tx.execute<{ amount: string | number }>(
+        sql`select coalesce(sum(l.unit_amount_cents),0)::bigint as amount from checkout_line l join checkout c on c.id=l.checkout_id join pass_period pp on pp.id=l.pass_period_id join pass_contract pc on pc.id=pp.contract_id where pc.included_uses=0 and c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt} ${staff}`,
       );
       const sessions = query.staffId
         ? []
@@ -295,10 +317,10 @@ export async function salesReport(db: Database, query: ReportQuery, principal: P
           refundedCents: Number(refunds.find((row) => row.method === method)?.amount ?? 0),
         }));
       const collectedCents = methods
-        .filter((row) => row.method !== "gift_card")
+        .filter((row) => !["gift_card", "package", "membership"].includes(row.method))
         .reduce((sum, row) => sum + row.collectedCents, 0);
       const refundedCents = methods
-        .filter((row) => row.method !== "gift_card")
+        .filter((row) => !["gift_card", "package", "membership"].includes(row.method))
         .reduce((sum, row) => sum + row.refundedCents, 0);
       return {
         from: query.from,
@@ -312,6 +334,15 @@ export async function salesReport(db: Database, query: ReportQuery, principal: P
         storedValueReturnedCents:
           methods.find((row) => row.method === "gift_card")?.refundedCents ?? 0,
         giftValueIssuedCents: Number(giftIssued?.amount ?? 0),
+        prepaidAppliedCents: methods
+          .filter((r) => r.method === "package" || r.method === "membership")
+          .reduce((sum, r) => sum + r.collectedCents, 0),
+        prepaidReturnedCents: methods
+          .filter((r) => r.method === "package" || r.method === "membership")
+          .reduce((sum, r) => sum + r.refundedCents, 0),
+        prepaidAllocatedCents: Number(prepaid?.applied ?? 0),
+        prepaidAllocationReturnedCents: Number(prepaid?.returned ?? 0),
+        membershipAccessFeesCents: Number(fees?.amount ?? 0),
         soldCents: Number(sales?.sold ?? 0),
         includedTaxCents: Number(sales?.tax ?? 0),
         tipsCents: Number(sales?.tips ?? 0),

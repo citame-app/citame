@@ -52,3 +52,9 @@ Full suites passed: 742 API, 627 web, 123 contracts and 47 database tests. Four 
 ## Gift-card delivery evidence
 
 Full suites passed with 752 API, 632 web, 125 contract and 47 database tests; four light/dark mobile/desktop Chromium gift workflows passed, including isolated print-document inspection, redemption/refund balance checks and axe. A subsequent financial regression run passed 55 tests for full-return closure and late captures; all 12 gift tests pass after also covering expired-request replay. Typechecking and repository lint pass. No real bank operation or gift delivery was performed.
+
+## Prepaid visits and membership progress
+
+Packages and manually renewed memberships now have frozen server-priced terms, paid activation, discrete visit allocations, period/expiry checks, concurrent redemption protection, whole-visit return quotes, bank-refund holds, manual renewal/cancellation, scoped EN/ES operator/customer UI and integrated commissions/reports; [operator guide](passes.md), [decision](adr/0014-prepaid-visits.md). Automatic recurring bank mandates and transactional delivery remain open and requests for automatic payment fail closed. This block remains unchecked until that remaining scope is addressed.
+
+Prepaid verification: full suites passed with 776 API, 637 web, 128 contracts and 47 database tests. Four mobile/desktop light/dark Playwright workflows passed with actual plan creation, activation, redemption, full visit restoration, original-penny purchase returns, axe and horizontal-overflow checks. Subsequent financial edge regressions passed 44 tests, covering settlement timing, split-method access-fee returns and excess-first quotes. Typechecking and repository lint pass. Automatic recurring payment remains unavailable and is not represented as delivered.

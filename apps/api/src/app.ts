@@ -23,6 +23,7 @@ import {
 import { giftCardRoutes } from "./modules/gift-cards/routes";
 import { inventoryRoutes } from "./modules/inventory/routes";
 import { meRoutes } from "./modules/me/routes";
+import { passRoutes, planAdminRoutes, publicPlanRoutes } from "./modules/passes/routes";
 import { reportRoutes } from "./modules/reports/routes";
 import { serviceAdminRoutes } from "./modules/services/admin-routes";
 import { servicesRoutes } from "./modules/services/routes";
@@ -273,6 +274,10 @@ export function createApp(input: AppDeps): App {
   app.route("/admin/commerce", commerceAdminRoutes(deps));
   app.route("/admin/inventory", inventoryRoutes(deps));
   app.route("/admin/accounting", accountingRoutes(deps));
+  app.route("/benefit-plans", publicPlanRoutes(deps));
+  app.route("/admin/benefit-plans", planAdminRoutes(deps));
+  app.route("/admin/passes", passRoutes(deps));
+  app.route("/me/passes", passRoutes(deps));
   app.route("/admin/gift-cards", giftCardRoutes(deps));
   app.route("/me/gift-cards", giftCardRoutes(deps));
   app.route("/admin/services", serviceAdminRoutes(deps));

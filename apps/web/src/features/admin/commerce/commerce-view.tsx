@@ -11,11 +11,11 @@ import { api } from "~/lib/api/instance";
 import { formatMoney } from "~/lib/format";
 import { AccountingView } from "./accounting-view";
 import { CheckoutPanel } from "./checkout-panel";
-import { GiftCardsView } from "./gift-cards-view";
 import { invalidateCommerce } from "./invalidate";
 import { InventoryView } from "./inventory-view";
 import { inputCents } from "./money";
 import { type CartProduct, ProductCart } from "./product-cart";
+import { RewardsView } from "./rewards-view";
 
 export function CommerceView({
   role,
@@ -38,7 +38,7 @@ export function CommerceView({
         <Button variant="ghost" onClick={() => setRewards(false)}>
           {t("commerce.back")}
         </Button>
-        <GiftCardsView mode="admin" role={role} accessPreset={accessPreset} />
+        <RewardsView mode="admin" role={role} accessPreset={accessPreset} />
       </div>
     );
   if (accounting)

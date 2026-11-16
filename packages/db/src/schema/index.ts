@@ -10,6 +10,8 @@ export * from "./inventory";
 export * from "./inventory-product";
 export * from "./notification";
 export * from "./oauth";
+export * from "./pass";
+export * from "./pass-ledger";
 export * from "./salon-settings";
 export * from "./service";
 export * from "./staff";

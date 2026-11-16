@@ -10,6 +10,8 @@ export const paymentMethodSchema = z.enum([
   "redsys_card",
   "redsys_bizum",
   "gift_card",
+  "package",
+  "membership",
 ]);
 export const checkoutStatusSchema = z.enum([
   "open",
@@ -73,11 +75,24 @@ export const startPaymentSchema = z
   .object({
     method: paymentMethodSchema,
     giftCardCode: giftCardCodeSchema.optional(),
+    passPeriodId: idSchema.optional(),
+    checkoutLineId: idSchema.optional(),
     amountCents: moneyCentsSchema.refine((v) => v > 0),
     idempotencyKey: idempotencyKeySchema,
   })
   .strict()
   .superRefine((input, ctx) => {
+    const pass = input.method === "package" || input.method === "membership";
+    if (
+      pass
+        ? !input.passPeriodId || !input.checkoutLineId
+        : input.passPeriodId || input.checkoutLineId
+    )
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "Pass tender requires a period and service line; other methods cannot include them",
+      });
     if ((input.method === "gift_card") !== Boolean(input.giftCardCode))
       ctx.addIssue({
         code: "custom",
@@ -115,6 +130,8 @@ export const checkoutLineSchema = z.object({
   quantity: z.number().int(),
   unitAmountCents: moneyCentsSchema,
   taxBasisPoints: z.number().int(),
+  passPeriodId: idSchema.nullable().optional(),
+  discountCents: z.number().int().nonnegative().max(2_147_483_647).optional(),
 });
 export const checkoutPaymentSchema = z.object({
   id: idSchema,
@@ -134,7 +151,7 @@ export const checkoutSchema = z.object({
   status: checkoutStatusSchema,
   // Gross may exceed the payable limit when a valid discount reduces the total.
   subtotalCents: z.number().int().nonnegative().max(2_147_483_647),
-  discountCents: moneyCentsSchema,
+  discountCents: z.number().int().nonnegative().max(2_147_483_647),
   tipCents: moneyCentsSchema,
   taxCents: moneyCentsSchema,
   totalCents: moneyCentsSchema,
