@@ -7,6 +7,7 @@ import { parseThemeCookie } from "../lib/theme";
 import { visitorAddress } from "./client-address";
 import { renderRateLimitedPage } from "./rate-limited-page";
 import { runWithRequestContext } from "./request-context";
+import { applyWidgetFramePolicy, parseWidgetOrigins } from "./widget-policy";
 
 export interface ProxyLike {
   matches: (url: URL) => boolean;
@@ -26,6 +27,8 @@ export interface WebServerOptions {
    * Decides how the visitor address handed to SSR (and so to the API) is determined.
    */
   trustProxy?: boolean;
+  /** Exact external origins permitted to embed the public read-only widget. Default: same-origin. */
+  widgetParentOrigins?: string[];
   /** Access log sink. Receives plain data (no query strings, cookies or addresses). */
   log?: (entry: Record<string, unknown>) => void;
 }
@@ -59,10 +62,12 @@ export function createWebServer({
   proxy,
   hsts = false,
   trustProxy = false,
+  widgetParentOrigins = [],
   log,
 }: WebServerOptions) {
   const root = normalize(clientDir.endsWith(sep) ? clientDir : clientDir + sep);
   const gzipCache = new Map<string, Uint8Array>();
+  const allowedWidgetParents = parseWidgetOrigins(widgetParentOrigins.join(","));
 
   function acceptsGzip(request: Request): boolean {
     return /\bgzip\b/.test(request.headers.get("accept-encoding") ?? "");
@@ -195,6 +200,9 @@ export function createWebServer({
       const out = new Response(response.body, response);
       for (const [name, value] of Object.entries(BASELINE_HEADERS)) {
         if (!out.headers.has(name)) out.headers.set(name, value);
+      }
+      if (out.status === 200 && (out.headers.get("content-type") ?? "").startsWith("text/html")) {
+        applyWidgetFramePolicy(out.headers, url.pathname, allowedWidgetParents);
       }
       if (hsts && !out.headers.has("strict-transport-security")) {
         out.headers.set("strict-transport-security", "max-age=31536000; includeSubDomains");

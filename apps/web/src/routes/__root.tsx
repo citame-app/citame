@@ -22,7 +22,7 @@ import { buildCsp } from "~/lib/csp";
 import { salonQuery } from "~/lib/queries";
 import { pageMeta } from "~/lib/seo";
 import type { Theme } from "~/lib/theme";
-import { bootstrapQuery } from "~/server/request";
+import { bootstrapQuery, publicBootstrapQuery } from "~/server/request";
 import appCss from "~/styles/app.css?url";
 
 const FALLBACK_SALON = {
@@ -47,9 +47,11 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         }
       : {}),
   }),
-  beforeLoad: async ({ context }) => {
+  beforeLoad: async ({ context, location }) => {
     const [bootstrap, salon] = await Promise.all([
-      context.queryClient.ensureQueryData(bootstrapQuery),
+      context.queryClient.ensureQueryData(
+        location.pathname === "/widget" ? publicBootstrapQuery : bootstrapQuery,
+      ),
       context.queryClient.ensureQueryData(salonQuery).catch(() => FALLBACK_SALON),
     ]);
     return {
@@ -178,6 +180,7 @@ function Chrome({
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const firstRender = useRef(true);
   const inAdmin = pathname === "/admin" || pathname.startsWith("/admin/");
+  const inWidget = pathname === "/widget";
 
   // Move focus to the page content after client-side navigations so keyboard and screen reader
   // users land on the new page instead of being left on the link they activated.
@@ -199,18 +202,20 @@ function Chrome({
         {t("a11y.skip")}
       </a>
       <OfflineBanner />
-      <Header
-        salonName={salonName}
-        session={session}
-        theme={theme}
-        locale={locale}
-        onLocaleChange={onLocaleChange}
-        onThemeChange={onThemeChange}
-      />
+      {!inWidget && (
+        <Header
+          salonName={salonName}
+          session={session}
+          theme={theme}
+          locale={locale}
+          onLocaleChange={onLocaleChange}
+          onThemeChange={onThemeChange}
+        />
+      )}
       <main id="main" ref={mainRef} tabIndex={-1} className="flex-1 outline-none">
         <Outlet />
       </main>
-      {!inAdmin && <Footer salonName={salonName} timeZone={timeZone} />}
+      {!inAdmin && !inWidget && <Footer salonName={salonName} timeZone={timeZone} />}
     </div>
   );
 }

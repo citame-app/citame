@@ -10,6 +10,7 @@ import { serveWeb } from "./src/server/listener";
 import { createProxy } from "./src/server/proxy";
 import { assertSafeProxyConfig } from "./src/server/proxy-config";
 import { createWebServer } from "./src/server/web-server";
+import { parseWidgetOrigins } from "./src/server/widget-policy";
 
 assertSafeProxyConfig(process.env);
 
@@ -33,6 +34,7 @@ const web = createWebServer({
   proxy: createProxy({ apiUrl, trustProxy }),
   hsts,
   trustProxy,
+  widgetParentOrigins: parseWidgetOrigins(process.env.BOOKING_WIDGET_ORIGINS),
   log: (entry) => process.stdout.write(`${JSON.stringify(entry)}\n`),
 });
 

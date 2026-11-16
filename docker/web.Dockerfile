@@ -29,5 +29,5 @@ USER bun
 WORKDIR /app/apps/web
 EXPOSE 4173
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
-  CMD ["bun", "-e", "fetch('http://localhost:4173/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+  CMD ["bun", "src/server/healthcheck.ts"]
 CMD ["bun", "server.ts"]

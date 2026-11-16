@@ -1,17 +1,11 @@
-import type { MeResponse } from "@sob/contracts";
 import { queryOptions } from "@tanstack/react-query";
 import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeaders } from "@tanstack/react-start/server";
-import { type Locale, resolveLocale } from "~/i18n";
 import { serverEndpoints } from "~/lib/api/instance";
-import { parseThemeCookie, type Theme } from "~/lib/theme";
+import { type Bootstrap, bootstrapForRequest } from "./bootstrap";
 import { resolveSession } from "./session";
 
-export interface Bootstrap {
-  locale: Locale;
-  theme: Theme | undefined;
-  session: MeResponse | null;
-}
+export type { Bootstrap } from "./bootstrap";
 
 /**
  * Everything the very first render needs and that depends on the visitor's cookies: language,
@@ -21,17 +15,23 @@ export const loadBootstrap = createServerFn({ method: "GET" }).handler(
   async (): Promise<Bootstrap> => {
     const headers = getRequestHeaders();
     const cookie = headers.get("cookie");
-    const locale = resolveLocale({ cookie, acceptLanguage: headers.get("accept-language") });
-    const theme = parseThemeCookie(cookie);
-    const session = cookie
-      ? await resolveSession(() => serverEndpoints(cookie, headers.get("x-request-id")).me())
-      : null;
-    return { locale, theme, session };
+    return bootstrapForRequest(headers, () =>
+      resolveSession(() => serverEndpoints(cookie, headers.get("x-request-id")).me()),
+    );
   },
 );
 
 export const bootstrapQuery = queryOptions({
   queryKey: ["bootstrap"],
   queryFn: () => loadBootstrap(),
+  staleTime: 5 * 60_000,
+});
+
+const loadPublicBootstrap = createServerFn({ method: "GET" }).handler(
+  async (): Promise<Bootstrap> => bootstrapForRequest(getRequestHeaders(), async () => null, true),
+);
+export const publicBootstrapQuery = queryOptions({
+  queryKey: ["bootstrap-public"],
+  queryFn: () => loadPublicBootstrap(),
   staleTime: 5 * 60_000,
 });

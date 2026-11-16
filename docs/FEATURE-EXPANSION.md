@@ -16,7 +16,7 @@ The release is not complete merely because a table or endpoint exists. Each oper
 - [x] Loyalty and promotions: accrual/redemption, original-credit refund adjustments, discounts, usage limits and validity; [operator guide](loyalty-and-promotions.md).
 - [ ] Scheduling: automated waitlist and expiring offers, resources/capacity, recurring appointments, service variants/add-ons/combinations and processing gaps.
 - [ ] CRM: client tags, blocked/trusted clients, photos, import/export and deduplication; custom intake forms/waivers with versioned answers.
-- [ ] Reputation and acquisition: completed-appointment reviews and moderated public portfolio are implemented; booking links/QR/widget/social entry points remain open.
+- [ ] Reputation and acquisition: completed-appointment reviews, moderated public portfolio and booking link/QR/widget entry are implemented; consented social creative remains open.
 - [ ] Marketing: explicit channel consent, client segments, templates, scheduled campaigns, unsubscribe/suppression, durable delivery and outcomes, including transactional gift/pass delivery.
 - [ ] Mobile experience: responsive flows and installable application behavior, offline/reconnect states, deep links and device/browser verification; native distribution only where the required platform/signing environment exists.
 - [ ] Final integration: UI/UX review, cross-feature races, money/stock/entitlement invariants, all suites, production smoke and deployment guidance.
@@ -183,3 +183,15 @@ The complete API suite now passes **982 tests across 102 files**, with zero fail
 The **four dated-shift browser regressions** also pass, and the current production API image passes the combined **13 review/portfolio cases** on pinned Bun 1.4.4 with a read-only filesystem. Forced types and repository lint pass after the browser hit-target refinements.
 
 Three further reproduced editor-lifecycle regressions now prevent late review/photo/moderation responses from closing another record opened meanwhile. The complete web suite passes **722 tests**, and forced type checking passes after the refinement. The final browser pass includes direct pointer dismissal of success notices as well as the nonblocking action checks.
+
+## Booking entry progress
+
+The owner/manager composer now generates selected-treatment/professional links, local QR PNGs, clipboard/native share entry and escaped widget snippets. Public widgets read only the catalog, omit authenticated session bootstrap, carry explicit content language and open booking in a separate first-party tab. External embedding stays off until exact parent origins are configured; other pages, API and error responses retain their framing protection. Stale QR responses and removed-professional choices have runnable regressions. [Operation, configuration and limits](booking-entry.md). No actual domain or social account was configured. Social creative and its separate permissions remain open.
+
+The first four real mobile/desktop light/dark workflows pass with independent PNG decoding, approved/denied cross-origin framing, private-session exclusion, booking popup, clipboard, Spanish, axe and overflow checks. All **26 script tests** pass, including database backup/restore. The subsequent stale-selection refinement is being verified before the final counts are recorded.
+
+After the stale-selection refinement, all **733 web tests** pass, and the four entry workflows pass again on the host build. The web production image builds with frozen dependencies on Bun 1.4.4 and passes the same four browser workflows with a read-only filesystem. A reproduced custom-port healthcheck error now has coverage for configured ports and IPv6; the production browser cases assert actual Docker health. A dedicated owner-labelled wrapper is verifying fixture teardown, since killing only the foreground Docker CLI left its container running.
+
+The final **four production-image entry workflows pass**, including actual healthy-container assertions, and the labelled fixture container is confirmed absent after automatic teardown. No deployment or external activation occurred. The broad reputation/acquisition checkbox remains open for the separate social-creative workflow and consent.
+
+Final entry verification also passes forced type checks, repository lint and **26 script tests** after the runtime-wrapper and health-probe refinements. The current complete web suite is **733 passing tests**. API/database/contracts remain at the preceding **982/47/152** verified baseline; this entry block changes no API/database contract or financial behavior.

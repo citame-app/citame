@@ -1,6 +1,7 @@
 import { accessEn } from "./access";
 import { accountSecurityEn } from "./account-security";
 import { accountingEn } from "./accounting";
+import { acquisitionEn } from "./acquisition";
 import { adminEn } from "./admin";
 import { bookingProtectionEn } from "./booking-protection";
 import { clientControlsEn } from "./client-controls";
@@ -21,6 +22,7 @@ import { serviceOptionsEn } from "./service-options";
 import { waitlistEn } from "./waitlist";
 /** English is the source catalog: its keys define what every other catalog must provide. */
 export const en = {
+  ...acquisitionEn,
   ...portfolioEn,
   ...reputationEn,
   ...dateShiftsEn,

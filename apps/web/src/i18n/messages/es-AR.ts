@@ -1,6 +1,7 @@
 import { accessEsAR } from "./access";
 import { accountSecurityEsAR } from "./account-security";
 import { accountingEsAR } from "./accounting";
+import { acquisitionEsAR } from "./acquisition";
 import { adminEsAR } from "./admin";
 import { bookingProtectionEsAR } from "./booking-protection";
 import { clientControlsEsAR } from "./client-controls";
@@ -23,6 +24,7 @@ import { waitlistEsAR } from "./waitlist";
 
 /** Neutral, professional Spanish for Argentina. */
 export const esAR: Record<MessageKey, string> = {
+  ...acquisitionEsAR,
   ...portfolioEsAR,
   ...reputationEsAR,
   ...dateShiftsEsAR,
