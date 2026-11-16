@@ -1,15 +1,22 @@
 import { type ReviewCreate, type ReviewPrivate, reviewEditSchema } from "@sob/contracts";
 import { useMutation } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { TextField } from "~/components/ui/field";
 import { SelectField, TextAreaField } from "~/components/ui/select-field";
 import { ErrorState } from "~/components/ui/states";
+import type { TranslationKey } from "~/i18n";
 import { useI18n } from "~/i18n/react";
 import { ApiError, NetworkError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 
-export function ReviewFailure({ error }: { error: unknown }) {
+export function ReviewFailure({
+  error,
+  changedKey = "reviews.changed",
+}: {
+  error: unknown;
+  changedKey?: TranslationKey;
+}) {
   const { t } = useI18n();
   return (
     <div className="space-y-3">
@@ -17,7 +24,7 @@ export function ReviewFailure({ error }: { error: unknown }) {
       {error instanceof ApiError &&
         (error.code === "version_conflict" || error.code === "invalid_state") && (
           <p role="status" className="text-sm text-muted">
-            {t("reviews.changed")}
+            {t(changedKey)}
           </p>
         )}
     </div>
@@ -36,6 +43,13 @@ export function ReviewEditor({
 }) {
   const { t } = useI18n();
   const [name, setName] = useState(review?.publicName ?? "");
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const [rating, setRating] = useState(String(review?.rating ?? 5));
   const [body, setBody] = useState(review?.body ?? "");
   const [share, setShare] = useState(review?.shareServices ?? false);
@@ -67,11 +81,13 @@ export function ReviewEditor({
       } else await api().reviews.create(packet.current);
     },
     onError: (error) => {
+      if (!mounted.current) return;
       if (error instanceof NetworkError || (error instanceof ApiError && error.status >= 500))
         setUncertain(true);
       else packet.current = null;
     },
     onSuccess: () => {
+      if (!mounted.current) return;
       onDirtyChange(false);
       onSaved();
     },

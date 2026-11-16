@@ -232,6 +232,13 @@
       "when": 1794828433763,
       "tag": "0032_giant_hawkeye",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1794829393900,
+      "tag": "0033_milky_the_fury",
+      "breakpoints": true
     }
   ]
 }

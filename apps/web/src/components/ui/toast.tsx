@@ -21,8 +21,10 @@ function ToastList() {
       <Toast.Root
         key={toast.id}
         toast={toast}
+        // Notifications must not trap a click on an action underneath them. Only dismissal
+        // takes pointer input; live announcements and keyboard dismissal stay available.
         className={cn(
-          "sob-rise pointer-events-auto flex w-full items-start gap-3 rounded-lg border p-3.5 shadow-lg",
+          "sob-rise pointer-events-none flex w-full items-start gap-3 rounded-lg border p-3.5 shadow-lg",
           tones[tone],
         )}
       >
@@ -33,7 +35,7 @@ function ToastList() {
           <Toast.Title className="flex-1 text-[0.95rem] font-medium leading-snug" />
           <Toast.Close
             aria-label={t("common.dismiss")}
-            className="-m-2 inline-flex size-11 shrink-0 items-center justify-center rounded-md opacity-80 hover:opacity-100"
+            className="pointer-events-auto -m-2 inline-flex size-11 shrink-0 items-center justify-center rounded-md opacity-80 hover:opacity-100"
           >
             <CloseIcon />
           </Toast.Close>

@@ -15,6 +15,7 @@ import { Route as AdminRouteImport } from './routes/admin'
 import { Route as BookRouteImport } from './routes/book'
 import { Route as ConsentRouteImport } from './routes/consent'
 import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
+import { Route as PortfolioRouteImport } from './routes/portfolio'
 import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as ReviewsRouteImport } from './routes/reviews'
 import { Route as SignInRouteImport } from './routes/sign-in'
@@ -74,6 +75,11 @@ const ConsentRoute = ConsentRouteImport.update({
 const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
   id: '/forgot-password',
   path: '/forgot-password',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PortfolioRoute = PortfolioRouteImport.update({
+  id: '/portfolio',
+  path: '/portfolio',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ResetPasswordRoute = ResetPasswordRouteImport.update({
@@ -236,6 +242,7 @@ export interface FileRoutesByFullPath {
   '/book': typeof BookRouteWithChildren
   '/consent': typeof ConsentRoute
   '/forgot-password': typeof ForgotPasswordRoute
+  '/portfolio': typeof PortfolioRoute
   '/reset-password': typeof ResetPasswordRoute
   '/reviews': typeof ReviewsRoute
   '/sign-in': typeof SignInRoute
@@ -271,6 +278,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/consent': typeof ConsentRoute
   '/forgot-password': typeof ForgotPasswordRoute
+  '/portfolio': typeof PortfolioRoute
   '/reset-password': typeof ResetPasswordRoute
   '/reviews': typeof ReviewsRoute
   '/sign-in': typeof SignInRoute
@@ -310,6 +318,7 @@ export interface FileRoutesById {
   '/book': typeof BookRouteWithChildren
   '/consent': typeof ConsentRoute
   '/forgot-password': typeof ForgotPasswordRoute
+  '/portfolio': typeof PortfolioRoute
   '/reset-password': typeof ResetPasswordRoute
   '/reviews': typeof ReviewsRoute
   '/sign-in': typeof SignInRoute
@@ -350,6 +359,7 @@ export interface FileRouteTypes {
     | '/book'
     | '/consent'
     | '/forgot-password'
+    | '/portfolio'
     | '/reset-password'
     | '/reviews'
     | '/sign-in'
@@ -385,6 +395,7 @@ export interface FileRouteTypes {
     | '/'
     | '/consent'
     | '/forgot-password'
+    | '/portfolio'
     | '/reset-password'
     | '/reviews'
     | '/sign-in'
@@ -423,6 +434,7 @@ export interface FileRouteTypes {
     | '/book'
     | '/consent'
     | '/forgot-password'
+    | '/portfolio'
     | '/reset-password'
     | '/reviews'
     | '/sign-in'
@@ -462,6 +474,7 @@ export interface RootRouteChildren {
   BookRoute: typeof BookRouteWithChildren
   ConsentRoute: typeof ConsentRoute
   ForgotPasswordRoute: typeof ForgotPasswordRoute
+  PortfolioRoute: typeof PortfolioRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
   ReviewsRoute: typeof ReviewsRoute
   SignInRoute: typeof SignInRoute
@@ -513,6 +526,13 @@ declare module '@tanstack/react-router' {
       path: '/forgot-password'
       fullPath: '/forgot-password'
       preLoaderRoute: typeof ForgotPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/portfolio': {
+      id: '/portfolio'
+      path: '/portfolio'
+      fullPath: '/portfolio'
+      preLoaderRoute: typeof PortfolioRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/reset-password': {
@@ -806,6 +826,7 @@ const rootRouteChildren: RootRouteChildren = {
   BookRoute: BookRouteWithChildren,
   ConsentRoute: ConsentRoute,
   ForgotPasswordRoute: ForgotPasswordRoute,
+  PortfolioRoute: PortfolioRoute,
   ResetPasswordRoute: ResetPasswordRoute,
   ReviewsRoute: ReviewsRoute,
   SignInRoute: SignInRoute,

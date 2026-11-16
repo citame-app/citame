@@ -30,6 +30,7 @@ export * from "./notifications";
 export * from "./oauth";
 export * from "./passes";
 export * from "./permissions";
+export * from "./portfolio";
 export * from "./reports";
 export * from "./resources";
 export * from "./reviews";

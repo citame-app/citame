@@ -92,6 +92,12 @@ function Home() {
               >
                 {t("reviews.title")}
               </Link>
+              <Link
+                to="/portfolio"
+                className="ml-5 mt-4 inline-flex min-h-11 items-center text-accent-text underline underline-offset-4"
+              >
+                {t("portfolio.title")}
+              </Link>
             </div>
             <div
               aria-hidden="true"

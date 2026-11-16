@@ -1,6 +1,6 @@
 import type { ReviewPrivate, ReviewPublic } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { ConfirmDialog } from "~/components/ui/dialog";
 import { SelectField, TextAreaField } from "~/components/ui/select-field";
@@ -419,6 +419,13 @@ function ModerateEditor({
   onSaved: () => void;
 }) {
   const { t } = useI18n();
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const [reason, setReason] = useState(review.moderationReason ?? "");
   const [reply, setReply] = useState(review.reply ?? "");
   const mutation = useMutation({
@@ -430,7 +437,9 @@ function ModerateEditor({
             status: kind === "publish" ? "published" : "hidden",
             ...(kind === "hide" ? { reason: reason.trim() } : {}),
           }),
-    onSuccess: onSaved,
+    onSuccess: () => {
+      if (mounted.current) onSaved();
+    },
   });
   return (
     <div className="space-y-5">

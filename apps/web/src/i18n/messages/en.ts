@@ -14,12 +14,14 @@ import { inventoryEn } from "./inventory";
 import { loyaltyEn } from "./loyalty";
 import { notificationsEn } from "./notifications";
 import { passesEn } from "./passes";
+import { portfolioEn } from "./portfolio";
 import { reputationEn } from "./reputation";
 import { schedulingEn } from "./scheduling";
 import { serviceOptionsEn } from "./service-options";
 import { waitlistEn } from "./waitlist";
 /** English is the source catalog: its keys define what every other catalog must provide. */
 export const en = {
+  ...portfolioEn,
   ...reputationEn,
   ...dateShiftsEn,
   ...intakeEn,

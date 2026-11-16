@@ -31,6 +31,7 @@ import { inventoryRoutes } from "./modules/inventory/routes";
 import { meRoutes } from "./modules/me/routes";
 import { passRoutes, planAdminRoutes, publicPlanRoutes } from "./modules/passes/routes";
 import { reportRoutes } from "./modules/reports/routes";
+import { portfolioAdminRoutes, portfolioPublicRoutes } from "./modules/reputation/portfolio-routes";
 import {
   reviewAdminRoutes,
   reviewPublicRoutes,
@@ -298,6 +299,7 @@ export function createApp(input: AppDeps): App {
   app.route("/admin/waitlist", waitlistAdminRoutes(deps));
   app.route("/admin/resources", resourceRoutes(deps));
   app.route("/admin/reviews", reviewAdminRoutes(deps));
+  app.route("/admin/portfolio", portfolioAdminRoutes(deps));
   app.route("/benefit-plans", publicPlanRoutes(deps));
   app.route("/admin/benefit-plans", planAdminRoutes(deps));
   app.route("/admin/passes", passRoutes(deps));
@@ -316,6 +318,7 @@ export function createApp(input: AppDeps): App {
   // Public catalog and availability: anonymous visitors browse before they sign up.
   app.route("/salon", salonRoutes(deps));
   app.route("/reviews", reviewPublicRoutes(deps));
+  app.route("/portfolio", portfolioPublicRoutes(deps));
   app.route("/services", servicesRoutes(deps));
   app.route("/staff", staffRoutes(deps));
   app.route("/availability", availabilityRoutes(deps));

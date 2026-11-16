@@ -35,7 +35,7 @@ export default defineConfig({
   ...(recurringFixture
     ? {
         testMatch: reputationFixture
-          ? "**/reputation.spec.ts"
+          ? ["**/reputation.spec.ts", "**/portfolio.spec.ts"]
           : shiftsFixture
             ? "**/date-shifts.spec.ts"
             : intakeFixture
@@ -85,6 +85,7 @@ export default defineConfig({
           "**/intake.spec.ts",
           "**/date-shifts.spec.ts",
           "**/reputation.spec.ts",
+          "**/portfolio.spec.ts",
         ],
       }),
   outputDir: "./test-results",

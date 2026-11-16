@@ -18,6 +18,7 @@ export * from "./notification";
 export * from "./oauth";
 export * from "./pass";
 export * from "./pass-ledger";
+export * from "./portfolio";
 export * from "./resources";
 export * from "./review";
 export * from "./rewards";

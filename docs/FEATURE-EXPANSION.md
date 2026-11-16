@@ -16,7 +16,7 @@ The release is not complete merely because a table or endpoint exists. Each oper
 - [x] Loyalty and promotions: accrual/redemption, original-credit refund adjustments, discounts, usage limits and validity; [operator guide](loyalty-and-promotions.md).
 - [ ] Scheduling: automated waitlist and expiring offers, resources/capacity, recurring appointments, service variants/add-ons/combinations and processing gaps.
 - [ ] CRM: client tags, blocked/trusted clients, photos, import/export and deduplication; custom intake forms/waivers with versioned answers.
-- [ ] Reputation and acquisition: verified post-visit reviews, moderated public portfolio, booking links/QR/widget/social entry points.
+- [ ] Reputation and acquisition: completed-appointment reviews and moderated public portfolio are implemented; booking links/QR/widget/social entry points remain open.
 - [ ] Marketing: explicit channel consent, client segments, templates, scheduled campaigns, unsubscribe/suppression, durable delivery and outcomes, including transactional gift/pass delivery.
 - [ ] Mobile experience: responsive flows and installable application behavior, offline/reconnect states, deep links and device/browser verification; native distribution only where the required platform/signing environment exists.
 - [ ] Final integration: UI/UX review, cross-feature races, money/stock/entitlement invariants, all suites, production smoke and deployment guidance.
@@ -171,3 +171,15 @@ Client-chosen public identities, explicit publication/treatment disclosure, comp
 The focused API suite passes eight integration cases, including SQL identity protection and moderator demotion while queued. The complete web suite passes **718 tests**, contracts **151**, and forced type checks pass. Browser and production-image verification are recorded after completion below.
 
 All **four review browser workflows** pass with axe, overflow and Spanish withdrawal, and their mobile/desktop light/dark screenshots have been inspected. The production API image builds and passes the **eight review cases on pinned Bun 1.4.4 with a read-only filesystem**. Repository lint passes. No real reviews or external messages were created.
+
+## Public portfolio progress
+
+Separate private image drafts, explicit public-use permission, accessible captions/descriptions, optional frozen treatment links, reviewed publication/unpublication, revision-fenced editing and confirmed pixel/text erasure are implemented in EN/ES. Private client-gallery permissions never authorize this public gallery. [Operation and limits](portfolio.md). The five focused API cases pass, including the 200-image bound, SQL erasure protection and inactive catalog snapshots; the production image passes those same five cases on Bun 1.4.4 with a read-only filesystem. The complete web suite initially passes **719 tests**, contracts **152**, and forced types pass. Browser verification and the final action-layout refinement follow below. Acquisition links, QR/widget entry and social creative remain open.
+
+The final **eight portfolio/review browser workflows** pass in mobile/desktop light/dark, with axe, overflow, treatment booking entry, Spanish erasure and inspected screenshots. A reproduced success-toast obstruction is corrected with portfolio actions in the measured panel footer and nonblocking notification content; dedicated DOM hit-target checks exercise both the gallery action and unpublish button while the notification is visible. The notification's close button stays interactive. All **719 web tests**, forced types and repository lint pass after this correction. Full API and shared-interface regressions are recorded after completion.
+
+The complete API suite now passes **982 tests across 102 files**, with zero failures; database tests pass **47**, contracts **152**. All **eight photo/CSV** and **eight intake** browser regressions pass with the shared notification correction. No real reviews, photos, charges or external communications were created.
+
+The **four dated-shift browser regressions** also pass, and the current production API image passes the combined **13 review/portfolio cases** on pinned Bun 1.4.4 with a read-only filesystem. Forced types and repository lint pass after the browser hit-target refinements.
+
+Three further reproduced editor-lifecycle regressions now prevent late review/photo/moderation responses from closing another record opened meanwhile. The complete web suite passes **722 tests**, and forced type checking passes after the refinement. The final browser pass includes direct pointer dismissal of success notices as well as the nonblocking action checks.

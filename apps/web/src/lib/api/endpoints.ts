@@ -63,6 +63,7 @@ import { giftCardEndpoints } from "./gift-card-endpoints";
 import { intakeEndpoints } from "./intake-endpoints";
 import { inventoryEndpoints } from "./inventory-endpoints";
 import { passEndpoints } from "./pass-endpoints";
+import { portfolioEndpoints } from "./portfolio-endpoints";
 import { resourceEndpoints } from "./resource-endpoints";
 import { reviewEndpoints } from "./review-endpoints";
 import { rewardEndpoints } from "./reward-endpoints";
@@ -107,6 +108,7 @@ export function createEndpoints(client: ApiClient) {
   return {
     dateShifts: dateShiftEndpoints(client),
     reviews: reviewEndpoints(client),
+    portfolio: portfolioEndpoints(client),
     intake: intakeEndpoints(client),
     commerce: commerceEndpoints(client),
     bookingPolicy: bookingPolicyEndpoints(client),
