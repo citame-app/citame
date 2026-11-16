@@ -129,13 +129,31 @@ for (const scheme of ["light", "dark"] as const) {
         await expect(
           page.getByText("€40", { exact: true }).filter({ visible: true }).first(),
         ).toBeVisible();
+        // Let the real API commit, then lose only the browser response. The retry must
+        // recover the same visit even though the original slot is now occupied.
+        let lostIntent: string | undefined;
+        await page.route("**/api/appointments", async (route) => {
+          if (route.request().method() !== "POST" || lostIntent) return route.continue();
+          lostIntent = route.request().postDataJSON().id;
+          const response = await route.fetch();
+          expect(response.status(), await response.text()).toBe(201);
+          booking = await response.json();
+          await route.abort("connectionreset");
+        });
+        await page.getByRole("button", { name: "Confirm booking", exact: true }).click();
+        await expect(
+          page.getByText("We could not confirm your booking", { exact: true }),
+        ).toBeVisible();
+        await expect(page).toHaveURL(/\/book\/review/);
         const booked = page.waitForResponse(
           (r) => r.url().endsWith("/api/appointments") && r.request().method() === "POST",
         );
         await page.getByRole("button", { name: "Confirm booking", exact: true }).click();
         const bookedResponse = await booked;
         expect(bookedResponse.status(), await bookedResponse.text()).toBe(201);
+        expect(bookedResponse.headers()["x-idempotent-replay"]).toBe("true");
         const result = await bookedResponse.json();
+        expect(result.id).toBe(lostIntent);
         booking = result;
         expect(result.services.map((s: { serviceId: string }) => s.serviceId)).toEqual([
           variant.id,

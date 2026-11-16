@@ -14,6 +14,7 @@ import { SelectField, TextAreaField } from "~/components/ui/select-field";
 import { Sheet } from "~/components/ui/sheet";
 import { useToast } from "~/components/ui/toast";
 import { CatalogChoices } from "~/features/booking/catalog-choices";
+import { createBookingIntent } from "~/features/booking/intent";
 import { acceptedServiceQuotes } from "~/features/booking/quotes";
 import { useI18n } from "~/i18n/react";
 import { adminStaffQuery, clientsQuery } from "~/lib/admin-queries";
@@ -77,6 +78,7 @@ export function NewAppointmentSheet({
     override: true,
   });
   const [waiver, setWaiver] = useState("");
+  const [intent] = useState(() => createBookingIntent());
   const [date, setDate] = useState(initial.date);
   const [time, setTime] = useState(hhmm(initial.minutesOfDay ?? 9 * 60));
   const [search, setSearch] = useState("");
@@ -179,11 +181,12 @@ export function NewAppointmentSheet({
         if (!first) throw new Error("The series has no appointments");
         return first;
       }
-      return api().appointments.create({
+      const request = {
         ...buildWalkInRequest({ ...values, startsAt: resolveStart() }),
         serviceQuotes: acceptedServiceQuotes(chosen),
         ...(waiver.trim() ? { protectionWaiverReason: waiver.trim() } : {}),
-      });
+      };
+      return api().appointments.create({ ...request, id: intent(request) });
     },
     onSuccess: (appointment) => {
       toast.success(

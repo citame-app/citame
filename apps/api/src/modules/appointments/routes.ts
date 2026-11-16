@@ -23,6 +23,7 @@ import { parseOrThrow, readJson } from "../../http";
 import { bookingOutcome } from "../../observability/booking";
 import { findAvailability } from "../availability/service";
 import { getCalendar } from "./calendar";
+import { findAppointmentReplay } from "./replay";
 import { createAppointmentSeries, getAppointmentSeries, previewAppointmentSeries } from "./series";
 import {
   createAppointment,
@@ -93,6 +94,14 @@ export function appointmentsRoutes({ db, now = () => new Date(), metrics }: AppD
           principal,
           parseOrThrow(schema, await readJson(c)),
         );
+        const replay = async () => {
+          const existing = await findAppointmentReplay(db, request, principal.userId);
+          if (!existing) return null;
+          c.header("x-idempotent-replay", "true");
+          return c.json(existing, 201);
+        };
+        const previous = await replay();
+        if (previous) return previous;
         try {
           const created = await createAppointment(
             db,
@@ -103,6 +112,11 @@ export function appointmentsRoutes({ db, now = () => new Date(), metrics }: AppD
           metrics?.booking.inc({ source: "rest", outcome: "created" });
           return c.json(created, 201);
         } catch (error) {
+          // Another identical request may have committed while this one waited for locks.
+          if (error instanceof DomainError) {
+            const existing = await replay();
+            if (existing) return existing;
+          }
           metrics?.booking.inc({ source: "rest", outcome: bookingOutcome(error) });
           throw error;
         }

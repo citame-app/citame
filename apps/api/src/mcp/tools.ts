@@ -36,17 +36,15 @@ import type { Principal } from "../auth/principal";
 import { DomainError } from "../errors";
 import { parseOrThrow } from "../http";
 import { getCalendar } from "../modules/appointments/calendar";
+import { findAppointmentReplay } from "../modules/appointments/replay";
 import {
   createAppointment,
   getAppointmentOwnership,
   listAppointments,
-  loadSnapshots,
-  toAppointment,
   updateAppointment,
 } from "../modules/appointments/service";
 import { findAvailability } from "../modules/availability/service";
 import { getBookingPolicy } from "../modules/booking-protection/policy";
-import { protectionView } from "../modules/booking-protection/value";
 import { listClients } from "../modules/clients/admin";
 import { listServices } from "../modules/services/service";
 import { listStaff } from "../modules/staff/service";
@@ -216,7 +214,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
           : parseOrThrow(createAppointmentRequestSchema, candidate);
       const authorized = authorizeAppointmentCreate(principal, request);
       if (requestId) {
-        const previous = await findOwnedReplay(ctx, requestId, authorized);
+        const previous = await findAppointmentReplay(db, authorized, principal.userId);
         if (previous) return { appointment: redactNotes(principal, previous), replayed: true };
       }
       const actor = { userId: principal.userId, via: ctx.via };
@@ -225,16 +223,17 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
         ctx.onBooking?.("created");
         return { appointment: redactNotes(principal, created), replayed: false };
       } catch (error) {
-        ctx.onBooking?.(bookingOutcome(error));
         // The same requestId again: return the booking it already made, if it is this caller's.
-        if (requestId && error instanceof DomainError && error.code === "invalid_state") {
-          const existing = await findOwnedReplay(ctx, requestId, authorized);
+        if (requestId && error instanceof DomainError) {
+          const existing = await findAppointmentReplay(db, authorized, principal.userId);
           if (existing) return { appointment: redactNotes(principal, existing), replayed: true };
-          throw new DomainError(
-            "validation_error",
-            "This requestId was already used. Generate a new one",
-          );
+          if (error.code === "invalid_state")
+            throw new DomainError(
+              "validation_error",
+              "This requestId was already used. Generate a new one",
+            );
         }
+        ctx.onBooking?.(bookingOutcome(error));
         throw error;
       }
     }),
@@ -349,33 +348,4 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       };
     }),
   );
-}
-
-/**
- * A retried booking: the appointment `requestId` already created, but only when it matches what
- * this caller is asking for right now (same professional, start and client). The request has
- * already passed the create policy, so returning it reveals nothing the caller could not
- * create; a requestId that collides with someone else's appointment is not a replay.
- */
-async function findOwnedReplay(ctx: ToolContext, id: string, request: CreateAppointmentRequest) {
-  const [row] = await ctx.db
-    .select()
-    .from(appointment)
-    .where(and(eq(appointment.id, id), isNull(appointment.deletedAt)));
-  if (!row) return null;
-  const same =
-    row.staffId === request.staffId &&
-    row.startsAt.getTime() === Date.parse(request.startsAt) &&
-    row.clientId === request.clientId;
-  if (!same) return null;
-  const snapshots = ((await loadSnapshots(ctx.db, [id])).get(id) ?? []).sort(
-    (a, b) => a.position - b.position,
-  );
-  if (
-    row.notes !== (request.notes ?? null) ||
-    JSON.stringify(snapshots.map((s) => s.serviceId)) !==
-      JSON.stringify([...new Set(request.serviceIds)])
-  )
-    return null;
-  return { ...toAppointment(row, snapshots), protection: await protectionView(ctx.db, row.id) };
 }

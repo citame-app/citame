@@ -142,6 +142,7 @@ describe("NewAppointmentSheet", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create appointment" }));
     await waitFor(() => expect(posts).toHaveLength(1));
     expect(posts[0]).toEqual({
+      id: expect.any(String),
       staffId: ANA,
       serviceIds: [CUT],
       startsAt: "2026-03-09T12:00:00.000Z",
@@ -345,4 +346,37 @@ test("a changed catalog quote refreshes the displayed terms and the next submiss
   fireEvent.click(screen.getByRole("button", { name: "Create appointment" }));
   await waitFor(() => expect(posts).toHaveLength(2));
   expect(posts[1]).toMatchObject({ serviceQuotes: { [CUT]: "b".repeat(64) } });
+  expect((posts[1] as { id: string }).id).toBe((posts[0] as { id: string }).id);
+});
+
+test("a connection failure keeps the submitted visit id until the operator changes the intent", async () => {
+  const baseFetch = globalThis.fetch;
+  let failed = false;
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    if (
+      new URL(String(input), "http://localhost").pathname === "/api/appointments" &&
+      init?.method === "POST"
+    ) {
+      const response = await baseFetch(input, init);
+      if (!failed) {
+        failed = true;
+        throw new TypeError("Connection lost after commit");
+      }
+      return response;
+    }
+    return baseFetch(input, init);
+  }) as unknown as typeof fetch;
+  const created = mock();
+  open({ onCreated: created });
+  fireEvent.click(await screen.findByRole("radio", { name: "New client" }));
+  fireEvent.change(screen.getByLabelText("Full name"), { target: { value: "Retry customer" } });
+  fireEvent.click(await screen.findByRole("checkbox", { name: "Haircut" }));
+  fireEvent.click(screen.getByRole("button", { name: "Create appointment" }));
+  await screen.findByRole("alert");
+  expect(created).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Create appointment" }));
+  await waitFor(() => expect(created).toHaveBeenCalledTimes(1));
+  expect(posts).toHaveLength(2);
+  expect((posts[0] as { id: string }).id).toMatch(/^[a-f0-9-]{36}$/);
+  expect(posts[1]).toEqual(posts[0]);
 });

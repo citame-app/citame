@@ -46,6 +46,7 @@ import { getBookableServices } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { assertStaffActive } from "../staff/guards";
 import { assertStaffExists } from "../staff/service";
+import { appointmentIntentFingerprint } from "./intent";
 import { loadSeriesReferences } from "./series-references";
 
 const UNIQUE_VIOLATION = "23505";
@@ -228,6 +229,7 @@ export async function createAppointment(
           entity: "appointment",
           entityId: row.id,
           metadata: {
+            requestFingerprint: appointmentIntentFingerprint(request),
             staffId: row.staffId,
             clientId: row.clientId,
             startsAt: row.startsAt.toISOString(),

@@ -7,6 +7,7 @@ import { ErrorState } from "~/components/ui/states";
 import { useToast } from "~/components/ui/toast";
 import { InlineAuth } from "~/features/booking/auth-panel";
 import { BookingFrame } from "~/features/booking/frame";
+import { createBookingIntent } from "~/features/booking/intent";
 import { BookingPolicyConsent } from "~/features/booking/protection";
 import { acceptedServiceQuotes } from "~/features/booking/quotes";
 import {
@@ -53,6 +54,7 @@ function ReviewStep() {
   const { search, selectedServices, totals, salon } = booking;
   const [acceptedTotal, setAcceptedTotal] = useState<number | null>(null);
   const [acceptedVersion, setAcceptedVersion] = useState<number | null>(null);
+  const [intent] = useState(() => createBookingIntent());
   const policy = useQuery({
     queryKey: ["booking-policy"],
     queryFn: () => api().bookingPolicy.get(),
@@ -74,7 +76,7 @@ function ReviewStep() {
     mutationFn: () => {
       if (!policyAccepted) throw new Error("Review current booking policy");
       if (!search.slot || !search.slotStaff) throw new Error("incomplete booking");
-      return api().appointments.create({
+      const request = {
         staffId: search.slotStaff,
         serviceIds: search.services,
         serviceQuotes: acceptedServiceQuotes(selectedServices),
@@ -84,7 +86,8 @@ function ReviewStep() {
         protectionAcceptedVersion: policy.data?.enabled
           ? (acceptedVersion ?? undefined)
           : undefined,
-      });
+      };
+      return api().appointments.create({ ...request, id: intent(request) });
     },
     onSuccess: (appointment) => {
       bookingActions.recordBooked(appointment);
