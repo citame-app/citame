@@ -614,16 +614,14 @@ test("a percentage offer handles the supported gross range above the payable lim
     })
     .returning();
   if (!bill) throw new Error("Missing gross-range fixture");
-  await t.db
-    .insert(checkoutLine)
-    .values({
-      checkoutId: bill.id,
-      kind: "custom",
-      description: "Supported discounted gross fixture",
-      quantity: 4,
-      unitAmountCents: 500000000,
-      discountCents: 1100000000,
-    });
+  await t.db.insert(checkoutLine).values({
+    checkoutId: bill.id,
+    kind: "custom",
+    description: "Supported discounted gross fixture",
+    quantity: 4,
+    unitAmountCents: 500000000,
+    discountCents: 1100000000,
+  });
   const response = await call(client, `/me/checkouts/${bill.id}/reward/quote`, "POST", {
     kind: "promotion",
     code: "FULL_VALID_GROSS",
