@@ -98,6 +98,13 @@ export function BookingSummary({
                     <p className="text-sm text-muted">
                       {formatDuration(service.durationMinutes, locale)}
                     </p>
+                    {service.processing && (
+                      <p className="text-sm text-muted">
+                        {t("timing.included", {
+                          duration: formatDuration(service.processing.minutes, locale),
+                        })}
+                      </p>
+                    )}
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="text-[0.95rem]">

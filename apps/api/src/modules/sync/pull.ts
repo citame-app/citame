@@ -114,6 +114,7 @@ async function loadVisible(
           id: r.id,
           displayName: r.displayName,
           active: r.active,
+          ...(r.maxConcurrent !== 1 ? { maxConcurrent: r.maxConcurrent } : {}),
           // The login link is account administration: owner only.
           userId: owner ? r.userId : null,
           updatedAt: r.updatedAt.toISOString(),

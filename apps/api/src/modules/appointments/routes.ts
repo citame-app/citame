@@ -149,6 +149,14 @@ export function appointmentsRoutes({ db, now = () => new Date(), metrics }: AppD
               id: s.serviceId ?? s.id,
               durationMinutes: s.durationMinutes,
               bufferMinutes: s.bufferMinutes,
+              ...(s.processingStartMinutes !== null && s.processingMinutes !== null
+                ? {
+                    processing: {
+                      startsAfterMinutes: s.processingStartMinutes,
+                      minutes: s.processingMinutes,
+                    },
+                  }
+                : {}),
             })),
           }),
         );

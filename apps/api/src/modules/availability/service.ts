@@ -1,6 +1,6 @@
 import type { AvailabilityQuery, AvailabilityResponse } from "@sob/contracts";
-import { appointment, type Database, timeOff, waitlistOffer, workingHours } from "@sob/db";
-import { and, eq, gt, inArray, isNull, lt, ne } from "drizzle-orm";
+import { type Database, staffProfile, timeOff, workingHours } from "@sob/db";
+import { and, gt, inArray, isNull, lt } from "drizzle-orm";
 import type { TimedService } from "../resources/reservations";
 import { filterResourceAvailability } from "../resources/reservations";
 import { getBookableServices } from "../services/service";
@@ -8,6 +8,8 @@ import { getSalonSettings } from "../settings/service";
 import { asDatedHours, loadShiftRows } from "../staff/date-hours";
 import { assertStaffExists, staffQualifiedFor } from "../staff/service";
 import { computeAvailability, totalBlockMinutes } from "./compute";
+import { staffOccupied } from "./staff-reservations";
+import { serviceWorkWindows } from "./work-windows";
 
 /** Finds bookable slots. Advisory only: the database exclusion constraint is authoritative. */
 export async function findAvailability(
@@ -33,7 +35,7 @@ export async function findAvailability(
   const windowStart = new Date(dayStart.epochMilliseconds);
   const windowEnd = new Date(dayStart.add({ days: 1 }).epochMilliseconds);
 
-  const [hours, offs, offered, booked, dated] = await Promise.all([
+  const [hours, offs, busy, members, dated] = await Promise.all([
     db
       .select()
       .from(workingHours)
@@ -49,33 +51,11 @@ export async function findAvailability(
           gt(timeOff.endsAt, windowStart),
         ),
       ),
+    staffOccupied(db, staffIds, windowStart, windowEnd, now, options.excludeAppointmentId),
     db
-      .select()
-      .from(waitlistOffer)
-      .where(
-        and(
-          inArray(waitlistOffer.staffId, staffIds),
-          eq(waitlistOffer.state, "offered"),
-          gt(waitlistOffer.expiresAt, now),
-          lt(waitlistOffer.startsAt, windowEnd),
-          gt(waitlistOffer.endsAt, windowStart),
-        ),
-      ),
-    db
-      .select()
-      .from(appointment)
-      .where(
-        and(
-          inArray(appointment.staffId, staffIds),
-          ne(appointment.status, "cancelled"),
-          options.excludeAppointmentId
-            ? ne(appointment.id, options.excludeAppointmentId)
-            : undefined,
-          isNull(appointment.deletedAt),
-          lt(appointment.startsAt, windowEnd),
-          gt(appointment.endsAt, windowStart),
-        ),
-      ),
+      .select({ id: staffProfile.id, capacity: staffProfile.maxConcurrent })
+      .from(staffProfile)
+      .where(inArray(staffProfile.id, staffIds)),
     loadShiftRows(db, staffIds, query.date, query.date),
   ]);
 
@@ -87,8 +67,10 @@ export async function findAvailability(
     maxDaysAhead: settings.maxDaysAhead,
     now,
     blockMinutes: totalBlockMinutes(services),
+    workWindows: serviceWorkWindows(services),
     staff: staffIds.map((staffId) => ({
       staffId,
+      capacity: members.find((s) => s.id === staffId)?.capacity ?? 1,
       datedWorkingHours: asDatedHours(dated, staffId),
       workingHours: hours
         .filter((h) => h.staffId === staffId)
@@ -96,7 +78,7 @@ export async function findAvailability(
       timeOff: offs
         .filter((o) => o.staffId === staffId)
         .map((o) => ({ start: o.startsAt, end: o.endsAt })),
-      appointments: [...booked, ...offered]
+      appointments: busy
         .filter((a) => a.staffId === staffId)
         .map((a) => ({ start: a.startsAt, end: a.endsAt })),
     })),

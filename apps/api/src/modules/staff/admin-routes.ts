@@ -7,6 +7,7 @@ import {
   listTimeOffQuerySchema,
   setWorkingHoursRequestSchema,
   staffAccessInputSchema,
+  staffCapacityInputSchema,
   updateStaffRequestSchema,
   updateTimeOffRequestSchema,
 } from "@sob/contracts";
@@ -23,6 +24,7 @@ import type { AppEnv } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
 import { getStaffAccess, setStaffAccess } from "./access";
 import { listAdminStaff, updateStaff } from "./admin";
+import { getStaffCapacity, setStaffCapacity } from "./capacity";
 import { commitDateShifts, getDateShifts, previewDateShifts } from "./date-shifts";
 import {
   createTimeOff,
@@ -42,6 +44,20 @@ export function staffAdminRoutes({ db, now = () => new Date() }: AppDeps) {
   const staffId = (param: string) => parseOrThrow(idSchema, param);
 
   return new Hono<AppEnv>()
+    .get("/:id/capacity", async (c) =>
+      c.json(await getStaffCapacity(db, staffId(c.req.param("id")), c.get("principal"))),
+    )
+    .put("/:id/capacity", async (c) =>
+      c.json(
+        await setStaffCapacity(
+          db,
+          staffId(c.req.param("id")),
+          parseOrThrow(staffCapacityInputSchema, await readJson(c)),
+          c.get("principal"),
+          now(),
+        ),
+      ),
+    )
     .get("/", async (c) => {
       const scope = authorizeStaffList(c.get("principal"));
       return c.json({ staff: await listAdminStaff(db, scope) });

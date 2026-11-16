@@ -49,6 +49,14 @@ export function publicService(row: CatalogRow, catalog?: ServiceCatalog): Servic
     description: row.description,
     durationMinutes: row.durationMinutes,
     bufferMinutes: row.bufferMinutes,
+    ...(row.processingStartMinutes !== null && row.processingMinutes !== null
+      ? {
+          processing: {
+            startsAfterMinutes: row.processingStartMinutes,
+            minutes: row.processingMinutes,
+          },
+        }
+      : {}),
     priceCents: row.priceCents,
     currency: row.currency,
     ...(catalog ? { catalog } : {}),

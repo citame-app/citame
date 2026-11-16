@@ -1,5 +1,4 @@
 import {
-  appointment,
   clientProfile,
   type Database,
   pgErrorCode,
@@ -9,12 +8,14 @@ import {
   waitlistEntry,
   waitlistOffer,
 } from "@sob/db";
-import { and, asc, count, eq, gt, gte, inArray, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, count, eq, gte, inArray, lte, or, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { DomainError } from "../../errors";
 import { lockCalendars, lockScheduling, type Tx } from "../../tx";
 import { assertBookable } from "../appointments/service";
 import { findAvailability } from "../availability/service";
+import { repackStaff } from "../availability/staff-reservations";
+import { serviceWorkWindows } from "../availability/work-windows";
 import { getBookingPolicy } from "../booking-protection/policy";
 import { assertClientCanBook } from "../clients/controls";
 import { reserveResources } from "../resources/reservations";
@@ -29,6 +30,7 @@ export function offerServices(services: ServiceRow[]) {
     name: s.name,
     durationMinutes: s.durationMinutes,
     bufferMinutes: s.bufferMinutes,
+    ...(s.processing ? { processing: s.processing } : {}),
     priceCents: s.priceCents,
     currency: s.currency,
   }));
@@ -291,29 +293,16 @@ async function matchEntry(db: Database, id: string, now: Date): Promise<boolean>
             now,
             override: false,
             settings,
+            workWindows: serviceWorkWindows(await getBookableServices(tx, entry.serviceIds)),
           });
         } catch (error) {
           if (
             error instanceof DomainError &&
-            ["slot_unavailable", "not_found"].includes(error.code)
+            ["slot_unavailable", "slot_taken", "not_found"].includes(error.code)
           )
             continue;
           throw error;
         }
-        const [busy] = await tx
-          .select({ id: appointment.id })
-          .from(appointment)
-          .where(
-            and(
-              eq(appointment.staffId, slot.staffId),
-              ne(appointment.status, "cancelled"),
-              isNull(appointment.deletedAt),
-              lt(appointment.startsAt, new Date(slot.endsAt)),
-              gt(appointment.endsAt, new Date(slot.startsAt)),
-            ),
-          )
-          .limit(1);
-        if (busy) continue;
         // All accepted offers for this customer serialize with normal booking access controls.
         await assertClientCanBook(tx, entry.clientId);
         const [otherHold] = await tx.execute<{ n: number }>(
@@ -344,6 +333,9 @@ async function matchEntry(db: Database, id: string, now: Date): Promise<boolean>
             endsAt: new Date(slot.endsAt),
             expiresAt,
             services: snapshots,
+            ...(snapshots.some((s) => s.processing)
+              ? { workWindows: sql`${JSON.stringify(serviceWorkWindows(snapshots))}::jsonb` }
+              : {}),
             policy: bookingPolicy,
             catalogHash: selectionHash({ services: snapshots, policy: bookingPolicy }),
             priceCents,
@@ -352,6 +344,7 @@ async function matchEntry(db: Database, id: string, now: Date): Promise<boolean>
           })
           .returning();
         if (!offer) throw new Error("Waitlist offer insert returned no row");
+        await repackStaff(tx, offer.staffId, now, { offerId: offer.id });
         await reserveResources(
           tx,
           { offerId: offer.id, startsAt: offer.startsAt, endsAt: offer.endsAt },

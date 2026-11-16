@@ -5,7 +5,7 @@ use serde_json::{Map, Value, json};
 
 use crate::calendar::{effective_appointment, known_clients};
 use crate::error::{CoreError, Result};
-use crate::model::AppointmentStatus;
+use crate::model::{AppointmentService, AppointmentStatus};
 use crate::store::Store;
 
 /// Longest free text the API accepts (`LIMITS` in `packages/contracts`). Counted in UTF-16 code
@@ -98,11 +98,43 @@ pub fn create_appointment(store: &mut Store, new: NewAppointment) -> Result<Stri
     if let Some(notes) = &new.notes {
         check_len("notes", notes, MAX_NOTES)?;
     }
+    let catalog = store.services()?;
+    let picked: Vec<_> = new
+        .service_ids
+        .iter()
+        .filter_map(|id| catalog.iter().find(|row| &row.id == id))
+        .collect();
+    let mut quotes = Map::new();
+    let mut reviewed = Vec::new();
+    for source in picked {
+        let Some(hash) = &source.quote_hash else {
+            return Err(CoreError::Invalid(
+                "Refresh the service catalogue before creating a booking".into(),
+            ));
+        };
+        if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(CoreError::Invalid(
+                "Refresh the service catalogue before creating a booking".into(),
+            ));
+        }
+        quotes.insert(source.id.clone(), json!(hash));
+        reviewed.push(AppointmentService {
+            service_id: Some(source.id.clone()),
+            name: source.name.clone(),
+            duration_minutes: source.duration_minutes,
+            buffer_minutes: source.buffer_minutes,
+            price_cents: source.price_cents,
+            currency: source.currency.clone(),
+            processing: source.processing.clone(),
+        });
+    }
     let id = uuid::Uuid::now_v7().to_string();
     let mut p = Map::new();
     p.insert("id".into(), json!(id));
     p.insert("staffId".into(), json!(new.staff_id));
     p.insert("serviceIds".into(), json!(new.service_ids));
+    p.insert("serviceQuotes".into(), Value::Object(quotes));
+    p.insert("_reviewedServices".into(), json!(reviewed));
     p.insert("startsAt".into(), json!(iso(new.starts_at)));
     p.insert("clientId".into(), json!(new.client_id));
     if let Some(n) = new.notes.filter(|n| !n.trim().is_empty()) {
@@ -239,6 +271,9 @@ pub fn resolve_conflict(
         } => {
             match c.kind.as_str() {
                 "appointment.create" => {
+                    if c.reason == "conflict" {
+                        return Err(CoreError::Invalid("The reviewed booking terms changed; drop this proposal and review a new booking".into()));
+                    }
                     // A rejection is final: same appointment id, new mutation id.
                     let mut p = c.payload.clone();
                     p["startsAt"] = json!(iso(starts_at));

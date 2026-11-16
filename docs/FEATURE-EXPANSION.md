@@ -14,7 +14,7 @@ The release is not complete merely because a table or endpoint exists. Each oper
 - [x] Gift cards: paid activation, bearer codes, balances, partial redemption, refund holds/restoration, closure, code/expiry recovery, vouchers and customer account UI; [operator guide](gift-cards.md).
 - [x] Packages and memberships: multi-visit plans, paid periods, eligible-service entitlements, opt-in card renewals and cancellation; [operator guide](passes.md).
 - [x] Loyalty and promotions: accrual/redemption, original-credit refund adjustments, discounts, usage limits and validity; [operator guide](loyalty-and-promotions.md).
-- [ ] Scheduling: automated waitlist and expiring offers, resources/capacity, recurring appointments, service variants/add-ons/combinations and processing gaps.
+- [x] Scheduling: automated waitlist and expiring offers, resources/capacity, recurring appointments, service variants/add-ons/combinations and processing gaps.
 - [ ] CRM: client tags, blocked/trusted clients, photos, import/export and deduplication; custom intake forms/waivers with versioned answers.
 - [x] Reputation and acquisition: completed-appointment reviews, moderated public portfolio, booking links/QR/widget and separately consented local social creative with revocation. [Guide](social-creative.md).
 - [ ] Marketing: explicit channel consent, client segments, templates, scheduled campaigns, unsubscribe/suppression, durable delivery and outcomes, including transactional gift/pass delivery.
@@ -124,13 +124,13 @@ Four real mobile/desktop light/dark browser cases pass for CSV upload, rejected/
 The [official Spanish feature catalog](https://biz.booksy.com/es-es/funcionalidades), reviewed 2026-11-16, also identifies these single-business gaps beyond the original grouped checklist. They remain required work rather than implied parity:
 
 - [ ] Delegated booking and management for family/friends with explicit account ownership and scoped permissions.
-- [ ] Parallel-client service capacity in addition to resources, combinations and processing gaps.
+- [x] Parallel-client service capacity in addition to resources, combinations and processing gaps. [Guide](processing-and-capacity.md).
 - [ ] Optional home appointments with reviewed travel area/fees and protected travel time.
 - [ ] Calendar import from Google/Apple-compatible feeds/files, with duplicate/conflict handling; external account activation requires its credentials.
 - [x] Date-specific staff shifts and safe copying to future dates/weeks, beyond weekly hours/time-off. [Guide](date-shifts.md).
 - [ ] Time-specific happy-hour and last-minute promotions, beyond existing validity windows and generic offers.
 - [ ] Unlimited-visit membership terms and usage safeguards, beyond the implemented discrete prepaid visits.
-- [ ] Shareable social creative for services/offers/reviews, plus moderated portfolio and booking/QR/widget entry.
+- [x] Shareable social creative for services/offers/reviews, plus moderated portfolio and booking/QR/widget entry. [Guide](social-creative.md).
 
 The public multi-business marketplace, paid discovery/Boost and multisite remain outside the owner's confirmed current scope. External Instagram/Google booking activation, signing and bank/provider enrollment await actual accounts and approval; preparing local adapters is separate from claiming activation. This list does not claim equivalence with Booksy's network or proprietary integrations.
 
@@ -211,3 +211,11 @@ Owners/managers can create, version-edit and archive ordered selections of exist
 Verification passes **744 web, 154 contract and 47 database tests**, forced types and lint. The focused service/catalog API regression passes **20 cases**; the production API image passes **16 combination/variant/extra cases** on pinned Bun 1.4.4 with a read-only filesystem. All **four host and four final production-image browser journeys** pass for uncertain creation, conflicting edits, ordered booking, unchanged booked prices after archive, Spanish, long names, axe and overflow. A reproduced label/content mismatch was fixed and the four production workflows pass again; their fixture container is confirmed removed after teardown. Existing variant/extra browser regressions are running separately. The last complete API baseline is the preceding **986 tests**, before these seven new combination cases; no new complete-suite count is inferred.
 
 The **four existing variant/extra browser regressions also pass** after the combination and button-accessibility changes, including changed-price rejection and uncertain booking recovery.
+
+## Processing and concurrent-professional delivery
+
+Owners/managers explicitly configure a treatment’s hands-off middle interval and each professional’s concurrent active-work limit (default one, maximum six). New appointments and waitlist offers freeze their work plans; later catalog changes and rescheduling preserve those reviewed intervals. Physical rooms/equipment retain full-window occupancy. Reduced capacity cannot displace booked visits or held offers. Versioned EN/ES editors preserve drafts and freeze uncertain submissions. The calendar and desktop expose saved timing, and desktop proposals retain reviewed prices, quote hashes and timing across later syncs. Rejected terms require a fresh proposal. [Operation, migration and limits](processing-and-capacity.md), [decision](adr/0016-professional-work-capacity.md).
+
+The complete API suite passes **1,007 tests across 105 files**, including concurrent capacity, direct SQL constraints/lock waits, frozen processing, rooms and waitlist transfer. Complete suites pass **749 web, 157 contract, 47 database and 27 script tests**; the contention proof now checks active work rather than full client-span overlaps. Desktop/core passes **131 executed tests**, with four environment-dependent cases explicitly ignored; formatting and Clippy pass. Forced types and repository lint pass. The read-only production API image passes **14 processing/work-window cases** on pinned Bun 1.4.4. All **four host and four production-image light/dark mobile/desktop browser workflows** pass for processing configuration, uncertain save recovery, booking another client during exposure, saved calendar annotation after source edits, rejected capacity reduction, cancellation/reduction recovery, Spanish, axe and overflow. The production web container was healthy during execution and absent after teardown. Existing scheduling browser regressions are recorded below after completion. No external provider was activated.
+
+The **four existing variant/extra and four dated-shift browser regressions also pass** after the processing/capacity changes, including uncertain booking recovery, source-review fencing, keyboard access, Spanish, axe and overflow.

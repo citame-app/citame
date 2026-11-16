@@ -22,6 +22,7 @@ export type TimedService = {
   durationMinutes: number;
   bufferMinutes: number;
   position?: number;
+  processing?: { startsAfterMinutes: number; minutes: number };
 };
 type Pool = typeof resourcePool.$inferSelect;
 type Window = {

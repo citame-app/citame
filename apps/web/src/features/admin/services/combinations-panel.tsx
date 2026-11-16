@@ -28,8 +28,9 @@ export function CombinationsPanel() {
   const ready = catalog.isSuccess && staff.isSuccess && query.isSuccess;
   return (
     <section
+      id="treatment-combinations"
       aria-label={t("combinations.title")}
-      className="mt-10 space-y-5 border-t border-line pt-8"
+      className="mt-10 scroll-mt-24 space-y-5 border-t border-line pt-8"
     >
       <h2 className="text-heading">{t("combinations.title")}</h2>
       <p className="max-w-prose text-muted">{t("combinations.lead")}</p>

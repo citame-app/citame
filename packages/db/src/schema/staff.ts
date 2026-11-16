@@ -33,11 +33,20 @@ export const staffProfile = pgTable(
     active: boolean().notNull().default(true),
     accessPreset: staffAccessPreset().notNull().default("professional"),
     accessVersion: integer().notNull().default(1),
+    maxConcurrent: integer().notNull().default(1),
+    capacityVersion: integer().notNull().default(1),
+    capacityEffectiveAt: timestamptz().notNull().default(sql`'epoch'::timestamptz`),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     deletedAt: deletedAt(),
   },
-  (t) => [unique("staff_profile_user_id_unique").on(t.userId)],
+  (t) => [
+    unique("staff_profile_user_id_unique").on(t.userId),
+    check(
+      "staff_capacity_valid",
+      sql`${t.maxConcurrent} between 1 and 6 and ${t.capacityVersion}>0`,
+    ),
+  ],
 );
 
 export const serviceStaff = pgTable(

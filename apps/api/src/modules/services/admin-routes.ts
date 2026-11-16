@@ -5,6 +5,7 @@ import {
   idSchema,
   serviceCatalogUpdateSchema,
   serviceConfigurationSchema,
+  serviceProcessingInputSchema,
   serviceResourceInputSchema,
   setServiceStaffRequestSchema,
   updateServiceRequestSchema,
@@ -28,6 +29,8 @@ import {
 
 import { listCombinations, saveCombination } from "./combinations";
 
+import { setServiceProcessing } from "./processing";
+
 const ownerOnly = createMiddleware<AppEnv>(async (c, next) => {
   authorizeServiceAdmin(c.get("principal"));
   await next();
@@ -36,6 +39,16 @@ const ownerOnly = createMiddleware<AppEnv>(async (c, next) => {
 /** Owner-only catalog administration, mounted at `/admin/services` behind `requireAuth`. */
 export function serviceAdminRoutes({ db, now = () => new Date() }: AppDeps) {
   return new Hono<AppEnv>()
+    .put("/:id/processing", ownerOnly, async (c) =>
+      c.json(
+        await setServiceProcessing(
+          db,
+          parseOrThrow(idSchema, c.req.param("id")),
+          parseOrThrow(serviceProcessingInputSchema, await readJson(c)),
+          c.get("principal"),
+        ),
+      ),
+    )
     .get("/combinations", ownerOnly, async (c) =>
       c.json(await listCombinations(db, c.get("principal"))),
     )

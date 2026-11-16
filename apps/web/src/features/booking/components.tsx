@@ -81,6 +81,13 @@ export function ServiceChoice({
               ? t("booking.options.noTime")
               : formatDuration(service.durationMinutes, locale)}
           </span>
+          {service.processing && (
+            <span className="mt-1 block text-sm text-muted">
+              {t("timing.included", {
+                duration: formatDuration(service.processing.minutes, locale),
+              })}
+            </span>
+          )}
         </span>
         <span className="shrink-0 font-display text-lg font-semibold text-fg">
           {formatMoney(service.priceCents, service.currency, locale)}

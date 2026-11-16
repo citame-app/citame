@@ -477,7 +477,7 @@ fn offline_create_then_reconnect_applies_and_clears_the_pending_flag() {
             id: cut.into(),
             op: "upsert".into(),
             data: Some(
-                json!({"id": cut, "name": "Haircut", "description": null, "durationMinutes": 45, "bufferMinutes": 15, "priceCents": 1, "currency": "ARS", "active": true, "updatedAt": t0}),
+                json!({"id": cut, "name": "Haircut", "description": null, "durationMinutes": 45, "bufferMinutes": 15, "priceCents": 1, "currency": "ARS", "active": true, "updatedAt": t0, "quoteHash": "a".repeat(64)}),
             ),
         },
         RawChange {

@@ -9,18 +9,26 @@ import {
   pageSizeSchema,
 } from "./common";
 import { intakeBookingShape } from "./intake";
+import { processingTimeSchema, workWindowSchema } from "./staff-capacity";
 
 export const appointmentStatusSchema = z.enum(["booked", "completed", "cancelled", "no_show"]);
 export type AppointmentStatus = z.infer<typeof appointmentStatusSchema>;
 
-export const appointmentServiceSchema = z.object({
-  serviceId: idSchema.nullable(),
-  name: z.string(),
-  durationMinutes: z.number().int().nonnegative(),
-  bufferMinutes: z.number().int().min(0),
-  priceCents: z.number().int().min(0),
-  currency: z.string().length(3),
-});
+export const appointmentServiceSchema = z
+  .object({
+    serviceId: idSchema.nullable(),
+    name: z.string(),
+    durationMinutes: z.number().int().nonnegative(),
+    bufferMinutes: z.number().int().min(0),
+    processing: processingTimeSchema.optional(),
+    priceCents: z.number().int().min(0),
+    currency: z.string().length(3),
+  })
+  .refine(
+    (s) =>
+      !s.processing || s.processing.startsAfterMinutes + s.processing.minutes < s.durationMinutes,
+    { message: "Processing requires final hands-on work", path: ["processing"] },
+  );
 
 export const appointmentSchema = z.object({
   id: idSchema,
@@ -32,6 +40,7 @@ export const appointmentSchema = z.object({
   notes: z.string().nullable(),
   version: z.number().int().positive(),
   services: z.array(appointmentServiceSchema),
+  workWindows: z.array(workWindowSchema).max(48).optional(),
   createdAt: instantSchema,
   updatedAt: instantSchema,
   protection: bookingProtectionSchema.nullable().optional(),

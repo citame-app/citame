@@ -111,6 +111,7 @@ export const waitlistOffer = pgTable(
       .$type<"offered" | "accepted" | "expired" | "declined" | "cancelled">()
       .notNull()
       .default("offered"),
+    workWindows: jsonb().$type<{ offsetMinutes: number; endOffsetMinutes: number }[]>(),
     services: jsonb().$type<ServiceSnapshot[]>().notNull(),
     policy: jsonb().$type<BookingTerms>().notNull(),
     catalogHash: text().notNull(),

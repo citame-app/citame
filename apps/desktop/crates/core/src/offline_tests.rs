@@ -64,14 +64,14 @@ fn seeded() -> Store {
             "service",
             CUT,
             json!({"id": CUT, "name": "Haircut", "description": null, "durationMinutes": 45,
-            "bufferMinutes": 15, "priceCents": 10000, "currency": "ARS", "active": true, "updatedAt": T0}),
+            "bufferMinutes": 15, "priceCents": 10000, "currency": "ARS", "active": true, "updatedAt": T0, "quoteHash": "a".repeat(64)}),
         ),
         up(
             5,
             "service",
             DRY,
             json!({"id": DRY, "name": "Blow dry", "description": null, "durationMinutes": 30,
-            "bufferMinutes": 0, "priceCents": 5000, "currency": "ARS", "active": true, "updatedAt": T0}),
+            "bufferMinutes": 0, "priceCents": 5000, "currency": "ARS", "active": true, "updatedAt": T0, "quoteHash": "a".repeat(64)}),
         ),
         up(
             6,
@@ -587,4 +587,103 @@ fn free_text_beyond_the_server_limits_is_rejected_before_it_is_queued() {
 
     // Only the two valid mutations were queued (the client of the first assertion and the booking).
     assert_eq!(s.outbox_len().unwrap(), before + 2);
+}
+
+#[test]
+fn processing_and_capacity_survive_the_native_replica_round_trip() {
+    let mut s = seeded();
+    s.apply_page(&[
+        up(8,"staff",BEA,json!({"id":BEA,"displayName":"Bea","active":true,"userId":null,"maxConcurrent":2,"updatedAt":T0})),
+        up(9,"service",CUT,json!({"id":CUT,"name":"Haircut","description":null,"durationMinutes":90,"bufferMinutes":15,"priceCents":10000,"currency":"ARS","active":true,"updatedAt":T0,"processing":{"startsAfterMinutes":30,"minutes":30},"quoteHash":"a".repeat(64)}))
+    ],9).unwrap();
+    let member = s
+        .staff()
+        .unwrap()
+        .into_iter()
+        .find(|row| row.id == BEA)
+        .unwrap();
+    assert_eq!(serde_json::to_value(member).unwrap()["maxConcurrent"], 2);
+    let treatment = s
+        .services()
+        .unwrap()
+        .into_iter()
+        .find(|row| row.id == CUT)
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(treatment).unwrap()["processing"],
+        json!({"startsAfterMinutes":30,"minutes":30})
+    );
+}
+
+#[test]
+fn a_pending_native_booking_freezes_reviewed_work_and_prices_but_never_sends_local_snapshot_fields()
+{
+    let mut s = seeded();
+    s.apply_page(&[
+        up(8,"service",CUT,json!({"id":CUT,"name":"Haircut","description":null,"durationMinutes":90,"bufferMinutes":15,"priceCents":10000,"currency":"ARS","active":true,"updatedAt":T0,"processing":{"startsAfterMinutes":30,"minutes":30},"quoteHash":"a".repeat(64)})),
+        up(9,"service",DRY,json!({"id":DRY,"name":"Blow dry","description":null,"durationMinutes":30,"bufferMinutes":0,"priceCents":5000,"currency":"ARS","active":true,"updatedAt":T0,"quoteHash":"b".repeat(64)}))
+    ],9).unwrap();
+    let id = create_appointment(&mut s, new_appt("2026-03-09T12:00:00Z")).unwrap();
+    let entry = s.outbox(10).unwrap().remove(0);
+    assert_eq!(
+        entry.to_wire().payload["serviceQuotes"][CUT],
+        "a".repeat(64)
+    );
+    assert!(entry.to_wire().payload.get("_reviewedServices").is_none());
+    s.apply_page(&[up(10,"service",CUT,json!({"id":CUT,"name":"Haircut changed","description":null,"durationMinutes":120,"bufferMinutes":15,"priceCents":99000,"currency":"ARS","active":true,"updatedAt":T0,"quoteHash":"c".repeat(64)}))],10).unwrap();
+    let proposed = effective_appointment(&s, &id).unwrap().unwrap();
+    assert_eq!(proposed.services[0].name, "Haircut");
+    assert_eq!(proposed.services[0].duration_minutes, 90);
+    assert_eq!(proposed.services[0].price_cents, 10000);
+    assert_eq!(
+        serde_json::to_value(&proposed.services[0]).unwrap()["processing"],
+        json!({"startsAfterMinutes":30,"minutes":30})
+    );
+}
+
+#[test]
+fn an_old_unquoted_catalog_remains_readable_but_cannot_create_an_unfenced_booking() {
+    let mut s = seeded();
+    s.apply_page(&[up(8,"service",CUT,json!({"id":CUT,"name":"Legacy haircut","description":null,"durationMinutes":45,"bufferMinutes":15,"priceCents":10000,"currency":"ARS","active":true,"updatedAt":T0}))],8).unwrap();
+    assert!(
+        s.services()
+            .unwrap()
+            .iter()
+            .any(|row| row.name == "Legacy haircut")
+    );
+    let error = create_appointment(&mut s, new_appt("2026-03-09T12:00:00Z")).unwrap_err();
+    assert!(error.to_string().contains("Refresh the service catalogue"));
+    assert_eq!(s.outbox_len().unwrap(), 0);
+}
+
+#[test]
+fn changed_reviewed_terms_cannot_be_accepted_by_merely_retrying_at_another_time() {
+    let mut s = seeded();
+    let id = create_appointment(&mut s, new_appt("2026-03-09T12:00:00Z")).unwrap();
+    let entry = s.outbox(10).unwrap().remove(0);
+    s.apply_push_results(
+        std::slice::from_ref(&entry),
+        &[MutationResult::Rejected {
+            mutation_id: entry.mutation_id.clone(),
+            reason: "conflict".into(),
+            message: "Reviewed treatment terms changed".into(),
+            replayed: false,
+        }],
+    )
+    .unwrap();
+    assert!(
+        resolve_conflict(
+            &mut s,
+            &entry.mutation_id,
+            Resolution::Reschedule {
+                starts_at: at("2026-03-10T12:00:00Z"),
+                staff_id: None
+            }
+        )
+        .is_err()
+    );
+    assert_eq!(s.outbox_len().unwrap(), 0);
+    assert_eq!(s.conflicts().unwrap().len(), 1);
+    resolve_conflict(&mut s, &entry.mutation_id, Resolution::Cancel).unwrap();
+    assert!(effective_appointment(&s, &id).unwrap().is_none());
 }

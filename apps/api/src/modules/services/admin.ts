@@ -40,6 +40,14 @@ function toAdminService(
     description: row.description,
     durationMinutes: row.durationMinutes,
     bufferMinutes: row.bufferMinutes,
+    ...(row.processingStartMinutes !== null && row.processingMinutes !== null
+      ? {
+          processing: {
+            startsAfterMinutes: row.processingStartMinutes,
+            minutes: row.processingMinutes,
+          },
+        }
+      : {}),
     priceCents: row.priceCents,
     currency: row.currency,
     active: row.active,
@@ -78,7 +86,7 @@ export async function getAdminService(db: Executor, id: string): Promise<AdminSe
 }
 
 /** Every non-deleted service, inactive ones included. */
-export async function listAdminServices(db: Database): Promise<AdminService[]> {
+export async function listAdminServices(db: CatalogConnection): Promise<AdminService[]> {
   const rows = await db
     .select()
     .from(service)
@@ -203,6 +211,16 @@ export async function updateService(
   return db.transaction(async (tx) => {
     await lockScheduling(tx);
     const current = await requireService(tx, id);
+    if (
+      current.processingStartMinutes !== null &&
+      current.processingMinutes !== null &&
+      current.processingStartMinutes + current.processingMinutes >=
+        (input.durationMinutes ?? current.durationMinutes)
+    )
+      throw new DomainError(
+        "validation_error",
+        "Review or remove processing time before shortening the treatment",
+      );
     if (input.durationMinutes === 0 && current.catalogKind !== "addon")
       throw new DomainError("validation_error", "A standalone service needs a positive duration");
     if (
@@ -221,6 +239,16 @@ export async function updateService(
           "Remove resource requirements before making an add-on zero-time",
         );
     }
+    if (
+      current.processingStartMinutes !== null &&
+      current.processingMinutes !== null &&
+      current.processingStartMinutes + current.processingMinutes >=
+        (input.durationMinutes ?? current.durationMinutes)
+    )
+      throw new DomainError(
+        "validation_error",
+        "Remove or adjust processing before shortening this treatment",
+      );
     const changes: Partial<Record<(typeof EDITABLE)[number], unknown>> = {};
     for (const key of EDITABLE) {
       const next = input[key];

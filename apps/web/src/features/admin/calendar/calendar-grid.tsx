@@ -4,6 +4,7 @@ import { AlertIcon, CheckIcon, ClockIcon, GripIcon, SlashIcon } from "~/componen
 import { useI18n } from "~/i18n/react";
 import { cn } from "~/lib/cn";
 import { formatTime, localDateOf } from "~/lib/format";
+import { processingRanges } from "~/lib/processing";
 import { localDayBounds, zonedInstant } from "~/lib/zoned";
 import { type ColumnRect, dropTarget, exceedsDragThreshold } from "./drag";
 import { keyboardMove } from "./keys";
@@ -347,6 +348,13 @@ export function CalendarGrid(props: CalendarGridProps) {
                   const Icon = ICONS[look.icon];
                   const status = t(look.labelKey);
                   const dragging = drag?.id === appointment.id && drag.active;
+                  const processing = processingRanges(appointment);
+                  const processingLabels = processing.map((range) =>
+                    t("timing.processingRange", {
+                      from: formatTime(range.startsAt, timeZone, locale),
+                      to: formatTime(range.endsAt, timeZone, locale),
+                    }),
+                  );
                   const px = Math.max(block.durationMinutes * PX_PER_MINUTE, MIN_BLOCK_PX);
                   return (
                     <div
@@ -371,7 +379,7 @@ export function CalendarGrid(props: CalendarGridProps) {
                           time: formatTime(appointment.startsAt, timeZone, locale),
                           client: appointment.clientName,
                           services: appointment.serviceNames.join(", "),
-                          status,
+                          status: [...processingLabels, status].join(" · "),
                         })}
                         aria-description={
                           props.canMove(appointment) ? t("calendar.grid.moveHint") : undefined
@@ -390,12 +398,24 @@ export function CalendarGrid(props: CalendarGridProps) {
                         onPointerUp={(event) => onPointerUp(event, appointment)}
                         onPointerCancel={() => setDrag(null)}
                         className={cn(
-                          "flex size-full flex-col overflow-hidden rounded-md border px-2 py-1 text-left text-xs leading-tight shadow-sm transition-shadow hover:shadow-md",
+                          "relative isolate flex size-full flex-col overflow-hidden rounded-md border px-2 py-1 text-left text-xs leading-tight shadow-sm transition-shadow hover:shadow-md",
                           props.canMove(appointment) && "md:cursor-grab md:active:cursor-grabbing",
                           STATUS_CLASSES[appointment.status],
                           props.highlightId === appointment.id && "ring-2 ring-ring",
                         )}
                       >
+                        {processing.map((range) => (
+                          <span
+                            key={range.startsAt}
+                            aria-hidden="true"
+                            data-processing-window
+                            className="pointer-events-none absolute inset-x-0 -z-10 border-y border-dashed border-line-strong bg-surface/50"
+                            style={{
+                              top: `${(range.offsetMinutes / block.durationMinutes) * 100}%`,
+                              height: `${(range.minutes / block.durationMinutes) * 100}%`,
+                            }}
+                          />
+                        ))}
                         <span className="flex items-center gap-1 font-semibold">
                           <Icon width={13} height={13} className="shrink-0" />
                           <span className="shrink-0 tabular-nums">
@@ -411,6 +431,9 @@ export function CalendarGrid(props: CalendarGridProps) {
                           )}
                         </span>{" "}
                         <span className="truncate">{appointment.serviceNames.join(", ")}</span>{" "}
+                        {processingLabels.length > 0 && (
+                          <span className="truncate">{processingLabels.join(" · ")}</span>
+                        )}{" "}
                         <span className="mt-auto truncate font-medium">{status}</span>
                       </button>
                     </div>

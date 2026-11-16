@@ -1,6 +1,6 @@
 // Many virtual users race for the SAME slot. The database exclusion constraint is the source of
 // truth, so for every slot exactly one request must get 201 and every other one 409 slot_taken.
-// Afterwards `bun k6/check-overlaps.ts` confirms in SQL that no two live appointments overlap.
+// Afterwards `bun k6/check-overlaps.ts` confirms in SQL that active professional work respects configured capacity.
 //
 //   K6_EMAIL=owner@example.com K6_PASSWORD=... k6 run k6/booking-contention.js && bun k6/check-overlaps.ts
 //

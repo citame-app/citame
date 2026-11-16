@@ -304,6 +304,7 @@ export const syncServiceSchema = serviceSchema.safeExtend({
 export type SyncService = z.infer<typeof syncServiceSchema>;
 
 export const syncStaffSchema = z.object({
+  maxConcurrent: z.number().int().min(1).max(6).optional(),
   id: idSchema,
   displayName: z.string(),
   active: z.boolean(),

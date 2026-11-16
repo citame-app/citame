@@ -7,6 +7,7 @@ import { TabPanel, Tabs } from "~/components/ui/tabs";
 import { useI18n } from "~/i18n/react";
 import { adminStaffQuery } from "~/lib/admin-queries";
 import { AccessPanel } from "./access-panel";
+import { CapacityPanel } from "./capacity-panel";
 import { DateShiftEditor } from "./date-shifts";
 import { HoursEditor } from "./hours-editor";
 import { TeamList } from "./team-list";
@@ -73,6 +74,7 @@ export function StaffView({
         <h2 className="font-display text-2xl font-semibold">{member.displayName}</h2>
       </div>
       {permissions.manageAccounts && <AccessPanel staffId={member.id} />}
+      <CapacityPanel key={member.id} staffId={member.id} editable={permissions.editSchedules} />
       <Tabs
         label={t("staff.tab.label")}
         items={[

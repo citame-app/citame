@@ -86,7 +86,7 @@ Each phase ends green (lint, typecheck, `bun test`, and the listed checks) and i
 
 1. `docker compose up -d` brings up postgres, valkey, api, web; `/health` is green.
 2. `bun test` passes; then `bun run db:migrate && bun run db:seed` on a fresh DB.
-3. `k6 run k6/booking-contention.js` → exactly one successful booking per slot; SQL check confirms no overlapping appointments.
+3. `k6 run k6/booking-contention.js` → exactly one successful booking per slot; SQL checks confirm no active professional unit overlap or capacity violation (full client spans may overlap during processing or configured parallel work).
 4. Book through the web UI, see the appointment appear on the desktop client after sync.
 5. Go offline on the desktop, create an appointment, reconnect → it syncs; create a conflicting one on web while offline → conflict UI appears.
 6. Connect an MCP client, complete OAuth 2.1, call `find_availability` and `create_appointment`.

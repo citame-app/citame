@@ -15,6 +15,7 @@ import { useI18n } from "~/i18n/react";
 import { clientDetailQuery } from "~/lib/admin-queries";
 import { api } from "~/lib/api/instance";
 import { formatDateLong, formatDuration, formatMoney, formatTime, localDateOf } from "~/lib/format";
+import { processingRanges } from "~/lib/processing";
 import { salonQuery } from "~/lib/queries";
 import { AppointmentCheckout } from "../commerce/appointment-checkout";
 import { describeProblem, type Problem } from "../problems";
@@ -230,6 +231,14 @@ function DrawerBody({
               </li>
             ))}
           </ul>
+          {processingRanges(appointment).map((range) => (
+            <p key={range.startsAt} className="mt-2 text-sm text-muted">
+              {t("timing.processingRange", {
+                from: formatTime(range.startsAt, timeZone, locale),
+                to: formatTime(range.endsAt, timeZone, locale),
+              })}
+            </p>
+          ))}
           <p className="mt-1 flex justify-between gap-3 border-t border-line pt-1 font-medium">
             <span>{t("drawer.total")}</span>
             <span className="tabular-nums">{formatMoney(totalCents, currency, locale)}</span>

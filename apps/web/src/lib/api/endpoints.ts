@@ -68,6 +68,7 @@ import { portfolioEndpoints } from "./portfolio-endpoints";
 import { resourceEndpoints } from "./resource-endpoints";
 import { reviewEndpoints } from "./review-endpoints";
 import { rewardEndpoints } from "./reward-endpoints";
+import { schedulingPolicyEndpoints } from "./scheduling-policy-endpoints";
 import { seriesEndpoints } from "./series-endpoints";
 import { waitlistEndpoints } from "./waitlist-endpoints";
 
@@ -113,6 +114,7 @@ export function createEndpoints(client: ApiClient) {
     intake: intakeEndpoints(client),
     commerce: commerceEndpoints(client),
     bookingPolicy: bookingPolicyEndpoints(client),
+    schedulingPolicy: schedulingPolicyEndpoints(client),
     combinations: combinationEndpoints(client),
     inventory: inventoryEndpoints(client),
     accounting: accountingEndpoints(client),

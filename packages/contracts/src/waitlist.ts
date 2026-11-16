@@ -10,6 +10,7 @@ import {
   pageSizeSchema,
 } from "./common";
 import { intakeBookingShape } from "./intake";
+import { processingTimeSchema } from "./staff-capacity";
 
 const time = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
 export const waitlistPolicySchema = z.object({
@@ -64,7 +65,8 @@ export const waitlistOfferSchema = z.object({
     z.object({
       id: idSchema,
       name: z.string(),
-      durationMinutes: z.number().int().positive(),
+      durationMinutes: z.number().int().nonnegative(),
+      processing: processingTimeSchema.optional(),
       bufferMinutes: z.number().int().nonnegative(),
       priceCents: z.number().int().nonnegative(),
       currency: z.string(),

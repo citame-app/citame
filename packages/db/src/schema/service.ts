@@ -21,6 +21,8 @@ export const service = pgTable(
     durationMinutes: integer().notNull(),
     /** Cleanup/transition time blocked after the service. */
     bufferMinutes: integer().notNull().default(0),
+    processingStartMinutes: integer(),
+    processingMinutes: integer(),
     priceCents: integer().notNull(),
     currency: text().notNull().default("ARS"),
     resourceVersion: integer().notNull().default(1),
@@ -43,6 +45,10 @@ export const service = pgTable(
       sql`${t.catalogVersion}>0 and ((${t.catalogKind}='service' and ${t.parentServiceId} is null and ${t.optionLabel} is null) or (${t.catalogKind}='variant' and ${t.parentServiceId} is not null and ${t.optionLabel} is not null and length(trim(${t.optionLabel})) between 1 and 80) or (${t.catalogKind}='addon' and ${t.parentServiceId} is null and ${t.optionLabel} is null))`,
     ),
     index("service_parent_idx").on(t.parentServiceId),
+    check(
+      "service_processing_valid",
+      sql`(${t.processingStartMinutes} is null and ${t.processingMinutes} is null) or (${t.processingStartMinutes} is not null and ${t.processingMinutes} is not null and ${t.processingStartMinutes}>0 and ${t.processingMinutes}>0 and ${t.processingStartMinutes}+${t.processingMinutes}<${t.durationMinutes})`,
+    ),
     check("service_buffer_non_negative", sql`${t.bufferMinutes} >= 0`),
     check("service_price_non_negative", sql`${t.priceCents} >= 0`),
   ],

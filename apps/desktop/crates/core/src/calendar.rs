@@ -113,7 +113,7 @@ fn overlay(
                 ) else {
                     continue;
                 };
-                let picked: Vec<AppointmentService> = p
+                let catalog_picked: Vec<AppointmentService> = p
                     .get("serviceIds")
                     .and_then(Value::as_array)
                     .into_iter()
@@ -126,8 +126,13 @@ fn overlay(
                         buffer_minutes: s.buffer_minutes,
                         price_cents: s.price_cents,
                         currency: s.currency.clone(),
+                        processing: s.processing.clone(),
                     })
                     .collect();
+                let picked: Vec<AppointmentService> = p
+                    .get("_reviewedServices")
+                    .and_then(|value| serde_json::from_value(value.clone()).ok())
+                    .unwrap_or(catalog_picked);
                 let block: i64 = picked
                     .iter()
                     .map(|s| s.duration_minutes + s.buffer_minutes)

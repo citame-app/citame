@@ -5,6 +5,7 @@ import {
   serviceCatalogSchema,
   serviceCatalogUpdateSchema,
 } from "./service-options";
+import { processingTimeSchema } from "./staff-capacity";
 
 export const serviceSchema = z
   .object({
@@ -13,6 +14,7 @@ export const serviceSchema = z
     description: z.string().nullable(),
     durationMinutes: z.number().int().nonnegative(),
     bufferMinutes: z.number().int().min(0),
+    processing: processingTimeSchema.optional(),
     priceCents: z.number().int().min(0),
     currency: z.string().length(3),
     catalog: serviceCatalogSchema.optional(),
@@ -24,7 +26,12 @@ export const serviceSchema = z
   .refine((s) => s.durationMinutes > 0 || s.catalog?.kind === "addon", {
     message: "A standalone service needs a positive duration",
     path: ["durationMinutes"],
-  });
+  })
+  .refine(
+    (s) =>
+      !s.processing || s.processing.startsAfterMinutes + s.processing.minutes < s.durationMinutes,
+    { message: "Processing requires final hands-on work", path: ["processing"] },
+  );
 
 export type Service = z.infer<typeof serviceSchema>;
 

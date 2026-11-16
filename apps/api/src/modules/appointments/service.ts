@@ -16,9 +16,9 @@ import {
   EXCLUSION_VIOLATION,
   pgErrorCode,
   serviceStaff,
+  staffProfile,
   timeOff,
   user,
-  waitlistOffer,
   workingHours,
 } from "@sob/db";
 import { and, asc, count, desc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
@@ -32,6 +32,16 @@ import {
 import { lockCalendars, lockScheduling, type Tx } from "../../tx";
 import { totalBlockMinutes } from "../availability/compute";
 import { type BookingViolation, bookingViolations } from "../availability/rules";
+import {
+  releaseExpiredStaffOffers,
+  repackStaff,
+  staffOccupied,
+} from "../availability/staff-reservations";
+import {
+  createStaffCapacityCalendar,
+  serviceWorkWindows,
+  type WorkWindow,
+} from "../availability/work-windows";
 import {
   createProtection,
   lockProtectionReceipt,
@@ -80,6 +90,7 @@ export function toAppointment(
     status: row.status,
     notes: row.notes,
     version: row.version,
+    ...(row.workWindows ? { workWindows: row.workWindows } : {}),
     services: snapshots
       .sort((a, b) => a.position - b.position)
       .map((s) => ({
@@ -87,6 +98,14 @@ export function toAppointment(
         name: s.name,
         durationMinutes: s.durationMinutes,
         bufferMinutes: s.bufferMinutes,
+        ...(s.processingStartMinutes !== null && s.processingMinutes !== null
+          ? {
+              processing: {
+                startsAfterMinutes: s.processingStartMinutes,
+                minutes: s.processingMinutes,
+              },
+            }
+          : {}),
         priceCents: s.priceCents,
         currency: s.currency,
       })),
@@ -188,6 +207,7 @@ export async function createAppointment(
         now,
         override: request.override === true,
         settings,
+        workWindows: serviceWorkWindows(services),
       });
       const clientId = await resolveClient(tx, request);
       await assertClientCanBook(tx, clientId);
@@ -208,9 +228,13 @@ export async function createAppointment(
           startsAt,
           endsAt,
           notes: request.notes,
+          ...(services.some((s) => s.processing)
+            ? { workWindows: sql`${JSON.stringify(serviceWorkWindows(services))}::jsonb` }
+            : {}),
         })
         .returning();
       if (!row) throw new Error("Appointment insert returned no row");
+      await repackStaff(tx, row.staffId, now, { appointmentId: row.id });
       await recordBookingIntake(tx, intake, clientId, row.id, now);
       const snapshots = await tx
         .insert(appointmentService)
@@ -222,6 +246,8 @@ export async function createAppointment(
             name: s.name,
             durationMinutes: s.durationMinutes,
             bufferMinutes: s.bufferMinutes,
+            processingStartMinutes: s.processing?.startsAfterMinutes ?? null,
+            processingMinutes: s.processing?.minutes ?? null,
             priceCents: s.priceCents,
             currency: s.currency,
           })),
@@ -285,28 +311,46 @@ export async function assertBookable(
     now: Date;
     override: boolean;
     settings: Awaited<ReturnType<typeof getSalonSettings>>;
+    workWindows?: WorkWindow[];
+    excludeAppointmentId?: string;
   },
 ): Promise<boolean> {
   const { staffId, startsAt, endsAt, settings } = input;
   await assertStaffActive(tx, staffId);
-  const [heldOffer] = await tx
-    .select({ id: waitlistOffer.id })
-    .from(waitlistOffer)
-    .where(
-      and(
-        eq(waitlistOffer.staffId, staffId),
-        eq(waitlistOffer.state, "offered"),
-        gt(waitlistOffer.expiresAt, input.now),
-        lt(waitlistOffer.startsAt, endsAt),
-        gt(waitlistOffer.endsAt, startsAt),
-      ),
-    )
-    .limit(1);
-  if (heldOffer)
+  await releaseExpiredStaffOffers(tx, [staffId], input.now);
+  const [member] = await tx
+    .select({ capacity: staffProfile.maxConcurrent })
+    .from(staffProfile)
+    .where(eq(staffProfile.id, staffId));
+  const work = input.workWindows ?? [
+    { offsetMinutes: 0, endOffsetMinutes: (endsAt.getTime() - startsAt.getTime()) / 60000 },
+  ];
+  const candidate = work.map((w) => ({
+    start: startsAt.getTime() + w.offsetMinutes * 60000,
+    end: startsAt.getTime() + w.endOffsetMinutes * 60000,
+  }));
+  const busy = await staffOccupied(
+    tx,
+    [staffId],
+    startsAt,
+    endsAt,
+    input.now,
+    input.excludeAppointmentId,
+  );
+  const intervals = (rows: typeof busy) =>
+    rows.map((r) => ({ start: r.startsAt.getTime(), end: r.endsAt.getTime() }));
+  if (!createStaffCapacityCalendar(member?.capacity ?? 1, intervals(busy))(candidate)) {
+    const bookings = busy.filter((r) => r.appointmentId !== null);
+    if (!createStaffCapacityCalendar(member?.capacity ?? 1, intervals(bookings))(candidate))
+      throw new DomainError(
+        "slot_taken",
+        "The professional has no remaining capacity at this time",
+      );
     throw new DomainError(
       "slot_unavailable",
       "This time is temporarily reserved for a waitlist offer",
     );
+  }
   const hours = await tx
     .select()
     .from(workingHours)
@@ -596,6 +640,8 @@ export async function updateAppointment(
           now,
           override: request.override === true,
           settings,
+          workWindows: current.workWindows ?? undefined,
+          excludeAppointmentId: current.id,
         }));
       const [updated] = await tx
         .update(appointment)
@@ -609,7 +655,10 @@ export async function updateAppointment(
         })
         .where(and(eq(appointment.id, id), eq(appointment.version, request.version)))
         .returning();
-      if (updated && slotChanges) await reassignAppointmentResources(tx, id, now);
+      if (updated && slotChanges) {
+        await repackStaff(tx, updated.staffId, now, { appointmentId: id });
+        await reassignAppointmentResources(tx, id, now);
+      }
       if (updated && actor) {
         await recordAudit(tx, {
           actorUserId: actor.userId,

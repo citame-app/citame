@@ -37,7 +37,23 @@ impl AppointmentStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ProcessingTime {
+    pub starts_after_minutes: i64,
+    pub minutes: i64,
+}
+
+fn one() -> i64 {
+    1
+}
+fn is_one(value: &i64) -> bool {
+    *value == 1
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AppointmentService {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processing: Option<ProcessingTime>,
     pub service_id: Option<String>,
     pub name: String,
     pub duration_minutes: i64,
@@ -77,6 +93,10 @@ pub struct Client {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Service {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processing: Option<ProcessingTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quote_hash: Option<String>,
     pub id: String,
     pub name: String,
     pub description: Option<String>,
@@ -91,6 +111,8 @@ pub struct Service {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Staff {
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub max_concurrent: i64,
     pub id: String,
     pub display_name: String,
     pub active: bool,
@@ -252,11 +274,17 @@ pub struct OutboxEntry {
 
 impl OutboxEntry {
     pub fn to_wire(&self) -> WireMutation {
+        let mut payload = self.payload.clone();
+        if self.kind == "appointment.create"
+            && let Some(fields) = payload.as_object_mut()
+        {
+            fields.remove("_reviewedServices");
+        }
         WireMutation {
             mutation_id: self.mutation_id.clone(),
             created_at: self.created_at.clone(),
             kind: self.kind.clone(),
-            payload: self.payload.clone(),
+            payload,
         }
     }
 }

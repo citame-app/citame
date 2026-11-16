@@ -513,6 +513,17 @@ impl Root {
             cx.notify();
             return;
         }
+        if form.services.iter().any(|id| {
+            self.services
+                .iter()
+                .find(|row| &row.id == id)
+                .and_then(|row| row.quote_hash.as_ref())
+                .is_none()
+        }) {
+            form.error = Some(Key::ErrRefreshCatalog);
+            cx.notify();
+            return;
+        }
         if form.client_id.is_none() && name.is_empty() {
             form.error = Some(Key::ErrPickClient);
             cx.notify();
@@ -1179,6 +1190,19 @@ impl Root {
                         services
                     ))),
             )
+            .when(a.services.iter().any(|s| s.processing.is_some()), |d| {
+                let minutes: i64 = a
+                    .services
+                    .iter()
+                    .filter_map(|s| s.processing.as_ref().map(|p| p.minutes))
+                    .sum();
+                d.child(div().text_xs().text_color(theme::muted()).truncate().child(
+                    SharedString::from(i18n::fill(
+                        self.t(Key::ProcessingDuration),
+                        &[("minutes", &minutes.to_string())],
+                    )),
+                ))
+            })
             .into_any_element()
     }
 
@@ -1271,6 +1295,14 @@ impl Root {
                     } else {
                         col.staff.display_name.clone()
                     }))
+                    .when(col.staff.max_concurrent > 1, |d| {
+                        d.child(div().ml_1().text_xs().text_color(theme::muted()).child(
+                            SharedString::from(i18n::fill(
+                                self.t(Key::ConcurrentClients),
+                                &[("n", &col.staff.max_concurrent.to_string())],
+                            )),
+                        ))
+                    })
             });
         div()
             .id("calendar-horizontal-scroll")
@@ -1427,7 +1459,18 @@ impl Root {
                 let sid = s.id.clone();
                 self.chip(
                     ("service", i),
-                    SharedString::from(format!("{} ({} min)", s.name, s.duration_minutes)),
+                    SharedString::from(match &s.processing {
+                        Some(processing) => format!(
+                            "{} ({} min · {})",
+                            s.name,
+                            s.duration_minutes,
+                            i18n::fill(
+                                self.t(Key::ProcessingDuration),
+                                &[("minutes", &processing.minutes.to_string())]
+                            )
+                        ),
+                        None => format!("{} ({} min)", s.name, s.duration_minutes),
+                    }),
                     f.services.contains(&s.id),
                     cx.listener(move |this, _, _, cx| {
                         if let Overlay::New(f) = &mut this.overlay {
@@ -1730,7 +1773,13 @@ impl Root {
                                 .child(SharedString::from(format!("{when} {staff}"))),
                         ),
                 )
-                .child(div().text_sm().child(self.conflict_reason(&c.reason)));
+                .child(div().text_sm().child(
+                    if c.kind == "appointment.create" && c.reason == "conflict" {
+                        self.t(Key::ConflictReviewedTerms)
+                    } else {
+                        self.conflict_reason(&c.reason)
+                    },
+                ));
             if !c.is_appointment() {
                 let m = mid.clone();
                 return card.child(self.button(
@@ -1807,7 +1856,7 @@ impl Root {
             let can_reschedule = matches!(
                 c.kind.as_str(),
                 "appointment.create" | "appointment.reschedule"
-            );
+            ) && !(c.kind == "appointment.create" && c.reason == "conflict");
             card.child(
                 div()
                     .flex()
@@ -1975,8 +2024,8 @@ mod tests {
                         "slotGranularityMinutes": 15, "minNoticeMinutes": 60, "maxDaysAhead": 60, "updatedAt": T0})),
                     up(2, "staff", ANA, json!({"id": ANA, "displayName": "Ana", "active": true, "userId": null, "updatedAt": T0})),
                     up(3, "staff", BEA, json!({"id": BEA, "displayName": "Bea", "active": true, "userId": null, "updatedAt": T0})),
-                    up(4, "service", CUT, json!({"id": CUT, "name": "Haircut", "description": null, "durationMinutes": 45, "bufferMinutes": 15, "priceCents": 1, "currency": "ARS", "active": true, "updatedAt": T0})),
-                    up(5, "service", NAILS, json!({"id": NAILS, "name": "Manicure", "description": null, "durationMinutes": 45, "bufferMinutes": 0, "priceCents": 1, "currency": "ARS", "active": true, "updatedAt": T0})),
+                    up(4, "service", CUT, json!({"id": CUT, "name": "Haircut", "description": null, "durationMinutes": 45, "bufferMinutes": 15, "priceCents": 1, "currency": "ARS", "active": true, "updatedAt": T0, "quoteHash": "a".repeat(64)})),
+                    up(5, "service", NAILS, json!({"id": NAILS, "name": "Manicure", "description": null, "durationMinutes": 45, "bufferMinutes": 0, "priceCents": 1, "currency": "ARS", "active": true, "updatedAt": T0, "quoteHash": "a".repeat(64)})),
                     up(6, "service_staff", "l1", json!({"id": "l1", "serviceId": CUT, "staffId": ANA})),
                     up(7, "service_staff", "l2", json!({"id": "l2", "serviceId": NAILS, "staffId": BEA})),
                     up(8, "client", LUCIA, json!({"id": LUCIA, "name": "Lucia", "phone": null, "email": null, "notes": null, "createdAt": T0, "updatedAt": T0})),

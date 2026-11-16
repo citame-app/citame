@@ -186,3 +186,14 @@ describe("CalendarGrid", () => {
     expect(two.style.left).toBe("50%");
   });
 });
+
+test("a processing card announces its visible timing before the visible booking status", () => {
+  const visit = appt("0198f5a0-7b1c-7000-8000-0000000000a6", ANA, "13:00");
+  visit.workWindows = [
+    { offsetMinutes: 0, endOffsetMinutes: 15 },
+    { offsetMinutes: 45, endOffsetMinutes: 60 },
+  ];
+  renderApp(<CalendarGrid {...base} appointments={[visit]} />);
+  expect(screen.getByRole("button", { name: /Lucia.*Haircut.*Processing:.*Booked/ })).toBeVisible();
+  expect(screen.getByRole("button", { name: /Lucia/ })).toHaveTextContent(/AM Booked/);
+});

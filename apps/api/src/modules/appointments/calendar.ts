@@ -143,11 +143,20 @@ export async function getCalendar(
           status: row.status,
           notes: row.notes,
           version: row.version,
+          ...(row.workWindows ? { workWindows: row.workWindows } : {}),
           services: own.map((s) => ({
             serviceId: s.serviceId,
             name: s.name,
             durationMinutes: s.durationMinutes,
             bufferMinutes: s.bufferMinutes,
+            ...(s.processingStartMinutes !== null && s.processingMinutes !== null
+              ? {
+                  processing: {
+                    startsAfterMinutes: s.processingStartMinutes,
+                    minutes: s.processingMinutes,
+                  },
+                }
+              : {}),
             priceCents: s.priceCents,
             currency: s.currency,
           })),

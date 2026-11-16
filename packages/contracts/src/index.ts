@@ -40,5 +40,6 @@ export * from "./service-combinations";
 export * from "./service-options";
 export * from "./services";
 export * from "./staff";
+export * from "./staff-capacity";
 export * from "./sync";
 export * from "./waitlist";

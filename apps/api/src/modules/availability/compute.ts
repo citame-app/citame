@@ -9,6 +9,7 @@
  */
 
 import { type DatedWorkingHours, hoursForDate } from "./dated-hours";
+import { createStaffCapacityCalendar, type WorkWindow } from "./work-windows";
 
 const MS_PER_MINUTE = 60_000;
 
@@ -27,6 +28,7 @@ export interface WorkingRange {
 
 export interface StaffAvailabilityInput {
   staffId: string;
+  capacity?: number;
   workingHours: WorkingRange[];
   datedWorkingHours?: DatedWorkingHours[];
   timeOff: TimeRange[];
@@ -45,6 +47,7 @@ export interface AvailabilityInput {
   now: Date;
   /** Total minutes to block, see `totalBlockMinutes`. */
   blockMinutes: number;
+  workWindows?: WorkWindow[];
   staff: StaffAvailabilityInput[];
 }
 
@@ -103,6 +106,11 @@ export function computeAvailability(input: AvailabilityInput): ComputedSlot[] {
 
   const slots: ComputedSlot[] = [];
   for (const member of input.staff) {
+    const calendar = createStaffCapacityCalendar(
+      member.capacity ?? 1,
+      member.appointments.map((r) => ({ start: r.start.getTime(), end: r.end.getTime() })),
+    );
+    const work = input.workWindows ?? [{ offsetMinutes: 0, endOffsetMinutes: blockMinutes }];
     for (const hours of hoursForDate(date, member.workingHours, member.datedWorkingHours)) {
       if (hours.weekday !== weekday) continue;
       const { startMs: rangeStart, endMs: rangeEnd } = resolveWorkingRange(date, timeZone, hours);
@@ -110,7 +118,15 @@ export function computeAvailability(input: AvailabilityInput): ComputedSlot[] {
       for (let start = rangeStart; start + blockMs <= rangeEnd; start += stepMs) {
         const end = start + blockMs;
         if (start < earliestMs) continue;
-        if (overlaps(start, end, member.timeOff) || overlaps(start, end, member.appointments)) {
+        if (
+          overlaps(start, end, member.timeOff) ||
+          !calendar(
+            work.map((w) => ({
+              start: start + w.offsetMinutes * 60000,
+              end: start + w.endOffsetMinutes * 60000,
+            })),
+          )
+        ) {
           continue;
         }
         slots.push({

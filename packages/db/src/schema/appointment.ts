@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { check, index, integer, pgEnum, pgTable, text, uuid } from "drizzle-orm/pg-core";
+import { check, index, integer, jsonb, pgEnum, pgTable, text, uuid } from "drizzle-orm/pg-core";
 import { clientProfile } from "./client";
 import { createdAt, deletedAt, primaryId, timestamptz, updatedAt } from "./helpers";
 import { service } from "./service";
@@ -13,9 +13,8 @@ export const appointmentStatus = pgEnum("appointment_status", [
 ]);
 
 /**
- * `ends_at` already includes the buffer of every booked service (see ADR 0002), so the
- * exclusion constraint in the hand-written migration protects the whole blocked window.
- * The constraint itself is not expressible in Drizzle: see drizzle/*_appointment_no_overlap.sql.
+ * `ends_at` includes processing and cleanup. Frozen work windows feed internal staff reservations;
+ * migration0037 protects active professional intervals, not the full client-presence span.
  */
 export const appointment = pgTable(
   "appointment",
@@ -31,6 +30,7 @@ export const appointment = pgTable(
     endsAt: timestamptz().notNull(),
     status: appointmentStatus().notNull().default("booked"),
     notes: text(),
+    workWindows: jsonb().$type<{ offsetMinutes: number; endOffsetMinutes: number }[]>(),
     /** Optimistic-concurrency counter, incremented on every update. */
     version: integer().notNull().default(1),
     createdAt: createdAt(),
@@ -57,8 +57,16 @@ export const appointmentService = pgTable(
     name: text().notNull(),
     durationMinutes: integer().notNull(),
     bufferMinutes: integer().notNull(),
+    processingStartMinutes: integer(),
+    processingMinutes: integer(),
     priceCents: integer().notNull(),
     currency: text().notNull(),
   },
-  (t) => [index("appointment_service_appointment_idx").on(t.appointmentId)],
+  (t) => [
+    index("appointment_service_appointment_idx").on(t.appointmentId),
+    check(
+      "appointment_service_processing_valid",
+      sql`(${t.processingStartMinutes} is null and ${t.processingMinutes} is null) or (${t.processingStartMinutes} is not null and ${t.processingMinutes} is not null and ${t.processingStartMinutes}>0 and ${t.processingMinutes}>0 and ${t.processingStartMinutes}+${t.processingMinutes}<${t.durationMinutes})`,
+    ),
+  ],
 );

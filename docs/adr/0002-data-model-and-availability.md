@@ -1,5 +1,8 @@
 # ADR 0002: Data model, double-booking guard and availability
 
+The original continuous professional-block exclusion below is extended by [ADR 0016](0016-professional-work-capacity.md). Current deployments use frozen active-work intervals and configured concurrent capacity; full client spans and physical-resource rules remain distinct.
+
+
 Status: accepted (Phase 1)
 
 ## Context
