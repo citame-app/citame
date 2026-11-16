@@ -25,7 +25,7 @@ import { totalBlockMinutes } from "../availability/compute";
 import { getBookingPolicy } from "../booking-protection/policy";
 import { protectionView } from "../booking-protection/value";
 import { filterResourceAvailability } from "../resources/reservations";
-import { getServicesByIds } from "../services/service";
+import { getBookableServices } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { staffQualifiedFor } from "../staff/service";
 import { seriesStartsAt } from "./series-dates";
@@ -54,7 +54,7 @@ async function previewInTransaction(
   now: Date,
 ): Promise<AppointmentSeriesPreview> {
   const settings = await getSalonSettings(tx);
-  const services = await getServicesByIds(tx, input.serviceIds);
+  const services = await getBookableServices(tx, input.serviceIds);
   if (!(await staffQualifiedFor(tx, input.serviceIds)).includes(input.staffId))
     throw new DomainError(
       "validation_error",

@@ -14,10 +14,11 @@ import { ErrorState, Skeleton, useOnline } from "~/components/ui/states";
 import { useToast } from "~/components/ui/toast";
 import { UnsavedGuard } from "~/features/admin/unsaved-guard";
 import { useDebounced } from "~/features/admin/use-debounced";
+import { CatalogChoices } from "~/features/booking/catalog-choices";
 import { useI18n } from "~/i18n/react";
 import type { CommerceMode } from "~/lib/api/commerce-endpoints";
 import { api } from "~/lib/api/instance";
-import { addDaysLocal, formatMoney, localDateOf } from "~/lib/format";
+import { addDaysLocal, localDateOf } from "~/lib/format";
 import { salonQuery, servicesQuery, staffQuery } from "~/lib/queries";
 export interface JoinFormProps {
   mode: CommerceMode;
@@ -39,7 +40,7 @@ export function WaitlistJoinForm({
   initialDate,
   onJoined,
 }: JoinFormProps) {
-  const { t, locale, timeZone } = useI18n();
+  const { t, timeZone } = useI18n();
   const toast = useToast();
   const online = useOnline();
   const queries = useQueryClient();
@@ -164,38 +165,23 @@ export function WaitlistJoinForm({
         )}
         <fieldset className="space-y-2">
           <legend className="mb-1 text-sm font-medium">{t("waitlist.services")}</legend>
-          {services.data
-            .filter(
+          <CatalogChoices
+            allCatalog={services.data}
+            catalog={services.data.filter(
               (s) =>
                 !ownOnly ||
-                staff.data.some(
-                  (person) => person.id === ownStaffId && person.serviceIds.includes(s.id),
-                ),
-            )
-            .map((s) => (
-              <label
-                key={s.id}
-                className="flex min-h-11 min-w-0 items-center gap-3 rounded-md border border-line p-3"
-              >
-                <input
-                  type="checkbox"
-                  className="size-5 shrink-0 accent-accent"
-                  checked={selected.includes(s.id)}
-                  onChange={(e) => {
-                    const next = e.target.checked
-                      ? [...selected, s.id]
-                      : selected.filter((id) => id !== s.id);
-                    setSelected(next);
-                    const performer = staff.data.find((person) => person.id === chosenStaff);
-                    if (performer && !next.every((id) => performer.serviceIds.includes(id)))
-                      setChosenStaff("");
-                  }}
-                />
-                <span className="min-w-0 break-words">
-                  {s.name} · {formatMoney(s.priceCents, s.currency, locale)}
-                </span>
-              </label>
-            ))}
+                staff.data.some((p) => p.id === ownStaffId && p.serviceIds.includes(s.id)),
+            )}
+            selected={selected}
+            maxSelected={8}
+            disabled={save.isPending}
+            onChange={(next) => {
+              setSelected(next);
+              const performer = staff.data.find((person) => person.id === chosenStaff);
+              if (performer && !next.every((id) => performer.serviceIds.includes(id)))
+                setChosenStaff("");
+            }}
+          />
         </fieldset>
         <SelectField
           disabled={ownOnly}

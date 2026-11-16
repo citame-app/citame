@@ -84,6 +84,18 @@ beforeEach(() => {
       }
       const id = url.pathname.split("/")[4];
       const current = services.find((s) => s.id === id) as Svc;
+      if (method === "PUT" && url.pathname.endsWith("/configuration")) {
+        const id = url.pathname.split("/")[4];
+        const current = services.find((s) => s.id === id);
+        const updated = {
+          ...current,
+          ...body.service,
+          staffIds: body.staffIds,
+          version: body.version + 1,
+        };
+        services = services.map((s) => (s.id === id ? updated : s));
+        return json(updated);
+      }
       if (method === "PUT") {
         const next = { ...current, staffIds: body.staffIds };
         services = services.map((s) => (s.id === id ? next : s));
@@ -187,7 +199,7 @@ describe("ServicesView", () => {
     fireEvent.change(within(dialog).getByLabelText("Price"), { target: { value: "12000" } });
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Ana" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
-    await waitFor(() => expect(writes()).toHaveLength(2));
+    await waitFor(() => expect(writes()).toHaveLength(1));
     expect(writes()[0]).toEqual({
       method: "POST",
       path: "/api/admin/services",
@@ -198,13 +210,13 @@ describe("ServicesView", () => {
         bufferMinutes: 10,
         priceCents: 1_200_000,
         currency: "ARS",
+        staffIds: [ANA],
       },
     });
-    expect(writes()[1]).toMatchObject({ method: "PUT", body: { staffIds: [ANA] } });
     expect(await screen.findByText("Service created")).toBeInTheDocument();
   });
 
-  test("editing sends only the changed fields", async () => {
+  test("editing submits reviewed service details and the team atomically", async () => {
     open();
     const table = await screen.findByRole("table", { name: "Services" });
     fireEvent.click(within(table).getByRole("button", { name: "Haircut" }));
@@ -214,7 +226,11 @@ describe("ServicesView", () => {
     fireEvent.change(within(dialog).getByLabelText("Price"), { target: { value: "16000" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(writes()).toHaveLength(1));
-    expect(writes()[0]).toMatchObject({ method: "PATCH", body: { priceCents: 1_600_000 } });
+    expect(writes()[0]).toMatchObject({
+      method: "PUT",
+      path: `/api/admin/services/${CUT}/configuration`,
+      body: { version: 1, service: { priceCents: 1_600_000 }, staffIds: [ANA, BEA] },
+    });
   });
 
   test("closing a dirty form asks before discarding", async () => {

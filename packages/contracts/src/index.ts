@@ -29,6 +29,7 @@ export * from "./reports";
 export * from "./resources";
 export * from "./rewards";
 export * from "./salon";
+export * from "./service-options";
 export * from "./services";
 export * from "./staff";
 export * from "./sync";

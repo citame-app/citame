@@ -13,6 +13,7 @@ import { TextField } from "~/components/ui/field";
 import { SelectField, TextAreaField } from "~/components/ui/select-field";
 import { Sheet } from "~/components/ui/sheet";
 import { useToast } from "~/components/ui/toast";
+import { CatalogChoices } from "~/features/booking/catalog-choices";
 import { useI18n } from "~/i18n/react";
 import { adminStaffQuery, clientsQuery } from "~/lib/admin-queries";
 import { api } from "~/lib/api/instance";
@@ -148,7 +149,10 @@ export function NewAppointmentSheet({
   const activeStaff = (staff.data ?? []).filter((s) => s.active);
   const chosenStaff = activeStaff.find((s) => s.id === values.staffId);
   const offered = (services.data ?? []).filter((s) => chosenStaff?.serviceIds.includes(s.id));
-  const chosen = offered.filter((s) => values.serviceIds.includes(s.id));
+  const chosen = values.serviceIds.flatMap((id) => {
+    const s = offered.find((s) => s.id === id);
+    return s ? [s] : [];
+  });
   const totalMinutes = chosen.reduce((sum, s) => sum + s.durationMinutes, 0);
   const totalCents = chosen.reduce((sum, s) => sum + s.priceCents, 0);
 
@@ -408,33 +412,13 @@ export function NewAppointmentSheet({
           {chosenStaff && offered.length === 0 && (
             <p className="text-sm text-muted">{t("walkin.services.none")}</p>
           )}
-          {offered.map((service) => (
-            <label
-              key={service.id}
-              className="flex min-h-11 cursor-pointer items-center gap-3 rounded-md border border-line px-3 hover:bg-sunken has-[:checked]:border-accent has-[:checked]:bg-accent-soft"
-            >
-              <input
-                type="checkbox"
-                className="size-5 accent-[var(--accent)]"
-                checked={values.serviceIds.includes(service.id)}
-                onChange={(e) =>
-                  set(
-                    "serviceIds",
-                    e.target.checked
-                      ? [...values.serviceIds, service.id]
-                      : values.serviceIds.filter((id) => id !== service.id),
-                  )
-                }
-              />
-              <span className="flex-1">
-                <span className="font-medium">{service.name}</span>
-                <span className="ml-2 text-sm text-muted">
-                  {formatDuration(service.durationMinutes, locale)} ·{" "}
-                  {formatMoney(service.priceCents, service.currency, locale)}
-                </span>
-              </span>
-            </label>
-          ))}
+          <CatalogChoices
+            catalog={offered}
+            allCatalog={services.data ?? []}
+            selected={values.serviceIds}
+            onChange={(ids) => set("serviceIds", ids)}
+            disabled={create.isPending}
+          />
           {errors.services && (
             <p role="alert" className="text-sm font-medium text-danger-fg">
               {errorText("services")}

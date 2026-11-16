@@ -12,6 +12,7 @@ import { loyaltyEsAR } from "./loyalty";
 import { notificationsEsAR } from "./notifications";
 import { passesEsAR } from "./passes";
 import { schedulingEsAR } from "./scheduling";
+import { serviceOptionsEsAR } from "./service-options";
 import { waitlistEsAR } from "./waitlist";
 
 /** Neutral, professional Spanish for Argentina. */
@@ -21,6 +22,7 @@ export const esAR: Record<MessageKey, string> = {
   ...passesEsAR,
   ...loyaltyEsAR,
   ...schedulingEsAR,
+  ...serviceOptionsEsAR,
   ...waitlistEsAR,
   "common.greeting": "Hola, {name}",
   "booking.summary.services_one": "{count} servicio",

@@ -89,7 +89,7 @@ export async function pickProfessional(page: Page, name: string | RegExp) {
 
 /** Picks the first offered time on the next available day. Returns its label. */
 export async function pickFirstTime(page: Page): Promise<string> {
-  const first = page.getByRole("main").getByRole("group").getByRole("radio").first();
+  const first = page.getByRole("main").locator('input[type="radio"][name="slot"]').first();
   await expect(first).toBeVisible();
   const id = await first.getAttribute("id");
   const label = (await page.locator(`label[for="${id}"]`).textContent())?.trim() ?? "";

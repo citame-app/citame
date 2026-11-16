@@ -1,0 +1,24 @@
+# Service variants and optional extras
+
+Open **Services → New service** and choose a catalog type. Existing services remain standalone services.
+
+A **service variant** belongs to one ordinary parent, has its own label, name, price, duration and performers, and starts with a copy of the parent's resource requirements. For example, “Haircut · Long hair” can take longer and cost more than the standard haircut. Changing the parent later does not silently rewrite the variant's prices, performers, resource requirements or booked snapshots. Nested variants are rejected. Deactivating a parent hides its variants from new public bookings; existing visits retain their snapshots.
+
+An **optional extra** lists its eligible services. Allowing an ordinary parent also allows its variants; allowing a specific variant restricts the extra to that option. An extra must follow an eligible base in the visit sequence and use the same currency. It cannot be booked on its own. The booking interface reveals compatible extras after a service is chosen. Each extra can currently be selected once per visit, attached to its chosen eligible service. Changing a variant removes incompatible extras and preserves compatible ones. Removing a service removes its attached extras.
+
+Extras may add zero minutes when they only add price. A zero-time extra with no cleanup buffer cannot reserve a room or equipment. Remove resource requirements before editing a timed extra into a zero-length allocation. The visit retains a positive service window, and its frozen snapshot still records the zero-time charge separately. Timed extras add their own service and cleanup time in sequence.
+
+Creation saves the reviewed details and performer set atomically. If no performer set is supplied to the API, variants inherit their parent's initial performers and extras inherit the performers of their initial eligible services. The web editor supplies the explicitly reviewed set. Editing through the web editor saves service details, performers and option terms as one transaction, with a configuration revision. A conflict keeps the draft; **Reload current service** explicitly replaces it with the current server record. Legacy detail, performer and option endpoints also advance the revision when they change the service, so concurrent configuration submissions cannot silently overwrite those edits.
+
+Resource allocation, deposit calculation, checkout lines and booked duration use the actual selected service records, rather than a client-provided price adjustment. Recurring visits and waitlist matching use the same family and extra-selection rules. The bounded waitlist worker withdraws an unexpired offer if a parent becomes inactive or an extra no longer follows a compatible service, and releases its shared capacity. Previously booked visits keep their accepted service snapshots and can be moved using the frozen-duration picker.
+
+Public service DTOs include optional `catalog` metadata for variants/extras. Administrative DTOs additionally expose their current configuration revision. Sync pulls include option metadata and the current service activation state. Older clients that omit the metadata remain able to use ordinary service IDs; the server still rejects invalid families or orphan extras. Native presentation of the new metadata belongs to the remaining device/offline integration work and is not claimed as verified here.
+
+## Verification
+
+- `packages/contracts`: option input validation, explicit eligible services and zero-time extras.
+- `apps/api`: `bun test src/modules/services/options.test.ts` covers family exclusivity, nested-variant rejection, eligible order, zero-time snapshots, copied resources, resource-duration guards, atomic performer creation, configuration rollback/revision fences and withdrawal of an unusable waitlist offer.
+- `apps/web`: catalog selection/component tests cover compatible-extra preservation, normalization, limits, qualified variants without their standard parent, and unique accessible controls when an extra has several eligible services. Editor tests cover atomic requests and draft-preserving conflict recovery.
+- Build `apps/web`, then run `bun run e2e:options`. The isolated local Postgres/API/browser fixture creates a variant and extra through the editor and books them through the customer flow. Mobile/desktop, light/dark and Spanish selection checks include axe and horizontal-overflow assertions. The recorded fixture confirms a €30 variant plus a €5 extra and an 85-minute resource/calendar window including cleanup. It does not contact a real bank.
+
+Variants and extras are progress within the open scheduling expansion. Curated combinations and processing gaps remain separate work in [the delivery checklist](FEATURE-EXPANSION.md).

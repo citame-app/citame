@@ -27,6 +27,7 @@ import {
   optOutPreviewSchema,
   ownerSalonSettingsSchema,
   reportSummarySchema,
+  type ServiceConfiguration,
   type SetServiceStaffRequest,
   type SetWorkingHoursRequest,
   type StaffAccessPreset,
@@ -169,6 +170,8 @@ export function createEndpoints(client: ApiClient) {
         remove: (id: string) => client.delete(`/admin/clients/${id}`, deletedAck),
       },
       services: {
+        configure: (id: string, request: ServiceConfiguration) =>
+          client.put(`/admin/services/${id}/configuration`, request, adminServiceSchema),
         list: () => client.get("/admin/services", listAdminServicesResponseSchema),
         create: (request: CreateServiceRequest) =>
           client.post("/admin/services", request, adminServiceSchema),

@@ -292,7 +292,7 @@ export const syncClientSchema = z.object({
 });
 export type SyncClient = z.infer<typeof syncClientSchema>;
 
-export const syncServiceSchema = serviceSchema.extend({
+export const syncServiceSchema = serviceSchema.safeExtend({
   active: z.boolean(),
   updatedAt: instantSchema,
 });

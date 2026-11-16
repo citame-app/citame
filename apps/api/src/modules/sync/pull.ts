@@ -16,6 +16,7 @@ import { and, asc, gt, inArray, isNull, max } from "drizzle-orm";
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { loadSnapshots, toAppointment } from "../appointments/service";
+import { catalogMetadata } from "../services/options";
 
 /**
  * Highest committed `seq`. Because seq order equals commit order (ADR 0007), everything at or
@@ -92,6 +93,7 @@ async function loadVisible(
         .select()
         .from(service)
         .where(and(inArray(service.id, ids), isNull(service.deletedAt)));
+      const catalog = await catalogMetadata(db, rows);
       for (const r of rows) {
         put(r.id, {
           id: r.id,
@@ -102,6 +104,7 @@ async function loadVisible(
           priceCents: r.priceCents,
           currency: r.currency,
           active: r.active,
+          ...(catalog.has(r.id) ? { catalog: catalog.get(r.id) } : {}),
           updatedAt: r.updatedAt.toISOString(),
         });
       }

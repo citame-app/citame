@@ -3,6 +3,7 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useI18n } from "~/i18n/react";
 import { salonQuery, servicesQuery, staffQuery } from "~/lib/queries";
+import { normalizeCatalogSelection } from "./catalog-selection";
 import { type BookingTotals, bookingTotals, eligibleStaff } from "./logic";
 import {
   type BookingSearch,
@@ -41,7 +42,8 @@ export function useBooking(): BookingContext {
   const { data: salon } = useSuspenseQuery(salonQuery);
   const navigate = useNavigate();
 
-  const selectedServices = search.services
+  const serviceIds = normalizeCatalogSelection(search.services, catalog);
+  const selectedServices = serviceIds
     .map((id) => catalog.find((service) => service.id === id))
     .filter((service): service is Service => service !== undefined);
   const resolvedStaffId = search.slotStaff ?? (search.staff !== "any" ? search.staff : undefined);
@@ -56,8 +58,8 @@ export function useBooking(): BookingContext {
     catalog,
     staff,
     selectedServices,
-    totals: bookingTotals(catalog, search.services),
-    eligible: eligibleStaff(staff, search.services),
+    totals: bookingTotals(catalog, serviceIds),
+    eligible: eligibleStaff(staff, serviceIds),
     staffName,
     salon,
     go(step, next, options) {

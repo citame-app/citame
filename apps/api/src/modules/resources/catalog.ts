@@ -212,6 +212,11 @@ export async function setServiceResources(
     await lockScheduling(tx);
     const row = await serviceRow(tx, id, true);
     if (row.resourceVersion !== input.version) throw versionConflict();
+    if (input.requirements.length && row.durationMinutes + row.bufferMinutes === 0)
+      throw new DomainError(
+        "validation_error",
+        "A zero-time add-on cannot reserve a room or equipment",
+      );
     const ids = input.requirements.map((r) => r.resourceId);
     const pools = ids.length
       ? await tx.select().from(resourcePool).where(inArray(resourcePool.id, ids))

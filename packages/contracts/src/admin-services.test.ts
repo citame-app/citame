@@ -51,7 +51,7 @@ describe("update service request", () => {
 
   test("requires at least one field and validates the ones it has", () => {
     expect(updateServiceRequestSchema.safeParse({}).success).toBe(false);
-    expect(updateServiceRequestSchema.safeParse({ durationMinutes: 0 }).success).toBe(false);
+    expect(updateServiceRequestSchema.safeParse({ durationMinutes: -1 }).success).toBe(false);
   });
 });
 

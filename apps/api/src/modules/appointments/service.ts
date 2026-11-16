@@ -42,7 +42,7 @@ import { assertClientCanBook } from "../clients/controls";
 import { refreshAppointmentCheckout } from "../commerce/service";
 import { reassignAppointmentResources, reserveResources } from "../resources/reservations";
 import { releaseUnfulfilledAppointmentRewards } from "../rewards/value";
-import { getServicesByIds } from "../services/service";
+import { getBookableServices } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { assertStaffActive } from "../staff/guards";
 import { assertStaffExists } from "../staff/service";
@@ -156,8 +156,7 @@ export async function createAppointment(
 ): Promise<Appointment> {
   const now = options.now ?? new Date();
   await assertStaffExists(db, request.staffId);
-  const settings = await getSalonSettings(db);
-  const services = await getServicesByIds(db, request.serviceIds);
+  const services = await getBookableServices(db, request.serviceIds);
   await assertStaffPerforms(
     db,
     request.staffId,
@@ -165,12 +164,14 @@ export async function createAppointment(
   );
 
   const startsAt = new Date(request.startsAt);
-  const endsAt = new Date(startsAt.getTime() + totalBlockMinutes(services) * MS_PER_MINUTE);
 
   try {
     return await db.transaction(async (tx) => {
       await lockScheduling(tx);
       await lockCalendars(tx, [request.staffId]);
+      const settings = await getSalonSettings(tx);
+      const services = await getBookableServices(tx, request.serviceIds);
+      const endsAt = new Date(startsAt.getTime() + totalBlockMinutes(services) * MS_PER_MINUTE);
       await assertStaffPerforms(
         tx,
         request.staffId,

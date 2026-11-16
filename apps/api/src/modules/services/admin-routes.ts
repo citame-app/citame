@@ -1,6 +1,8 @@
 import {
   createServiceRequestSchema,
   idSchema,
+  serviceCatalogUpdateSchema,
+  serviceConfigurationSchema,
   serviceResourceInputSchema,
   setServiceStaffRequestSchema,
   updateServiceRequestSchema,
@@ -18,6 +20,8 @@ import {
   listAdminServices,
   setServiceStaff,
   updateService,
+  updateServiceCatalog,
+  updateServiceConfiguration,
 } from "./admin";
 
 const ownerOnly = createMiddleware<AppEnv>(async (c, next) => {
@@ -50,6 +54,26 @@ export function serviceAdminRoutes({ db, now = () => new Date() }: AppDeps) {
           parseOrThrow(serviceResourceInputSchema, await readJson(c)),
           c.get("principal"),
           now(),
+        ),
+      ),
+    )
+    .put("/:id/configuration", ownerOnly, async (c) =>
+      c.json(
+        await updateServiceConfiguration(
+          db,
+          parseOrThrow(idSchema, c.req.param("id")),
+          parseOrThrow(serviceConfigurationSchema, await readJson(c)),
+          c.get("principal"),
+        ),
+      ),
+    )
+    .put("/:id/catalog", ownerOnly, async (c) =>
+      c.json(
+        await updateServiceCatalog(
+          db,
+          parseOrThrow(idSchema, c.req.param("id")),
+          parseOrThrow(serviceCatalogUpdateSchema, await readJson(c)),
+          c.get("principal"),
         ),
       ),
     )

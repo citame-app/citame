@@ -15,7 +15,7 @@ export type AppointmentStatus = z.infer<typeof appointmentStatusSchema>;
 export const appointmentServiceSchema = z.object({
   serviceId: idSchema.nullable(),
   name: z.string(),
-  durationMinutes: z.number().int().positive(),
+  durationMinutes: z.number().int().nonnegative(),
   bufferMinutes: z.number().int().min(0),
   priceCents: z.number().int().min(0),
   currency: z.string().length(3),

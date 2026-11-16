@@ -22,7 +22,7 @@ import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { lockCalendars, lockScheduling, type Tx } from "../../tx";
 import { assertClientCanBook } from "../clients/controls";
-import { getServicesByIds } from "../services/service";
+import { getBookableServices } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { staffQualifiedFor } from "../staff/service";
 
@@ -282,7 +282,7 @@ export async function joinWaitlist(
         "validation_error",
         "The waitlist window must fit the salon booking horizon",
       );
-    const services = await getServicesByIds(tx, input.serviceIds);
+    const services = await getBookableServices(tx, input.serviceIds);
     const qualified = await staffQualifiedFor(tx, input.serviceIds);
     if (!qualified.length || (staffId && !qualified.includes(staffId)))
       throw new DomainError(

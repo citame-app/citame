@@ -100,3 +100,7 @@ Verification: full suites passed with 871 API, 671 web, 129 contract and 47 data
 ### Shared-resource scheduling progress
 
 Rooms, stations and equipment now have transactional pooled capacity, per-service quantities, future-visit/offer reconfiguration, protected booking and waitlist release paths, calendar detail and an English/Spanish administration panel. Reprogramming uses authorized self-exclusion and booked service durations. See [the resource guide](resources.md) and [ADR 0015](adr/0015-shared-resource-capacity.md). The broad scheduling item remains open for variants, add-ons, combinations and processing gaps.
+
+### Variant and extra scheduling progress
+
+The catalog now supports independently priced/timed variants, explicit eligible extras (including price-only extras), family exclusivity, atomic editor submissions and server validation shared with recurrence and waitlists. The English/Spanish customer and operator selectors preserve sequence and compatible extras. See [the service-options guide](service-options.md). Curated combinations, processing gaps and native presentation of option metadata remain open.

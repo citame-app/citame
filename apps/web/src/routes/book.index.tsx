@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { EmptyState } from "~/components/ui/states";
-import { ServiceChoice } from "~/features/booking/components";
+import { CatalogChoices } from "~/features/booking/catalog-choices";
+import { toggleCatalogSelection } from "~/features/booking/catalog-selection";
 import { BookingFrame } from "~/features/booking/frame";
-import { toggleService } from "~/features/booking/search";
 import { BookingSummary } from "~/features/booking/summary";
 import { useBooking } from "~/features/booking/use-booking";
 import { useI18n } from "~/i18n/react";
@@ -29,7 +29,11 @@ function ServicesStep() {
           ctaDisabled={totals.count === 0}
           onCta={() => booking.go("professional", search)}
           onRemoveService={(id) =>
-            booking.go("services", toggleService(search, id), { replace: true })
+            booking.go(
+              "services",
+              { services: toggleCatalogSelection(search.services, id, catalog) },
+              { replace: true },
+            )
           }
         />
       }
@@ -40,19 +44,11 @@ function ServicesStep() {
           description={t("booking.services.empty.body")}
         />
       ) : (
-        <ul className="space-y-3">
-          {catalog.map((service) => (
-            <li key={service.id}>
-              <ServiceChoice
-                service={service}
-                selected={search.services.includes(service.id)}
-                onToggle={(id) =>
-                  booking.go("services", toggleService(search, id), { replace: true })
-                }
-              />
-            </li>
-          ))}
-        </ul>
+        <CatalogChoices
+          catalog={catalog}
+          selected={search.services}
+          onChange={(services) => booking.go("services", { services }, { replace: true })}
+        />
       )}
     </BookingFrame>
   );

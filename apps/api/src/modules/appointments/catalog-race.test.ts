@@ -8,7 +8,8 @@ import {
   seedFixtures,
   setupApiTest,
 } from "../../../test/helpers";
-import { lockScheduling } from "../../tx";
+import { lockScheduling, type Tx } from "../../tx";
+import { setServiceStaff } from "../services/admin";
 
 let t: Awaited<ReturnType<typeof setupApiTest>>;
 let f: Fixtures;
@@ -39,7 +40,9 @@ async function changeDuringPreflight(
   const resumed = new Promise<void>((resolve) => {
     release = resolve;
   });
+  let writer!: Tx;
   const configuration = t.db.transaction(async (tx) => {
+    writer = tx;
     await lockScheduling(tx);
     ready();
     await resumed;
@@ -60,9 +63,7 @@ async function changeDuringPreflight(
       await Bun.sleep(10);
     }
     expect(waiting).toBe(true);
-    expect((await call(`/admin/services/${f.haircutId}/staff`, "PUT", { staffIds })).status).toBe(
-      200,
-    );
+    await setServiceStaff(writer, f.haircutId, { staffIds }, { userId: owner.userId });
   } finally {
     release();
     await configuration;

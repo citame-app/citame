@@ -4,6 +4,7 @@ import { defineConfig, devices } from "@playwright/test";
  * End-to-end tests run against a REAL stack: Postgres, Valkey, the Hono API and the built web
  * server (see README, "End-to-end tests"). Nothing is mocked except where a test says so.
  */
+const optionsFixture = process.env.E2E_OPTIONS_FIXTURE === "true";
 const resourcesFixture = process.env.E2E_RESOURCES_FIXTURE === "true";
 const depositFixture = process.env.E2E_DEPOSIT_FIXTURE === "true";
 const waitlistFixture = process.env.E2E_WAITLIST_FIXTURE === "true";
@@ -15,7 +16,8 @@ const recurringFixture =
   rewardsFixture ||
   seriesFixture ||
   waitlistFixture ||
-  resourcesFixture;
+  resourcesFixture ||
+  optionsFixture;
 const baseURL = recurringFixture
   ? "http://localhost:4273"
   : (process.env.E2E_BASE_URL ?? "http://localhost:4173");
@@ -24,17 +26,19 @@ export default defineConfig({
   testDir: "./e2e",
   ...(recurringFixture
     ? {
-        testMatch: resourcesFixture
-          ? "**/resources.spec.ts"
-          : waitlistFixture
-            ? "**/waitlist.spec.ts"
-            : seriesFixture
-              ? "**/appointment-series.spec.ts"
-              : rewardsFixture
-                ? "**/rewards.spec.ts"
-                : depositFixture
-                  ? "**/booking-protection.spec.ts"
-                  : "**/recurring.spec.ts",
+        testMatch: optionsFixture
+          ? "**/service-options.spec.ts"
+          : resourcesFixture
+            ? "**/resources.spec.ts"
+            : waitlistFixture
+              ? "**/waitlist.spec.ts"
+              : seriesFixture
+                ? "**/appointment-series.spec.ts"
+                : rewardsFixture
+                  ? "**/rewards.spec.ts"
+                  : depositFixture
+                    ? "**/booking-protection.spec.ts"
+                    : "**/recurring.spec.ts",
         webServer: [
           {
             command: "NODE_ENV=test bun ../api/test/recurring-browser.ts",
@@ -59,6 +63,7 @@ export default defineConfig({
           "**/appointment-series.spec.ts",
           "**/waitlist.spec.ts",
           "**/resources.spec.ts",
+          "**/service-options.spec.ts",
         ],
       }),
   outputDir: "./test-results",

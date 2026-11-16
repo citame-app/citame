@@ -54,11 +54,20 @@ export type ServiceFormErrors = Partial<Record<keyof ServiceFormValues, FieldCod
 
 const MAX_MINUTES = 24 * 60;
 
-export function validateServiceForm(values: ServiceFormValues): ServiceFormErrors {
+export function validateServiceForm(
+  values: ServiceFormValues,
+  options: { allowZeroDuration?: boolean } = {},
+): ServiceFormErrors {
   const errors: ServiceFormErrors = {};
   if (values.name.trim().length === 0) errors.name = "required";
   const duration = Number(values.durationMinutes);
-  if (!Number.isInteger(duration) || duration <= 0) errors.durationMinutes = "positive";
+  if (
+    !values.durationMinutes.trim() ||
+    !Number.isInteger(duration) ||
+    duration < 0 ||
+    (duration === 0 && !options.allowZeroDuration)
+  )
+    errors.durationMinutes = "positive";
   else if (duration > MAX_MINUTES) errors.durationMinutes = "tooLong";
   const buffer = Number(values.bufferMinutes === "" ? 0 : values.bufferMinutes);
   if (!Number.isInteger(buffer) || buffer < 0) errors.bufferMinutes = "nonNegative";

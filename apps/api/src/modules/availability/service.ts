@@ -3,7 +3,7 @@ import { appointment, type Database, timeOff, waitlistOffer, workingHours } from
 import { and, eq, gt, inArray, isNull, lt, ne } from "drizzle-orm";
 import type { TimedService } from "../resources/reservations";
 import { filterResourceAvailability } from "../resources/reservations";
-import { getServicesByIds } from "../services/service";
+import { getBookableServices } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { assertStaffExists, staffQualifiedFor } from "../staff/service";
 import { computeAvailability, totalBlockMinutes } from "./compute";
@@ -16,7 +16,7 @@ export async function findAvailability(
   options: { excludeAppointmentId?: string; services?: TimedService[] } = {},
 ): Promise<AvailabilityResponse> {
   const settings = await getSalonSettings(db);
-  const services = options.services ?? (await getServicesByIds(db, query.serviceIds));
+  const services = options.services ?? (await getBookableServices(db, query.serviceIds));
   if (query.staffId) await assertStaffExists(db, query.staffId);
 
   let staffIds = await staffQualifiedFor(

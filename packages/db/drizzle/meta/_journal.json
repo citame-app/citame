@@ -176,6 +176,20 @@
       "when": 1794805314005,
       "tag": "0024_lean_mad_thinker",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1794808889023,
+      "tag": "0025_polite_sabretooth",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1794810239741,
+      "tag": "0026_romantic_doomsday",
+      "breakpoints": true
     }
   ]
 }

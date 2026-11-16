@@ -17,7 +17,7 @@ import { lockCalendars, lockScheduling, type Tx } from "../../tx";
 import { createAppointment, loadSnapshots, toAppointment } from "../appointments/service";
 import { getBookingPolicy } from "../booking-protection/policy";
 import { protectionView } from "../booking-protection/value";
-import { getServicesByIds } from "../services/service";
+import { getBookableServices } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { offerServices } from "./matching";
 import { entryRow, entryView, selectionHash, versionConflict } from "./service";
@@ -113,7 +113,7 @@ export async function acceptWaitlist(
     await tx.select().from(salonSettings).for("share");
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('booking-policy',0))`);
     const settings = await getSalonSettings(tx);
-    const current = offerServices(await getServicesByIds(tx, entry.serviceIds));
+    const current = offerServices(await getBookableServices(tx, entry.serviceIds));
     const policy = await getBookingPolicy(tx);
     if (
       settings.timezone !== entry.timezone ||

@@ -18,7 +18,7 @@ import { findAvailability } from "../availability/service";
 import { getBookingPolicy } from "../booking-protection/policy";
 import { assertClientCanBook } from "../clients/controls";
 import { reserveResources } from "../resources/reservations";
-import { getServicesByIds, type ServiceRow } from "../services/service";
+import { getBookableServices, type ServiceRow } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { staffQualifiedFor } from "../staff/service";
 import { type EntryRow, getWaitlistPolicy, localToday, selectionHash } from "./service";
@@ -47,6 +47,21 @@ async function finishEntry(tx: Tx, entry: EntryRow, state: "expired" | "unavaila
   });
 }
 export async function expireWaitlistOffers(db: Database, now: Date, limit = 100) {
+  // Use normalized selections, not the JSON driver encoding, to find changed option rules.
+  const invalidOptions = sql`exists (
+    select 1 from unnest(${waitlistEntry.serviceIds}) with ordinality requested(id,pos)
+    join service s on s.id=requested.id
+    left join service parent on parent.id=s.parent_service_id
+    left join lateral (
+      select b.id,b.parent_service_id,b.currency from unnest(${waitlistEntry.serviceIds}) with ordinality prior(id,pos)
+      join service b on b.id=prior.id where prior.pos<requested.pos and b.catalog_kind<>'addon'
+      order by prior.pos desc limit 1
+    ) base on true
+    where (s.catalog_kind='variant' and (parent.id is null or parent.active=false or parent.deleted_at is not null))
+      or (s.catalog_kind='addon' and (base.id is null or base.currency<>s.currency or not exists (
+        select 1 from service_addon a where a.addon_id=s.id and (a.service_id=base.id or a.service_id=base.parent_service_id)
+      )))
+  )`;
   const candidates = await db
     .select({ offer: waitlistOffer })
     .from(waitlistOffer)
@@ -58,6 +73,7 @@ export async function expireWaitlistOffers(db: Database, now: Date, limit = 100)
         eq(waitlistOffer.state, "offered"),
         or(
           lte(waitlistOffer.expiresAt, now),
+          invalidOptions,
           sql`${clientProfile.deletedAt} is not null`,
           eq(clientProfile.bookingAccess, "blocked"),
           eq(staffProfile.active, false),
@@ -96,16 +112,17 @@ export async function expireWaitlistOffers(db: Database, now: Date, limit = 100)
         .select()
         .from(staffProfile)
         .where(eq(staffProfile.id, offer.staffId));
-      const validServices = await tx
-        .select({ id: service.id })
-        .from(service)
-        .where(
-          and(
-            inArray(service.id, entry.serviceIds),
-            eq(service.active, true),
-            isNull(service.deletedAt),
-          ),
-        );
+      let validSelection = true;
+      try {
+        await getBookableServices(tx, entry.serviceIds);
+      } catch (error) {
+        if (
+          !(error instanceof DomainError) ||
+          !["not_found", "validation_error"].includes(error.code)
+        )
+          throw error;
+        validSelection = false;
+      }
       const qualified = await staffQualifiedFor(tx, entry.serviceIds);
       const unavailable =
         !client ||
@@ -113,7 +130,7 @@ export async function expireWaitlistOffers(db: Database, now: Date, limit = 100)
         client.bookingAccess === "blocked" ||
         !performer?.active ||
         Boolean(performer.deletedAt) ||
-        validServices.length !== entry.serviceIds.length ||
+        !validSelection ||
         !qualified.includes(offer.staffId);
       if (!unavailable && offer.expiresAt > now) return null;
       await tx
@@ -195,9 +212,13 @@ async function matchEntry(db: Database, id: string, now: Date): Promise<boolean>
       .for("share");
     let services: ServiceRow[];
     try {
-      services = await getServicesByIds(tx, entry.serviceIds);
+      services = await getBookableServices(tx, entry.serviceIds);
     } catch (error) {
-      if (!(error instanceof DomainError) || error.code !== "not_found") throw error;
+      if (
+        !(error instanceof DomainError) ||
+        !["not_found", "validation_error"].includes(error.code)
+      )
+        throw error;
       await finishEntry(tx, entry, "unavailable", now);
       return false;
     }
@@ -307,7 +328,7 @@ async function matchEntry(db: Database, id: string, now: Date): Promise<boolean>
             and(eq(waitlistEntry.clientId, entry.clientId), gte(waitlistOffer.createdAt, dayStart)),
           );
         if ((latestDaily?.n ?? 0) >= 3) return false;
-        const snapshots = offerServices(await getServicesByIds(tx, entry.serviceIds));
+        const snapshots = offerServices(await getBookableServices(tx, entry.serviceIds));
         const bookingPolicy = await getBookingPolicy(tx);
         const priceCents = snapshots.reduce((n, s) => n + s.priceCents, 0);
         if (priceCents > 999999999) {
