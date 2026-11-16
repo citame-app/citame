@@ -41,3 +41,56 @@ test("the printed receipt contains only the selected sale and escapes user text"
   expect(result.textContent).not.toContain("Cash register");
   expect(result.textContent).not.toContain("Refund payment");
 });
+
+test("printed rewards preserve redeemed and returned points and render coupon names as text", () => {
+  const id = "0198f5a0-7b1c-7000-8000-000000000100";
+  for (const kind of ["points", "promotion"] as const) {
+    const sale = checkoutSchema.parse({
+      id,
+      appointmentId: null,
+      clientId: id,
+      currency: "EUR",
+      status: "partially_refunded",
+      subtotalCents: 2500,
+      discountCents: 1000,
+      tipCents: 0,
+      taxCents: 0,
+      totalCents: 1500,
+      paidCents: 1500,
+      refundedCents: 750,
+      balanceCents: 0,
+      lines: [
+        {
+          id,
+          kind: "custom",
+          description: "Treatment",
+          quantity: 1,
+          unitAmountCents: 2500,
+          taxBasisPoints: 0,
+        },
+      ],
+      payments: [],
+      createdAt: "2026-11-01T12:00:00.000Z",
+      reward: {
+        id,
+        kind,
+        name: '<svg onload="alert(1)">',
+        code: kind === "promotion" ? "WELCOME10" : null,
+        pointsUsed: kind === "points" ? 100 : 0,
+        returnedPoints: kind === "points" ? 50 : 0,
+        discountCents: 1000,
+        state: "applied",
+        expiresAt: "2026-11-01T12:30:00.000Z",
+      },
+    });
+    const printed = printableReceipt(document, sale, "en", createTranslator("en"));
+    if (kind === "points") {
+      expect(printed.textContent).toContain("Points used: 100");
+      expect(printed.textContent).toContain("Points returned: 50");
+    } else {
+      expect(printed.textContent).toContain("WELCOME10");
+      expect(printed.textContent).toContain(sale.reward?.name ?? "");
+    }
+    expect(printed.querySelector("svg, script, form, input")).toBeNull();
+  }
+});

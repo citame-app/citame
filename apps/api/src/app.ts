@@ -25,6 +25,7 @@ import { inventoryRoutes } from "./modules/inventory/routes";
 import { meRoutes } from "./modules/me/routes";
 import { passRoutes, planAdminRoutes, publicPlanRoutes } from "./modules/passes/routes";
 import { reportRoutes } from "./modules/reports/routes";
+import { rewardsAdminRoutes, rewardsClientRoutes } from "./modules/rewards/routes";
 import { serviceAdminRoutes } from "./modules/services/admin-routes";
 import { servicesRoutes } from "./modules/services/routes";
 import { settingsAdminRoutes } from "./modules/settings/admin-routes";
@@ -268,12 +269,14 @@ export function createApp(input: AppDeps): App {
   app.route("/notifications", optOutRoutes(deps));
   app.route("/me", meRoutes(deps));
   app.route("/me", commerceClientRoutes(deps));
+  app.route("/me", rewardsClientRoutes(deps));
 
   app.use("/admin/*", requireAuth(auth, deps.db));
   app.route("/admin", adminRoutes(deps, auth));
   app.route("/admin/commerce", commerceAdminRoutes(deps));
   app.route("/admin/inventory", inventoryRoutes(deps));
   app.route("/admin/accounting", accountingRoutes(deps));
+  app.route("/admin/rewards", rewardsAdminRoutes(deps));
   app.route("/benefit-plans", publicPlanRoutes(deps));
   app.route("/admin/benefit-plans", planAdminRoutes(deps));
   app.route("/admin/passes", passRoutes(deps));

@@ -9,6 +9,7 @@ import { useI18n } from "~/i18n/react";
 import { adminStaffQuery } from "~/lib/admin-queries";
 import { api } from "~/lib/api/instance";
 import { formatMoney } from "~/lib/format";
+import { useDebounced } from "../use-debounced";
 import { AccountingView } from "./accounting-view";
 import { CheckoutPanel } from "./checkout-panel";
 import { invalidateCommerce } from "./invalidate";
@@ -108,10 +109,10 @@ export function CommerceView({
       ) : sales.data.checkouts.length === 0 ? (
         <EmptyState title={t("commerce.noSales")} description={t("commerce.noSalesHelp")} />
       ) : (
-        <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {sales.data.checkouts.map((sale) => (
-            <li key={sale.id} className="rounded-xl border border-line bg-surface p-4">
-              <p className="font-semibold">
+            <li key={sale.id} className="min-w-0 rounded-xl border border-line bg-surface p-4">
+              <p className="break-words font-semibold [overflow-wrap:anywhere]">
                 {sale.lines.map((line) => line.description).join(", ")}
               </p>
               <p className="mt-1 text-sm text-muted">
@@ -145,6 +146,15 @@ function NewSale({ onCreated, role }: { onCreated: (id: string) => void; role: U
   const online = useOnline();
   const staff = useQuery({ ...adminStaffQuery, enabled: role === "owner" });
   const [seller, setSeller] = useState("");
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [customer, setCustomer] = useState("");
+  const customerTerm = useDebounced(customerSearch.trim());
+  const customers = useQuery({
+    queryKey: ["rewards", "sale-customers", customerTerm],
+    queryFn: () =>
+      api().admin.clients.list({ search: customerTerm, pageSize: 8, sort: "name", order: "asc" }),
+    enabled: customerTerm.length > 0,
+  });
   const [items, setItems] = useState<CartProduct[]>([]);
   const [description, setDescription] = useState("");
   const [price, setPrice] = useState("");
@@ -178,6 +188,7 @@ function NewSale({ onCreated, role }: { onCreated: (id: string) => void; role: U
       return api().commerce.create({
         currency: "EUR",
         ...(seller ? { staffId: seller } : {}),
+        ...(customer ? { clientId: customer } : {}),
         lines: [
           ...items.map((item) => ({
             kind: "product" as const,
@@ -222,6 +233,34 @@ function NewSale({ onCreated, role }: { onCreated: (id: string) => void; role: U
     >
       <h3 className="font-semibold sm:col-span-2">{t("commerce.newSale")}</h3>
       <p className="text-sm text-muted sm:col-span-2">{t("commerce.customHelp")}</p>
+      <div className="space-y-3 sm:col-span-2">
+        <TextField
+          label={t("loyalty.searchClient")}
+          type="search"
+          value={customerSearch}
+          hint={t("loyalty.saleClientHelp")}
+          onChange={(e) => {
+            change(setCustomerSearch, e.target.value);
+            setCustomer("");
+          }}
+        />
+        {customers.isFetching && <Skeleton className="h-8" />}
+        {customers.isError && (
+          <ErrorState error={customers.error} onRetry={() => void customers.refetch()} />
+        )}
+        <SelectField
+          label={t("loyalty.client")}
+          value={customer}
+          options={[
+            { value: "", label: t("loyalty.chooseClient") },
+            ...(customers.data?.clients ?? []).map((c) => ({
+              value: c.id,
+              label: `${c.name}${c.email ? ` · ${c.email}` : ""}`,
+            })),
+          ]}
+          onChange={(value) => change(setCustomer, value)}
+        />
+      </div>
       {role === "owner" &&
         (staff.isPending ? (
           <Skeleton className="h-14" />

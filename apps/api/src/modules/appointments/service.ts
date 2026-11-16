@@ -39,6 +39,7 @@ import {
 } from "../booking-protection/value";
 import { assertClientCanBook } from "../clients/controls";
 import { refreshAppointmentCheckout } from "../commerce/service";
+import { releaseUnfulfilledAppointmentRewards } from "../rewards/value";
 import { getServicesByIds } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { assertStaffActive } from "../staff/guards";
@@ -542,6 +543,8 @@ export async function updateAppointment(
       }
       if (updated) {
         await updateProtection(tx, current, updated, now, actor);
+        if (updated.status === "cancelled" || updated.status === "no_show")
+          await releaseUnfulfilledAppointmentRewards(tx, id, actor?.userId ?? null);
         if (updated.status === "completed") await refreshAppointmentCheckout(tx, id, now);
         if (updated.status === "cancelled" && current.status !== "cancelled") {
           await closeAppointment(tx, updated, now, { notify: true });

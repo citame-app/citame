@@ -3,6 +3,7 @@ import { bookingProtectionSchema } from "./booking-protection";
 import { idSchema, instantSchema } from "./common";
 import { giftCardCodeSchema } from "./gift-card-code";
 import { staffPermissionsSchema } from "./permissions";
+import { checkoutRewardSchema } from "./rewards";
 
 export const moneyCentsSchema = z.number().int().min(0).max(999_999_999);
 export const paymentMethodSchema = z.enum([
@@ -164,6 +165,7 @@ export const checkoutSchema = z.object({
   balanceCents: moneyCentsSchema,
   payableCents: moneyCentsSchema.optional(),
   protection: bookingProtectionSchema.nullable().optional(),
+  reward: checkoutRewardSchema.nullable().optional(),
   lines: z.array(checkoutLineSchema),
   payments: z.array(checkoutPaymentSchema),
   refunds: z.array(z.lazy(() => checkoutRefundSchema)).default([]),

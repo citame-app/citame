@@ -20,6 +20,7 @@ function RewardsPage() {
       mode={session.user.role === "client" ? "client" : "admin"}
       role={session.user.role}
       accessPreset={session.accessPreset}
+      clientId={session.clientId}
     />
   );
 }

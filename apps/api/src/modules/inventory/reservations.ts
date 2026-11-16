@@ -11,6 +11,7 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
+import { releaseCheckoutReward } from "../rewards/value";
 
 export async function loadCheckoutProducts(
   tx: Tx,
@@ -64,7 +65,7 @@ export async function reserveCheckoutProducts(
     });
   }
 }
-async function heldProducts(tx: Tx, checkoutId: string) {
+export async function heldProducts(tx: Tx, checkoutId: string) {
   const holds = await tx
     .select()
     .from(stockReservation)
@@ -171,6 +172,7 @@ export async function expireInventoryHolds(
         .limit(1);
       if (!due) return 0;
       await releaseCheckoutInventory(tx, sale.id);
+      await releaseCheckoutReward(tx, sale.id);
       await tx.update(checkout).set({ status: "void" }).where(eq(checkout.id, sale.id));
       await recordAudit(tx, {
         actorUserId: null,

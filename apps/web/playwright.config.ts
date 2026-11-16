@@ -5,7 +5,9 @@ import { defineConfig, devices } from "@playwright/test";
  * server (see README, "End-to-end tests"). Nothing is mocked except where a test says so.
  */
 const depositFixture = process.env.E2E_DEPOSIT_FIXTURE === "true";
-const recurringFixture = process.env.E2E_RECURRING_FIXTURE === "true" || depositFixture;
+const rewardsFixture = process.env.E2E_REWARDS_FIXTURE === "true";
+const recurringFixture =
+  process.env.E2E_RECURRING_FIXTURE === "true" || depositFixture || rewardsFixture;
 const baseURL = recurringFixture
   ? "http://localhost:4273"
   : (process.env.E2E_BASE_URL ?? "http://localhost:4173");
@@ -14,7 +16,11 @@ export default defineConfig({
   testDir: "./e2e",
   ...(recurringFixture
     ? {
-        testMatch: depositFixture ? "**/booking-protection.spec.ts" : "**/recurring.spec.ts",
+        testMatch: rewardsFixture
+          ? "**/rewards.spec.ts"
+          : depositFixture
+            ? "**/booking-protection.spec.ts"
+            : "**/recurring.spec.ts",
         webServer: [
           {
             command: "NODE_ENV=test bun ../api/test/recurring-browser.ts",
@@ -31,7 +37,9 @@ export default defineConfig({
           },
         ],
       }
-    : { testIgnore: ["**/recurring.spec.ts", "**/booking-protection.spec.ts"] }),
+    : {
+        testIgnore: ["**/recurring.spec.ts", "**/booking-protection.spec.ts", "**/rewards.spec.ts"],
+      }),
   outputDir: "./test-results",
   // Tests share one database and one rate limiter: run them one at a time, in a stable order.
   fullyParallel: false,

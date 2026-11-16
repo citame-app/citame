@@ -8,6 +8,7 @@ export function invalidateCommerce(queries: QueryClient) {
       "accounting",
       "gift-cards",
       "passes",
+      "rewards",
       "appointments",
       "availability",
       "admin",

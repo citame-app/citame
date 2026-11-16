@@ -1,0 +1,7 @@
+ALTER TABLE "checkout_reward" DROP CONSTRAINT "checkout_reward_valid";--> statement-breakpoint
+ALTER TABLE "checkout_reward_lot" DROP CONSTRAINT "checkout_reward_lot_points_positive";--> statement-breakpoint
+ALTER TABLE "loyalty_lot" ALTER COLUMN "basis_cents" SET DATA TYPE bigint;--> statement-breakpoint
+ALTER TABLE "checkout_reward" ADD COLUMN "returned_points" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "checkout_reward_lot" ADD COLUMN "returned_points" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "checkout_reward" ADD CONSTRAINT "checkout_reward_valid" CHECK ("checkout_reward"."points_used">=0 and "checkout_reward"."returned_points" between 0 and "checkout_reward"."points_used" and "checkout_reward"."discount_cents">0 and "checkout_reward"."state" in ('held','applied','released') and (("checkout_reward"."kind"='points' and "checkout_reward"."points_used">0 and "checkout_reward"."promotion_id" is null) or ("checkout_reward"."kind"='promotion' and "checkout_reward"."points_used"=0 and "checkout_reward"."promotion_id" is not null)));--> statement-breakpoint
+ALTER TABLE "checkout_reward_lot" ADD CONSTRAINT "checkout_reward_lot_points_positive" CHECK ("checkout_reward_lot"."points">0 and "checkout_reward_lot"."returned_points" between 0 and "checkout_reward_lot"."points");

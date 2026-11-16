@@ -19,6 +19,7 @@ import { DomainError } from "../../errors";
 import { errorBody, parseOrThrow, readJson } from "../../http";
 import { recurringSettings } from "../../payments/recurring-settings";
 import { InvalidBankNotificationError, RedsysGateway } from "../../payments/redsys";
+import { checkoutRewardRoutes } from "../rewards/routes";
 import {
   adjustCash,
   closeCashSession,
@@ -51,6 +52,7 @@ export function commerceAdminRoutes(deps: AppDeps) {
   const gateway = gatewayFor(deps);
   return new Hono<AppEnv>()
     .use("*", operator)
+    .route("/checkouts", checkoutRewardRoutes(deps))
     .get("/capabilities", (c) =>
       c.json({
         permissions: permissionsFor(c.get("principal").role, c.get("principal").accessPreset),
@@ -177,6 +179,7 @@ export function commerceAdminRoutes(deps: AppDeps) {
 export function commerceClientRoutes(deps: AppDeps) {
   const gateway = gatewayFor(deps);
   return new Hono<AppEnv>()
+    .route("/checkouts", checkoutRewardRoutes(deps))
     .get("/commerce/capabilities", (c) =>
       c.json({
         permissions: permissionsFor(c.get("principal").role, c.get("principal").accessPreset),

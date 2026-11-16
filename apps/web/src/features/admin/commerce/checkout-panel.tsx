@@ -19,6 +19,7 @@ import { invalidateCommerce } from "./invalidate";
 import { centsInput, inputCents } from "./money";
 import { PassPurchaseRefund, PassTender } from "./pass-tender";
 import { printReceipt } from "./print-receipt";
+import { RewardReceipt, RewardTender } from "./reward-tender";
 import { StockReturn } from "./stock-return";
 
 export function CheckoutPanel({
@@ -182,11 +183,11 @@ export function CheckoutPanel({
       <ul className="divide-y divide-line">
         {order.lines.map((line) => (
           <li key={line.id} className="flex justify-between gap-3 py-3">
-            <span>
+            <span className="min-w-0 break-words [overflow-wrap:anywhere]">
               {line.description}
               <span className="ml-2 text-muted">× {line.quantity}</span>
             </span>
-            <span className="whitespace-nowrap font-medium">
+            <span className="shrink-0 whitespace-nowrap font-medium">
               {money(line.quantity * line.unitAmountCents)}
             </span>
           </li>
@@ -208,6 +209,17 @@ export function CheckoutPanel({
           </div>
         ))}
       </dl>
+      <RewardReceipt checkout={order} mode={mode} canRefund={canRefund} />
+      {order.status === "open" &&
+        order.clientId &&
+        !order.reward &&
+        !order.payments.length &&
+        order.lines.some((line) => ["service", "product", "custom"].includes(line.kind)) && (
+          <details className="space-y-3">
+            <summary className="cursor-pointer py-2 font-medium">{t("loyalty.title")}</summary>
+            <RewardTender checkout={order} mode={mode} />
+          </details>
+        )}
       {capabilities.data?.environment === "test" && (
         <p className="rounded-md bg-warning-soft p-3 text-sm text-warning-fg">
           {t("commerce.testMode")}
@@ -246,6 +258,7 @@ export function CheckoutPanel({
         !pending &&
         !review &&
         !form &&
+        !order.reward &&
         order.appointmentId &&
         order.clientId && <PassTender checkoutId={order.id} mode={mode} />}
       {order.status === "open" && payableCents > 0 && !pending && !review && !form && (

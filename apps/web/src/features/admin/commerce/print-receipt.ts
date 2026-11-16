@@ -57,6 +57,16 @@ export function printableReceipt(
     row.append(text("span", t(key)), text("strong", formatMoney(amount, sale.currency, locale)));
     main.append(row);
   }
+  if (sale.reward) {
+    main.append(
+      text("h3", sale.reward.kind === "points" ? t("loyalty.pointsOption") : sale.reward.name),
+    );
+    if (sale.reward.code) main.append(text("p", sale.reward.code));
+    if (sale.reward.pointsUsed)
+      main.append(text("p", t("loyalty.used", { points: sale.reward.pointsUsed })));
+    if (sale.reward.returnedPoints)
+      main.append(text("p", t("loyalty.returned", { points: sale.reward.returnedPoints })));
+  }
   return main;
 }
 export function printReceipt(sale: Checkout, locale: string, t: Translator, timeZone: string) {

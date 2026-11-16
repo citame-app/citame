@@ -8,6 +8,7 @@ import { commerceEsAR } from "./commerce";
 import type { MessageKey } from "./en";
 import { giftCardsEsAR } from "./gift-cards";
 import { inventoryEsAR } from "./inventory";
+import { loyaltyEsAR } from "./loyalty";
 import { notificationsEsAR } from "./notifications";
 import { passesEsAR } from "./passes";
 
@@ -16,6 +17,7 @@ export const esAR: Record<MessageKey, string> = {
   ...bookingProtectionEsAR,
   ...clientControlsEsAR,
   ...passesEsAR,
+  ...loyaltyEsAR,
   "common.greeting": "Hola, {name}",
   "booking.summary.services_one": "{count} servicio",
   "booking.summary.services_other": "{count} servicios",

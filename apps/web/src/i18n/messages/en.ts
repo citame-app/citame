@@ -7,6 +7,7 @@ import { clientControlsEn } from "./client-controls";
 import { commerceEn } from "./commerce";
 import { giftCardsEn } from "./gift-cards";
 import { inventoryEn } from "./inventory";
+import { loyaltyEn } from "./loyalty";
 import { notificationsEn } from "./notifications";
 import { passesEn } from "./passes";
 /** English is the source catalog: its keys define what every other catalog must provide. */
@@ -14,6 +15,7 @@ export const en = {
   ...bookingProtectionEn,
   ...clientControlsEn,
   ...passesEn,
+  ...loyaltyEn,
   "common.greeting": "Hello, {name}",
   "booking.summary.services_one": "{count} service",
   "booking.summary.services_other": "{count} services",

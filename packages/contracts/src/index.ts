@@ -25,6 +25,7 @@ export * from "./oauth";
 export * from "./passes";
 export * from "./permissions";
 export * from "./reports";
+export * from "./rewards";
 export * from "./salon";
 export * from "./services";
 export * from "./staff";

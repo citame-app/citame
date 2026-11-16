@@ -52,6 +52,8 @@ import {
   syncCheckoutPassRefunds,
   voidCheckoutPasses,
 } from "../passes/value";
+import { assertRewardPayment, checkoutRewardView } from "../rewards/discounts";
+import { releaseCheckoutReward, syncCheckoutRewards } from "../rewards/value";
 import { allocateDiscount } from "./money";
 
 type Connection = Database | Tx;
@@ -68,7 +70,7 @@ function checkReplay(row: { requestHash: string }, requestHash: string) {
       "Idempotency key already belongs to a different request",
     );
 }
-async function saleRow(db: Connection, id: string, principal: Principal, lock = false) {
+export async function saleRow(db: Connection, id: string, principal: Principal, lock = false) {
   if (principal.role !== "client") requireOperator(principal);
   const query = db.select().from(checkout).where(eq(checkout.id, id));
   const [row] = await (lock ? query.for("update") : query);
@@ -139,6 +141,7 @@ async function snapshot(
     refundedCents,
     overpaidCents: Math.max(0, paidCents - refundedCents - row.totalCents),
     balanceCents,
+    reward: await checkoutRewardView(db, row.id),
     ...(protection
       ? { protection, payableCents: await protectedPayable(db, row, balanceCents, now) }
       : {}),
@@ -206,7 +209,7 @@ export async function listCheckouts(db: Database, principal: Principal) {
     { isolationLevel: "repeatable read", accessMode: "read only" },
   );
 }
-async function refreshStatus(tx: Tx, id: string, now = new Date()) {
+export async function refreshStatus(tx: Tx, id: string, now = new Date()) {
   await syncProtectionPayment(tx, id, now);
   const [row] = await tx.select().from(checkout).where(eq(checkout.id, id));
   if (!row || row.status === "void") return;
@@ -226,6 +229,7 @@ async function refreshStatus(tx: Tx, id: string, now = new Date()) {
   if (status === "paid" && !row.fulfilledAt && (await canFulfillProtected(tx, row)))
     await fulfillCheckout(tx, id);
   await tx.update(checkout).set({ status }).where(eq(checkout.id, id));
+  await syncCheckoutRewards(tx, id);
 }
 async function fulfillCheckout(tx: Tx, id: string) {
   await consumeReservedInventory(tx, id);
@@ -234,6 +238,7 @@ async function fulfillCheckout(tx: Tx, id: string) {
   await activateCheckoutPasses(tx, id);
   const fulfilledAt = new Date();
   await tx.update(checkout).set({ fulfilledAt }).where(eq(checkout.id, id));
+  await syncCheckoutRewards(tx, id, true);
   return fulfilledAt;
 }
 export async function refreshAppointmentCheckout(tx: Tx, appointmentId: string, now: Date) {
@@ -261,6 +266,7 @@ export async function voidCheckout(db: Database, id: string, principal: Principa
     await releaseCheckoutInventory(tx, id);
     await voidCheckoutGifts(tx, id);
     await voidCheckoutPasses(tx, id, principal.userId);
+    await releaseCheckoutReward(tx, id);
     const [updated] = await tx
       .update(checkout)
       .set({ status: "void" })
@@ -580,6 +586,7 @@ export async function startPayment(
     if (previous) checkReplay(previous, requestHash);
     else {
       const view = await snapshot(tx, sale);
+      await assertRewardPayment(tx, sale, input.method);
       await assertProtectedPayment(
         tx,
         sale,

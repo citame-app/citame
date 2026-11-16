@@ -16,13 +16,14 @@ import {
   staffProfile,
   user,
 } from "@sob/db";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { DomainError } from "../../errors";
 import { closeAppointment, scheduleNewAppointment } from "../../notifications/outbox";
 import type { Tx } from "../../tx";
 import type { Actor } from "../appointments/service";
 import { membershipDiscounts } from "../passes/value";
+import { releaseCheckoutReward } from "../rewards/value";
 import { getBookingPolicy } from "./policy";
 
 type Connection = Database | Tx;
@@ -212,11 +213,12 @@ export async function createProtection(
 }
 /** Receipts are locked before appointment rows throughout payment and lifecycle operations. */
 export async function lockProtectionReceipt(tx: Tx, appointmentId: string) {
-  const [p] = await tx
-    .select()
-    .from(bookingProtection)
-    .where(eq(bookingProtection.appointmentId, appointmentId));
-  if (p) await tx.select().from(checkout).where(eq(checkout.id, p.checkoutId)).for("update");
+  await tx
+    .select({ id: checkout.id })
+    .from(checkout)
+    .where(eq(checkout.appointmentId, appointmentId))
+    .orderBy(asc(checkout.id))
+    .for("update");
 }
 export async function protectedPayable(
   db: Connection,
@@ -368,6 +370,7 @@ export async function finishProtection(
     .set({ state: target, feeCents, finalisedAt: now })
     .where(eq(bookingProtection.appointmentId, booking.id));
   await tx.update(checkout).set({ status: "void" }).where(eq(checkout.id, p.checkoutId));
+  await releaseCheckoutReward(tx, p.checkoutId);
   if (feeCents)
     await tx.insert(bookingFeeMovement).values({
       appointmentId: booking.id,
