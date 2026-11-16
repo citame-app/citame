@@ -3,6 +3,7 @@ import { permissionsFor, type StaffAccessPreset, type UserRole } from "@sob/cont
 export type AdminSection =
   | "today"
   | "calendar"
+  | "waitlist"
   | "commerce"
   | "clients"
   | "services"
@@ -22,6 +23,7 @@ const BOTH = ["owner", "staff"] as const;
 const SECTIONS: readonly SectionConfig[] = [
   { section: "today", to: "/admin", roles: BOTH },
   { section: "calendar", to: "/admin/calendar", roles: BOTH },
+  { section: "waitlist", to: "/admin/waitlist", roles: BOTH },
   { section: "commerce", to: "/admin/commerce", roles: BOTH },
   { section: "clients", to: "/admin/clients", roles: BOTH },
   { section: "services", to: "/admin/services", roles: ["owner"] },
@@ -43,6 +45,8 @@ export function adminNavFor(
   const allowed = (s: SectionConfig) => {
     if (role === "client") return false;
     switch (s.section) {
+      case "waitlist":
+        return permissions.clients && permissions.editCalendar;
       case "services":
         return permissions.editCatalog;
       case "settings":

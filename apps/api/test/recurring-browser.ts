@@ -1,6 +1,6 @@
 /** Explicit test executable; it is never imported by the production entry point. */
 
-import { passContract, passPeriod, service } from "@sob/db";
+import { passContract, passPeriod, service, waitlistOffer } from "@sob/db";
 import { seedSampleData } from "@sob/db/seed";
 import { createTestDatabase } from "@sob/db/testing";
 import { eq } from "drizzle-orm";
@@ -9,6 +9,7 @@ import { createAccount } from "../src/auth/accounts";
 import { createAuth } from "../src/auth/auth";
 import { loadConfig } from "../src/config";
 import { runMembershipBilling } from "../src/modules/passes/billing";
+import { runWaitlist } from "../src/modules/waitlist/matching";
 import { RedsysGateway, redsysSignature } from "../src/payments/redsys";
 import type { PaymentGateway } from "../src/payments/types";
 import { RECURRING_FIXTURE as fixture } from "./recurring-values";
@@ -182,6 +183,16 @@ app.post("/__recurring-fixture/billing", async (c) => {
   }
   const result = await runMembershipBilling({ db: database.db, config, gateway, now: () => now });
   return c.json({ ...result, bankCalls });
+});
+app.post("/__recurring-fixture/waitlist/run", async (c) => {
+  if (c.req.header("x-recurring-fixture") !== "local-only") return c.text("Not found", 404);
+  const body = await c.req.json<{ expireOfferId?: string }>();
+  if (body.expireOfferId)
+    await database.db
+      .update(waitlistOffer)
+      .set({ expiresAt: new Date(Date.now() - 1) })
+      .where(eq(waitlistOffer.id, body.expireOfferId));
+  return c.json(await runWaitlist(database.db));
 });
 const server = Bun.serve({ hostname: "127.0.0.1", port: fixture.apiPort, fetch: app.fetch });
 console.log(`Recurring fixture listening on ${server.port}`);

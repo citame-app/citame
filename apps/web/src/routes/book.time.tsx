@@ -1,6 +1,7 @@
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { useStore } from "@tanstack/react-store";
 import { useEffect, useState } from "react";
+import { buttonClasses } from "~/components/ui/button";
 import { AlertIcon, ClockIcon } from "~/components/ui/icons";
 import { BookingFrame } from "~/features/booking/frame";
 import { buildDateStrip, timezoneDifference } from "~/features/booking/logic";
@@ -51,6 +52,7 @@ export const Route = createFileRoute("/book/time")({
 
 function TimeStep() {
   const { t } = useI18n();
+  const { session } = Route.useRouteContext();
   const booking = useBooking();
   const { search, selectedServices, totals, salon } = booking;
   const takenSlot = useStore(bookingStore, (state) => state.takenSlot);
@@ -127,6 +129,19 @@ function TimeStep() {
             );
           }}
         />
+        {(!session || session.user.role === "client") && (
+          <Link
+            to="/account/waitlist"
+            search={{
+              services: search.services.join(","),
+              staff: search.staff === "any" ? undefined : search.staff,
+              date: search.date ?? today,
+            }}
+            className={`${buttonClasses({ variant: "secondary" })} max-w-full whitespace-normal! text-center`}
+          >
+            {t("waitlist.join")}
+          </Link>
+        )}
         {difference && (
           <p className="flex items-start gap-2 text-sm text-muted">
             <ClockIcon width={16} height={16} className="mt-0.5 shrink-0" />

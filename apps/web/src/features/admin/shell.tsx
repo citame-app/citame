@@ -4,6 +4,7 @@ import { type ComponentType, type ReactNode, useEffect, useState } from "react";
 import {
   CalendarIcon,
   ChartIcon,
+  ClockIcon,
   CreditCardIcon,
   HomeIcon,
   MenuIcon,
@@ -21,6 +22,7 @@ import { type AdminSection, adminNavFor } from "./nav";
 const ICONS: Record<AdminSection, ComponentType<{ width?: number; height?: number }>> = {
   today: HomeIcon,
   calendar: CalendarIcon,
+  waitlist: ClockIcon,
   commerce: CreditCardIcon,
   clients: UserIcon,
   services: ScissorsIcon,

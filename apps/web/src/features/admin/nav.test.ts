@@ -20,6 +20,7 @@ describe("adminNavFor", () => {
     expect(adminNavFor("owner").map((item) => item.section)).toEqual([
       "today",
       "calendar",
+      "waitlist",
       "commerce",
       "clients",
       "services",
@@ -33,6 +34,7 @@ describe("adminNavFor", () => {
     expect(adminNavFor("staff").map((item) => item.section)).toEqual([
       "today",
       "calendar",
+      "waitlist",
       "commerce",
       "clients",
       "staff",
@@ -83,4 +85,11 @@ test("access presets expose permitted sections without granting owner account or
     "staff",
   ]);
   expect(adminGuard("/admin/commerce", "staff", "restricted").type).toBe("redirect");
+});
+
+test("the waitlist is available to booking operators and hidden from restricted staff", () => {
+  expect(sectionOfPath("/admin/waitlist")).toBe("waitlist");
+  expect(adminNavFor("staff", "receptionist").map((item) => item.section)).toContain("waitlist");
+  expect(adminNavFor("staff", "restricted").map((item) => item.section)).not.toContain("waitlist");
+  expect(adminGuard("/admin/waitlist", "staff", "restricted").type).toBe("redirect");
 });

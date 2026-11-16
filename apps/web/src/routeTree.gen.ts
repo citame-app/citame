@@ -23,6 +23,7 @@ import { Route as AccountIndexRouteImport } from './routes/account.index'
 import { Route as AccountNotificationsRouteImport } from './routes/account.notifications'
 import { Route as AccountProfileRouteImport } from './routes/account.profile'
 import { Route as AccountRewardsRouteImport } from './routes/account.rewards'
+import { Route as AccountWaitlistRouteImport } from './routes/account.waitlist'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as AdminCalendarRouteImport } from './routes/admin.calendar'
 import { Route as AdminCommerceRouteImport } from './routes/admin.commerce'
@@ -30,6 +31,7 @@ import { Route as AdminReportsRouteImport } from './routes/admin.reports'
 import { Route as AdminServicesRouteImport } from './routes/admin.services'
 import { Route as AdminSettingsRouteImport } from './routes/admin.settings'
 import { Route as AdminStaffRouteImport } from './routes/admin.staff'
+import { Route as AdminWaitlistRouteImport } from './routes/admin.waitlist'
 import { Route as BookIndexRouteImport } from './routes/book.index'
 import { Route as BookProfessionalRouteImport } from './routes/book.professional'
 import { Route as BookReviewRouteImport } from './routes/book.review'
@@ -111,6 +113,11 @@ const AccountRewardsRoute = AccountRewardsRouteImport.update({
   path: '/rewards',
   getParentRoute: () => AccountRoute,
 } as any)
+const AccountWaitlistRoute = AccountWaitlistRouteImport.update({
+  id: '/waitlist',
+  path: '/waitlist',
+  getParentRoute: () => AccountRoute,
+} as any)
 const AdminIndexRoute = AdminIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -144,6 +151,11 @@ const AdminSettingsRoute = AdminSettingsRouteImport.update({
 const AdminStaffRoute = AdminStaffRouteImport.update({
   id: '/staff',
   path: '/staff',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminWaitlistRoute = AdminWaitlistRouteImport.update({
+  id: '/waitlist',
+  path: '/waitlist',
   getParentRoute: () => AdminRoute,
 } as any)
 const BookIndexRoute = BookIndexRouteImport.update({
@@ -213,12 +225,14 @@ export interface FileRoutesByFullPath {
   '/account/notifications': typeof AccountNotificationsRoute
   '/account/profile': typeof AccountProfileRoute
   '/account/rewards': typeof AccountRewardsRoute
+  '/account/waitlist': typeof AccountWaitlistRoute
   '/admin/calendar': typeof AdminCalendarRoute
   '/admin/commerce': typeof AdminCommerceRoute
   '/admin/reports': typeof AdminReportsRoute
   '/admin/services': typeof AdminServicesRoute
   '/admin/settings': typeof AdminSettingsRoute
   '/admin/staff': typeof AdminStaffRoute
+  '/admin/waitlist': typeof AdminWaitlistRoute
   '/book/professional': typeof BookProfessionalRoute
   '/book/review': typeof BookReviewRoute
   '/book/time': typeof BookTimeRoute
@@ -243,12 +257,14 @@ export interface FileRoutesByTo {
   '/account/notifications': typeof AccountNotificationsRoute
   '/account/profile': typeof AccountProfileRoute
   '/account/rewards': typeof AccountRewardsRoute
+  '/account/waitlist': typeof AccountWaitlistRoute
   '/admin/calendar': typeof AdminCalendarRoute
   '/admin/commerce': typeof AdminCommerceRoute
   '/admin/reports': typeof AdminReportsRoute
   '/admin/services': typeof AdminServicesRoute
   '/admin/settings': typeof AdminSettingsRoute
   '/admin/staff': typeof AdminStaffRoute
+  '/admin/waitlist': typeof AdminWaitlistRoute
   '/book/professional': typeof BookProfessionalRoute
   '/book/review': typeof BookReviewRoute
   '/book/time': typeof BookTimeRoute
@@ -277,12 +293,14 @@ export interface FileRoutesById {
   '/account/notifications': typeof AccountNotificationsRoute
   '/account/profile': typeof AccountProfileRoute
   '/account/rewards': typeof AccountRewardsRoute
+  '/account/waitlist': typeof AccountWaitlistRoute
   '/admin/calendar': typeof AdminCalendarRoute
   '/admin/commerce': typeof AdminCommerceRoute
   '/admin/reports': typeof AdminReportsRoute
   '/admin/services': typeof AdminServicesRoute
   '/admin/settings': typeof AdminSettingsRoute
   '/admin/staff': typeof AdminStaffRoute
+  '/admin/waitlist': typeof AdminWaitlistRoute
   '/book/professional': typeof BookProfessionalRoute
   '/book/review': typeof BookReviewRoute
   '/book/time': typeof BookTimeRoute
@@ -312,12 +330,14 @@ export interface FileRouteTypes {
     | '/account/notifications'
     | '/account/profile'
     | '/account/rewards'
+    | '/account/waitlist'
     | '/admin/calendar'
     | '/admin/commerce'
     | '/admin/reports'
     | '/admin/services'
     | '/admin/settings'
     | '/admin/staff'
+    | '/admin/waitlist'
     | '/book/professional'
     | '/book/review'
     | '/book/time'
@@ -342,12 +362,14 @@ export interface FileRouteTypes {
     | '/account/notifications'
     | '/account/profile'
     | '/account/rewards'
+    | '/account/waitlist'
     | '/admin/calendar'
     | '/admin/commerce'
     | '/admin/reports'
     | '/admin/services'
     | '/admin/settings'
     | '/admin/staff'
+    | '/admin/waitlist'
     | '/book/professional'
     | '/book/review'
     | '/book/time'
@@ -375,12 +397,14 @@ export interface FileRouteTypes {
     | '/account/notifications'
     | '/account/profile'
     | '/account/rewards'
+    | '/account/waitlist'
     | '/admin/calendar'
     | '/admin/commerce'
     | '/admin/reports'
     | '/admin/services'
     | '/admin/settings'
     | '/admin/staff'
+    | '/admin/waitlist'
     | '/book/professional'
     | '/book/review'
     | '/book/time'
@@ -510,6 +534,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AccountRewardsRouteImport
       parentRoute: typeof AccountRoute
     }
+    '/account/waitlist': {
+      id: '/account/waitlist'
+      path: '/waitlist'
+      fullPath: '/account/waitlist'
+      preLoaderRoute: typeof AccountWaitlistRouteImport
+      parentRoute: typeof AccountRoute
+    }
     '/admin/': {
       id: '/admin/'
       path: '/'
@@ -557,6 +588,13 @@ declare module '@tanstack/react-router' {
       path: '/staff'
       fullPath: '/admin/staff'
       preLoaderRoute: typeof AdminStaffRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/waitlist': {
+      id: '/admin/waitlist'
+      path: '/waitlist'
+      fullPath: '/admin/waitlist'
+      preLoaderRoute: typeof AdminWaitlistRouteImport
       parentRoute: typeof AdminRoute
     }
     '/book/': {
@@ -636,6 +674,7 @@ interface AccountRouteChildren {
   AccountNotificationsRoute: typeof AccountNotificationsRoute
   AccountProfileRoute: typeof AccountProfileRoute
   AccountRewardsRoute: typeof AccountRewardsRoute
+  AccountWaitlistRoute: typeof AccountWaitlistRoute
   AccountIndexRoute: typeof AccountIndexRoute
   AccountAppointmentsIdRescheduleRoute: typeof AccountAppointmentsIdRescheduleRoute
 }
@@ -644,6 +683,7 @@ const AccountRouteChildren: AccountRouteChildren = {
   AccountNotificationsRoute: AccountNotificationsRoute,
   AccountProfileRoute: AccountProfileRoute,
   AccountRewardsRoute: AccountRewardsRoute,
+  AccountWaitlistRoute: AccountWaitlistRoute,
   AccountIndexRoute: AccountIndexRoute,
   AccountAppointmentsIdRescheduleRoute: AccountAppointmentsIdRescheduleRoute,
 }
@@ -658,6 +698,7 @@ interface AdminRouteChildren {
   AdminServicesRoute: typeof AdminServicesRoute
   AdminSettingsRoute: typeof AdminSettingsRoute
   AdminStaffRoute: typeof AdminStaffRoute
+  AdminWaitlistRoute: typeof AdminWaitlistRoute
   AdminIndexRoute: typeof AdminIndexRoute
   AdminClientsIdRoute: typeof AdminClientsIdRoute
   AdminClientsIndexRoute: typeof AdminClientsIndexRoute
@@ -670,6 +711,7 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminServicesRoute: AdminServicesRoute,
   AdminSettingsRoute: AdminSettingsRoute,
   AdminStaffRoute: AdminStaffRoute,
+  AdminWaitlistRoute: AdminWaitlistRoute,
   AdminIndexRoute: AdminIndexRoute,
   AdminClientsIdRoute: AdminClientsIdRoute,
   AdminClientsIndexRoute: AdminClientsIndexRoute,

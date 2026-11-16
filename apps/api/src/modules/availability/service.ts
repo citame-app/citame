@@ -1,6 +1,6 @@
 import type { AvailabilityQuery, AvailabilityResponse } from "@sob/contracts";
-import { appointment, type Database, timeOff, workingHours } from "@sob/db";
-import { and, gt, inArray, isNull, lt, ne } from "drizzle-orm";
+import { appointment, type Database, timeOff, waitlistOffer, workingHours } from "@sob/db";
+import { and, eq, gt, inArray, isNull, lt, ne } from "drizzle-orm";
 import { getServicesByIds } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { assertStaffExists, staffQualifiedFor } from "../staff/service";
@@ -29,7 +29,7 @@ export async function findAvailability(
   const windowStart = new Date(dayStart.epochMilliseconds);
   const windowEnd = new Date(dayStart.add({ days: 1 }).epochMilliseconds);
 
-  const [hours, offs, booked] = await Promise.all([
+  const [hours, offs, offered, booked] = await Promise.all([
     db
       .select()
       .from(workingHours)
@@ -43,6 +43,18 @@ export async function findAvailability(
           isNull(timeOff.deletedAt),
           lt(timeOff.startsAt, windowEnd),
           gt(timeOff.endsAt, windowStart),
+        ),
+      ),
+    db
+      .select()
+      .from(waitlistOffer)
+      .where(
+        and(
+          inArray(waitlistOffer.staffId, staffIds),
+          eq(waitlistOffer.state, "offered"),
+          gt(waitlistOffer.expiresAt, now),
+          lt(waitlistOffer.startsAt, windowEnd),
+          gt(waitlistOffer.endsAt, windowStart),
         ),
       ),
     db
@@ -75,7 +87,7 @@ export async function findAvailability(
       timeOff: offs
         .filter((o) => o.staffId === staffId)
         .map((o) => ({ start: o.startsAt, end: o.endsAt })),
-      appointments: booked
+      appointments: [...booked, ...offered]
         .filter((a) => a.staffId === staffId)
         .map((a) => ({ start: a.startsAt, end: a.endsAt })),
     })),

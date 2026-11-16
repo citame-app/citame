@@ -11,6 +11,7 @@ import { loyaltyEn } from "./loyalty";
 import { notificationsEn } from "./notifications";
 import { passesEn } from "./passes";
 import { schedulingEn } from "./scheduling";
+import { waitlistEn } from "./waitlist";
 /** English is the source catalog: its keys define what every other catalog must provide. */
 export const en = {
   ...bookingProtectionEn,
@@ -18,6 +19,7 @@ export const en = {
   ...passesEn,
   ...loyaltyEn,
   ...schedulingEn,
+  ...waitlistEn,
   "common.greeting": "Hello, {name}",
   "booking.summary.services_one": "{count} service",
   "booking.summary.services_other": "{count} services",

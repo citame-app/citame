@@ -54,6 +54,7 @@ import { inventoryEndpoints } from "./inventory-endpoints";
 import { passEndpoints } from "./pass-endpoints";
 import { rewardEndpoints } from "./reward-endpoints";
 import { seriesEndpoints } from "./series-endpoints";
+import { waitlistEndpoints } from "./waitlist-endpoints";
 
 /** Better Auth answers with extra fields we do not depend on. */
 const authAck = z.looseObject({});
@@ -98,6 +99,7 @@ export function createEndpoints(client: ApiClient) {
     passes: passEndpoints(client),
     rewards: rewardEndpoints(client),
     appointmentSeries: seriesEndpoints(client),
+    waitlist: waitlistEndpoints(client),
     salon: () => client.get("/salon", salonResponseSchema),
     services: () => client.get("/services", listServicesResponseSchema),
     staff: () => client.get("/staff", listStaffResponseSchema),

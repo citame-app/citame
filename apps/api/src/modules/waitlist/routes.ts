@@ -1,0 +1,120 @@
+import {
+  idSchema,
+  waitlistAcceptSchema,
+  waitlistAdminInputSchema,
+  waitlistCancelSchema,
+  waitlistDeclineSchema,
+  waitlistInputSchema,
+  waitlistPolicySchema,
+  waitlistQuerySchema,
+} from "@sob/contracts";
+import { Hono } from "hono";
+import type { AppDeps } from "../../app";
+import { requirePermission, requireRole } from "../../auth/policy";
+import type { AppEnv } from "../../auth/principal";
+import { parseOrThrow, readJson } from "../../http";
+import { acceptWaitlist } from "./accept";
+import { endWaitlist, joinWaitlist, listWaitlist, setWaitlistPolicy } from "./service";
+
+function entryActions(app: Hono<AppEnv>, { db, now = () => new Date() }: AppDeps) {
+  return app
+    .post("/:id/cancel", async (c) =>
+      c.json(
+        await endWaitlist(
+          db,
+          parseOrThrow(idSchema, c.req.param("id")),
+          parseOrThrow(waitlistCancelSchema, await readJson(c)),
+          c.get("principal"),
+          now(),
+        ),
+      ),
+    )
+    .post("/:id/decline", async (c) =>
+      c.json(
+        await endWaitlist(
+          db,
+          parseOrThrow(idSchema, c.req.param("id")),
+          parseOrThrow(waitlistDeclineSchema, await readJson(c)),
+          c.get("principal"),
+          now(),
+        ),
+      ),
+    )
+    .post("/:id/accept", async (c) =>
+      c.json(
+        await acceptWaitlist(
+          db,
+          parseOrThrow(idSchema, c.req.param("id")),
+          parseOrThrow(waitlistAcceptSchema, await readJson(c)),
+          c.get("principal"),
+          now(),
+        ),
+        201,
+      ),
+    );
+}
+export function waitlistClientRoutes(deps: AppDeps) {
+  const { db, now = () => new Date() } = deps;
+  return entryActions(
+    new Hono<AppEnv>()
+      .use("*", async (c, next) => {
+        requireRole(c.get("principal"), "client");
+        await next();
+      })
+      .get("/", async (c) =>
+        c.json(
+          await listWaitlist(
+            db,
+            c.get("principal"),
+            parseOrThrow(waitlistQuerySchema, c.req.query()),
+          ),
+        ),
+      )
+      .post("/", async (c) =>
+        c.json(
+          await joinWaitlist(
+            db,
+            parseOrThrow(waitlistInputSchema, await readJson(c)),
+            c.get("principal"),
+            now(),
+          ),
+          201,
+        ),
+      ),
+    deps,
+  );
+}
+export function waitlistAdminRoutes(deps: AppDeps) {
+  const { db, now = () => new Date() } = deps;
+  return entryActions(
+    new Hono<AppEnv>()
+      .use("*", async (c, next) => {
+        requirePermission(c.get("principal"), "clients");
+        requirePermission(c.get("principal"), "editCalendar");
+        await next();
+      })
+      .put("/policy", async (c) =>
+        c.json(
+          await setWaitlistPolicy(
+            db,
+            parseOrThrow(waitlistPolicySchema.strict(), await readJson(c)),
+            c.get("principal"),
+          ),
+        ),
+      )
+      .get("/", async (c) =>
+        c.json(
+          await listWaitlist(
+            db,
+            c.get("principal"),
+            parseOrThrow(waitlistQuerySchema, c.req.query()),
+          ),
+        ),
+      )
+      .post("/", async (c) => {
+        const { clientId, ...input } = parseOrThrow(waitlistAdminInputSchema, await readJson(c));
+        return c.json(await joinWaitlist(db, input, c.get("principal"), now(), clientId), 201);
+      }),
+    deps,
+  );
+}

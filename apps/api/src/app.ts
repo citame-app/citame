@@ -35,6 +35,7 @@ import { staffRoutes } from "./modules/staff/routes";
 import { createSyncHub } from "./modules/sync/hub";
 import { headSeq } from "./modules/sync/pull";
 import { syncRoutes } from "./modules/sync/routes";
+import { waitlistAdminRoutes, waitlistClientRoutes } from "./modules/waitlist/routes";
 import type { EmailProvider } from "./notifications/providers/types";
 import { notificationAdminRoutes, optOutRoutes } from "./notifications/routes";
 import { oauthAudit } from "./oauth/audit";
@@ -270,6 +271,7 @@ export function createApp(input: AppDeps): App {
   app.route("/me", meRoutes(deps));
   app.route("/me", commerceClientRoutes(deps));
   app.route("/me", rewardsClientRoutes(deps));
+  app.route("/me/waitlist", waitlistClientRoutes(deps));
 
   app.use("/admin/*", requireAuth(auth, deps.db));
   app.route("/admin", adminRoutes(deps, auth));
@@ -277,6 +279,7 @@ export function createApp(input: AppDeps): App {
   app.route("/admin/inventory", inventoryRoutes(deps));
   app.route("/admin/accounting", accountingRoutes(deps));
   app.route("/admin/rewards", rewardsAdminRoutes(deps));
+  app.route("/admin/waitlist", waitlistAdminRoutes(deps));
   app.route("/benefit-plans", publicPlanRoutes(deps));
   app.route("/admin/benefit-plans", planAdminRoutes(deps));
   app.route("/admin/passes", passRoutes(deps));

@@ -1,5 +1,5 @@
 import { permissionsFor } from "@sob/contracts";
-import { createFileRoute, Link, Outlet, redirect } from "@tanstack/react-router";
+import { createFileRoute, Link, Outlet, redirect, useRouterState } from "@tanstack/react-router";
 import { PageContainer, PageHeading } from "~/components/pages";
 import { Button } from "~/components/ui/button";
 import { LogOutIcon } from "~/components/ui/icons";
@@ -38,12 +38,22 @@ const tabClass =
 function AccountLayout() {
   const { t } = useI18n();
   const auth = useAuth();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const title = pathname.endsWith("/waitlist")
+    ? t("waitlist.title")
+    : pathname.endsWith("/rewards")
+      ? t("rewards.title")
+      : pathname.endsWith("/profile")
+        ? t("account.profile.title")
+        : pathname.endsWith("/notifications")
+          ? t("notify.title")
+          : t("account.title");
   const { session } = Route.useRouteContext();
   return (
     <PageContainer width="max-w-3xl">
       <div className="py-8 sm:py-12">
         <PageHeading
-          title={t("account.title")}
+          title={title}
           lead={session ? t("common.greeting", { name: session.user.name }) : undefined}
         />
         <div className="mb-8 flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
@@ -51,6 +61,11 @@ function AccountLayout() {
             <Link to="/account" activeOptions={{ exact: true }} className={tabClass}>
               {t("account.nav.appointments")}
             </Link>
+            {session?.user.role === "client" && (
+              <Link to="/account/waitlist" className={tabClass}>
+                {t("waitlist.title")}
+              </Link>
+            )}
             <Link to="/account/profile" className={tabClass}>
               {t("account.nav.profile")}
             </Link>

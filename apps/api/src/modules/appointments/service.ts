@@ -18,6 +18,7 @@ import {
   serviceStaff,
   timeOff,
   user,
+  waitlistOffer,
   workingHours,
 } from "@sob/db";
 import { and, asc, count, desc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
@@ -255,6 +256,24 @@ export async function assertBookable(
 ): Promise<boolean> {
   const { staffId, startsAt, endsAt, settings } = input;
   await assertStaffActive(tx, staffId);
+  const [heldOffer] = await tx
+    .select({ id: waitlistOffer.id })
+    .from(waitlistOffer)
+    .where(
+      and(
+        eq(waitlistOffer.staffId, staffId),
+        eq(waitlistOffer.state, "offered"),
+        gt(waitlistOffer.expiresAt, input.now),
+        lt(waitlistOffer.startsAt, endsAt),
+        gt(waitlistOffer.endsAt, startsAt),
+      ),
+    )
+    .limit(1);
+  if (heldOffer)
+    throw new DomainError(
+      "slot_unavailable",
+      "This time is temporarily reserved for a waitlist offer",
+    );
   const hours = await tx
     .select()
     .from(workingHours)

@@ -7,6 +7,7 @@ import { startBookingExpiry } from "./modules/booking-protection/runtime";
 import { startInventoryExpiry } from "./modules/inventory/runtime";
 import { startMembershipBilling } from "./modules/passes/runtime";
 import { startRewardsExpiry } from "./modules/rewards/runtime";
+import { startWaitlist } from "./modules/waitlist/runtime";
 import { createProviders } from "./notifications/providers";
 import { startNotificationRuntime } from "./notifications/runtime";
 import { rootLogger } from "./observability/logger";
@@ -25,6 +26,7 @@ await app.ready();
 const inventoryExpiry = startInventoryExpiry(db);
 const bookingExpiry = startBookingExpiry(db);
 const rewardsExpiry = startRewardsExpiry(db);
+const waitlist = startWaitlist(db);
 
 // Optional in-process notification worker (NOTIFY_WORKER_ENABLED). `bun run worker` runs the same code alone.
 const notifications = startNotificationRuntime({ db, config });
@@ -69,6 +71,7 @@ async function shutdown(signal: string) {
       inventoryExpiry.stop(),
       bookingExpiry.stop(),
       rewardsExpiry.stop(),
+      waitlist.stop(),
       membershipBilling?.stop(),
     ]);
     await closeDb();
