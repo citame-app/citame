@@ -22,12 +22,14 @@ import { reputationEsAR } from "./reputation";
 import { schedulingEsAR } from "./scheduling";
 import { serviceOptionsEsAR } from "./service-options";
 import { socialEsAR } from "./social";
+import { timedPromotionsEs } from "./timed-promotions";
 import { timingEs } from "./timing";
 import { waitlistEsAR } from "./waitlist";
 
 /** Neutral, professional Spanish for Argentina. */
 export const esAR: Record<MessageKey, string> = {
   ...combinationsEs,
+  ...timedPromotionsEs,
   ...timingEs,
   ...socialEsAR,
   ...acquisitionEsAR,

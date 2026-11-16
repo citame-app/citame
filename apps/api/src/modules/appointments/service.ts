@@ -52,6 +52,7 @@ import { assertClientCanBook } from "../clients/controls";
 import { prepareBookingIntake, recordBookingIntake } from "../clients/intake-booking";
 import { refreshAppointmentCheckout } from "../commerce/service";
 import { reassignAppointmentResources, reserveResources } from "../resources/reservations";
+import { assertPromotionReschedule } from "../rewards/timing";
 import { releaseUnfulfilledAppointmentRewards } from "../rewards/value";
 import { getBookableServices } from "../services/service";
 import { getSalonSettings } from "../settings/service";
@@ -631,6 +632,8 @@ export async function updateAppointment(
           true,
         );
       if (slotChanges) await assertClientCanBook(tx, current.clientId);
+      if (slotChanges)
+        await assertPromotionReschedule(tx, id, { startsAt, createdAt: current.createdAt });
       const noticeOverridden =
         settings !== undefined &&
         (await assertBookable(tx, {

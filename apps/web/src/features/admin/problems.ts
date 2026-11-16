@@ -13,6 +13,8 @@ export function describeProblem(error: unknown): Problem {
   if (error instanceof NetworkError) return { messageKey: "problem.offline", recovery: "retry" };
   if (error instanceof ApiError) {
     switch (error.code) {
+      case "promotion_timing_mismatch":
+        return { messageKey: "timedPromotions.mismatch", recovery: "pickAnotherTime" };
       case "intake_required":
         return { messageKey: "intake.changed", recovery: "reload" };
       case "booking_intent_conflict":

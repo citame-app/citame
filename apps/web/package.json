@@ -30,7 +30,9 @@
     "e2e:social": "E2E_SOCIAL_FIXTURE=true playwright test",
     "e2e:social:production": "E2E_SOCIAL_FIXTURE=true E2E_WEB_IMAGE=true playwright test",
     "e2e:acquisition": "E2E_ACQUISITION_FIXTURE=true playwright test",
-    "e2e:acquisition:production": "E2E_ACQUISITION_FIXTURE=true E2E_WEB_IMAGE=true playwright test"
+    "e2e:acquisition:production": "E2E_ACQUISITION_FIXTURE=true E2E_WEB_IMAGE=true playwright test",
+    "e2e:timed-promotions": "E2E_TIMED_PROMOTIONS_FIXTURE=true playwright test",
+    "e2e:timed-promotions:production": "E2E_TIMED_PROMOTIONS_FIXTURE=true E2E_WEB_IMAGE=true playwright test"
   },
   "dependencies": {
     "@base-ui/react": "1.9.0",

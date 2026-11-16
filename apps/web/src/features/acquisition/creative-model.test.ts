@@ -122,3 +122,25 @@ test("export fencing tracks price and offer terms but permits another redemption
     }),
   ).not.toBe(creativeSourceSignature(original));
 });
+test("timed offer artwork includes complete local days, exclusive end and original-booking lead conditions", () => {
+  const timed = {
+    ...promotion,
+    timing: { weekdays: [1, 5], startMinute: 600, endMinute: 780, lastMinuteHours: 24 },
+  };
+  const model = creativeModel(
+    { kind: "promotion", promotion: timed, service },
+    { ...options, timeZone: "Europe/Madrid" },
+  );
+  for (const text of [
+    "Monday",
+    "Friday",
+    "10:00",
+    "13:00",
+    "before",
+    "Europe/Madrid",
+    "24 hours",
+    "rescheduling",
+  ])
+    expect(model.caption).toContain(text);
+  expect(model.paragraphs.join(" ")).toContain("24 hours");
+});

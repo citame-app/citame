@@ -1,6 +1,7 @@
 import type { Promotion, ReviewSocial, Service } from "@sob/contracts";
 import { createTranslator, type Locale } from "~/i18n";
 import { formatDuration, formatMoney } from "~/lib/format";
+import { promotionTimingConditions } from "~/lib/promotion-timing";
 export type CreativeSource =
   | { kind: "service"; service: Service }
   | { kind: "promotion"; promotion: Promotion; service: Service }
@@ -122,6 +123,7 @@ export function creativeModel(
       : []),
     ...(promotion.startsAt ? [t("social.from", { date: date(promotion.startsAt) })] : []),
     ...(promotion.endsAt ? [t("social.until", { date: date(promotion.endsAt) })] : []),
+    ...(promotion.timing ? promotionTimingConditions(promotion.timing, timeZone, locale) : []),
     t("social.notStacked"),
   ];
   const emphasis = t("social.upTo", { value });

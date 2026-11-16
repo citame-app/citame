@@ -56,6 +56,7 @@ export function rejectionReason(
       slot_unavailable: "slot_unavailable",
       version_conflict: "conflict",
       invalid_state: "invalid_state",
+      promotion_timing_mismatch: "invalid_state",
       intake_required: "intake_required",
       booking_intent_conflict: "booking_intent_conflict",
       has_future_appointments: "invalid_state",

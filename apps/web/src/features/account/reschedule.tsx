@@ -55,6 +55,11 @@ export function RescheduleView({
       onDone();
     },
     onError: (error) => {
+      if (error instanceof ApiError && error.code === "promotion_timing_mismatch") {
+        toast.error(t("timedPromotions.mismatch"));
+        setSlot(undefined);
+        return;
+      }
       if (
         error instanceof ApiError &&
         (error.code === "slot_taken" || error.code === "slot_unavailable")

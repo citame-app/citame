@@ -7,6 +7,8 @@ import { rootLogger } from "../observability/logger";
  * message to a program; here the reader is a model, so each failure also says what to do next.
  */
 const NEXT_STEP: Partial<Record<ErrorCode, string>> = {
+  promotion_timing_mismatch:
+    "Keep the appointment's saved promotional weekday, local start window and original booking lead. Do not remove its discount or cancel/rebook without the customer's explicit review. Ask the salon for help when no qualifying time is suitable.",
   intake_required:
     "The customer must complete the current required forms in the salon's web booking flow. Never invent answers or confirm consent on their behalf. Retry after they complete the forms.",
   booking_intent_conflict:

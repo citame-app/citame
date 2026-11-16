@@ -95,6 +95,12 @@ export type PromotionTerms = {
   eligibleKinds: ("service" | "product" | "custom")[];
   serviceIds: string[];
   active: boolean;
+  timing?: {
+    weekdays: number[];
+    startMinute: number;
+    endMinute: number;
+    lastMinuteHours: number | null;
+  };
 };
 export const promotion = pgTable(
   "promotion",
@@ -123,6 +129,10 @@ export const checkoutReward = pgTable(
       .references(() => clientProfile.id),
     promotionId: uuid().references(() => promotion.id),
     kind: text().$type<"points" | "promotion">().notNull(),
+    appointmentTiming: jsonb().$type<{
+      timing: NonNullable<PromotionTerms["timing"]>;
+      timeZone: string;
+    }>(),
     name: text().notNull(),
     code: text(),
     pointsUsed: integer().notNull().default(0),

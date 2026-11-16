@@ -6,9 +6,11 @@ import { TextField } from "~/components/ui/field";
 import { SelectField } from "~/components/ui/select-field";
 import { ErrorState, Skeleton, useOnline } from "~/components/ui/states";
 import { useI18n } from "~/i18n/react";
+import { ApiError } from "~/lib/api/client";
 import type { CommerceMode } from "~/lib/api/commerce-endpoints";
 import { api } from "~/lib/api/instance";
 import { formatMoney } from "~/lib/format";
+import { promotionTimingConditions } from "~/lib/promotion-timing";
 import { invalidateCommerce } from "./invalidate";
 
 export function RewardTender({
@@ -62,6 +64,9 @@ export function RewardTender({
           expectedTotalCents: quoted.quote.currentTotalCents,
           expectedDiscountCents: quoted.quote.discountCents,
           idempotencyKey: key,
+          ...(quoted.choice.kind === "promotion" && quoted.quote.promotionVersion
+            ? { expectedPromotionVersion: quoted.quote.promotionVersion }
+            : {}),
         },
         mode,
       );
@@ -158,6 +163,16 @@ export function RewardTender({
               total: formatMoney(quoted.quote.newTotalCents, "EUR", locale),
             })}
           </p>
+          {quoted.quote.appointmentTiming &&
+            promotionTimingConditions(
+              quoted.quote.appointmentTiming.timing,
+              quoted.quote.appointmentTiming.timeZone,
+              locale,
+            ).map((text) => (
+              <p key={text} className="text-sm text-muted">
+                {text}
+              </p>
+            ))}
           <Button
             type="button"
             disabled={!online || apply.isPending}
@@ -167,7 +182,17 @@ export function RewardTender({
           </Button>
         </div>
       )}
-      {(preview.isError || apply.isError) && <p role="alert">{t("loyalty.error")}</p>}
+      {(preview.isError || apply.isError) && (
+        <p role="alert">
+          {t(
+            (preview.error instanceof ApiError &&
+              preview.error.code === "promotion_timing_mismatch") ||
+              (apply.error instanceof ApiError && apply.error.code === "promotion_timing_mismatch")
+              ? "timedPromotions.mismatch"
+              : "loyalty.error",
+          )}
+        </p>
+      )}
     </form>
   );
 }
@@ -208,6 +233,16 @@ export function RewardReceipt({
         {reward.kind === "points" ? t("loyalty.pointsOption") : reward.name}
       </h3>
       {reward.code && <p className="break-all font-medium">{reward.code}</p>}
+      {reward.appointmentTiming &&
+        promotionTimingConditions(
+          reward.appointmentTiming.timing,
+          reward.appointmentTiming.timeZone,
+          locale,
+        ).map((text) => (
+          <p key={text} className="text-sm text-muted">
+            {text}
+          </p>
+        ))}
       <p>{t("loyalty.applied", { amount: formatMoney(reward.discountCents, "EUR", locale) })}</p>
       {reward.pointsUsed > 0 && <p>{t("loyalty.used", { points: reward.pointsUsed })}</p>}
       {reward.returnedPoints > 0 && (

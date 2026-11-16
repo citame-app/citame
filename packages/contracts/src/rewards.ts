@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { idSchema, instantSchema, pageInfoSchema } from "./common";
+import { appointmentPromotionTimingSchema, promotionTimingSchema } from "./promotion-timing";
 
 const points = z.number().int().min(0).max(1000000000);
 const money = z.number().int().min(0).max(999999999);
@@ -58,6 +59,7 @@ export const applyRewardInputSchema = z.discriminatedUnion("kind", [
         .regex(/^[A-Z0-9][A-Z0-9_-]{2,39}$/),
       expectedTotalCents: money,
       expectedDiscountCents: money.positive(),
+      expectedPromotionVersion: z.number().int().positive().optional(),
       idempotencyKey: z.string().min(8).max(120),
     })
     .strict(),
@@ -72,6 +74,7 @@ export const checkoutRewardSchema = z.object({
   discountCents: money,
   state: z.enum(["held", "applied", "released"]),
   expiresAt: instantSchema,
+  appointmentTiming: appointmentPromotionTimingSchema.optional(),
 });
 export const rewardQuoteSchema = z.object({
   name: z.string(),
@@ -81,6 +84,8 @@ export const rewardQuoteSchema = z.object({
   discountCents: money,
   currentTotalCents: money,
   newTotalCents: money,
+  promotionVersion: z.number().int().positive().optional(),
+  appointmentTiming: appointmentPromotionTimingSchema.optional(),
 });
 export const loyaltyStatementSchema = z.object({
   policy: loyaltyPolicySchema,
@@ -124,12 +129,17 @@ export const promotionInputSchema = z
       .default(["service", "product", "custom"]),
     serviceIds: z.array(idSchema).max(100).default([]),
     active: z.boolean().default(true),
+    timing: promotionTimingSchema.optional(),
     version: z.number().int().positive().nullable().default(null),
   })
   .strict()
   .refine((p) => p.kind !== "percent" || p.value <= 10000, {
     path: ["value"],
     message: "Percentage exceeds 100%",
+  })
+  .refine((p) => !p.timing || p.eligibleKinds.every((kind) => kind === "service"), {
+    path: ["eligibleKinds"],
+    message: "Timed promotions apply only to appointment services",
   })
   .refine((p) => !p.startsAt || !p.endsAt || Date.parse(p.startsAt) < Date.parse(p.endsAt), {
     path: ["endsAt"],

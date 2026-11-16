@@ -21,10 +21,12 @@ import { reputationEn } from "./reputation";
 import { schedulingEn } from "./scheduling";
 import { serviceOptionsEn } from "./service-options";
 import { socialEn } from "./social";
+import { timedPromotionsEn } from "./timed-promotions";
 import { timingEn } from "./timing";
 import { waitlistEn } from "./waitlist";
 /** English is the source catalog: its keys define what every other catalog must provide. */
 export const en = {
+  ...timedPromotionsEn,
   ...combinationsEn,
   ...timingEn,
   ...socialEn,

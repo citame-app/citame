@@ -1,5 +1,6 @@
 import type { ApplyRewardInput, RewardChoice } from "@sob/contracts";
 import {
+  appointment,
   bookingProtection,
   checkout,
   checkoutLine,
@@ -18,6 +19,7 @@ import type { Tx } from "../../tx";
 import { allocateDiscount } from "../commerce/money";
 import { getCheckoutInTransaction, refreshStatus, saleRow } from "../commerce/service";
 import { heldProducts } from "../inventory/reservations";
+import { getSalonSettings } from "../settings/service";
 import {
   availableRewardLots,
   getLoyaltyPolicy,
@@ -26,6 +28,7 @@ import {
   rewardBalance,
   rewardHash,
 } from "./accounts";
+import { appointmentMatchesPromotionTiming } from "./timing";
 
 const ordinary = (kind: string) => ["service", "product", "custom"].includes(kind);
 export async function checkoutRewardView(db: RewardConnection, checkoutId: string) {
@@ -44,6 +47,7 @@ export async function checkoutRewardView(db: RewardConnection, checkoutId: strin
         discountCents: r.discountCents,
         state: r.state,
         expiresAt: r.expiresAt.toISOString(),
+        ...(r.appointmentTiming ? { appointmentTiming: r.appointmentTiming } : {}),
       }
     : null;
 }
@@ -105,6 +109,7 @@ async function rewardPricing(
   let name = "Loyalty points";
   let maximumPoints = 0;
   let policyVersion: number | null = null;
+  let appointmentTiming: typeof checkoutReward.$inferInsert.appointmentTiming = null;
   if (choice.kind === "points") {
     const policy = await getLoyaltyPolicy(tx);
     if (!policy.enabled) throw new DomainError("invalid_state", "Loyalty redemption is disabled");
@@ -142,6 +147,18 @@ async function rewardPricing(
     )
       throw new DomainError("invalid_state", "This promotion is unavailable");
     const terms = promo.terms;
+    if (terms.timing) {
+      const [visit] = row.appointmentId
+        ? await tx.select().from(appointment).where(eq(appointment.id, row.appointmentId))
+        : [];
+      const { timezone } = await getSalonSettings(tx);
+      if (!appointmentMatchesPromotionTiming(terms.timing, visit ?? null, timezone))
+        throw new DomainError(
+          "promotion_timing_mismatch",
+          "This appointment does not meet the promotion's local start or booking lead conditions",
+        );
+      appointmentTiming = { timing: terms.timing, timeZone: timezone };
+    }
     eligible = eligible.filter(
       (l) =>
         terms.eligibleKinds.includes(l.kind as "service" | "product" | "custom") &&
@@ -194,6 +211,7 @@ async function rewardPricing(
     extra,
     promo,
     policyVersion,
+    appointmentTiming,
     quote: {
       name,
       kind: choice.kind,
@@ -202,6 +220,7 @@ async function rewardPricing(
       discountCents,
       currentTotalCents: row.totalCents,
       newTotalCents: row.totalCents - discountCents,
+      ...(appointmentTiming && promo ? { appointmentTiming, promotionVersion: promo.version } : {}),
     },
   };
 }
@@ -243,6 +262,15 @@ export async function applyCheckoutReward(
       ? { kind: "points", points: input.points }
       : { kind: "promotion", code: input.code };
   const priced = await rewardPricing(tx, row, choice, now, true);
+  if (
+    priced.appointmentTiming &&
+    input.kind === "promotion" &&
+    input.expectedPromotionVersion !== priced.promo?.version
+  )
+    throw new DomainError(
+      "version_conflict",
+      "Promotion conditions changed; review the quote again",
+    );
   if (priced.quote.discountCents !== input.expectedDiscountCents)
     throw new DomainError("version_conflict", "Reward terms changed; review the discount again");
   const [reward] = await tx
@@ -257,6 +285,7 @@ export async function applyCheckoutReward(
       pointsUsed: priced.quote.pointsUsed,
       discountCents: priced.quote.discountCents,
       policyVersion: priced.policyVersion,
+      appointmentTiming: priced.appointmentTiming,
       expiresAt: new Date(now.getTime() + 30 * 60000),
       idempotencyKey: input.idempotencyKey,
       requestHash,

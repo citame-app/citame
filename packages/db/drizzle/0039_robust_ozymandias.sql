@@ -1,0 +1,1 @@
+ALTER TABLE "checkout_reward" ADD COLUMN "appointment_timing" jsonb;
