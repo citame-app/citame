@@ -8,6 +8,7 @@ import { useToast } from "~/components/ui/toast";
 import { InlineAuth } from "~/features/booking/auth-panel";
 import { BookingFrame } from "~/features/booking/frame";
 import { BookingPolicyConsent } from "~/features/booking/protection";
+import { acceptedServiceQuotes } from "~/features/booking/quotes";
 import {
   canEnterStep,
   parseBookingSearch,
@@ -76,6 +77,7 @@ function ReviewStep() {
       return api().appointments.create({
         staffId: search.slotStaff,
         serviceIds: search.services,
+        serviceQuotes: acceptedServiceQuotes(selectedServices),
         startsAt: search.slot,
         notes: notes.trim() || undefined,
         protectionAcceptedTotalCents: acceptedTotal ?? undefined,
@@ -94,6 +96,17 @@ function ReviewStep() {
       });
     },
     onError: (error) => {
+      if (
+        error instanceof ApiError &&
+        (error.code === "version_conflict" || error.code === "not_found")
+      ) {
+        void queryClient.invalidateQueries({ queryKey: ["services"] });
+        void queryClient.invalidateQueries({ queryKey: ["staff"] });
+        void queryClient.invalidateQueries({ queryKey: ["availability"] });
+        toast.error(t("booking.review.catalogChanged"));
+        booking.go("services", { services: search.services }, { replace: true });
+        return;
+      }
       if (error instanceof ApiError && error.code === "invalid_state") {
         setAcceptedVersion(null);
         setAcceptedTotal(null);

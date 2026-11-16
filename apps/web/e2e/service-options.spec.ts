@@ -102,6 +102,33 @@ for (const scheme of ["light", "dark"] as const) {
         await expect(
           page.getByText("€35", { exact: true }).filter({ visible: true }).first(),
         ).toBeVisible();
+        const changed = await owner.patch(`/api/admin/services/${variant.id}`, {
+          data: { priceCents: 3500 },
+        });
+        expect(changed.status(), await changed.text()).toBe(200);
+        const rejected = page.waitForResponse(
+          (r) => r.url().endsWith("/api/appointments") && r.request().method() === "POST",
+        );
+        await page.getByRole("button", { name: "Confirm booking", exact: true }).click();
+        expect((await rejected).status()).toBe(409);
+        await expect(page).toHaveURL(/\/book\?/);
+        await expect(
+          page.getByText(
+            "Service prices or duration changed. Review your selection and choose a time again.",
+            { exact: true },
+          ),
+        ).toBeVisible();
+        await expect(
+          page.getByText("€40", { exact: true }).filter({ visible: true }).first(),
+        ).toBeVisible();
+        await page.getByRole("button", { name: "Continue", exact: true }).click();
+        await pickProfessional(page, "Stylist A");
+        await pickFirstTime(page);
+        await page.getByRole("button", { name: "Continue", exact: true }).click();
+        await expect(page).toHaveURL(/\/book\/review/);
+        await expect(
+          page.getByText("€40", { exact: true }).filter({ visible: true }).first(),
+        ).toBeVisible();
         const booked = page.waitForResponse(
           (r) => r.url().endsWith("/api/appointments") && r.request().method() === "POST",
         );
@@ -115,7 +142,7 @@ for (const scheme of ["light", "dark"] as const) {
           extra.id,
         ]);
         expect(result.services.map((s: { priceCents: number }) => s.priceCents)).toEqual([
-          3000, 500,
+          3500, 500,
         ]);
         expect(Date.parse(result.endsAt) - Date.parse(result.startsAt)).toBe(85 * 60000);
         await expect(page).toHaveURL(/\/book\/confirmed\//);

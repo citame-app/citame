@@ -85,3 +85,53 @@ describe("BookingSummary", () => {
     expect(onRemove).toHaveBeenCalledWith(id(1));
   });
 });
+
+test("mobile summary reserves its measured height for notifications and releases the inset on unmount", () => {
+  let height = 96;
+  const original = HTMLElement.prototype.getBoundingClientRect;
+  const originalObserver = globalThis.ResizeObserver;
+  let resize: (() => void) | undefined;
+  class LayoutObserver implements ResizeObserver {
+    constructor(private readonly callback: ResizeObserverCallback) {}
+    observe(target: Element) {
+      if (target.tagName === "ASIDE") resize = () => this.callback([], this);
+    }
+    unobserve() {}
+    disconnect() {}
+  }
+  globalThis.ResizeObserver = LayoutObserver;
+  HTMLElement.prototype.getBoundingClientRect = function () {
+    return this.tagName === "ASIDE" ? new DOMRect(0, 0, 390, height) : original.call(this);
+  };
+  let unmount: (() => void) | undefined;
+  try {
+    ({ unmount } = renderApp(
+      <BookingSummary
+        services={services}
+        totals={bookingTotals(
+          services,
+          services.map((s) => s.id),
+        )}
+        timeZone="UTC"
+        ctaLabel="Continue"
+        onCta={() => {}}
+      />,
+    ));
+    expect(document.documentElement.style.getPropertyValue("--booking-summary-height")).toBe(
+      "96px",
+    );
+    height = 180;
+    fireEvent.click(screen.getByRole("button", { name: /Details/ }));
+    if (!resize) throw new Error("Summary is not observed");
+    resize();
+    expect(document.documentElement.style.getPropertyValue("--booking-summary-height")).toBe(
+      "180px",
+    );
+    unmount();
+    expect(document.documentElement.style.getPropertyValue("--booking-summary-height")).toBe("");
+  } finally {
+    unmount?.();
+    HTMLElement.prototype.getBoundingClientRect = original;
+    globalThis.ResizeObserver = originalObserver;
+  }
+});

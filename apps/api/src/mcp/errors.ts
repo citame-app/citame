@@ -17,7 +17,8 @@ const NEXT_STEP: Partial<Record<ErrorCode, string>> = {
   invalid_state:
     "The appointment is not in a state that allows this. Call list_my_appointments to see its status.",
   forbidden: "This account is not allowed to do that. Do not retry.",
-  version_conflict: "The appointment changed meanwhile. Call list_my_appointments and retry.",
+  version_conflict:
+    "Call list_services for current service terms or list_my_appointments for an existing visit. Ask the customer to review any changed price or duration before retrying.",
   has_future_appointments: "There are upcoming appointments that block this.",
 };
 

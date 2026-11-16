@@ -60,6 +60,13 @@ export const createAppointmentBaseSchema = z.object({
   id: idSchema.optional(),
   staffId: idSchema,
   serviceIds: z.array(idSchema).min(1).max(24),
+  /** Optional compatibility fence: reject changed reviewed catalog terms before creating a visit. */
+  serviceQuotes: z
+    .record(idSchema, z.string().regex(/^[a-f0-9]{64}$/))
+    .refine((quotes) => Object.keys(quotes).length >= 1 && Object.keys(quotes).length <= 24, {
+      message: "Review quotes for 1 to 24 services",
+    })
+    .optional(),
   startsAt: instantSchema,
   clientId: idSchema.optional(),
   client: inlineClientSchema.optional(),

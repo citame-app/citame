@@ -190,6 +190,8 @@ export const esAR: Record<MessageKey, string> = {
     "Esta página de reservas es para clientes. Usa el panel para reservar en nombre de un cliente.",
   "booking.review.staff.link": "Ir al panel",
   "booking.review.sessionExpired": "Tu sesión venció. Ingresa nuevamente para confirmar.",
+  "booking.review.catalogChanged":
+    "Cambió el precio o la duración de un servicio. Revisa tu selección y vuelve a elegir un horario.",
   "booking.review.failed": "No pudimos confirmar tu reserva",
   "booking.review.where": "Dónde",
   "booking.review.total": "Total",

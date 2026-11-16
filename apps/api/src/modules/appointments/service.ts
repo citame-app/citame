@@ -156,7 +156,7 @@ export async function createAppointment(
 ): Promise<Appointment> {
   const now = options.now ?? new Date();
   await assertStaffExists(db, request.staffId);
-  const services = await getBookableServices(db, request.serviceIds);
+  const services = await getBookableServices(db, request.serviceIds, request.serviceQuotes);
   await assertStaffPerforms(
     db,
     request.staffId,
@@ -170,7 +170,7 @@ export async function createAppointment(
       await lockScheduling(tx);
       await lockCalendars(tx, [request.staffId]);
       const settings = await getSalonSettings(tx);
-      const services = await getBookableServices(tx, request.serviceIds);
+      const services = await getBookableServices(tx, request.serviceIds, request.serviceQuotes);
       const endsAt = new Date(startsAt.getTime() + totalBlockMinutes(services) * MS_PER_MINUTE);
       await assertStaffPerforms(
         tx,

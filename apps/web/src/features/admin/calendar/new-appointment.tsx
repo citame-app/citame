@@ -14,6 +14,7 @@ import { SelectField, TextAreaField } from "~/components/ui/select-field";
 import { Sheet } from "~/components/ui/sheet";
 import { useToast } from "~/components/ui/toast";
 import { CatalogChoices } from "~/features/booking/catalog-choices";
+import { acceptedServiceQuotes } from "~/features/booking/quotes";
 import { useI18n } from "~/i18n/react";
 import { adminStaffQuery, clientsQuery } from "~/lib/admin-queries";
 import { api } from "~/lib/api/instance";
@@ -180,6 +181,7 @@ export function NewAppointmentSheet({
       }
       return api().appointments.create({
         ...buildWalkInRequest({ ...values, startsAt: resolveStart() }),
+        serviceQuotes: acceptedServiceQuotes(chosen),
         ...(waiver.trim() ? { protectionWaiverReason: waiver.trim() } : {}),
       });
     },
@@ -198,6 +200,11 @@ export function NewAppointmentSheet({
     onError: (error) => {
       const problem = describeProblem(error);
       setFailure(problem);
+      if (problem.recovery === "reload") {
+        void queryClient.invalidateQueries({ queryKey: ["services"] });
+        void queryClient.invalidateQueries({ queryKey: ["admin", "staff"] });
+        void queryClient.invalidateQueries({ queryKey: ["availability"] });
+      }
       if (
         cadence !== "none" &&
         (problem.recovery === "reload" || problem.recovery === "pickAnotherTime")
@@ -228,6 +235,7 @@ export function NewAppointmentSheet({
         signature,
         input: {
           ...booking,
+          serviceQuotes: acceptedServiceQuotes(chosen),
           cadence,
           interval: Number(interval),
           count: Number(count),

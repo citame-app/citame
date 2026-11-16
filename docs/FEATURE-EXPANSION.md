@@ -104,3 +104,9 @@ Rooms, stations and equipment now have transactional pooled capacity, per-servic
 ### Variant and extra scheduling progress
 
 The catalog now supports independently priced/timed variants, explicit eligible extras (including price-only extras), family exclusivity, atomic editor submissions and server validation shared with recurrence and waitlists. The English/Spanish customer and operator selectors preserve sequence and compatible extras. See [the service-options guide](service-options.md). Curated combinations, processing gaps and native presentation of option metadata remain open.
+
+### Reviewed booking terms
+
+Interactive bookings now bind every selected service to its reviewed price/duration/option identity, rechecking after scheduling locks. Changed terms require fresh selection and timing; the operator form preserves its draft and refreshes current terms. Existing API/offline clients may omit the optional fence for compatibility. See [reviewed quote behavior and verification](booking-quotes.md).
+
+Local verification after variants/extras: the complete API suite passed 901 tests, web 689, contracts 134, database 47, forced type checks and repository lint. Subsequent reviewed-quote and notification regressions passed 47 targeted API tests (including MCP), 693 web tests, and four real browser cases that reject a changed price then confirm only after a fresh review. These counts describe tested local code; the unchecked delivery blocks above remain open.

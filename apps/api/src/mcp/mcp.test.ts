@@ -561,3 +561,55 @@ describe("concurrency", () => {
     expect(loser?.text).toContain("find_availability");
   });
 });
+
+test("a reviewed quote retry returns the existing requestId booking after catalog prices change", async () => {
+  const { tokens } = await clientToken();
+  const catalog = await callTool(t.app, tokens.access_token, "list_services");
+  const selected = catalog.data?.services.find((s: { id: string }) => s.id === fx.haircutId);
+  expect(selected?.quoteHash).toMatch(/^[a-f0-9]{64}$/);
+  const input = {
+    staffId: fx.anaId,
+    serviceIds: [fx.haircutId],
+    startsAt: MONDAY_0900,
+    requestId: Bun.randomUUIDv7(),
+    serviceQuotes: { [fx.haircutId]: selected.quoteHash },
+  };
+  const first = await callTool(t.app, tokens.access_token, "create_appointment", input);
+  expect(first.isError).not.toBe(true);
+  await t.db.execute(sql`update service set price_cents=12000 where id=${fx.haircutId}`);
+  const again = await callTool(t.app, tokens.access_token, "create_appointment", input);
+  expect(again.isError).not.toBe(true);
+  expect(again.data?.replayed).toBe(true);
+  expect(again.data?.appointment.services[0].priceCents).toBe(10000);
+  expect(await appointmentCount()).toBe(1);
+});
+test("a requestId cannot replay a different service selection or note as a successful booking", async () => {
+  const { tokens } = await clientToken();
+  const input = {
+    staffId: fx.anaId,
+    serviceIds: [fx.haircutId],
+    startsAt: MONDAY_0900,
+    requestId: Bun.randomUUIDv7(),
+    notes: "Original",
+  };
+  expect(
+    (await callTool(t.app, tokens.access_token, "create_appointment", input)).isError,
+  ).not.toBe(true);
+  expect(
+    (
+      await callTool(t.app, tokens.access_token, "create_appointment", {
+        ...input,
+        serviceIds: [fx.haircutId, fx.colorId],
+      })
+    ).isError,
+  ).toBe(true);
+  expect(
+    (
+      await callTool(t.app, tokens.access_token, "create_appointment", {
+        ...input,
+        notes: "Different",
+      })
+    ).isError,
+  ).toBe(true);
+  expect(await appointmentCount()).toBe(1);
+});

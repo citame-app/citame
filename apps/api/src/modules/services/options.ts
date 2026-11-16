@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Service, ServiceCatalog, ServiceCatalogCreate } from "@sob/contracts";
 import { type Database, service, serviceAddon } from "@sob/db";
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
@@ -42,7 +43,7 @@ export async function catalogMetadata(
   return result;
 }
 export function publicService(row: CatalogRow, catalog?: ServiceCatalog): Service {
-  return {
+  const fields = {
     id: row.id,
     name: row.name,
     description: row.description,
@@ -52,7 +53,10 @@ export function publicService(row: CatalogRow, catalog?: ServiceCatalog): Servic
     currency: row.currency,
     ...(catalog ? { catalog } : {}),
   };
+  const quoteHash = createHash("sha256").update(JSON.stringify(fields)).digest("hex");
+  return { ...fields, quoteHash };
 }
+
 /** Variant roots must be active ordinary services. Add-ons never depend on other add-ons. */
 export async function catalogTargets(tx: Tx, input: ServiceCatalogCreate) {
   const ids = input.kind === "variant" ? [input.parentServiceId] : input.allowedServiceIds;

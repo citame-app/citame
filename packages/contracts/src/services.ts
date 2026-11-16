@@ -16,6 +16,10 @@ export const serviceSchema = z
     priceCents: z.number().int().min(0),
     currency: z.string().length(3),
     catalog: serviceCatalogSchema.optional(),
+    quoteHash: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
   })
   .refine((s) => s.durationMinutes > 0 || s.catalog?.kind === "addon", {
     message: "A standalone service needs a positive duration",

@@ -16,7 +16,7 @@ import { and, asc, gt, inArray, isNull, max } from "drizzle-orm";
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { loadSnapshots, toAppointment } from "../appointments/service";
-import { catalogMetadata } from "../services/options";
+import { catalogMetadata, publicService } from "../services/options";
 
 /**
  * Highest committed `seq`. Because seq order equals commit order (ADR 0007), everything at or
@@ -96,15 +96,8 @@ async function loadVisible(
       const catalog = await catalogMetadata(db, rows);
       for (const r of rows) {
         put(r.id, {
-          id: r.id,
-          name: r.name,
-          description: r.description,
-          durationMinutes: r.durationMinutes,
-          bufferMinutes: r.bufferMinutes,
-          priceCents: r.priceCents,
-          currency: r.currency,
+          ...publicService(r, catalog.get(r.id)),
           active: r.active,
-          ...(catalog.has(r.id) ? { catalog: catalog.get(r.id) } : {}),
           updatedAt: r.updatedAt.toISOString(),
         });
       }

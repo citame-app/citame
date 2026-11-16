@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { appointmentSchema, appointmentStatusSchema } from "./appointments";
+import {
+  appointmentSchema,
+  appointmentStatusSchema,
+  createAppointmentBaseSchema,
+} from "./appointments";
 import { bookingPolicySchema } from "./booking-protection";
 import { adminClientSchema } from "./clients";
 import { idSchema, instantSchema, localDateSchema } from "./common";
@@ -57,6 +61,9 @@ export const mcpCreateAppointmentInput = z.object({
       "Staff and owners only: the client being booked, from find_client. Clients book for themselves and must omit this.",
     ),
   notes: z.string().trim().max(500).optional().describe("Optional note for the salon."),
+  serviceQuotes: createAppointmentBaseSchema.shape.serviceQuotes.describe(
+    "Quote hashes from list_services for every selected service, after the customer reviews the current prices and duration. Changed terms require a fresh review.",
+  ),
   protectionAcceptedVersion: z
     .number()
     .int()

@@ -185,6 +185,8 @@ export const en = {
     "This booking page is for clients. Use the dashboard to book on behalf of a client.",
   "booking.review.staff.link": "Go to the dashboard",
   "booking.review.sessionExpired": "Your session expired. Please sign in again to confirm.",
+  "booking.review.catalogChanged":
+    "Service prices or duration changed. Review your selection and choose a time again.",
   "booking.review.failed": "We could not confirm your booking",
   "booking.review.where": "Where",
   "booking.review.total": "Total",

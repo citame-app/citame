@@ -215,6 +215,10 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
           ? ({ ...candidate } as CreateAppointmentRequest)
           : parseOrThrow(createAppointmentRequestSchema, candidate);
       const authorized = authorizeAppointmentCreate(principal, request);
+      if (requestId) {
+        const previous = await findOwnedReplay(ctx, requestId, authorized);
+        if (previous) return { appointment: redactNotes(principal, previous), replayed: true };
+      }
       const actor = { userId: principal.userId, via: ctx.via };
       try {
         const created = await createAppointment(db, authorized, actor, { now: ctx.now() });
@@ -364,6 +368,14 @@ async function findOwnedReplay(ctx: ToolContext, id: string, request: CreateAppo
     row.startsAt.getTime() === Date.parse(request.startsAt) &&
     row.clientId === request.clientId;
   if (!same) return null;
-  const snapshots = (await loadSnapshots(ctx.db, [id])).get(id) ?? [];
+  const snapshots = ((await loadSnapshots(ctx.db, [id])).get(id) ?? []).sort(
+    (a, b) => a.position - b.position,
+  );
+  if (
+    row.notes !== (request.notes ?? null) ||
+    JSON.stringify(snapshots.map((s) => s.serviceId)) !==
+      JSON.stringify([...new Set(request.serviceIds)])
+  )
+    return null;
   return { ...toAppointment(row, snapshots), protection: await protectionView(ctx.db, row.id) };
 }

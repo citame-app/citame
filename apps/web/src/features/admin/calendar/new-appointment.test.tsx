@@ -290,3 +290,59 @@ test("a manager can choose any calendar without being pinned to their own", asyn
   open({ role: "staff", ownStaffId: ANA, accessPreset: "manager" });
   expect(await screen.findByLabelText("Team member")).not.toBeDisabled();
 });
+
+test("a changed catalog quote refreshes the displayed terms and the next submission uses the new quote", async () => {
+  const baseFetch = globalThis.fetch;
+  let hash = "a".repeat(64);
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    const path = new URL(String(input), "http://localhost").pathname;
+    if (path === "/api/services") {
+      const response = await baseFetch(input, init);
+      const body = (await response.json()) as { services: { id: string; priceCents: number }[] };
+      return json({
+        services: body.services.map((s) => ({
+          ...s,
+          quoteHash: hash,
+          priceCents: s.id === CUT && hash.startsWith("b") ? 1_600_000 : s.priceCents,
+        })),
+      });
+    }
+    if (path === "/api/appointments" && init?.method === "POST") hash = "b".repeat(64);
+    return baseFetch(input, init);
+  }) as unknown as typeof fetch;
+  postReply = {
+    status: 409,
+    body: { error: { code: "version_conflict", message: "Changed terms" } },
+  };
+  open();
+  fireEvent.click(await screen.findByRole("radio", { name: "New client" }));
+  fireEvent.change(screen.getByLabelText("Full name"), { target: { value: "Nora" } });
+  fireEvent.click(await screen.findByRole("checkbox", { name: "Haircut" }));
+  fireEvent.click(screen.getByRole("button", { name: "Create appointment" }));
+  await screen.findByRole("alert");
+  await waitFor(() =>
+    expect(screen.getByRole("checkbox", { name: "Haircut" }).parentElement?.textContent).toContain(
+      "16,000",
+    ),
+  );
+  expect(posts[0]).toMatchObject({ serviceQuotes: { [CUT]: "a".repeat(64) } });
+  postReply = {
+    status: 201,
+    body: {
+      id: crypto.randomUUID(),
+      staffId: ANA,
+      clientId: CLIENT,
+      startsAt: "2026-03-09T12:00:00.000Z",
+      endsAt: "2026-03-09T13:00:00.000Z",
+      status: "booked",
+      notes: null,
+      version: 1,
+      services: [],
+      createdAt: "2026-03-02T12:00:00.000Z",
+      updatedAt: "2026-03-02T12:00:00.000Z",
+    },
+  };
+  fireEvent.click(screen.getByRole("button", { name: "Create appointment" }));
+  await waitFor(() => expect(posts).toHaveLength(2));
+  expect(posts[1]).toMatchObject({ serviceQuotes: { [CUT]: "b".repeat(64) } });
+});

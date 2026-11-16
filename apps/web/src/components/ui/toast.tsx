@@ -49,7 +49,7 @@ export function ToastHost({ children }: { children: ReactNode }) {
     <Toast.Provider timeout={5000} limit={3}>
       {children}
       <Toast.Portal>
-        <Toast.Viewport className="pointer-events-none fixed inset-x-0 bottom-0 z-[60] mx-auto flex w-full max-w-md flex-col gap-2 p-4 pb-[calc(1rem+var(--bottom-nav,0px)+env(safe-area-inset-bottom))] sm:bottom-[calc(var(--bottom-nav,0px)+1rem)] sm:right-4 sm:pb-4 md:bottom-4 sm:left-auto sm:mx-0">
+        <Toast.Viewport className="pointer-events-none fixed inset-x-0 bottom-0 z-[60] mx-auto flex w-full max-w-md flex-col gap-2 p-4 pb-[calc(1rem+max(var(--bottom-nav,0px),var(--booking-summary-height,0px))+env(safe-area-inset-bottom))] sm:bottom-[calc(max(var(--bottom-nav,0px),var(--booking-summary-height,0px))+1rem)] sm:right-4 sm:pb-4 md:bottom-[calc(var(--booking-summary-height,0px)+1rem)] sm:left-auto sm:mx-0">
           <ToastList />
         </Toast.Viewport>
       </Toast.Portal>

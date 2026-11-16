@@ -1,5 +1,5 @@
 import type { Service } from "@sob/contracts";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { CalendarIcon, ChevronUpIcon, ClockIcon, CloseIcon, UserIcon } from "~/components/ui/icons";
 import { useI18n } from "~/i18n/react";
@@ -39,10 +39,37 @@ export function BookingSummary({
   const { t, locale } = useI18n();
   const [expanded, setExpanded] = useState(false);
   const detailsId = useId();
+  const panel = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const element = panel.current;
+    if (!element) return;
+    const root = document.documentElement;
+    const property = "--booking-summary-height";
+    const previous = root.style.getPropertyValue(property);
+    const mobile = window.matchMedia("(max-width:1023px)");
+    const measure = () =>
+      root.style.setProperty(
+        property,
+        mobile.matches ? `${Math.ceil(element.getBoundingClientRect().height)}px` : "0px",
+      );
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    observer?.observe(element);
+    mobile.addEventListener("change", measure);
+    window.addEventListener("resize", measure);
+    measure();
+    return () => {
+      observer?.disconnect();
+      mobile.removeEventListener("change", measure);
+      window.removeEventListener("resize", measure);
+      if (previous) root.style.setProperty(property, previous);
+      else root.style.removeProperty(property);
+    };
+  }, []);
   const total = totals.currency ? formatMoney(totals.priceCents, totals.currency, locale) : null;
 
   return (
     <aside
+      ref={panel}
       aria-label={t("booking.summary.title")}
       className={cn(
         "fixed inset-x-0 bottom-0 z-40 border-t border-line bg-surface shadow-lg",

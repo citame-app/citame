@@ -54,7 +54,7 @@ async function previewInTransaction(
   now: Date,
 ): Promise<AppointmentSeriesPreview> {
   const settings = await getSalonSettings(tx);
-  const services = await getBookableServices(tx, input.serviceIds);
+  const services = await getBookableServices(tx, input.serviceIds, input.serviceQuotes);
   if (!(await staffQualifiedFor(tx, input.serviceIds)).includes(input.staffId))
     throw new DomainError(
       "validation_error",

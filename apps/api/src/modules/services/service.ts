@@ -51,8 +51,21 @@ export async function getServicesByIds(
 }
 
 /** Catalog lookup plus booking-only family and add-on rules. Other readers may list arbitrary eligible services. */
-export async function getBookableServices(db: Pick<Database, "select">, ids: string[]) {
+export async function getBookableServices(
+  db: Pick<Database, "select">,
+  ids: string[],
+  expectedQuotes?: Record<string, string>,
+) {
   const rows = await getServicesByIds(db, ids);
+  if (
+    expectedQuotes &&
+    (Object.keys(expectedQuotes).length !== rows.length ||
+      rows.some((s) => expectedQuotes[s.id] !== s.quoteHash))
+  )
+    throw new DomainError(
+      "version_conflict",
+      "Service terms changed; review the current price and duration before booking",
+    );
   assertCatalogSelection(rows);
   return rows;
 }
