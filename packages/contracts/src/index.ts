@@ -11,6 +11,7 @@ export * from "./appointments";
 export * from "./auth";
 export * from "./availability";
 export * from "./calendar";
+export * from "./client-controls";
 export * from "./clients";
 export * from "./commerce";
 export * from "./common";

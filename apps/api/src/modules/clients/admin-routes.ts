@@ -1,10 +1,16 @@
-import { clientListQuerySchema, idSchema, updateClientRequestSchema } from "@sob/contracts";
+import {
+  clientControlsInputSchema,
+  clientListQuerySchema,
+  idSchema,
+  updateClientRequestSchema,
+} from "@sob/contracts";
 import { Hono } from "hono";
 import type { AppDeps } from "../../app";
 import { authorizeClientAccess, authorizeClientDelete } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
 import { deleteClient, getClientDetail, listClients, updateClient } from "./admin";
+import { getClientControls, updateClientControls } from "./controls";
 
 /** Client directory, mounted at `/admin/clients` behind `requireAuth`. */
 export function clientAdminRoutes({ db, now = () => new Date() }: AppDeps) {
@@ -13,6 +19,22 @@ export function clientAdminRoutes({ db, now = () => new Date() }: AppDeps) {
       authorizeClientAccess(c.get("principal"));
       const query = parseOrThrow(clientListQuerySchema, c.req.query());
       return c.json(await listClients(db, query));
+    })
+    .get("/:id/controls", async (c) =>
+      c.json(
+        await getClientControls(db, parseOrThrow(idSchema, c.req.param("id")), c.get("principal")),
+      ),
+    )
+    .patch("/:id/controls", async (c) => {
+      authorizeClientAccess(c.get("principal"));
+      return c.json(
+        await updateClientControls(
+          db,
+          parseOrThrow(idSchema, c.req.param("id")),
+          parseOrThrow(clientControlsInputSchema, await readJson(c)),
+          c.get("principal"),
+        ),
+      );
     })
     .get("/:id", async (c) => {
       authorizeClientAccess(c.get("principal"));

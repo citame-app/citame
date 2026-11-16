@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderApp } from "../../../../test/render";
 import { ClientDetail } from "./client-detail";
 
@@ -61,6 +61,15 @@ beforeEach(() => {
   };
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
+    if (url.pathname.endsWith("/controls"))
+      return json({
+        clientId: CLIENT,
+        tags: [],
+        bookingAccess: "normal",
+        reason: null,
+        version: 1,
+        canManageBookingAccess: true,
+      });
     if (url.pathname === "/api/admin/staff")
       return json({
         staff: [{ id: STAFF, displayName: "Ana", active: true, userId: null, serviceIds: [] }],
@@ -172,4 +181,20 @@ describe("ClientDetail", () => {
     expect(alert).toHaveTextContent("This client has upcoming appointments");
     expect(within(alert).getByText(/Manicure/)).toBeInTheDocument();
   });
+});
+
+test("a controls-only timestamp update preserves an unsaved contact draft", async () => {
+  const view = open();
+  await screen.findByLabelText("Full name");
+  fireEvent.change(screen.getByLabelText("Full name"), {
+    target: { value: "Unsaved contact draft" },
+  });
+  detail = { ...detail, client: { ...detail.client, updatedAt: "2026-03-10T12:00:00.000Z" } };
+  await act(async () => {
+    await view.queryClient.invalidateQueries({ queryKey: ["admin", "client", CLIENT] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  await waitFor(() =>
+    expect(screen.getByLabelText("Full name")).toHaveValue("Unsaved contact draft"),
+  );
 });

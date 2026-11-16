@@ -40,6 +40,7 @@ function searchFilter(term: string | undefined) {
     ilike(clientProfile.name, like),
     ilike(clientProfile.email, like),
     ilike(clientProfile.phone, like),
+    sql`array_to_string(${clientProfile.tags}, ' ') ilike ${like}`,
     // "(11) 5555" must find "+54 9 11 5555-0000": compare digits only.
     digits.length >= 3
       ? sql`regexp_replace(${clientProfile.phone}, '[^0-9]', '', 'g') like ${`%${digits}%`}`

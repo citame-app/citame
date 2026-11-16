@@ -18,6 +18,7 @@ import { StatusBadge } from "../calendar/status-badge";
 import { describeProblem } from "../problems";
 import { UnsavedGuard } from "../unsaved-guard";
 import { useNow } from "../use-now";
+import { ClientControlsEditor } from "./client-controls";
 
 export function ClientDetail({
   clientId,
@@ -41,14 +42,15 @@ export function ClientDetail({
   const [errors, setErrors] = useState<{ name?: string; phone?: string }>({});
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [blocked, setBlocked] = useState(false);
+  const [controlsDirty, setControlsDirty] = useState(false);
 
   const client = query.data?.client;
-  // Reset the draft whenever the server copy changes (first load, after saving, after a refetch).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed by the saved timestamp
+  // Refresh contact values when those values change; metadata timestamps must preserve the draft.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset only when the contact fields change
   useEffect(() => {
     if (client)
       setForm({ name: client.name, phone: client.phone ?? "", notes: client.notes ?? "" });
-  }, [client?.id, client?.updatedAt, client?.name, client?.phone, client?.notes]);
+  }, [client?.id, client?.name, client?.phone, client?.notes]);
 
   const dirty =
     Boolean(client) &&
@@ -136,7 +138,7 @@ export function ClientDetail({
 
   return (
     <div className="space-y-8">
-      <UnsavedGuard dirty={dirty} />
+      <UnsavedGuard dirty={dirty || controlsDirty} />
       <div>
         <Link
           to="/admin/clients"
@@ -195,6 +197,8 @@ export function ClientDetail({
           {dirty && <span className="text-sm text-warning-fg">{t("admin.unsaved.badge")}</span>}
         </div>
       </form>
+
+      <ClientControlsEditor clientId={clientId} onDirtyChange={setControlsDirty} />
 
       <section aria-labelledby="client-upcoming" className="space-y-3">
         <h3 id="client-upcoming" className="text-heading">

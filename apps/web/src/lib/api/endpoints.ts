@@ -6,12 +6,14 @@ import {
   appointmentSchema,
   availabilityResponseSchema,
   type CalendarQuery,
+  type ClientControlsInput,
   type ClientListQuery,
   type CreateAppointmentRequest,
   type CreateServiceRequest,
   type CreateStaffAccountRequest,
   type CreateTimeOffRequest,
   calendarResponseSchema,
+  clientControlsSchema,
   clientDetailResponseSchema,
   listAdminServicesResponseSchema,
   listAdminStaffResponseSchema,
@@ -138,6 +140,9 @@ export function createEndpoints(client: ApiClient) {
           query: { from: query.from, to: query.to, staffIds: query.staffIds?.join(",") },
         }),
       clients: {
+        controls: (id: string) => client.get(`/admin/clients/${id}/controls`, clientControlsSchema),
+        updateControls: (id: string, input: ClientControlsInput) =>
+          client.patch(`/admin/clients/${id}/controls`, input, clientControlsSchema),
         list: (query: Partial<ClientListQuery>) =>
           client.get("/admin/clients", listClientsResponseSchema, { query: { ...query } }),
         get: (id: string) => client.get(`/admin/clients/${id}`, clientDetailResponseSchema),

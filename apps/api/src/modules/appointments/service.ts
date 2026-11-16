@@ -31,6 +31,7 @@ import {
 import { lockCalendars, type Tx } from "../../tx";
 import { totalBlockMinutes } from "../availability/compute";
 import { type BookingViolation, bookingViolations } from "../availability/rules";
+import { assertClientCanBook } from "../clients/controls";
 import { getServicesByIds } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { assertStaffActive } from "../staff/guards";
@@ -156,6 +157,7 @@ export async function createAppointment(
         settings,
       });
       const clientId = await resolveClient(tx, request);
+      await assertClientCanBook(tx, clientId);
       const [row] = await tx
         .insert(appointment)
         .values({
@@ -478,6 +480,7 @@ export async function updateAppointment(
   try {
     const row = await db.transaction(async (tx) => {
       await lockCalendars(tx, [current.staffId, staffId]);
+      if (slotChanges) await assertClientCanBook(tx, current.clientId);
       const noticeOverridden =
         settings !== undefined &&
         (await assertBookable(tx, {
