@@ -35,6 +35,8 @@ beforeEach(() => {
   };
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
+    if (url.pathname === "/api/intake/requirements")
+      return json({ forms: [], reviewHash: "1".repeat(64), readyResponses: [] });
     if (url.pathname === "/api/services") {
       return json({
         services: [
@@ -108,6 +110,12 @@ const open = (props: Partial<Parameters<typeof NewAppointmentSheet>[0]> = {}) =>
     />,
   );
 
+async function clickReady(name: string) {
+  const button = screen.getByRole("button", { name });
+  await waitFor(() => expect(button).toBeEnabled());
+  fireEvent.click(button);
+}
+
 describe("NewAppointmentSheet", () => {
   test("is prefilled from the clicked slot", async () => {
     open();
@@ -139,7 +147,7 @@ describe("NewAppointmentSheet", () => {
     });
     fireEvent.click(await screen.findByRole("radio", { name: /Lucia Perez/ }));
     fireEvent.click(await screen.findByRole("checkbox", { name: /Haircut/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Create appointment" }));
+    await clickReady("Create appointment");
     await waitFor(() => expect(posts).toHaveLength(1));
     expect(posts[0]).toEqual({
       id: expect.any(String),
@@ -148,6 +156,9 @@ describe("NewAppointmentSheet", () => {
       startsAt: "2026-03-09T12:00:00.000Z",
       clientId: CLIENT,
       override: true,
+      intakeReviewHash: "1".repeat(64),
+      intakeSubmissionIds: [],
+      intakeResponses: [],
     });
     await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
   });
@@ -160,7 +171,7 @@ describe("NewAppointmentSheet", () => {
       target: { value: "+54 9 11 4444-1111" },
     });
     fireEvent.click(await screen.findByRole("checkbox", { name: /Hair color/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Create appointment" }));
+    await clickReady("Create appointment");
     await waitFor(() => expect(posts).toHaveLength(1));
     expect(posts[0]).toMatchObject({
       client: { name: "Nora Diaz", phone: "+54 9 11 4444-1111" },
@@ -174,7 +185,7 @@ describe("NewAppointmentSheet", () => {
     fireEvent.click(await screen.findByRole("radio", { name: "New client" }));
     fireEvent.change(screen.getByLabelText("Full name"), { target: { value: "Nora" } });
     fireEvent.click(await screen.findByRole("checkbox", { name: /Haircut/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Create appointment" }));
+    await clickReady("Create appointment");
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Someone just took that time. Pick another time to continue.");
     expect(screen.getByLabelText("Full name")).toHaveValue("Nora");
@@ -246,13 +257,13 @@ test("a recurring appointment reviews dates and never submits a stale preview af
   fireEvent.click(await screen.findByRole("checkbox", { name: /Haircut/ }));
   fireEvent.change(screen.getByLabelText("Repeat appointment"), { target: { value: "weekly" } });
   fireEvent.change(screen.getByLabelText("Number of visits"), { target: { value: "2" } });
-  fireEvent.click(screen.getByRole("button", { name: "Review recurring visits" }));
+  await clickReady("Review recurring visits");
   expect(await screen.findByRole("button", { name: "Create 2 appointments" })).toBeInTheDocument();
   expect(previews).toHaveLength(1);
   expect(series).toHaveLength(0);
   fireEvent.change(screen.getByLabelText("Start time"), { target: { value: "10:00" } });
   expect(screen.queryByRole("button", { name: "Create 2 appointments" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Review recurring visits" }));
+  await clickReady("Review recurring visits");
   fireEvent.click(await screen.findByRole("button", { name: "Create 2 appointments" }));
   await waitFor(() => expect(series).toHaveLength(1));
   expect(series[0]).toMatchObject({
@@ -280,7 +291,7 @@ test("a nonexistent salon-local time is rejected instead of silently moving the 
   fireEvent.click(await screen.findByRole("radio", { name: "New client" }));
   fireEvent.change(screen.getByLabelText("Full name"), { target: { value: "DST customer" } });
   fireEvent.click(await screen.findByRole("checkbox", { name: /Haircut/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Create appointment" }));
+  await clickReady("Create appointment");
   await waitFor(() =>
     expect(screen.getByLabelText("Date")).toHaveAttribute("aria-invalid", "true"),
   );
@@ -319,7 +330,7 @@ test("a changed catalog quote refreshes the displayed terms and the next submiss
   fireEvent.click(await screen.findByRole("radio", { name: "New client" }));
   fireEvent.change(screen.getByLabelText("Full name"), { target: { value: "Nora" } });
   fireEvent.click(await screen.findByRole("checkbox", { name: "Haircut" }));
-  fireEvent.click(screen.getByRole("button", { name: "Create appointment" }));
+  await clickReady("Create appointment");
   await screen.findByRole("alert");
   await waitFor(() =>
     expect(screen.getByRole("checkbox", { name: "Haircut" }).parentElement?.textContent).toContain(
@@ -343,7 +354,7 @@ test("a changed catalog quote refreshes the displayed terms and the next submiss
       updatedAt: "2026-03-02T12:00:00.000Z",
     },
   };
-  fireEvent.click(screen.getByRole("button", { name: "Create appointment" }));
+  await clickReady("Create appointment");
   await waitFor(() => expect(posts).toHaveLength(2));
   expect(posts[1]).toMatchObject({ serviceQuotes: { [CUT]: "b".repeat(64) } });
   expect((posts[1] as { id: string }).id).toBe((posts[0] as { id: string }).id);
@@ -371,12 +382,51 @@ test("a connection failure keeps the submitted visit id until the operator chang
   fireEvent.click(await screen.findByRole("radio", { name: "New client" }));
   fireEvent.change(screen.getByLabelText("Full name"), { target: { value: "Retry customer" } });
   fireEvent.click(await screen.findByRole("checkbox", { name: "Haircut" }));
-  fireEvent.click(screen.getByRole("button", { name: "Create appointment" }));
+  await clickReady("Create appointment");
   await screen.findByRole("alert");
   expect(created).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Create appointment" }));
+  await clickReady("Create appointment");
   await waitFor(() => expect(created).toHaveBeenCalledTimes(1));
   expect(posts).toHaveLength(2);
   expect((posts[0] as { id: string }).id).toMatch(/^[a-f0-9-]{36}$/);
   expect(posts[1]).toEqual(posts[0]);
+});
+
+test("closing a booking with a private answer asks before discarding it", async () => {
+  const baseFetch = globalThis.fetch;
+  const question = "0198f5a0-7b1c-7000-8000-000000000001";
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    if (new URL(String(input), "http://localhost").pathname === "/api/intake/requirements")
+      return json({
+        reviewHash: "1".repeat(64),
+        readyResponses: [],
+        forms: [
+          {
+            id: "0198f5a0-7b1c-7000-8000-000000000002",
+            formId: "0198f5a0-7b1c-7000-8000-000000000003",
+            number: 1,
+            contentHash: "1".repeat(64),
+            createdAt: "2026-03-02T12:00:00.000Z",
+            definition: {
+              title: "Preferences",
+              fields: [{ id: question, kind: "text", label: "Style preference", required: true }],
+              requiredAtBooking: true,
+              allowTeamResponses: true,
+            },
+          },
+        ],
+      });
+    return baseFetch(input, init);
+  }) as unknown as typeof fetch;
+  const closed = mock();
+  open({ onOpenChange: closed });
+  fireEvent.click(await screen.findByRole("radio", { name: "New client" }));
+  fireEvent.change(screen.getByLabelText("Full name"), { target: { value: "Customer" } });
+  fireEvent.click(await screen.findByRole("checkbox", { name: /Haircut/ }));
+  fireEvent.change(await screen.findByLabelText("Style preference"), {
+    target: { value: "Keep my private draft" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await screen.findByRole("dialog", { name: "Discard draft changes" });
+  expect(closed).not.toHaveBeenCalled();
 });

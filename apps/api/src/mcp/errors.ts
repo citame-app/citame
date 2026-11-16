@@ -7,6 +7,10 @@ import { rootLogger } from "../observability/logger";
  * message to a program; here the reader is a model, so each failure also says what to do next.
  */
 const NEXT_STEP: Partial<Record<ErrorCode, string>> = {
+  intake_required:
+    "The customer must complete the current required forms in the salon's web booking flow. Never invent answers or confirm consent on their behalf. Retry after they complete the forms.",
+  booking_intent_conflict:
+    "This requestId already contains another confirmed statement. Call list_my_appointments to recover the visit. Do not silently replace answers or generate a new requestId to duplicate the booking.",
   slot_taken:
     "Someone else booked that time first. Call find_availability again for the same date and pick another slot.",
   slot_unavailable:

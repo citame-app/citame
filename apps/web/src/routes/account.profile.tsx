@@ -1,6 +1,9 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useRouter } from "@tanstack/react-router";
+import { useState } from "react";
 import { ProfileForm } from "~/features/account/profile-form";
+import { UnsavedGuard } from "~/features/admin/unsaved-guard";
+import { IntakeRecord } from "~/features/intake/record";
 import { useI18n } from "~/i18n/react";
 import { bootstrapQuery } from "~/server/request";
 
@@ -11,9 +14,11 @@ function ProfilePage() {
   const { session } = Route.useRouteContext();
   const queryClient = useQueryClient();
   const router = useRouter();
+  const [intakeDirty, setIntakeDirty] = useState(false);
   if (!session) return null;
   return (
     <section aria-labelledby="profile-title" className="max-w-lg">
+      <UnsavedGuard dirty={intakeDirty} />
       <h2 id="profile-title" className="text-heading">
         {t("account.profile.title")}
       </h2>
@@ -27,6 +32,9 @@ function ProfilePage() {
           void router.invalidate();
         }}
       />
+      <div className="mt-8">
+        <IntakeRecord onDirtyChange={setIntakeDirty} />
+      </div>
     </section>
   );
 }

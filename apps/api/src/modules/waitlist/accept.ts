@@ -61,6 +61,9 @@ export async function acceptWaitlist(
       .for("update");
     if (!offer) throw versionConflict();
     const booking = authorizeAppointmentCreate(p, {
+      intakeResponses: input.intakeResponses,
+      intakeSubmissionIds: input.intakeSubmissionIds,
+      intakeReviewHash: input.intakeReviewHash,
       staffId: offer.staffId,
       clientId: entry.clientId,
       serviceIds: entry.serviceIds,

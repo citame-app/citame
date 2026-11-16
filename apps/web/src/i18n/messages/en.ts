@@ -8,6 +8,7 @@ import { clientPhotosEn } from "./client-photos";
 import { clientTransferEn } from "./client-transfer";
 import { commerceEn } from "./commerce";
 import { giftCardsEn } from "./gift-cards";
+import { intakeEn } from "./intake";
 import { inventoryEn } from "./inventory";
 import { loyaltyEn } from "./loyalty";
 import { notificationsEn } from "./notifications";
@@ -17,6 +18,7 @@ import { serviceOptionsEn } from "./service-options";
 import { waitlistEn } from "./waitlist";
 /** English is the source catalog: its keys define what every other catalog must provide. */
 export const en = {
+  ...intakeEn,
   ...bookingProtectionEn,
   ...clientControlsEn,
   ...clientPhotosEn,

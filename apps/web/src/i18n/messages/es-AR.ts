@@ -9,6 +9,7 @@ import { clientTransferEsAR } from "./client-transfer";
 import { commerceEsAR } from "./commerce";
 import type { MessageKey } from "./en";
 import { giftCardsEsAR } from "./gift-cards";
+import { intakeEsAR } from "./intake";
 import { inventoryEsAR } from "./inventory";
 import { loyaltyEsAR } from "./loyalty";
 import { notificationsEsAR } from "./notifications";
@@ -19,6 +20,7 @@ import { waitlistEsAR } from "./waitlist";
 
 /** Neutral, professional Spanish for Argentina. */
 export const esAR: Record<MessageKey, string> = {
+  ...intakeEsAR,
   ...bookingProtectionEsAR,
   ...clientControlsEsAR,
   ...clientPhotosEsAR,

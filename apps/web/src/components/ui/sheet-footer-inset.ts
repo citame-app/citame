@@ -5,7 +5,7 @@ const heights = new Map<symbol, number>();
 let previous = "";
 
 /** Keep notices above every open sheet's actions, including nested or resizing panels. */
-export function useSheetFooterInset(open: boolean, footer: HTMLElement | null) {
+export function useSheetFooterInset(open: boolean, footer: HTMLElement | null, centered = false) {
   useEffect(() => {
     if (!open || !footer) return;
     const root = footer.ownerDocument.documentElement;
@@ -19,12 +19,16 @@ export function useSheetFooterInset(open: boolean, footer: HTMLElement | null) {
     };
     const measure = () => {
       if (!active) return;
-      const height = footer.getBoundingClientRect().height;
+      const bounds = footer.getBoundingClientRect();
+      const height = centered
+        ? Math.max(bounds.height, window.innerHeight - bounds.top)
+        : bounds.height;
       heights.set(key, Number.isFinite(height) ? Math.max(0, Math.ceil(height)) : 0);
       publish();
     };
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
     observer?.observe(footer);
+    if (centered && footer.parentElement) observer?.observe(footer.parentElement);
     window.addEventListener("resize", measure);
     measure();
     return () => {
@@ -34,5 +38,5 @@ export function useSheetFooterInset(open: boolean, footer: HTMLElement | null) {
       heights.delete(key);
       publish();
     };
-  }, [open, footer]);
+  }, [open, footer, centered]);
 }

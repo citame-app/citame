@@ -8,6 +8,7 @@ import {
   pageSchema,
   pageSizeSchema,
 } from "./common";
+import { intakeBookingShape } from "./intake";
 
 export const appointmentStatusSchema = z.enum(["booked", "completed", "cancelled", "no_show"]);
 export type AppointmentStatus = z.infer<typeof appointmentStatusSchema>;
@@ -56,6 +57,7 @@ export const inlineClientSchema = z.object({
  * their profile and the payload carries neither `clientId` nor `client`.
  */
 export const createAppointmentBaseSchema = z.object({
+  ...intakeBookingShape,
   /** Optional client-generated UUID (v7) so offline clients can pre-assign ids. */
   id: idSchema.optional(),
   staffId: idSchema,

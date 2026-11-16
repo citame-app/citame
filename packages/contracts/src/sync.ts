@@ -235,6 +235,9 @@ export const syncRejectReasonSchema = z.enum([
   "not_found",
   /** The row is in a state that does not allow the change (for example a cancelled appointment). */
   "invalid_state",
+  /** A human must complete the current published forms before retrying this proposal. */
+  "intake_required",
+  "booking_intent_conflict",
 ]);
 export type SyncRejectReason = z.infer<typeof syncRejectReasonSchema>;
 

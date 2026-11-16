@@ -9,6 +9,7 @@ import {
   pageSchema,
   pageSizeSchema,
 } from "./common";
+import { intakeBookingShape } from "./intake";
 
 const time = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
 export const waitlistPolicySchema = z.object({
@@ -112,6 +113,7 @@ export const waitlistDeclineSchema = waitlistCancelSchema
   .strict();
 export const waitlistAcceptSchema = z
   .object({
+    ...intakeBookingShape,
     version: z.number().int().positive(),
     offerId: idSchema,
     idempotencyKey: z.string().min(8).max(120),

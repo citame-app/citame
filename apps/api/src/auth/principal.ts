@@ -3,6 +3,7 @@ import { clientProfile, type Database, staffProfile, user } from "@sob/db";
 import { and, eq, isNull } from "drizzle-orm";
 import type { MiddlewareHandler } from "hono";
 import { DomainError } from "../errors";
+import type { Tx } from "../tx";
 import type { Auth } from "./auth";
 
 /** The authenticated caller as the authorization layer sees it. */
@@ -25,7 +26,7 @@ export type AppEnv = { Variables: { principal: Principal } };
  * trusting the cached session payload, so a role change takes effect immediately even though
  * sessions live in Valkey for days.
  */
-export async function loadPrincipal(db: Database, userId: string): Promise<Principal | null> {
+export async function loadPrincipal(db: Database | Tx, userId: string): Promise<Principal | null> {
   const [row] = await db.select().from(user).where(eq(user.id, userId));
   if (!row) return null;
 

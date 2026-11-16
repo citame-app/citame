@@ -13,6 +13,10 @@ export function describeProblem(error: unknown): Problem {
   if (error instanceof NetworkError) return { messageKey: "problem.offline", recovery: "retry" };
   if (error instanceof ApiError) {
     switch (error.code) {
+      case "intake_required":
+        return { messageKey: "intake.changed", recovery: "reload" };
+      case "booking_intent_conflict":
+        return { messageKey: "intake.conflict", recovery: "none" };
       case "slot_taken":
         return { messageKey: "problem.slotTaken", recovery: "pickAnotherTime" };
       case "slot_unavailable":

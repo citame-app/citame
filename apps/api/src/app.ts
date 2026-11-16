@@ -16,6 +16,12 @@ import { appointmentsRoutes } from "./modules/appointments/routes";
 import { availabilityRoutes } from "./modules/availability/routes";
 import { clientAdminRoutes } from "./modules/clients/admin-routes";
 import {
+  intakeAdminRoutes,
+  intakeClientRoutes,
+  intakeRoutes,
+  intakeSelfRoutes,
+} from "./modules/clients/intake-routes";
+import {
   commerceAdminRoutes,
   commerceClientRoutes,
   redsysNotificationRoutes,
@@ -273,6 +279,9 @@ export function createApp(input: AppDeps): App {
   app.route("/me", commerceClientRoutes(deps));
   app.route("/me", rewardsClientRoutes(deps));
   app.route("/me/waitlist", waitlistClientRoutes(deps));
+  app.route("/me/intake", intakeSelfRoutes(deps));
+  app.use("/intake/*", requireAuth(auth, deps.db));
+  app.route("/intake", intakeRoutes(deps));
 
   app.use("/admin/*", requireAuth(auth, deps.db));
   app.route("/admin", adminRoutes(deps, auth));
@@ -291,6 +300,8 @@ export function createApp(input: AppDeps): App {
   app.route("/admin/services", serviceAdminRoutes(deps));
   app.route("/admin/staff", staffAdminRoutes(deps));
   app.route("/admin/clients", clientAdminRoutes(deps));
+  app.route("/admin/clients", intakeClientRoutes(deps));
+  app.route("/admin/intake-forms", intakeAdminRoutes(deps));
   app.route("/admin/reports", reportRoutes(deps));
   app.route("/admin/settings", settingsAdminRoutes(deps));
   app.route("/admin/notifications", notificationAdminRoutes(deps));

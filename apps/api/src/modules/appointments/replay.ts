@@ -1,6 +1,7 @@
-import type { CreateAppointmentRequest } from "@sob/contracts";
+import { type CreateAppointmentRequest, intakeBookingIdentity } from "@sob/contracts";
 import { appointment, auditLog, type Database } from "@sob/db";
 import { and, eq, isNull } from "drizzle-orm";
+import { DomainError } from "../../errors";
 import { protectionView } from "../booking-protection/value";
 import { appointmentIntentFingerprint } from "./intent";
 import { loadSeriesReferences } from "./series-references";
@@ -42,7 +43,14 @@ export async function findAppointmentReplay(
     (a, b) => a.position - b.position,
   );
   if (created.metadata.requestFingerprint !== undefined) {
-    if (created.metadata.requestFingerprint !== appointmentIntentFingerprint(request)) return null;
+    if (created.metadata.requestFingerprint !== appointmentIntentFingerprint(request)) {
+      if (created.metadata.intakeConfirmed || intakeBookingIdentity(request))
+        throw new DomainError(
+          "booking_intent_conflict",
+          "This booking identifier already contains a different confirmed statement",
+        );
+      return null;
+    }
   } else if (
     !request.clientId ||
     row.notes !== (request.notes ?? null) ||

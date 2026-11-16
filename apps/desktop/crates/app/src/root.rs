@@ -706,6 +706,8 @@ impl Root {
             "conflict" => Key::ConflictStale,
             "not_found" => Key::ConflictNotFound,
             "invalid_state" => Key::ConflictInvalidState,
+            "intake_required" => Key::ConflictIntakeRequired,
+            "booking_intent_conflict" => Key::ConflictBookingIntent,
             "forbidden" => Key::ConflictForbidden,
             _ => Key::ConflictInvalid,
         })
@@ -2426,6 +2428,7 @@ mod tests {
                 root.conflict_reason("slot_taken"),
                 "That time is no longer available."
             );
+            assert_eq!(root.conflict_reason("intake_required"), "Complete the current required forms in the web application, then retry this proposal. If you booked there, discard this proposal to avoid another visit.");
         })
         .unwrap();
     }

@@ -9,6 +9,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
+import { ConfirmDialog } from "~/components/ui/dialog";
 import { TextField } from "~/components/ui/field";
 import { SelectField, TextAreaField } from "~/components/ui/select-field";
 import { Sheet } from "~/components/ui/sheet";
@@ -16,8 +17,10 @@ import { useToast } from "~/components/ui/toast";
 import { CatalogChoices } from "~/features/booking/catalog-choices";
 import { createBookingIntent } from "~/features/booking/intent";
 import { acceptedServiceQuotes } from "~/features/booking/quotes";
+import { BookingForms, useBookingForms } from "~/features/intake/booking-forms";
 import { useI18n } from "~/i18n/react";
 import { adminStaffQuery, clientsQuery } from "~/lib/admin-queries";
+import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { formatDateLong, formatDuration, formatMoney, formatTime, localDateOf } from "~/lib/format";
 import { salonQuery, servicesQuery } from "~/lib/queries";
@@ -88,7 +91,19 @@ export function NewAppointmentSheet({
   const [cadence, setCadence] = useState<"none" | "weekly" | "monthly">("none");
   const [interval, setInterval] = useState("1");
   const [count, setCount] = useState("3");
+  const intake = useBookingForms({
+    serviceIds: values.serviceIds,
+    enabled: open && values.serviceIds.length > 0,
+    team: true,
+    subjectKey:
+      values.clientMode === "existing"
+        ? values.clientId
+        : `walkin:${values.newName}:${values.newPhone}`,
+    clientId: values.clientMode === "existing" ? values.clientId || undefined : undefined,
+    series: cadence !== "none",
+  });
   const [seriesError, setSeriesError] = useState(false);
+  const [discardIntake, setDiscardIntake] = useState(false);
   const [review, setReview] = useState<{
     signature: string;
     input: AppointmentSeriesInput;
@@ -111,6 +126,7 @@ export function NewAppointmentSheet({
     }
   }
   const signature = JSON.stringify({
+    intake: intake.payload,
     values,
     date,
     time,
@@ -141,6 +157,8 @@ export function NewAppointmentSheet({
     setCount("3");
     setReview(null);
     setSeriesError(false);
+    setDiscardIntake(false);
+    intake.reset();
   }, [open, initial.date, initial.minutesOfDay, initial.staffId]);
 
   const debounced = useDebounced(search.trim());
@@ -170,6 +188,7 @@ export function NewAppointmentSheet({
   });
   const create = useMutation({
     mutationFn: async () => {
+      if (!intake.ready) throw new Error("Complete the current forms");
       if (cadence !== "none") {
         if (!reviewed) throw new Error("Review the recurring visits first");
         const series = await api().appointmentSeries.create({
@@ -182,6 +201,7 @@ export function NewAppointmentSheet({
         return first;
       }
       const request = {
+        ...intake.payload,
         ...buildWalkInRequest({ ...values, startsAt: resolveStart() }),
         serviceQuotes: acceptedServiceQuotes(chosen),
         ...(waiver.trim() ? { protectionWaiverReason: waiver.trim() } : {}),
@@ -201,6 +221,7 @@ export function NewAppointmentSheet({
       onOpenChange(false);
     },
     onError: (error) => {
+      if (error instanceof ApiError && error.code === "intake_required") void intake.refresh();
       const problem = describeProblem(error);
       setFailure(problem);
       if (problem.recovery === "reload") {
@@ -231,12 +252,14 @@ export function NewAppointmentSheet({
       Number(count) >= 2 &&
       Number(count) <= 12;
     setSeriesError(cadence !== "none" && !validSeries);
-    if (Object.keys(found).length !== 0 || (cadence !== "none" && !validSeries)) return;
+    if (Object.keys(found).length !== 0 || (cadence !== "none" && !validSeries) || !intake.ready)
+      return;
     if (cadence !== "none" && !reviewed) {
       const { id: _id, ...booking } = buildWalkInRequest({ ...values, startsAt });
       preview.mutate({
         signature,
         input: {
+          ...intake.payload,
           ...booking,
           serviceQuotes: acceptedServiceQuotes(chosen),
           cadence,
@@ -263,20 +286,35 @@ export function NewAppointmentSheet({
   const errorText = (key: keyof WalkInErrors) =>
     errors[key] ? t(`walkin.error.${key}` as "walkin.error.client") : undefined;
 
+  const close = () => {
+    if (create.isPending || preview.isPending) return;
+    if (intake.dirty) setDiscardIntake(true);
+    else onOpenChange(false);
+  };
+
   return (
     <Sheet
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={(next) => {
+        if (next) onOpenChange(true);
+        else close();
+      }}
       title={t("walkin.title")}
       description={t("walkin.description")}
       footer={
         <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-          <Button variant="secondary" onClick={() => onOpenChange(false)}>
+          <Button
+            variant="secondary"
+            onClick={close}
+            disabled={create.isPending || preview.isPending}
+          >
             {t("admin.cancel")}
           </Button>
           <Button
             loading={create.isPending || preview.isPending}
-            disabled={Boolean(reviewed?.data.occurrences.some((o) => !o.available))}
+            disabled={
+              !intake.ready || Boolean(reviewed?.data.occurrences.some((o) => !o.available))
+            }
             onClick={submit}
           >
             {cadence === "none"
@@ -552,6 +590,7 @@ export function NewAppointmentSheet({
           )}
         </fieldset>
 
+        <BookingForms state={intake} />
         <label className="flex items-start gap-3">
           <input
             type="checkbox"
@@ -565,6 +604,20 @@ export function NewAppointmentSheet({
           </span>
         </label>
       </form>
+      <ConfirmDialog
+        open={discardIntake}
+        onOpenChange={setDiscardIntake}
+        title={t("intake.discard")}
+        description={t("admin.unsaved.body")}
+        confirmLabel={t("intake.discard")}
+        cancelLabel={t("admin.cancel")}
+        destructive
+        onConfirm={() => {
+          intake.reset();
+          setDiscardIntake(false);
+          onOpenChange(false);
+        }}
+      />
     </Sheet>
   );
 }

@@ -9,6 +9,7 @@ import { ChevronLeftIcon } from "~/components/ui/icons";
 import { TextAreaField } from "~/components/ui/select-field";
 import { ErrorState, Skeleton } from "~/components/ui/states";
 import { useToast } from "~/components/ui/toast";
+import { IntakeRecord } from "~/features/intake/record";
 import { useI18n } from "~/i18n/react";
 import { adminStaffQuery, clientDetailQuery } from "~/lib/admin-queries";
 import { ApiError } from "~/lib/api/client";
@@ -45,6 +46,7 @@ export function ClientDetail({
   const [blocked, setBlocked] = useState(false);
   const [controlsDirty, setControlsDirty] = useState(false);
   const [photosDirty, setPhotosDirty] = useState(false);
+  const [intakeDirty, setIntakeDirty] = useState(false);
 
   const client = query.data?.client;
   // Refresh contact values when those values change; metadata timestamps must preserve the draft.
@@ -140,7 +142,7 @@ export function ClientDetail({
 
   return (
     <div className="space-y-8">
-      <UnsavedGuard dirty={dirty || controlsDirty || photosDirty} />
+      <UnsavedGuard dirty={dirty || controlsDirty || photosDirty || intakeDirty} />
       <div>
         <Link
           to="/admin/clients"
@@ -202,6 +204,7 @@ export function ClientDetail({
 
       <ClientControlsEditor clientId={clientId} onDirtyChange={setControlsDirty} />
       <ClientPhotos clientId={clientId} onDirtyChange={setPhotosDirty} />
+      <IntakeRecord clientId={clientId} onDirtyChange={setIntakeDirty} />
 
       <section aria-labelledby="client-upcoming" className="space-y-3">
         <h3 id="client-upcoming" className="text-heading">

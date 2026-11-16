@@ -112,6 +112,8 @@ keys! {
     ConflictStale => ("The appointment changed on the server.", "El turno cambió en el servidor."),
     ConflictNotFound => ("The appointment no longer exists.", "El turno ya no existe."),
     ConflictInvalidState => ("That change is not allowed in the appointment's current state.", "Ese cambio no está permitido en el estado actual del turno."),
+    ConflictIntakeRequired => ("Complete the current required forms in the web application, then retry this proposal. If you booked there, discard this proposal to avoid another visit.", "Completa los formularios obligatorios actuales en la aplicación web y vuelve a intentar esta propuesta. Si reservas allí, descarta esta propuesta para evitar una segunda cita."),
+    ConflictBookingIntent => ("This booking was already confirmed with different answers. Review the existing visit before creating another proposal.", "Esta reserva ya se confirmó con otras respuestas. Revisa la cita existente antes de crear otra propuesta."),
     ConflictForbidden => ("You are not allowed to make that change.", "No tienes permiso para hacer ese cambio."),
     ConflictInvalid => ("The server rejected that change.", "El servidor rechazó ese cambio."),
     ConflictPickNewTime => ("Pick another time", "Elegir otro horario"),

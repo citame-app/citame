@@ -39,6 +39,7 @@ import {
   updateProtection,
 } from "../booking-protection/value";
 import { assertClientCanBook } from "../clients/controls";
+import { prepareBookingIntake, recordBookingIntake } from "../clients/intake-booking";
 import { refreshAppointmentCheckout } from "../commerce/service";
 import { reassignAppointmentResources, reserveResources } from "../resources/reservations";
 import { releaseUnfulfilledAppointmentRewards } from "../rewards/value";
@@ -189,6 +190,14 @@ export async function createAppointment(
       });
       const clientId = await resolveClient(tx, request);
       await assertClientCanBook(tx, clientId);
+      const intake = await prepareBookingIntake(
+        tx,
+        request,
+        clientId,
+        actor?.userId,
+        now,
+        services,
+      );
       const [row] = await tx
         .insert(appointment)
         .values({
@@ -201,6 +210,7 @@ export async function createAppointment(
         })
         .returning();
       if (!row) throw new Error("Appointment insert returned no row");
+      await recordBookingIntake(tx, intake, clientId, row.id, now);
       const snapshots = await tx
         .insert(appointmentService)
         .values(
@@ -230,6 +240,9 @@ export async function createAppointment(
           entityId: row.id,
           metadata: {
             requestFingerprint: appointmentIntentFingerprint(request),
+            intakeConfirmed: Boolean(
+              request.intakeResponses?.length || request.intakeSubmissionIds?.length,
+            ),
             staffId: row.staffId,
             clientId: row.clientId,
             startsAt: row.startsAt.toISOString(),

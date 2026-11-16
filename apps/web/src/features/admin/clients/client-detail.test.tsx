@@ -61,6 +61,7 @@ beforeEach(() => {
   };
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
+    if (url.pathname.endsWith("/intake")) return json({ submissions: [], nextCursor: null });
     if (url.pathname.endsWith("/controls"))
       return json({
         clientId: CLIENT,

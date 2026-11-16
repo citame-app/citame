@@ -24,6 +24,7 @@ import { lockCalendars, lockScheduling, type Tx } from "../../tx";
 import { totalBlockMinutes } from "../availability/compute";
 import { getBookingPolicy } from "../booking-protection/policy";
 import { protectionView } from "../booking-protection/value";
+import { applicableIntakeForms } from "../clients/intake";
 import { filterResourceAvailability } from "../resources/reservations";
 import { getBookableServices } from "../services/service";
 import { getSalonSettings } from "../settings/service";
@@ -115,7 +116,17 @@ async function previewInTransaction(
     occurrence.available &&= resourceStarts.has(occurrence.startsAt);
   return {
     timezone: settings.timezone,
-    reviewHash: hash({ input, services, settings, policy, starts }),
+    reviewHash: hash({
+      input,
+      services,
+      settings,
+      policy,
+      starts,
+      intake: (await applicableIntakeForms(tx, services)).map((form) => [
+        form.id,
+        form.contentHash,
+      ]),
+    }),
     policy,
     occurrences,
     perVisitCents: services.reduce((n, s) => n + s.priceCents, 0),

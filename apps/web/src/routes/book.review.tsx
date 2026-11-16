@@ -18,6 +18,7 @@ import {
 import { bookingActions, bookingStore } from "~/features/booking/store";
 import { BookingSummary } from "~/features/booking/summary";
 import { useBooking } from "~/features/booking/use-booking";
+import { BookingForms, useBookingForms } from "~/features/intake/booking-forms";
 import { useI18n } from "~/i18n/react";
 import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
@@ -71,12 +72,19 @@ function ReviewStep() {
 
   const isClient = session?.user.role === "client";
   const isStaff = session !== null && !isClient;
+  const intake = useBookingForms({
+    serviceIds: search.services,
+    enabled: Boolean(isClient),
+    subjectKey: session?.user.id ?? "guest",
+  });
 
   const confirm = useMutation({
     mutationFn: () => {
       if (!policyAccepted) throw new Error("Review current booking policy");
+      if (!intake.ready) throw new Error("Complete the current forms");
       if (!search.slot || !search.slotStaff) throw new Error("incomplete booking");
       const request = {
+        ...intake.payload,
         staffId: search.slotStaff,
         serviceIds: search.services,
         serviceQuotes: acceptedServiceQuotes(selectedServices),
@@ -99,6 +107,15 @@ function ReviewStep() {
       });
     },
     onError: (error) => {
+      if (error instanceof ApiError && error.code === "intake_required") {
+        void intake.refresh();
+        toast.error(t("intake.changed"));
+        return;
+      }
+      if (error instanceof ApiError && error.code === "booking_intent_conflict") {
+        toast.error(t("intake.conflict"));
+        return;
+      }
       if (
         error instanceof ApiError &&
         (error.code === "version_conflict" || error.code === "not_found")
@@ -137,13 +154,20 @@ function ReviewStep() {
     },
   });
 
+  const intakeSelection = JSON.stringify(intake.payload);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset only a stale-form error when the reviewed form selection changes
+  useEffect(() => {
+    if (confirm.error instanceof ApiError && confirm.error.code === "intake_required")
+      confirm.reset();
+  }, [intakeSelection]);
+
   function onCta() {
     if (!session) {
       authRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" });
       authRef.current?.focus();
       return;
     }
-    if (policyAccepted) confirm.mutate();
+    if (policyAccepted && intake.ready) confirm.mutate();
   }
 
   return (
@@ -161,12 +185,13 @@ function ReviewStep() {
           timeZone={salon.timezone}
           ctaLabel={session ? t("booking.cta.confirm") : t("booking.cta.signInToConfirm")}
           ctaLoading={confirm.isPending}
-          ctaDisabled={isStaff || !policyAccepted}
+          ctaDisabled={isStaff || !policyAccepted || !intake.ready}
           onCta={onCta}
         />
       }
     >
       <div className="space-y-6">
+        <BookingForms state={intake} />
         {policy.isError && (
           <ErrorState error={policy.error} onRetry={() => void policy.refetch()} />
         )}

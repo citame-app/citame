@@ -10,6 +10,7 @@ export * from "./client-photo";
 export * from "./commerce";
 export * from "./gift-card";
 export * from "./gift-card-ledger";
+export * from "./intake";
 export * from "./inventory";
 export * from "./inventory-product";
 export * from "./notification";

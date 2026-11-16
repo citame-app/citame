@@ -14,7 +14,9 @@ import { useToast } from "~/components/ui/toast";
 import { invalidateCommerce } from "~/features/admin/commerce/invalidate";
 import { useNow } from "~/features/admin/use-now";
 import { BookingPolicyConsent } from "~/features/booking/protection";
+import { BookingForms, useBookingForms } from "~/features/intake/booking-forms";
 import { useI18n } from "~/i18n/react";
+import { ApiError } from "~/lib/api/client";
 import type { CommerceMode } from "~/lib/api/commerce-endpoints";
 import { api } from "~/lib/api/instance";
 import { formatDateLong, formatMoney, formatTime, localDateOf } from "~/lib/format";
@@ -40,10 +42,19 @@ export function WaitlistOfferReview({
   const [waiver, setWaiver] = useState("");
   const [key] = useState(() => crypto.randomUUID());
   const offer = entry.offer;
+  const intake = useBookingForms({
+    serviceIds: entry.serviceIds,
+    enabled: Boolean(offer) && entry.canManage,
+    team: mode === "admin",
+    subjectKey: entry.clientId,
+    clientId: mode === "admin" ? entry.clientId : undefined,
+  });
   const accept = useMutation({
     mutationFn: () => {
       if (!offer) throw new Error("Missing waitlist offer");
+      if (!intake.ready) throw new Error("Complete the current forms");
       return api().waitlist.accept(mode, entry.id, {
+        ...intake.payload,
         version: entry.version,
         offerId: offer.id,
         expectedTotalCents: offer.priceCents,
@@ -60,6 +71,9 @@ export function WaitlistOfferReview({
       void invalidateCommerce(queries);
       onBooked(result.appointment);
     },
+    onError: (error) => {
+      if (error instanceof ApiError && error.code === "intake_required") void intake.refresh();
+    },
   });
   if (!offer) return null;
   const expired = Date.parse(offer.expiresAt) <= now.getTime();
@@ -71,6 +85,7 @@ export function WaitlistOfferReview({
         : permissionsFor(role, accessPreset).refunds && waiver.trim().length >= 8));
   return (
     <div className="min-w-0 space-y-4">
+      <BookingForms state={intake} />
       <p className="text-heading">
         {formatDateLong(localDateOf(offer.startsAt, entry.timezone), locale)} ·{" "}
         {formatTime(offer.startsAt, entry.timezone, locale)}
@@ -132,7 +147,7 @@ export function WaitlistOfferReview({
       <Button
         onClick={() => accept.mutate()}
         loading={accept.isPending}
-        disabled={!online || expired || !allowed}
+        disabled={!online || expired || !allowed || !intake.ready}
         className="max-w-full whitespace-normal!"
       >
         {t("waitlist.accept")}

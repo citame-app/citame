@@ -22,6 +22,7 @@ export * from "./commerce";
 export * from "./common";
 export * from "./errors";
 export * from "./gift-cards";
+export * from "./intake";
 export * from "./inventory";
 export * from "./mcp";
 export * from "./notifications";

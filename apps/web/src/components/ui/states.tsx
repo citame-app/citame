@@ -44,6 +44,11 @@ export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () =>
   } else if (error instanceof ApiError && error.code === "rate_limited") {
     title = t("error.rateLimited.title");
     body = t("error.rateLimited.body", { count: error.retryAfterSeconds ?? 30 });
+  } else if (
+    error instanceof ApiError &&
+    (error.code === "intake_required" || error.code === "booking_intent_conflict")
+  ) {
+    body = t(error.code === "intake_required" ? "intake.changed" : "intake.conflict");
   }
   return (
     <div
