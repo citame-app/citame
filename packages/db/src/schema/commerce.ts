@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   check,
   index,
   integer,
@@ -16,7 +17,7 @@ import { clientProfile } from "./client";
 import { giftCard } from "./gift-card";
 import { createdAt, primaryId, timestamptz, updatedAt } from "./helpers";
 import { retailProduct } from "./inventory-product";
-import { passPeriod } from "./pass";
+import { passMandate, passPeriod } from "./pass";
 import { staffProfile } from "./staff";
 
 export const checkoutStatus = pgEnum("checkout_status", [
@@ -148,6 +149,9 @@ export const checkoutPayment = pgTable(
     amountCents: integer().notNull(),
     currency: text().notNull().default("EUR"),
     giftCardId: uuid().references(() => giftCard.id),
+    mandateRequested: boolean().notNull().default(false),
+    merchantInitiated: boolean().notNull().default(false),
+    recurringMandateId: uuid().references(() => passMandate.id),
     bankOrder: text().unique(),
     bankResponse: text(),
     authorizationCode: text(),

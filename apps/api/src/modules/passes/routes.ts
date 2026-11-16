@@ -15,6 +15,8 @@ import type { AppDeps } from "../../app";
 import { requirePermission } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
+import { recurringSettings } from "../../payments/recurring-settings";
+import { RedsysGateway } from "../../payments/redsys";
 import { createPlan, listPlans, updatePlan } from "./catalog";
 import {
   authorizePass,
@@ -61,6 +63,13 @@ export function planAdminRoutes(deps: AppDeps) {
     );
 }
 export function passRoutes(deps: AppDeps) {
+  const gateway =
+    deps.paymentGateway === undefined
+      ? deps.config.payments.redsys
+        ? new RedsysGateway(deps.config.payments.redsys)
+        : null
+      : deps.paymentGateway;
+  const automaticAvailable = Boolean(recurringSettings(deps.config, gateway));
   return new Hono<AppEnv>()
     .use("*", async (c, next) => {
       authorizePass(c.get("principal"));
@@ -77,6 +86,7 @@ export function passRoutes(deps: AppDeps) {
           deps.db,
           parseOrThrow(benefitPurchaseSchema, await readJson(c)),
           c.get("principal"),
+          automaticAvailable,
         ),
         201,
       ),

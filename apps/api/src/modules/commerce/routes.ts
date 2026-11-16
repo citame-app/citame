@@ -17,6 +17,7 @@ import type { AppDeps } from "../../app";
 import type { AppEnv } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { errorBody, parseOrThrow, readJson } from "../../http";
+import { recurringSettings } from "../../payments/recurring-settings";
 import { InvalidBankNotificationError, RedsysGateway } from "../../payments/redsys";
 import {
   adjustCash,
@@ -59,6 +60,7 @@ export function commerceAdminRoutes(deps: AppDeps) {
         bizum: Boolean(gateway && deps.config.payments.bizumEnabled),
         currency: "EUR",
         giftCards: true,
+        recurring: Boolean(recurringSettings(deps.config, gateway)),
       }),
     )
     .get("/checkouts", async (c) =>
@@ -89,6 +91,7 @@ export function commerceAdminRoutes(deps: AppDeps) {
           c.get("principal"),
           gateway,
           deps.config.payments.bizumEnabled,
+          recurringSettings(deps.config, gateway),
         ),
         201,
       ),
@@ -174,6 +177,7 @@ export function commerceClientRoutes(deps: AppDeps) {
         bizum: Boolean(gateway && deps.config.payments.bizumEnabled),
         currency: "EUR",
         giftCards: true,
+        recurring: Boolean(recurringSettings(deps.config, gateway)),
       }),
     )
     .post("/checkouts", async (c) =>
@@ -209,6 +213,7 @@ export function commerceClientRoutes(deps: AppDeps) {
           c.get("principal"),
           gateway,
           deps.config.payments.bizumEnabled,
+          recurringSettings(deps.config, gateway),
         ),
         201,
       ),
@@ -229,7 +234,12 @@ export function redsysNotificationRoutes(deps: AppDeps) {
         if (Object.hasOwn(fields, key)) throw new InvalidBankNotificationError();
         fields[key] = value;
       }
-      await receiveBankNotification(deps.db, gateway, fields);
+      await receiveBankNotification(
+        deps.db,
+        gateway,
+        fields,
+        recurringSettings(deps.config, gateway),
+      );
       return c.text("OK", 200);
     } catch (error) {
       // No provider payloads or error strings are logged: bank fields may contain personal data.

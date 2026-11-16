@@ -1,4 +1,30 @@
 export const passesEn = {
+  "passes.renewalPayment": "Renewal payment",
+  "passes.payManually": "Pay each renewal manually",
+  "passes.payAutomatically": "Renew automatically by card",
+  "passes.recurringHelp":
+    "Each new period uses this agreed price. Card authentication is required to set up automatic payment. A charge already dispatched may still settle after you stop renewal.",
+  "passes.recurringAgreement_one":
+    "I authorize automatic card payments of {amount} each month until I stop renewal.",
+  "passes.recurringAgreement_other":
+    "I authorize automatic card payments of {amount} every {count} months until I stop renewal.",
+  "passes.termsChanged": "Plan terms changed. Review the current price and authorize it again.",
+  "passes.recurringUnavailable":
+    "Automatic renewal is unavailable. Choose manual payment or retry later.",
+  "passes.servicesChanged":
+    "Eligible services changed. Ask the salon to review this plan before purchasing.",
+  "passes.setupCard": "Complete this purchase by card to set up automatic renewal.",
+  "passes.autoReady":
+    "Automatic card renewal is set up at the agreed price. You can stop future renewals here.",
+  "passes.autoAttention":
+    "Automatic renewal needs attention. Pay a renewal by card or contact the salon.",
+  "passes.autoInvoice":
+    "An unpaid renewal invoice is open. Complete or reconcile it before another renewal; no second automatic attempt will be made.",
+  "passes.automaticCharge": "Automatic membership card payment",
+  "passes.cancelPurchase": "Cancel unpaid purchase",
+  "passes.cancelPurchaseHelp":
+    "Cancelling an unpaid renewal also stops future automatic renewal. Already paid benefits remain valid.",
+
   "passes.title": "Packages & memberships",
   "passes.lead":
     "Prepaid visits and membership benefits, with each paid period recorded separately.",
@@ -45,6 +71,7 @@ export const passesEn = {
   "passes.from": "Valid from: {date}",
   "passes.until": "Valid until: {date}",
   "passes.noExpiry": "No expiry date",
+  "passes.awaitingValidity": "Validity begins after payment.",
   "passes.renew": "Renew membership",
   "passes.cancel": "Stop renewal",
   "passes.reason": "Cancellation reason",
@@ -75,6 +102,33 @@ export const passesEn = {
     "Prices include tax. Existing purchases keep their original terms when you edit or archive a plan.",
 } as const;
 export const passesEsAR: Record<keyof typeof passesEn, string> = {
+  "passes.renewalPayment": "Pago de la renovación",
+  "passes.payManually": "Pagar cada renovación manualmente",
+  "passes.payAutomatically": "Renovar automáticamente con tarjeta",
+  "passes.recurringHelp":
+    "Cada periodo nuevo usa este precio acordado. La configuración requiere autenticar la tarjeta. Un cargo ya enviado al banco puede completarse después de detener la renovación.",
+  "passes.recurringAgreement_one":
+    "Autorizo cobros automáticos con tarjeta de {amount} cada mes hasta detener la renovación.",
+  "passes.recurringAgreement_other":
+    "Autorizo cobros automáticos con tarjeta de {amount} cada {count} meses hasta detener la renovación.",
+  "passes.termsChanged":
+    "Las condiciones han cambiado. Revisa el precio actual y vuelve a autorizarlo.",
+  "passes.recurringUnavailable":
+    "La renovación automática no está disponible. Elige pago manual o inténtalo más tarde.",
+  "passes.servicesChanged":
+    "Han cambiado los servicios incluidos. Consulta con el salón antes de comprar este plan.",
+  "passes.setupCard": "Completa esta compra con tarjeta para configurar la renovación automática.",
+  "passes.autoReady":
+    "La renovación automática con tarjeta está configurada al precio acordado. Puedes detener las renovaciones futuras aquí.",
+  "passes.autoAttention":
+    "La renovación automática necesita atención. Paga una renovación con tarjeta o consulta con el salón.",
+  "passes.autoInvoice":
+    "Hay una renovación pendiente de pago. Completa o concilia ese recibo antes de otra renovación; no se hará un segundo intento automático.",
+  "passes.automaticCharge": "Pago automático de membresía con tarjeta",
+  "passes.cancelPurchase": "Cancelar compra sin pagar",
+  "passes.cancelPurchaseHelp":
+    "Cancelar una renovación sin pagar también detiene las renovaciones automáticas futuras. Las ventajas ya pagadas siguen vigentes.",
+
   "passes.title": "Bonos y membresías",
   "passes.lead":
     "Visitas prepagadas y ventajas de membresía, con cada periodo pagado por separado.",
@@ -121,6 +175,7 @@ export const passesEsAR: Record<keyof typeof passesEn, string> = {
   "passes.from": "Válido desde: {date}",
   "passes.until": "Válido hasta: {date}",
   "passes.noExpiry": "Sin fecha de caducidad",
+  "passes.awaitingValidity": "La validez comienza después del pago.",
   "passes.renew": "Renovar membresía",
   "passes.cancel": "Detener renovación",
   "passes.reason": "Motivo de cancelación",

@@ -199,3 +199,40 @@ test("a client can select gift tender when online banking is disabled and sends 
     amountCents: 2500,
   });
 });
+test("a client can explicitly cancel an unpaid pass purchase without a manual payment capability", async () => {
+  const fallback = globalThis.fetch;
+  let voided = false;
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    const path = new URL(String(input), "http://localhost").pathname;
+    if (path.endsWith(`/checkouts/${id}/void`)) {
+      voided = true;
+      return reply({ ...sale(), status: "void", balanceCents: 0 });
+    }
+    if (path.endsWith(`/checkouts/${id}`))
+      return reply({
+        ...sale(),
+        clientId: id,
+        status: voided ? "void" : "open",
+        balanceCents: voided ? 0 : 2500,
+        lines: [
+          {
+            id,
+            kind: "membership_period",
+            passPeriodId: id,
+            description: "Monthly visits",
+            quantity: 1,
+            unitAmountCents: 2500,
+            taxBasisPoints: 0,
+          },
+        ],
+      });
+    return fallback(input, init);
+  }) as unknown as typeof fetch;
+  renderApp(<CheckoutPanel id={id} mode="client" role="client" />);
+  await screen.findByText("Monthly visits");
+  fireEvent.click(screen.getByText("Cancel unpaid purchase", { selector: "summary" }));
+  fireEvent.click(screen.getByRole("button", { name: "Cancel unpaid purchase" }));
+  await waitFor(() => expect(voided).toBe(true));
+  await screen.findByText("Voided");
+  expect(screen.queryByRole("button", { name: "Continue to secure payment" })).toBeNull();
+});

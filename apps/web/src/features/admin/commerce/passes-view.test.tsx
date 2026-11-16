@@ -25,6 +25,7 @@ const pass = {
   id,
   planId: id,
   clientId: id,
+  clientName: "Known buyer",
   kind: "package",
   name: "Three visits",
   priceCents: 1000,
@@ -45,9 +46,11 @@ const pass = {
 };
 let posts: Record<string, unknown>[];
 let membership = false;
+let awaitingPayment = false;
 beforeEach(() => {
   posts = [];
   membership = false;
+  awaitingPayment = false;
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     const path = new URL(String(input), "http://localhost").pathname;
     const body = init?.body ? JSON.parse(String(init.body)) : {};
@@ -65,7 +68,10 @@ beforeEach(() => {
     if (path.endsWith("/benefit-plans")) return Response.json({ plans: [] });
     if (path.endsWith(`/passes/${id}`)) return Response.json(current);
     if (path.endsWith("/periods"))
-      return Response.json({ periods: [period], pagination: { page: 1, pageSize: 20, total: 1 } });
+      return Response.json({
+        periods: [awaitingPayment ? { ...period, status: "pending", startsAt: null } : period],
+        pagination: { page: 1, pageSize: 20, total: 1 },
+      });
     if (path.endsWith("/cancel"))
       return Response.json({ ...current, cancelAtPeriodEnd: true, version: 3 });
     return Response.json({ passes: [current], pagination: { page: 1, pageSize: 20, total: 1 } });
@@ -96,4 +102,18 @@ test("membership cancellation requires an explicit reason and submits the curren
   });
   fireEvent.click(screen.getByRole("button", { name: "Stop renewal" }));
   await waitFor(() => expect(posts).toContainEqual({ version: 2, reason: "No longer needed" }));
+});
+
+test("operators can distinguish buyers with the same plan name", async () => {
+  renderApp(<PassesView mode="admin" role="owner" />);
+  expect(await screen.findByText("Known buyer")).toBeInTheDocument();
+});
+
+test("unpaid periods explain activation instead of promising no expiry", async () => {
+  awaitingPayment = true;
+  renderApp(<PassesView mode="client" role="client" />);
+  await screen.findByText("Three visits");
+  fireEvent.click(screen.getByRole("button", { name: "View pass" }));
+  expect(await screen.findByText("Validity begins after payment.")).toBeInTheDocument();
+  expect(screen.queryByText("No expiry date")).toBeNull();
 });

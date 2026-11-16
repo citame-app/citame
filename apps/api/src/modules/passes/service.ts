@@ -1,5 +1,6 @@
 import {
   type BenefitPurchaseInput,
+  MEMBERSHIP_RECURRING_CONSENT_VERSION,
   type PassContract,
   type PassPeriod,
   permissionsFor,
@@ -8,7 +9,6 @@ import {
   benefitPlan,
   checkout,
   checkoutLine,
-  checkoutPayment,
   clientProfile,
   type Database,
   passContract,
@@ -24,7 +24,8 @@ import type { Tx } from "../../tx";
 import { getCheckoutInTransaction } from "../commerce/service";
 import { getSalonSettings } from "../settings/service";
 import { intentHash, validateServices } from "./catalog";
-import { currentMembershipIndex } from "./terms";
+import { revokeCardMandate } from "./mandates";
+import { currentMembershipIndex, membershipTermsHash } from "./terms";
 export type Connection = Database | Tx;
 export function authorizePass(p: Principal) {
   if (p.role !== "client") requirePermission(p, "commerce");
@@ -97,10 +98,15 @@ export async function passView(
     .orderBy(desc(passPeriod.index))
     .limit(periodLimit)
     .offset((periodPage - 1) * periodLimit);
+  const [buyer] = await db
+    .select({ name: clientProfile.name })
+    .from(clientProfile)
+    .where(eq(clientProfile.id, row.clientId));
   return {
     id: row.id,
     planId: row.planId,
     clientId: row.clientId,
+    clientName: buyer?.name,
     kind: row.kind as "package" | "membership",
     name: row.name,
     priceCents: row.priceCents,
@@ -157,11 +163,11 @@ export async function listPasses(
   );
 }
 /** Private invoice factory: caller has authenticated the buyer and frozen the plan terms. */
-async function newPeriod(
+export async function createPassPeriodInvoice(
   tx: Tx,
   contract: typeof passContract.$inferSelect,
   index: number,
-  p: Principal,
+  actorUserId: string | null,
 ) {
   const [period] = await tx
     .insert(passPeriod)
@@ -178,7 +184,7 @@ async function newPeriod(
       subtotalCents: contract.priceCents,
       totalCents: contract.priceCents,
       taxCents,
-      createdBy: p.userId,
+      createdBy: actorUserId,
       idempotencyKey: `pass-${period.id}`,
       requestHash: intentHash({ periodId: period.id, priceCents: contract.priceCents }),
     })
@@ -209,7 +215,12 @@ async function purchaseView(
     checkout: await getCheckoutInTransaction(tx, view.checkoutId, p),
   };
 }
-export async function purchasePass(db: Database, input: BenefitPurchaseInput, p: Principal) {
+export async function purchasePass(
+  db: Database,
+  input: BenefitPurchaseInput,
+  p: Principal,
+  automaticPaymentsAvailable = false,
+) {
   authorizePass(p);
   const clientId = p.role === "client" ? p.clientId : input.clientId;
   if (!clientId || (p.role === "client" && input.clientId && input.clientId !== p.clientId))
@@ -244,12 +255,28 @@ export async function purchasePass(db: Database, input: BenefitPurchaseInput, p:
     if (!plan) throw new DomainError("not_found", "Active plan not found");
     if (input.planVersion && input.planVersion !== plan.version)
       throw new DomainError("version_conflict", "Plan terms changed; review before purchasing");
-    // Automatic mandates remain unavailable until the separate Redsys recurring facility is configured.
-    if (input.renewalMode === "automatic")
-      throw new DomainError(
-        "payment_unavailable",
-        "Automatic recurring payments are not configured",
-      );
+    if (input.renewalMode === "automatic") {
+      if (!automaticPaymentsAvailable)
+        throw new DomainError(
+          "payment_unavailable",
+          "Automatic recurring payments are not configured",
+        );
+      if (p.role !== "client")
+        throw new DomainError(
+          "forbidden",
+          "Only the client can authorize their recurring payments",
+        );
+      if (
+        plan.kind !== "membership" ||
+        !input.planVersion ||
+        !input.acceptRecurring ||
+        input.consentVersion !== MEMBERSHIP_RECURRING_CONSENT_VERSION
+      )
+        throw new DomainError(
+          "validation_error",
+          "Review and accept the current membership payment terms",
+        );
+    }
     const [buyer] = await tx
       .select({ id: clientProfile.id })
       .from(clientProfile)
@@ -272,13 +299,24 @@ export async function purchasePass(db: Database, input: BenefitPurchaseInput, p:
         validityDays: plan.validityDays,
         periodMonths: plan.periodMonths,
         timezone: settings.timezone,
+        renewalMode: input.renewalMode,
+        consent:
+          input.renewalMode === "automatic"
+            ? {
+                version: MEMBERSHIP_RECURRING_CONSENT_VERSION,
+                planVersion: plan.version,
+                actorUserId: p.userId,
+                acceptedAt: new Date().toISOString(),
+                termsHash: membershipTermsHash(plan),
+              }
+            : null,
         createdBy: p.userId,
         idempotencyKey,
         requestHash,
       })
       .returning();
     if (!contract) throw new Error("Pass insert failed");
-    const period = await newPeriod(tx, contract, 0, p);
+    const period = await createPassPeriodInvoice(tx, contract, 0, p.userId);
     await recordAudit(tx, {
       actorUserId: p.userId,
       action: "pass.purchase_created",
@@ -319,7 +357,7 @@ export async function renewPass(db: Database, id: string, p: Principal) {
             new Date(),
           )
         : last.index + 1;
-    const next = await newPeriod(tx, contract, nextIndex, p);
+    const next = await createPassPeriodInvoice(tx, contract, nextIndex, p.userId);
     await recordAudit(tx, {
       actorUserId: p.userId,
       action: "pass.renewal_created",
@@ -339,22 +377,15 @@ export async function cancelPass(
   authorizePass(p);
   return db.transaction(async (tx) => {
     const contract = await visiblePass(tx, id, p, true);
-    if (contract.version !== input.version)
-      throw new DomainError("version_conflict", "Membership changed; reload before cancellation");
-    if (contract.kind !== "membership" || contract.status !== "active")
+    // Stopping future charges is monotonic; background settlement must not defeat this intent.
+    if (input.version > contract.version)
+      throw new DomainError("version_conflict", "Unknown membership revision");
+    if (contract.kind !== "membership")
+      throw new DomainError("invalid_state", "Only memberships have renewal cancellation");
+    if (contract.cancelAtPeriodEnd) return passView(tx, contract);
+    if (!["active", "pending"].includes(contract.status))
       throw new DomainError("invalid_state", "Only active memberships can be cancelled");
-    const rows = await tx
-      .select({ id: checkoutPayment.id })
-      .from(checkoutPayment)
-      .innerJoin(checkoutLine, eq(checkoutLine.checkoutId, checkoutPayment.checkoutId))
-      .innerJoin(passPeriod, eq(passPeriod.id, checkoutLine.passPeriodId))
-      .where(and(eq(passPeriod.contractId, id), eq(checkoutPayment.status, "pending")))
-      .limit(1);
-    if (rows.length)
-      throw new DomainError(
-        "invalid_state",
-        "Resolve the pending bank payment before cancellation",
-      );
+    await revokeCardMandate(tx, id);
     const [saved] = await tx
       .update(passContract)
       .set({ cancelAtPeriodEnd: true, autoPayReady: false, version: contract.version + 1 })

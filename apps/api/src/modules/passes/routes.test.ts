@@ -489,7 +489,7 @@ test("automatic renewal cannot be silently enabled without the bank facility and
         clientId: client.clientId,
         renewalMode: "automatic",
         acceptRecurring: true,
-        consentVersion: "v1",
+        consentVersion: "sob.membership-recurring.v1",
         planVersion: p.version,
         idempotencyKey: key(),
       })
@@ -697,4 +697,16 @@ test("access-fee return quotes allocate excess first without exceeding a split p
   expect(await response.json()).toMatchObject({ amountCents: 1000, excessCents: 500 });
   expect((await refund(bought.payment.id, 1000)).status).toBe(201);
   expect((await get(bought.pass.id)).periods[0]?.status).toBe("void");
+});
+test("salon pass records identify the buyer without exposing private client notes", async () => {
+  await call(owner, `/admin/clients/${client.clientId}`, "PATCH", {
+    name: "Known buyer",
+    notes: "Private treatment history",
+  });
+  const p = await plan();
+  const bought = await purchase(p.id);
+  expect(bought.pass).toMatchObject({ clientName: "Known buyer" });
+  expect(JSON.stringify(bought.pass)).not.toContain("Private treatment history");
+  await call(owner, `/admin/clients/${client.clientId}`, "PATCH", { name: "Updated buyer" });
+  expect(await get(bought.pass.id)).toMatchObject({ clientName: "Updated buyer" });
 });

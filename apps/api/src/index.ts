@@ -4,6 +4,7 @@ import { createApp } from "./app";
 import { loadConfig } from "./config";
 import { startMaintenance } from "./maintenance";
 import { startInventoryExpiry } from "./modules/inventory/runtime";
+import { startMembershipBilling } from "./modules/passes/runtime";
 import { createProviders } from "./notifications/providers";
 import { startNotificationRuntime } from "./notifications/runtime";
 import { rootLogger } from "./observability/logger";
@@ -40,6 +41,7 @@ const server = serveApi(app, {
   maxRequestBodyBytes: config.http.maxRequestBodyBytes,
 });
 rootLogger.info("api listening", { port: server.port });
+const membershipBilling = startMembershipBilling({ db, config });
 
 /**
  * Graceful shutdown, in the order that loses nothing: tell the load balancer first (`/ready`
@@ -57,7 +59,12 @@ async function shutdown(signal: string) {
     await app.shutdown(); // SSE streams must end or `server.stop()` waits for them forever
     await server.stop();
     await emailProvider?.close?.();
-    await Promise.all([notifications?.stop(), maintenance?.stop(), inventoryExpiry.stop()]);
+    await Promise.all([
+      notifications?.stop(),
+      maintenance?.stop(),
+      inventoryExpiry.stop(),
+      membershipBilling?.stop(),
+    ]);
     await closeDb();
     valkey.close();
     rootLogger.info("shutdown complete");

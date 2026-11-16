@@ -4,10 +4,33 @@ import { defineConfig, devices } from "@playwright/test";
  * End-to-end tests run against a REAL stack: Postgres, Valkey, the Hono API and the built web
  * server (see README, "End-to-end tests"). Nothing is mocked except where a test says so.
  */
-const baseURL = process.env.E2E_BASE_URL ?? "http://localhost:4173";
+const recurringFixture = process.env.E2E_RECURRING_FIXTURE === "true";
+const baseURL = recurringFixture
+  ? "http://localhost:4273"
+  : (process.env.E2E_BASE_URL ?? "http://localhost:4173");
 
 export default defineConfig({
   testDir: "./e2e",
+  ...(recurringFixture
+    ? {
+        testMatch: "**/recurring.spec.ts",
+        webServer: [
+          {
+            command: "NODE_ENV=test bun ../api/test/recurring-browser.ts",
+            url: "http://localhost:4300/health",
+            reuseExistingServer: false,
+            timeout: 60000,
+          },
+          {
+            command:
+              "API_INTERNAL_URL=http://localhost:4300 PORT=4273 PUBLIC_URL=http://localhost:4273 bun server.ts",
+            url: "http://localhost:4273/healthz",
+            reuseExistingServer: false,
+            timeout: 60000,
+          },
+        ],
+      }
+    : { testIgnore: "**/recurring.spec.ts" }),
   outputDir: "./test-results",
   // Tests share one database and one rate limiter: run them one at a time, in a stable order.
   fullyParallel: false,

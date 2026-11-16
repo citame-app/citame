@@ -139,6 +139,7 @@ export const checkoutPaymentSchema = z.object({
   amountCents: moneyCentsSchema,
   status: z.enum(["pending", "succeeded", "failed", "reconciliation"]),
   order: z.string().nullable(),
+  merchantInitiated: z.boolean().optional(),
   createdAt: instantSchema,
   updatedAt: instantSchema.optional(),
 });
@@ -175,6 +176,7 @@ export const paymentCapabilitiesSchema = z.object({
   environment: z.enum(["test", "live"]).nullable(),
   card: z.boolean(),
   giftCards: z.boolean().optional(),
+  recurring: z.boolean().optional(),
   bizum: z.boolean(),
   currency: z.literal("EUR"),
 });

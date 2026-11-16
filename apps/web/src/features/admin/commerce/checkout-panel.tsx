@@ -114,6 +114,11 @@ export function CheckoutPanel({
   const order = sale.data;
   const money = (value: number) => formatMoney(value, order.currency, locale);
   const canRefund = capabilities.data?.permissions?.refunds ?? role === "owner";
+  const clientPurchase =
+    mode === "client" &&
+    order.lines.some((line) =>
+      ["gift_card", "package_purchase", "membership_period"].includes(line.kind),
+    );
   const canReturn = capabilities.data?.permissions?.writeInventory ?? role === "owner";
   const pending = order.payments.some((p) => p.status === "pending");
   const refundedFor = (id: string) =>
@@ -148,18 +153,22 @@ export function CheckoutPanel({
           {t(`commerce.status.${order.status}`)}
         </p>
       </div>
-      {mode === "admin" &&
+      {(mode === "admin" || clientPurchase) &&
         order.status === "open" &&
         !order.payments.some((p) => p.status !== "failed") && (
           <details>
-            <summary className="cursor-pointer py-2 font-medium">{t("inventory.void")}</summary>
-            <p className="my-2 text-sm text-muted">{t("inventory.voidHelp")}</p>
+            <summary className="cursor-pointer py-2 font-medium">
+              {t(clientPurchase ? "passes.cancelPurchase" : "inventory.void")}
+            </summary>
+            <p className="my-2 text-sm text-muted">
+              {t(clientPurchase ? "passes.cancelPurchaseHelp" : "inventory.voidHelp")}
+            </p>
             <Button
               variant="secondary"
               disabled={!online || voidSale.isPending}
               onClick={() => voidSale.mutate()}
             >
-              {t("inventory.void")}
+              {t(clientPurchase ? "passes.cancelPurchase" : "inventory.void")}
             </Button>
             {voidSale.isError && <p role="alert">{t("inventory.error")}</p>}
           </details>
@@ -319,7 +328,10 @@ export function CheckoutPanel({
           {order.payments.map((payment) => (
             <div key={payment.id} className="rounded-lg border border-line p-3">
               <p>
-                {t(`commerce.${payment.method}`)} · {money(payment.amountCents)}
+                {payment.merchantInitiated
+                  ? t("passes.automaticCharge")
+                  : t(`commerce.${payment.method}`)}{" "}
+                · {money(payment.amountCents)}
               </p>
               <p className="text-sm text-muted">
                 {refundedFor(payment.id) >= payment.amountCents

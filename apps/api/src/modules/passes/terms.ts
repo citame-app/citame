@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 /** Immutable allocation per visit; the first remainder visits receive one extra cent. */
 export function allocatedUnits(amountCents: number, includedUses: number): number[] {
   if (
@@ -63,4 +64,28 @@ export function currentMembershipIndex(
   if (index > minimum && membershipCycle(anchor, timezone, periodMonths, index).startsAt > now)
     index--;
   return index;
+}
+
+export function membershipTermsHash(value: {
+  name: string;
+  priceCents: number;
+  taxBasisPoints: number;
+  includedUses: number;
+  discountBasisPoints: number;
+  serviceIds: string[];
+  periodMonths: number | null;
+}) {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        name: value.name,
+        priceCents: value.priceCents,
+        taxBasisPoints: value.taxBasisPoints,
+        includedUses: value.includedUses,
+        discountBasisPoints: value.discountBasisPoints,
+        serviceIds: value.serviceIds,
+        periodMonths: value.periodMonths,
+      }),
+    )
+    .digest("hex");
 }

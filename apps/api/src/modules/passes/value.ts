@@ -10,13 +10,14 @@ import {
   passRefundAllocation,
   passUnit,
 } from "@sob/db";
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
 import { allocateDiscount, multiplyDivide } from "../commerce/money";
 import { getCheckoutInTransaction } from "../commerce/service";
+import { revokeCardMandate } from "./mandates";
 import { periodView } from "./service";
 import { allocatedUnits, currentMembershipIndex, membershipCycle, packageExpiry } from "./terms";
 export async function lockPeriod(tx: Tx, id: string) {
@@ -87,7 +88,11 @@ export async function activateCheckoutPasses(tx: Tx, checkoutId: string) {
     });
   }
 }
-export async function voidCheckoutPasses(tx: Tx, checkoutId: string) {
+export async function voidCheckoutPasses(
+  tx: Tx,
+  checkoutId: string,
+  actorUserId: string | null = null,
+) {
   const lines = await tx.select().from(checkoutLine).where(eq(checkoutLine.checkoutId, checkoutId));
   for (const line of lines) {
     if (!line.passPeriodId) continue;
@@ -98,7 +103,25 @@ export async function voidCheckoutPasses(tx: Tx, checkoutId: string) {
       .update(passPeriod)
       .set({ status: "void", version: period.version + 1 })
       .where(eq(passPeriod.id, period.id));
-    if (period.index === 0)
+    if (contract.kind === "membership") {
+      await revokeCardMandate(tx, contract.id);
+      await tx
+        .update(passContract)
+        .set({
+          ...(period.index === 0 ? { status: "void" } : {}),
+          cancelAtPeriodEnd: true,
+          autoPayReady: false,
+          version: contract.version + 1,
+        })
+        .where(eq(passContract.id, contract.id));
+      await recordAudit(tx, {
+        actorUserId,
+        action: "membership.renewal_stopped",
+        entity: "pass_contract",
+        entityId: contract.id,
+        metadata: { reason: "unpaid_invoice_cancelled", checkoutId },
+      });
+    } else if (period.index === 0)
       await tx
         .update(passContract)
         .set({ status: "void", version: contract.version + 1 })
@@ -450,14 +473,21 @@ export async function syncCheckoutPassRefunds(tx: Tx, checkoutId: string) {
             eq(passPeriod.contractId, contract.id),
             sql`${passPeriod.id}<>${period.id}`,
             eq(passPeriod.status, "active"),
+            or(isNull(passPeriod.endsAt), gt(passPeriod.endsAt, new Date())),
           ),
         )
         .limit(1);
-      if (!other)
-        await tx
-          .update(passContract)
-          .set({ status: "void", autoPayReady: false, version: contract.version + 1 })
-          .where(eq(passContract.id, contract.id));
+      if (contract.kind === "membership") await revokeCardMandate(tx, contract.id);
+      await tx
+        .update(passContract)
+        .set({
+          ...(!other ? { status: "void", autoPayReady: false } : {}),
+          ...(contract.kind === "membership"
+            ? { cancelAtPeriodEnd: true, autoPayReady: false }
+            : {}),
+          version: contract.version + 1,
+        })
+        .where(eq(passContract.id, contract.id));
       await tx.update(checkout).set({ status: "void" }).where(eq(checkout.id, checkoutId));
       closed = true;
     } else if (allocations.length)

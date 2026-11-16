@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "test": "bun test src",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "e2e:recurring": "E2E_RECURRING_FIXTURE=true playwright test"
   },
   "dependencies": {
     "@base-ui/react": "1.9.0",

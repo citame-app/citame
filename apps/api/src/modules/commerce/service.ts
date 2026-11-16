@@ -18,7 +18,8 @@ import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
-import type { PaymentGateway } from "../../payments/types";
+import type { BankNotification } from "../../payments/redsys";
+import type { PaymentGateway, RecurringPaymentSettings } from "../../payments/types";
 import type { Tx } from "../../tx";
 import { accrueCommissions } from "../accounting/service";
 import {
@@ -34,6 +35,7 @@ import {
   releaseCheckoutInventory,
   reserveCheckoutProducts,
 } from "../inventory/reservations";
+import { needsCardMandate, storeCardMandate } from "../passes/mandates";
 import {
   activateCheckoutPasses,
   membershipDiscounts,
@@ -122,7 +124,7 @@ async function snapshot(db: Connection, row: typeof checkout.$inferSelect): Prom
     paidCents,
     refundedCents,
     overpaidCents: Math.max(0, paidCents - refundedCents - row.totalCents),
-    balanceCents: Math.max(0, row.totalCents - paidCents),
+    balanceCents: row.status === "void" ? 0 : Math.max(0, row.totalCents - paidCents),
     lines: lines.map((line) => ({
       id: line.id,
       kind: line.kind,
@@ -136,6 +138,7 @@ async function snapshot(db: Connection, row: typeof checkout.$inferSelect): Prom
     payments: payments.map((payment) => ({
       id: payment.id,
       method: payment.method,
+      merchantInitiated: payment.merchantInitiated,
       status: payment.status,
       amountCents: payment.amountCents,
       order: payment.bankOrder,
@@ -224,7 +227,7 @@ export async function voidCheckout(db: Database, id: string, principal: Principa
       );
     await releaseCheckoutInventory(tx, id);
     await voidCheckoutGifts(tx, id);
-    await voidCheckoutPasses(tx, id);
+    await voidCheckoutPasses(tx, id, principal.userId);
     const [updated] = await tx
       .update(checkout)
       .set({ status: "void" })
@@ -517,6 +520,7 @@ export async function startPayment(
   principal: Principal,
   gateway: PaymentGateway | null,
   bizumEnabled = false,
+  recurring: RecurringPaymentSettings | null = null,
 ) {
   if (
     principal.role === "client" &&
@@ -557,6 +561,11 @@ export async function startPayment(
           "invalid_state",
           "The register balance exceeds its supported cash limit",
         );
+      const mandateRequested = Boolean(
+        recurring &&
+          input.method === "redsys_card" &&
+          (await needsCardMandate(tx, sale, input.amountCents, principal)),
+      );
       for (let attempt = 0; attempt < 3; attempt++) {
         const order = bank ? `${randomInt(1000, 10000)}${randomBytes(4).toString("hex")}` : null;
         [payment] = await tx
@@ -564,6 +573,7 @@ export async function startPayment(
           .values({
             checkoutId: id,
             method: input.method,
+            mandateRequested,
             amountCents: input.amountCents,
             status: bank ? "pending" : "succeeded",
             bankOrder: order,
@@ -615,12 +625,13 @@ export async function startPayment(
     }
     if (!payment) throw new Error("Missing payment after transaction");
     const form =
-      bank && payment.bankOrder && payment.status === "pending"
+      bank && !payment.merchantInitiated && payment.bankOrder && payment.status === "pending"
         ? gateway?.checkout({
             order: payment.bankOrder,
             amountCents: payment.amountCents,
             currency: payment.currency,
             method: payment.method === "redsys_bizum" ? "bizum" : "card",
+            createMandate: payment.mandateRequested,
           })
         : undefined;
     return {
@@ -639,8 +650,16 @@ export async function receiveBankNotification(
   db: Database,
   gateway: PaymentGateway,
   fields: Record<string, unknown>,
+  recurring: RecurringPaymentSettings | null = null,
 ) {
-  const bank = gateway.verify(fields);
+  return settleVerifiedBankPayment(db, gateway.verify(fields), recurring);
+}
+/** Trusted adapter boundary; bank authenticity is checked before this function is called. */
+export async function settleVerifiedBankPayment(
+  db: Database,
+  bank: BankNotification,
+  recurring: RecurringPaymentSettings | null = null,
+) {
   return db.transaction(async (tx) => {
     const [found] = await tx
       .select()
@@ -681,6 +700,8 @@ export async function receiveBankNotification(
       .set({ status, bankResponse: bank.responseCode, authorizationCode: bank.authorizationCode })
       .where(eq(checkoutPayment.id, payment.id));
     await refreshStatus(tx, sale.id);
+    if (status === "succeeded" && bank.mandate && recurring)
+      await storeCardMandate(tx, sale.id, payment, bank.mandate, recurring);
     await recordAudit(tx, {
       actorUserId: null,
       action: "commerce.payment_settled",

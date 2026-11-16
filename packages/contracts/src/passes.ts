@@ -1,3 +1,5 @@
+export const MEMBERSHIP_RECURRING_CONSENT_VERSION = "sob.membership-recurring.v1";
+
 import { z } from "zod";
 import { checkoutSchema, idempotencyKeySchema, moneyCentsSchema } from "./commerce";
 import { idSchema, instantSchema, pageInfoSchema } from "./common";
@@ -83,7 +85,10 @@ export const benefitPurchaseSchema = z
   .strict()
   .refine(
     (value) =>
-      value.renewalMode !== "automatic" || (value.acceptRecurring && Boolean(value.consentVersion)),
+      value.renewalMode !== "automatic" ||
+      (value.acceptRecurring &&
+        value.consentVersion === MEMBERSHIP_RECURRING_CONSENT_VERSION &&
+        Boolean(value.planVersion)),
     "Automatic renewal requires explicit recurring-payment consent",
   );
 export const passQuerySchema = z.object({
@@ -108,6 +113,7 @@ export const passPeriodSchema = z.object({
   version: z.number().int().positive(),
 });
 export const passContractSchema = z.object({
+  clientName: z.string().optional(),
   id: idSchema,
   planId: idSchema,
   clientId: idSchema,

@@ -72,6 +72,7 @@ export const passContract = pgTable(
       version: string;
       planVersion: number;
       acceptedAt: string;
+      termsHash: string;
       actorUserId: string;
     }>(),
     version: integer().notNull().default(1),
@@ -112,6 +113,33 @@ export const passPeriod = pgTable(
     check(
       "pass_period_valid",
       sql`${t.status} in ('pending','active','void') and ${t.index} between 0 and 10000 and ${t.priceCents} between 1 and 999999999 and ${t.version}>0 and (${t.endsAt} is null or ${t.endsAt}>${t.startsAt})`,
+    ),
+  ],
+);
+/** Bank references are encrypted; cancellation erases the local capability. */
+export const passMandate = pgTable(
+  "pass_mandate",
+  {
+    id: primaryId(),
+    contractId: uuid()
+      .notNull()
+      .references(() => passContract.id)
+      .unique(),
+    merchantCode: text().notNull(),
+    terminal: text().notNull(),
+    environment: text().notNull(),
+    currency: text().notNull().default("EUR"),
+    encryptedPayload: text(),
+    expiry: text().notNull(),
+    last4: text(),
+    revokedAt: timestamptz(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    check(
+      "pass_mandate_valid",
+      sql`${t.environment} in ('test','live') and ${t.currency}='EUR' and length(${t.expiry})=4 and (${t.last4} is null or length(${t.last4})=4) and (${t.revokedAt} is not null or ${t.encryptedPayload} is not null)`,
     ),
   ],
 );

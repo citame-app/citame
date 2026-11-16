@@ -27,3 +27,10 @@ export interface PaymentGateway {
     refundId: string;
   }): Promise<BankNotification>;
 }
+
+export interface RecurringPaymentSettings {
+  encryptionKey: string;
+  merchantCode: string;
+  terminal: string;
+  environment: "test" | "live";
+}

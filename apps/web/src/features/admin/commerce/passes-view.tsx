@@ -7,16 +7,17 @@ import {
   type UserRole,
 } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { Button } from "~/components/ui/button";
 import { TextField } from "~/components/ui/field";
 import { SelectField } from "~/components/ui/select-field";
 import { EmptyState, ErrorState, Skeleton, useOnline } from "~/components/ui/states";
 import { useI18n } from "~/i18n/react";
-import { clientsQuery } from "~/lib/admin-queries";
 import type { CommerceMode } from "~/lib/api/commerce-endpoints";
 import { api } from "~/lib/api/instance";
 import { formatMoney } from "~/lib/format";
+import { BenefitPlanPurchase } from "./benefit-plan-purchase";
 import { CheckoutPanel } from "./checkout-panel";
 import { invalidateCommerce } from "./invalidate";
 import { centsInput, inputCents } from "./money";
@@ -82,11 +83,12 @@ export function PassesView({ mode, role, accessPreset }: Props) {
           {plans.data.plans
             .filter((p) => p.active)
             .map((plan) => (
-              <PlanPurchase
+              <BenefitPlanPurchase
                 key={plan.id}
                 plan={plan}
                 mode={mode}
                 disabled={unavailable || !capabilities.isSuccess}
+                automaticAvailable={capabilities.data?.recurring ?? false}
                 onCreated={setSelected}
               />
             ))}
@@ -111,6 +113,15 @@ export function PassesView({ mode, role, accessPreset }: Props) {
           {passes.data.passes.map((pass) => (
             <li key={pass.id} className="space-y-3 rounded-xl border border-line bg-surface p-4">
               <h3 className="break-words font-semibold">{pass.name}</h3>
+              {mode === "admin" && pass.clientName && (
+                <Link
+                  to="/admin/clients/$id"
+                  params={{ id: pass.clientId }}
+                  className="inline-flex min-h-11 items-center break-words text-accent-text underline"
+                >
+                  {pass.clientName}
+                </Link>
+              )}
               <p className="text-sm text-muted">
                 {t(`passes.status.${pass.status}`)} · {formatMoney(pass.priceCents, "EUR", locale)}
               </p>
@@ -160,124 +171,7 @@ function VisitCounts({ period }: { period: PassPeriod }) {
     </p>
   );
 }
-function PlanPurchase({
-  plan,
-  mode,
-  disabled,
-  onCreated,
-}: {
-  plan: BenefitPlan;
-  mode: CommerceMode;
-  disabled: boolean;
-  onCreated: (id: string) => void;
-}) {
-  const { t, locale } = useI18n();
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState("");
-  const [buyer, setBuyer] = useState("");
-  const [key, setKey] = useState(() => crypto.randomUUID());
-  const queries = useQueryClient();
-  const online = useOnline();
-  const clients = useQuery({
-    ...clientsQuery({ search, pageSize: 20, sort: "name", order: "asc" }),
-    enabled: mode === "admin" && open && search.trim().length > 0,
-  });
-  const buy = useMutation({
-    mutationFn: () =>
-      api().passes.purchase(
-        {
-          planId: plan.id,
-          planVersion: plan.version,
-          ...(mode === "admin" ? { clientId: buyer } : {}),
-          renewalMode: "manual",
-          acceptRecurring: false,
-          idempotencyKey: key,
-        },
-        mode,
-      ),
-    onSuccess: (r) => {
-      void invalidateCommerce(queries);
-      onCreated(r.pass.id);
-    },
-  });
-  return (
-    <div className="space-y-3 rounded-xl border border-line bg-surface p-4">
-      <h4 className="break-words font-semibold">{plan.name}</h4>
-      <p>
-        {formatMoney(plan.priceCents, "EUR", locale)} ·{" "}
-        {t(plan.kind === "package" ? "passes.package" : "passes.membership")}
-      </p>
-      {plan.description && <p className="text-sm text-muted">{plan.description}</p>}
-      <p className="text-sm">
-        {t("passes.uses")}: {plan.includedUses}
-      </p>
-      {plan.discountBasisPoints > 0 && (
-        <p>{t("passes.discounts", { discount: plan.discountBasisPoints / 100 })}</p>
-      )}
-      {plan.periodMonths && (
-        <p className="text-sm">
-          {t("passes.months")}: {plan.periodMonths}
-        </p>
-      )}
-      {plan.validityDays && (
-        <p className="text-sm">
-          {t("passes.days")}: {plan.validityDays}
-        </p>
-      )}
-      <Button variant="secondary" disabled={disabled || !online} onClick={() => setOpen(!open)}>
-        {t("passes.buy")}
-      </Button>
-      {open && (
-        <form
-          className="space-y-3"
-          onSubmit={(e) => {
-            e.preventDefault();
-            buy.mutate();
-          }}
-        >
-          {mode === "admin" && (
-            <>
-              <TextField
-                label={t("passes.searchBuyer")}
-                value={search}
-                onChange={(e) => {
-                  setSearch(e.target.value);
-                  setBuyer("");
-                  setKey(crypto.randomUUID());
-                  buy.reset();
-                }}
-              />
-              {clients.isError ? (
-                <ErrorState error={clients.error} onRetry={() => void clients.refetch()} />
-              ) : (
-                <SelectField
-                  label={t("passes.selectBuyer")}
-                  value={buyer}
-                  options={[
-                    { value: "", label: t("passes.selectBuyer") },
-                    ...(clients.data?.clients ?? []).map((c) => ({ value: c.id, label: c.name })),
-                  ]}
-                  onChange={(v) => {
-                    setBuyer(v);
-                    setKey(crypto.randomUUID());
-                    buy.reset();
-                  }}
-                />
-              )}
-            </>
-          )}
-          {plan.kind === "membership" && (
-            <p className="text-sm text-muted">{t("passes.manualHelp")}</p>
-          )}
-          {buy.isError && <p role="alert">{t("passes.error")}</p>}
-          <Button type="submit" disabled={!online || buy.isPending || (mode === "admin" && !buyer)}>
-            {t("passes.create")}
-          </Button>
-        </form>
-      )}
-    </div>
-  );
-}
+
 function PassDetail({ id, mode, role }: { id: string; mode: CommerceMode; role: UserRole }) {
   const { t, locale, timeZone } = useI18n();
   const queries = useQueryClient();
@@ -326,26 +220,51 @@ function PassDetail({ id, mode, role }: { id: string; mode: CommerceMode; role: 
   return (
     <section aria-label={t("passes.view")} className="space-y-5">
       <h2 className="text-heading">{row.name}</h2>
+      {mode === "admin" && row.clientName && (
+        <Link
+          to="/admin/clients/$id"
+          params={{ id: row.clientId }}
+          className="inline-flex min-h-11 items-center break-words text-accent-text underline"
+        >
+          {row.clientName}
+        </Link>
+      )}
       {row.discountBasisPoints > 0 && (
         <p>{t("passes.discounts", { discount: row.discountBasisPoints / 100 })}</p>
       )}
       {row.kind === "membership" && (
         <div className="space-y-3 rounded-xl border border-line p-4">
           <p className="text-sm text-muted">
-            {t(row.cancelAtPeriodEnd ? "passes.cancelledHelp" : "passes.manualHelp")}
+            {t(
+              row.cancelAtPeriodEnd
+                ? "passes.cancelledHelp"
+                : row.renewalMode === "automatic"
+                  ? !capabilities.data?.recurring
+                    ? "passes.recurringUnavailable"
+                    : row.status === "pending"
+                      ? "passes.setupCard"
+                      : !row.autoPayReady
+                        ? "passes.autoAttention"
+                        : row.periods.some((period) => period.status === "pending")
+                          ? "passes.autoInvoice"
+                          : "passes.autoReady"
+                  : "passes.manualHelp",
+            )}
           </p>
-          {!row.cancelAtPeriodEnd && row.status === "active" && (
+          {!row.cancelAtPeriodEnd && ["active", "pending"].includes(row.status) && (
             <>
-              <Button
-                disabled={
-                  !online ||
-                  renew.isPending ||
-                  (mode === "client" && !capabilities.data?.card && !capabilities.data?.bizum)
-                }
-                onClick={() => renew.mutate()}
-              >
-                {t("passes.renew")}
-              </Button>
+              {row.status === "active" && (
+                <Button
+                  disabled={
+                    !online ||
+                    renew.isPending ||
+                    (mode === "client" && !capabilities.data?.card && !capabilities.data?.bizum)
+                  }
+                  onClick={() => renew.mutate()}
+                >
+                  {t("passes.renew")}
+                </Button>
+              )}
               <form
                 className="grid gap-3 sm:grid-cols-2"
                 onSubmit={(e) => {
@@ -401,9 +320,13 @@ function PassDetail({ id, mode, role }: { id: string; mode: CommerceMode; role: 
                   <p className="text-sm">{t("passes.from", { date: date(period.startsAt) })}</p>
                 )}
                 <p className="text-sm">
-                  {period.endsAt
-                    ? t("passes.until", { date: date(period.endsAt) })
-                    : t("passes.noExpiry")}
+                  {!period.startsAt
+                    ? period.status === "pending"
+                      ? t("passes.awaitingValidity")
+                      : null
+                    : period.endsAt
+                      ? t("passes.until", { date: date(period.endsAt) })
+                      : t("passes.noExpiry")}
                 </p>
                 <Button variant="secondary" onClick={() => setReceipt(period.checkoutId)}>
                   {t("passes.receipt")}
