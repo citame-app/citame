@@ -11,6 +11,7 @@ export const SYNC_ENTITIES = [
   "staff",
   "service_staff",
   "working_hours",
+  "date_shift",
   "time_off",
   "salon_settings",
 ] as const;

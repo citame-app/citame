@@ -119,6 +119,25 @@ pub struct WorkingHours {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DateShiftRange {
+    pub start_time: String,
+    pub end_time: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DateShift {
+    pub id: String,
+    pub staff_id: String,
+    pub date: String,
+    /// None inherits the weekly template; Some([]) is explicitly closed.
+    pub ranges: Option<Vec<DateShiftRange>>,
+    pub version: i64,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TimeOff {
     pub id: String,
     pub staff_id: String,

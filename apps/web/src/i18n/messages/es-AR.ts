@@ -7,6 +7,7 @@ import { clientControlsEsAR } from "./client-controls";
 import { clientPhotosEsAR } from "./client-photos";
 import { clientTransferEsAR } from "./client-transfer";
 import { commerceEsAR } from "./commerce";
+import { dateShiftsEsAR } from "./date-shifts";
 import type { MessageKey } from "./en";
 import { giftCardsEsAR } from "./gift-cards";
 import { intakeEsAR } from "./intake";
@@ -20,6 +21,7 @@ import { waitlistEsAR } from "./waitlist";
 
 /** Neutral, professional Spanish for Argentina. */
 export const esAR: Record<MessageKey, string> = {
+  ...dateShiftsEsAR,
   ...intakeEsAR,
   ...bookingProtectionEsAR,
   ...clientControlsEsAR,

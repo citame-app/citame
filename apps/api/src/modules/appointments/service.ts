@@ -45,6 +45,7 @@ import { reassignAppointmentResources, reserveResources } from "../resources/res
 import { releaseUnfulfilledAppointmentRewards } from "../rewards/value";
 import { getBookableServices } from "../services/service";
 import { getSalonSettings } from "../settings/service";
+import { loadDatedHours } from "../staff/date-hours";
 import { assertStaffActive } from "../staff/guards";
 import { assertStaffExists } from "../staff/service";
 import { appointmentIntentFingerprint } from "./intent";
@@ -329,6 +330,14 @@ export async function assertBookable(
     minNoticeMinutes: settings.minNoticeMinutes,
     maxDaysAhead: settings.maxDaysAhead,
     workingHours: hours.map((h) => ({ weekday: h.weekday, start: h.startTime, end: h.endTime })),
+    datedWorkingHours: await loadDatedHours(
+      tx,
+      staffId,
+      Temporal.Instant.fromEpochMilliseconds(startsAt.getTime())
+        .toZonedDateTimeISO(settings.timezone)
+        .toPlainDate()
+        .toString(),
+    ),
     timeOff: offs.map((o) => ({ start: o.startsAt, end: o.endsAt })),
   });
   const blocking = input.override ? violations.filter((v) => v !== "min_notice") : violations;

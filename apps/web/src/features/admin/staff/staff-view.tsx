@@ -7,20 +7,21 @@ import { TabPanel, Tabs } from "~/components/ui/tabs";
 import { useI18n } from "~/i18n/react";
 import { adminStaffQuery } from "~/lib/admin-queries";
 import { AccessPanel } from "./access-panel";
+import { DateShiftEditor } from "./date-shifts";
 import { HoursEditor } from "./hours-editor";
 import { TeamList } from "./team-list";
 import { TimeOffPanel } from "./time-off-panel";
 
 export interface StaffSearch {
   member?: string;
-  tab: "hours" | "timeoff";
+  tab: "hours" | "timeoff" | "dates";
 }
 
 export function validateStaffSearch(raw: Record<string, unknown>): StaffSearch {
   const member = idSchema.safeParse(raw.member);
   return {
     ...(member.success ? { member: member.data } : {}),
-    tab: raw.tab === "timeoff" ? "timeoff" : "hours",
+    tab: raw.tab === "timeoff" ? "timeoff" : raw.tab === "dates" ? "dates" : "hours",
   };
 }
 
@@ -77,17 +78,25 @@ export function StaffView({
         items={[
           { value: "hours", label: t("staff.tab.hours") },
           { value: "timeoff", label: t("staff.tab.timeoff") },
+          { value: "dates", label: t("shifts.title") },
         ]}
         value={search.tab}
         onValueChange={(tab) =>
           onSearchChange({
             ...(search.member ? { member: search.member } : {}),
-            tab: tab === "timeoff" ? "timeoff" : "hours",
+            tab: tab === "timeoff" ? "timeoff" : tab === "dates" ? "dates" : "hours",
           })
         }
       >
         <TabPanel value="hours">
           <HoursEditor key={member.id} staffId={member.id} editable={permissions.editSchedules} />
+        </TabPanel>
+        <TabPanel value="dates">
+          <DateShiftEditor
+            key={member.id}
+            staffId={member.id}
+            editable={permissions.editSchedules}
+          />
         </TabPanel>
         <TabPanel value="timeoff">
           <TimeOffPanel

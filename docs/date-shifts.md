@@ -1,0 +1,31 @@
+# Dated shifts and reviewed copying
+
+Owners and managers use **Team → select a professional → Dates and shifts**. Professionals can inspect their own dates. Editing follows the existing schedule-administration permissions; it does not grant access to another calendar or account.
+
+The weekly template remains the default. A particular date can instead be **Closed** or have **Custom hours**. **Use weekly hours** restores inheritance from the latest weekly template; it retains the date's revision, so an older review cannot overwrite a subsequent change. Dates that have no override retain their weekly hours. Editing is limited to today through the following 730 salon-local calendar days; past dates remain readable.
+
+## Review before applying
+
+Enter the date's ranges and choose **Review changes**. The review shows current and proposed hours for every target date, existing appointments that no longer fit and held waitlist offers that will expire. Applying does not move, cancel, reprice or otherwise change existing appointments. Resolve any listed appointment with its ordinary calendar workflow.
+
+Up to eight non-overlapping ranges may be entered for a custom date. Touching ranges are permitted, and zero ranges means explicitly closed. Every start and end is a wall-clock time in the displayed salon timezone. Nonexistent local times at a daylight-saving transition are rejected; choose an actual time on that date. The normal booking notice, maximum advance window, time off, staff qualifications and resource limits still apply.
+
+The live review binds source/target revisions, weekly hours, settings, affected appointments, time off and active offers. If a colleague changes these before applying, refresh and review the current dates. Draft edits remain visible after a failed read or write. Leaving a dirty date window requires discarding the edits explicitly. If the apply response is lost, retry the same review: its actor-scoped batch identifier prevents repeated writes, including after a colleague makes newer changes. A replay returns the current dated hours and preserves those newer changes.
+
+## Copy a period
+
+Save current edits before opening **Copy a period**. Choose the source start, one to seven days, the first target start and one to twelve target weeks. Source and target dates must not overlap, and each target date must be unique. Review lists every resulting target date, including closed days.
+
+Copying freezes the effective source hours, combining custom dates and the source's inherited weekly template. The copied dates become explicit custom/closed dates: a later weekly-template edit does not change them. Restore **Use weekly hours** on those dates to resume inheritance. A source with more than eight ranges must be simplified or copied in smaller custom configurations; inherited weekly schedules remain fully readable up to their existing 56-range limit.
+
+The source can be within two years before or after today. At most 84 target dates can be changed in one reviewed batch. A read window spans at most 366 consecutive days. Review rejects windows with more than 5,000 affected scheduled records instead of silently truncating conflicts. Each professional retains at most 5,000 dated-shift history rows; restoring weekly hours preserves the revision rather than deleting that history.
+
+## Shared booking and offline behaviour
+
+Availability, ordinary/operator/MCP bookings, rescheduling, reviewed series, waitlist acceptance and the calendar's displayed working windows use the same effective date rules. Expiring an incompatible waitlist hold immediately releases its slot for availability and ordinary resource reservation. The bounded waitlist worker subsequently processes the expired offer and reconsiders the request. Schedule changes do not acquire queue-entry locks while holding the global scheduling lock.
+
+The sync protocol includes scoped `date_shift` records, with a literal `null` for weekly inheritance and `[]` for a closed day. The desktop replica stores these separately and upgrades its SQLite schema without losing the cursor or queued changes. The web editor is the schedule-administration interface; native front-desk bookings remain subject to the shared server checks. An applied batch has an immutable receipt; account removal may clear its author reference without reattributing or deleting its history.
+
+## Local verification
+
+`bun run e2e:shifts` from `apps/web` uses the explicit isolated Postgres/Valkey/API fixture and the built web bundle. Build the web app first. The fixture resets its dedicated test database; it does not load production data or contact a bank or messaging provider.

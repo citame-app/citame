@@ -14,6 +14,7 @@ import { workingWindows } from "../availability/windows";
 import { protectionView } from "../booking-protection/value";
 import { calendarResources } from "../resources/reservations";
 import { getSalonSettings } from "../settings/service";
+import { asDatedHours, loadShiftRows } from "../staff/date-hours";
 import { loadSeriesReferences } from "./series-references";
 
 /**
@@ -58,7 +59,7 @@ export async function getCalendar(
     };
   }
 
-  const [rows, offs, hours] = await Promise.all([
+  const [rows, offs, hours, dated] = await Promise.all([
     db
       .select({ row: appointment, clientName: clientProfile.name })
       .from(appointment)
@@ -88,6 +89,18 @@ export async function getCalendar(
       .select()
       .from(workingHours)
       .where(and(inArray(workingHours.staffId, staffIds), isNull(workingHours.deletedAt))),
+    loadShiftRows(
+      db,
+      staffIds,
+      Temporal.Instant.fromEpochMilliseconds(from.getTime())
+        .toZonedDateTimeISO(settings.timezone)
+        .toPlainDate()
+        .toString(),
+      Temporal.Instant.fromEpochMilliseconds(to.getTime())
+        .toZonedDateTimeISO(settings.timezone)
+        .toPlainDate()
+        .toString(),
+    ),
   ]);
 
   const snapshots = rows.length
@@ -160,6 +173,7 @@ export async function getCalendar(
       timeZone: settings.timezone,
       staff: staffIds.map((staffId) => ({
         staffId,
+        datedWorkingHours: asDatedHours(dated, staffId),
         workingHours: hours
           .filter((h) => h.staffId === staffId)
           .map((h) => ({ weekday: h.weekday, start: h.startTime, end: h.endTime })),

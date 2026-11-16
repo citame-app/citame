@@ -1,0 +1,94 @@
+export const dateShiftsEn = {
+  "shifts.title": "Dates and shifts",
+  "shifts.lead":
+    "Adjust specific dates or copy a reviewed period. Existing appointments are never moved or cancelled.",
+  "shifts.week": "Week starting",
+  "shifts.previousWeek": "Previous week",
+  "shifts.nextWeek": "Next week",
+  "shifts.mode": "Schedule mode",
+  "shifts.weekly": "Use weekly hours",
+  "shifts.custom": "Custom hours",
+  "shifts.closed": "Closed",
+  "shifts.inherited": "Weekly template",
+  "shifts.start": "Start {number}",
+  "shifts.end": "End {number}",
+  "shifts.addRange": "Add shift",
+  "shifts.removeRange": "Remove shift {number}",
+  "shifts.invalid":
+    "Use valid dates and at most eight shifts per date. End must follow start; shifts must not overlap, and each local time must exist.",
+  "shifts.review": "Review changes",
+  "shifts.reviewTitle": "Review dated shifts",
+  "shifts.reviewHelp":
+    "Check every target date and affected appointment before applying. Dates omitted here keep their current schedule.",
+  "shifts.apply": "Apply reviewed shifts",
+  "shifts.refresh": "Refresh review",
+  "shifts.saved": "Dated shifts saved",
+  "shifts.before": "Current",
+  "shifts.after": "After applying",
+  "shifts.noChange": "No change",
+  "shifts.copy": "Copy a period",
+  "shifts.copyHelp":
+    "Copy the effective source hours, including closed days, to the displayed dates. Save any current edits before copying.",
+  "shifts.source": "Source starts on",
+  "shifts.days": "Days to copy",
+  "shifts.target": "First target starts on",
+  "shifts.weeks": "Number of target weeks",
+  "shifts.copyReview": "Review copied dates",
+  "shifts.offers":
+    "{count} held waitlist offers will expire and be reconsidered for available times.",
+  "shifts.stale":
+    "The schedule, source hours or affected bookings changed. Refresh and review the current dates before applying.",
+  "shifts.intentConflict":
+    "This batch identifier was already used for another review. Reload current shifts before making another change.",
+  "shifts.reload": "Reload current shifts",
+  "shifts.discard": "Discard shift edits",
+  "shifts.readOnly": "You can view your dated shifts. A manager can change them.",
+  "shifts.timezone": "All shifts use {timezone} local time.",
+} as const;
+export const dateShiftsEsAR: Record<keyof typeof dateShiftsEn, string> = {
+  "shifts.title": "Fechas y turnos",
+  "shifts.lead":
+    "Ajusta fechas concretas o copia un período revisado. Las citas existentes conservan su fecha y estado.",
+  "shifts.week": "Semana desde",
+  "shifts.previousWeek": "Semana anterior",
+  "shifts.nextWeek": "Semana siguiente",
+  "shifts.mode": "Modo de horario",
+  "shifts.weekly": "Usar horario semanal",
+  "shifts.custom": "Horario personalizado",
+  "shifts.closed": "Cerrado",
+  "shifts.inherited": "Plantilla semanal",
+  "shifts.start": "Inicio {number}",
+  "shifts.end": "Fin {number}",
+  "shifts.addRange": "Añadir turno",
+  "shifts.removeRange": "Eliminar turno {number}",
+  "shifts.invalid":
+    "Usa fechas válidas y como máximo ocho turnos por fecha. El fin debe ser posterior al inicio; los turnos no pueden solaparse y las horas deben existir en la zona local.",
+  "shifts.review": "Revisar cambios",
+  "shifts.reviewTitle": "Revisar turnos por fecha",
+  "shifts.reviewHelp":
+    "Comprueba cada fecha de destino y las citas afectadas antes de aplicar. Las fechas que no aparecen conservan su horario.",
+  "shifts.apply": "Aplicar turnos revisados",
+  "shifts.refresh": "Actualizar revisión",
+  "shifts.saved": "Turnos por fecha guardados",
+  "shifts.before": "Actual",
+  "shifts.after": "Después de aplicar",
+  "shifts.noChange": "Sin cambios",
+  "shifts.copy": "Copiar un período",
+  "shifts.copyHelp":
+    "Copia el horario efectivo de origen, incluidos los días cerrados, a las fechas indicadas. Guarda los cambios actuales antes de copiar.",
+  "shifts.source": "El origen empieza el",
+  "shifts.days": "Días que copiar",
+  "shifts.target": "El primer destino empieza el",
+  "shifts.weeks": "Número de semanas de destino",
+  "shifts.copyReview": "Revisar fechas copiadas",
+  "shifts.offers":
+    "Caducarán {count} ofertas de lista de espera retenidas y se buscarán horarios disponibles de nuevo.",
+  "shifts.stale":
+    "Han cambiado el horario, las horas de origen o las citas afectadas. Actualiza y revisa las fechas actuales antes de aplicar.",
+  "shifts.intentConflict":
+    "Este identificador de lote ya se usó para otra revisión. Recarga los turnos actuales antes de realizar otro cambio.",
+  "shifts.reload": "Recargar turnos actuales",
+  "shifts.discard": "Descartar cambios de turnos",
+  "shifts.readOnly": "Puedes consultar tus turnos por fecha. Un responsable puede modificarlos.",
+  "shifts.timezone": "Todos los turnos usan la hora local de {timezone}.",
+};

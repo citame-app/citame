@@ -58,11 +58,11 @@ fn migrations_run_once_and_survive_reopen() {
     let path = dir.path().join("replica.db");
     {
         let mut s = Store::open(&path).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 1);
+        assert_eq!(s.schema_version().unwrap(), 2);
         s.apply_page(&[staff_change(3, "st1", "Ana")], 3).unwrap();
     }
     let s = Store::open(&path).unwrap();
-    assert_eq!(s.schema_version().unwrap(), 1);
+    assert_eq!(s.schema_version().unwrap(), 2);
     assert_eq!(s.staff().unwrap().len(), 1);
 }
 
@@ -399,4 +399,43 @@ fn resetting_the_replica_drops_the_mirror_and_cursor_but_keeps_the_outbox() {
     assert!(s.appointment(A1).unwrap().is_none());
     assert_eq!(s.outbox_len().unwrap(), 1);
     assert_eq!(s.device_id().unwrap(), dev);
+}
+
+#[test]
+fn dated_shift_replica_distinguishes_closed_from_weekly_and_resets_with_the_mirror() {
+    let mut store = Store::open_in_memory().unwrap();
+    let row = |seq, ranges: Value, version| RawChange {
+        seq,
+        entity: "date_shift".into(),
+        id: "shift1".into(),
+        op: "upsert".into(),
+        data: Some(
+            json!({ "id": "shift1", "staffId": "staff1", "date": "2026-03-09", "ranges": ranges, "version": version, "updatedAt": "2026-03-02T12:00:00.000Z" }),
+        ),
+    };
+    store.apply_page(&[row(1, json!([]), 1)], 1).unwrap();
+    assert_eq!(store.date_shifts().unwrap()[0].ranges, Some(vec![]));
+    store.apply_page(&[row(2, Value::Null, 2)], 2).unwrap();
+    assert_eq!(store.date_shifts().unwrap()[0].ranges, None);
+    assert_eq!(store.date_shifts().unwrap()[0].version, 2);
+    store.reset_replica().unwrap();
+    assert!(store.date_shifts().unwrap().is_empty());
+}
+
+#[test]
+fn dated_shift_migration_keeps_an_existing_replica_cursor_and_outbox() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("old-replica.db");
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(MIGRATIONS[0]).unwrap();
+        conn.pragma_update(None, "user_version", 1).unwrap();
+        conn.execute("INSERT INTO meta(key,value) VALUES('cursor','42')", [])
+            .unwrap();
+        conn.execute("INSERT INTO outbox(mutation_id,created_at,kind,entity_id,payload) VALUES('pending','2026-03-01T12:00:00.000Z','client.create','c1','{}')",[]).unwrap();
+    }
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.cursor().unwrap(), 42);
+    assert_eq!(store.outbox_len().unwrap(), 1);
+    assert!(store.date_shifts().unwrap().is_empty());
 }

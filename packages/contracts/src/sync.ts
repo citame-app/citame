@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { appointmentSchema, createAppointmentBaseSchema } from "./appointments";
-import { idSchema, instantSchema, LIMITS } from "./common";
+import { idSchema, instantSchema, LIMITS, localDateSchema } from "./common";
+import { dateShiftRangesSchema } from "./date-shifts";
 import { salonResponseSchema, updateSalonSettingsRequestSchema } from "./salon";
 import { serviceSchema, updateServiceRequestSchema } from "./services";
 import { timeOfDaySchema, timeOffSchema, weekdaySchema } from "./staff";
@@ -25,6 +26,7 @@ export const syncEntitySchema = z.enum([
   "staff",
   "service_staff",
   "working_hours",
+  "date_shift",
   "time_off",
   "salon_settings",
 ]);
@@ -326,6 +328,15 @@ export const syncWorkingHoursSchema = z.object({
   endTime: timeOfDaySchema,
 });
 export type SyncWorkingHours = z.infer<typeof syncWorkingHoursSchema>;
+export const syncDateShiftSchema = z.object({
+  id: idSchema,
+  staffId: idSchema,
+  date: localDateSchema,
+  ranges: dateShiftRangesSchema.nullable(),
+  version: z.number().int().positive(),
+  updatedAt: instantSchema,
+});
+export type SyncDateShift = z.infer<typeof syncDateShiftSchema>;
 
 export const syncTimeOffSchema = timeOffSchema.extend({ updatedAt: instantSchema });
 export type SyncTimeOff = z.infer<typeof syncTimeOffSchema>;
@@ -349,6 +360,7 @@ const upsertChangeSchema = z.discriminatedUnion("entity", [
   upsert("staff", syncStaffSchema),
   upsert("service_staff", syncServiceStaffSchema),
   upsert("working_hours", syncWorkingHoursSchema),
+  upsert("date_shift", syncDateShiftSchema),
   upsert("time_off", syncTimeOffSchema),
   upsert("salon_settings", syncSalonSettingsSchema),
 ]);

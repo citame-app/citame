@@ -40,6 +40,7 @@ describe("Sheet", () => {
     const dialog = await screen.findByRole("dialog", { name: "Appointment" });
     expect(dialog).toHaveAccessibleDescription("Details");
     expect(screen.getByText("Body text")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Appointment" })).toHaveAttribute("tabindex", "0");
   });
 
   test("the close button reports the request to close", async () => {

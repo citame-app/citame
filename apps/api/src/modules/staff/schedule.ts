@@ -17,6 +17,7 @@ import { lockCalendars } from "../../tx";
 import { findConflicts } from "../availability/rules";
 import { getSalonSettings } from "../settings/service";
 import { type AdminActor, requireStaff } from "./admin";
+import { asDatedHours, loadShiftRows } from "./date-hours";
 
 type Executor = Pick<Database, "select">;
 type TimeOffRow = typeof timeOff.$inferSelect;
@@ -90,6 +91,7 @@ async function scheduleConflicts(
       endsAt: a.endsAt,
     })),
     workingHours: hours.map((h) => ({ weekday: h.weekday, start: h.startTime, end: h.endTime })),
+    datedWorkingHours: asDatedHours(await loadShiftRows(db, [staffId])),
     timeOff: offs.map((o) => ({ start: o.startsAt, end: o.endsAt })),
   }).flatMap((conflict) => {
     const row = byId.get(conflict.id);

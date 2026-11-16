@@ -64,7 +64,14 @@ export function Sheet({
                 <CloseIcon />
               </Dialog.Close>
             </header>
-            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">{children}</div>
+            <section
+              aria-label={title}
+              // biome-ignore lint/a11y/noNoninteractiveTabindex: a scroll region needs keyboard focus for Page Down and arrow navigation
+              tabIndex={0}
+              className="min-h-0 flex-1 overflow-y-auto px-5 py-5"
+            >
+              {children}
+            </section>
             {footer && (
               <footer
                 ref={setFooterNode}

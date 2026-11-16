@@ -8,6 +8,8 @@
  * hand-rolled offset math.
  */
 
+import { type DatedWorkingHours, hoursForDate } from "./dated-hours";
+
 const MS_PER_MINUTE = 60_000;
 
 export interface TimeRange {
@@ -26,6 +28,7 @@ export interface WorkingRange {
 export interface StaffAvailabilityInput {
   staffId: string;
   workingHours: WorkingRange[];
+  datedWorkingHours?: DatedWorkingHours[];
   timeOff: TimeRange[];
   /** Blocking appointments (cancelled ones excluded by the caller); `end` includes buffers. */
   appointments: TimeRange[];
@@ -100,7 +103,7 @@ export function computeAvailability(input: AvailabilityInput): ComputedSlot[] {
 
   const slots: ComputedSlot[] = [];
   for (const member of input.staff) {
-    for (const hours of member.workingHours) {
+    for (const hours of hoursForDate(date, member.workingHours, member.datedWorkingHours)) {
       if (hours.weekday !== weekday) continue;
       const { startMs: rangeStart, endMs: rangeEnd } = resolveWorkingRange(date, timeZone, hours);
 

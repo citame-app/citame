@@ -37,11 +37,12 @@ export function ConfirmDialog({
         <Dialog.Backdrop className="fixed inset-0 z-50 bg-scrim transition-opacity duration-200 data-ending-style:opacity-0 data-starting-style:opacity-0" />
         <Dialog.Viewport className="fixed inset-0 z-50 grid place-items-end sm:place-items-center">
           <Dialog.Popup className="sob-rise flex max-h-[92dvh] w-full max-w-md flex-col overflow-hidden rounded-t-xl border border-line bg-surface shadow-lg transition-[transform,opacity] duration-200 data-ending-style:translate-y-4 data-ending-style:opacity-0 data-starting-style:translate-y-4 sm:rounded-xl">
-            <div className="min-h-0 overflow-y-auto p-6">
+            {/* biome-ignore lint/a11y/noNoninteractiveTabindex: a scroll region needs keyboard focus for Page Down and arrow navigation */}
+            <section aria-label={title} tabIndex={0} className="min-h-0 overflow-y-auto p-6">
               <Dialog.Title className="font-display text-xl font-semibold">{title}</Dialog.Title>
               <Dialog.Description className="mt-2 text-muted">{description}</Dialog.Description>
               {children}
-            </div>
+            </section>
             <div
               ref={setActions}
               data-dialog-actions

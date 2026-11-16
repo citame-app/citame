@@ -127,7 +127,7 @@ The [official Spanish feature catalog](https://biz.booksy.com/es-es/funcionalida
 - [ ] Parallel-client service capacity in addition to resources, combinations and processing gaps.
 - [ ] Optional home appointments with reviewed travel area/fees and protected travel time.
 - [ ] Calendar import from Google/Apple-compatible feeds/files, with duplicate/conflict handling; external account activation requires its credentials.
-- [ ] Date-specific staff shifts and safe copying to future dates/weeks, beyond weekly hours/time-off.
+- [x] Date-specific staff shifts and safe copying to future dates/weeks, beyond weekly hours/time-off. [Guide](date-shifts.md).
 - [ ] Time-specific happy-hour and last-minute promotions, beyond existing validity windows and generic offers.
 - [ ] Unlimited-visit membership terms and usage safeguards, beyond the implemented discrete prepaid visits.
 - [ ] Shareable social creative for services/offers/reviews, plus moderated portfolio and booking/QR/widget entry.
@@ -155,3 +155,11 @@ Final form refinement verification: the rebuilt production image passes **20 int
 After the operator-close correction, the complete web suite passes **713 tests**, forced type checks and lint pass, and the rebuilt web bundle passes all four service-option/uncertain-booking browser regressions. The remaining grouped delivery items and additional Booksy single-business gaps are still open.
 
 The shared-dialog refinement also passes all **eight photo/CSV browser regressions**. This verifies that success notices leave confirmation actions reachable and preserves the previous private-photo and transfer flows.
+
+## Dated shift delivery
+
+Owners/managers can review specific-date openings, closures, weekly restoration and bounded copying of effective source hours into explicit target dates. A versioned review captures source/target hours, affected appointments, offers and settings; changed reviews cannot overwrite newer work. Actor-scoped immutable batch receipts recover uncertain responses without replaying old changes over a colleague's newer schedule. Existing appointments retain their dates/status/price. Incompatible waitlist holds expire without reversing the entry/scheduling lock order, allowing other professionals to use shared resources. Availability, booking, rescheduling, recurrence, waitlist acceptance, calendar windows and scoped offline sync share the effective-date rules. The desktop replica upgrades without losing cursor or queued changes. [Operation, limits and verification](date-shifts.md).
+
+Full verification passes with **969 API, 715 web, 149 contract and 47 database tests**. Desktop/core verification passes **127 tests**; four environment-dependent tests remain explicitly ignored. Four actual light/dark mobile/desktop Chromium workflows pass for an occupied-date review, unchanged original appointment, uncertain apply recovery, changed-source rejection, refreshed two-week copy, Spanish layout, axe and overflow checks. A reproduced long-review keyboard defect is corrected in shared panels with a live Page Down regression. Forced type checks and repository lint pass. The broad scheduling/mobile release blocks remain open for their other listed work.
+
+Final shift refinements pass **716 web tests**, forced types and lint, plus the four shift browser workflows with a translated-active-tab visibility regression. The rebuilt API production image passes **13 shift/rule cases on Bun 1.4.4 with a read-only filesystem**. The shared keyboard/scroll changes also pass the eight intake workflows and eight photo/CSV browser regressions. These are isolated fixtures, with no external provider activation.

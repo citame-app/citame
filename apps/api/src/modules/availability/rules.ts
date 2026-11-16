@@ -3,6 +3,7 @@
  * Like `compute.ts` there is no I/O or clock access: `now` and the salon timezone come in.
  */
 import { resolveWorkingRange } from "./compute";
+import { type DatedWorkingHours, hoursForDate } from "./dated-hours";
 
 const MS_PER_MINUTE = 60_000;
 
@@ -33,6 +34,7 @@ export interface WindowInput {
   minNoticeMinutes: number;
   maxDaysAhead: number;
   workingHours: WeeklyRange[];
+  datedWorkingHours?: DatedWorkingHours[];
   timeOff: Interval[];
 }
 
@@ -49,10 +51,11 @@ function fitsWorkingHours(
   endsAt: Date,
   timeZone: string,
   workingHours: WeeklyRange[],
+  datedWorkingHours?: DatedWorkingHours[],
 ): boolean {
   const date = toZoned(startsAt, timeZone).toPlainDate();
   const weekday = date.dayOfWeek % 7; // Temporal: 1 = Monday ... 7 = Sunday
-  const ranges = workingHours
+  const ranges = hoursForDate(date, workingHours, datedWorkingHours)
     .filter((h) => h.weekday === weekday)
     .map((h) => resolveWorkingRange(date, timeZone, h))
     .sort((a, b) => a.startMs - b.startMs);
@@ -83,7 +86,7 @@ export function bookingViolations(input: WindowInput): BookingViolation[] {
   const daysAhead = today.until(startDate, { largestUnit: "days" }).days;
   if (daysAhead > input.maxDaysAhead) violations.push("max_days_ahead");
 
-  if (!fitsWorkingHours(startsAt, endsAt, timeZone, input.workingHours)) {
+  if (!fitsWorkingHours(startsAt, endsAt, timeZone, input.workingHours, input.datedWorkingHours)) {
     violations.push("outside_working_hours");
   }
   if (overlapsAny(startsAt, endsAt, input.timeOff)) violations.push("time_off");
@@ -98,6 +101,7 @@ export type ConflictReason = "outside_working_hours" | "time_off";
 export interface ConflictInput {
   appointments: { id: string; status: string; startsAt: Date; endsAt: Date }[];
   workingHours: WeeklyRange[];
+  datedWorkingHours?: DatedWorkingHours[];
   timeOff: Interval[];
   timeZone: string;
   now: Date;
@@ -117,7 +121,15 @@ export function findConflicts(input: ConflictInput): ScheduleConflict[] {
   for (const a of input.appointments) {
     if (a.status === "cancelled" || a.endsAt.getTime() <= input.now.getTime()) continue;
     const reasons: ConflictReason[] = [];
-    if (!fitsWorkingHours(a.startsAt, a.endsAt, input.timeZone, input.workingHours)) {
+    if (
+      !fitsWorkingHours(
+        a.startsAt,
+        a.endsAt,
+        input.timeZone,
+        input.workingHours,
+        input.datedWorkingHours,
+      )
+    ) {
       reasons.push("outside_working_hours");
     }
     if (overlapsAny(a.startsAt, a.endsAt, input.timeOff)) reasons.push("time_off");

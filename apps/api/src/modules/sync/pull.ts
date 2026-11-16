@@ -4,6 +4,7 @@ import {
   appointment,
   clientProfile,
   type Database,
+  dateShift,
   salonSettings,
   service,
   serviceStaff,
@@ -142,6 +143,19 @@ async function loadVisible(
           endTime: hhmm(r.endTime),
         });
       }
+      break;
+    }
+    case "date_shift": {
+      const rows = await db.select().from(dateShift).where(inArray(dateShift.id, ids));
+      for (const row of rows.filter((row) => ownCalendar(row.staffId)))
+        put(row.id, {
+          id: row.id,
+          staffId: row.staffId,
+          date: row.date,
+          ranges: row.ranges,
+          version: row.version,
+          updatedAt: row.updatedAt.toISOString(),
+        });
       break;
     }
     case "time_off": {

@@ -1,5 +1,8 @@
 import {
   createTimeOffRequestSchema,
+  dateShiftCommitSchema,
+  dateShiftInputSchema,
+  dateShiftsQuerySchema,
   idSchema,
   listTimeOffQuerySchema,
   setWorkingHoursRequestSchema,
@@ -20,6 +23,7 @@ import type { AppEnv } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
 import { getStaffAccess, setStaffAccess } from "./access";
 import { listAdminStaff, updateStaff } from "./admin";
+import { commitDateShifts, getDateShifts, previewDateShifts } from "./date-shifts";
 import {
   createTimeOff,
   deleteTimeOff,
@@ -41,6 +45,45 @@ export function staffAdminRoutes({ db, now = () => new Date() }: AppDeps) {
     .get("/", async (c) => {
       const scope = authorizeStaffList(c.get("principal"));
       return c.json({ staff: await listAdminStaff(db, scope) });
+    })
+    .get("/:id/date-shifts", async (c) => {
+      c.header("cache-control", "private, no-store");
+      const query = parseOrThrow(dateShiftsQuerySchema, c.req.query());
+      return c.json(
+        await getDateShifts(
+          db,
+          staffId(c.req.param("id")),
+          query.from,
+          query.to,
+          c.get("principal"),
+          now(),
+        ),
+      );
+    })
+    .post("/:id/date-shifts/preview", async (c) => {
+      c.header("cache-control", "private, no-store");
+      return c.json(
+        await previewDateShifts(
+          db,
+          staffId(c.req.param("id")),
+          parseOrThrow(dateShiftInputSchema, await readJson(c)),
+          c.get("principal"),
+          now(),
+        ),
+      );
+    })
+    .post("/:id/date-shifts", async (c) => {
+      c.header("cache-control", "private, no-store");
+      return c.json(
+        await commitDateShifts(
+          db,
+          staffId(c.req.param("id")),
+          parseOrThrow(dateShiftCommitSchema, await readJson(c)),
+          c.get("principal"),
+          now(),
+        ),
+        201,
+      );
     })
     .get("/:id/access", async (c) =>
       c.json(await getStaffAccess(db, staffId(c.req.param("id")), c.get("principal"))),

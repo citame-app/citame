@@ -5,6 +5,7 @@ import type { TimedService } from "../resources/reservations";
 import { filterResourceAvailability } from "../resources/reservations";
 import { getBookableServices } from "../services/service";
 import { getSalonSettings } from "../settings/service";
+import { asDatedHours, loadShiftRows } from "../staff/date-hours";
 import { assertStaffExists, staffQualifiedFor } from "../staff/service";
 import { computeAvailability, totalBlockMinutes } from "./compute";
 
@@ -32,7 +33,7 @@ export async function findAvailability(
   const windowStart = new Date(dayStart.epochMilliseconds);
   const windowEnd = new Date(dayStart.add({ days: 1 }).epochMilliseconds);
 
-  const [hours, offs, offered, booked] = await Promise.all([
+  const [hours, offs, offered, booked, dated] = await Promise.all([
     db
       .select()
       .from(workingHours)
@@ -75,6 +76,7 @@ export async function findAvailability(
           gt(appointment.endsAt, windowStart),
         ),
       ),
+    loadShiftRows(db, staffIds, query.date, query.date),
   ]);
 
   const computed = computeAvailability({
@@ -87,6 +89,7 @@ export async function findAvailability(
     blockMinutes: totalBlockMinutes(services),
     staff: staffIds.map((staffId) => ({
       staffId,
+      datedWorkingHours: asDatedHours(dated, staffId),
       workingHours: hours
         .filter((h) => h.staffId === staffId)
         .map((h) => ({ weekday: h.weekday, start: h.startTime, end: h.endTime })),

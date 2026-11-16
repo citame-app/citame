@@ -1,11 +1,16 @@
 import { resolveWorkingRange } from "./compute";
+import { type DatedWorkingHours, hoursForDate } from "./dated-hours";
 import type { WeeklyRange } from "./rules";
 
 export interface WindowsInput {
   from: Date;
   to: Date;
   timeZone: string;
-  staff: { staffId: string; workingHours: WeeklyRange[] }[];
+  staff: {
+    staffId: string;
+    workingHours: WeeklyRange[];
+    datedWorkingHours?: DatedWorkingHours[];
+  }[];
 }
 
 export interface ResolvedWindow {
@@ -35,7 +40,7 @@ export function workingWindows(input: WindowsInput): ResolvedWindow[] {
   ) {
     const weekday = date.dayOfWeek % 7; // Temporal: 1 = Monday ... 7 = Sunday
     for (const member of input.staff) {
-      for (const hours of member.workingHours) {
+      for (const hours of hoursForDate(date, member.workingHours, member.datedWorkingHours)) {
         if (hours.weekday !== weekday) continue;
         const { startMs, endMs } = resolveWorkingRange(date, timeZone, hours);
         if (startMs < to.getTime() && endMs > from.getTime()) {

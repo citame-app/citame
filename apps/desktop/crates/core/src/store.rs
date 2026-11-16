@@ -57,6 +57,11 @@ const MIGRATIONS: &[&str] = &[
         resolution TEXT);
     CREATE INDEX conflict_open ON conflict (entity_id) WHERE resolved_at IS NULL;
     "#,
+    // 2: date-specific schedule exceptions (existing replicas retain their outbox/cursor).
+    r#"
+    CREATE TABLE date_shift (id TEXT PRIMARY KEY, staff_id TEXT NOT NULL, date TEXT NOT NULL, json TEXT NOT NULL);
+    CREATE INDEX date_shift_staff_date ON date_shift(staff_id,date);
+    "#,
 ];
 
 const MIRROR_TABLES: &[&str] = &[
@@ -65,6 +70,7 @@ const MIRROR_TABLES: &[&str] = &[
     "staff",
     "service_staff",
     "working_hours",
+    "date_shift",
     "time_off",
     "salon_settings",
     "appointment",
@@ -114,6 +120,7 @@ fn apply_change(tx: &Transaction, c: &RawChange) -> Result<()> {
         "staff",
         "service_staff",
         "working_hours",
+        "date_shift",
         "time_off",
         "salon_settings",
     ];
@@ -182,6 +189,10 @@ fn upsert(tx: &Transaction, c: &RawChange) -> Result<()> {
                  ON CONFLICT(id) DO UPDATE SET staff_id = excluded.staff_id, json = excluded.json",
                 params![v.id, v.staff_id, serde_json::to_string(&v)?],
             )?;
+        }
+        "date_shift" => {
+            let value: DateShift = parse(&c.data, "date_shift", id)?;
+            tx.execute("INSERT INTO date_shift (id,staff_id,date,json) VALUES (?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET staff_id=excluded.staff_id,date=excluded.date,json=excluded.json",params![value.id,value.staff_id,value.date,serde_json::to_string(&value)?])?;
         }
         "time_off" => {
             let v: TimeOff = parse(&c.data, "time_off", id)?;
@@ -373,6 +384,10 @@ impl Store {
 
     pub fn working_hours(&self) -> Result<Vec<WorkingHours>> {
         self.rows("SELECT json FROM working_hours")
+    }
+
+    pub fn date_shifts(&self) -> Result<Vec<DateShift>> {
+        self.rows("SELECT json FROM date_shift ORDER BY date,staff_id,id")
     }
 
     pub fn time_off_between(&self, from_ms: i64, to_ms: i64) -> Result<Vec<TimeOff>> {

@@ -58,6 +58,7 @@ import { accountingEndpoints } from "./accounting-endpoints";
 import { bookingPolicyEndpoints } from "./booking-policy-endpoints";
 import type { ApiClient } from "./client";
 import { commerceEndpoints } from "./commerce-endpoints";
+import { dateShiftEndpoints } from "./date-shift-endpoints";
 import { giftCardEndpoints } from "./gift-card-endpoints";
 import { intakeEndpoints } from "./intake-endpoints";
 import { inventoryEndpoints } from "./inventory-endpoints";
@@ -103,6 +104,7 @@ type CreateBooking = Omit<CreateAppointmentRequest, "clientId" | "client">;
 /** Every call the web app makes, typed from the shared contracts and validated at runtime. */
 export function createEndpoints(client: ApiClient) {
   return {
+    dateShifts: dateShiftEndpoints(client),
     intake: intakeEndpoints(client),
     commerce: commerceEndpoints(client),
     bookingPolicy: bookingPolicyEndpoints(client),
