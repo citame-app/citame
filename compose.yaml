@@ -138,7 +138,7 @@ services:
   # `docker compose --profile mail up -d mailpit`, then SMTP_URL=smtp://localhost:1025.
   mailpit:
     profiles: ["mail"]
-    image: axllent/mailpit:v1.29
+    image: axllent/mailpit:v1.33
     restart: unless-stopped
     ports:
       - "127.0.0.1:1025:1025"
