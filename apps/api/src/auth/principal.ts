@@ -108,12 +108,20 @@ export function requireAuth(
         : method === "GET" || method === "POST";
       if (
         !DESKTOP_PROXY_ROUTE.test(path) ||
-        (["/me", "/me/desktop-workspaces", "/admin/commerce/unpaid"].includes(path) &&
+        ([
+          "/me",
+          "/me/desktop-workspaces",
+          "/admin/commerce/unpaid",
+          "/admin/commerce/capabilities",
+        ].includes(path) &&
           method !== "GET") ||
         (path.startsWith("/admin/inventory/") && !inventoryAllowed) ||
         (path.startsWith("/admin/commerce/checkouts/") &&
           path.endsWith("/prices") &&
           method !== "PUT") ||
+        ((path.startsWith("/admin/commerce/payments/") ||
+          (path.startsWith("/admin/commerce/checkouts/") && path.endsWith("/void"))) &&
+          method !== "POST") ||
         (path.startsWith("/admin/staff/") && path.includes("/date-shifts") && !dateShiftAllowed) ||
         (path.startsWith("/admin/staff/") &&
           path.endsWith("/working-hours") &&

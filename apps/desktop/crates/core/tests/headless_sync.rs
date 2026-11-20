@@ -1000,9 +1000,15 @@ fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
             .any(|p| p.id == product_id)
     );
     let before = device.transport.inventory_product(product_id).unwrap();
+    assert!(device.transport.can_assign_walk_in_sales().unwrap());
+    let mut staff_lookup = Device::sign_in();
+    staff_lookup.sync();
+    let staff_id: uuid::Uuid = catalog(&staff_lookup).staff.parse().unwrap();
     let sale = WalkInSale {
         idempotency_key: uuid::Uuid::now_v7(),
         client_id: None,
+        staff_id: Some(staff_id),
+        use_client_discount: None,
         lines: vec![
             SaleItem::Product {
                 product_id,
@@ -1034,9 +1040,18 @@ fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
     assert_eq!(paid.status, "paid");
     let web = browser.rest_get(&format!("/admin/commerce/checkouts/{}", receipt.id));
     assert_eq!(web["paidCents"], 4200);
+    assert_eq!(web["staffId"], staff_id.to_string());
     let history = device
         .transport
-        .checkout_history("Synthetic walk-in product", 1)
+        .checkout_history(
+            &sob_core::billing::CheckoutHistoryFilters {
+                search: "Synthetic walk-in product".into(),
+                status: Some("paid"),
+                method: Some("external_card"),
+                ..Default::default()
+            },
+            1,
+        )
         .unwrap();
     let saved = history
         .checkouts
@@ -1055,6 +1070,64 @@ fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
     let after = device.transport.inventory_product(product_id).unwrap();
     assert_eq!(after.stock_on_hand, before.stock_on_hand - 2);
     assert_eq!(after.stock_reserved, 0);
+
+    let unpaid = WalkInSale {
+        idempotency_key: uuid::Uuid::now_v7(),
+        lines: vec![SaleItem::Product {
+            product_id,
+            quantity: 1,
+        }],
+        discount_cents: 0,
+        tip_cents: 0,
+        ..sale.clone()
+    };
+    let open = device.transport.create_walk_in_sale(&unpaid).unwrap();
+    assert_eq!(
+        device
+            .transport
+            .inventory_product(product_id)
+            .unwrap()
+            .stock_reserved,
+        1
+    );
+    let voided = device.transport.void_checkout(&open).unwrap();
+    assert_eq!(voided.status, "void");
+    assert_eq!(device.transport.void_checkout(&open).unwrap().id, voided.id);
+    assert_eq!(
+        device
+            .transport
+            .inventory_product(product_id)
+            .unwrap()
+            .stock_reserved,
+        0
+    );
+
+    let payment = paid.manual_refunds_available().next().unwrap();
+    let refund = sob_core::billing::RefundAttempt::new(1200, "Synthetic partial return").unwrap();
+    let updated = device
+        .transport
+        .record_checkout_refund(&paid, payment.id, &refund)
+        .unwrap();
+    assert_eq!(updated.status, "partially_refunded");
+    assert_eq!(
+        updated.manual_refunds_available().next().unwrap().available,
+        3000
+    );
+    let replayed = device
+        .transport
+        .record_checkout_refund(&paid, payment.id, &refund)
+        .unwrap();
+    assert_eq!(replayed.refunds.len(), 1);
+    let web = browser.rest_get(&format!("/admin/commerce/checkouts/{}", receipt.id));
+    assert_eq!(web["refundedCents"], 1200);
+    assert_eq!(
+        device
+            .transport
+            .inventory_product(product_id)
+            .unwrap()
+            .stock_on_hand,
+        before.stock_on_hand - 2
+    );
 }
 
 #[test]

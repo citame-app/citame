@@ -10,10 +10,10 @@ use std::time::Duration;
 use crate::auth::{AuthError, AuthProvider, BrowserWorkspace, SessionHandle, TokenStore};
 use crate::backoff::Backoff;
 use crate::billing::{
-    AppointmentCheckout, CashCommand, CashSession, CheckoutFinalPrice, CheckoutPage,
-    ImportedPartialPayment, ImportedPartialPaymentPreview, ImportedPricePreview,
-    ImportedPriceReview, ImportedSettlement, ImportedSettlementStatus, ManualTender,
-    PaymentAttempt, WalkInSale,
+    AppointmentCheckout, CashCommand, CashSession, CheckoutFinalPrice, CheckoutHistoryFilters,
+    CheckoutPage, CheckoutRefund, ImportedPartialPayment, ImportedPartialPaymentPreview,
+    ImportedPricePreview, ImportedPriceReview, ImportedSettlement, ImportedSettlementStatus,
+    ManualTender, PaymentAttempt, RefundAttempt, WalkInSale,
 };
 use crate::inventory::{
     ContentWriteError, LedgerPage, LedgerQuery, MovementPage, PRODUCTS_PATH, PackageContent,
@@ -294,15 +294,32 @@ impl HttpTransport {
         Ok(response.workspaces)
     }
 
-    pub fn checkout_history(&self, term: &str, page: u32) -> Result<CheckoutPage, TransportError> {
-        if term.trim().encode_utf16().count() > 150 || !(1..=100_000).contains(&page) {
+    pub fn checkout_history(
+        &self,
+        filters: &CheckoutHistoryFilters,
+        page: u32,
+    ) -> Result<CheckoutPage, TransportError> {
+        if filters.search.trim().encode_utf16().count() > 150 || !(1..=100_000).contains(&page) {
             return Err(TransportError::BadRequest("Invalid receipt search".into()));
         }
-        let query = url::form_urlencoded::Serializer::new(String::new())
-            .append_pair("search", term.trim())
+        let mut query = url::form_urlencoded::Serializer::new(String::new());
+        query
+            .append_pair("search", filters.search.trim())
             .append_pair("page", &page.to_string())
-            .append_pair("pageSize", "15")
-            .finish();
+            .append_pair("pageSize", "15");
+        if let Some(status) = filters.status {
+            query.append_pair("status", status);
+        }
+        if let Some(method) = filters.method {
+            query.append_pair("method", method);
+        }
+        if let Some(from) = filters.from {
+            query.append_pair("from", &from.to_rfc3339());
+        }
+        if let Some(to) = filters.to {
+            query.append_pair("to", &to.to_rfc3339());
+        }
+        let query = query.finish();
         read_response(
             self.get(
                 &self.agent,
@@ -330,6 +347,23 @@ impl HttpTransport {
             .transpose()?;
         let balance = receipt.external_balance;
         validate_checkout(receipt, appointment, balance)
+    }
+
+    pub fn can_assign_walk_in_sales(&self) -> Result<bool, TransportError> {
+        #[derive(serde::Deserialize)]
+        struct Permission {
+            #[serde(rename = "allSales")]
+            all_sales: bool,
+        }
+        #[derive(serde::Deserialize)]
+        struct Capabilities {
+            permissions: Permission,
+        }
+        let response: Capabilities = read_response(
+            self.get(&self.agent, "/admin/commerce/capabilities", None)?,
+            false,
+        )?;
+        Ok(response.permissions.all_sales)
     }
 
     pub fn create_walk_in_sale(
@@ -440,7 +474,81 @@ impl HttpTransport {
                 "Invalid payment acknowledgement".into(),
             ));
         }
-        self.refresh_checkout(checkout)
+        self.refresh_checkout(checkout).map_err(|_| {
+            TransportError::Server(
+                "Payment recorded, but the receipt could not be refreshed".into(),
+            )
+        })
+    }
+
+    pub fn void_checkout(
+        &self,
+        checkout: &AppointmentCheckout,
+    ) -> Result<AppointmentCheckout, TransportError> {
+        if !checkout.can_void() {
+            return Err(TransportError::BadRequest(
+                "This receipt cannot be voided".into(),
+            ));
+        }
+        let id = parse_id(&checkout.id)?;
+        let appointment = checkout
+            .appointment_id
+            .as_deref()
+            .map(parse_id)
+            .transpose()?;
+        let updated = self.post_json(
+            &format!("/admin/commerce/checkouts/{id}/void"),
+            &serde_json::json!({}),
+        )?;
+        let updated = validate_checkout(updated, appointment, checkout.external_balance)?;
+        if parse_id(&updated.id).ok() != Some(id) || updated.status != "void" {
+            return Err(TransportError::Server(
+                "Invalid void acknowledgement".into(),
+            ));
+        }
+        Ok(updated)
+    }
+
+    pub fn record_checkout_refund(
+        &self,
+        checkout: &AppointmentCheckout,
+        payment_id: uuid::Uuid,
+        attempt: &RefundAttempt,
+    ) -> Result<AppointmentCheckout, TransportError> {
+        if !checkout
+            .manual_refunds_available()
+            .any(|payment| payment.id == payment_id && attempt.amount_cents <= payment.available)
+        {
+            return Err(TransportError::BadRequest(
+                "This payment cannot be refunded for the requested amount".into(),
+            ));
+        }
+        let refund: CheckoutRefund = self.post_json(
+            &format!("/admin/commerce/payments/{payment_id}/refunds"),
+            attempt,
+        )?;
+        if refund.payment_id != payment_id
+            || refund.amount_cents != attempt.amount_cents
+            || refund.status != "succeeded"
+            || refund.reason != attempt.reason
+        {
+            return Err(TransportError::Server(
+                "Invalid refund acknowledgement".into(),
+            ));
+        }
+        let receipt = self.refresh_checkout(checkout).map_err(|_| {
+            TransportError::Server("Refund recorded, but the receipt could not be refreshed".into())
+        })?;
+        if !receipt
+            .refunds
+            .iter()
+            .any(|confirmed| confirmed.id == refund.id)
+        {
+            return Err(TransportError::Server(
+                "Refund missing from refreshed receipt".into(),
+            ));
+        }
+        Ok(receipt)
     }
 
     pub fn refresh_checkout(

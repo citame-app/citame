@@ -9,6 +9,7 @@ enum CatalogTab {
     Services,
     Products,
     Clients,
+    Staff,
     Custom,
 }
 
@@ -35,6 +36,10 @@ pub(super) struct SaleDesk {
     _changed: Vec<Subscription>,
     lines: Vec<Line>,
     client: Option<(Uuid, String)>,
+    staff: Option<(Uuid, String)>,
+    use_client_discount: bool,
+    can_assign_staff: bool,
+    access_request: Arc<()>,
     products: Option<ProductPage>,
     product_query: ProductQuery,
     loading_products: Option<Arc<()>>,
@@ -61,7 +66,12 @@ impl SaleDesk {
                 parse_reviewed_amount(text)
             }
         };
-        Some((amount(&self.discount)?, amount(&self.tip)?))
+        let discount = if self.use_client_discount {
+            0
+        } else {
+            amount(&self.discount)?
+        };
+        Some((discount, amount(&self.tip)?))
     }
 
     fn build_sale(&self, cx: &App) -> Option<WalkInSale> {
@@ -88,6 +98,8 @@ impl SaleDesk {
                 })
                 .collect(),
             client_id: self.client.as_ref().map(|(id, _)| *id),
+            staff_id: self.staff.as_ref().map(|(id, _)| *id),
+            use_client_discount: self.use_client_discount.then_some(true),
             discount_cents,
             tip_cents,
         })
@@ -152,6 +164,7 @@ impl Root {
                 root.search_sale_products(1, cx);
             }
         }));
+        let access_request = Arc::new(());
         self.overlay = Overlay::WalkIn(Box::new(SaleDesk {
             tab: CatalogTab::Services,
             search,
@@ -162,6 +175,10 @@ impl Root {
             _changed: changed,
             lines: vec![],
             client: None,
+            staff: None,
+            use_client_discount: false,
+            can_assign_staff: false,
+            access_request: access_request.clone(),
             products: None,
             loading_products: None,
             product_query: ProductQuery::default(),
@@ -171,6 +188,28 @@ impl Root {
             error: None,
         }));
         cx.notify();
+        let Some(transport) = self.svc.transport() else {
+            return;
+        };
+        let session = self.svc.session.clone();
+        cx.spawn(async move |root, cx| {
+            let allowed = cx
+                .background_executor()
+                .spawn(async move { transport.can_assign_walk_in_sales().unwrap_or(false) })
+                .await;
+            let _ = root.update(cx, |root, cx| {
+                if !Arc::ptr_eq(&session, &root.svc.session) {
+                    return;
+                }
+                if let Overlay::WalkIn(sale) = &mut root.overlay
+                    && Arc::ptr_eq(&sale.access_request, &access_request)
+                {
+                    sale.can_assign_staff = allowed;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     fn search_sale_products(&mut self, page: u32, cx: &mut Context<Self>) {
@@ -307,11 +346,16 @@ impl Root {
                 (CatalogTab::Services, Key::SaleServices),
                 (CatalogTab::Products, Key::SaleProducts),
                 (CatalogTab::Clients, Key::ClientDirectory),
+                (CatalogTab::Staff, Key::Staff),
                 (CatalogTab::Custom, Key::SaleCustomItem),
             ]
             .into_iter()
             .enumerate()
-            .filter(|(_, (tab, _))| *tab != CatalogTab::Clients || self.directory_enabled())
+            .filter(|(_, (tab, _))| match tab {
+                CatalogTab::Clients => self.directory_enabled(),
+                CatalogTab::Staff => sale.can_assign_staff,
+                _ => true,
+            })
             .map(|(index, (tab, label))| {
                 self.button(
                     ("sale-tab", index),
@@ -374,6 +418,29 @@ impl Root {
                                 cx.listener(|root, _, _, cx| {
                                     if let Overlay::WalkIn(sale) = &mut root.overlay {
                                         sale.client = None;
+                                        sale.use_client_discount = false;
+                                        cx.notify();
+                                    }
+                                }),
+                            ))
+                        }),
+                )
+            })
+            .when_some(sale.staff.as_ref(), |view, (_, name)| {
+                view.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(format!("{} · {name}", self.t(Key::Staff)))
+                        .when(sale.pending.is_none(), |view| {
+                            view.child(self.button(
+                                "sale-remove-staff",
+                                self.t(Key::SaleRemove),
+                                Kind::Ghost,
+                                cx.listener(|root, _, _, cx| {
+                                    if let Overlay::WalkIn(sale) = &mut root.overlay {
+                                        sale.staff = None;
                                         cx.notify();
                                     }
                                 }),
@@ -419,10 +486,32 @@ impl Root {
                     })
             }))
             .when(sale.pending.is_none(), |view| {
-                view.child(self.label(Key::CheckoutDiscount))
-                    .child(sale.discount.clone())
-                    .child(self.label(Key::SaleTip))
-                    .child(sale.tip.clone())
+                view.when(sale.client.is_some(), |view| {
+                    view.child(self.button(
+                        "sale-client-discount",
+                        self.t(Key::SaleClientDiscount),
+                        if sale.use_client_discount {
+                            Kind::Primary
+                        } else {
+                            Kind::Ghost
+                        },
+                        cx.listener(|root, _, _, cx| {
+                            if let Overlay::WalkIn(sale) = &mut root.overlay
+                                && sale.client.is_some()
+                                && sale.pending.is_none()
+                            {
+                                sale.use_client_discount = !sale.use_client_discount;
+                                cx.notify();
+                            }
+                        }),
+                    ))
+                })
+                .when(!sale.use_client_discount, |view| {
+                    view.child(self.label(Key::CheckoutDiscount))
+                        .child(sale.discount.clone())
+                })
+                .child(self.label(Key::SaleTip))
+                .child(sale.tip.clone())
             });
         let content = div()
             .flex()
@@ -532,6 +621,36 @@ impl Root {
                                 && sale.pending.is_none()
                             {
                                 sale.client = Some((id, label.clone()));
+                                sale.use_client_discount = false;
+                                cx.notify();
+                            }
+                        }),
+                    ));
+                }
+            }
+            CatalogTab::Staff => {
+                for member in self
+                    .staff
+                    .iter()
+                    .filter(|member| {
+                        member.active && member.display_name.to_lowercase().contains(&needle)
+                    })
+                    .take(12)
+                {
+                    let Ok(id) = Uuid::parse_str(&member.id) else {
+                        continue;
+                    };
+                    let label = member.display_name.clone();
+                    view = view.child(self.button(
+                        SharedString::from(format!("sale-staff-{id}")),
+                        label.clone(),
+                        Kind::Ghost,
+                        cx.listener(move |root, _, _, cx| {
+                            if let Overlay::WalkIn(sale) = &mut root.overlay
+                                && sale.can_assign_staff
+                                && sale.pending.is_none()
+                            {
+                                sale.staff = Some((id, label.clone()));
                                 cx.notify();
                             }
                         }),

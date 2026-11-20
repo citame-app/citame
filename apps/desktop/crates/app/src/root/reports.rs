@@ -80,7 +80,7 @@ pub(super) struct Desk {
     outcomes: outcomes::Desk,
 }
 
-fn parse_report_date(value: &str) -> Option<NaiveDate> {
+pub(super) fn parse_report_date(value: &str) -> Option<NaiveDate> {
     let input = value.trim();
     let date = NaiveDate::parse_from_str(input, "%Y-%m-%d").ok()?;
     (input.len() == 10 && date.year() > 0 && date.to_string() == input).then_some(date)

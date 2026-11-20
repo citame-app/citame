@@ -177,16 +177,19 @@ export function commerceAdminRoutes(deps: AppDeps) {
         201,
       ),
     )
-    .get("/checkouts/:id", async (c) =>
-      c.json(
-        await getCheckout(
-          deps.db,
-          checkoutId(c.req.param("id")),
-          c.get("principal"),
-          deps.now?.() ?? new Date(),
-        ),
-      ),
-    )
+    .get("/checkouts/:id", async (c) => {
+      const principal = c.get("principal");
+      const receipt = await getCheckout(
+        deps.db,
+        checkoutId(c.req.param("id")),
+        principal,
+        deps.now?.() ?? new Date(),
+      );
+      return c.json({
+        ...receipt,
+        canRefund: permissionsFor(principal.role, principal.accessPreset).refunds,
+      });
+    })
     .post("/checkouts/:id/void", async (c) =>
       c.json(await voidCheckout(deps.db, checkoutId(c.req.param("id")), c.get("principal"))),
     )

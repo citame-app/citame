@@ -8,6 +8,9 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Added
 
+- Desktop receipts support final service prices, walk-in checkout, transaction history with date, tender and status filters, sale attribution, customer discounts and partial or full refunds of cash and external-card payments, and cancellation of unpaid receipts with stock release.
+- The Desktop management menu opens permitted Cloud areas in the browser with the linked account.
+
 - Weekly team shifts in the web admin with dated overrides, absence intervals and links to individual schedules. [Scheduling guide](docs/date-shifts.md).
 - Native weekly team shifts read the offline replica, mark pending blocks and open the selected professional's calendar. Dates and names remain visible while scrolling, and a date field jumps directly to a week.
 

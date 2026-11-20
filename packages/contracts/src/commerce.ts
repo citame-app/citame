@@ -252,6 +252,7 @@ export const checkoutPaymentSchema = z.object({
 });
 export const checkoutSchema = z.object({
   externalBalance: externalBalanceSchema.optional(),
+  canRefund: z.boolean().optional(),
   id: idSchema,
   pricingVersion: z.number().int().positive().optional(),
   appointmentId: idSchema.nullable(),

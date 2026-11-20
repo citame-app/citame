@@ -1,4 +1,8 @@
-import { type MeResponse, updateProfileRequestSchema } from "@sob/contracts";
+import {
+  type DesktopWorkspacesResponse,
+  type MeResponse,
+  updateProfileRequestSchema,
+} from "@sob/contracts";
 import { user } from "@sob/db";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
@@ -30,9 +34,13 @@ export function meRoutes({ db }: Pick<AppDeps, "db">) {
     .route("/desktop-devices", desktopDeviceAccountRoutes(db))
     .route("/notification-preferences", preferenceRoutes({ db }))
     .get("/desktop-workspaces", (c) =>
-      c.json({ workspaces: desktopWorkspaces(c.get("principal")) }, 200, {
-        "Cache-Control": "private, no-store",
-      }),
+      c.json<DesktopWorkspacesResponse>(
+        { workspaces: desktopWorkspaces(c.get("principal")) },
+        200,
+        {
+          "Cache-Control": "private, no-store",
+        },
+      ),
     )
     .get("/", async (c) => c.json(await respond(c.get("principal"))))
     .patch("/", async (c) => {

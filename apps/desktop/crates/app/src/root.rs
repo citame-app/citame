@@ -2285,6 +2285,8 @@ impl Root {
                     return;
                 }
                 history.receipt = None;
+                let page = history.page;
+                self.load_sales_history(page, false, cx);
             }
             Overlay::SalesHistory(_) => {
                 self.load_register(cx);

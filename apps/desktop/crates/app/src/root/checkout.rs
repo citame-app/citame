@@ -6,6 +6,8 @@ use sob_core::sync::TransportError;
 use std::sync::Arc;
 use uuid::Uuid;
 
+mod refunds;
+
 pub(super) enum CheckoutReview {
     Loading(Arc<()>),
     Failed,
@@ -30,6 +32,8 @@ impl CheckoutReview {
             receipt: Arc::new(receipt),
             selected: None,
             request: None,
+            refund: None,
+            confirming_void: false,
             amount,
             _amount_changed: amount_changed,
             busy: false,
@@ -40,7 +44,9 @@ impl CheckoutReview {
     }
 
     pub(super) fn can_go_back(&self) -> bool {
-        !matches!(self, Self::Receipt(form) if form.busy)
+        !matches!(self, Self::Receipt(form) if form.busy
+            || form.request.is_some()
+            || form.refund.as_ref().is_some_and(|editor| editor.has_attempt()))
     }
 }
 
@@ -51,6 +57,8 @@ pub(super) struct ReceiptForm {
     amount: Entity<TextField>,
     _amount_changed: Subscription,
     price_fields: Vec<PriceField>,
+    refund: Option<refunds::RefundEditor>,
+    confirming_void: bool,
     busy: bool,
     refreshing: bool,
     observed_revision: i64,
@@ -159,6 +167,10 @@ impl Root {
         if form.busy
             || form.refreshing
             || form.request.is_some()
+            || form
+                .refund
+                .as_ref()
+                .is_some_and(|editor| editor.has_attempt())
             || form.observed_revision == revision
         {
             return;
@@ -224,7 +236,12 @@ impl Root {
             return;
         };
         let collectible = form.receipt.collectible_cents();
-        if form.busy || form.refreshing || collectible == 0 {
+        if form.busy
+            || form.refreshing
+            || form.refund.is_some()
+            || form.confirming_void
+            || collectible == 0
+        {
             return;
         }
         let Some(amount) = form.reviewed_amount(cx) else {
@@ -269,7 +286,12 @@ impl Root {
                         form.selected = None;
                         form.request = None;
                     }
-                    Err(TransportError::BadRequest(message)) => form.error = Some(message),
+                    Err(
+                        TransportError::BadRequest(message) | TransportError::Forbidden(message),
+                    ) => {
+                        form.request = None;
+                        form.error = Some(message);
+                    }
                     Err(_) => form.error = Some(fallback.to_owned()),
                 }
                 cx.notify();
@@ -290,7 +312,12 @@ impl Root {
         let Some(CheckoutReview::Receipt(form)) = self.checkout_review_mut() else {
             return;
         };
-        if form.busy || form.refreshing || form.request.is_some() {
+        if form.busy
+            || form.refreshing
+            || form.request.is_some()
+            || form.refund.is_some()
+            || form.confirming_void
+        {
             return;
         }
         let Some(prices) = form.reviewed_prices(cx) else {
@@ -444,7 +471,12 @@ impl Root {
                                 .child(message.clone()),
                         )
                     });
-                let reviewing_prices = receipt.can_review_prices()
+                let body = body
+                    .child(self.render_refunds(form, cx))
+                    .child(self.render_void_receipt(form, cx));
+                let reviewing_prices = form.refund.is_none()
+                    && !form.confirming_void
+                    && receipt.can_review_prices()
                     && self.status.connectivity == Connectivity::Online
                     && !form.busy
                     && !form.refreshing
@@ -494,7 +526,9 @@ impl Root {
                             }),
                     )
                 });
-                if receipt.status == "paid" {
+                if form.refund.is_some() || form.confirming_void {
+                    body
+                } else if receipt.status == "paid" {
                     body.child(self.t(Key::ReceiptPaid))
                 } else if self.status.connectivity != Connectivity::Online {
                     body.child(self.t(Key::CheckoutOffline))
@@ -685,6 +719,8 @@ mod tests {
                     receipt: Arc::new(receipt),
                     selected: None,
                     request: None,
+                    refund: None,
+            confirming_void: false,
                     amount,
                     _amount_changed: amount_changed,
                     busy: false,
@@ -722,6 +758,8 @@ mod tests {
                     price_fields: Vec::new(),
                     selected: Some(ManualTender::Cash),
                     request: None,
+                    refund: None,
+                    confirming_void: false,
                     amount,
                     _amount_changed: amount_changed,
                     busy: false,

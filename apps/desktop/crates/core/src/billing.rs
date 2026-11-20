@@ -139,10 +139,53 @@ pub struct AppointmentCheckout {
     #[serde(default)]
     pub lines: Vec<CheckoutPriceLine>,
     protection: Option<CheckoutProtection>,
+    fulfilled_at: Option<DateTime<Utc>>,
     payments: Vec<CheckoutPayment>,
+    #[serde(default)]
+    pub can_refund: bool,
+    #[serde(default)]
+    pub refunds: Vec<CheckoutRefund>,
 }
 
 impl AppointmentCheckout {
+    pub fn manual_refunds_available(&self) -> impl Iterator<Item = RefundablePayment> + '_ {
+        self.payments.iter().filter_map(|payment| {
+            if !self.can_refund || payment.status != "succeeded" {
+                return None;
+            }
+            let id = payment.id?;
+            let tender = match payment.method.as_deref()? {
+                "cash" => ManualTender::Cash,
+                "external_card" => ManualTender::ExternalCard,
+                _ => return None,
+            };
+            let already_committed: u64 = self
+                .refunds
+                .iter()
+                .filter(|refund| refund.payment_id == id && refund.status != "failed")
+                .map(|refund| u64::from(refund.amount_cents))
+                .sum();
+            let available =
+                u64::from(payment.amount_cents).saturating_sub(already_committed) as u32;
+            (available > 0).then_some(RefundablePayment {
+                id,
+                tender,
+                available,
+            })
+        })
+    }
+
+    pub fn can_void(&self) -> bool {
+        self.status == "open"
+            && self.fulfilled_at.is_none()
+            && self.protection.is_none()
+            && self.paid_cents == 0
+            && self
+                .payments
+                .iter()
+                .all(|payment| payment.status == "failed")
+    }
+
     pub fn can_review_prices(&self) -> bool {
         self.status == "open"
             && self.external_balance.is_none()
@@ -225,6 +268,10 @@ pub struct WalkInSale {
     pub lines: Vec<SaleItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub staff_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub use_client_discount: Option<bool>,
     pub discount_cents: u32,
     pub tip_cents: u32,
 }
@@ -240,6 +287,15 @@ pub struct CheckoutSummary {
     pub lines: Vec<CheckoutPriceLine>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct CheckoutHistoryFilters {
+    pub search: String,
+    pub status: Option<&'static str>,
+    pub method: Option<&'static str>,
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CheckoutPage {
     pub checkouts: Vec<CheckoutSummary>,
@@ -252,8 +308,51 @@ struct CheckoutProtection {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CheckoutPayment {
+    id: Option<Uuid>,
+    method: Option<String>,
+    #[serde(default)]
+    amount_cents: u32,
     status: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckoutRefund {
+    pub id: Uuid,
+    pub payment_id: Uuid,
+    pub amount_cents: u32,
+    pub status: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RefundablePayment {
+    pub id: Uuid,
+    pub tender: ManualTender,
+    pub available: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefundAttempt {
+    pub(crate) idempotency_key: Uuid,
+    pub(crate) amount_cents: u32,
+    pub(crate) reason: String,
+}
+
+impl RefundAttempt {
+    pub fn new(amount_cents: u32, reason: &str) -> Option<Self> {
+        let reason = reason.trim();
+        ((1..=999_999_999).contains(&amount_cents)
+            && (3..=300).contains(&reason.encode_utf16().count()))
+        .then(|| Self {
+            idempotency_key: Uuid::now_v7(),
+            amount_cents,
+            reason: reason.to_owned(),
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
