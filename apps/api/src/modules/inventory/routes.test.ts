@@ -355,10 +355,11 @@ test("ledger pages and CSV exclude both later and earlier-started transactions t
     const first = stockLedgerSchema.parse(await (await call(owner, `${path}?${filters}`)).json());
     expect(first).toMatchObject({
       movements: [{ reason: "Anchored ledger 2" }],
-      anchor: expect.stringMatching(/^[A-Za-z0-9_-]+~\d+$/),
       hasNewer: false,
     });
-    anchor = first.anchor!;
+    if (!first.anchor) throw new Error("Expected a stock history anchor");
+    expect(first.anchor).toMatch(/^[A-Za-z0-9_-]+~\d+$/);
+    anchor = first.anchor;
     await add(3, 2);
   } finally {
     release.resolve();

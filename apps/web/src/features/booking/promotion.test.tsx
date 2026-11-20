@@ -94,7 +94,9 @@ test("a quote arriving after the appointment selection changed cannot approve th
   fireEvent.click(screen.getByRole("button", { name: "Change booking time" }));
   resolve(Response.json(quote));
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: "Review offer" })).not.toBeDisabled(),
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Review offer" }).disabled).toBe(
+      false,
+    ),
   );
   expect(screen.getByLabelText("Reviewed booking hash")).toHaveTextContent("none");
   expect(screen.getByLabelText("Booking can confirm")).toHaveTextContent("false");

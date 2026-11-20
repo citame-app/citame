@@ -111,7 +111,9 @@ test("the production API and worker refuse an installation behind the release le
   } finally {
     try {
       await data?.close();
-      await admin.db.execute(sql`drop database if exists ${sql.identifier(`sob_test_${suffix}`)}`);
+      await admin.db.execute(
+        sql`drop database if exists ${sql.identifier(`sob_test_${suffix}`)} with (force)`,
+      );
     } finally {
       await admin.close();
     }

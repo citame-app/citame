@@ -109,7 +109,9 @@ test("an uncertain merge stays frozen through a later authentication failure and
   expect(login).toHaveAttribute("target", "_blank");
   expect(login).toHaveAttribute("rel", "noopener");
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: "Recover this merge" })).not.toBeDisabled(),
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Recover this merge" }).disabled,
+    ).toBe(false),
   );
   fireEvent.click(screen.getByRole("button", { name: "Recover this merge" }));
   await screen.findByText("Profiles joined. Original history and financial records are preserved.");
