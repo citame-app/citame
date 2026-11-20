@@ -40,6 +40,7 @@ describe("route mapping", () => {
     const { proxy, seen } = proxyWith();
     const paths = [
       "/me",
+      "/me/desktop-workspaces",
       "/sync/pull?since=0",
       "/sync/push",
       "/sync/stream",

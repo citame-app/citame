@@ -44,9 +44,28 @@ export function parseScopes(value: string | null | undefined): OAuthScope[] {
 /** First-party public client of the desktop app, pre-registered at startup. */
 export const DESKTOP_CLIENT_ID = "sob-desktop";
 
+export const desktopWorkspaceSchema = z.enum([
+  "waitlist",
+  "clients",
+  "services",
+  "staff",
+  "resources",
+  "sales",
+  "transactions",
+  "inventory",
+  "benefits",
+  "reports",
+  "commissions",
+  "marketing",
+  "reputation",
+  "settings",
+  "whatsapp",
+]);
+export type DesktopWorkspace = z.infer<typeof desktopWorkspaceSchema>;
+
 /** Routes supported by the desktop client and exposed through the same-origin proxy. */
 export const DESKTOP_PROXY_ROUTE =
-  /^\/(?:me|sync\/(?:pull|push|stream)|intake\/requirements|appointments\/[\da-f-]+\/context|admin\/staff\/[\da-f-]+\/(?:date-shifts(?:\/preview)?|working-hours)|admin\/reports\/(?:summary|clients|outcomes(?:\/export)?)|admin\/reviews(?:\/requests(?:\/[\da-f-]+\/email)?|\/[\da-f-]+\/(?:moderation|reply))?|admin\/notifications\/inbox(?:\/archive)?|admin\/waitlist\/desk(?:\/policy|\/[\da-f-]+\/(?:cancel|accept|decline))?|admin\/inventory\/(?:movements(?:\/export)?|products(?:\/[\da-f-]+(?:\/(?:package-content|movements))?)?)|admin\/commerce\/(?:unpaid|appointments\/[\da-f-]+\/imported-(?:price|settlement|partial-payment)|checkouts(?:\/[\da-f-]+(?:\/(?:payments|prices))?)?|cash-sessions(?:\/(?:current|adjust|[\da-f-]+\/close))?))(?:\?|$)/;
+  /^\/(?:me(?:\/desktop-workspaces)?|sync\/(?:pull|push|stream)|intake\/requirements|appointments\/[\da-f-]+\/context|admin\/staff\/[\da-f-]+\/(?:date-shifts(?:\/preview)?|working-hours)|admin\/reports\/(?:summary|clients|outcomes(?:\/export)?)|admin\/reviews(?:\/requests(?:\/[\da-f-]+\/email)?|\/[\da-f-]+\/(?:moderation|reply))?|admin\/notifications\/inbox(?:\/archive)?|admin\/waitlist\/desk(?:\/policy|\/[\da-f-]+\/(?:cancel|accept|decline))?|admin\/inventory\/(?:movements(?:\/export)?|products(?:\/[\da-f-]+(?:\/(?:package-content|movements))?)?)|admin\/commerce\/(?:unpaid|appointments\/[\da-f-]+\/imported-(?:price|settlement|partial-payment)|checkouts(?:\/[\da-f-]+(?:\/(?:payments|prices))?)?|cash-sessions(?:\/(?:current|adjust|[\da-f-]+\/close))?))(?:\?|$)/;
 
 export const oauthConnectionIdSchema = z.string().min(1).max(512);
 export const oauthConnectionsSchema = z.object({

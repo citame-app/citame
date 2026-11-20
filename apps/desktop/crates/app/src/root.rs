@@ -53,6 +53,7 @@ mod transactions;
 mod unpaid;
 mod waitlist;
 mod walk_in;
+mod workspaces;
 
 const HOUR_PX: f32 = 60.0;
 const GUTTER_PX: f32 = 56.0;
@@ -229,6 +230,7 @@ struct ConflictDraft {
 
 enum Overlay {
     None,
+    Cloud(workspaces::CloudDesk),
     New(Box<NewForm>),
     Slot(slots::SelectedSlot),
     Details(Box<Details>),
@@ -276,7 +278,6 @@ pub struct Root {
     disconnect_failed: bool,
     date: NaiveDate,
     calendar_now: DateTime<Utc>,
-    cloud_calendar_error: bool,
     tz: Tz,
     view: Option<DayView>,
     week_mode: bool,
@@ -352,7 +353,6 @@ impl Root {
             disconnect_failed: false,
             date: start_date.unwrap_or_else(|| Utc::now().with_timezone(&tz).date_naive()),
             calendar_now: Utc::now(),
-            cloud_calendar_error: false,
             tz,
             view: None,
             week_mode: false,
@@ -1536,48 +1536,6 @@ impl Root {
         Some(link)
     }
 
-    fn open_cloud_calendar(&mut self, cx: &mut Context<Self>) {
-        let Some(link) = self.cloud_calendar_url() else {
-            return;
-        };
-        let Some(session) = self.svc.current_session() else {
-            return;
-        };
-        self.cloud_calendar_error = false;
-        cx.notify();
-        let auth = self.svc.auth.clone();
-        let session_handle = self.svc.session.clone();
-        cx.spawn(async move |root, cx| {
-            let handoff = cx
-                .background_executor()
-                .spawn(async move { auth.begin_browser_calendar(&session, &link).ok().flatten() })
-                .await;
-            let should_open = root
-                .update(cx, |root, cx| {
-                    if !Arc::ptr_eq(&session_handle, &root.svc.session)
-                        || root.svc.current_session().is_none()
-                    {
-                        return false;
-                    }
-                    if let Some(local) = handoff.as_ref() {
-                        cx.open_url(&local.url());
-                        true
-                    } else {
-                        root.cloud_calendar_error = true;
-                        cx.notify();
-                        false
-                    }
-                })
-                .unwrap_or(false);
-            if should_open && let Some(handoff) = handoff {
-                cx.background_executor()
-                    .spawn(async move { handoff.serve() })
-                    .await;
-            }
-        })
-        .detach();
-    }
-
     fn render_header(&self, cx: &mut Context<Self>) -> gpui::Div {
         div()
             .flex()
@@ -1651,21 +1609,13 @@ impl Root {
             .when(self.cloud_calendar_url().is_some(), |d| {
                 d.child(
                     self.button(
-                        "open-cloud-calendar",
-                        self.t(Key::OpenCloudCalendar),
+                        "open-cloud-management",
+                        self.t(Key::CloudManagement),
                         Kind::Ghost,
-                        cx.listener(|this, _, _, cx| this.open_cloud_calendar(cx)),
+                        cx.listener(|this, _, _, cx| this.open_web_management(cx)),
                     )
                     .gap_2()
                     .child(appointment_badges::Icon::External.element(theme::muted())),
-                )
-            })
-            .when(self.cloud_calendar_error, |d| {
-                d.child(
-                    div()
-                        .text_sm()
-                        .text_color(theme::conflict_fg())
-                        .child(self.t(Key::OpenCloudCalendarError)),
                 )
             })
             .child(div().flex_1())
@@ -3508,6 +3458,9 @@ impl Render for Root {
                 Screen::Main => {
                     let overlay = match &self.overlay {
                         Overlay::None => None,
+                        Overlay::Cloud(desk) => {
+                            Some(self.render_web_management(desk, window.viewport_size(), cx))
+                        }
                         Overlay::New(f) => Some(self.render_new(f, window.viewport_size(), cx)),
                         Overlay::Slot(slot) => Some(self.render_slot_actions(slot, cx)),
                         Overlay::Details(d) => {

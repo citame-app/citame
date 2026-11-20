@@ -137,6 +137,57 @@ impl ProxyDevice {
         }
     }
 
+    pub fn assert_browser_workspace(&self) {
+        use sob_core::auth::BrowserWorkspace;
+        let session = self.session.read().unwrap().clone().unwrap();
+        let handoff = self
+            .auth
+            .begin_browser_workspace(&session, BrowserWorkspace::Settings)
+            .unwrap()
+            .unwrap();
+        let url = Url::parse(&handoff.url()).unwrap();
+        let server = std::thread::spawn(move || handoff.serve());
+        let mut page = self.agent.get(url.as_str()).call().unwrap();
+        assert_eq!(page.status().as_u16(), 200);
+        let document = page.body_mut().read_to_string().unwrap();
+        server.join().unwrap();
+        let ticket = document
+            .split_once("name=\"ticket\" value=\"")
+            .unwrap()
+            .1
+            .split_once('"')
+            .unwrap()
+            .0;
+        let response = self
+            .agent
+            .post(
+                self.base
+                    .join("/api/auth/desktop/browser")
+                    .unwrap()
+                    .as_str(),
+            )
+            .header("Origin", url.origin().ascii_serialization())
+            .content_type("application/x-www-form-urlencoded")
+            .send(format!("ticket={ticket}"))
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 303);
+        assert_eq!(response.headers()["location"], "/admin/settings");
+        let cookie = response
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .map(|value| value.to_str().unwrap().split(';').next().unwrap())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let mut me = self
+            .agent
+            .get(self.base.join("/api/me").unwrap().as_str())
+            .header("Cookie", cookie)
+            .call()
+            .unwrap();
+        assert_eq!(response_json(&mut me)["user"]["id"], session.user_id);
+    }
+
     fn bearer_header(&self) -> (String, String) {
         let mut linked = self.session.read().unwrap().clone().unwrap();
         let mut headers = self.auth.authorize(&mut linked).unwrap();

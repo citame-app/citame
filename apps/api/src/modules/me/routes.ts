@@ -8,6 +8,7 @@ import { parseOrThrow, readJson } from "../../http";
 import { preferenceRoutes } from "../../notifications/routes";
 import { oauthConnectionRoutes } from "../../oauth/connections";
 import { desktopDeviceAccountRoutes } from "../../oauth/desktop-devices";
+import { desktopWorkspaces } from "../../oauth/desktop-workspaces";
 import { getPhone, updateProfile } from "./service";
 
 export function meRoutes({ db }: Pick<AppDeps, "db">) {
@@ -28,6 +29,11 @@ export function meRoutes({ db }: Pick<AppDeps, "db">) {
     .route("/connections", oauthConnectionRoutes(db))
     .route("/desktop-devices", desktopDeviceAccountRoutes(db))
     .route("/notification-preferences", preferenceRoutes({ db }))
+    .get("/desktop-workspaces", (c) =>
+      c.json({ workspaces: desktopWorkspaces(c.get("principal")) }, 200, {
+        "Cache-Control": "private, no-store",
+      }),
+    )
     .get("/", async (c) => c.json(await respond(c.get("principal"))))
     .patch("/", async (c) => {
       const principal = c.get("principal");

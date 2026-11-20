@@ -8,7 +8,29 @@ struct Ticket {
     ticket: String,
 }
 
-pub struct BrowserCalendar {
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserWorkspace {
+    Waitlist,
+    Clients,
+    Services,
+    Staff,
+    Resources,
+    Sales,
+    Transactions,
+    Inventory,
+    Benefits,
+    Reports,
+    Commissions,
+    Marketing,
+    Reputation,
+    Settings,
+    Whatsapp,
+    #[serde(other)]
+    Unknown,
+}
+
+pub struct BrowserHandoff {
     listener: TcpListener,
     origin: String,
     path: String,
@@ -22,14 +44,7 @@ impl BetterAuthSession {
         &self,
         session: &Session,
         calendar: &url::Url,
-    ) -> Result<Option<BrowserCalendar>, AuthError> {
-        let device = session
-            .oauth
-            .as_ref()
-            .and_then(|value| value.device.as_ref());
-        if device.is_none() && session.cookie.is_empty() {
-            return Ok(None);
-        }
+    ) -> Result<Option<BrowserHandoff>, AuthError> {
         if calendar.origin().ascii_serialization() != self.base_url
             || calendar.path() != "/admin/calendar"
         {
@@ -45,6 +60,47 @@ impl BetterAuthSession {
             .map(|value| value.as_ref())
             .unwrap_or("");
         let staff = calendar.get("staff").map(|value| value.as_ref());
+        let mut target = serde_json::json!({ "date": date, "view": view });
+        if let Some(staff) = staff {
+            target["staff"] = serde_json::json!(staff);
+        }
+        self.begin_browser_handoff(
+            session,
+            serde_json::json!({ "calendar": target }),
+            &[date, view, staff.unwrap_or("")],
+        )
+    }
+
+    pub fn begin_browser_workspace(
+        &self,
+        session: &Session,
+        workspace: BrowserWorkspace,
+    ) -> Result<Option<BrowserHandoff>, AuthError> {
+        let workspace = serde_json::json!(workspace);
+        let name = workspace
+            .as_str()
+            .filter(|name| *name != "unknown")
+            .ok_or_else(|| AuthError::Unexpected("Invalid workspace destination".into()))?;
+        self.begin_browser_handoff(
+            session,
+            serde_json::json!({ "workspace": name }),
+            &["workspace", name],
+        )
+    }
+
+    fn begin_browser_handoff(
+        &self,
+        session: &Session,
+        mut body: serde_json::Value,
+        fields: &[&str],
+    ) -> Result<Option<BrowserHandoff>, AuthError> {
+        let device = session
+            .oauth
+            .as_ref()
+            .and_then(|value| value.device.as_ref());
+        if device.is_none() && session.cookie.is_empty() {
+            return Ok(None);
+        }
         let listener =
             TcpListener::bind("127.0.0.1:0").map_err(|e| AuthError::Network(e.to_string()))?;
         listener
@@ -55,18 +111,11 @@ impl BetterAuthSession {
             .map_err(|e| AuthError::Network(e.to_string()))?
             .port();
         let origin = format!("http://127.0.0.1:{port}");
-        let mut target = serde_json::json!({ "date": date, "view": view });
-        if let Some(staff) = staff {
-            target["staff"] = serde_json::json!(staff);
-        }
-        let body = serde_json::json!({ "origin": origin, "calendar": target });
+        body["origin"] = serde_json::json!(origin);
         let mut response = if let Some(device) = device {
-            self.send_device_proof(
-                device,
-                "browser-ticket",
-                &[&origin, date, view, staff.unwrap_or("")],
-                body,
-            )?
+            let mut binding = vec![origin.as_str()];
+            binding.extend_from_slice(fields);
+            self.send_device_proof(device, "browser-ticket", &binding, body)?
         } else {
             self.agent
                 .post(&format!(
@@ -90,7 +139,7 @@ impl BetterAuthSession {
         {
             return Err(AuthError::Unexpected("Invalid browser ticket".into()));
         }
-        Ok(Some(BrowserCalendar {
+        Ok(Some(BrowserHandoff {
             listener,
             origin,
             path: format!("/{}", crate::pkce::new_verifier()),
@@ -100,7 +149,7 @@ impl BetterAuthSession {
     }
 }
 
-impl BrowserCalendar {
+impl BrowserHandoff {
     pub fn url(&self) -> String {
         format!("{}{}", self.origin, self.path)
     }
@@ -153,7 +202,7 @@ impl BrowserCalendar {
             let body = format!(
                 r#"<!doctype html><html lang="es"><meta charset="utf-8"><title>Citame</title>
 <form id="handoff" method="post" action="{cloud}/api/auth/desktop/browser">
-<input type="hidden" name="ticket" value="{}"><button type="submit">Abrir la agenda de Citame</button>
+<input type="hidden" name="ticket" value="{}"><button type="submit">Continuar a Citame</button>
 </form><script nonce="{nonce}">document.getElementById('handoff').requestSubmit();</script></html>"#,
                 self.ticket,
             );

@@ -12,7 +12,7 @@ use thiserror::Error;
 
 mod browser_calendar;
 mod device;
-pub use browser_calendar::BrowserCalendar;
+pub use browser_calendar::{BrowserHandoff, BrowserWorkspace};
 use device::DeviceLink;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

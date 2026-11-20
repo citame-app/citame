@@ -138,6 +138,8 @@ This client covers the appointment desk, notifications, waitlist requests, appoi
 
 For appointment receipts with a variable price or an advertised minimum, an authorized operator can enter the final amounts in the desktop app while online. The server checks the receipt revision and minimums before enabling collection. A deposit allowed by the booking policy remains collectible at the amount set by the server.
 
+**Manage online** opens the cloud management areas available to the signed-in account. Choose an area to open its original Citame page in the system browser. The linked device signs the requested destination, and Citame grants the browser a session for that same account through a one-use ticket. The calendar shortcut preserves the selected date and view.
+
 ### Pruebas locales con el calendario importado
 
 En el equipo donde se preparó la copia, abre **Citame (pruebas locales)** desde el menú de aplicaciones o ejecuta `~/.local/bin/citame-pruebas-locales`. El lanzador solicita el arranque de los servicios de usuario en segundo plano y abre la app de escritorio. Si la API no está disponible, puedes consultar la última réplica sincronizada. La app y la [agenda web](http://127.0.0.1:4275/admin/calendar) usan la misma copia editable en `http://127.0.0.1:4275`. Si necesitas vincular el equipo otra vez, elige **Iniciar sesión en el navegador** y aprueba el acceso de escritorio con la cuenta indicada en el archivo privado `~/.local/share/citame/local-desktop-test/local-owner.json`.

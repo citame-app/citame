@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use crate::auth::{AuthError, AuthProvider, SessionHandle, TokenStore};
+use crate::auth::{AuthError, AuthProvider, BrowserWorkspace, SessionHandle, TokenStore};
 use crate::backoff::Backoff;
 use crate::billing::{
     AppointmentCheckout, CashCommand, CashSession, CheckoutFinalPrice, CheckoutPage,
@@ -280,6 +280,18 @@ impl HttpTransport {
         }
         let receipt = self.post_json("/admin/commerce/checkouts", &input)?;
         validate_checkout(receipt, Some(id), balance)
+    }
+
+    pub fn browser_workspaces(&self) -> Result<Vec<BrowserWorkspace>, TransportError> {
+        #[derive(serde::Deserialize)]
+        struct Workspaces {
+            workspaces: Vec<BrowserWorkspace>,
+        }
+        let response: Workspaces = read_response(
+            self.get(&self.agent, "/me/desktop-workspaces", None)?,
+            false,
+        )?;
+        Ok(response.workspaces)
     }
 
     pub fn checkout_history(&self, term: &str, page: u32) -> Result<CheckoutPage, TransportError> {

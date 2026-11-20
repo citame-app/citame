@@ -3,6 +3,7 @@ import {
   DESKTOP_CLIENT_ID,
   DESKTOP_SIGN_IN_SCOPE,
   desktopDeviceLinkResponseSchema,
+  desktopWorkspaceSchema,
 } from "@sob/contracts";
 import { type Database, desktopDevice, oauthClient, session } from "@sob/db";
 import type { RedisClient } from "bun";
@@ -12,12 +13,13 @@ import { jwtVerify, SignJWT } from "jose";
 import { z } from "zod";
 import { recordAudit } from "../audit";
 import { requireRole } from "../auth/policy";
-import { type AppEnv, loadPrincipal } from "../auth/principal";
+import { type AppEnv, loadPrincipal, type Principal } from "../auth/principal";
 import type { AppConfig } from "../config";
 import { DomainError } from "../errors";
 import { parseOrThrow, readJson } from "../http";
 import { BearerError, type TokenVerifier } from "../mcp/verify";
 import { desktopResource } from "./desktop";
+import { desktopWorkspacePath } from "./desktop-workspaces";
 
 const tokenPrefix = "cd1.";
 export const isDesktopDeviceBearer = (header: string | undefined) =>
@@ -54,15 +56,28 @@ const calendarTarget = z.object({
   view: z.enum(["day", "week"]),
   staff: deviceId.optional(),
 });
-const browserTarget = z.object({
-  origin: loopbackOrigin,
-  calendar: calendarTarget,
-});
-const browserRequest = browserTarget.extend({ proof: proof.optional() });
+const calendarDestination = { calendar: calendarTarget };
+const workspaceDestination = { workspace: desktopWorkspaceSchema };
+const browserOrigin = { origin: loopbackOrigin, proof: proof.optional() };
+const browserRequest = z.union([
+  z.strictObject({ ...browserOrigin, ...calendarDestination }),
+  z.strictObject({ ...browserOrigin, ...workspaceDestination }),
+]);
 const browserSource = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("device"), id: deviceId }),
   z.object({ kind: z.literal("session"), id: z.string() }),
 ]);
+const savedBrowserTicket = z.union([
+  z.strictObject({ source: browserSource, ...calendarDestination }),
+  z.strictObject({ source: browserSource, ...workspaceDestination }),
+]);
+
+function browserPath(saved: z.infer<typeof savedBrowserTicket>, principal: Principal) {
+  if ("workspace" in saved) return desktopWorkspacePath(saved.workspace, principal);
+  const query = new URLSearchParams({ date: saved.calendar.date, view: saved.calendar.view });
+  if (saved.calendar.staff) query.set("staff", saved.calendar.staff);
+  return `/admin/calendar?${query}`;
+}
 const handoffTicket = z.string().length(43).regex(base64url);
 const proofWindowSeconds = 120;
 const spkiPrefix = Buffer.from("302a300506032b6570032100", "hex");
@@ -256,15 +271,14 @@ export function createDesktopDevices({
     })
     .post("/browser-ticket", async (c) => {
       const input = parseOrThrow(browserRequest, await readJson(c));
-      const { origin, calendar } = input;
+      const { origin } = input;
       let source: z.infer<typeof browserSource>;
       if (input.proof) {
-        const device = await verifyProof("browser-ticket", input.proof, [
-          origin,
-          calendar.date,
-          calendar.view,
-          calendar.staff ?? "",
-        ]);
+        const binding =
+          "workspace" in input
+            ? [origin, "workspace", input.workspace]
+            : [origin, input.calendar.date, input.calendar.view, input.calendar.staff ?? ""];
+        const device = await verifyProof("browser-ticket", input.proof, binding);
         source = { kind: "device", id: device.id };
       } else {
         if (c.req.header("origin") !== new URL(config.auth.baseURL).origin)
@@ -273,11 +287,17 @@ export function createDesktopDevices({
         if (!sessionId) throw new DomainError("unauthorized", "Browser handoff requires a session");
         source = { kind: "session", id: sessionId };
       }
-      if (!(await browserPrincipal(source))) throw new DomainError("forbidden", "Access denied");
+      const saved =
+        "workspace" in input
+          ? { source, workspace: input.workspace }
+          : { source, calendar: input.calendar };
+      const principal = await browserPrincipal(source);
+      if (!principal || !browserPath(saved, principal))
+        throw new DomainError("forbidden", "Access denied");
       const ticket = randomBytes(32).toString("base64url");
       await valkey.send("SET", [
         browserTicketKey(input.origin, ticket),
-        JSON.stringify({ source, calendar }),
+        JSON.stringify(saved),
         "EX",
         "60",
       ]);
@@ -297,18 +317,15 @@ export function createDesktopDevices({
       const serialized = await valkey.send("GETDEL", [browserTicketKey(origin.data, ticket.data)]);
       if (typeof serialized !== "string")
         throw new DomainError("unauthorized", "Expired browser handoff");
-      const saved = z
-        .object({ source: browserSource, calendar: calendarTarget })
-        .parse(JSON.parse(serialized));
+      const saved = savedBrowserTicket.parse(JSON.parse(serialized));
       const principal = await browserPrincipal(saved.source);
-      if (!principal) throw new DomainError("forbidden", "Access denied");
+      const path = principal && browserPath(saved, principal);
+      if (!path) throw new DomainError("forbidden", "Access denied");
       const response = await browserSession(principal.userId);
       if (!response.ok) return response;
       for (const cookie of response.headers.getSetCookie())
         c.header("Set-Cookie", cookie, { append: true });
-      const query = new URLSearchParams({ date: saved.calendar.date, view: saved.calendar.view });
-      if (saved.calendar.staff) query.set("staff", saved.calendar.staff);
-      return c.redirect(`/admin/calendar?${query}`, 303);
+      return c.redirect(path, 303);
     })
     .post("/link", async (c) => {
       const input = parseOrThrow(enrollment, await readJson(c));

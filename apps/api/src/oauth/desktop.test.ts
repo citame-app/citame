@@ -64,7 +64,10 @@ const outcomeExportPath = `/admin/reports/outcomes/export${outcomeParams}`;
 
 test("a desktop owner can review and replay a dated shift without broader staff access", async () => {
   const { access } = await tokens("owner", "dated-shifts-owner");
-  const [member] = await t.db.select().from(staffProfile).where(eq(staffProfile.displayName, "Ana"));
+  const [member] = await t.db
+    .select()
+    .from(staffProfile)
+    .where(eq(staffProfile.displayName, "Ana"));
   if (!member) throw new Error("Missing shift member");
   const date = "2026-03-10";
   const path = `/admin/staff/${member.id}/date-shifts`;
@@ -79,11 +82,15 @@ test("a desktop owner can review and replay a dated shift without broader staff 
     t.app.request(route, { method: "POST", headers, body: JSON.stringify(body) });
   const selection = { mode: "edit", changes: [{ date, ranges: [] }] };
   const { access: staff } = await tokens("staff", "dated-shifts-staff");
-  expect((await t.app.request(`${path}/preview`, {
-    method: "POST",
-    headers: { ...headers, authorization: `Bearer ${staff}` },
-    body: JSON.stringify(selection),
-  })).status).toBe(403);
+  expect(
+    (
+      await t.app.request(`${path}/preview`, {
+        method: "POST",
+        headers: { ...headers, authorization: `Bearer ${staff}` },
+        body: JSON.stringify(selection),
+      })
+    ).status,
+  ).toBe(403);
   const proposed = await post(`${path}/preview`, selection);
   expect(proposed.status).toBe(200);
   const review = dateShiftPreviewSchema.parse(await proposed.json());
@@ -361,6 +368,49 @@ test("linked devices renew independently and can be revoked from either client",
   const browserUser = await t.app.request("/me", { headers: { cookie: browserCookie } });
   expect(await browserUser.json()).toMatchObject({ user: { id: who.userId, role: "owner" } });
   expect((await redeemBrowser(browserTicket)).status).toBe(401);
+  const workspaceRequest = {
+    origin: browserOrigin,
+    workspace: "inventory",
+    proof: first.proof("browser-ticket", undefined, [browserOrigin, "workspace", "inventory"]),
+  };
+  expect(
+    (await endpoint("browser-ticket", { ...workspaceRequest, workspace: "settings" })).status,
+  ).toBe(401);
+  expect(
+    (
+      await endpoint("browser-ticket", {
+        ...workspaceRequest,
+        workspace: "https://outside.example.test",
+      })
+    ).status,
+  ).toBe(400);
+  expect((await endpoint("browser-ticket", { ...workspaceRequest, calendar })).status).toBe(400);
+  const workspaceTicket = await endpoint("browser-ticket", workspaceRequest);
+  expect(workspaceTicket.status).toBe(200);
+  const workspace = await redeemBrowser(
+    ((await workspaceTicket.json()) as { ticket: string }).ticket,
+  );
+  expect(workspace.status).toBe(303);
+  expect(workspace.headers.get("location")).toBe("/admin/commerce?view=inventory");
+  const restricted = await actor(t, "staff", "restricted-workspaces@example.test");
+  await t.db
+    .update(staffProfile)
+    .set({ accessPreset: "restricted" })
+    .where(eq(staffProfile.userId, restricted.userId));
+  const restrictedHeaders = {
+    origin: ORIGIN,
+    cookie: restricted.cookie,
+    "content-type": "application/json",
+  };
+  expect(
+    await (await t.app.request("/me/desktop-workspaces", { headers: restrictedHeaders })).json(),
+  ).toEqual({ workspaces: ["staff"] });
+  const deniedWorkspace = await t.app.request("/api/auth/desktop/browser-ticket", {
+    method: "POST",
+    headers: restrictedHeaders,
+    body: JSON.stringify({ origin: browserOrigin, workspace: "settings" }),
+  });
+  expect(deniedWorkspace.status).toBe(403);
   const revokedTicket = await issueBrowser();
   const payload = first.proof("token");
   const issuance = await endpoint("token", payload);
@@ -369,6 +419,11 @@ test("linked devices renew independently and can be revoked from either client",
   expect((await endpoint("token", payload)).status).toBe(401);
   expect((await endpoint("revoke", second.proof("token"))).status).toBe(401);
   expect((await endpoint("token", second.proof("token", 1))).status).toBe(401);
+  const menu = await request("/me/desktop-workspaces", firstToken);
+  expect(menu.status).toBe(200);
+  expect(await menu.json()).toMatchObject({
+    workspaces: expect.arrayContaining(["inventory", "settings", "clients"]),
+  });
   expect((await request("/sync/pull", firstToken)).status).toBe(200);
   const report = await request(reportPath, firstToken);
   expect(report.status).toBe(200);

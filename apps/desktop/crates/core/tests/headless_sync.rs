@@ -62,6 +62,20 @@ fn proxy_device() -> ProxyDevice {
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
+fn desktop_opens_cloud_management_with_the_linked_users_web_session() {
+    use sob_core::auth::BrowserWorkspace;
+    let device = proxy_device();
+    let workspaces = device.transport.browser_workspaces().unwrap();
+    assert!(
+        workspaces
+            .iter()
+            .any(|area| matches!(area, BrowserWorkspace::Settings))
+    );
+    device.assert_browser_workspace();
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_dated_shift_commits_and_replays_through_the_proxy() {
     let mut observer = Device::sign_in();
     observer.sync();
