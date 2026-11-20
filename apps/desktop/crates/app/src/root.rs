@@ -2828,18 +2828,7 @@ impl Root {
     }
 
     fn amount_label(&self, cents: i64, currency: &str) -> String {
-        let separator = if self.locale == Locale::EsAr {
-            ","
-        } else {
-            "."
-        };
-        let sign = if cents < 0 { "−" } else { "" };
-        let cents = cents.unsigned_abs();
-        format!(
-            "{sign}{}{separator}{:02} {currency}",
-            cents / 100,
-            cents % 100
-        )
+        sob_core::receipt_print::amount_label(self.locale, cents, currency)
     }
 
     fn render_details(

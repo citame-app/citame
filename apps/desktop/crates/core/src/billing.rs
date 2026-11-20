@@ -133,6 +133,14 @@ pub struct AppointmentCheckout {
     pub total_cents: u32,
     pub discount_cents: u32,
     pub paid_cents: u64,
+    pub created_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub tip_cents: u32,
+    #[serde(default)]
+    pub tax_cents: u32,
+    #[serde(default)]
+    pub refunded_cents: u64,
+    pub reward: Option<ReceiptReward>,
     pub balance_cents: u32,
     pub payable_cents: Option<u32>,
     pub external_balance: Option<ExternalBalance>,
@@ -147,6 +155,17 @@ pub struct AppointmentCheckout {
     pub can_refund: bool,
     #[serde(default)]
     pub refunds: Vec<CheckoutRefund>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReceiptReward {
+    pub kind: String,
+    pub name: String,
+    pub code: Option<String>,
+    pub points_used: u32,
+    #[serde(default)]
+    pub returned_points: u32,
 }
 
 impl AppointmentCheckout {

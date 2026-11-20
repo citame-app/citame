@@ -8,6 +8,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 mod passes;
+mod print;
 mod refunds;
 mod stock_return;
 
@@ -43,6 +44,7 @@ impl CheckoutReview {
             stock_return_notice: None,
             confirming_void: false,
             amount,
+            print_opening: None,
             gift_code,
             _gift_code_changed: gift_code_changed,
             _amount_changed: amount_changed,
@@ -66,6 +68,7 @@ pub(super) struct ReceiptForm {
     request: Option<PaymentAttempt>,
     pass_picker: Option<passes::PassPicker>,
     amount: Entity<TextField>,
+    print_opening: Option<Arc<()>>,
     gift_code: Entity<TextField>,
     _gift_code_changed: Subscription,
     _amount_changed: Subscription,
@@ -515,7 +518,16 @@ impl Root {
                 let body = body
                     .child(self.render_refunds(form, cx))
                     .child(self.render_void_receipt(form, cx))
-                    .child(self.render_stock_returns(form, cx));
+                    .child(self.render_stock_returns(form, cx))
+                    .when(
+                        !form.busy
+                            && !form.refreshing
+                            && form.request.is_none()
+                            && form.refund.is_none()
+                            && form.stock_return.is_none()
+                            && !form.confirming_void,
+                        |view| view.child(self.render_print_receipt(form, cx)),
+                    );
                 let reviewing_prices = form.refund.is_none()
                     && form.stock_return.is_none()
                     && !form.confirming_void
@@ -807,6 +819,7 @@ mod tests {
                     stock_return_notice: None,
                     confirming_void: false,
                     amount,
+                    print_opening: None,
                     gift_code,
                     _gift_code_changed: gift_code_changed,
                     _amount_changed: amount_changed,
@@ -853,6 +866,7 @@ mod tests {
                     stock_return_notice: None,
                     confirming_void: false,
                     amount,
+                    print_opening: None,
                     gift_code,
                     _gift_code_changed: gift_code_changed,
                     _amount_changed: amount_changed,
