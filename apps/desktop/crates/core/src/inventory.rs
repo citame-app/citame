@@ -31,6 +31,15 @@ pub(crate) struct StockReturnCommand {
 }
 
 impl StockReturnAttempt {
+    pub fn valid_input(quantity: u32, maximum: u32, reason: &str) -> bool {
+        (1..=maximum).contains(&quantity)
+            && (3..=300).contains(&reason.trim().encode_utf16().count())
+    }
+
+    pub fn reason(&self) -> &str {
+        &self.command.reason
+    }
+
     pub fn line_id(&self) -> Uuid {
         self.command.checkout_line_id
     }

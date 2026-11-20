@@ -62,7 +62,7 @@ fn proxy_device() -> ProxyDevice {
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
-fn desktop_opens_cloud_management_with_the_linked_users_web_session() {
+fn desktop_opens_cloud_management_with_the_linked_users_web_session_through_the_proxy() {
     use sob_core::auth::BrowserWorkspace;
     let device = proxy_device();
     let workspaces = device.transport.browser_workspaces().unwrap();
@@ -1154,6 +1154,8 @@ fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
             .reserve_stock_return(&attempt)
             .unwrap()
     );
+    // The first write may commit before Desktop can record its acknowledgement.
+    device.transport.return_inventory_stock(&attempt).unwrap();
     let persisted = Store::open(&replica).unwrap();
     assert!(!persisted.reserve_stock_return(&attempt).unwrap());
     let attempt = persisted
@@ -1179,6 +1181,8 @@ fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
     );
     let current = browser.rest_get(&format!("/admin/commerce/checkouts/{}", receipt.id));
     assert_eq!(current["refundedCents"], 1200);
+    let cloud_stock = browser.rest_get(&format!("/admin/inventory/products/{product_id}"));
+    assert_eq!(cloud_stock["stockOnHand"], before.stock_on_hand - 1);
 }
 
 #[test]

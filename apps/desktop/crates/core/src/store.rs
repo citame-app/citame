@@ -431,6 +431,20 @@ impl Store {
         Ok(())
     }
 
+    pub fn settle_stock_return(
+        &self,
+        attempt: &crate::inventory::StockReturnAttempt,
+        result: &std::result::Result<crate::inventory::Product, crate::sync::TransportError>,
+    ) -> Result<()> {
+        if matches!(
+            result,
+            Ok(_) | Err(crate::sync::TransportError::BadRequest(_))
+        ) {
+            self.clear_stock_return(attempt)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn set_meta_in(&mut self, key: &str, value: &str, generation: &str) -> Result<()> {
         let tx = self
             .conn

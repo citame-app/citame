@@ -107,6 +107,7 @@ export const inventoryEn = {
   "inventory.returnHelp": "Record only items physically returned. Refund money separately.",
   "inventory.returnLine": "Product to return",
   "inventory.returnDone": "Product returned to stock",
+  "inventory.returnQuantityError": "Enter a whole quantity between one and the units sold.",
   "inventory.cartHelp":
     "Products are reserved for 30 minutes once checkout is created. Pending or collected payments keep the reservation.",
   "inventory.customOptional": "Optional custom item",
@@ -225,6 +226,7 @@ export const inventoryEsAR: Record<keyof typeof inventoryEn, string> = {
     "Registra solo productos devueltos físicamente. La devolución del dinero se registra por separado.",
   "inventory.returnLine": "Producto a devolver",
   "inventory.returnDone": "Producto devuelto al inventario",
+  "inventory.returnQuantityError": "Introduce una cantidad entera entre una unidad y las vendidas.",
   "inventory.cartHelp":
     "Los productos se reservan durante 30 minutos al crear el cobro. Los pagos pendientes o cobrados mantienen la reserva.",
   "inventory.customOptional": "Concepto personalizado opcional",

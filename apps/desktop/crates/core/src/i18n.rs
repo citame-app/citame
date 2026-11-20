@@ -511,6 +511,8 @@ keys! {
     CheckoutStockReturnSold => ("Units sold", "Unidades vendidas"),
     CheckoutStockReturnDone => ("Product returned to stock", "Producto devuelto al inventario"),
     CheckoutStockReturnUnconfirmed => ("The stock return is unconfirmed. Retry this same request.", "La devolución de stock está sin confirmar. Reintenta esta misma solicitud."),
+    CheckoutStockReturnReviewBeforeDiscard => ("Check stock history before discarding this previous-generation return.", "Revisa el historial de stock antes de descartar esta devolución anterior a la restauración."),
+    CheckoutStockReturnDiscard => ("Discard old return request", "Descartar la solicitud anterior"),
     CheckoutStockReturnRestored => ("Inventory has been restored. Review the receipt again.", "Se restauró el inventario. Vuelve a revisar el recibo."),
     CheckoutRefund => ("Refund payment", "Devolver pago"),
     CheckoutRefunds => ("Refunds", "Devoluciones"),

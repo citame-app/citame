@@ -205,6 +205,14 @@ impl AppointmentCheckout {
         })
     }
 
+    pub fn stock_return_obsolete(&self, attempt: &crate::inventory::StockReturnAttempt) -> bool {
+        self.id.parse().ok() == Some(attempt.receipt_id)
+            && self
+                .stock_return_generation
+                .as_ref()
+                .is_some_and(|generation| generation != &attempt.command.generation)
+    }
+
     pub fn stock_return(
         &self,
         line_id: Uuid,
@@ -214,9 +222,7 @@ impl AppointmentCheckout {
     ) -> Option<crate::inventory::StockReturnAttempt> {
         let line = self.returnable_products().find(|line| line.id == line_id)?;
         let reason = reason.trim();
-        if !(1..=line.quantity).contains(&quantity)
-            || !(3..=300).contains(&reason.encode_utf16().count())
-        {
+        if !crate::inventory::StockReturnAttempt::valid_input(quantity, line.quantity, reason) {
             return None;
         }
         Some(crate::inventory::StockReturnAttempt {

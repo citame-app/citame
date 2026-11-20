@@ -13,7 +13,7 @@ impl ReturnEditor {
     fn input(&self, maximum: u32, cx: &App) -> Option<(u32, String)> {
         let quantity = self.quantity.read(cx).text().trim().parse().ok()?;
         let reason = self.reason.read(cx).text().trim();
-        ((1..=maximum).contains(&quantity) && (3..=300).contains(&reason.encode_utf16().count()))
+        StockReturnAttempt::valid_input(quantity, maximum, reason)
             .then(|| (quantity, reason.to_owned()))
     }
 }
@@ -77,7 +77,7 @@ impl Root {
             attempt,
         });
         form.error = None;
-        form.stock_return_done = false;
+        form.stock_return_notice = None;
         cx.notify();
     }
 
@@ -140,6 +140,9 @@ impl Root {
         let Some(attempt) = editor.attempt.clone() else {
             return;
         };
+        if form.receipt.stock_return_obsolete(&attempt) {
+            return;
+        }
         let receipt = form.receipt.clone();
         form.busy = true;
         form.error = None;
@@ -156,14 +159,11 @@ impl Root {
                 }
                 let pending = root.t(Key::CheckoutStockReturnUnconfirmed);
                 let store_failed = root.t(Key::InventoryStockStoreFailed);
-                let terminal = matches!(
-                    &result,
-                    Ok(_)
-                        | Err(TransportError::ReplicaGenerationChanged
-                            | TransportError::BadRequest(_))
-                );
-                let cleared = !terminal || root.svc.store.clear_stock_return(&attempt).is_ok();
-                let restored = root.t(Key::CheckoutStockReturnRestored);
+                let cleared = root
+                    .svc
+                    .store
+                    .settle_stock_return(&attempt, &result)
+                    .is_ok();
                 if result.is_ok() {
                     root.svc.wake(Wake::Manual);
                 }
@@ -186,12 +186,12 @@ impl Root {
                     Ok(_) => {
                         form.stock_return = None;
                         form.error = None;
-                        form.stock_return_done = true;
+                        form.stock_return_notice = Some(Key::CheckoutStockReturnDone);
                     }
                     Err(TransportError::ReplicaGenerationChanged) => {
                         form.stock_return = None;
                         form.observed_revision = -1;
-                        form.error = Some(restored.to_owned());
+                        form.stock_return_notice = Some(Key::CheckoutStockReturnRestored);
                     }
                     Err(TransportError::BadRequest(message)) => {
                         editor.attempt = None;
@@ -206,6 +206,32 @@ impl Root {
         .detach();
     }
 
+    fn discard_obsolete_stock_return(&mut self, cx: &mut Context<Self>) {
+        let store_failed = self.t(Key::InventoryStockStoreFailed);
+        let Some(CheckoutReview::Receipt(form)) = Self::checkout_review_in(&mut self.overlay)
+        else {
+            return;
+        };
+        let Some(attempt) = form
+            .stock_return
+            .as_ref()
+            .and_then(|editor| editor.attempt.as_ref())
+        else {
+            return;
+        };
+        if form.busy || !form.receipt.stock_return_obsolete(attempt) {
+            return;
+        }
+        if self.svc.store.clear_stock_return(attempt).is_ok() {
+            form.stock_return = None;
+            form.stock_return_notice = None;
+            form.error = None;
+        } else {
+            form.error = Some(store_failed.to_owned());
+        }
+        cx.notify();
+    }
+
     pub(super) fn render_stock_returns(
         &self,
         form: &ReceiptForm,
@@ -216,8 +242,8 @@ impl Root {
             .flex()
             .flex_col()
             .gap_2()
-            .when(form.stock_return_done, |view| {
-                view.child(div().text_sm().child(self.t(Key::CheckoutStockReturnDone)))
+            .when_some(form.stock_return_notice, |view, notice| {
+                view.child(div().text_sm().child(self.t(notice)))
             });
         let Some(editor) = &form.stock_return else {
             return body.when(
@@ -265,13 +291,24 @@ impl Root {
         }
         let body = body.when(!online, |view| view.child(self.t(Key::CheckoutOffline)));
         if let Some(attempt) = &editor.attempt {
+            let obsolete = form.receipt.stock_return_obsolete(attempt);
             return body
                 .child(format!(
                     "{}: {}",
                     self.t(Key::InventoryStockQuantity),
                     attempt.quantity()
                 ))
-                .when(online, |view| {
+                .child(attempt.reason().to_owned())
+                .when(online && obsolete, |view| {
+                    view.child(self.t(Key::CheckoutStockReturnReviewBeforeDiscard))
+                        .child(self.button(
+                            "discard-stock-return",
+                            self.t(Key::CheckoutStockReturnDiscard),
+                            Kind::Danger,
+                            cx.listener(|root, _, _, cx| root.discard_obsolete_stock_return(cx)),
+                        ))
+                })
+                .when(online && !obsolete, |view| {
                     view.child(self.button(
                         "retry-stock-return",
                         self.t(Key::InventoryStockRetry),
@@ -310,5 +347,60 @@ impl Root {
                     }
                 }),
             ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[gpui::test]
+    async fn a_restored_receipt_keeps_the_old_return_until_explicit_discard(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_dir, config) = crate::root::tests::desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        root.update(cx, |root, cx| {
+            root.svc.stop_sync();
+            let receipt_id = Uuid::now_v7();
+            let line_id = Uuid::now_v7();
+            let product_id = Uuid::now_v7();
+            let receipt = |generation| {
+                serde_json::from_value::<AppointmentCheckout>(json!({
+                    "id": receipt_id, "currency": "EUR", "status": "paid",
+                    "stockReturnGeneration": generation, "fulfilledAt": "2026-03-09T12:00:00Z",
+                    "totalCents": 2000, "paidCents": 2000, "discountCents": 0, "balanceCents": 0,
+                    "payments": [],
+                    "lines": [{"id":line_id, "productId":product_id, "kind":"product",
+                        "description":"Shampoo", "quantity":2, "unitAmountCents":1000}]
+                }))
+                .unwrap()
+            };
+            let attempt = receipt("first")
+                .stock_return(line_id, 1, "Unopened return", "u".into())
+                .unwrap();
+            assert!(root.svc.store.reserve_stock_return(&attempt).unwrap());
+            let restored = receipt("second");
+            root.overlay = Overlay::WalkInReceipt(CheckoutReview::from_receipt(restored, 0, cx));
+            root.open_stock_return(line_id, cx);
+            let Some(CheckoutReview::Receipt(form)) = root.checkout_review_mut() else {
+                panic!("missing receipt")
+            };
+            let editor = form
+                .stock_return
+                .as_ref()
+                .expect("pending return recovered");
+            assert_eq!(editor.attempt.as_ref(), Some(&attempt));
+            assert!(form.receipt.stock_return_obsolete(&attempt));
+            root.discard_obsolete_stock_return(cx);
+            assert!(
+                root.svc
+                    .store
+                    .pending_stock_return(receipt_id, "u")
+                    .unwrap()
+                    .is_none()
+            );
+        });
     }
 }

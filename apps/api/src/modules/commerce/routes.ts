@@ -20,7 +20,7 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { createMiddleware } from "hono/factory";
 import type { AppDeps } from "../../app";
-import type { AppEnv } from "../../auth/principal";
+import type { AppEnv, Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { errorBody, parseOrThrow, readJson } from "../../http";
 import { recurringSettings } from "../../payments/recurring-settings";
@@ -66,6 +66,16 @@ function gatewayFor(deps: AppDeps) {
 
 export function commerceAdminRoutes(deps: AppDeps) {
   const gateway = gatewayFor(deps);
+  const withActions = (receipt: Awaited<ReturnType<typeof getCheckout>>, principal: Principal) => {
+    const permissions = permissionsFor(principal.role, principal.accessPreset);
+    return {
+      ...receipt,
+      canRefund: permissions.refunds,
+      ...(permissions.writeInventory && receipt.fulfilledAt
+        ? { stockReturnGeneration: deps.config.syncReplicaGeneration }
+        : {}),
+    };
+  };
   return new Hono<AppEnv>()
     .use("*", operator)
     .route("/checkouts", checkoutRewardRoutes(deps))
@@ -167,16 +177,15 @@ export function commerceAdminRoutes(deps: AppDeps) {
         ),
       ),
     )
-    .post("/checkouts", async (c) =>
-      c.json(
-        await createCheckout(
-          deps.db,
-          parseOrThrow(createCheckoutSchema, await readJson(c)),
-          c.get("principal"),
-        ),
-        201,
-      ),
-    )
+    .post("/checkouts", async (c) => {
+      const principal = c.get("principal");
+      const receipt = await createCheckout(
+        deps.db,
+        parseOrThrow(createCheckoutSchema, await readJson(c)),
+        principal,
+      );
+      return c.json(withActions(receipt, principal), 201);
+    })
     .get("/checkouts/:id", async (c) => {
       const principal = c.get("principal");
       const receipt = await getCheckout(
@@ -185,14 +194,7 @@ export function commerceAdminRoutes(deps: AppDeps) {
         principal,
         deps.now?.() ?? new Date(),
       );
-      const permissions = permissionsFor(principal.role, principal.accessPreset);
-      return c.json({
-        ...receipt,
-        canRefund: permissions.refunds,
-        ...(permissions.writeInventory && receipt.fulfilledAt
-          ? { stockReturnGeneration: deps.config.syncReplicaGeneration }
-          : {}),
-      });
+      return c.json(withActions(receipt, principal));
     })
     .post("/checkouts/:id/void", async (c) =>
       c.json(await voidCheckout(deps.db, checkoutId(c.req.param("id")), c.get("principal"))),
