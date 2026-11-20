@@ -17,7 +17,8 @@ use crate::billing::{
 };
 use crate::inventory::{
     ContentWriteError, LedgerPage, LedgerQuery, MovementPage, PRODUCTS_PATH, PackageContent,
-    PendingStock, Product, ProductId, ProductPage, ProductQuery, StockWriteError,
+    PendingStock, Product, ProductId, ProductPage, ProductQuery, StockReturnAttempt,
+    StockWriteError,
 };
 use crate::model::*;
 use crate::reports::{ClientReport, Outcome, OutcomePage, ReportQuery, ReportSummary};
@@ -925,6 +926,17 @@ impl HttpTransport {
             ));
         }
         Ok(response)
+    }
+
+    pub fn return_inventory_stock(
+        &self,
+        attempt: &StockReturnAttempt,
+    ) -> Result<Product, TransportError> {
+        let product: Product = self.post_json("/admin/inventory/returns", &attempt.command)?;
+        if product.id != attempt.product_id {
+            return Err(TransportError::Server("Unexpected returned product".into()));
+        }
+        Ok(product)
     }
 
     pub fn move_inventory_stock(&self, pending: &PendingStock) -> Result<Product, StockWriteError> {

@@ -194,6 +194,7 @@ export function inventoryRoutes(deps: AppDeps) {
           deps.db,
           parseOrThrow(stockReturnSchema, await readJson(c)),
           c.get("principal"),
+          generation,
         ),
         201,
       ),

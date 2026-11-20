@@ -384,6 +384,53 @@ impl Store {
         )? == 1)
     }
 
+    pub fn pending_stock_return(
+        &self,
+        receipt_id: uuid::Uuid,
+        actor_user_id: &str,
+    ) -> Result<Option<crate::inventory::StockReturnAttempt>> {
+        let key = format!("inventory_pending_return:{receipt_id}:{actor_user_id}");
+        self.get_meta(&key)?
+            .map(|value| {
+                let attempt: crate::inventory::StockReturnAttempt = serde_json::from_str(&value)?;
+                if attempt.receipt_id != receipt_id
+                    || attempt.command.actor_user_id != actor_user_id
+                {
+                    return Err(CoreError::Protocol(
+                        "Pending stock return identity mismatch".into(),
+                    ));
+                }
+                Ok(attempt)
+            })
+            .transpose()
+    }
+
+    pub fn reserve_stock_return(
+        &self,
+        attempt: &crate::inventory::StockReturnAttempt,
+    ) -> Result<bool> {
+        let key = format!(
+            "inventory_pending_return:{}:{}",
+            attempt.receipt_id, attempt.command.actor_user_id
+        );
+        Ok(self.conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO NOTHING",
+            params![key, serde_json::to_string(attempt)?],
+        )? == 1)
+    }
+
+    pub fn clear_stock_return(&self, attempt: &crate::inventory::StockReturnAttempt) -> Result<()> {
+        let key = format!(
+            "inventory_pending_return:{}:{}",
+            attempt.receipt_id, attempt.command.actor_user_id
+        );
+        self.conn.execute(
+            "DELETE FROM meta WHERE key = ?1 AND value = ?2",
+            params![key, serde_json::to_string(attempt)?],
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn set_meta_in(&mut self, key: &str, value: &str, generation: &str) -> Result<()> {
         let tx = self
             .conn

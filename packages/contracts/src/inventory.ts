@@ -137,6 +137,8 @@ export const stockMovementInputSchema = z.discriminatedUnion("kind", [
 export const stockReturnSchema = z
   .object({
     checkoutLineId: idSchema,
+    actorUserId: z.string().min(1).max(200).optional(),
+    generation: syncGenerationSchema.optional(),
     quantity: quantity.positive(),
     reason: z.string().trim().min(3).max(300),
     idempotencyKey: idempotencyKeySchema,

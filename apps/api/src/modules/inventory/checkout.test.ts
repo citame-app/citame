@@ -122,6 +122,13 @@ test("settlement consumes a reserved quantity once and later catalog edits canno
     reason: "Unopened customer return",
     idempotencyKey: returnKey,
   };
+  const stale = await call("/admin/inventory/returns", "POST", {
+    ...returned,
+    generation: "an-older-replica",
+  });
+  expect(stale.status).toBe(409);
+  expect(await stale.json()).toMatchObject({ error: { code: "sync_generation_changed" } });
+  expect(await stock(p.id)).toMatchObject({ stockOnHand: 3, stockReserved: 0 });
   expect((await call("/admin/inventory/returns", "POST", returned)).status).toBe(201);
   expect((await call("/admin/inventory/returns", "POST", returned)).status).toBe(201);
   expect(await stock(p.id)).toMatchObject({ stockOnHand: 4, stockReserved: 0 });

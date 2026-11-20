@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 mod passes;
 mod refunds;
+mod stock_return;
 
 pub(super) enum CheckoutReview {
     Loading(Arc<()>),
@@ -38,6 +39,8 @@ impl CheckoutReview {
             request: None,
             pass_picker: None,
             refund: None,
+            stock_return: None,
+            stock_return_done: false,
             confirming_void: false,
             amount,
             gift_code,
@@ -68,6 +71,8 @@ pub(super) struct ReceiptForm {
     _amount_changed: Subscription,
     price_fields: Vec<PriceField>,
     refund: Option<refunds::RefundEditor>,
+    stock_return: Option<stock_return::ReturnEditor>,
+    stock_return_done: bool,
     confirming_void: bool,
     busy: bool,
     refreshing: bool,
@@ -179,6 +184,7 @@ impl Root {
         };
         if form.busy
             || form.refreshing
+            || form.stock_return.is_some()
             || form.request.is_some()
             || form
                 .refund
@@ -253,6 +259,7 @@ impl Root {
         if form.busy
             || form.refreshing
             || form.refund.is_some()
+            || form.stock_return.is_some()
             || form.confirming_void
             || collectible == 0
         {
@@ -345,6 +352,7 @@ impl Root {
             || form.refreshing
             || form.request.is_some()
             || form.refund.is_some()
+            || form.stock_return.is_some()
             || form.confirming_void
         {
             return;
@@ -420,7 +428,11 @@ impl Root {
     }
 
     fn checkout_review_mut(&mut self) -> Option<&mut CheckoutReview> {
-        match &mut self.overlay {
+        Self::checkout_review_in(&mut self.overlay)
+    }
+
+    fn checkout_review_in(overlay: &mut Overlay) -> Option<&mut CheckoutReview> {
+        match overlay {
             Overlay::Details(details) => details.checkout.as_mut(),
             Overlay::WalkInReceipt(review) => Some(review),
             Overlay::SalesHistory(history) => history.receipt.as_mut(),
@@ -502,8 +514,10 @@ impl Root {
                     });
                 let body = body
                     .child(self.render_refunds(form, cx))
-                    .child(self.render_void_receipt(form, cx));
+                    .child(self.render_void_receipt(form, cx))
+                    .child(self.render_stock_returns(form, cx));
                 let reviewing_prices = form.refund.is_none()
+                    && form.stock_return.is_none()
                     && !form.confirming_void
                     && receipt.can_review_prices()
                     && self.status.connectivity == Connectivity::Online
@@ -555,7 +569,7 @@ impl Root {
                             }),
                     )
                 });
-                if form.refund.is_some() || form.confirming_void {
+                if form.refund.is_some() || form.stock_return.is_some() || form.confirming_void {
                     body
                 } else if receipt.status == "paid" {
                     body.child(self.t(Key::ReceiptPaid))
@@ -789,6 +803,8 @@ mod tests {
                     request: None,
                     pass_picker: None,
                     refund: None,
+                    stock_return: None,
+                    stock_return_done: false,
                     confirming_void: false,
                     amount,
                     gift_code,
@@ -833,6 +849,8 @@ mod tests {
                     request: None,
                     pass_picker: None,
                     refund: None,
+                    stock_return: None,
+                    stock_return_done: false,
                     confirming_void: false,
                     amount,
                     gift_code,

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { bookingProtectionSchema } from "./booking-protection";
-import { idSchema, instantSchema, pageInfoSchema } from "./common";
+import { idSchema, instantSchema, pageInfoSchema, syncGenerationSchema } from "./common";
 import { giftCardCodeSchema } from "./gift-card-code";
 import { staffPermissionsSchema } from "./permissions";
 import { checkoutRewardSchema } from "./rewards";
@@ -253,6 +253,7 @@ export const checkoutPaymentSchema = z.object({
 export const checkoutSchema = z.object({
   externalBalance: externalBalanceSchema.optional(),
   canRefund: z.boolean().optional(),
+  stockReturnGeneration: syncGenerationSchema.optional(),
   id: idSchema,
   pricingVersion: z.number().int().positive().optional(),
   appointmentId: idSchema.nullable(),

@@ -39,6 +39,7 @@ impl Root {
         if form.busy
             || form.refreshing
             || form.request.is_some()
+            || form.stock_return.is_some()
             || form.refund.is_some()
             || form.confirming_void
         {
@@ -225,6 +226,7 @@ impl Root {
             || form.busy
             || form.refreshing
             || form.request.is_some()
+            || form.stock_return.is_some()
             || form.refund.is_some()
             || !form.receipt.can_void()
         {
@@ -296,6 +298,7 @@ impl Root {
                     && !form.busy
                     && !form.refreshing
                     && form.request.is_none()
+                    && form.stock_return.is_none()
                     && !form.confirming_void,
                 |view| {
                     view.children(receipt.recordable_refunds_available().map(|payment| {

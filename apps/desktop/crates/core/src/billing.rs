@@ -141,6 +141,7 @@ pub struct AppointmentCheckout {
     pub lines: Vec<CheckoutPriceLine>,
     protection: Option<CheckoutProtection>,
     fulfilled_at: Option<DateTime<Utc>>,
+    stock_return_generation: Option<String>,
     payments: Vec<CheckoutPayment>,
     #[serde(default)]
     pub can_refund: bool,
@@ -194,6 +195,44 @@ impl AppointmentCheckout {
                 .is_some_and(|p| p.state == "pending")
     }
 
+    pub fn returnable_products(&self) -> impl Iterator<Item = &CheckoutPriceLine> {
+        self.lines.iter().filter(|line| {
+            self.fulfilled_at.is_some()
+                && self.stock_return_generation.is_some()
+                && line.kind == "product"
+                && line.product_id.is_some()
+                && line.quantity > 0
+        })
+    }
+
+    pub fn stock_return(
+        &self,
+        line_id: Uuid,
+        quantity: u32,
+        reason: &str,
+        actor_user_id: String,
+    ) -> Option<crate::inventory::StockReturnAttempt> {
+        let line = self.returnable_products().find(|line| line.id == line_id)?;
+        let reason = reason.trim();
+        if !(1..=line.quantity).contains(&quantity)
+            || !(3..=300).contains(&reason.encode_utf16().count())
+        {
+            return None;
+        }
+        Some(crate::inventory::StockReturnAttempt {
+            product_id: line.product_id?,
+            receipt_id: self.id.parse().ok()?,
+            command: crate::inventory::StockReturnCommand {
+                checkout_line_id: line_id,
+                quantity,
+                reason: reason.to_owned(),
+                generation: self.stock_return_generation.clone()?,
+                actor_user_id,
+                idempotency_key: Uuid::now_v7(),
+            },
+        })
+    }
+
     pub fn can_void(&self) -> bool {
         self.status == "open"
             && self.fulfilled_at.is_none()
@@ -244,6 +283,7 @@ pub struct CheckoutPriceLine {
     pub id: Uuid,
     #[serde(default)]
     kind: String,
+    product_id: Option<Uuid>,
     pub description: String,
     pub quantity: u32,
     pub unit_amount_cents: u32,

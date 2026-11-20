@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const idSchema = z.uuid();
+export const syncGenerationSchema = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
 
 /**
  * Maximum lengths of free text a caller can submit. Every request schema that accepts text uses

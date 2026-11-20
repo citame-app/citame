@@ -185,9 +185,13 @@ export function commerceAdminRoutes(deps: AppDeps) {
         principal,
         deps.now?.() ?? new Date(),
       );
+      const permissions = permissionsFor(principal.role, principal.accessPreset);
       return c.json({
         ...receipt,
-        canRefund: permissionsFor(principal.role, principal.accessPreset).refunds,
+        canRefund: permissions.refunds,
+        ...(permissions.writeInventory && receipt.fulfilledAt
+          ? { stockReturnGeneration: deps.config.syncReplicaGeneration }
+          : {}),
       });
     })
     .post("/checkouts/:id/void", async (c) =>

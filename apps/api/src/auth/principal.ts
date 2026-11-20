@@ -97,12 +97,15 @@ export function requireAuth(
     const authorization = c.req.header("authorization");
     if (desktop && authorization) {
       const { path, method } = c.req;
-      const inventoryAllowed = path.endsWith("/package-content")
-        ? method === "PATCH"
-        : method === "GET" ||
-          (method === "POST" &&
-            path.startsWith("/admin/inventory/products/") &&
-            path.endsWith("/movements"));
+      const inventoryAllowed =
+        path === "/admin/inventory/returns"
+          ? method === "POST"
+          : path.endsWith("/package-content")
+            ? method === "PATCH"
+            : method === "GET" ||
+              (method === "POST" &&
+                path.startsWith("/admin/inventory/products/") &&
+                path.endsWith("/movements"));
       const dateShiftAllowed = path.endsWith("/preview")
         ? method === "POST"
         : method === "GET" || method === "POST";

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { appointmentSchema, createAppointmentBaseSchema } from "./appointments";
 import { calendarAppointmentSchema } from "./calendar";
-import { idSchema, instantSchema, LIMITS, localDateSchema } from "./common";
+import { idSchema, instantSchema, LIMITS, localDateSchema, syncGenerationSchema } from "./common";
 import { dateShiftRangesSchema } from "./date-shifts";
 import { salonResponseSchema, updateSalonSettingsRequestSchema } from "./salon";
 import { serviceSchema, updateServiceRequestSchema } from "./services";
@@ -218,7 +218,7 @@ export type SyncMutation = z.infer<typeof syncMutationSchema>;
 export type SyncMutationKind = SyncMutation["kind"];
 
 export const initialSyncGeneration = "initial";
-export const syncGenerationSchema = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
+export { syncGenerationSchema } from "./common";
 
 /**
  * What the server validates first: the envelope only. Each mutation body is then validated on

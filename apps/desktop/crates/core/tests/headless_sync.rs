@@ -1133,6 +1133,52 @@ fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
             .stock_on_hand,
         before.stock_on_hand - 2
     );
+    let line = updated.returnable_products().next().unwrap();
+    let actor = browser.rest_get("/me")["user"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let attempt = updated
+        .stock_return(line.id, 1, "Synthetic returned product", actor)
+        .unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let replica = scratch.path().join("stock-return.db");
+    let receipt_id = updated.id.parse().unwrap();
+    let actor_id = browser.rest_get("/me")["user"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        Store::open(&replica)
+            .unwrap()
+            .reserve_stock_return(&attempt)
+            .unwrap()
+    );
+    let persisted = Store::open(&replica).unwrap();
+    assert!(!persisted.reserve_stock_return(&attempt).unwrap());
+    let attempt = persisted
+        .pending_stock_return(receipt_id, &actor_id)
+        .unwrap()
+        .unwrap();
+    let stock = device.transport.return_inventory_stock(&attempt).unwrap();
+    assert_eq!(stock.stock_on_hand, before.stock_on_hand - 1);
+    assert_eq!(
+        device
+            .transport
+            .return_inventory_stock(&attempt)
+            .unwrap()
+            .stock_on_hand,
+        stock.stock_on_hand
+    );
+    persisted.clear_stock_return(&attempt).unwrap();
+    assert!(
+        persisted
+            .pending_stock_return(receipt_id, &actor_id)
+            .unwrap()
+            .is_none()
+    );
+    let current = browser.rest_get(&format!("/admin/commerce/checkouts/{}", receipt.id));
+    assert_eq!(current["refundedCents"], 1200);
 }
 
 #[test]

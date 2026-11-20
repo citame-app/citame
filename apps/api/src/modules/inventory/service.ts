@@ -381,8 +381,18 @@ export async function listMovements(
     { isolationLevel: "repeatable read", accessMode: "read only" },
   );
 }
-export async function returnStock(db: Database, input: StockReturnInput, principal: Principal) {
+export async function returnStock(
+  db: Database,
+  reviewed: StockReturnInput,
+  principal: Principal,
+  executingGeneration: string,
+) {
   requirePermission(principal, "writeInventory");
+  const { generation, actorUserId, ...input } = reviewed;
+  if (actorUserId !== undefined && principal.userId !== actorUserId)
+    throw new DomainError("forbidden", "Switch back to the account that prepared this return");
+  if (generation !== undefined && generation !== executingGeneration)
+    throw new DomainError("sync_generation_changed", "Refresh the receipt before returning stock");
   return db.transaction(async (tx) => {
     const [line] = await tx
       .select()

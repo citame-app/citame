@@ -12,6 +12,34 @@ const LEDGER_PATH: &str = "/admin/inventory/movements";
 pub type ProductId = Uuid;
 pub type StockRequestId = Uuid;
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StockReturnAttempt {
+    pub(crate) product_id: Uuid,
+    pub(crate) receipt_id: Uuid,
+    pub(crate) command: StockReturnCommand,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct StockReturnCommand {
+    pub(crate) actor_user_id: String,
+    pub(crate) checkout_line_id: Uuid,
+    pub(crate) quantity: u32,
+    pub(crate) reason: String,
+    pub(crate) generation: String,
+    pub(crate) idempotency_key: StockRequestId,
+}
+
+impl StockReturnAttempt {
+    pub fn line_id(&self) -> Uuid {
+        self.command.checkout_line_id
+    }
+
+    pub fn quantity(&self) -> u32 {
+        self.command.quantity
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProductQuery {
     pub search: String,
