@@ -498,6 +498,8 @@ keys! {
     CheckoutVoidReview => ("Confirm to void this unpaid receipt and release its reserved stock.", "Confirma para anular este recibo sin pagar y liberar el stock reservado."),
     CheckoutVoidConfirm => ("Confirm void", "Confirmar anulación"),
     CheckoutVoidUnconfirmed => ("Void not confirmed. Check the updated receipt or retry.", "Anulación sin confirmar. Comprueba el recibo actualizado o reintenta."),
+    CheckoutGiftCodeInvalid => ("Check the gift card code", "Revisa el código de la tarjeta regalo"),
+    CheckoutGiftCode => ("Gift card code", "Código de la tarjeta regalo"),
     CheckoutRefund => ("Refund payment", "Devolver pago"),
     CheckoutRefunds => ("Refunds", "Devoluciones"),
     CheckoutRefundReason => ("Refund reason (3–300 characters)", "Motivo de la devolución (3–300 caracteres)"),

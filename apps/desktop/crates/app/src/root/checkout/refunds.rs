@@ -17,7 +17,7 @@ impl RefundEditor {
 
     fn reviewed_amount(&self, receipt: &AppointmentCheckout, cx: &App) -> Option<u32> {
         let limit = receipt
-            .manual_refunds_available()
+            .recordable_refunds_available()
             .find(|payment| payment.id == self.payment.id)?
             .available;
         parse_reviewed_amount(self.amount.read(cx).text())
@@ -44,7 +44,7 @@ impl Root {
         }
         let Some(payment) = form
             .receipt
-            .manual_refunds_available()
+            .recordable_refunds_available()
             .find(|payment| payment.id == id)
         else {
             return;
@@ -296,7 +296,7 @@ impl Root {
                     && form.request.is_none()
                     && !form.confirming_void,
                 |view| {
-                    view.children(receipt.manual_refunds_available().map(|payment| {
+                    view.children(receipt.recordable_refunds_available().map(|payment| {
                         let id = payment.id;
                         self.button(
                             SharedString::from(format!("refund-{id}")),

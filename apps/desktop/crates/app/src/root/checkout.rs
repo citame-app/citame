@@ -1,6 +1,7 @@
 use super::*;
 use sob_core::billing::{
-    AppointmentCheckout, CheckoutFinalPrice, ManualTender, PaymentAttempt, parse_reviewed_amount,
+    AppointmentCheckout, CheckoutFinalPrice, PaymentAttempt, ReceiptTender,
+    normalize_gift_card_code, parse_reviewed_amount,
 };
 use sob_core::sync::TransportError;
 use std::sync::Arc;
@@ -27,6 +28,8 @@ impl CheckoutReview {
             field
         });
         let amount_changed = cx.observe(&amount, |_, _, cx| cx.notify());
+        let gift_code = cx.new(|cx| TextField::new("SOB-…", true, cx));
+        let gift_code_changed = cx.observe(&gift_code, |_, _, cx| cx.notify());
         Self::Receipt(Box::new(ReceiptForm {
             price_fields: ReceiptForm::price_fields(&receipt, cx),
             receipt: Arc::new(receipt),
@@ -35,6 +38,8 @@ impl CheckoutReview {
             refund: None,
             confirming_void: false,
             amount,
+            gift_code,
+            _gift_code_changed: gift_code_changed,
             _amount_changed: amount_changed,
             busy: false,
             refreshing: false,
@@ -52,9 +57,11 @@ impl CheckoutReview {
 
 pub(super) struct ReceiptForm {
     receipt: Arc<AppointmentCheckout>,
-    selected: Option<ManualTender>,
+    selected: Option<ReceiptTender>,
     request: Option<PaymentAttempt>,
     amount: Entity<TextField>,
+    gift_code: Entity<TextField>,
+    _gift_code_changed: Subscription,
     _amount_changed: Subscription,
     price_fields: Vec<PriceField>,
     refund: Option<refunds::RefundEditor>,
@@ -71,10 +78,11 @@ struct PriceField {
     _changed: Subscription,
 }
 
-fn tender_label(method: ManualTender) -> Key {
+fn tender_label(method: ReceiptTender) -> Key {
     match method {
-        ManualTender::Cash => Key::CheckoutCash,
-        ManualTender::ExternalCard => Key::CheckoutExternalCard,
+        ReceiptTender::Cash => Key::CheckoutCash,
+        ReceiptTender::ExternalCard => Key::CheckoutExternalCard,
+        ReceiptTender::GiftCard => Key::SalesGiftCard,
     }
 }
 
@@ -247,19 +255,27 @@ impl Root {
         let Some(amount) = form.reviewed_amount(cx) else {
             return;
         };
-        let request = *form
-            .request
-            .get_or_insert_with(|| PaymentAttempt::new(selected, amount));
+        if form.request.is_none() {
+            form.request = if selected == ReceiptTender::GiftCard {
+                PaymentAttempt::with_gift_card(amount, form.gift_code.read(cx).text())
+            } else {
+                Some(PaymentAttempt::new(selected, amount))
+            };
+        }
+        let Some(request) = form.request.clone() else {
+            return;
+        };
         form.busy = true;
         form.error = None;
         let receipt = form.receipt.clone();
         let session = self.svc.session.clone();
         cx.notify();
 
+        let submitted = request.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { transport.record_checkout_payment(&receipt, request) })
+                .spawn(async move { transport.record_checkout_payment(&receipt, &submitted) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if !Arc::ptr_eq(&session, &this.svc.session) || this.svc.current_session().is_none()
@@ -285,6 +301,8 @@ impl Root {
                         form.replace_receipt(receipt, cx);
                         form.selected = None;
                         form.request = None;
+                        form.gift_code
+                            .update(cx, |field, cx| field.set_text("", cx));
                     }
                     Err(
                         TransportError::BadRequest(message) | TransportError::Forbidden(message),
@@ -542,6 +560,10 @@ impl Root {
                     })
                 } else {
                     let reviewed = form.reviewed_amount(cx);
+                    let needs_gift_code =
+                        form.request.is_none() && form.selected == Some(ReceiptTender::GiftCard);
+                    let valid_tender = !needs_gift_code
+                        || normalize_gift_card_code(form.gift_code.read(cx).text()).is_some();
                     body.when(collectible < receipt.balance_cents, |view| {
                         view.child(format!(
                             "{}: {}",
@@ -558,10 +580,14 @@ impl Root {
                         );
                         view.children(
                             [
-                                (ManualTender::Cash, "checkout-cash"),
-                                (ManualTender::ExternalCard, "checkout-card"),
+                                (ReceiptTender::Cash, "checkout-cash"),
+                                (ReceiptTender::ExternalCard, "checkout-card"),
+                                (ReceiptTender::GiftCard, "checkout-gift"),
                             ]
                             .into_iter()
+                            .filter(|(tender, _)| {
+                                *tender != ReceiptTender::GiftCard || receipt.allows_gift_card()
+                            })
                             .map(|(tender, id)| {
                                 self.button(
                                     id,
@@ -577,12 +603,29 @@ impl Root {
                                             && form.request.is_none()
                                         {
                                             form.selected = Some(tender);
+                                            form.error = None;
+                                            if tender != ReceiptTender::GiftCard {
+                                                form.gift_code
+                                                    .update(cx, |field, cx| field.set_text("", cx));
+                                            }
                                             cx.notify();
                                         }
                                     }),
                                 )
                             }),
                         )
+                    })
+                    .when(needs_gift_code, |view| {
+                        view.child(self.label(Key::CheckoutGiftCode))
+                            .child(form.gift_code.clone())
+                            .when(
+                                !valid_tender && !form.gift_code.read(cx).text().is_empty(),
+                                |view| {
+                                    view.child(
+                                        div().text_sm().child(self.t(Key::CheckoutGiftCodeInvalid)),
+                                    )
+                                },
+                            )
                     })
                     .when(reviewed.is_none(), |view| {
                         view.child(
@@ -593,7 +636,7 @@ impl Root {
                         )
                     })
                     .when_some(
-                        form.selected.zip(reviewed),
+                        form.selected.zip(reviewed.filter(|_| valid_tender)),
                         |view, (method, amount)| {
                             view.child(self.button(
                                 "checkout-confirm",
@@ -679,6 +722,7 @@ impl ReceiptForm {
 
     fn reviewed_amount(&self, cx: &App) -> Option<u32> {
         self.request
+            .as_ref()
             .map(PaymentAttempt::amount_cents)
             .or_else(|| parse_reviewed_amount(self.amount.read(cx).text()))
             .filter(|amount| *amount > 0 && *amount <= self.receipt.collectible_cents())
@@ -714,14 +758,18 @@ mod tests {
                 .unwrap();
                 let amount = cx.new(|cx| TextField::new("EUR", false, cx));
                 let amount_changed = cx.observe(&amount, |_, _, cx| cx.notify());
+                let gift_code = cx.new(|cx| TextField::new("SOB-…", true, cx));
+                let gift_code_changed = cx.observe(&gift_code, |_, _, cx| cx.notify());
                 let form = ReceiptForm {
                     price_fields: ReceiptForm::price_fields(&receipt, cx),
                     receipt: Arc::new(receipt),
                     selected: None,
                     request: None,
                     refund: None,
-            confirming_void: false,
+                    confirming_void: false,
                     amount,
+                    gift_code,
+                    _gift_code_changed: gift_code_changed,
                     _amount_changed: amount_changed,
                     busy: false,
                     refreshing: false,
@@ -753,14 +801,18 @@ mod tests {
                 .unwrap();
                 let amount = cx.new(|cx| TextField::new("EUR", false, cx));
                 let amount_changed = cx.observe(&amount, |_, _, cx| cx.notify());
+                let gift_code = cx.new(|cx| TextField::new("SOB-…", true, cx));
+                let gift_code_changed = cx.observe(&gift_code, |_, _, cx| cx.notify());
                 let mut form = ReceiptForm {
                     receipt: Arc::new(receipt),
                     price_fields: Vec::new(),
-                    selected: Some(ManualTender::Cash),
+                    selected: Some(ReceiptTender::Cash),
                     request: None,
                     refund: None,
                     confirming_void: false,
                     amount,
+                    gift_code,
+                    _gift_code_changed: gift_code_changed,
                     _amount_changed: amount_changed,
                     busy: false,
                     refreshing: false,
@@ -773,7 +825,7 @@ mod tests {
                 form.amount
                     .update(cx, |field, cx| field.set_text("12,50", cx));
                 assert_eq!(form.reviewed_amount(cx), Some(1250));
-                form.request = Some(PaymentAttempt::new(ManualTender::Cash, 1250));
+                form.request = Some(PaymentAttempt::new(ReceiptTender::Cash, 1250));
                 form.amount.update(cx, |field, cx| field.set_text("15", cx));
                 assert_eq!(form.reviewed_amount(cx), Some(1250));
             })

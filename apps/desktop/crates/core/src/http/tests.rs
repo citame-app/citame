@@ -284,14 +284,14 @@ fn checkout_retries_the_exact_cash_registration_when_a_response_is_lost() {
     let checkout = transport
         .open_appointment_checkout(appointment, Some(balance))
         .unwrap();
-    let attempt = PaymentAttempt::new(ManualTender::Cash, 6500);
+    let attempt = PaymentAttempt::new(ReceiptTender::Cash, 6500);
     assert!(
         transport
-            .record_checkout_payment(&checkout, attempt)
+            .record_checkout_payment(&checkout, &attempt)
             .is_err()
     );
     let recorded = transport
-        .record_checkout_payment(&checkout, attempt)
+        .record_checkout_payment(&checkout, &attempt)
         .unwrap();
     assert_eq!(recorded.paid_cents, 6500);
     assert_eq!(recorded.collectible_cents(), 0);
@@ -309,7 +309,7 @@ fn checkout_retries_the_exact_cash_registration_when_a_response_is_lost() {
 
 #[test]
 fn appointment_checkout_uses_the_server_payable_limit_and_blocks_unresolved_payments() {
-    use crate::billing::{ManualTender, PaymentAttempt};
+    use crate::billing::{PaymentAttempt, ReceiptTender};
     use serde_json::{Value, json};
 
     let appointment = "01a1d81f-2231-75bd-ba65-bc41f42803e9";
@@ -331,7 +331,8 @@ fn appointment_checkout_uses_the_server_payable_limit_and_blocks_unresolved_paym
         .unwrap();
     assert_eq!(checkout.collectible_cents(), 1500);
     assert!(matches!(
-        transport.record_checkout_payment(&checkout, PaymentAttempt::new(ManualTender::Cash, 1501)),
+        transport
+            .record_checkout_payment(&checkout, &PaymentAttempt::new(ReceiptTender::Cash, 1501)),
         Err(TransportError::BadRequest(_))
     ));
     let checkout = transport
@@ -340,7 +341,7 @@ fn appointment_checkout_uses_the_server_payable_limit_and_blocks_unresolved_paym
     assert_eq!(checkout.collectible_cents(), 0);
     assert!(
         transport
-            .record_checkout_payment(&checkout, PaymentAttempt::new(ManualTender::Cash, 1000))
+            .record_checkout_payment(&checkout, &PaymentAttempt::new(ReceiptTender::Cash, 1000))
             .is_err()
     );
     let requests = seen.lock().unwrap();

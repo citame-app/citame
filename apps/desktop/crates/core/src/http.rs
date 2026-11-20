@@ -13,7 +13,7 @@ use crate::billing::{
     AppointmentCheckout, CashCommand, CashSession, CheckoutFinalPrice, CheckoutHistoryFilters,
     CheckoutPage, CheckoutRefund, ImportedPartialPayment, ImportedPartialPaymentPreview,
     ImportedPricePreview, ImportedPriceReview, ImportedSettlement, ImportedSettlementStatus,
-    ManualTender, PaymentAttempt, RefundAttempt, WalkInSale,
+    PaymentAttempt, ReceiptTender, RefundAttempt, WalkInSale,
 };
 use crate::inventory::{
     ContentWriteError, LedgerPage, LedgerQuery, MovementPage, PRODUCTS_PATH, PackageContent,
@@ -433,17 +433,24 @@ impl HttpTransport {
     pub fn record_checkout_payment(
         &self,
         checkout: &AppointmentCheckout,
-        attempt: PaymentAttempt,
+        attempt: &PaymentAttempt,
     ) -> Result<AppointmentCheckout, TransportError> {
         if attempt.amount_cents == 0 || attempt.amount_cents > checkout.collectible_cents() {
             return Err(TransportError::BadRequest(
                 "The payment exceeds the collectible amount or this receipt cannot be paid".into(),
             ));
         }
+        if attempt.method == ReceiptTender::GiftCard
+            && (!checkout.allows_gift_card() || attempt.gift_card_code.is_none())
+        {
+            return Err(TransportError::BadRequest(
+                "A valid gift card is required for this receipt".into(),
+            ));
+        }
         #[derive(serde::Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Payment {
-            method: ManualTender,
+            method: ReceiptTender,
             amount_cents: u32,
             status: String,
         }
@@ -458,14 +465,7 @@ impl HttpTransport {
             .map(parse_id)
             .transpose()?;
         let path = format!("/admin/commerce/checkouts/{id}");
-        let result: Started = self.post_json(
-            &format!("{path}/payments"),
-            &serde_json::json!({
-                "method": attempt.method,
-                "amountCents": attempt.amount_cents,
-                "idempotencyKey": attempt.idempotency_key.to_string(),
-            }),
-        )?;
+        let result: Started = self.post_json(&format!("{path}/payments"), attempt)?;
         if result.payment.status != "succeeded"
             || result.payment.method != attempt.method
             || result.payment.amount_cents != attempt.amount_cents
@@ -516,7 +516,7 @@ impl HttpTransport {
         attempt: &RefundAttempt,
     ) -> Result<AppointmentCheckout, TransportError> {
         if !checkout
-            .manual_refunds_available()
+            .recordable_refunds_available()
             .any(|payment| payment.id == payment_id && attempt.amount_cents <= payment.available)
         {
             return Err(TransportError::BadRequest(

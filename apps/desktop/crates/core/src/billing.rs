@@ -148,15 +148,16 @@ pub struct AppointmentCheckout {
 }
 
 impl AppointmentCheckout {
-    pub fn manual_refunds_available(&self) -> impl Iterator<Item = RefundablePayment> + '_ {
+    pub fn recordable_refunds_available(&self) -> impl Iterator<Item = RefundablePayment> + '_ {
         self.payments.iter().filter_map(|payment| {
             if !self.can_refund || payment.status != "succeeded" {
                 return None;
             }
             let id = payment.id?;
             let tender = match payment.method.as_deref()? {
-                "cash" => ManualTender::Cash,
-                "external_card" => ManualTender::ExternalCard,
+                "cash" => ReceiptTender::Cash,
+                "external_card" => ReceiptTender::ExternalCard,
+                "gift_card" => ReceiptTender::GiftCard,
                 _ => return None,
             };
             let already_committed: u64 = self
@@ -173,6 +174,10 @@ impl AppointmentCheckout {
                 available,
             })
         })
+    }
+
+    pub fn allows_gift_card(&self) -> bool {
+        self.external_balance.is_none() && self.lines.iter().all(|line| line.kind != "gift_card")
     }
 
     pub fn can_void(&self) -> bool {
@@ -223,6 +228,8 @@ impl AppointmentCheckout {
 #[serde(rename_all = "camelCase")]
 pub struct CheckoutPriceLine {
     pub id: Uuid,
+    #[serde(default)]
+    kind: String,
     pub description: String,
     pub quantity: u32,
     pub unit_amount_cents: u32,
@@ -330,7 +337,7 @@ pub struct CheckoutRefund {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RefundablePayment {
     pub id: Uuid,
-    pub tender: ManualTender,
+    pub tender: ReceiptTender,
     pub available: u32,
 }
 
@@ -357,30 +364,51 @@ impl RefundAttempt {
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ManualTender {
+pub enum ReceiptTender {
     Cash,
     ExternalCard,
+    GiftCard,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PaymentAttempt {
-    pub(crate) method: ManualTender,
+    pub(crate) method: ReceiptTender,
     pub(crate) amount_cents: u32,
     pub(crate) idempotency_key: uuid::Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) gift_card_code: Option<String>,
 }
 
 impl PaymentAttempt {
-    pub fn new(method: ManualTender, amount_cents: u32) -> Self {
+    pub fn new(method: ReceiptTender, amount_cents: u32) -> Self {
         Self {
             method,
             amount_cents,
             idempotency_key: uuid::Uuid::now_v7(),
+            gift_card_code: None,
         }
     }
 
-    pub fn amount_cents(self) -> u32 {
+    pub fn with_gift_card(amount_cents: u32, code: &str) -> Option<Self> {
+        let mut attempt = Self::new(ReceiptTender::GiftCard, amount_cents);
+        attempt.gift_card_code = Some(normalize_gift_card_code(code)?);
+        Some(attempt)
+    }
+
+    pub fn amount_cents(&self) -> u32 {
         self.amount_cents
     }
+}
+
+pub fn normalize_gift_card_code(value: &str) -> Option<String> {
+    if value.encode_utf16().count() > 80 {
+        return None;
+    }
+    let code = value.trim().to_uppercase().replace([' ', '-'], "");
+    code.strip_prefix("SOB")
+        .is_some_and(|suffix| suffix.len() == 24 && suffix.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then_some(code)
 }
 
 #[derive(Debug, Deserialize)]

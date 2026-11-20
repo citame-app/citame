@@ -20,7 +20,7 @@ use serde_json::json;
 use sob_core::auth::{AuthProvider, BetterAuthSession, Credentials, SessionHandle};
 use sob_core::billing::{
     CashAdjustment, CashCommand, CheckoutFinalPrice, ImportedPartialPaymentPreview,
-    ImportedSettlement, ManualTender, PaymentAttempt,
+    ImportedSettlement, PaymentAttempt, ReceiptTender,
 };
 use sob_core::billing::{SaleItem, WalkInSale};
 use sob_core::calendar::{self, salon_tz};
@@ -1034,7 +1034,7 @@ fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
         .transport
         .record_checkout_payment(
             &receipt,
-            PaymentAttempt::new(ManualTender::ExternalCard, 4200),
+            &PaymentAttempt::new(ReceiptTender::ExternalCard, 4200),
         )
         .unwrap();
     assert_eq!(paid.status, "paid");
@@ -1102,7 +1102,7 @@ fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
         0
     );
 
-    let payment = paid.manual_refunds_available().next().unwrap();
+    let payment = paid.recordable_refunds_available().next().unwrap();
     let refund = sob_core::billing::RefundAttempt::new(1200, "Synthetic partial return").unwrap();
     let updated = device
         .transport
@@ -1110,7 +1110,11 @@ fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
         .unwrap();
     assert_eq!(updated.status, "partially_refunded");
     assert_eq!(
-        updated.manual_refunds_available().next().unwrap().available,
+        updated
+            .recordable_refunds_available()
+            .next()
+            .unwrap()
+            .available,
         3000
     );
     let replayed = device
@@ -1128,6 +1132,92 @@ fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
             .stock_on_hand,
         before.stock_on_hand - 2
     );
+}
+
+#[test]
+#[ignore = "requires smoke stack"]
+fn native_gift_card_redemption_and_refund_update_cloud_balance_once() {
+    use sob_core::billing::{SaleItem, WalkInSale};
+
+    let browser = Device::sign_in();
+    let gift = browser.rest_post(
+        "/admin/gift-cards",
+        json!({"amountCents": 2000, "idempotencyKey": uuid::Uuid::now_v7()}),
+    );
+    let gift_id = gift["card"]["id"].as_str().unwrap();
+    let purchase_id = gift["checkout"]["id"].as_str().unwrap();
+    browser.rest_post(
+        &format!("/admin/commerce/checkouts/{purchase_id}/payments"),
+        json!({"method":"external_card","amountCents":2000,"idempotencyKey":uuid::Uuid::now_v7()}),
+    );
+    let revealed = browser.rest_post(&format!("/admin/gift-cards/{gift_id}/code"), json!({}));
+    let code = revealed["code"].as_str().unwrap();
+    let attempt = PaymentAttempt::with_gift_card(1200, &code.to_lowercase()).unwrap();
+    let device = proxy_device();
+    let receipt = device
+        .transport
+        .create_walk_in_sale(&WalkInSale {
+            idempotency_key: uuid::Uuid::now_v7(),
+            client_id: None,
+            staff_id: None,
+            use_client_discount: None,
+            lines: vec![SaleItem::Custom {
+                description: "Synthetic gift card redemption".into(),
+                unit_amount_cents: 1800,
+                quantity: 1,
+            }],
+            discount_cents: 0,
+            tip_cents: 0,
+        })
+        .unwrap();
+    let updated = device
+        .transport
+        .record_checkout_payment(&receipt, &attempt)
+        .unwrap();
+    assert_eq!(updated.paid_cents, 1200);
+    assert_eq!(updated.collectible_cents(), 600);
+    assert_eq!(
+        device
+            .transport
+            .record_checkout_payment(&receipt, &attempt)
+            .unwrap()
+            .paid_cents,
+        1200
+    );
+    let paid = device
+        .transport
+        .record_checkout_payment(
+            &updated,
+            &PaymentAttempt::new(ReceiptTender::ExternalCard, 600),
+        )
+        .unwrap();
+    assert_eq!(paid.status, "paid");
+    let cloud = browser.rest_get(&format!("/admin/gift-cards/{gift_id}"));
+    assert_eq!(cloud["balanceCents"], 800);
+    let cloud = browser.rest_get(&format!("/admin/commerce/checkouts/{}", receipt.id));
+    assert_eq!(cloud["payments"].as_array().unwrap().len(), 2);
+    assert_eq!(cloud["paidCents"], 1800);
+    let gift_payment = paid
+        .recordable_refunds_available()
+        .find(|payment| payment.tender == ReceiptTender::GiftCard)
+        .unwrap();
+    let refund = sob_core::billing::RefundAttempt::new(300, "Synthetic gift card refund").unwrap();
+    let returned = device
+        .transport
+        .record_checkout_refund(&paid, gift_payment.id, &refund)
+        .unwrap();
+    assert_eq!(returned.status, "partially_refunded");
+    assert_eq!(
+        device
+            .transport
+            .record_checkout_refund(&paid, gift_payment.id, &refund)
+            .unwrap()
+            .refunds
+            .len(),
+        1
+    );
+    let cloud = browser.rest_get(&format!("/admin/gift-cards/{gift_id}"));
+    assert_eq!(cloud["balanceCents"], 1100);
 }
 
 #[test]
@@ -1197,7 +1287,7 @@ fn native_finalizes_a_pending_service_price_through_the_proxy() {
         .transport
         .record_checkout_payment(
             &confirmed,
-            PaymentAttempt::new(ManualTender::ExternalCard, 7550),
+            &PaymentAttempt::new(ReceiptTender::ExternalCard, 7550),
         )
         .unwrap();
     assert_eq!(paid.status, "paid");
@@ -1224,24 +1314,24 @@ fn native_appointment_receipt_applies_the_profile_discount_and_records_split_ten
         desk.transport.update_cash_session(&open).unwrap().id,
         register.id
     );
-    let cash = PaymentAttempt::new(ManualTender::Cash, 3000);
+    let cash = PaymentAttempt::new(ReceiptTender::Cash, 3000);
     let adjusted = desk
         .transport
-        .record_checkout_payment(&receipt, cash)
+        .record_checkout_payment(&receipt, &cash)
         .unwrap();
     assert_eq!(adjusted.paid_cents, 3000);
     assert_eq!(adjusted.collectible_cents(), 5750);
     assert_eq!(
         desk.transport
-            .record_checkout_payment(&receipt, cash)
+            .record_checkout_payment(&receipt, &cash)
             .unwrap()
             .paid_cents,
         3000
     );
-    let card = PaymentAttempt::new(ManualTender::ExternalCard, 5750);
+    let card = PaymentAttempt::new(ReceiptTender::ExternalCard, 5750);
     let paid = desk
         .transport
-        .record_checkout_payment(&adjusted, card)
+        .record_checkout_payment(&adjusted, &card)
         .unwrap();
     assert_eq!(paid.status, "paid");
     assert_eq!(paid.paid_cents, 8750);
@@ -1458,10 +1548,10 @@ fn imported_partial_payment_preserves_the_original_total_and_opens_only_the_bala
     assert_eq!(checkout.balance_cents, 6500);
     assert_eq!(checkout.paid_cents, 0);
     assert_eq!(checkout.collectible_cents(), 6500);
-    let request = PaymentAttempt::new(ManualTender::ExternalCard, 6500);
+    let request = PaymentAttempt::new(ReceiptTender::ExternalCard, 6500);
     let record = || {
         desk.transport
-            .record_checkout_payment(&checkout, request)
+            .record_checkout_payment(&checkout, &request)
             .unwrap()
     };
     let receipt = record();
