@@ -348,7 +348,9 @@ test("a recurring appointment reviews dates and never submits a stale preview af
   fireEvent.submit(screen.getByLabelText<HTMLInputElement>("Start time").form!);
   refresh.resolve();
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: "Create 2 appointments" })).not.toBeDisabled(),
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Create 2 appointments" }).disabled,
+    ).toBe(false),
   );
   expect(series).toHaveLength(0);
   fireEvent.change(screen.getByLabelText("Start time"), { target: { value: "10:00" } });

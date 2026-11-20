@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  screen,
+  waitFor,
+  waitForElementToBeRemoved,
+  within,
+} from "@testing-library/react";
 import { renderApp } from "../../../../test/render";
 import { StaffPortraitEditor } from "./staff-portrait";
 import { StaffView, validateStaffSearch } from "./staff-view";
@@ -80,8 +86,9 @@ describe("StaffView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove photo" }));
     let dialog = await screen.findByRole("dialog", { name: "Remove photo" });
     expect(request).not.toHaveBeenCalled();
+    const cancelled = waitForElementToBeRemoved(dialog);
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    await cancelled;
     expect(request).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Remove photo" }));
