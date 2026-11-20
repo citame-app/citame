@@ -10,14 +10,7 @@ impl Root {
         let Some(CheckoutReview::Receipt(form)) = self.checkout_review_mut() else {
             return;
         };
-        if form.print_opening.is_some()
-            || form.busy
-            || form.refreshing
-            || form.request.is_some()
-            || form.refund.is_some()
-            || form.stock_return.is_some()
-            || form.confirming_void
-        {
+        if form.print_opening.is_some() || !form.can_print() {
             return;
         }
         let request = Arc::new(());
@@ -25,6 +18,8 @@ impl Root {
         form.error = None;
         let receipt = form.receipt.clone();
         let session = self.svc.session.clone();
+        let changed = self.t(Key::PrintReceiptChanged);
+        let reviewed = receipt.clone();
         cx.notify();
         cx.spawn(async move |root, cx| {
             let preview = cx
@@ -49,6 +44,12 @@ impl Root {
                         .as_ref()
                         .is_some_and(|pending| Arc::ptr_eq(pending, &request))
                     {
+                        return false;
+                    }
+                    if !Arc::ptr_eq(&form.receipt, &reviewed) || !form.can_print() {
+                        form.print_opening = None;
+                        form.error = Some(changed.into());
+                        cx.notify();
                         return false;
                     }
                     if let Ok(preview) = &preview {
@@ -107,5 +108,38 @@ impl Root {
             Kind::Ghost,
             cx.listener(|root, _, _, cx| root.open_receipt_print(cx)),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[gpui::test]
+    async fn an_offline_receipt_can_start_printing_but_a_replaced_form_does_not_open_it(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_dir, config) = crate::root::tests::desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        let receipt = || {
+            serde_json::from_value::<AppointmentCheckout>(json!({
+            "id": Uuid::now_v7(), "currency":"EUR", "status":"paid",
+            "totalCents":2000, "paidCents":2000, "discountCents":0, "balanceCents":0, "payments":[]
+        })).unwrap()
+        };
+        root.update(cx, |root, cx| {
+            root.svc.stop_sync();
+            root.status.connectivity = Connectivity::Offline;
+            root.overlay = Overlay::WalkInReceipt(CheckoutReview::from_receipt(receipt(), 0, cx));
+            root.open_receipt_print(cx);
+            let Some(CheckoutReview::Receipt(form)) = root.checkout_review_mut() else {
+                panic!("missing receipt")
+            };
+            assert!(form.print_opening.is_some());
+            root.overlay = Overlay::WalkInReceipt(CheckoutReview::from_receipt(receipt(), 0, cx));
+        });
+        cx.run_until_parked();
+        assert!(cx.opened_url().is_none());
     }
 }

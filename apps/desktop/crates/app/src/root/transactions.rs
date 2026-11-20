@@ -384,16 +384,8 @@ impl Root {
                                         .map(|line| line.description.as_str())
                                         .collect::<Vec<_>>()
                                         .join(", ");
-                                    let status = match row.status.as_str() {
-                                        "open" => self.t(Key::SalesStatusOpen),
-                                        "paid" => self.t(Key::SalesStatusPaid),
-                                        "void" => self.t(Key::SalesStatusVoid),
-                                        "refunded" => self.t(Key::SalesStatusRefunded),
-                                        "partially_refunded" => {
-                                            self.t(Key::SalesStatusPartiallyRefunded)
-                                        }
-                                        _ => row.status.as_str(),
-                                    };
+                                    let status =
+                                        i18n::receipt_status_label(self.locale, &row.status);
                                     let detail = format!(
                                         "{} · {} · {}",
                                         self.date_time_label(row.created_at),

@@ -25,6 +25,29 @@ impl Locale {
     }
 }
 
+pub fn amount_label(locale: Locale, cents: i64, currency: &str) -> String {
+    let separator = if locale == Locale::EsAr { "," } else { "." };
+    let sign = if cents < 0 { "−" } else { "" };
+    let cents = cents.unsigned_abs();
+    format!(
+        "{sign}{}{separator}{:02} {currency}",
+        cents / 100,
+        cents % 100
+    )
+}
+
+pub fn receipt_status_label(locale: Locale, status: &str) -> &str {
+    let key = match status {
+        "open" => Key::SalesStatusOpen,
+        "paid" => Key::SalesStatusPaid,
+        "void" => Key::SalesStatusVoid,
+        "refunded" => Key::SalesStatusRefunded,
+        "partially_refunded" => Key::SalesStatusPartiallyRefunded,
+        _ => return status,
+    };
+    t(locale, key)
+}
+
 /// Replaces `{name}` placeholders.
 pub fn fill(template: &str, args: &[(&str, &str)]) -> String {
     args.iter().fold(template.to_owned(), |acc, (name, value)| {
@@ -518,7 +541,11 @@ keys! {
     PrintReceipt => ("Print receipt", "Imprimir comprobante"),
     PrintReceiptTitle => ("Receipt", "Comprobante"),
     PrintReceiptItems => ("Item", "Concepto"),
-    PrintReceiptPricePending => ("Price pending", "Precio pendiente"),
+    PrintReceiptLineAmount => ("Amount", "Importe"),
+    PrintReceiptCollected => ("Collected", "Cobrado"),
+    PrintReceiptPricePending => ("Price varies", "Precio variable"),
+    PrintReceiptPricesPendingNotice => ("The team must set the final service price before collecting the balance.", "El equipo debe fijar el importe final antes de cobrar el saldo del servicio."),
+    PrintReceiptChanged => ("The receipt changed. Review it and open a new print preview.", "El recibo ha cambiado. Revísalo y vuelve a abrir la vista de impresión."),
     PrintReceiptTax => ("Tax included", "Impuestos incluidos"),
     PrintReceiptPoints => ("Loyalty points", "Puntos de fidelidad"),
     PrintReceiptPointsUsed => ("{points} points used", "{points} puntos utilizados"),

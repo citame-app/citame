@@ -519,15 +519,9 @@ impl Root {
                     .child(self.render_refunds(form, cx))
                     .child(self.render_void_receipt(form, cx))
                     .child(self.render_stock_returns(form, cx))
-                    .when(
-                        !form.busy
-                            && !form.refreshing
-                            && form.request.is_none()
-                            && form.refund.is_none()
-                            && form.stock_return.is_none()
-                            && !form.confirming_void,
-                        |view| view.child(self.render_print_receipt(form, cx)),
-                    );
+                    .when(form.can_print(), |view| {
+                        view.child(self.render_print_receipt(form, cx))
+                    });
                 let reviewing_prices = form.refund.is_none()
                     && form.stock_return.is_none()
                     && !form.confirming_void
@@ -721,6 +715,15 @@ impl Root {
 }
 
 impl ReceiptForm {
+    fn can_print(&self) -> bool {
+        !self.busy
+            && !self.refreshing
+            && self.request.is_none()
+            && self.refund.is_none()
+            && self.stock_return.is_none()
+            && !self.confirming_void
+    }
+
     fn price_fields(receipt: &AppointmentCheckout, cx: &mut Context<Root>) -> Vec<PriceField> {
         receipt
             .lines

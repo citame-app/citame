@@ -2828,7 +2828,7 @@ impl Root {
     }
 
     fn amount_label(&self, cents: i64, currency: &str) -> String {
-        sob_core::receipt_print::amount_label(self.locale, cents, currency)
+        i18n::amount_label(self.locale, cents, currency)
     }
 
     fn render_details(

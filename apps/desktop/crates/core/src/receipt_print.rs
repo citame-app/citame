@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use chrono_tz::Tz;
 
 use crate::billing::AppointmentCheckout;
-use crate::i18n::{Key, Locale, fill, t};
+use crate::i18n::{Key, Locale, amount_label, fill, receipt_status_label, t};
 use crate::pkce::new_verifier;
 
 const PREVIEW_LIFETIME: Duration = Duration::from_secs(30);
@@ -143,17 +143,6 @@ fn escaped(value: &str) -> String {
     html
 }
 
-pub fn amount_label(locale: Locale, cents: i64, currency: &str) -> String {
-    let separator = if locale == Locale::EsAr { "," } else { "." };
-    let sign = if cents < 0 { "−" } else { "" };
-    let cents = cents.unsigned_abs();
-    format!(
-        "{sign}{}{separator}{:02} {currency}",
-        cents / 100,
-        cents % 100
-    )
-}
-
 fn document(
     sale: &AppointmentCheckout,
     salon: &str,
@@ -162,8 +151,17 @@ fn document(
     nonce: &str,
 ) -> String {
     let label = |key| t(locale, key);
-    let money = |cents| escaped(&amount_label(locale, cents, &sale.currency));
-    let lang = if locale == Locale::EsAr { "es" } else { "en" };
+    let money = |cents| {
+        format!(
+            "<span data-cents=\"{cents}\">{}</span>",
+            escaped(&amount_label(locale, cents, &sale.currency))
+        )
+    };
+    let lang = if locale == Locale::EsAr {
+        "es-AR"
+    } else {
+        "en"
+    };
     let title = label(Key::PrintReceiptTitle);
     let mut out = format!(
         r#"<!doctype html><html lang="{lang}">
@@ -180,10 +178,11 @@ dl{{margin:0}} dl>div{{display:flex;justify-content:space-between;gap:1rem;paddi
 tr,dl>div{{break-inside:avoid}}
 @media print{{button{{display:none}} main{{max-width:none;padding:0}}}}
 </style>
-<main><button type="button" id="print">{print}</button><h1>{salon}</h1><h2>{title}</h2><p>{receipt}</p>"#,
+<main data-currency="{currency}" data-timezone="{tz}"><button type="button" id="print">{print}</button><h1>{salon}</h1><h2>{title}</h2><p>{receipt}</p>"#,
         print = label(Key::PrintReceipt),
         salon = escaped(salon),
         receipt = escaped(&sale.id),
+        currency = escaped(&sale.currency),
     );
     if let Some(instant) = sale.created_at {
         let local = instant.with_timezone(&tz);
@@ -199,20 +198,23 @@ tr,dl>div{{break-inside:avoid}}
             local.format(date_format)
         );
     }
-    let status = match sale.status.as_str() {
-        "open" => label(Key::SalesStatusOpen),
-        "paid" => label(Key::SalesStatusPaid),
-        "void" => label(Key::SalesStatusVoid),
-        "refunded" => label(Key::SalesStatusRefunded),
-        "partially_refunded" => label(Key::SalesStatusPartiallyRefunded),
-        status => status,
-    };
-    let _ = write!(out, "<p>{}</p>", escaped(status));
+    let _ = write!(
+        out,
+        "<p>{}</p>",
+        escaped(receipt_status_label(locale, &sale.status))
+    );
+    if sale.lines.iter().any(|line| line.price_pending) {
+        let _ = write!(
+            out,
+            "<p>{}</p>",
+            label(Key::PrintReceiptPricesPendingNotice)
+        );
+    }
     let _ = write!(
         out,
         "<table><thead><tr><th scope=\"col\">{}</th><th scope=\"col\">{}</th></tr></thead><tbody>",
         label(Key::PrintReceiptItems),
-        label(Key::CheckoutAmount)
+        label(Key::PrintReceiptLineAmount)
     );
     for line in &sale.lines {
         let amount = if line.price_pending {
@@ -228,34 +230,30 @@ tr,dl>div{{break-inside:avoid}}
         );
     }
     out.push_str("</tbody></table><dl>");
-    let optional = [
-        (Key::CheckoutDiscount, -i64::from(sale.discount_cents)),
-        (Key::SaleTip, i64::from(sale.tip_cents)),
-        (Key::PrintReceiptTax, i64::from(sale.tax_cents)),
+    let totals = [
         (
-            Key::CheckoutBooksyPaid,
-            i64::from(
-                sale.external_balance
-                    .map_or(0, |amount| amount.paid_in_booksy_cents),
-            ),
+            Key::CheckoutDiscount,
+            -i64::from(sale.discount_cents),
+            false,
         ),
+        (Key::SaleTip, i64::from(sale.tip_cents), false),
+        (Key::PrintReceiptTax, i64::from(sale.tax_cents), false),
+        (Key::CheckoutTotal, i64::from(sale.total_cents), true),
         (
-            Key::CheckoutRefunds,
-            sale.refunded_cents.min(i64::MAX as u64) as i64,
-        ),
-    ];
-    let required = [
-        (Key::CheckoutTotal, i64::from(sale.total_cents)),
-        (
-            Key::CheckoutPaidInCitame,
+            Key::PrintReceiptCollected,
             sale.paid_cents.min(i64::MAX as u64) as i64,
+            true,
         ),
-        (Key::CheckoutDue, i64::from(sale.balance_cents)),
+        (
+            Key::SalesStatusRefunded,
+            sale.refunded_cents.min(i64::MAX as u64) as i64,
+            false,
+        ),
+        (Key::CheckoutDue, i64::from(sale.balance_cents), true),
     ];
-    for (key, cents) in optional
+    for (key, cents, _) in totals
         .into_iter()
-        .filter(|(_, cents)| *cents != 0)
-        .chain(required)
+        .filter(|(_, cents, always)| *always || *cents != 0)
     {
         let _ = write!(
             out,
@@ -290,7 +288,20 @@ tr,dl>div{{break-inside:avoid}}
     }
     let _ = write!(
         out,
-        r#"</main><script nonce="{nonce}">document.getElementById("print").addEventListener("click", () => window.print());</script></html>"#
+        r#"</main><script nonce="{nonce}">
+const root = document.querySelector("main");
+const locale = document.documentElement.lang;
+document.getElementById("print").addEventListener("click", () => window.print());
+const formatDate = new Intl.DateTimeFormat(locale, {{dateStyle:"medium",timeStyle:"short",timeZone:root.dataset.timezone}});
+const date = root.querySelector("time");
+if (date) date.textContent = formatDate.format(new Date(date.dateTime));
+const formatWhole = new Intl.NumberFormat(locale, {{style:"currency",currency:root.dataset.currency,minimumFractionDigits:0,maximumFractionDigits:0}});
+const formatFraction = new Intl.NumberFormat(locale, {{style:"currency",currency:root.dataset.currency,minimumFractionDigits:2,maximumFractionDigits:2}});
+for (const cell of root.querySelectorAll("[data-cents]")) {{
+    const cents = Number(cell.dataset.cents);
+    cell.textContent = (cents % 100 === 0 ? formatWhole : formatFraction).format(cents / 100);
+}}
+</script></html>"#
     );
     out
 }
@@ -369,5 +380,27 @@ mod tests {
         assert!(body.contains("Test salon"));
         assert!(worker.join().unwrap());
         assert!(TcpStream::connect(address).is_err());
+    }
+    #[test]
+    fn a_pending_service_and_reward_show_the_same_information_as_cloud() {
+        let receipt: AppointmentCheckout = serde_json::from_value(serde_json::json!({
+            "id":"0198f5a0-7b1c-7000-8000-000000000101", "currency":"EUR", "status":"open",
+            "totalCents":0, "discountCents":0, "paidCents":0, "balanceCents":0, "payments":[],
+            "reward":{"kind":"points","name":"Customer rewards","code":null,"pointsUsed":10,"returnedPoints":2},
+            "lines":[{"id":"0198f5a0-7b1c-7000-8000-000000000102","quantity":1,
+                "unitAmountCents":1000, "description":"Treatment", "pricePending":true}]
+        })).unwrap();
+        let body = document(&receipt, "Test salon", chrono_tz::UTC, Locale::En, "nonce");
+        assert!(
+            body.contains(
+                "The team must set the final service price before collecting the balance."
+            )
+        );
+        assert!(body.contains("<td>Price varies</td>"));
+        assert!(body.contains("<th scope=\"col\">Amount</th>"));
+        assert!(body.contains("<dt>Collected</dt>"));
+        assert!(body.contains("<h2>Loyalty points</h2>"));
+        assert!(body.contains("10 points used"));
+        assert!(body.contains("2 points returned"));
     }
 }
