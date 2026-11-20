@@ -101,6 +101,31 @@ test("variable service prices are frozen as unresolved and cannot become free fu
   });
   expect(attempt.status).toBe(409);
 });
+test("walk-in receipts require a final catalog price before money is collected", async () => {
+  const { service } = await book("from", 3000);
+  const response = await call("/admin/commerce/checkouts", "POST", {
+    idempotencyKey: crypto.randomUUID(),
+    lines: [{ kind: "service", serviceId: service.id, quantity: 2 }],
+  });
+  expect(response.status).toBe(201);
+  const sale = checkoutSchema.parse(await response.json());
+  expect(sale.appointmentId).toBeNull();
+  expect(sale.lines[0]).toMatchObject({ pricePending: true, minimumUnitAmountCents: 3000 });
+  expect(
+    (await call(`/admin/commerce/checkouts/${sale.id}/payments`, "POST", {
+      method: "external_card",
+      amountCents: 3000,
+      idempotencyKey: crypto.randomUUID(),
+    })).status,
+  ).toBe(409);
+  const finalized = await call(`/admin/commerce/checkouts/${sale.id}/prices`, "PUT", {
+    version: sale.pricingVersion,
+    lines: [{ id: firstLine(sale).id, unitAmountCents: 4000 }],
+  });
+  expect(finalized.status).toBe(200);
+  expect(checkoutSchema.parse(await finalized.json())).toMatchObject({ totalCents: 8000 });
+});
+
 test("only the team can set the reviewed final price and stale changes cannot rewrite it", async () => {
   const { sale } = await book("variable");
   const body = { version: 1, lines: [{ id: firstLine(sale).id, unitAmountCents: 7500 }] };

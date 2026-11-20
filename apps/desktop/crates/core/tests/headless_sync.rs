@@ -22,6 +22,7 @@ use sob_core::billing::{
     CashAdjustment, CashCommand, CheckoutFinalPrice, ImportedPartialPaymentPreview,
     ImportedSettlement, ManualTender, PaymentAttempt,
 };
+use sob_core::billing::{SaleItem, WalkInSale};
 use sob_core::calendar::{self, salon_tz};
 use sob_core::http::{
     DatedShiftCopy, DatedShiftEdit, DatedShiftSelection, HttpTransport, spawn_stream_listener,
@@ -958,6 +959,92 @@ fn imported_eur_booking(desk: &mut Device, price: u32) -> Appointment {
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
+    let browser = Device::sign_in();
+    let product = browser.rest_post(
+        "/admin/inventory/products",
+        json!({
+            "name": "Synthetic walk-in product",
+            "sku": "SMOKE-WALK-IN",
+            "idempotencyKey": uuid::Uuid::now_v7(),
+            "openingStock": 3,
+            "priceCents": 2000,
+            "unitLabel": "unit",
+            "resellable": true,
+        }),
+    );
+    let product_id = uuid::Uuid::parse_str(product["id"].as_str().unwrap()).unwrap();
+    let device = proxy_device();
+    let query = ProductQuery::new("SMOKE-WALK-IN", false).unwrap();
+    assert!(
+        device
+            .transport
+            .products_for_sale(&query, 1)
+            .unwrap()
+            .products
+            .iter()
+            .any(|p| p.id == product_id)
+    );
+    let before = device.transport.inventory_product(product_id).unwrap();
+    let sale = WalkInSale {
+        idempotency_key: uuid::Uuid::now_v7(),
+        client_id: None,
+        lines: vec![
+            SaleItem::Product {
+                product_id,
+                quantity: 2,
+            },
+            SaleItem::Custom {
+                description: "Synthetic extra".into(),
+                unit_amount_cents: 500,
+                quantity: 1,
+            },
+        ],
+        discount_cents: 400,
+        tip_cents: 100,
+    };
+    let receipt = device.transport.create_walk_in_sale(&sale).unwrap();
+    assert!(receipt.appointment_id.is_none());
+    assert_eq!(receipt.total_cents, 4200);
+    assert_eq!(
+        device.transport.create_walk_in_sale(&sale).unwrap().id,
+        receipt.id
+    );
+    let paid = device
+        .transport
+        .record_checkout_payment(
+            &receipt,
+            PaymentAttempt::new(ManualTender::ExternalCard, 4200),
+        )
+        .unwrap();
+    assert_eq!(paid.status, "paid");
+    let web = browser.rest_get(&format!("/admin/commerce/checkouts/{}", receipt.id));
+    assert_eq!(web["paidCents"], 4200);
+    let history = device
+        .transport
+        .checkout_history("Synthetic walk-in product", 1)
+        .unwrap();
+    let saved = history
+        .checkouts
+        .iter()
+        .find(|sale| sale.id.to_string() == receipt.id)
+        .unwrap();
+    assert_eq!(saved.status, "paid");
+    assert_eq!(
+        device
+            .transport
+            .open_saved_checkout(saved.id)
+            .unwrap()
+            .paid_cents,
+        4200
+    );
+    let after = device.transport.inventory_product(product_id).unwrap();
+    assert_eq!(after.stock_on_hand, before.stock_on_hand - 2);
+    assert_eq!(after.stock_reserved, 0);
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_finalizes_a_pending_service_price_through_the_proxy() {
     let mut browser = Device::sign_in();
     browser.sync();
@@ -1005,25 +1092,23 @@ fn native_finalizes_a_pending_service_price_through_the_proxy() {
     assert!(matches!(
         device
             .transport
-            .finalize_appointment_prices(&receipt, &[below_minimum]),
+            .finalize_checkout_prices(&receipt, &[below_minimum]),
         Err(TransportError::BadRequest(_))
     ));
     let prices = std::slice::from_ref(&reviewed);
     let confirmed = device
         .transport
-        .finalize_appointment_prices(&receipt, prices)
+        .finalize_checkout_prices(&receipt, prices)
         .unwrap();
     assert_eq!(confirmed.collectible_cents(), 7550);
     assert!(!confirmed.can_review_prices());
     assert!(matches!(
-        device
-            .transport
-            .finalize_appointment_prices(&receipt, prices),
+        device.transport.finalize_checkout_prices(&receipt, prices),
         Err(TransportError::BadRequest(_))
     ));
     let paid = device
         .transport
-        .record_appointment_payment(
+        .record_checkout_payment(
             &confirmed,
             PaymentAttempt::new(ManualTender::ExternalCard, 7550),
         )
@@ -1055,13 +1140,13 @@ fn native_appointment_receipt_applies_the_profile_discount_and_records_split_ten
     let cash = PaymentAttempt::new(ManualTender::Cash, 3000);
     let adjusted = desk
         .transport
-        .record_appointment_payment(&receipt, cash)
+        .record_checkout_payment(&receipt, cash)
         .unwrap();
     assert_eq!(adjusted.paid_cents, 3000);
     assert_eq!(adjusted.collectible_cents(), 5750);
     assert_eq!(
         desk.transport
-            .record_appointment_payment(&receipt, cash)
+            .record_checkout_payment(&receipt, cash)
             .unwrap()
             .paid_cents,
         3000
@@ -1069,7 +1154,7 @@ fn native_appointment_receipt_applies_the_profile_discount_and_records_split_ten
     let card = PaymentAttempt::new(ManualTender::ExternalCard, 5750);
     let paid = desk
         .transport
-        .record_appointment_payment(&adjusted, card)
+        .record_checkout_payment(&adjusted, card)
         .unwrap();
     assert_eq!(paid.status, "paid");
     assert_eq!(paid.paid_cents, 8750);
@@ -1289,7 +1374,7 @@ fn imported_partial_payment_preserves_the_original_total_and_opens_only_the_bala
     let request = PaymentAttempt::new(ManualTender::ExternalCard, 6500);
     let record = || {
         desk.transport
-            .record_appointment_payment(&checkout, request)
+            .record_checkout_payment(&checkout, request)
             .unwrap()
     };
     let receipt = record();

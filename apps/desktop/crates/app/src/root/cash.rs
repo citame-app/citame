@@ -232,6 +232,23 @@ impl Root {
                 )
             },
         );
+        let body = body.when(
+            online && !matches!(desk, RegisterDesk::Ready(view) if view.form.is_some()),
+            |view| {
+                view.child(self.button(
+                    "walk-in-sale",
+                    self.t(Key::WalkInSale),
+                    Kind::Primary,
+                    cx.listener(|root, _, _, cx| root.open_walk_in(cx)),
+                ))
+                .child(self.button(
+                    "cash-sales-history",
+                    self.t(Key::SalesHistory),
+                    Kind::Ghost,
+                    cx.listener(|root, _, _, cx| root.open_sales_history(cx)),
+                ))
+            },
+        );
         let body = match desk {
             RegisterDesk::Loading(_) => body.child(self.t(Key::CashLoading)),
             RegisterDesk::Error(key) => body.child(self.t(*key)),

@@ -554,6 +554,8 @@ export async function createCheckoutInTransaction(
         description: item.name,
         quantity: line.quantity,
         unitAmountCents: item.priceCents,
+        pricePending: needsFinalPrice(item.priceType),
+        minimumUnitAmountCents: item.priceType === "from" ? item.priceCents : 0,
         taxBasisPoints: 0,
       });
       continue;
@@ -594,6 +596,15 @@ export async function createCheckoutInTransaction(
       taxBasisPoints: line.taxBasisPoints,
     });
   }
+  if (
+    !input.appointmentId &&
+    lines.some((line) => line.pricePending) &&
+    (input.discountCents > 0 || input.useClientDiscount)
+  )
+    throw new DomainError(
+      "validation_error",
+      "Set the final service amounts before applying a manual discount",
+    );
   const subtotalCents = lines.reduce((a, b) => a + b.quantity * b.unitAmountCents, 0);
   const [discountClient] =
     input.useClientDiscount && clientId

@@ -49,8 +49,10 @@ mod settlement;
 mod slots;
 mod staff_portraits;
 mod team_shifts;
+mod transactions;
 mod unpaid;
 mod waitlist;
+mod walk_in;
 
 const HOUR_PX: f32 = 60.0;
 const GUTTER_PX: f32 = 56.0;
@@ -234,6 +236,9 @@ enum Overlay {
     Blocks,
     Inbox(inbox::Inbox),
     Cash(cash::RegisterDesk),
+    WalkIn(Box<walk_in::SaleDesk>),
+    WalkInReceipt(checkout::CheckoutReview),
+    SalesHistory(Box<transactions::History>),
     Unpaid(Box<unpaid::Desk>),
     Inventory(Box<inventory::Desk>),
     Reports(Box<reports::Desk>),
@@ -2315,6 +2320,26 @@ impl Root {
         }
         match &mut self.overlay {
             Overlay::None => return,
+            Overlay::WalkIn(sale) if !sale.can_dismiss() => return,
+            Overlay::WalkInReceipt(review) if !review.can_go_back() => return,
+            Overlay::WalkIn(_) | Overlay::WalkInReceipt(_) => {
+                self.load_register(cx);
+                return;
+            }
+            Overlay::SalesHistory(history) if history.receipt.is_some() => {
+                if !history
+                    .receipt
+                    .as_ref()
+                    .is_some_and(|review| review.can_go_back())
+                {
+                    return;
+                }
+                history.receipt = None;
+            }
+            Overlay::SalesHistory(_) => {
+                self.load_register(cx);
+                return;
+            }
             Overlay::ReviewModeration(desk) => {
                 if !desk.dismiss_editor(cx) {
                     self.overlay = Overlay::None;
@@ -3492,6 +3517,13 @@ impl Render for Root {
                         Overlay::Blocks => Some(self.render_time_off_list(cx)),
                         Overlay::Inbox(inbox) => Some(self.render_inbox(inbox, cx)),
                         Overlay::Cash(desk) => Some(self.render_cash_register(desk, cx)),
+                        Overlay::WalkIn(sale) => {
+                            Some(self.render_walk_in(sale, window.viewport_size(), cx))
+                        }
+                        Overlay::WalkInReceipt(review) => Some(self.render_checkout(review, cx)),
+                        Overlay::SalesHistory(history) => {
+                            Some(self.render_sales_history(history, window.viewport_size(), cx))
+                        }
                         Overlay::Unpaid(desk) => {
                             Some(self.render_unpaid(desk, window.viewport_size(), cx))
                         }

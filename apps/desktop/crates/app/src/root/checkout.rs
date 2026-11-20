@@ -13,6 +13,32 @@ pub(super) enum CheckoutReview {
 }
 
 impl CheckoutReview {
+    pub(super) fn from_receipt(
+        receipt: AppointmentCheckout,
+        observed_revision: i64,
+        cx: &mut Context<Root>,
+    ) -> Self {
+        let value = amount_entry(receipt.collectible_cents());
+        let amount = cx.new(|cx| {
+            let mut field = TextField::new("EUR", false, cx);
+            field.set_text(&value, cx);
+            field
+        });
+        let amount_changed = cx.observe(&amount, |_, _, cx| cx.notify());
+        Self::Receipt(Box::new(ReceiptForm {
+            price_fields: ReceiptForm::price_fields(&receipt, cx),
+            receipt: Arc::new(receipt),
+            selected: None,
+            request: None,
+            amount,
+            _amount_changed: amount_changed,
+            busy: false,
+            refreshing: false,
+            observed_revision,
+            error: None,
+        }))
+    }
+
     pub(super) fn can_go_back(&self) -> bool {
         !matches!(self, Self::Receipt(form) if form.busy)
     }
@@ -110,28 +136,7 @@ impl Root {
                     return;
                 }
                 details.checkout = Some(match result {
-                    Ok(receipt) => {
-                        let value = amount_entry(receipt.collectible_cents());
-                        let amount = cx.new(|cx| {
-                            let mut field = TextField::new("EUR", false, cx);
-                            field.set_text(&value, cx);
-                            field
-                        });
-                        let amount_changed = cx.observe(&amount, |_, _, cx| cx.notify());
-                        let price_fields = ReceiptForm::price_fields(&receipt, cx);
-                        CheckoutReview::Receipt(Box::new(ReceiptForm {
-                            receipt: Arc::new(receipt),
-                            price_fields,
-                            selected: None,
-                            request: None,
-                            amount,
-                            _amount_changed: amount_changed,
-                            busy: false,
-                            refreshing: false,
-                            observed_revision,
-                            error: None,
-                        }))
-                    }
+                    Ok(receipt) => CheckoutReview::from_receipt(receipt, observed_revision, cx),
                     Err(_) => CheckoutReview::Failed,
                 });
                 cx.notify();
@@ -143,17 +148,14 @@ impl Root {
         let Some(transport) = self.svc.transport() else {
             return;
         };
-        let Overlay::Details(details) = &mut self.overlay else {
-            return;
-        };
-        let Some(CheckoutReview::Receipt(form)) = &mut details.checkout else {
-            return;
-        };
         let revision = self
             .svc
             .store
             .live_view_revision("commerce")
             .unwrap_or_default();
+        let Some(CheckoutReview::Receipt(form)) = self.checkout_review_mut() else {
+            return;
+        };
         if form.busy
             || form.refreshing
             || form.request.is_some()
@@ -170,16 +172,13 @@ impl Root {
             let receipt = previous.clone();
             let result = cx
                 .background_executor()
-                .spawn(async move { transport.refresh_appointment_checkout(&receipt) })
+                .spawn(async move { transport.refresh_checkout(&receipt) })
                 .await;
             let _ = root.update(cx, |root, cx| {
                 if !Arc::ptr_eq(&session, &root.svc.session) {
                     return;
                 }
-                let Overlay::Details(details) = &mut root.overlay else {
-                    return;
-                };
-                let Some(CheckoutReview::Receipt(form)) = &mut details.checkout else {
+                let Some(CheckoutReview::Receipt(form)) = root.checkout_review_mut() else {
                     return;
                 };
                 if !Arc::ptr_eq(&form.receipt, &previous) {
@@ -199,7 +198,9 @@ impl Root {
                     }
                     Err(_) => {
                         // Avoid collecting against a balance we could not verify.
-                        details.checkout = Some(CheckoutReview::Failed);
+                        if let Some(review) = root.checkout_review_mut() {
+                            *review = CheckoutReview::Failed;
+                        }
                     }
                 }
                 cx.notify();
@@ -216,10 +217,7 @@ impl Root {
         else {
             return;
         };
-        let Overlay::Details(details) = &mut self.overlay else {
-            return;
-        };
-        let Some(CheckoutReview::Receipt(form)) = &mut details.checkout else {
+        let Some(CheckoutReview::Receipt(form)) = self.checkout_review_mut() else {
             return;
         };
         let Some(selected) = form.selected else {
@@ -244,7 +242,7 @@ impl Root {
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { transport.record_appointment_payment(&receipt, request) })
+                .spawn(async move { transport.record_checkout_payment(&receipt, request) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if !Arc::ptr_eq(&session, &this.svc.session) || this.svc.current_session().is_none()
@@ -255,10 +253,7 @@ impl Root {
                     this.svc.wake(Wake::Manual);
                 }
                 let fallback = this.t(Key::CheckoutNotConfirmed);
-                let Overlay::Details(details) = &mut this.overlay else {
-                    return;
-                };
-                let Some(CheckoutReview::Receipt(form)) = &mut details.checkout else {
+                let Some(CheckoutReview::Receipt(form)) = this.checkout_review_mut() else {
                     return;
                 };
                 if form.request != Some(request) {
@@ -291,10 +286,8 @@ impl Root {
         else {
             return;
         };
-        let Overlay::Details(details) = &mut self.overlay else {
-            return;
-        };
-        let Some(CheckoutReview::Receipt(form)) = &mut details.checkout else {
+        let session = self.svc.session.clone();
+        let Some(CheckoutReview::Receipt(form)) = self.checkout_review_mut() else {
             return;
         };
         if form.busy || form.refreshing || form.request.is_some() {
@@ -305,7 +298,6 @@ impl Root {
         };
         let previous = form.receipt.clone();
         let receipt = previous.clone();
-        let session = self.svc.session.clone();
         form.busy = true;
         form.error = None;
         cx.notify();
@@ -313,9 +305,9 @@ impl Root {
             let (result, refreshed) = cx
                 .background_executor()
                 .spawn(async move {
-                    let result = transport.finalize_appointment_prices(&receipt, &prices);
+                    let result = transport.finalize_checkout_prices(&receipt, &prices);
                     let refreshed = if result.is_err() {
-                        transport.refresh_appointment_checkout(&receipt).ok()
+                        transport.refresh_checkout(&receipt).ok()
                     } else {
                         None
                     };
@@ -331,10 +323,7 @@ impl Root {
                     root.svc.wake(Wake::Manual);
                 }
                 let fallback = root.t(Key::CheckoutPricesNotConfirmed);
-                let Overlay::Details(details) = &mut root.overlay else {
-                    return;
-                };
-                let Some(CheckoutReview::Receipt(form)) = &mut details.checkout else {
+                let Some(CheckoutReview::Receipt(form)) = root.checkout_review_mut() else {
                     return;
                 };
                 if !Arc::ptr_eq(&form.receipt, &previous) {
@@ -351,7 +340,9 @@ impl Root {
                     }
                     Err(error) => {
                         let Some(receipt) = refreshed else {
-                            details.checkout = Some(CheckoutReview::Failed);
+                            if let Some(review) = root.checkout_review_mut() {
+                                *review = CheckoutReview::Failed;
+                            }
                             cx.notify();
                             return;
                         };
@@ -372,16 +363,31 @@ impl Root {
         .detach();
     }
 
+    fn checkout_review_mut(&mut self) -> Option<&mut CheckoutReview> {
+        match &mut self.overlay {
+            Overlay::Details(details) => details.checkout.as_mut(),
+            Overlay::WalkInReceipt(review) => Some(review),
+            Overlay::SalesHistory(history) => history.receipt.as_mut(),
+            _ => None,
+        }
+    }
+
     pub(super) fn render_checkout(
         &self,
         review: &CheckoutReview,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let body = div().flex().flex_col().gap_3().child(
-            div()
-                .text_lg()
-                .font_weight(FontWeight::BOLD)
-                .child(self.t(Key::OpenAppointmentCheckout)),
+            div().text_lg().font_weight(FontWeight::BOLD).child(self.t(
+                if matches!(
+                    self.overlay,
+                    Overlay::WalkInReceipt(_) | Overlay::SalesHistory(_)
+                ) {
+                    Key::SaleCreateReceipt
+                } else {
+                    Key::OpenAppointmentCheckout
+                },
+            )),
         );
         let body = match review {
             CheckoutReview::Loading(_) => body.child(self.t(Key::CheckoutLoading)),
@@ -419,6 +425,17 @@ impl Root {
                         ))
                     })
                     .child(format!("{}: {due}", self.t(Key::CheckoutDue)))
+                    .when(
+                        receipt.appointment_id.is_none()
+                            || matches!(self.overlay, Overlay::SalesHistory(_)),
+                        |view| {
+                            view.children(receipt.lines.iter().map(|line| {
+                                div()
+                                    .text_sm()
+                                    .child(format!("{} × {}", line.quantity, line.description))
+                            }))
+                        },
+                    )
                     .when_some(form.error.as_ref(), |view, message| {
                         view.child(
                             div()
@@ -521,9 +538,8 @@ impl Root {
                                         Kind::Ghost
                                     },
                                     cx.listener(move |this, _, _, cx| {
-                                        if let Overlay::Details(details) = &mut this.overlay
-                                            && let Some(CheckoutReview::Receipt(form)) =
-                                                &mut details.checkout
+                                        if let Some(CheckoutReview::Receipt(form)) =
+                                            this.checkout_review_mut()
                                             && form.request.is_none()
                                         {
                                             form.selected = Some(tender);
@@ -658,7 +674,7 @@ mod tests {
                     "pricingVersion": 1, "payments": [],
                     "lines": [{
                         "id": "01a1d81f-2231-75bd-ba65-bc41f42803e9", "description": "Treatment",
-                        "unitAmountCents": 3000, "minimumUnitAmountCents": 3000, "pricePending": true
+                        "quantity": 1, "unitAmountCents": 3000, "minimumUnitAmountCents": 3000, "pricePending": true
                     }]
                 }))
                 .unwrap();

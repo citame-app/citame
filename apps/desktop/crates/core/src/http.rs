@@ -10,9 +10,10 @@ use std::time::Duration;
 use crate::auth::{AuthError, AuthProvider, SessionHandle, TokenStore};
 use crate::backoff::Backoff;
 use crate::billing::{
-    AppointmentCheckout, CashCommand, CashSession, CheckoutFinalPrice, ImportedPartialPayment,
-    ImportedPartialPaymentPreview, ImportedPricePreview, ImportedPriceReview, ImportedSettlement,
-    ImportedSettlementStatus, ManualTender, PaymentAttempt,
+    AppointmentCheckout, CashCommand, CashSession, CheckoutFinalPrice, CheckoutPage,
+    ImportedPartialPayment, ImportedPartialPaymentPreview, ImportedPricePreview,
+    ImportedPriceReview, ImportedSettlement, ImportedSettlementStatus, ManualTender,
+    PaymentAttempt, WalkInSale,
 };
 use crate::inventory::{
     ContentWriteError, LedgerPage, LedgerQuery, MovementPage, PRODUCTS_PATH, PackageContent,
@@ -278,10 +279,56 @@ impl HttpTransport {
             input["useClientDiscount"] = serde_json::json!(true);
         }
         let receipt = self.post_json("/admin/commerce/checkouts", &input)?;
-        validate_appointment_checkout(receipt, id, balance)
+        validate_checkout(receipt, Some(id), balance)
     }
 
-    pub fn finalize_appointment_prices(
+    pub fn checkout_history(&self, term: &str, page: u32) -> Result<CheckoutPage, TransportError> {
+        if term.trim().encode_utf16().count() > 150 || !(1..=100_000).contains(&page) {
+            return Err(TransportError::BadRequest("Invalid receipt search".into()));
+        }
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("search", term.trim())
+            .append_pair("page", &page.to_string())
+            .append_pair("pageSize", "15")
+            .finish();
+        read_response(
+            self.get(
+                &self.agent,
+                &format!("/admin/commerce/checkouts?{query}"),
+                None,
+            )?,
+            false,
+        )
+    }
+
+    pub fn open_saved_checkout(
+        &self,
+        id: uuid::Uuid,
+    ) -> Result<AppointmentCheckout, TransportError> {
+        let path = format!("/admin/commerce/checkouts/{id}");
+        let receipt: AppointmentCheckout =
+            read_response(self.get(&self.agent, &path, None)?, false)?;
+        if parse_id(&receipt.id).ok() != Some(id) {
+            return Err(TransportError::Server("Unexpected receipt identity".into()));
+        }
+        let appointment = receipt
+            .appointment_id
+            .as_deref()
+            .map(parse_id)
+            .transpose()?;
+        let balance = receipt.external_balance;
+        validate_checkout(receipt, appointment, balance)
+    }
+
+    pub fn create_walk_in_sale(
+        &self,
+        draft: &WalkInSale,
+    ) -> Result<AppointmentCheckout, TransportError> {
+        let receipt = self.post_json("/admin/commerce/checkouts", draft)?;
+        validate_checkout(receipt, None, None)
+    }
+
+    pub fn finalize_checkout_prices(
         &self,
         checkout: &AppointmentCheckout,
         prices: &[CheckoutFinalPrice],
@@ -311,12 +358,16 @@ impl HttpTransport {
             ));
         }
         let id = parse_id(&checkout.id)?;
-        let appointment = parse_id(&checkout.appointment_id)?;
+        let appointment = checkout
+            .appointment_id
+            .as_deref()
+            .map(parse_id)
+            .transpose()?;
         let receipt = self.put_json(
             &format!("/admin/commerce/checkouts/{id}/prices"),
             &serde_json::json!({ "version": version, "lines": prices }),
         )?;
-        let receipt = validate_appointment_checkout(receipt, appointment, None)?;
+        let receipt = validate_checkout(receipt, appointment, None)?;
         if parse_id(&receipt.id).ok() != Some(id)
             || receipt.pricing_version != next_version
             || receipt.lines.iter().any(|line| line.price_pending)
@@ -333,7 +384,7 @@ impl HttpTransport {
         Ok(receipt)
     }
 
-    pub fn record_appointment_payment(
+    pub fn record_checkout_payment(
         &self,
         checkout: &AppointmentCheckout,
         attempt: PaymentAttempt,
@@ -355,7 +406,11 @@ impl HttpTransport {
             payment: Payment,
         }
         let id = parse_id(&checkout.id)?;
-        parse_id(&checkout.appointment_id)?;
+        checkout
+            .appointment_id
+            .as_deref()
+            .map(parse_id)
+            .transpose()?;
         let path = format!("/admin/commerce/checkouts/{id}");
         let result: Started = self.post_json(
             &format!("{path}/payments"),
@@ -373,15 +428,19 @@ impl HttpTransport {
                 "Invalid payment acknowledgement".into(),
             ));
         }
-        self.refresh_appointment_checkout(checkout)
+        self.refresh_checkout(checkout)
     }
 
-    pub fn refresh_appointment_checkout(
+    pub fn refresh_checkout(
         &self,
         checkout: &AppointmentCheckout,
     ) -> Result<AppointmentCheckout, TransportError> {
         let id = parse_id(&checkout.id)?;
-        let appointment = parse_id(&checkout.appointment_id)?;
+        let appointment = checkout
+            .appointment_id
+            .as_deref()
+            .map(parse_id)
+            .transpose()?;
         let path = format!("/admin/commerce/checkouts/{id}");
         let receipt: AppointmentCheckout =
             read_response(self.get(&self.agent, &path, None)?, false)?;
@@ -390,7 +449,7 @@ impl HttpTransport {
                 "Unexpected checkout confirmation".into(),
             ));
         }
-        validate_appointment_checkout(receipt, appointment, checkout.external_balance)
+        validate_checkout(receipt, appointment, checkout.external_balance)
     }
 
     pub fn current_cash_session(&self) -> Result<Option<CashSession>, TransportError> {
@@ -576,8 +635,19 @@ impl HttpTransport {
         query: &ProductQuery,
         page: u32,
     ) -> Result<ProductPage, TransportError> {
-        let response: ProductPage =
-            read_response(self.get(&self.agent, &query.path(page), None)?, false)?;
+        self.load_inventory_page(&query.path(page), page)
+    }
+
+    pub fn products_for_sale(
+        &self,
+        query: &ProductQuery,
+        page: u32,
+    ) -> Result<ProductPage, TransportError> {
+        self.load_inventory_page(&format!("{}&resellable=true", query.path(page)), page)
+    }
+
+    fn load_inventory_page(&self, path: &str, page: u32) -> Result<ProductPage, TransportError> {
+        let response: ProductPage = read_response(self.get(&self.agent, path, None)?, false)?;
         if response.pagination.page != page || response.pagination.page_size == 0 {
             return Err(TransportError::Server("Unexpected inventory page".into()));
         }
@@ -947,12 +1017,18 @@ impl HttpTransport {
     }
 }
 
-fn validate_appointment_checkout(
+fn validate_checkout(
     receipt: AppointmentCheckout,
-    appointment: uuid::Uuid,
+    appointment: Option<uuid::Uuid>,
     balance: Option<ExternalBalance>,
 ) -> Result<AppointmentCheckout, TransportError> {
-    if parse_id(&receipt.appointment_id).ok() != Some(appointment)
+    if receipt
+        .appointment_id
+        .as_deref()
+        .map(uuid::Uuid::parse_str)
+        .transpose()
+        .ok()
+        != Some(appointment)
         || parse_id(&receipt.id).is_err()
         || receipt.currency != "EUR"
         || receipt.external_balance != balance
@@ -964,7 +1040,7 @@ fn validate_appointment_checkout(
             .is_some_and(|payable| payable > receipt.balance_cents)
     {
         return Err(TransportError::Server(
-            "The appointment receipt changed or contains invalid totals".into(),
+            "The receipt changed or contains invalid totals".into(),
         ));
     }
     Ok(receipt)

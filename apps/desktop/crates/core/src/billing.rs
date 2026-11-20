@@ -126,7 +126,7 @@ pub struct ImportedPartialPaymentTerms {
 #[serde(rename_all = "camelCase")]
 pub struct AppointmentCheckout {
     pub id: String,
-    pub appointment_id: String,
+    pub appointment_id: Option<String>,
     pub currency: String,
     pub status: String,
     pub total_cents: u32,
@@ -181,6 +181,7 @@ impl AppointmentCheckout {
 pub struct CheckoutPriceLine {
     pub id: Uuid,
     pub description: String,
+    pub quantity: u32,
     pub unit_amount_cents: u32,
     #[serde(default)]
     pub price_pending: bool,
@@ -193,6 +194,56 @@ pub struct CheckoutPriceLine {
 pub struct CheckoutFinalPrice {
     pub id: Uuid,
     pub unit_amount_cents: u32,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum SaleItem {
+    Service {
+        service_id: Uuid,
+        quantity: u32,
+    },
+    Product {
+        product_id: Uuid,
+        quantity: u32,
+    },
+    Custom {
+        description: String,
+        unit_amount_cents: u32,
+        quantity: u32,
+    },
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WalkInSale {
+    pub idempotency_key: Uuid,
+    pub lines: Vec<SaleItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<Uuid>,
+    pub discount_cents: u32,
+    pub tip_cents: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckoutSummary {
+    pub id: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub currency: String,
+    pub status: String,
+    pub total_cents: u32,
+    pub lines: Vec<CheckoutPriceLine>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CheckoutPage {
+    pub checkouts: Vec<CheckoutSummary>,
+    pub total: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -344,7 +395,7 @@ mod tests {
             "pricingVersion": 1, "payments": [],
             "lines": [{
                 "id": "01a1d81f-2231-75bd-ba65-bc41f42803e9", "description": "Treatment",
-                "unitAmountCents": 3000, "minimumUnitAmountCents": 3000, "pricePending": true
+                "quantity": 1, "unitAmountCents": 3000, "minimumUnitAmountCents": 3000, "pricePending": true
             }]
         });
         let read = |v| serde_json::from_value::<AppointmentCheckout>(v).unwrap();
