@@ -16,8 +16,10 @@ import { parseOrThrow, readJson } from "../../http";
 import {
   archiveIntakeForm,
   createIntakeForm,
+  getIntakeForm,
   getIntakeRequirements,
   getIntakeSubmission,
+  listIntakeFormSummaries,
   listIntakeForms,
   listIntakeSubmissions,
   publishIntakeForm,
@@ -34,7 +36,18 @@ function privateRouter() {
 
 export function intakeAdminRoutes({ db, now = () => new Date() }: AppDeps) {
   return privateRouter()
-    .get("/", async (c) => c.json(await listIntakeForms(db, c.get("principal"))))
+    .get("/", async (c) => {
+      const principal = c.get("principal");
+      if (c.req.query("view") === "summary") {
+        return c.json(await listIntakeFormSummaries(db, principal));
+      }
+      return c.json(await listIntakeForms(db, principal));
+    })
+    .get("/:id", async (c) =>
+      c.json(
+        await getIntakeForm(db, parseOrThrow(idSchema, c.req.param("id")), c.get("principal")),
+      ),
+    )
     .post("/", async (c) => {
       const principal = c.get("principal");
       requirePermission(principal, "deleteClients");

@@ -8,6 +8,8 @@ import {
   dateShiftPreviewSchema,
   dateShiftResultSchema,
   dateShiftsResponseSchema,
+  intakeAdminFormSchema,
+  intakeFormsSchema,
   reviewPrivateSchema,
   startedPaymentSchema,
   syncPullResponseSchema,
@@ -232,6 +234,105 @@ test("a desktop owner can review and replay a dated shift without broader staff 
     replayed: true,
     days: [{ date, ranges: [], version: 1 }],
   });
+});
+
+test("desktop form administration uses live permissions and versioned, immutable publication", async () => {
+  const owner = await tokens("owner", "form-admin-owner");
+  const staff = await tokens("staff", "form-admin-staff");
+  const directory = "/admin/intake-forms";
+  const desktop = (path: string, method: string, body?: object, access = owner.access) =>
+    t.app.request(path, {
+      method,
+      headers: { authorization: `Bearer ${access}`, "content-type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  expect(await (await request("/me/desktop-workspaces", owner.access)).json()).toMatchObject({
+    workspaces: expect.arrayContaining(["intake_forms"]),
+  });
+  const professionalMenu = (await (
+    await request("/me/desktop-workspaces", staff.access)
+  ).json()) as {
+    workspaces: string[];
+  };
+  expect(professionalMenu.workspaces).not.toContain("intake_forms");
+  expect((await desktop(directory, "GET", undefined, staff.access)).status).toBe(403);
+  expect((await desktop(directory, "DELETE")).status).toBe(403);
+  const definition = {
+    kind: "waiver",
+    title: "Synthetic consent",
+    description: "First line\nSecond line",
+    fields: [
+      { id: crypto.randomUUID(), label: "I agree", kind: "consent", required: true },
+      { id: crypto.randomUUID(), label: "Count", kind: "number", minimum: 0, maximum: 10 },
+    ],
+    requiredAtBooking: true,
+    allowTeamResponses: true,
+    allServices: true,
+    serviceIds: [],
+  };
+  const input = { idempotencyKey: crypto.randomUUID(), definition };
+  expect((await desktop(directory, "POST", input, staff.access)).status).toBe(403);
+  const created = await desktop(directory, "POST", input);
+  expect(created.status).toBe(201);
+  expect(created.headers.get("cache-control")).toBe("private, no-store");
+  const draft = intakeAdminFormSchema.parse(await created.json());
+  const retry = await desktop(directory, "POST", input);
+  expect(intakeAdminFormSchema.parse(await retry.json()).id).toBe(draft.id);
+
+  const path = `${directory}/${draft.id}`;
+  expect((await desktop(directory, "GET")).status).toBe(403);
+  const summaryPath = `${directory}?view=summary`;
+  const summary = await desktop(summaryPath, "GET");
+  expect(summary.status).toBe(200);
+  expect(summary.headers.get("cache-control")).toBe("private, no-store");
+  expect(await summary.json()).toEqual({
+    forms: [{ id: draft.id, title: definition.title, active: false, publishedNumber: null }],
+  });
+  expect((await desktop(summaryPath, "GET", undefined, staff.access)).status).toBe(403);
+  expect((await desktop(path, "GET", undefined, staff.access)).status).toBe(403);
+  expect(intakeAdminFormSchema.parse(await (await desktop(path, "GET")).json())).toEqual(draft);
+  expect((await desktop(`${path}/publish`, "PUT", { version: draft.version })).status).toBe(403);
+  const published = intakeAdminFormSchema.parse(
+    await (await desktop(`${path}/publish`, "POST", { version: draft.version })).json(),
+  );
+  expect(published).toMatchObject({ active: true, published: { number: 1, definition } });
+  expect((await desktop(path, "PUT", { version: draft.version, definition })).status).toBe(409);
+
+  await t.db
+    .update(staffProfile)
+    .set({ accessPreset: "manager" })
+    .where(eq(staffProfile.userId, staff.who.userId));
+  const changed = { ...definition, title: "Updated draft" };
+  const saved = intakeAdminFormSchema.parse(
+    await (
+      await desktop(
+        path,
+        "PUT",
+        {
+          version: published.version,
+          definition: changed,
+        },
+        staff.access,
+      )
+    ).json(),
+  );
+  expect(saved).toMatchObject({ draft: changed, published: { definition } });
+  await t.db
+    .update(staffProfile)
+    .set({ accessPreset: "professional" })
+    .where(eq(staffProfile.userId, staff.who.userId));
+  expect(
+    (await desktop(`${path}/archive`, "POST", { version: saved.version }, staff.access)).status,
+  ).toBe(403);
+  const archived = intakeAdminFormSchema.parse(
+    await (await desktop(`${path}/archive`, "POST", { version: saved.version })).json(),
+  );
+  expect(archived).toMatchObject({ active: false, draft: changed, published: { definition } });
+  const cloud = await json(t.app, directory, "GET", undefined, owner.who.cookie);
+  expect(
+    intakeFormsSchema.parse(await cloud.json()).forms.find((form) => form.id === draft.id),
+  ).toEqual(archived);
+  expect((await desktop("/intake/submissions/" + draft.id, "GET")).status).toBe(403);
 });
 
 test("owner PKCE tokens authorize sync, refresh and stop working after revocation", async () => {

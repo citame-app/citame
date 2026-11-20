@@ -93,6 +93,11 @@ describe("route mapping", () => {
       "/admin/inventory/products/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
       "/admin/inventory/products/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/package-content",
       "/intake/requirements?serviceIds=example",
+      "/admin/intake-forms",
+      "/admin/intake-forms?view=summary",
+      "/admin/intake-forms/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "/admin/intake-forms/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/publish",
+      "/admin/intake-forms/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/archive",
     ];
     for (const path of paths) {
       const request = new Request(`http://web${path}`);
@@ -127,6 +132,12 @@ describe("route mapping", () => {
       ),
     ).toBe(false);
     expect(proxy.matches(new URL("http://web/intake/submissions/example"))).toBe(false);
+    expect(proxy.matches(new URL("http://web/admin/intake-forms/invalid"))).toBe(false);
+    expect(
+      proxy.matches(
+        new URL("http://web/admin/intake-forms/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/responses"),
+      ),
+    ).toBe(false);
     expect(proxy.matches(new URL("http://web/metrics"))).toBe(false);
   });
 

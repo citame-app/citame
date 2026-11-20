@@ -25,6 +25,7 @@ pub enum BrowserWorkspace {
     Marketing,
     Reputation,
     Settings,
+    IntakeForms,
     Whatsapp,
     #[serde(other)]
     Unknown,

@@ -22,6 +22,7 @@ fn workspace_label(area: BrowserWorkspace) -> Option<Key> {
         BrowserWorkspace::Commissions => Key::CloudCommissions,
         BrowserWorkspace::Marketing => Key::CloudMarketing,
         BrowserWorkspace::Reputation => Key::Reputation,
+        BrowserWorkspace::IntakeForms => Key::FormAdmin,
         BrowserWorkspace::Settings => Key::CloudSettings,
         BrowserWorkspace::Whatsapp => Key::CloudWhatsapp,
         BrowserWorkspace::Waitlist => Key::Waitlist,
@@ -213,7 +214,11 @@ impl Root {
                                 self.t(key),
                                 Kind::Ghost,
                                 cx.listener(move |root, _, _, cx| {
-                                    root.open_web_workspace(Some(area), cx)
+                                    if matches!(area, BrowserWorkspace::IntakeForms) {
+                                        root.open_intake_forms(cx);
+                                    } else {
+                                        root.open_web_workspace(Some(area), cx);
+                                    }
                                 }),
                             ))
                         },

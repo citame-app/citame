@@ -77,6 +77,85 @@ fn desktop_opens_cloud_management_with_the_linked_users_web_session_through_the_
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_administers_a_form_through_the_proxy() {
+    use sob_core::intake::{FormDefinition, FormWrite, FormWriteError};
+    let device = proxy_device();
+    let browser = Device::sign_in();
+    let transport = &device.transport;
+    let definition: FormDefinition = serde_json::from_value(json!({
+        "kind": "intake",
+        "title": "Synthetic admin questionnaire",
+        "description": "First paragraph\n\nSecond paragraph",
+        "allServices": true,
+        "requiredAtBooking": false,
+        "allowTeamResponses": true,
+        "fields": [{
+            "id": uuid::Uuid::now_v7(),
+            "label": "Count",
+            "help": "",
+            "required": false,
+            "kind": "number",
+            "minimum": 0,
+            "maximum": 5
+        }]
+    }))
+    .unwrap();
+    let create = FormWrite::Create {
+        key: uuid::Uuid::now_v7().to_string(),
+        definition,
+    };
+    let saved = transport.write_intake_form(&create, None).unwrap();
+    assert_eq!(
+        transport.write_intake_form(&create, None).unwrap().id,
+        saved.id
+    );
+    let summary = transport
+        .intake_forms()
+        .unwrap()
+        .into_iter()
+        .find(|row| row.id == saved.id)
+        .unwrap();
+    assert_eq!(summary.title, saved.draft.title);
+    assert_eq!(summary.published_number, None);
+    let read = transport.intake_form(&saved.id).unwrap();
+    assert_eq!(read.draft, saved.draft);
+    let publish = FormWrite::Publish {
+        id: saved.id.clone(),
+        version: saved.version,
+    };
+    let published = transport.write_intake_form(&publish, None).unwrap();
+    assert!(published.active);
+    assert!(!published.can_publish());
+    assert!(matches!(
+        transport.write_intake_form(&publish, None),
+        Err(FormWriteError::Conflict)
+    ));
+    assert_eq!(
+        transport
+            .write_intake_form(&publish, Some(&saved))
+            .unwrap()
+            .version,
+        published.version
+    );
+    let cloud = browser.rest_get("/admin/intake-forms");
+    assert!(
+        cloud["forms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == saved.id && item["published"]["number"] == 1)
+    );
+    let archive = FormWrite::Archive {
+        id: saved.id.clone(),
+        version: published.version,
+    };
+    let archived = transport.write_intake_form(&archive, None).unwrap();
+    assert!(!archived.active);
+    assert_eq!(archived.published.unwrap().number, 1);
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
 fn desktop_opens_the_exact_receipt_and_observes_its_browser_payment_through_the_proxy() {
     let device = proxy_device();
     let receipt = device

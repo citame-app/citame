@@ -18,7 +18,10 @@ use crate::billing::{
     SavedBankRefundStatus, WalkInSale,
 };
 use crate::booking::{BookingError, BookingTerms, ReviewedBooking};
-use crate::intake::IntakeRequirements;
+use crate::intake::{
+    AdminForm, AdminFormSummary, AdminForms, FormWrite, FormWriteError, IntakeRequirements,
+    recovered_form,
+};
 use crate::inventory::{
     ContentWriteError, LedgerPage, LedgerQuery, MovementPage, PRODUCTS_PATH, PackageContent,
     PendingStock, Product, ProductId, ProductPage, ProductQuery, StockReturnAttempt,
@@ -1238,6 +1241,100 @@ impl HttpTransport {
             return Err(TransportError::Server("Unexpected inventory update".into()).into());
         }
         Ok(updated)
+    }
+
+    pub fn intake_forms(&self) -> Result<Vec<AdminFormSummary>, TransportError> {
+        let data: AdminForms = read_response(
+            self.get(
+                &self.agent,
+                "/admin/intake-forms?view=summary",
+                Some("application/json"),
+            )?,
+            false,
+        )?;
+        Ok(data.forms)
+    }
+
+    pub fn intake_form(&self, id: &str) -> Result<AdminForm, TransportError> {
+        let form: AdminForm = read_response(
+            self.get(
+                &self.agent,
+                &format!("/admin/intake-forms/{}", parse_id(id)?),
+                Some("application/json"),
+            )?,
+            false,
+        )?;
+        if form.id != id {
+            return Err(TransportError::Server("Unexpected form detail".into()));
+        }
+        Ok(form)
+    }
+
+    pub fn write_intake_form(
+        &self,
+        action: &FormWrite,
+        retry_base: Option<&AdminForm>,
+    ) -> Result<AdminForm, FormWriteError> {
+        match self.send_intake_form(action) {
+            Err(FormWriteError::Conflict) if let Some(base) = retry_base => {
+                recovered_form(action, base, self.intake_form(&base.id)?)
+                    .ok_or(FormWriteError::Conflict)
+            }
+            result => result,
+        }
+    }
+
+    fn send_intake_form(&self, action: &FormWrite) -> Result<AdminForm, FormWriteError> {
+        let response = match action {
+            FormWrite::Create { key, definition } => self.send_json(
+                "/admin/intake-forms",
+                &serde_json::json!({ "idempotencyKey": parse_id(key)?, "definition": definition }),
+            ),
+            FormWrite::Save {
+                id,
+                version,
+                definition,
+            } => self.send_put_json(
+                &format!("/admin/intake-forms/{}", parse_id(id)?),
+                &serde_json::json!({ "version": version, "definition": definition }),
+            ),
+            FormWrite::Publish { id, version } | FormWrite::Archive { id, version } => {
+                let operation = if matches!(action, FormWrite::Publish { .. }) {
+                    "publish"
+                } else {
+                    "archive"
+                };
+                self.send_json(
+                    &format!("/admin/intake-forms/{}/{operation}", parse_id(id)?),
+                    &serde_json::json!({ "version": version }),
+                )
+            }
+        }?;
+        let form: AdminForm = read_response_with(response, |status, retry_after, body| {
+            let code = serde_json::from_str::<serde_json::Value>(body).ok();
+            match code
+                .as_ref()
+                .and_then(|value| value.pointer("/error/code"))
+                .and_then(serde_json::Value::as_str)
+            {
+                Some("version_conflict") => FormWriteError::Conflict,
+                Some("storage_limit") => FormWriteError::Capacity,
+                _ if (400..500).contains(&status) && !matches!(status, 401 | 403 | 408 | 429) => {
+                    FormWriteError::Invalid
+                }
+                _ => classify_status(status, retry_after, body, false).into(),
+            }
+        })?;
+        let expected = match action {
+            FormWrite::Create { .. } => None,
+            FormWrite::Save { id, .. }
+            | FormWrite::Publish { id, .. }
+            | FormWrite::Archive { id, .. } => Some(id),
+        };
+        if expected.is_some_and(|id| *id != form.id) {
+            return Err(TransportError::Server("Unexpected form acknowledgement".into()).into());
+        }
+        Ok(form)
     }
 
     pub fn managed_reviews(

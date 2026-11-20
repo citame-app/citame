@@ -2,9 +2,15 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct FormDefinition {
+    #[serde(default)]
+    pub kind: FormKind,
+    #[serde(default = "all_services")]
+    pub all_services: bool,
+    #[serde(default)]
+    pub service_ids: Vec<String>,
     pub title: String,
     pub description: String,
     pub required_at_booking: bool,
@@ -12,7 +18,141 @@ pub struct FormDefinition {
     pub fields: Vec<Question>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+fn all_services() -> bool {
+    true
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FormKind {
+    #[default]
+    Intake,
+    Waiver,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminForm {
+    pub id: String,
+    pub version: u32,
+    pub active: bool,
+    pub draft: FormDefinition,
+    pub published: Option<PublishedForm>,
+}
+
+impl AdminForm {
+    pub fn can_publish(&self) -> bool {
+        !self.active
+            || self
+                .published
+                .as_ref()
+                .is_none_or(|revision| revision.definition != self.draft)
+    }
+}
+
+#[derive(Clone, Deserialize, PartialEq)]
+pub struct PublishedForm {
+    pub number: u32,
+    pub definition: FormDefinition,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct AdminForms {
+    pub forms: Vec<AdminFormSummary>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminFormSummary {
+    pub id: String,
+    pub title: String,
+    pub active: bool,
+    pub published_number: Option<u32>,
+}
+
+impl From<&AdminForm> for AdminFormSummary {
+    fn from(form: &AdminForm) -> Self {
+        Self {
+            id: form.id.clone(),
+            title: form.draft.title.clone(),
+            active: form.active,
+            published_number: form.published.as_ref().map(|revision| revision.number),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum FormWrite {
+    Create {
+        key: String,
+        definition: FormDefinition,
+    },
+    Save {
+        id: String,
+        version: u32,
+        definition: FormDefinition,
+    },
+    Publish {
+        id: String,
+        version: u32,
+    },
+    Archive {
+        id: String,
+        version: u32,
+    },
+}
+
+#[derive(Debug)]
+pub enum FormWriteError {
+    Conflict,
+    Capacity,
+    Invalid,
+    Transport(crate::sync::TransportError),
+}
+
+// A retried write may conflict because the first reply was lost. Recover only
+// the exact next version with the reviewed result, leaving unrelated edits visible.
+pub(crate) fn recovered_form(
+    action: &FormWrite,
+    base: &AdminForm,
+    form: AdminForm,
+) -> Option<AdminForm> {
+    if form.id != base.id || base.version.checked_add(1) != Some(form.version) {
+        return None;
+    }
+    let matches = match action {
+        FormWrite::Create { .. } => false,
+        FormWrite::Save { definition, .. } => {
+            form.draft == *definition
+                && form.active == base.active
+                && form.published == base.published
+        }
+        FormWrite::Publish { .. } => {
+            let previous = base
+                .published
+                .as_ref()
+                .map_or(0, |revision| revision.number);
+            form.active
+                && form.draft == base.draft
+                && form.published.as_ref().is_some_and(|revision| {
+                    previous.checked_add(1) == Some(revision.number)
+                        && revision.definition == base.draft
+                })
+        }
+        FormWrite::Archive { .. } => {
+            !form.active && form.draft == base.draft && form.published == base.published
+        }
+    };
+    matches.then_some(form)
+}
+
+impl From<crate::sync::TransportError> for FormWriteError {
+    fn from(error: crate::sync::TransportError) -> Self {
+        Self::Transport(error)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Question {
     pub id: String,
     pub label: String,
@@ -22,7 +162,7 @@ pub struct Question {
     pub kind: QuestionKind,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(
     tag = "kind",
     rename_all = "snake_case",
@@ -50,7 +190,7 @@ pub enum QuestionKind {
     },
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Choice {
     pub id: String,
     pub label: String,
@@ -194,6 +334,39 @@ pub struct ReadyResponse {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_lost_publication_reply_accepts_only_the_reviewed_successor() {
+        let draft: FormDefinition = serde_json::from_value(serde_json::json!({
+            "title": "Reviewed wording", "description": "",
+            "requiredAtBooking": true, "allowTeamResponses": false,
+            "fields": [{ "id": uuid::Uuid::now_v7().to_string(), "label": "Question", "help": "", "required": true, "kind": "consent" }],
+        })).unwrap();
+        let base = AdminForm {
+            id: uuid::Uuid::now_v7().to_string(),
+            version: 3,
+            active: false,
+            published: None,
+            draft: draft.clone(),
+        };
+        let mut successor = AdminForm {
+            version: 4,
+            active: true,
+            published: Some(PublishedForm {
+                number: 1,
+                definition: draft,
+            }),
+            ..base.clone()
+        };
+        let action = FormWrite::Publish {
+            id: base.id.clone(),
+            version: base.version,
+        };
+        assert!(recovered_form(&action, &base, successor.clone()).is_some());
+        successor.published.as_mut().unwrap().definition.title =
+            "Someone else’s publication".into();
+        assert!(recovered_form(&action, &base, successor).is_none());
+    }
 
     #[test]
     fn team_answers_preserve_explicit_false_zero_multiline_and_confirmed_consent() {

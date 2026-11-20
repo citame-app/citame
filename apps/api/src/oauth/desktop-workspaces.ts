@@ -20,6 +20,7 @@ const destinations = {
   commissions: ["/admin/staff?section=commissions", "commerce"],
   marketing: ["/admin/marketing", "editCatalog"],
   reputation: ["/admin/reputation", "editCatalog"],
+  intake_forms: ["/admin/settings?section=documents", "deleteClients"],
   settings: ["/admin/settings", "manageSettings"],
   whatsapp: ["/admin/whatsapp", "manageSettings"],
 } as const satisfies Record<DesktopWorkspace, readonly [string, keyof StaffPermissions | null]>;

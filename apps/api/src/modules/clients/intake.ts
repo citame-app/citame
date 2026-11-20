@@ -18,7 +18,7 @@ import {
   intakeRevision,
   intakeSubmission,
 } from "@sob/db";
-import { and, asc, count, desc, eq, gte, inArray, isNull, lte } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
 import { loadPrincipal, ownedClientIds, ownsClient, type Principal } from "../../auth/principal";
@@ -89,6 +89,28 @@ export async function listIntakeForms(db: Database, p: Principal) {
     .orderBy(desc(intakeForm.updatedAt), desc(intakeForm.id));
   return { forms: await Promise.all(rows.map((row) => formView(db, row))) };
 }
+export async function listIntakeFormSummaries(db: Database, p: Principal) {
+  requirePermission(p, "deleteClients");
+  const forms = await db
+    .select({
+      id: intakeForm.id,
+      // Earlier writers can store the document as a JSONB string.
+      title: sql<string>`(case when jsonb_typeof(${intakeForm.draft}) = 'string'
+        then (${intakeForm.draft} #>> '{}')::jsonb else ${intakeForm.draft} end)->>'title'`,
+      active: intakeForm.active,
+      publishedNumber: intakeRevision.number,
+    })
+    .from(intakeForm)
+    .leftJoin(intakeRevision, eq(intakeForm.currentRevisionId, intakeRevision.id))
+    .orderBy(desc(intakeForm.updatedAt), desc(intakeForm.id));
+  return { forms };
+}
+
+export async function getIntakeForm(db: Database, id: string, p: Principal) {
+  requirePermission(p, "deleteClients");
+  return formView(db, await formRow(db, id));
+}
+
 export async function createIntakeForm(
   db: Database,
   input: { idempotencyKey: string; definition: IntakeDefinition },

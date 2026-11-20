@@ -39,6 +39,7 @@ mod cash;
 mod checkout;
 mod connection;
 mod directory;
+mod form_admin;
 mod inbox;
 mod intake_editor;
 mod inventory;
@@ -235,6 +236,7 @@ struct ConflictDraft {
 enum Overlay {
     None,
     Cloud(workspaces::CloudDesk),
+    IntakeForms(Box<form_admin::Desk>),
     New(Box<NewForm>),
     Slot(slots::SelectedSlot),
     Details(Box<Details>),
@@ -2343,6 +2345,7 @@ impl Root {
                 self.load_register(cx);
                 return;
             }
+            Overlay::IntakeForms(_) => self.close_intake_forms(cx),
             Overlay::ReviewModeration(desk) => {
                 if !desk.dismiss_editor(cx) {
                     self.overlay = Overlay::None;
@@ -3510,6 +3513,9 @@ impl Render for Root {
                         Overlay::None => None,
                         Overlay::Cloud(desk) => {
                             Some(self.render_web_management(desk, window.viewport_size(), cx))
+                        }
+                        Overlay::IntakeForms(desk) => {
+                            Some(self.render_intake_forms(desk, window.viewport_size(), cx))
                         }
                         Overlay::New(f) => Some(self.render_new(f, window.viewport_size(), cx)),
                         Overlay::Slot(slot) => Some(self.render_slot_actions(slot, cx)),

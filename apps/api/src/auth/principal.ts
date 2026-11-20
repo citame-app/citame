@@ -109,7 +109,15 @@ export function requireAuth(
       const dateShiftAllowed = path.endsWith("/preview")
         ? method === "POST"
         : method === "GET" || method === "POST";
+      const intakeAllowed =
+        path === "/admin/intake-forms"
+          ? method === "GET" || method === "POST"
+          : path.endsWith("/publish") || path.endsWith("/archive")
+            ? method === "POST"
+            : method === "GET" || method === "PUT";
       if (
+        (path.startsWith("/admin/intake-forms") && !intakeAllowed) ||
+        (path === "/admin/intake-forms" && method === "GET" && c.req.query("view") !== "summary") ||
         !DESKTOP_PROXY_ROUTE.test(path) ||
         (path === "/appointments/desktop-booking" && method !== "POST") ||
         ([
