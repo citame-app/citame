@@ -1,10 +1,96 @@
 import { expect, request, test } from "@playwright/test";
-import { shiftDate } from "@sob/contracts";
+import { shiftDate, shiftWeekStart } from "@sob/contracts";
 import { RECURRING_FIXTURE as fixture } from "../../api/test/recurring-values";
 import { localDateOf } from "../src/lib/format";
 import { zonedInstant } from "../src/lib/zoned";
-import { expectNoHorizontalScroll } from "./admin-helpers";
-import { expectNoSeriousA11yViolations, signInThroughUi } from "./helpers";
+import { expectNoHorizontalScroll, STYLIST_A } from "./admin-helpers";
+import { expectNoSeriousA11yViolations, signInThroughUi, switchLocale } from "./helpers";
+
+test("team week stays current and opens the individual schedule at the selected date", async ({
+  page,
+}, info) => {
+  await signInThroughUi(page, fixture.ownerEmail, "/admin/staff?section=shifts");
+  const table = page.getByRole("table", { name: "Team shifts by week" });
+  await expect(table.getByRole("columnheader")).toHaveCount(8);
+  await expect(table.getByRole("rowheader", { name: "Stylist A" })).toBeVisible();
+  await expect(table.getByRole("rowheader", { name: "Stylist B" })).toBeVisible();
+  await expectNoHorizontalScroll(page);
+  await expectNoSeriousA11yViolations(page, "team week");
+
+  const { timezone } = await (await page.request.get("/api/salon")).json();
+  const week = shiftDate(shiftWeekStart(localDateOf(new Date().toISOString(), timezone)), 56);
+  await page.getByLabel("Week starting").fill(shiftDate(week, -7));
+  await page.getByRole("button", { name: "Next week", exact: true }).click();
+  await expect(page.getByLabel("Week starting")).toHaveValue(week);
+  await expect(page).toHaveURL(new RegExp(`week=${week}`));
+  const connected = page.waitForResponse(
+    (response) => response.url().endsWith("/api/sync/stream") && response.ok(),
+  );
+  await page.reload();
+  await connected;
+  await expect(table).toBeVisible();
+  const endpoint = `/api/admin/staff/${STYLIST_A}/time-off`;
+  const headers = { origin: fixture.baseURL };
+  const absence = await page.request.post(endpoint, {
+    headers,
+    data: {
+      startsAt: zonedInstant(week, "00:00", timezone),
+      endsAt: zonedInstant(shiftDate(week, 1), "00:00", timezone),
+    },
+  });
+  expect(absence.status(), await absence.text()).toBe(201);
+  const { timeOff } = await absence.json();
+  try {
+    await expect(table.getByText("Absent all day", { exact: true })).toBeVisible();
+    await page.screenshot({ path: info.outputPath("team-week.png") });
+  } finally {
+    const removed = await page.request.delete(`${endpoint}/${timeOff.id}`, { headers });
+    expect(removed.ok(), await removed.text()).toBe(true);
+  }
+  await table.getByRole("button", { name: "Stylist A", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Dates and shifts", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.getByLabel("Week starting")).toHaveValue(week);
+});
+
+test("weekly hours retain a web draft after a colleague saves", async ({ page }) => {
+  const connected = page.waitForResponse(
+    (response) => response.url().endsWith("/api/sync/stream") && response.ok(),
+  );
+  await signInThroughUi(page, fixture.ownerEmail, `/admin/staff?member=${STYLIST_A}&tab=hours`);
+  await connected;
+  const path = `/api/admin/staff/${STYLIST_A}/working-hours`;
+  const initial = await (await page.request.get(path)).json();
+  const headers = { origin: fixture.baseURL };
+  const input = page.getByLabel("To (Monday, range 1)", { exact: true });
+  await input.fill("16:00");
+  const changed = initial.hours.map((range: { weekday: number; endTime: string }) =>
+    range.weekday === 1 ? { ...range, endTime: "17:00" } : range,
+  );
+  const update = await page.request.put(path, {
+    headers,
+    data: { hours: changed, expectedRevision: initial.revision },
+  });
+  expect(update.ok(), await update.text()).toBe(true);
+  const saved = await update.json();
+  try {
+    await expect(
+      page.getByRole("alert").filter({ hasText: "Someone changed these hours" }),
+    ).toBeVisible();
+    await expect(input).toHaveValue("16:00");
+    await expect(page.getByRole("button", { name: "Save hours" })).toBeDisabled();
+    await page.getByRole("button", { name: "Discard draft and load current hours" }).click();
+    await expect(input).toHaveValue("17:00");
+  } finally {
+    const restored = await page.request.put(path, {
+      headers,
+      data: { hours: initial.hours, expectedRevision: saved.revision },
+    });
+    expect(restored.ok(), await restored.text()).toBe(true);
+  }
+});
 
 for (const scheme of ["light", "dark"] as const)
   test.describe(`dated shifts — ${scheme}`, () => {
@@ -181,7 +267,7 @@ for (const scheme of ["light", "dark"] as const)
           },
         ]);
         await expect(monday.getByLabel("Start 1", { exact: true })).toHaveValue("13:00");
-        await page.getByRole("radio", { name: "Español", exact: true }).check();
+        await switchLocale(page, "Español");
         await expect(
           page.getByRole("heading", { name: "Fechas y turnos", exact: true }),
         ).toBeVisible();

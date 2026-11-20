@@ -81,6 +81,11 @@ function ProfessionalStep() {
                 <ProfessionalChoice
                   value={member.id}
                   name={member.displayName}
+                  portraitUrl={
+                    member.portraitVersion
+                      ? `/api/staff/${member.id}/portrait/${member.portraitVersion}`
+                      : undefined
+                  }
                   selected={search.staff === member.id}
                   onSelect={choose}
                 />

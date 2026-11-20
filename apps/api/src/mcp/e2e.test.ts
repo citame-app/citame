@@ -70,7 +70,7 @@ class TestProvider implements OAuthClientProvider {
   verifier = "";
   authorizationUrl: URL | undefined;
   registrations = 0;
-  constructor(private readonly scope = "mcp:read mcp:book offline_access") {}
+  constructor(readonly scope = "mcp:read mcp:book offline_access") {}
   get redirectUrl() {
     return REDIRECT;
   }
@@ -109,7 +109,7 @@ class TestProvider implements OAuthClientProvider {
 }
 
 /** The signed-in user's browser: follows the authorize redirect and approves the consent page. */
-async function approveInBrowser(authorizationUrl: URL, user: Pick<Actor, "cookie">) {
+async function approveInBrowser(authorizationUrl: URL, user: Pick<Actor, "cookie">, scope: string) {
   const authorize = await fetch(authorizationUrl, {
     redirect: "manual",
     headers: { cookie: user.cookie },
@@ -119,7 +119,7 @@ async function approveInBrowser(authorizationUrl: URL, user: Pick<Actor, "cookie
   const consent = await fetch(`${origin}/api/auth/oauth2/consent`, {
     method: "POST",
     headers: { "content-type": "application/json", cookie: user.cookie, origin },
-    body: JSON.stringify({ accept: true, oauth_query: consentUrl.search.slice(1) }),
+    body: JSON.stringify({ accept: true, scope, oauth_query: consentUrl.search.slice(1) }),
   });
   const { url } = (await consent.json()) as { url: string };
   const redirect = new URL(url);
@@ -143,8 +143,8 @@ async function connect(user: Pick<Actor, "cookie">, provider = new TestProvider(
   } catch (error) {
     if (!(error instanceof UnauthorizedError)) throw error;
     const authorizationUrl = provider.authorizationUrl;
-    if (!authorizationUrl) throw new Error("the SDK never asked to authorize");
-    const code = await approveInBrowser(authorizationUrl, user);
+    if (!authorizationUrl) throw new Error("the SDK never asked to authorize", { cause: error });
+    const code = await approveInBrowser(authorizationUrl, user, provider.scope);
     await transport.finishAuth(code);
     transport = newTransport(provider);
     client = new Client({ name: "e2e", version: "1.0.0" });
@@ -298,17 +298,24 @@ describe("MCP client end to end over HTTP", () => {
     await two.client.close();
   });
 
-  test("a staff member's token sees the front-desk tools and lists the schedule", async () => {
+  test("a staff member authorizes read-only front-desk management over HTTP", async () => {
     const ana = await actor(t, "staff", "ana@example.com", { staffProfileId: fx.anaId });
-    const provider = new TestProvider("mcp:read mcp:book schedule:read offline_access");
+    const provider = new TestProvider("mcp:read schedule:read operations:read offline_access");
     const { client } = await connect(ana, provider);
     const names = (await client.listTools()).tools.map((tool) => tool.name);
     expect(names).toContain("list_schedule");
     expect(names).toContain("find_client");
+    expect(names).toContain("list_calendar_notices");
+    expect(names).not.toContain("set_calendar_notices_archived");
+    expect(names).not.toContain("get_loyalty_policy");
     const found = await client.callTool({ name: "find_client", arguments: { search: "Lucia" } });
     expect((found.structuredContent as { clients: { name: string }[] }).clients[0]?.name).toBe(
       "Lucia",
     );
+    const inbox = await client.callTool({ name: "list_calendar_notices", arguments: {} });
+    expect(inbox.structuredContent).toEqual({
+      data: { entries: [], total: 0, page: 1, pageSize: 25 },
+    });
     await client.close();
   });
 

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { CalendarAppointment } from "@sob/contracts";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import { renderApp } from "../../../../test/render";
 import { AppointmentDrawer } from "./appointment-drawer";
 
@@ -46,6 +47,8 @@ beforeEach(() => {
   patchReply = { status: 200, body: { ...appointment, version: 4 } };
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
+    if (url.pathname === `/api/appointments/${appointment.id}/context`)
+      return json({ rows: [], customerComment: null });
     if (url.pathname === `/api/admin/clients/${CLIENT}`) {
       return json({
         client: {
@@ -107,12 +110,31 @@ const open = (props: Partial<Parameters<typeof AppointmentDrawer>[0]> = {}) =>
     />,
   );
 
+function LiveUpdateHarness() {
+  const [version, setVersion] = useState(appointment.version);
+  return (
+    <>
+      <AppointmentDrawer
+        appointment={{ ...appointment, version }}
+        staffName="Ana"
+        onClose={() => {}}
+        role="owner"
+        ownStaffId={null}
+        now={NOW}
+      />
+      <button type="button" onClick={() => setVersion(4)}>
+        Receive remote calendar update
+      </button>
+    </>
+  );
+}
+
 describe("AppointmentDrawer", () => {
   test("shows who, when, what and the status", async () => {
     open();
     const dialog = await screen.findByRole("dialog", { name: "Lucia Perez" });
     expect(within(dialog).getByText("Ana")).toBeInTheDocument();
-    expect(within(dialog).getByText("Haircut")).toBeInTheDocument();
+    expect(within(dialog).getAllByText("Haircut").length).toBeGreaterThan(0);
     expect(within(dialog).getByText("Booked")).toBeInTheDocument();
     expect(within(dialog).getByText(/11:00 AM/)).toBeInTheDocument();
   });
@@ -145,6 +167,16 @@ describe("AppointmentDrawer", () => {
     expect(alert).toHaveTextContent("Someone changed this appointment");
     fireEvent.click(within(alert).getByRole("button", { name: "Reload latest" }));
     expect(onReload).toHaveBeenCalledTimes(1);
+  });
+
+  test("an unrelated live update keeps the draft and allows it to save on the latest revision", async () => {
+    renderApp(<LiveUpdateHarness />);
+    const notes = await screen.findByLabelText("Appointment notes");
+    fireEvent.change(notes, { target: { value: "My appointment draft" } });
+    fireEvent.click(screen.getByText("Receive remote calendar update"));
+    expect(notes).toHaveValue("My appointment draft");
+    fireEvent.click(screen.getByRole("button", { name: "Save notes" }));
+    await waitFor(() => expect(patches).toEqual([{ version: 4, notes: "My appointment draft" }]));
   });
 
   test("rescheduling picks a slot from availability and moves with version, time and staff", async () => {

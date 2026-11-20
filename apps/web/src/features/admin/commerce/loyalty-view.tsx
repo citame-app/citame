@@ -28,20 +28,20 @@ export function LoyaltyView({
 }) {
   const { t } = useI18n();
   const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState("");
+  const [selected, setSelected] = useState(clientId ?? "");
   const debounced = useDebounced(search.trim());
   const clients = useQuery({
     queryKey: ["rewards", "customers", debounced],
     queryFn: () =>
       api().admin.clients.list({ search: debounced, pageSize: 8, sort: "name", order: "asc" }),
-    enabled: mode === "admin" && debounced.length > 0,
+    enabled: mode === "admin" && !clientId && debounced.length > 0,
   });
   const permissions = permissionsFor(role, accessPreset);
   return (
     <section aria-label={t("loyalty.title")} className="space-y-6">
       <h2 className="text-heading">{t("loyalty.title")}</h2>
-      {mode === "admin" && role === "owner" && <LoyaltyPolicyForm />}
-      {mode === "admin" && (
+      {mode === "admin" && !clientId && role === "owner" && <LoyaltyPolicyForm />}
+      {mode === "admin" && !clientId && (
         <div className="space-y-3 rounded-xl border border-line p-4">
           <TextField
             label={t("loyalty.searchClient")}
@@ -81,7 +81,7 @@ export function LoyaltyView({
       ) : (
         <p className="text-sm text-muted">{t("loyalty.emptyClient")}</p>
       )}
-      {mode === "admin" && permissions.editCatalog && <PromotionsView />}
+      {mode === "admin" && !clientId && permissions.editCatalog && <PromotionsView />}
     </section>
   );
 }

@@ -8,6 +8,7 @@ import {
   pickFirstTime,
   pickProfessional,
   signInThroughUi,
+  switchLocale,
 } from "./helpers";
 
 for (const scheme of ["light", "dark"] as const)
@@ -82,7 +83,7 @@ for (const scheme of ["light", "dark"] as const)
         );
         const express = await create(`Fixture express ${scheme} ${info.project.name}`, 30, 0, 1500);
         await signInThroughUi(page, fixture.ownerEmail, "/admin/services");
-        await page.getByRole("link", { name: "Processing time", exact: true }).click();
+        await page.getByRole("button", { name: "Processing time", exact: true }).click();
         await page
           .getByLabel("Choose a treatment to configure", { exact: true })
           .selectOption(colour.id);
@@ -197,7 +198,7 @@ for (const scheme of ["light", "dark"] as const)
         const block = page.getByRole("button", {
           name: new RegExp(`Recurring fixture client.*${colour.name}`),
         });
-        await expect(block).toHaveAttribute("aria-label", /Processing:/);
+        await expect(block).toHaveAccessibleName(/Processing:/);
         await expect(block.locator("[data-processing-window]")).toHaveCount(1);
         await expectNoSeriousA11yViolations(page, `frozen calendar exposure ${scheme}`);
         await block.click();
@@ -283,7 +284,7 @@ for (const scheme of ["light", "dark"] as const)
         expect(
           (await (await owner.get(`/api/admin/staff/${staffId}/capacity`)).json()).maxConcurrent,
         ).toBe(1);
-        await page.getByRole("radio", { name: "Español", exact: true }).check();
+        await switchLocale(page, "Español");
         await expect(
           page.getByRole("heading", { name: "Capacidad del profesional", exact: true }),
         ).toBeVisible();

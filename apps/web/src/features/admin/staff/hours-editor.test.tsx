@@ -9,6 +9,7 @@ const realFetch = globalThis.fetch;
 
 let hours: { weekday: number; startTime: string; endTime: string }[];
 let conflicts: unknown[];
+let revision: string;
 let puts: unknown[];
 let putReply: { status: number; body?: unknown };
 const json = (body: unknown, status = 200) =>
@@ -25,6 +26,7 @@ beforeEach(() => {
   puts = [];
   conflicts = [];
   putReply = { status: 200 };
+  revision = "a".repeat(64);
   hours = [
     { weekday: 1, startTime: "09:00", endTime: "13:00" },
     { weekday: 1, startTime: "14:00", endTime: "18:00" },
@@ -38,9 +40,9 @@ beforeEach(() => {
         puts.push(body);
         if (putReply.status !== 200) return json(putReply.body, putReply.status);
         hours = body.hours;
-        return json({ staffId: STAFF, hours, conflicts });
+        return json({ staffId: STAFF, hours, conflicts, revision });
       }
-      return json({ staffId: STAFF, hours, conflicts });
+      return json({ staffId: STAFF, hours, conflicts, revision });
     }
     if (url.pathname === `/api/admin/clients/${CLIENT}`) {
       return json({
@@ -147,6 +149,26 @@ describe("HoursEditor", () => {
     });
     expect(within(warning).getByText(/outside working hours/)).toBeInTheDocument();
     expect(await within(warning).findByText("Lucia Perez")).toBeInTheDocument();
+  });
+
+  test("a stale draft keeps its edits until the operator explicitly reloads", async () => {
+    open();
+    const hour = await screen.findByLabelText("To (Tuesday, range 1)");
+    fireEvent.change(hour, { target: { value: "16:00" } });
+    revision = "b".repeat(64);
+    hours[2] = { weekday: 2, startTime: "09:00", endTime: "19:00" };
+    putReply = { status: 409, body: { error: { code: "version_conflict", message: "Stale" } } };
+
+    fireEvent.click(screen.getByRole("button", { name: "Save hours" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Someone changed these hours.");
+    expect(puts[0]).toMatchObject({ expectedRevision: "a".repeat(64) });
+    expect(hour).toHaveValue("16:00");
+    expect(hour).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save hours" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard draft and load current hours" }));
+    await waitFor(() => expect(hour).toHaveValue("19:00"));
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   test("conflicts that already exist are shown before any edit", async () => {

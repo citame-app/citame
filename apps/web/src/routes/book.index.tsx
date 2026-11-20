@@ -7,8 +7,14 @@ import { BookingFrame } from "~/features/booking/frame";
 import { BookingSummary } from "~/features/booking/summary";
 import { useBooking } from "~/features/booking/use-booking";
 import { useI18n } from "~/i18n/react";
+import { publicCombinationsQuery } from "~/lib/queries";
 
-export const Route = createFileRoute("/book/")({ component: ServicesStep });
+export const Route = createFileRoute("/book/")({
+  loader: async ({ context }) => {
+    await context.queryClient.prefetchQuery(publicCombinationsQuery);
+  },
+  component: ServicesStep,
+});
 
 function ServicesStep() {
   const { t } = useI18n();

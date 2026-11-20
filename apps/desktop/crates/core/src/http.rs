@@ -1,18 +1,36 @@
 //! HTTP transport for the sync protocol and the SSE nudge listener.
 
 use std::io::{BufRead, BufReader};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use crate::auth::{AuthProvider, SessionHandle};
+use crate::auth::{AuthError, AuthProvider, SessionHandle, TokenStore};
 use crate::backoff::Backoff;
+use crate::billing::{
+    AppointmentCheckout, CashCommand, CashSession, ImportedPartialPayment,
+    ImportedPartialPaymentPreview, ImportedPricePreview, ImportedPriceReview, ImportedSettlement,
+    ImportedSettlementStatus, ManualTender, PaymentAttempt,
+};
+use crate::inventory::{
+    ContentWriteError, LedgerPage, LedgerQuery, MovementPage, PRODUCTS_PATH, PackageContent,
+    PendingStock, Product, ProductId, ProductPage, ProductQuery, StockWriteError,
+};
 use crate::model::*;
+use crate::reports::{ClientReport, Outcome, OutcomePage, ReportQuery, ReportSummary};
+use crate::reviews::{
+    self, EmailStatus, ManagedReview, ModerationCommand, ReviewEmail, ReviewPage, ReviewRequests,
+    ReviewStatus,
+};
 use crate::runner::Wake;
 use crate::sse::{SseParser, nudge_seq};
-use crate::sync::{Transport, TransportError};
+use crate::sync::{CatalogColors, Transport, TransportError};
+use crate::waitlist::{
+    AcceptOffer, AcceptedOffer, OfferRequirements, WaitlistEntry, WaitlistPage, WaitlistPolicy,
+    WaitlistRequest,
+};
 
 pub struct HttpTransport {
     base_url: String,
@@ -20,7 +38,19 @@ pub struct HttpTransport {
     stream_agent: ureq::Agent,
     session: SessionHandle,
     auth: Arc<dyn AuthProvider>,
+    authorization: Mutex<bool>,
+    token_store: Option<Arc<dyn TokenStore>>,
 }
+
+mod staff_portraits;
+pub use staff_portraits::{PortraitDirectory, PortraitStaff, PortraitUpdate};
+mod weekly_hours;
+pub use weekly_hours::{WeeklyHours, WeeklyRange, parse_weekly_hours};
+mod date_shifts;
+pub use date_shifts::{
+    DatedShiftConflict, DatedShiftConflictReason, DatedShiftCopy, DatedShiftDay, DatedShiftEdit,
+    DatedShiftReview, DatedShiftSelection, ReviewedDatedShift,
+};
 
 /// The stream is reconnected at least this often. ureq bounds the whole body, not each read,
 /// so this doubles as dead-connection detection (the server pings every 15 s).
@@ -30,11 +60,13 @@ impl HttpTransport {
     pub fn new(base_url: &str, session: SessionHandle, auth: Arc<dyn AuthProvider>) -> Self {
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .http_status_as_error(false)
+            .max_redirects(0)
             .timeout_global(Some(Duration::from_secs(30)))
             .build()
             .into();
         let stream_agent: ureq::Agent = ureq::Agent::config_builder()
             .http_status_as_error(false)
+            .max_redirects(0)
             .timeout_connect(Some(Duration::from_secs(10)))
             .timeout_recv_response(Some(Duration::from_secs(15)))
             .timeout_recv_body(Some(STREAM_BODY_BUDGET))
@@ -46,13 +78,350 @@ impl HttpTransport {
             stream_agent,
             session,
             auth,
+            authorization: Mutex::new(false),
+            token_store: None,
         }
     }
 
+    pub fn with_token_store(mut self, token_store: Arc<dyn TokenStore>) -> Self {
+        self.token_store = Some(token_store);
+        self
+    }
+
     fn headers(&self) -> Result<Vec<(String, String)>, TransportError> {
-        let guard = self.session.read().expect("session lock");
-        let session = guard.as_ref().ok_or(TransportError::Unauthorized)?;
-        Ok(self.auth.authorize(session))
+        // SSE and REST share one rotating refresh token, without holding the UI lock over I/O.
+        let mut pending_save = self.authorization.lock().expect("authorization lock");
+        let previous = self
+            .session
+            .read()
+            .expect("session lock")
+            .clone()
+            .ok_or(TransportError::Unauthorized)?;
+        let mut session = previous.clone();
+        let headers = self
+            .auth
+            .authorize(&mut session)
+            .map_err(|error| match error {
+                AuthError::InvalidCredentials | AuthError::WrongRole(_) => {
+                    TransportError::Unauthorized
+                }
+                other => TransportError::Offline(other.to_string()),
+            })?;
+        if session != previous || *pending_save {
+            let mut current = self.session.write().expect("session lock");
+            if current.as_ref() != Some(&previous) {
+                drop(current);
+                self.auth.sign_out(&session);
+                return Err(TransportError::Unauthorized);
+            }
+            if let Some(store) = &self.token_store
+                && let Err(error) = store.save(&session)
+            {
+                // Keep the rotated token in memory even if the local write failed.
+                *current = Some(session);
+                *pending_save = true;
+                return Err(TransportError::Offline(error.to_string()));
+            }
+            *current = Some(session);
+            *pending_save = false;
+        }
+        Ok(headers)
+    }
+
+    pub fn appointment_annotations(
+        &self,
+        id: &str,
+    ) -> Result<AppointmentAnnotations, TransportError> {
+        let path = format!("/appointments/{}/context", parse_id(id)?);
+        read_response(self.get(&self.agent, &path, None)?, false)
+    }
+
+    pub fn update_service_annotations(
+        &self,
+        id: &str,
+        input: &UpdateServiceAnnotations,
+    ) -> Result<Option<AppointmentAnnotations>, TransportError> {
+        let id = parse_id(id)?;
+        let mut request = self
+            .agent
+            .patch(&format!("{}/appointments/{id}/context", self.base_url));
+        for (key, value) in self.headers()? {
+            request = request.header(key, value);
+        }
+        let body = serde_json::to_string(input)
+            .map_err(|_| TransportError::BadRequest("Invalid appointment note".into()))?;
+        let response = request
+            .content_type("application/json")
+            .send(body)
+            .map_err(|e| TransportError::Offline(e.to_string()))?;
+        if response.status().as_u16() == 409 {
+            return Ok(None);
+        }
+        read_response(response, false).map(Some)
+    }
+
+    pub fn imported_price_preview(&self, id: &str) -> Result<ImportedPricePreview, TransportError> {
+        let path = format!(
+            "/admin/commerce/appointments/{}/imported-price",
+            parse_id(id)?
+        );
+        read_response(self.get(&self.agent, &path, None)?, false)
+    }
+
+    pub fn review_imported_price(
+        &self,
+        id: &str,
+        review: &ImportedPriceReview,
+    ) -> Result<(), TransportError> {
+        #[derive(serde::Deserialize)]
+        struct Saved {
+            ok: bool,
+        }
+        let path = format!(
+            "/admin/commerce/appointments/{}/imported-price",
+            parse_id(id)?
+        );
+        let saved: Saved = self.put_json(&path, review)?;
+        if !saved.ok {
+            return Err(TransportError::Server(
+                "Invalid price review acknowledgement".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn imported_settlement_status(
+        &self,
+        id: &str,
+    ) -> Result<ImportedSettlementStatus, TransportError> {
+        let path = format!(
+            "/admin/commerce/appointments/{}/imported-settlement",
+            parse_id(id)?
+        );
+        let status: ImportedSettlementStatus =
+            read_response(self.get(&self.agent, &path, None)?, false)?;
+        if status.appointment_version <= 0 {
+            return Err(TransportError::Server("Invalid settlement version".into()));
+        }
+        Ok(status)
+    }
+
+    pub fn confirm_imported_settlement(
+        &self,
+        id: &str,
+        input: &ImportedSettlement,
+    ) -> Result<u32, TransportError> {
+        let path = format!(
+            "/admin/commerce/appointments/{}/imported-settlement",
+            parse_id(id)?
+        );
+        let status: ImportedSettlementStatus = self.put_json(&path, input)?;
+        let settlement = status
+            .settlement
+            .filter(|row| {
+                status.appointment_version > input.appointment_version
+                    && row.amount_cents == input.amount_cents
+            })
+            .ok_or_else(|| TransportError::Server("Invalid settlement acknowledgement".into()))?;
+        Ok(settlement.amount_cents)
+    }
+
+    pub fn imported_partial_payment_preview(
+        &self,
+        id: &str,
+    ) -> Result<ImportedPartialPaymentPreview, TransportError> {
+        let path = format!(
+            "/admin/commerce/appointments/{}/imported-partial-payment",
+            parse_id(id)?
+        );
+        read_response(self.get(&self.agent, &path, None)?, false)
+    }
+
+    pub fn confirm_imported_partial_payment(
+        &self,
+        id: &str,
+        input: &ImportedSettlement,
+        original_total_cents: u32,
+    ) -> Result<ExternalBalance, TransportError> {
+        let path = format!(
+            "/admin/commerce/appointments/{}/imported-partial-payment",
+            parse_id(id)?
+        );
+        let result: ImportedPartialPayment = self.put_json(&path, input)?;
+        let balance = result.external_balance;
+        if result.appointment_version <= input.appointment_version
+            || balance.paid_in_booksy_cents != input.amount_cents
+            || balance.due_in_citame_cents == 0
+            || balance
+                .paid_in_booksy_cents
+                .checked_add(balance.due_in_citame_cents)
+                != Some(original_total_cents)
+        {
+            return Err(TransportError::Server(
+                "Invalid partial payment acknowledgement".into(),
+            ));
+        }
+        Ok(balance)
+    }
+
+    pub fn open_appointment_checkout(
+        &self,
+        appointment_id: &str,
+        balance: Option<ExternalBalance>,
+    ) -> Result<AppointmentCheckout, TransportError> {
+        let id = parse_id(appointment_id)?;
+        let mut input = serde_json::json!({
+            "appointmentId": id.to_string(),
+            "idempotencyKey": uuid::Uuid::now_v7().to_string(),
+        });
+        if balance.is_none() {
+            input["useClientDiscount"] = serde_json::json!(true);
+        }
+        let receipt = self.post_json("/admin/commerce/checkouts", &input)?;
+        validate_appointment_checkout(receipt, id, balance)
+    }
+
+    pub fn record_appointment_payment(
+        &self,
+        checkout: &AppointmentCheckout,
+        attempt: PaymentAttempt,
+    ) -> Result<AppointmentCheckout, TransportError> {
+        if attempt.amount_cents == 0 || attempt.amount_cents > checkout.collectible_cents() {
+            return Err(TransportError::BadRequest(
+                "The payment exceeds the collectible amount or this receipt cannot be paid".into(),
+            ));
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Payment {
+            method: ManualTender,
+            amount_cents: u32,
+            status: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct Started {
+            payment: Payment,
+        }
+        let id = parse_id(&checkout.id)?;
+        parse_id(&checkout.appointment_id)?;
+        let path = format!("/admin/commerce/checkouts/{id}");
+        let result: Started = self.post_json(
+            &format!("{path}/payments"),
+            &serde_json::json!({
+                "method": attempt.method,
+                "amountCents": attempt.amount_cents,
+                "idempotencyKey": attempt.idempotency_key.to_string(),
+            }),
+        )?;
+        if result.payment.status != "succeeded"
+            || result.payment.method != attempt.method
+            || result.payment.amount_cents != attempt.amount_cents
+        {
+            return Err(TransportError::Server(
+                "Invalid payment acknowledgement".into(),
+            ));
+        }
+        self.refresh_appointment_checkout(checkout)
+    }
+
+    pub fn refresh_appointment_checkout(
+        &self,
+        checkout: &AppointmentCheckout,
+    ) -> Result<AppointmentCheckout, TransportError> {
+        let id = parse_id(&checkout.id)?;
+        let appointment = parse_id(&checkout.appointment_id)?;
+        let path = format!("/admin/commerce/checkouts/{id}");
+        let receipt: AppointmentCheckout =
+            read_response(self.get(&self.agent, &path, None)?, false)?;
+        if parse_id(&receipt.id).ok() != Some(id) {
+            return Err(TransportError::Server(
+                "Unexpected checkout confirmation".into(),
+            ));
+        }
+        validate_appointment_checkout(receipt, appointment, checkout.external_balance)
+    }
+
+    pub fn current_cash_session(&self) -> Result<Option<CashSession>, TransportError> {
+        #[derive(serde::Deserialize)]
+        struct Current {
+            session: Option<CashSession>,
+        }
+        let path = "/admin/commerce/cash-sessions/current";
+        let current: Current = read_response(self.get(&self.agent, path, None)?, false)?;
+        Ok(current.session)
+    }
+
+    pub fn update_cash_session(
+        &self,
+        command: &CashCommand,
+    ) -> Result<CashSession, TransportError> {
+        use serde_json::json;
+
+        let base = "/admin/commerce/cash-sessions";
+        let (id, path, body) = match command {
+            CashCommand::Open { id, opening_cents } => (
+                id,
+                base.to_owned(),
+                json!({ "sessionId": id, "openingCents": opening_cents }),
+            ),
+            CashCommand::Close {
+                id,
+                counted_cents,
+                reviewed_expected_cents,
+            } => (
+                id,
+                format!("{base}/{id}/close"),
+                json!({
+                    "countedCents": counted_cents, "reviewedExpectedCents": reviewed_expected_cents,
+                }),
+            ),
+            CashCommand::Adjust {
+                id,
+                kind,
+                amount_cents,
+                reason,
+                request_key,
+            } => (
+                id,
+                format!("{base}/adjust"),
+                json!({
+                    "sessionId": id, "kind": kind, "amountCents": amount_cents,
+                    "reason": reason, "idempotencyKey": request_key,
+                }),
+            ),
+        };
+        let result: CashSession = self.post_json(&path, &body)?;
+        if result.id != *id {
+            return Err(TransportError::Server(
+                "Unexpected cash register acknowledgement".into(),
+            ));
+        }
+        Ok(result)
+    }
+
+    fn put_json<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        input: &impl serde::Serialize,
+    ) -> Result<T, TransportError> {
+        read_response(self.send_put_json(path, input)?, false)
+    }
+
+    fn send_put_json(
+        &self,
+        path: &str,
+        input: &impl serde::Serialize,
+    ) -> Result<ureq::http::Response<ureq::Body>, TransportError> {
+        let mut request = self.agent.put(&format!("{}{path}", self.base_url));
+        for (name, value) in self.headers()? {
+            request = request.header(name, value);
+        }
+        let body = serde_json::to_string(input)
+            .map_err(|error| TransportError::BadRequest(error.to_string()))?;
+        request
+            .content_type("application/json")
+            .send(body)
+            .map_err(|error| TransportError::Offline(error.to_string()))
     }
 
     fn get(
@@ -71,6 +440,487 @@ impl HttpTransport {
         req.call()
             .map_err(|e| TransportError::Offline(e.to_string()))
     }
+
+    pub fn calendar_inbox(
+        &self,
+        archived: bool,
+        page: u32,
+    ) -> Result<CalendarInbox, TransportError> {
+        let response = self.get(
+            &self.agent,
+            &format!("/admin/notifications/inbox?archived={archived}&page={page}"),
+            Some("application/json"),
+        )?;
+        read_response(response, false)
+    }
+
+    pub fn unpaid_appointments(
+        &self,
+        date: chrono::NaiveDate,
+        timezone: chrono_tz::Tz,
+    ) -> Result<crate::billing::UnpaidAppointments, TransportError> {
+        let (from, to) = crate::calendar::local_day_range(timezone, date);
+        if from >= to {
+            return Err(TransportError::BadRequest(
+                "Choose a valid local day".into(),
+            ));
+        }
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("from", &from.to_rfc3339())
+            .append_pair("to", &to.to_rfc3339())
+            .finish();
+        let response = self.get(
+            &self.agent,
+            &format!("/admin/commerce/unpaid?{query}"),
+            None,
+        )?;
+        let appointments: crate::billing::UnpaidAppointments = read_response(response, false)?;
+        if !appointments.valid() {
+            return Err(TransportError::Server(
+                "Unexpected unpaid appointments response".into(),
+            ));
+        }
+        Ok(appointments)
+    }
+
+    pub fn report_summary(&self, query: &ReportQuery) -> Result<ReportSummary, TransportError> {
+        read_response(
+            self.get(&self.agent, &query.path(), Some("application/json"))?,
+            false,
+        )
+    }
+
+    pub fn review_requests(
+        &self,
+        page: u32,
+        search: &str,
+    ) -> Result<ReviewRequests, TransportError> {
+        read_response(
+            self.get(
+                &self.agent,
+                &reviews::requests_path(page, search),
+                Some("application/json"),
+            )?,
+            false,
+        )
+    }
+
+    pub fn request_review_email(
+        &self,
+        appointment_id: &str,
+    ) -> Result<EmailStatus, TransportError> {
+        let result: ReviewEmail = self.post_json(
+            &format!(
+                "/admin/reviews/requests/{}/email",
+                parse_id(appointment_id)?
+            ),
+            &serde_json::json!({}),
+        )?;
+        Ok(result.status)
+    }
+
+    pub fn inventory_products(
+        &self,
+        query: &ProductQuery,
+        page: u32,
+    ) -> Result<ProductPage, TransportError> {
+        let response: ProductPage =
+            read_response(self.get(&self.agent, &query.path(page), None)?, false)?;
+        if response.pagination.page != page || response.pagination.page_size == 0 {
+            return Err(TransportError::Server("Unexpected inventory page".into()));
+        }
+        Ok(response)
+    }
+
+    pub fn inventory_product(&self, id: uuid::Uuid) -> Result<Product, TransportError> {
+        let product: Product = read_response(
+            self.get(&self.agent, &format!("{PRODUCTS_PATH}/{id}"), None)?,
+            false,
+        )?;
+        if product.id != id {
+            return Err(TransportError::Server(
+                "Unexpected inventory product".into(),
+            ));
+        }
+        Ok(product)
+    }
+
+    pub fn inventory_ledger(
+        &self,
+        query: &LedgerQuery,
+        page: u32,
+    ) -> Result<LedgerPage, TransportError> {
+        let result: LedgerPage =
+            read_response(self.get(&self.agent, &query.list_path(page), None)?, false)?;
+        if result.pagination.page != page
+            || result.pagination.page_size == 0
+            || (query.anchor.is_some() && result.anchor != query.anchor)
+            || query
+                .kind
+                .is_some_and(|kind| result.movements.iter().any(|row| row.movement.kind != kind))
+        {
+            return Err(TransportError::Server(
+                "Unexpected stock ledger page".into(),
+            ));
+        }
+        Ok(result)
+    }
+
+    pub fn write_inventory_ledger_csv(
+        &self,
+        query: &LedgerQuery,
+        output: &mut impl std::io::Write,
+    ) -> Result<(), TransportError> {
+        self.write_csv(&query.export_path(), output)
+    }
+
+    pub fn inventory_movements(
+        &self,
+        id: ProductId,
+        page: u32,
+    ) -> Result<MovementPage, TransportError> {
+        let response: MovementPage = read_response(
+            self.get(
+                &self.agent,
+                &format!("{PRODUCTS_PATH}/{id}/movements?page={page}"),
+                None,
+            )?,
+            false,
+        )?;
+        if response.pagination.page != page
+            || response.pagination.page_size == 0
+            || response
+                .movements
+                .iter()
+                .any(|movement| movement.product_id != id)
+        {
+            return Err(TransportError::Server(
+                "Unexpected inventory movements".into(),
+            ));
+        }
+        Ok(response)
+    }
+
+    pub fn move_inventory_stock(&self, pending: &PendingStock) -> Result<Product, StockWriteError> {
+        let id = pending.product_id;
+        let response =
+            self.send_json(&format!("{PRODUCTS_PATH}/{id}/movements"), &pending.command)?;
+        let product: Product = read_response_with(response, |status, retry_after, body| {
+            let value = serde_json::from_str::<serde_json::Value>(body).ok();
+            let code = value
+                .as_ref()
+                .and_then(|value| value.pointer("/error/code"))
+                .and_then(serde_json::Value::as_str);
+            match (status, code) {
+                (409, Some("version_conflict")) => StockWriteError::Conflict,
+                (409, Some("invalid_state")) => StockWriteError::Rejected,
+                _ => classify_status(status, retry_after, body, false).into(),
+            }
+        })?;
+        if product.id != id
+            || product.version <= pending.command.version
+            || product.inventory_generation.as_deref() != Some(&pending.command.generation)
+        {
+            return Err(
+                TransportError::Server("Unexpected inventory stock response".into()).into(),
+            );
+        }
+        Ok(product)
+    }
+
+    pub fn update_inventory_content(
+        &self,
+        id: uuid::Uuid,
+        version: u32,
+        package_content: Option<&PackageContent>,
+    ) -> Result<Product, ContentWriteError> {
+        let mut request = self.agent.patch(&format!(
+            "{}{PRODUCTS_PATH}/{id}/package-content",
+            self.base_url
+        ));
+        for (name, value) in self.headers()? {
+            request = request.header(name, value);
+        }
+        let response = request
+            .content_type("application/json")
+            .send(
+                serde_json::json!({ "version": version, "packageContent": package_content })
+                    .to_string(),
+            )
+            .map_err(|err| TransportError::Offline(err.to_string()))?;
+        if response.status().as_u16() == 409 {
+            return Err(ContentWriteError::Conflict);
+        }
+        let updated: Product = read_response(response, false)?;
+        if updated.id != id
+            || updated.version <= version
+            || updated.package_content.as_ref() != package_content
+        {
+            return Err(TransportError::Server("Unexpected inventory update".into()).into());
+        }
+        Ok(updated)
+    }
+
+    pub fn managed_reviews(
+        &self,
+        status: Option<ReviewStatus>,
+        before: Option<&str>,
+    ) -> Result<ReviewPage, TransportError> {
+        read_response(
+            self.get(
+                &self.agent,
+                &reviews::moderation_path(status, before),
+                Some("application/json"),
+            )?,
+            false,
+        )
+    }
+
+    pub fn update_managed_review(
+        &self,
+        id: &str,
+        version: u32,
+        command: ModerationCommand<'_>,
+    ) -> Result<ManagedReview, TransportError> {
+        let (operation, payload) = command.payload(version);
+        self.put_json(
+            &format!("/admin/reviews/{}/{operation}", parse_id(id)?),
+            &payload,
+        )
+    }
+
+    pub fn report_clients(&self, query: &ReportQuery) -> Result<ClientReport, TransportError> {
+        read_response(
+            self.get(&self.agent, &query.clients_path(), Some("application/json"))?,
+            false,
+        )
+    }
+
+    pub fn report_outcomes(
+        &self,
+        query: &ReportQuery,
+        status: Outcome,
+        page: u32,
+    ) -> Result<OutcomePage, TransportError> {
+        read_response(
+            self.get(
+                &self.agent,
+                &query.outcome_path(status, page),
+                Some("application/json"),
+            )?,
+            false,
+        )
+    }
+
+    pub fn write_report_outcomes_csv(
+        &self,
+        query: &ReportQuery,
+        status: Outcome,
+        output: &mut impl std::io::Write,
+    ) -> Result<(), TransportError> {
+        self.write_csv(&query.outcome_export_path(status), output)
+    }
+
+    fn write_csv(
+        &self,
+        path: &str,
+        output: &mut impl std::io::Write,
+    ) -> Result<(), TransportError> {
+        let mut response = self.get(&self.agent, path, Some("text/csv"))?;
+        let code = response.status().as_u16();
+        if code != 200 {
+            let retry_after = response
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok());
+            return Err(classify_status(code, retry_after, "", false));
+        }
+        if !response.headers().get("content-type").is_some_and(|value| {
+            value
+                .to_str()
+                .is_ok_and(|mime| mime.split(';').next() == Some("text/csv"))
+        }) {
+            return Err(TransportError::Server("Expected a CSV download".into()));
+        }
+        std::io::copy(&mut response.body_mut().as_reader(), output)
+            .map_err(|error| TransportError::Offline(error.to_string()))?;
+        Ok(())
+    }
+
+    pub fn set_calendar_notice_archived(
+        &self,
+        id: &str,
+        archived: bool,
+    ) -> Result<(), TransportError> {
+        let body = serde_json::json!({ "ids": [id], "archived": archived }).to_string();
+        let mut request = self.agent.post(&format!(
+            "{}/admin/notifications/inbox/archive",
+            self.base_url
+        ));
+        for (key, value) in self.headers()? {
+            request = request.header(key, value);
+        }
+        let response = request
+            .content_type("application/json")
+            .send(body)
+            .map_err(|e| TransportError::Offline(e.to_string()))?;
+        let result: serde_json::Value = read_response(response, false)?;
+        if result.get("ok") != Some(&serde_json::Value::Bool(true)) {
+            return Err(TransportError::Server(
+                "Invalid calendar inbox response".into(),
+            ));
+        }
+        Ok(())
+    }
+    pub fn waitlist(&self, page: u32, active: bool) -> Result<WaitlistPage, TransportError> {
+        let response = self.get(
+            &self.agent,
+            &format!("/admin/waitlist/desk?page={page}&pageSize=15&active={active}"),
+            None,
+        )?;
+        read_response(response, false)
+    }
+
+    pub fn join_waitlist(&self, input: &WaitlistRequest) -> Result<WaitlistEntry, TransportError> {
+        self.post_json("/admin/waitlist/desk", input)
+    }
+
+    pub fn cancel_waitlist(&self, id: &str, version: u32) -> Result<WaitlistEntry, TransportError> {
+        self.post_json(
+            &format!("/admin/waitlist/desk/{}/cancel", parse_id(id)?),
+            &serde_json::json!({ "version": version }),
+        )
+    }
+
+    pub fn update_waitlist_policy(
+        &self,
+        policy: &WaitlistPolicy,
+    ) -> Result<WaitlistPolicy, TransportError> {
+        let mut request = self
+            .agent
+            .put(&format!("{}/admin/waitlist/desk/policy", self.base_url));
+        for (key, value) in self.headers()? {
+            request = request.header(key, value);
+        }
+        let body =
+            serde_json::to_string(policy).map_err(|e| TransportError::BadRequest(e.to_string()))?;
+        read_response(
+            request
+                .content_type("application/json")
+                .send(body)
+                .map_err(|e| TransportError::Offline(e.to_string()))?,
+            false,
+        )
+    }
+
+    pub fn accept_waitlist_offer(
+        &self,
+        id: &str,
+        input: &AcceptOffer,
+    ) -> Result<AcceptedOffer, TransportError> {
+        self.post_json(
+            &format!("/admin/waitlist/desk/{}/accept", parse_id(id)?),
+            input,
+        )
+    }
+
+    pub fn requeue_waitlist_offer(
+        &self,
+        id: &str,
+        version: u32,
+        offer: &str,
+    ) -> Result<WaitlistEntry, TransportError> {
+        self.post_json(
+            &format!("/admin/waitlist/desk/{}/decline", parse_id(id)?),
+            &serde_json::json!({ "version": version, "offerId": offer, "requeue": true }),
+        )
+    }
+
+    pub fn waitlist_offer_requirements(
+        &self,
+        entry: &WaitlistEntry,
+    ) -> Result<(OfferRequirements, bool), TransportError> {
+        let client = parse_id(&entry.client_id)?;
+        let services = entry
+            .service_ids
+            .iter()
+            .map(|id| parse_id(id).map(|id| id.to_string()))
+            .collect::<Result<Vec<_>, _>>()?
+            .join(",");
+        let requirements = self.get(
+            &self.agent,
+            &format!("/intake/requirements?clientId={client}&serviceIds={services}"),
+            None,
+        )?;
+        let requirements = read_response(requirements, false)?;
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Viewer {
+            user: UserRole,
+            access_preset: Option<String>,
+        }
+        #[derive(serde::Deserialize)]
+        struct UserRole {
+            role: String,
+        }
+        let viewer: Viewer = read_response(self.get(&self.agent, "/me", None)?, false)?;
+        let waiver =
+            viewer.user.role == "owner" || viewer.access_preset.as_deref() == Some("manager");
+        Ok((requirements, waiver))
+    }
+
+    fn post_json<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        input: &impl serde::Serialize,
+    ) -> Result<T, TransportError> {
+        read_response(self.send_json(path, input)?, false)
+    }
+
+    fn send_json(
+        &self,
+        path: &str,
+        input: &impl serde::Serialize,
+    ) -> Result<ureq::http::Response<ureq::Body>, TransportError> {
+        let body =
+            serde_json::to_string(input).map_err(|e| TransportError::BadRequest(e.to_string()))?;
+        let mut request = self.agent.post(&format!("{}{path}", self.base_url));
+        for (key, value) in self.headers()? {
+            request = request.header(key, value);
+        }
+        request
+            .content_type("application/json")
+            .send(body)
+            .map_err(|e| TransportError::Offline(e.to_string()))
+    }
+}
+
+fn validate_appointment_checkout(
+    receipt: AppointmentCheckout,
+    appointment: uuid::Uuid,
+    balance: Option<ExternalBalance>,
+) -> Result<AppointmentCheckout, TransportError> {
+    if parse_id(&receipt.appointment_id).ok() != Some(appointment)
+        || parse_id(&receipt.id).is_err()
+        || receipt.currency != "EUR"
+        || receipt.external_balance != balance
+        || balance.is_some_and(|balance| receipt.total_cents != balance.due_in_citame_cents)
+        || i64::try_from(receipt.paid_cents).is_err()
+        || receipt.balance_cents > receipt.total_cents
+        || receipt
+            .payable_cents
+            .is_some_and(|payable| payable > receipt.balance_cents)
+    {
+        return Err(TransportError::Server(
+            "The appointment receipt changed or contains invalid totals".into(),
+        ));
+    }
+    Ok(receipt)
+}
+
+fn parse_id(id: &str) -> Result<uuid::Uuid, TransportError> {
+    uuid::Uuid::parse_str(id)
+        .map_err(|_| TransportError::BadRequest("Invalid resource identity".into()))
 }
 
 fn error_message(body: &str) -> String {
@@ -93,6 +943,15 @@ pub fn classify_status(
     match status {
         401 => TransportError::Unauthorized,
         403 => TransportError::Forbidden(error_message(body)),
+        409 if serde_json::from_str::<serde_json::Value>(body).is_ok_and(|value| {
+            value
+                .pointer("/error/code")
+                .and_then(serde_json::Value::as_str)
+                == Some("sync_generation_changed")
+        }) =>
+        {
+            TransportError::ReplicaGenerationChanged
+        }
         409 if is_pull => TransportError::CursorAhead,
         429 => TransportError::RateLimited(
             retry_after
@@ -105,9 +964,18 @@ pub fn classify_status(
 }
 
 fn read_response<T: serde::de::DeserializeOwned>(
-    mut resp: ureq::http::Response<ureq::Body>,
+    resp: ureq::http::Response<ureq::Body>,
     is_pull: bool,
 ) -> Result<T, TransportError> {
+    read_response_with(resp, |status, retry_after, body| {
+        classify_status(status, retry_after, body, is_pull)
+    })
+}
+
+fn read_response_with<T: serde::de::DeserializeOwned, E: From<TransportError>>(
+    mut resp: ureq::http::Response<ureq::Body>,
+    classify: impl FnOnce(u16, Option<&str>, &str) -> E,
+) -> Result<T, E> {
     let status = resp.status().as_u16();
     let retry_after = resp
         .headers()
@@ -118,19 +986,15 @@ fn read_response<T: serde::de::DeserializeOwned>(
         .body_mut()
         .read_to_string()
         .map_err(|e| TransportError::Offline(e.to_string()))?;
-    if status != 200 {
-        return Err(classify_status(
-            status,
-            retry_after.as_deref(),
-            &body,
-            is_pull,
-        ));
+    if status != 200 && status != 201 {
+        return Err(classify(status, retry_after.as_deref(), &body));
     }
     serde_json::from_str(&body).map_err(|e| {
         TransportError::Server(format!(
             "unreadable response ({e}): {}",
             body.chars().take(80).collect::<String>()
         ))
+        .into()
     })
 }
 
@@ -150,12 +1014,57 @@ impl Transport for HttpTransport {
     }
 
     fn pull(&self, since: i64, limit: u32) -> Result<PullResponse, TransportError> {
+        self.pull_page(since, limit, false)
+            .map(|result| result.page)
+    }
+
+    fn pull_with_catalog_colors(
+        &self,
+        since: i64,
+        limit: u32,
+    ) -> Result<(PullResponse, Option<CatalogColors>), TransportError> {
+        self.pull_page(since, limit, true)
+            .map(|result| (result.page, result.catalog_colors))
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogPull {
+    #[serde(flatten)]
+    page: PullResponse,
+    catalog_colors: Option<CatalogColors>,
+}
+
+impl HttpTransport {
+    fn pull_page(
+        &self,
+        since: i64,
+        limit: u32,
+        request_colors: bool,
+    ) -> Result<CatalogPull, TransportError> {
+        let catalog = if request_colors {
+            "&catalogColors=1"
+        } else {
+            ""
+        };
         let resp = self.get(
             &self.agent,
-            &format!("/sync/pull?since={since}&limit={limit}"),
+            &format!("/sync/pull?since={since}&limit={limit}{catalog}&reviewRequests=1"),
             None,
         )?;
-        read_response(resp, true)
+        let result: CatalogPull = read_response(resp, true)?;
+        if let Some(role) = result.page.viewer_role.as_deref()
+            && self
+                .session
+                .read()
+                .expect("session lock")
+                .as_ref()
+                .is_some_and(|current| current.role != role)
+        {
+            return Err(TransportError::Unauthorized);
+        }
+        Ok(result)
     }
 }
 
@@ -253,6 +1162,9 @@ pub fn spawn_stream_listener(
                     &mut || {
                         connected = true;
                         live.store(true, Ordering::SeqCst);
+                        // Catch up even when a restore or permission change kept the head
+                        // from moving forward. Subsequent head nudges remain coalesced.
+                        let _ = wakes.send(Wake::Manual);
                     },
                     &mut |seq| {
                         if wakes.send(Wake::Nudge(seq)).is_err() {

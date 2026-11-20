@@ -1,12 +1,14 @@
 import { idSchema, localDateSchema } from "@sob/contracts";
 import { addDaysLocal } from "~/lib/format";
-import type { CalendarView } from "./logic";
+import { type CalendarView, shiftMonth } from "./logic";
 
 export interface CalendarSearch {
   view: CalendarView;
   date: string;
-  /** Owner filter: comma separated staff ids (exactly one in the week view); empty means everyone. */
+  /** Comma separated staff ids; empty means everyone the caller may see. */
   staff?: string;
+  working?: boolean;
+  appointment?: string;
 }
 
 /** The URL is the calendar state, so views are deep-linkable and survive a reload. */
@@ -20,12 +22,17 @@ export function validateCalendarSearch(
       ? [...new Set(raw.staff.split(",").filter((id) => idSchema.safeParse(id).success))]
       : [];
   return {
-    view: raw.view === "week" ? "week" : "day",
+    view: raw.view === "week" || raw.view === "month" || raw.view === "list" ? raw.view : "day",
     date: date.success ? date.data : today,
     ...(staff.length > 0 ? { staff: staff.join(",") } : {}),
+    ...(raw.working === true || raw.working === "true" ? { working: true } : {}),
+    ...(idSchema.safeParse(raw.appointment).success
+      ? { appointment: raw.appointment as string }
+      : {}),
   };
 }
 
 export function shiftDate(date: string, view: CalendarView, direction: 1 | -1): string {
-  return addDaysLocal(date, direction * (view === "week" ? 7 : 1));
+  if (view === "month") return shiftMonth(date, direction);
+  return addDaysLocal(date, direction * (view === "week" || view === "list" ? 7 : 1));
 }

@@ -22,7 +22,8 @@ test.describe("calendar", () => {
   test("creates a walk-in appointment by clicking the calendar button flow", async ({ page }) => {
     const h = await freeHour(day(0));
     await signInAs(page, OWNER_EMAIL, `/admin/calendar?date=${day(0)}`);
-    await page.getByRole("button", { name: "New appointment" }).click();
+    await page.getByRole("button", { name: "Add to calendar" }).click();
+    await page.getByRole("button", { name: "New appointment", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "New appointment" });
     await dialog.getByRole("radio", { name: "New client" }).check();
     await dialog.getByLabel("Full name").fill(`Walk In ${stamp}`);
@@ -33,7 +34,7 @@ test.describe("calendar", () => {
     await expect(page.getByText("Appointment created")).toBeVisible();
     await expect(
       page.getByRole("button", {
-        name: new RegExp(`${label(h)}, Walk In ${stamp}, Haircut, Booked`),
+        name: new RegExp(`${label(h)}.* Walk In ${stamp}, Haircut, Booked`),
       }),
     ).toBeVisible();
   });
@@ -59,13 +60,13 @@ test.describe("calendar", () => {
     await page.getByRole("dialog").getByRole("button", { name: "Mark completed" }).click();
     await expect(page.getByText("Marked as completed")).toBeVisible();
     await expect(
-      page.getByRole("button", { name: new RegExp(`Past One ${stamp}, Haircut, Completed`) }),
+      page.getByRole("button", { name: new RegExp(`Past One ${stamp}, Haircut.*Completed`) }),
     ).toBeVisible();
     await page.getByRole("button", { name: new RegExp(`Past Two ${stamp}`) }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Mark no-show" }).click();
     await expect(page.getByText("Marked as no-show")).toBeVisible();
     await expect(
-      page.getByRole("button", { name: new RegExp(`Past Two ${stamp}, Haircut, No-show`) }),
+      page.getByRole("button", { name: new RegExp(`Past Two ${stamp}, Haircut.*No-show`) }),
     ).toBeVisible();
   });
 
@@ -91,7 +92,7 @@ test.describe("calendar", () => {
     const h = await freeHour(date, 2);
     await book(await asOwner(), { date, time: hh(h), client: `Drag ${stamp}` });
     await signInAs(page, OWNER_EMAIL, `/admin/calendar?date=${date}`);
-    const block = page.getByRole("button", { name: new RegExp(`${label(h)}, Drag ${stamp}`) });
+    const block = page.getByRole("button", { name: new RegExp(`${label(h)}.* Drag ${stamp}`) });
     const box = (await block.boundingBox()) as {
       x: number;
       y: number;
@@ -105,7 +106,7 @@ test.describe("calendar", () => {
     await page.mouse.up();
     await expect(page.getByText("Appointment moved")).toBeVisible();
     await expect(
-      page.getByRole("button", { name: new RegExp(`${label(h + 1)}, Drag ${stamp}`) }),
+      page.getByRole("button", { name: new RegExp(`${label(h + 1)}.* Drag ${stamp}`) }),
     ).toBeVisible();
   });
 
@@ -114,12 +115,12 @@ test.describe("calendar", () => {
     const h = await freeHour(date, 2);
     await book(await asOwner(), { date, time: hh(h), client: `Keys ${stamp}` });
     await signInAs(page, OWNER_EMAIL, `/admin/calendar?date=${date}`);
-    const block = page.getByRole("button", { name: new RegExp(`${label(h)}, Keys ${stamp}`) });
+    const block = page.getByRole("button", { name: new RegExp(`${label(h)}.* Keys ${stamp}`) });
     await block.focus();
     await page.keyboard.press("Alt+ArrowDown");
     await expect(page.getByText("Appointment moved")).toBeVisible();
     await expect(
-      page.getByRole("button", { name: new RegExp(`${label(h, 15)}, Keys ${stamp}`) }),
+      page.getByRole("button", { name: new RegExp(`${label(h, 15)}.* Keys ${stamp}`) }),
     ).toBeVisible();
 
     // The same move through the drawer's slot picker (the alternative that also serves phones).
@@ -144,13 +145,13 @@ test.describe("calendar", () => {
     await book(owner, { date, time: hh(h), client: `Mover ${stamp}` });
     await book(owner, { date, time: hh(h + 1), client: `Blocker ${stamp}` });
     await signInAs(page, OWNER_EMAIL, `/admin/calendar?date=${date}`);
-    const block = page.getByRole("button", { name: new RegExp(`${label(h)}, Mover ${stamp}`) });
+    const block = page.getByRole("button", { name: new RegExp(`${label(h)}.* Mover ${stamp}`) });
     await block.focus();
     await page.keyboard.press("Alt+ArrowDown");
     const banner = page.getByRole("alert").filter({ hasText: "Someone just took that time" });
     await expect(banner).toBeVisible();
     await expect(
-      page.getByRole("button", { name: new RegExp(`${label(h)}, Mover ${stamp}`) }),
+      page.getByRole("button", { name: new RegExp(`${label(h)}.* Mover ${stamp}`) }),
     ).toBeVisible();
     await banner.getByRole("button", { name: "Open appointment" }).click();
     await expect(page.getByRole("dialog", { name: `Mover ${stamp}` })).toBeVisible();

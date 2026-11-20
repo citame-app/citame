@@ -46,16 +46,17 @@ beforeEach(async () => {
     ).status,
   ).toBe(200);
 });
+const selection = () => ({
+  staffId: f.anaId,
+  serviceIds: [f.haircutId],
+  fromDate: "2026-03-09",
+  toDate: "2026-03-09",
+  fromTime: "09:00",
+  toTime: "10:00",
+  idempotencyKey: crypto.randomUUID(),
+});
 async function join(who = client) {
-  const r = await call(who, "/me/waitlist", "POST", {
-    staffId: f.anaId,
-    serviceIds: [f.haircutId],
-    fromDate: "2026-03-09",
-    toDate: "2026-03-09",
-    fromTime: "09:00",
-    toTime: "10:00",
-    idempotencyKey: crypto.randomUUID(),
-  });
+  const r = await call(who, "/me/waitlist", "POST", selection());
   expect(r.status, await r.clone().text()).toBe(201);
   return waitlistEntrySchema.parse(await r.json());
 }
@@ -113,6 +114,37 @@ test("a bounded match reserves an expiring offer, hides its slot and only its cu
   });
   expect(await t.db.select().from(appointment)).toHaveLength(1);
 });
+test("paused online booking leaves waitlist requests and offers intact until reopening", async () => {
+  const entry = await join();
+  const setOpen = (onlineBookingEnabled: boolean) =>
+    call(owner, "/admin/settings", "PATCH", { onlineBookingEnabled });
+  expect((await setOpen(false)).status).toBe(200);
+  const blockedJoin = await call(other, "/me/waitlist", "POST", selection());
+  expect(blockedJoin.status).toBe(409);
+  expect(await blockedJoin.json()).toMatchObject({ error: { code: "online_booking_paused" } });
+  expect(await runWaitlist(t.db, { now })).toMatchObject({ offersCreated: 0 });
+  expect((await list()).entries[0]).toMatchObject({ id: entry.id, state: "waiting" });
+
+  expect((await setOpen(true)).status).toBe(200);
+  expect(await runWaitlist(t.db, { now })).toMatchObject({ offersCreated: 1 });
+  const offered = (await list()).entries[0];
+  if (!offered?.offer) throw new Error("No waitlist offer");
+  const request = {
+    version: offered.version,
+    offerId: offered.offer.id,
+    expectedTotalCents: offered.offer.priceCents,
+    idempotencyKey: crypto.randomUUID(),
+  };
+  expect((await setOpen(false)).status).toBe(200);
+  const paused = await call(client, `/me/waitlist/${entry.id}/accept`, "POST", request);
+  expect(paused.status).toBe(409);
+  expect(await paused.json()).toMatchObject({ error: { code: "online_booking_paused" } });
+  expect((await list()).entries[0]).toMatchObject({ id: entry.id, state: "offered" });
+
+  expect((await setOpen(true)).status).toBe(200);
+  expect((await call(client, `/me/waitlist/${entry.id}/accept`, "POST", request)).status).toBe(201);
+});
+
 test("expired offers release capacity, reject late acceptance and pass the same scarce slot to the next customer", async () => {
   await join();
   await join(other);

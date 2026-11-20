@@ -5,6 +5,7 @@ import {
   gridHours,
   layoutBlocks,
   minutesToOffset,
+  monthDates,
   nowMarkerMinutes,
   offsetToSnappedMinutes,
   rangeFor,
@@ -13,6 +14,21 @@ import {
 
 const BA = "America/Argentina/Buenos_Aires";
 const at = (hhmm: string) => zonedInstant("2026-03-09", hhmm, BA);
+test("an imported consultation appointment offers no mutations even to an owner in other views", () => {
+  expect(
+    availableActions(
+      "owner",
+      {
+        status: "booked",
+        startsAt: at("10:00"),
+        staffId: "synthetic",
+        sourceCopy: { readOnly: true },
+      },
+      new Date(at("11:00")),
+      null,
+    ),
+  ).toEqual({ complete: false, noShow: false, cancel: false, reschedule: false });
+});
 
 describe("rangeFor", () => {
   test("a day is one local day, a week starts on Monday", () => {
@@ -26,6 +42,34 @@ describe("rangeFor", () => {
     expect(week.dates).toHaveLength(7);
     expect(week.to).toBe("2026-03-16T03:00:00.000Z");
   });
+});
+
+test("month ranges include full weeks and remain valid over Madrid daylight saving time", () => {
+  expect(monthDates("2026-02-10")).toHaveLength(35);
+  const august = rangeFor("month", "2026-08-15", "Europe/Madrid");
+  expect(august.dates).toHaveLength(42);
+  expect(august.dates[0]).toBe("2026-07-27");
+  expect(august.dates.at(-1)).toBe("2026-09-06");
+  const october = rangeFor("month", "2028-10-15", "Europe/Madrid");
+  expect(october.dates).toHaveLength(42);
+  expect(Date.parse(october.to) - Date.parse(october.from)).toBe(42 * 86400000 + 3600000);
+  expect(rangeFor("list", "2026-03-11", BA).dates[0]).toBe("2026-03-11");
+});
+
+test("short appointments use separate visual lanes without changing their duration", () => {
+  const blocks = layoutBlocks(
+    [
+      { id: "first", startsAt: at("10:00"), endsAt: at("10:05") },
+      { id: "second", startsAt: at("10:05"), endsAt: at("10:10") },
+    ],
+    BA,
+    480,
+    "2026-03-09",
+    15,
+  );
+  expect(blocks.map((block) => block.durationMinutes)).toEqual([5, 5]);
+  expect(blocks.map((block) => block.lane)).toEqual([0, 1]);
+  expect(blocks.map((block) => block.lanes)).toEqual([2, 2]);
 });
 
 describe("layoutBlocks", () => {

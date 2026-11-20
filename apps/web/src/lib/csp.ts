@@ -14,6 +14,10 @@ export function createNonce(): string {
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 }
 
+export function isWhatsAppSettingsPath(pathname: string): boolean {
+  return pathname === "/admin/whatsapp" || pathname === "/admin/whatsapp/";
+}
+
 export function buildCsp({ nonce, https }: { nonce: string; https: boolean }): string {
   const directives = [
     "default-src 'self'",

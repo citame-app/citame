@@ -28,7 +28,7 @@ import { lockCalendars, lockScheduling, type Tx } from "../../tx";
 import { bookingViolations, findConflicts } from "../availability/rules";
 import { getSalonSettings } from "../settings/service";
 import { requireStaff } from "./admin";
-import { asDatedHours, loadShiftRows, shiftDay } from "./date-hours";
+import { asDatedHours, loadShiftRows, shiftDay, toWorkingRange } from "./date-hours";
 
 type Connection = Database | Tx;
 const canonical = (value: unknown): unknown =>
@@ -60,11 +60,7 @@ async function hours(db: Pick<Database, "select">, staffId: string): Promise<Wor
     .from(workingHours)
     .where(and(eq(workingHours.staffId, staffId), isNull(workingHours.deletedAt)))
     .orderBy(asc(workingHours.weekday), asc(workingHours.startTime), asc(workingHours.id));
-  return rows.map((row) => ({
-    weekday: row.weekday,
-    startTime: row.startTime.slice(0, 5),
-    endTime: row.endTime.slice(0, 5),
-  }));
+  return rows.map(toWorkingRange);
 }
 async function currentPrincipal(tx: Tx, principal: Principal) {
   const current = await loadPrincipal(tx, principal.userId);

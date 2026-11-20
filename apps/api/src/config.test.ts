@@ -100,13 +100,24 @@ describe("loadConfig", () => {
     try {
       writeFileSync(join(dir, "auth"), `${"s".repeat(40)}\n`);
       writeFileSync(join(dir, "db"), "postgres://sob:pw@db:5432/sob\n");
+      writeFileSync(join(dir, "meta-app"), `${"a".repeat(32)}\n`);
+      writeFileSync(join(dir, "meta-verify"), `${"v".repeat(32)}\n`);
       const config = loadConfig({
         BETTER_AUTH_SECRET_FILE: join(dir, "auth"),
         DATABASE_URL_FILE: join(dir, "db"),
+        META_WHATSAPP_APP_ID: "12345",
+        META_WHATSAPP_CONFIG_ID: "67890",
+        META_WHATSAPP_APP_SECRET: "",
+        META_WHATSAPP_APP_SECRET_FILE: join(dir, "meta-app"),
+        META_WHATSAPP_VERIFY_TOKEN_FILE: join(dir, "meta-verify"),
       });
       // Trailing newlines (every editor adds one) are not part of the secret.
       expect(config.auth.secret).toBe("s".repeat(40));
       expect(config.databaseUrl).toBe("postgres://sob:pw@db:5432/sob");
+      expect(config.notifications.whatsapp).toMatchObject({
+        appSecret: "a".repeat(32),
+        verifyToken: "v".repeat(32),
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -160,6 +171,28 @@ describe("loadConfig", () => {
       loadConfig({ BETTER_AUTH_SECRET: SECRET, MCP_RESOURCE_URL: "https://mcp.example/mcp" }).oauth
         .mcpResource,
     ).toBe("https://mcp.example/mcp");
+  });
+
+  test("public OAuth URLs require HTTPS in production and cannot carry secrets or fragments", () => {
+    const production = {
+      BETTER_AUTH_SECRET: SECRET,
+      NODE_ENV: "production",
+      AUTH_REQUIRE_EMAIL_VERIFICATION: "false",
+    };
+    expect(() => loadConfig({ ...production, BETTER_AUTH_URL: "http://salon.example" })).toThrow(
+      "BETTER_AUTH_URL",
+    );
+    for (const url of [
+      "http://mcp.example/mcp",
+      "https://mcp.example/mcp#fragment",
+      "https://mcp.example/mcp?key=opaque",
+      "https://user@mcp.example/mcp",
+    ]) {
+      expect(() => loadConfig({ ...production, MCP_RESOURCE_URL: url })).toThrow(
+        "MCP_RESOURCE_URL",
+      );
+    }
+    expect(loadConfig(production).oauth.mcpResource).toBe("http://localhost:3000/mcp");
   });
 });
 

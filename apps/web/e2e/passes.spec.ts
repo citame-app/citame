@@ -47,7 +47,7 @@ for (const scheme of ["light", "dark"] as const) {
         if (!booking) throw new Error("No free fixture slot");
         await signInAs(page, OWNER_EMAIL, "/admin/commerce");
         await page.getByRole("button", { name: "Gift cards & rewards", exact: true }).click();
-        await page.getByRole("button", { name: "Packages & memberships", exact: true }).click();
+        await page.getByRole("button", { name: "Packages", exact: true }).click();
         await page.getByRole("button", { name: "Manage plans", exact: true }).click();
         await page.getByRole("button", { name: "New plan", exact: true }).click();
         await page.getByLabel("Plan name", { exact: true }).fill(label);
@@ -84,14 +84,7 @@ for (const scheme of ["light", "dark"] as const) {
         });
         expect(saleResponse.status()).toBe(201);
         const sale = await saleResponse.json();
-        await page.goto("/admin/commerce");
-        const saleCard = page
-          .locator("li")
-          .filter({ hasText: original.name })
-          .filter({ hasText: "€20" })
-          .filter({ hasText: "Awaiting payment" })
-          .first();
-        await saleCard.getByRole("button", { name: "View receipt", exact: true }).click();
+        await page.goto(`/admin/commerce?view=transactions&checkout=${sale.id}`);
         const serviceReceipt = page.getByRole("region", { name: "Receipt", exact: true });
         await serviceReceipt
           .getByLabel("Service covered by this visit", { exact: true })
@@ -118,8 +111,12 @@ for (const scheme of ["light", "dark"] as const) {
         await expect(
           serviceReceipt.getByRole("status").filter({ hasText: /^Refunded$/ }),
         ).toBeVisible();
+        await page
+          .getByRole("dialog")
+          .getByRole("button", { name: "Close panel", exact: true })
+          .click();
         await page.getByRole("button", { name: "Gift cards & rewards", exact: true }).click();
-        await page.getByRole("button", { name: "Packages & memberships", exact: true }).click();
+        await page.getByRole("button", { name: "Packages", exact: true }).click();
         await page.getByLabel("Search pass name", { exact: true }).fill(label);
         await page.getByRole("button", { name: "View pass", exact: true }).click();
         await expect(

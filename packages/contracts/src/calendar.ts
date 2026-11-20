@@ -1,5 +1,7 @@
 import { z } from "zod";
+import { calendarServiceBadgesSchema } from "./appointment-context";
 import { appointmentSchema } from "./appointments";
+import { externalBalanceSchema } from "./commerce";
 import { idSchema, instantSchema } from "./common";
 import { timeOffSchema } from "./staff";
 
@@ -34,7 +36,9 @@ export const calendarQuerySchema = z
     path: ["to"],
   })
   .refine(
-    (value) => Date.parse(value.to) - Date.parse(value.from) <= CALENDAR_MAX_DAYS * MS_PER_DAY,
+    // Six local weeks can contain the extra hour when daylight saving time ends.
+    (value) =>
+      Date.parse(value.to) - Date.parse(value.from) <= CALENDAR_MAX_DAYS * MS_PER_DAY + 3_600_000,
     {
       message: `The range cannot exceed ${CALENDAR_MAX_DAYS} days`,
       path: ["to"],
@@ -42,14 +46,50 @@ export const calendarQuerySchema = z
   );
 export type CalendarQuery = z.infer<typeof calendarQuerySchema>;
 
+const billingReviewReasonSchema = z.enum([
+  "unknown_amount",
+  "paid_in_booksy",
+  "invoiced_in_booksy",
+]);
+export type BillingReviewReason = z.infer<typeof billingReviewReasonSchema>;
+export const billingReviewReasonsSchema = z.array(billingReviewReasonSchema).min(1).max(3);
+
 export const calendarAppointmentSchema = appointmentSchema.extend({
   clientName: z.string(),
+  serviceBadges: z.array(calendarServiceBadgesSchema).optional(),
+  serviceColors: z.record(idSchema, z.string().regex(/^#[0-9a-fA-F]{6}$/)).optional(),
   resources: z
     .array(z.object({ name: z.string(), quantity: z.number().int().positive() }))
     .optional(),
   /** In booking order. */
   serviceNames: z.array(z.string()),
+  billingReviewReasons: billingReviewReasonsSchema.optional(),
+  externallySettled: z.literal(true).optional(),
+  importedFromBooksy: z.literal(true).optional(),
+  externalBalance: externalBalanceSchema.optional(),
+  unpricedServices: z
+    .array(z.object({ id: idSchema, name: z.string() }))
+    .min(1)
+    .optional(),
 });
+export const unpaidAppointmentsSchema = z.object({
+  appointments: z.array(calendarAppointmentSchema),
+  billingReview: z
+    .array(
+      calendarAppointmentSchema
+        .pick({
+          id: true,
+          clientName: true,
+          staffId: true,
+          startsAt: true,
+          serviceNames: true,
+        })
+        .extend({ reasons: billingReviewReasonsSchema }),
+    )
+    .optional(),
+});
+export type UnpaidAppointments = z.infer<typeof unpaidAppointmentsSchema>;
+
 export type CalendarAppointment = z.infer<typeof calendarAppointmentSchema>;
 
 /** One block of a staff member's recurring hours, resolved to instants in the salon timezone. */
@@ -62,6 +102,15 @@ export type WorkingWindow = z.infer<typeof workingWindowSchema>;
 
 /** Everything a day/week calendar needs in one response. */
 export const calendarResponseSchema = z.object({
+  importSnapshot: z
+    .object({
+      system: z.literal("booksy"),
+      capturedAt: instantSchema,
+      fromDate: z.iso.date(),
+      throughDate: z.iso.date(),
+      readOnly: z.literal(true),
+    })
+    .optional(),
   timezone: z.string(),
   from: instantSchema,
   to: instantSchema,

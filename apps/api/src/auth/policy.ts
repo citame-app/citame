@@ -216,14 +216,14 @@ export function authorizeReportQuery(principal: Principal, query: ReportQuery): 
  */
 export function authorizeCalendarQuery(
   principal: Principal,
-  query: CalendarQuery,
-): { staffIds?: string[] } {
+  query: Partial<CalendarQuery>,
+): { staffIds?: string[]; includeBilling: boolean } {
   requireRole(principal, "owner", "staff");
-  if (permissionsFor(principal.role, principal.accessPreset).allCalendars)
-    return query.staffIds ? { staffIds: query.staffIds } : {};
+  const { allCalendars, commerce } = permissionsFor(principal.role, principal.accessPreset);
+  if (allCalendars) return { staffIds: query.staffIds, includeBilling: commerce };
   if (!principal.staffId) throw forbidden("Your account has no calendar");
   if (query.staffIds?.some((staffId) => staffId !== principal.staffId)) {
     throw forbidden("Staff can only see their own calendar");
   }
-  return { staffIds: [principal.staffId] };
+  return { staffIds: [principal.staffId], includeBilling: commerce };
 }

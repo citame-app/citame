@@ -34,6 +34,7 @@ describe("GET /salon", () => {
       slotGranularityMinutes: 30,
       minNoticeMinutes: 60,
       maxDaysAhead: 90,
+      onlineBookingEnabled: true,
     });
   });
 });

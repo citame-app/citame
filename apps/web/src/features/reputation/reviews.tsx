@@ -9,6 +9,7 @@ import { EmptyState, ErrorState, Skeleton } from "~/components/ui/states";
 import { useToast } from "~/components/ui/toast";
 import { UnsavedGuard } from "~/features/admin/unsaved-guard";
 import { useI18n } from "~/i18n/react";
+import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { servicesQuery } from "~/lib/queries";
 import { ReviewEditor, ReviewFailure } from "./review-editor";
@@ -115,12 +116,12 @@ export function PublicReviews() {
     </section>
   );
 }
-export function OwnReviews() {
+export function OwnReviews({ appointmentId }: { appointmentId?: string }) {
   const { t, locale, timeZone } = useI18n();
   const [before, setBefore] = useState<string>();
   const query = useQuery({
-    queryKey: ["reviews", "own", before],
-    queryFn: () => api().reviews.own(before),
+    queryKey: ["reviews", "own", before, appointmentId],
+    queryFn: () => api().reviews.own(before, appointmentId),
     gcTime: 0,
   });
   const [selected, setSelected] = useState<{
@@ -151,7 +152,9 @@ export function OwnReviews() {
       <p className="text-muted">{t("reviews.lead")}</p>
       {query.isPending && <Skeleton className="h-32" />}
       {query.isError && <ErrorState error={query.error} onRetry={() => void query.refetch()} />}
-      {query.data?.visits.length === 0 && <EmptyState title={t("reviews.ownEmpty")} />}
+      {query.data?.visits.length === 0 && (
+        <EmptyState title={t(appointmentId ? "reviews.request.unavailable" : "reviews.ownEmpty")} />
+      )}
       <ul className="space-y-4">
         {query.data?.visits.map((visit) => (
           <li
@@ -351,6 +354,14 @@ export function ReviewModeration() {
   const [selected, setSelected] = useState<ReviewPrivate>();
   const [dirty, setDirty] = useState(false);
   const [discard, setDiscard] = useState(false);
+  const accessDenied = query.error instanceof ApiError && [401, 403].includes(query.error.status);
+  const data = accessDenied ? undefined : query.data;
+  useEffect(() => {
+    if (!accessDenied) return;
+    setSelected(undefined);
+    setDirty(false);
+    setDiscard(false);
+  }, [accessDenied]);
   const client = useQueryClient();
   const close = () => {
     setSelected(undefined);
@@ -381,9 +392,9 @@ export function ReviewModeration() {
       </div>
       {query.isPending && <Skeleton className="h-32" />}
       {query.isError && <ErrorState error={query.error} onRetry={() => void query.refetch()} />}
-      {query.data?.reviews.length === 0 && <EmptyState title={t("reviews.manageEmpty")} />}
+      {data?.reviews.length === 0 && <EmptyState title={t("reviews.manageEmpty")} />}
       <ul className="grid gap-4 md:grid-cols-2">
-        {query.data?.reviews.map((review) => (
+        {data?.reviews.map((review) => (
           <li
             key={review.id}
             className="min-w-0 space-y-4 rounded-xl border border-line bg-surface p-5"
@@ -413,17 +424,14 @@ export function ReviewModeration() {
         >
           {t("reviews.reload")}
         </Button>
-        {query.data?.nextBefore && (
-          <Button
-            variant="secondary"
-            onClick={() => setBefore(query.data?.nextBefore ?? undefined)}
-          >
+        {data?.nextBefore && (
+          <Button variant="secondary" onClick={() => setBefore(data.nextBefore ?? undefined)}>
             {t("reviews.more")}
           </Button>
         )}
       </div>
       <Sheet
-        open={Boolean(selected)}
+        open={!accessDenied && Boolean(selected)}
         onOpenChange={(open) => {
           if (!open) dirty ? setDiscard(true) : close();
         }}
@@ -434,7 +442,7 @@ export function ReviewModeration() {
           </Button>
         }
       >
-        {selected && (
+        {!accessDenied && selected && (
           <ModerateEditor
             key={`${selected.id}-${selected.version}`}
             review={selected}
@@ -444,7 +452,7 @@ export function ReviewModeration() {
         )}
       </Sheet>
       <ConfirmDialog
-        open={discard}
+        open={!accessDenied && discard}
         onOpenChange={setDiscard}
         title={t("reviews.discard")}
         description={t("reviews.discardBody")}

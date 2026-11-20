@@ -35,6 +35,7 @@ beforeEach(() => {
         currentRequirements = {
           serviceId: SERVICE,
           version: body.version + 1,
+          selectionMode: body.selectionMode ?? currentRequirements.selectionMode,
           requirements: body.requirements.map((r: { resourceId: string; quantity: number }) => ({
             ...r,
             name: pool.name,
@@ -100,6 +101,20 @@ test("service requirements validate quantity against capacity and send the revie
   fireEvent.click(screen.getByRole("button", { name: "Save requirements" }));
   await screen.findByText("Requirements saved");
   expect(writes[0]?.body).toEqual({ version: 1, requirements: [{ resourceId: ID, quantity: 1 }] });
+});
+test("selecting one available resource shows options and saves the selected mode", async () => {
+  await open();
+  fireEvent.change(screen.getByLabelText("Service resources"), { target: { value: SERVICE } });
+  fireEvent.click(await screen.findByRole("radio", { name: "Use one available resource" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Room A" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save requirements" }));
+  await screen.findByText("Requirements saved");
+  expect(writes[0]?.body).toEqual({
+    version: 1,
+    selectionMode: "one_of",
+    requirements: [{ resourceId: ID, quantity: 1 }],
+  });
+  expect(screen.getByRole("checkbox", { name: "Room A" })).toBeChecked();
 });
 test("closing a dirty resource draft requires explicit discard", async () => {
   await open();

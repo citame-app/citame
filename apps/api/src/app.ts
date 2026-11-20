@@ -1,4 +1,4 @@
-import type { HealthResponse } from "@sob/contracts";
+import type { CalendarResponse, HealthResponse } from "@sob/contracts";
 import type { Database } from "@sob/db";
 import type { RedisClient } from "bun";
 import { Hono } from "hono";
@@ -10,10 +10,13 @@ import type { AppConfig } from "./config";
 import { DomainError } from "./errors";
 import { errorBody, respondError } from "./http";
 import { mcpRoutes } from "./mcp/routes";
+import { createTokenVerifier } from "./mcp/verify";
 import { accountingRoutes } from "./modules/accounting/routes";
 import { adminRoutes } from "./modules/admin/routes";
 import { appointmentsRoutes } from "./modules/appointments/routes";
 import { availabilityRoutes } from "./modules/availability/routes";
+import type { BooksySourceReadModel } from "./modules/booksy-transfer/source-read-model";
+import { booksySourceRoutes } from "./modules/booksy-transfer/source-routes";
 import { clientAdminRoutes } from "./modules/clients/admin-routes";
 import {
   intakeAdminRoutes,
@@ -28,6 +31,12 @@ import {
 } from "./modules/commerce/routes";
 import { giftCardRoutes } from "./modules/gift-cards/routes";
 import { inventoryRoutes } from "./modules/inventory/routes";
+import {
+  clientMarketingRoutes,
+  marketingAdminRoutes,
+  marketingPublicRoutes,
+  selfMarketingRoutes,
+} from "./modules/marketing/routes";
 import { meRoutes } from "./modules/me/routes";
 import { passRoutes, planAdminRoutes, publicPlanRoutes } from "./modules/passes/routes";
 import { reportRoutes } from "./modules/reports/routes";
@@ -49,10 +58,14 @@ import { createSyncHub } from "./modules/sync/hub";
 import { headSeq } from "./modules/sync/pull";
 import { syncRoutes } from "./modules/sync/routes";
 import { waitlistAdminRoutes, waitlistClientRoutes } from "./modules/waitlist/routes";
+import { emailDeliveryRoutes } from "./notifications/email-routes";
 import type { EmailProvider } from "./notifications/providers/types";
 import { notificationAdminRoutes, optOutRoutes } from "./notifications/routes";
+import { whatsappAdminRoutes, whatsappWebhookRoutes } from "./notifications/whatsapp/routes";
 import { oauthAudit } from "./oauth/audit";
 import { ensureOAuthSeeds } from "./oauth/clients";
+import { desktopResource } from "./oauth/desktop";
+import { createDesktopDevices } from "./oauth/desktop-devices";
 import {
   type AppMetrics,
   createAppMetrics,
@@ -66,7 +79,15 @@ import { createRateLimiter, rateLimit } from "./rate-limit";
 import { bearerMatches, originCheck, securityHeaders } from "./security";
 
 export interface AppDeps {
+  /** Local immutable migration review; never enabled by the production entry point. */
+  booksyConsultation?: BooksySourceReadModel;
+  /** Local read-only review using the native candidate rows. */
+  booksyNativePreview?: NonNullable<CalendarResponse["importSnapshot"]>;
   paymentGateway?: PaymentGateway | null;
+  whatsappFetch?: typeof fetch;
+  emailFetch?: typeof fetch;
+  /** Disables manual provider tests in an isolated local instance. */
+  disableEmailDeliveryTest?: boolean;
   db: Database;
   valkey: RedisClient;
   config: AppConfig;
@@ -97,19 +118,60 @@ export type App = Hono & {
   ready: () => Promise<void>;
 };
 
+const consultationAuthReads = new Set([
+  "/api/auth/get-session",
+  "/api/auth/jwks",
+  "/api/auth/oauth2/authorize",
+  "/api/auth/oauth2/public-client",
+]);
+
+const consultationAuthWrites = new Set([
+  "/api/auth/sign-in/email",
+  "/api/auth/sign-out",
+  "/api/auth/oauth2/consent",
+  "/api/auth/oauth2/token",
+  "/api/auth/oauth2/revoke",
+  "/api/auth/desktop/link",
+  "/api/auth/desktop/token",
+  "/api/auth/desktop/revoke",
+]);
+
 export function createApp(input: AppDeps): App {
   const metrics = input.metrics ?? createAppMetrics();
   const logger = input.logger ?? rootLogger;
   const deps: AppDeps = { ...input, metrics, logger };
+  const consultation = Boolean(deps.booksyConsultation || deps.booksyNativePreview);
   registerRuntimeGauges(metrics, deps, { timeoutMs: input.readyTimeoutMs });
   const app = new Hono() as App;
-  const auth = createAuth({ ...deps, emailProvider: deps.emailProvider ?? null });
+  const auth = createAuth({ ...deps, emailProvider: consultation ? null : deps.emailProvider });
+  const verifyDesktop = createTokenVerifier({
+    auth,
+    db: deps.db,
+    config: deps.config,
+    audience: desktopResource(deps.config.auth.baseURL),
+  });
+  const desktop = createDesktopDevices({
+    ...deps,
+    oauth: verifyDesktop,
+    currentBrowserSession: async (headers) =>
+      (await auth.api.getSession({ headers, query: { disableCookieCache: true } }))?.session.id,
+    browserSession: (userId) =>
+      auth.api.createDesktopBrowserSession({
+        body: { userId },
+        asResponse: true,
+      }),
+  });
+  const authenticated = requireAuth(auth, deps.db, desktop.verifier);
   const limiter = createRateLimiter({
     storage: valkeySecondaryStorage(deps.valkey, deps.config.valkeyKeyPrefix),
     now: deps.rateLimitNow,
   });
   const { trustProxy, rateLimit: limits } = deps.config;
-  const hub = createSyncHub({ valkey: deps.valkey, keyPrefix: deps.config.valkeyKeyPrefix });
+  const hub = createSyncHub({
+    valkey: deps.valkey,
+    keyPrefix: deps.config.valkeyKeyPrefix,
+    readHead: () => headSeq(deps.db),
+  });
   let draining = false;
   app.drain = () => {
     draining = true;
@@ -135,6 +197,23 @@ export function createApp(input: AppDeps): App {
     requestContext({ logger, http: metrics.http, quietPaths: ["/health", "/ready", "/metrics"] }),
   );
   app.use("*", securityHeaders({ hsts: deps.config.auth.secureCookies }));
+  if (consultation)
+    app.use("*", async (c, next) => {
+      const { method, path } = c.req;
+      const authPath = path === "/api/auth" || path.startsWith("/api/auth/");
+      // Better Auth also handles email verification on GET, which changes account data.
+      const allowed =
+        method === "OPTIONS" ||
+        ((method === "GET" || method === "HEAD") &&
+          (!authPath || consultationAuthReads.has(path))) ||
+        (method === "POST" && consultationAuthWrites.has(path));
+      if (!allowed)
+        throw new DomainError(
+          "forbidden",
+          "Esta copia importada es de consulta. Booksy sigue siendo la agenda operativa.",
+        );
+      await next();
+    });
 
   // Liveness: the process is up and its event loop turns. It never asks a dependency, so an
   // outage of Postgres or Valkey does not get the container restarted for no benefit.
@@ -237,16 +316,17 @@ export function createApp(input: AppDeps): App {
   app.use("/api/auth/oauth2/consent", oauthLimit);
   app.use("/api/auth/oauth2/revoke", oauthLimit);
   app.use("/api/auth/oauth2/introspect", oauthLimit);
+  app.use("/api/auth/desktop/*", oauthLimit);
   // Browser-based MCP clients read metadata and talk to the token endpoint cross-origin. These
   // endpoints never rely on cookies (PKCE, bearer or anonymous), so a wildcard origin without
   // credentials is safe; cookie-bound endpoints (authorize, consent) get no CORS headers.
-  const publicCors = cors({
-    origin: "*",
+  const publicCorsOptions = {
     allowMethods: ["GET", "HEAD", "POST", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization", "MCP-Protocol-Version", "Mcp-Session-Id"],
     exposeHeaders: ["WWW-Authenticate", "Mcp-Session-Id"],
     maxAge: 600,
-  });
+  };
+  const publicCors = cors({ ...publicCorsOptions, origin: "*" });
   for (const path of [
     "/.well-known/*",
     "/api/auth/jwks",
@@ -259,44 +339,53 @@ export function createApp(input: AppDeps): App {
   app.use("/api/auth/oauth2/*", oauthAudit(auth, deps.db));
 
   // MCP server (Streamable HTTP, stateless) and its RFC 9728 protected-resource metadata. The
-  // `/mcp` endpoint answers CORS for browser-based clients; authentication is bearer-only.
+  // Browser MCP hosts use a dedicated allowlist independent of cookie-authenticated origins.
   const mcp = mcpRoutes(deps, auth);
-  for (const path of ["/mcp", "/mcp/*"]) app.use(path, publicCors);
-  app.use(
-    "/mcp",
-    rateLimit({ limiter, scope: "mcp", rule: limits.mcp, trustProxy, failOpen: true }),
-  );
+  const mcpCors = cors({ ...publicCorsOptions, origin: mcp.allowedOrigins });
+  for (const path of ["/mcp", "/mcp/*"]) {
+    app.use(path, mcp.checkOrigin);
+    app.use(path, mcpCors);
+  }
+  app.use("/mcp", rateLimit({ limiter, scope: "mcp", rule: limits.mcp, trustProxy }));
   app.route("/mcp", mcp.app);
   for (const path of ["/.well-known/oauth-protected-resource", new URL(mcp.metadataUrl).pathname]) {
     app.get(path, (c) => c.json(mcp.metadata(), 200, { "Cache-Control": "public, max-age=300" }));
   }
 
-  // Better Auth owns everything under /api/auth (sign-up, sign-in, sign-out, session).
+  app.route("/api/auth/desktop", desktop.routes);
+  // Better Auth handles the remaining auth routes.
   app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
   // RFC 8414: the issuer is `<origin>/api/auth`, so its metadata lives at the origin root with
   // the issuer path appended. Better Auth answers these itself (plugin `onRequest`).
   app.on(["GET", "HEAD"], "/.well-known/oauth-authorization-server/api/auth", (c) =>
     auth.handler(c.req.raw),
   );
-  app.use("/me", requireAuth(auth, deps.db));
-  app.use("/me/*", requireAuth(auth, deps.db));
+  app.use("/me", authenticated);
+  app.use("/me/*", authenticated);
   app.route("/notifications", optOutRoutes(deps));
+  app.route("/whatsapp/webhook", whatsappWebhookRoutes(deps));
   app.route("/me", meRoutes(deps));
+  app.route("/me", selfMarketingRoutes(deps));
+  app.route("/marketing", marketingPublicRoutes(deps));
   app.route("/me", commerceClientRoutes(deps));
   app.route("/me", rewardsClientRoutes(deps));
   app.route("/me/waitlist", waitlistClientRoutes(deps));
   app.route("/me/intake", intakeSelfRoutes(deps));
   app.route("/me/reviews", reviewSelfRoutes(deps));
-  app.use("/intake/*", requireAuth(auth, deps.db));
+  app.use("/intake/*", authenticated);
   app.route("/intake", intakeRoutes(deps));
 
-  app.use("/admin/*", requireAuth(auth, deps.db));
+  app.use("/admin/*", authenticated);
   app.route("/admin", adminRoutes(deps, auth));
   app.route("/admin/commerce", commerceAdminRoutes(deps));
+  app.route("/admin/marketing", marketingAdminRoutes(deps));
+  app.route("/admin/clients", clientMarketingRoutes(deps));
   app.route("/admin/inventory", inventoryRoutes(deps));
   app.route("/admin/accounting", accountingRoutes(deps));
   app.route("/admin/rewards", rewardsAdminRoutes(deps));
-  app.route("/admin/waitlist", waitlistAdminRoutes(deps));
+  const waitlistAdmin = waitlistAdminRoutes(deps);
+  app.route("/admin/waitlist/desk", waitlistAdmin);
+  app.route("/admin/waitlist", waitlistAdmin);
   app.route("/admin/resources", resourceRoutes(deps));
   app.route("/admin/reviews", reviewAdminRoutes(deps));
   app.route("/admin/portfolio", portfolioAdminRoutes(deps));
@@ -314,6 +403,8 @@ export function createApp(input: AppDeps): App {
   app.route("/admin/reports", reportRoutes(deps));
   app.route("/admin/settings", settingsAdminRoutes(deps));
   app.route("/admin/notifications", notificationAdminRoutes(deps));
+  app.route("/admin/email-delivery", emailDeliveryRoutes(deps, limiter));
+  app.route("/admin/whatsapp", whatsappAdminRoutes(deps));
 
   // Public catalog and availability: anonymous visitors browse before they sign up.
   app.route("/salon", salonRoutes(deps));
@@ -323,11 +414,13 @@ export function createApp(input: AppDeps): App {
   app.route("/staff", staffRoutes(deps));
   app.route("/availability", availabilityRoutes(deps));
   // Everything that touches appointments needs a session; the routes enforce the role policy.
-  app.use("/appointments", requireAuth(auth, deps.db));
-  app.use("/appointments/*", requireAuth(auth, deps.db));
+  app.use("/appointments", authenticated);
+  app.use("/appointments/*", authenticated);
+  if (deps.booksyConsultation)
+    app.route("/appointments", booksySourceRoutes(deps.db, deps.booksyConsultation));
   app.route("/appointments", appointmentsRoutes(deps));
 
-  app.use("/sync/*", requireAuth(auth, deps.db));
+  app.use("/sync/*", authenticated);
   const streamLimit = rateLimit({
     limiter,
     scope: "sync-stream",
@@ -335,7 +428,7 @@ export function createApp(input: AppDeps): App {
     trustProxy,
     failOpen: true,
   });
-  app.route("/sync", syncRoutes(deps, hub, streamLimit));
+  app.route("/sync", syncRoutes(deps, hub, streamLimit, desktop.verifier));
 
   return app;
 }

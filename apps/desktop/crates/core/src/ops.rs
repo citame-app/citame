@@ -1,11 +1,16 @@
 //! User actions. Each one writes to the outbox first; the calendar shows it as pending at once.
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use std::collections::BTreeMap;
+
+use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde_json::{Map, Value, json};
 
-use crate::calendar::{effective_appointment, known_clients};
+use crate::calendar::{
+    effective_appointment, effective_appointments_between, effective_time_off, known_clients,
+    service_work_windows,
+};
 use crate::error::{CoreError, Result};
-use crate::model::{AppointmentService, AppointmentStatus};
+use crate::model::{AppointmentService, AppointmentStatus, Client, TimeOff, WorkWindow};
 use crate::store::Store;
 
 /// Longest free text the API accepts (`LIMITS` in `packages/contracts`). Counted in UTF-16 code
@@ -13,6 +18,7 @@ use crate::store::Store;
 const MAX_NAME: usize = 200;
 const MAX_PHONE: usize = 32;
 const MAX_NOTES: usize = 2000;
+const MAX_REASON: usize = 500;
 
 fn check_len(what: &str, value: &str, max: usize) -> Result<()> {
     if value.encode_utf16().count() > max {
@@ -25,6 +31,163 @@ fn check_len(what: &str, value: &str, max: usize) -> Result<()> {
 
 fn iso(t: DateTime<Utc>) -> String {
     t.to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+fn validate_block(
+    store: &Store,
+    staff_id: &str,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    reason: &str,
+) -> Result<()> {
+    if start >= end {
+        return Err(CoreError::Invalid("The end must be after the start".into()));
+    }
+    if !store
+        .staff()?
+        .iter()
+        .any(|member| member.id == staff_id && member.active)
+    {
+        return Err(CoreError::Invalid(
+            "The professional is inactive or missing".into(),
+        ));
+    }
+    check_len("reason", reason.trim(), MAX_REASON)
+}
+
+pub fn create_time_off(
+    store: &mut Store,
+    staff_id: &str,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    reason: &str,
+) -> Result<String> {
+    validate_block(store, staff_id, start, end, reason)?;
+    let id = uuid::Uuid::now_v7().to_string();
+    let mut payload =
+        json!({"id": id, "staffId": staff_id, "startsAt": iso(start), "endsAt": iso(end)});
+    if !reason.trim().is_empty() {
+        payload["reason"] = json!(reason.trim());
+    }
+    store.enqueue("time_off.create", &id, payload)?;
+    Ok(id)
+}
+
+fn verify_block(store: &Store, expected: &TimeOff) -> Result<()> {
+    if !effective_time_off(store, expected.starts_at, expected.ends_at)?
+        .iter()
+        .any(|block| &block.time_off == expected)
+    {
+        return Err(CoreError::Invalid(
+            "The block changed. Close it and open the latest version.".into(),
+        ));
+    }
+    Ok(())
+}
+
+pub fn update_time_off(
+    store: &mut Store,
+    expected: &TimeOff,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    reason: &str,
+) -> Result<()> {
+    verify_block(store, expected)?;
+    validate_block(store, &expected.staff_id, start, end, reason)?;
+    let reason = (!reason.trim().is_empty()).then_some(reason.trim());
+    if expected.starts_at == start
+        && expected.ends_at == end
+        && expected.reason.as_deref() == reason
+    {
+        return Ok(());
+    }
+    store.enqueue_after("time_off.update", &expected.id, json!({
+        "id": expected.id, "staffId": expected.staff_id, "startsAt": iso(start), "endsAt": iso(end),
+        "reason": reason, "expectedUpdatedAt": iso(expected.updated_at)
+    }), expected.updated_at)?;
+    Ok(())
+}
+
+pub fn delete_time_off(store: &mut Store, expected: &TimeOff) -> Result<()> {
+    verify_block(store, expected)?;
+    store.enqueue_after(
+        "time_off.delete",
+        &expected.id,
+        json!({
+            "id": expected.id, "staffId": expected.staff_id,
+            "expectedUpdatedAt": iso(expected.updated_at)
+        }),
+        expected.updated_at,
+    )?;
+    Ok(())
+}
+
+type Slot = (DateTime<Utc>, DateTime<Utc>);
+
+fn working_intervals((start, end): Slot, schedule: &[WorkWindow]) -> Vec<Slot> {
+    let bounds = schedule
+        .iter()
+        .map(|window| {
+            let from = start.checked_add_signed(Duration::try_minutes(window.offset_minutes)?)?;
+            let to = start.checked_add_signed(Duration::try_minutes(window.end_offset_minutes)?)?;
+            (from >= start && to <= end && from < to).then_some((from, to))
+        })
+        .collect::<Option<Vec<_>>>();
+    bounds
+        .filter(|items| !items.is_empty())
+        .unwrap_or_else(|| vec![(start, end)])
+}
+
+fn ensure_local_slot(
+    store: &Store,
+    staff_id: &str,
+    slot: Slot,
+    windows: &[WorkWindow],
+    exclude: Option<&str>,
+) -> Result<()> {
+    let (start, end) = slot;
+    if effective_time_off(store, start, end)?
+        .iter()
+        .any(|block| block.time_off.staff_id == staff_id)
+    {
+        return Err(CoreError::TimeOffOverlap);
+    }
+    let staff = store
+        .staff()?
+        .into_iter()
+        .find(|staff| staff.id == staff_id)
+        .ok_or_else(|| CoreError::NotFound(format!("staff member {staff_id}")))?;
+    let existing: Vec<_> = effective_appointments_between(store, start, end)?
+        .into_iter()
+        .filter(|appointment| {
+            appointment.staff_id == staff_id && Some(appointment.id.as_str()) != exclude
+        })
+        .flat_map(|appointment| {
+            working_intervals(
+                (appointment.starts_at, appointment.ends_at),
+                appointment.work_windows.as_deref().unwrap_or_default(),
+            )
+        })
+        .collect();
+    for (work_start, work_end) in working_intervals(slot, windows) {
+        let mut changes = BTreeMap::new();
+        for &(occupied_start, occupied_end) in &existing {
+            let overlaps_from = occupied_start.max(work_start);
+            let overlaps_until = occupied_end.min(work_end);
+            if overlaps_from < overlaps_until {
+                *changes.entry(overlaps_from).or_insert(0) += 1;
+                *changes.entry(overlaps_until).or_insert(0) -= 1;
+            }
+        }
+        let mut active = 0;
+        for change in changes.into_values() {
+            active += change;
+            if active >= staff.max_concurrent.clamp(1, 6) {
+                return Err(CoreError::StaffCapacityExceeded);
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +230,10 @@ pub fn performed_services(store: &Store, staff_id: &str) -> Result<Vec<String>> 
 
 /// Returns the new appointment id.
 pub fn create_appointment(store: &mut Store, new: NewAppointment) -> Result<String> {
+    store.write_transaction(|store| queue_appointment(store, new))
+}
+
+fn queue_appointment(store: &mut Store, new: NewAppointment) -> Result<String> {
     if new.service_ids.is_empty() {
         return Err(CoreError::Invalid("pick at least one service".into()));
     }
@@ -124,10 +291,22 @@ pub fn create_appointment(store: &mut Store, new: NewAppointment) -> Result<Stri
             duration_minutes: source.duration_minutes,
             buffer_minutes: source.buffer_minutes,
             price_cents: source.price_cents,
+            source_unpriced: false,
             currency: source.currency.clone(),
             processing: source.processing.clone(),
         });
     }
+    let duration: i64 = reviewed
+        .iter()
+        .map(|s| s.duration_minutes + s.buffer_minutes)
+        .sum();
+    ensure_local_slot(
+        store,
+        &new.staff_id,
+        (new.starts_at, new.starts_at + Duration::minutes(duration)),
+        &service_work_windows(&reviewed),
+        None,
+    )?;
     let id = uuid::Uuid::now_v7().to_string();
     let mut p = Map::new();
     p.insert("id".into(), json!(id));
@@ -145,6 +324,18 @@ pub fn create_appointment(store: &mut Store, new: NewAppointment) -> Result<Stri
     }
     store.enqueue("appointment.create", &id, Value::Object(p))?;
     Ok(id)
+}
+
+pub fn create_appointment_for_new_client(
+    store: &mut Store,
+    mut new: NewAppointment,
+    name: &str,
+    phone: Option<&str>,
+) -> Result<String> {
+    store.write_transaction(|store| {
+        new.client_id = create_client(store, name, phone)?;
+        queue_appointment(store, new)
+    })
 }
 
 fn editable(store: &Store, id: &str) -> Result<crate::model::Appointment> {
@@ -165,12 +356,29 @@ pub fn reschedule_appointment(
     starts_at: Option<DateTime<Utc>>,
     staff_id: Option<&str>,
 ) -> Result<()> {
+    store.write_transaction(|store| queue_reschedule(store, id, starts_at, staff_id))
+}
+
+fn queue_reschedule(
+    store: &mut Store,
+    id: &str,
+    starts_at: Option<DateTime<Utc>>,
+    staff_id: Option<&str>,
+) -> Result<()> {
     if starts_at.is_none() && staff_id.is_none() {
         return Err(CoreError::Invalid(
             "provide a new time and/or staff member".into(),
         ));
     }
     let current = editable(store, id)?;
+    let start = starts_at.unwrap_or(current.starts_at);
+    ensure_local_slot(
+        store,
+        staff_id.unwrap_or(&current.staff_id),
+        (start, start + (current.ends_at - current.starts_at)),
+        current.work_windows.as_deref().unwrap_or_default(),
+        Some(id),
+    )?;
     let mut p = Map::new();
     p.insert("id".into(), json!(id));
     p.insert("version".into(), json!(current.version));
@@ -223,23 +431,128 @@ pub fn set_appointment_status(
 
 /// Returns the new client id.
 pub fn create_client(store: &mut Store, name: &str, phone: Option<&str>) -> Result<String> {
-    let name = name.trim();
+    enqueue_client(store, name, phone, None, None)
+}
+
+pub fn create_directory_client(
+    store: &mut Store,
+    name: &str,
+    phone: &str,
+    email: &str,
+    notes: &str,
+) -> Result<String> {
+    require_directory(store)?;
+    let email = email.trim();
+    check_len("email", email, 254)?;
+    if !email.is_empty()
+        && (email.chars().any(char::is_whitespace)
+            || !email.split_once('@').is_some_and(|(name, domain)| {
+                !name.is_empty() && !domain.contains('@') && domain.split('.').count() > 1
+            }))
+    {
+        return Err(CoreError::Invalid("Enter a valid email address".into()));
+    }
+    check_len("notes", notes, MAX_NOTES)?;
+    enqueue_client(store, name, Some(phone), Some(email), Some(notes))
+}
+
+fn require_directory(store: &Store) -> Result<()> {
+    if !store.client_directory_enabled()? {
+        return Err(CoreError::Invalid(
+            "The client directory is unavailable".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_contact(name: &str, phone: Option<&str>) -> Result<()> {
     if name.is_empty() {
         return Err(CoreError::Invalid("a client needs a name".into()));
     }
     check_len("name", name, MAX_NAME)?;
     if let Some(ph) = phone {
-        check_len("phone", ph.trim(), MAX_PHONE)?;
+        check_len("phone", ph, MAX_PHONE)?;
+        if ph.encode_utf16().count() < 3 {
+            return Err(CoreError::Invalid(
+                "A phone number needs at least 3 characters".into(),
+            ));
+        }
     }
+    Ok(())
+}
+
+fn enqueue_client(
+    store: &mut Store,
+    name: &str,
+    phone: Option<&str>,
+    email: Option<&str>,
+    notes: Option<&str>,
+) -> Result<String> {
+    let name = name.trim();
+    let phone = phone.map(str::trim).filter(|value| !value.is_empty());
+    validate_contact(name, phone)?;
     let id = uuid::Uuid::now_v7().to_string();
     let mut p = Map::new();
     p.insert("id".into(), json!(id));
     p.insert("name".into(), json!(name));
-    if let Some(ph) = phone.map(str::trim).filter(|p| !p.is_empty()) {
+    if let Some(ph) = phone {
         p.insert("phone".into(), json!(ph));
+    }
+    if let Some(email) = email.filter(|value| !value.is_empty()) {
+        p.insert("email".into(), json!(email));
+    }
+    if let Some(notes) = notes.filter(|value| !value.trim().is_empty()) {
+        p.insert("notes".into(), json!(notes));
     }
     store.enqueue("client.create", &id, Value::Object(p))?;
     Ok(id)
+}
+
+pub fn update_directory_client(
+    store: &mut Store,
+    expected: &Client,
+    name: &str,
+    phone: &str,
+    notes: &str,
+) -> Result<()> {
+    require_directory(store)?;
+    let name = name.trim();
+    let phone = (!phone.trim().is_empty()).then(|| phone.trim());
+    let notes = (!notes.trim().is_empty()).then_some(notes);
+    validate_contact(name, phone)?;
+    if let Some(notes) = notes {
+        check_len("notes", notes, MAX_NOTES)?;
+    }
+    let id = &expected.id;
+    if store
+        .outbox(usize::MAX)?
+        .iter()
+        .any(|entry| entry.entity_id == *id)
+    {
+        return Err(CoreError::Invalid(
+            "Wait for this contact to sync before editing it again".into(),
+        ));
+    }
+    let latest = store.clients()?.into_iter().find(|client| client.id == *id);
+    if latest.as_ref() != Some(expected) || expected.merged_into_id.is_some() {
+        return Err(CoreError::Invalid(
+            "The contact changed. Reopen its latest version.".into(),
+        ));
+    }
+    let mut body = json!({"id":id,"expectedUpdatedAt":iso(expected.updated_at)});
+    if name != expected.name {
+        body["name"] = json!(name);
+    }
+    if phone != expected.phone.as_deref() {
+        body["phone"] = json!(phone);
+    }
+    if notes != expected.notes.as_deref() {
+        body["notes"] = json!(notes);
+    }
+    if body.as_object().is_some_and(|fields| fields.len() > 2) {
+        store.enqueue_after("client.update", id, body, expected.updated_at)?;
+    }
+    Ok(())
 }
 
 pub fn resolve_conflict(
@@ -247,9 +560,22 @@ pub fn resolve_conflict(
     mutation_id: &str,
     resolution: Resolution,
 ) -> Result<()> {
+    store.write_transaction(|store| resolve_conflict_in_transaction(store, mutation_id, resolution))
+}
+
+fn resolve_conflict_in_transaction(
+    store: &mut Store,
+    mutation_id: &str,
+    resolution: Resolution,
+) -> Result<()> {
     let c = store
         .conflict(mutation_id)?
         .ok_or_else(|| CoreError::NotFound(format!("open conflict {mutation_id}")))?;
+    if c.requires_restored_review() && !matches!(resolution, Resolution::Dismiss) {
+        return Err(CoreError::Invalid(
+            "Review the restored calendar before making a new change".into(),
+        ));
+    }
     match resolution {
         Resolution::Dismiss => store.resolve_conflict(mutation_id, "dismissed"),
         Resolution::Cancel => {
@@ -280,15 +606,29 @@ pub fn resolve_conflict(
                     if let Some(s) = staff_id {
                         p["staffId"] = json!(s);
                     }
+                    if let Some((staff_id, services)) = p
+                        .get("staffId")
+                        .and_then(Value::as_str)
+                        .zip(p.get("_reviewedServices"))
+                    {
+                        let reviewed: Vec<AppointmentService> =
+                            serde_json::from_value(services.clone())?;
+                        let duration: i64 = reviewed
+                            .iter()
+                            .map(|s| s.duration_minutes + s.buffer_minutes)
+                            .sum();
+                        ensure_local_slot(
+                            store,
+                            staff_id,
+                            (starts_at, starts_at + Duration::minutes(duration)),
+                            &service_work_windows(&reviewed),
+                            Some(&c.entity_id),
+                        )?;
+                    }
                     store.enqueue("appointment.create", &c.entity_id, p)?;
                 }
                 "appointment.reschedule" => {
-                    reschedule_appointment(
-                        store,
-                        &c.entity_id,
-                        Some(starts_at),
-                        staff_id.as_deref(),
-                    )?;
+                    queue_reschedule(store, &c.entity_id, Some(starts_at), staff_id.as_deref())?;
                 }
                 other => {
                     return Err(CoreError::Invalid(format!("{other} cannot be rescheduled")));

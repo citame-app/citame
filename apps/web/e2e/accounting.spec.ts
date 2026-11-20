@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import { asOwner, expectNoHorizontalScroll, OWNER_EMAIL, signInAs } from "./admin-helpers";
 import { expectNoSeriousA11yViolations, PASSWORD } from "./helpers";
+import { addCatalogProduct, closeReceipt, reviewReceipt } from "./pos-helpers";
 
 for (const scheme of ["light", "dark"] as const) {
   test.describe(`commissions and financial reports — ${scheme}`, () => {
@@ -44,7 +45,10 @@ for (const scheme of ["light", "dark"] as const) {
       await page
         .getByRole("button", { name: "Financial reports & commissions", exact: true })
         .click();
-      await page.getByLabel("Professional", { exact: true }).selectOption(staffId);
+      await page
+        .getByRole("region", { name: "Financial reports & commissions", exact: true })
+        .getByLabel("Professional", { exact: true })
+        .selectOption(staffId);
       await page.getByLabel("Service commission (%)", { exact: true }).fill("25");
       await page.getByLabel("Product commission (%)", { exact: true }).fill("10");
       const savedRates = page.waitForResponse(
@@ -55,24 +59,25 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(page.getByLabel("Product commission (%)", { exact: true })).toHaveValue("10.00");
       await page.getByRole("button", { name: "Back to sales", exact: true }).click();
       await page.getByRole("button", { name: "New sale", exact: true }).click();
-      await page.getByLabel("Professional", { exact: true }).selectOption(staffId);
-      await page.getByLabel("Search products", { exact: true }).fill(unique);
-      const option = page.getByRole("option").filter({ hasText: name });
-      await expect(option).toHaveCount(1);
-      const productId = await option.getAttribute("value");
-      if (!productId) throw new Error("Missing product id");
-      await page.getByLabel("Choose a product", { exact: true }).selectOption(productId);
-      await page.getByRole("button", { name: "Add product", exact: true }).click();
-      await page.getByRole("button", { name: "Create checkout", exact: true }).click();
+      await page
+        .getByRole("complementary", { name: "Current receipt", exact: true })
+        .getByLabel("Professional", { exact: true })
+        .selectOption(staffId);
+      await addCatalogProduct(page, name, unique);
+      await reviewReceipt(page);
       const receipt = page.getByRole("region", { name: "Receipt", exact: true });
       await expect(receipt.getByText(name)).toBeVisible();
       await receipt.getByLabel("Payment method", { exact: true }).selectOption("external_card");
       await receipt.getByRole("button", { name: "Record payment", exact: true }).click();
       await expect(receipt.getByRole("status").filter({ hasText: /^Paid$/ })).toBeVisible();
+      await closeReceipt(page);
       await page
         .getByRole("button", { name: "Financial reports & commissions", exact: true })
         .click();
-      await page.getByLabel("Professional", { exact: true }).selectOption(staffId);
+      await page
+        .getByRole("region", { name: "Financial reports & commissions", exact: true })
+        .getByLabel("Professional", { exact: true })
+        .selectOption(staffId);
       const panel = page.getByRole("region", { name: "Commissions", exact: true });
       await expect(
         panel

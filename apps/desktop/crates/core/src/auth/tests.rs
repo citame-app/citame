@@ -3,6 +3,7 @@ use super::*;
 fn session() -> Session {
     Session {
         cookie: "better-auth.session_token=abc.def%3D".into(),
+        oauth: None,
         user_id: "u1".into(),
         name: "Owner".into(),
         email: "owner@example.com".into(),
@@ -18,6 +19,38 @@ fn memory_store_round_trips() {
     assert_eq!(s.load().unwrap(), Some(session()));
     s.clear().unwrap();
     assert_eq!(s.load().unwrap(), None);
+}
+
+#[test]
+fn an_offline_account_cannot_inherit_another_accounts_queue() {
+    let dir = tempfile::tempdir().unwrap();
+    let owner = session();
+    let mut staff = owner.clone();
+    staff.role = "staff".into();
+    let mut other = owner.clone();
+    other.user_id = "u2".into();
+    let api = "https://citame.example";
+    let path = replica_path(dir.path(), api, &owner);
+    let mut store = crate::store::Store::open(&path).unwrap();
+    crate::ops::create_client(&mut store, "Pending client", None).unwrap();
+    for profile in [staff, other] {
+        let store = crate::store::Store::open(&replica_path(dir.path(), api, &profile)).unwrap();
+        assert!(store.outbox(10).unwrap().is_empty());
+    }
+    let separate_server = replica_path(dir.path(), "https://other.example", &owner);
+    assert_ne!(separate_server, path);
+    assert_eq!(
+        replica_path(dir.path(), "https://citame.example/", &owner),
+        path
+    );
+    assert_eq!(
+        crate::store::Store::open(&path)
+            .unwrap()
+            .outbox(10)
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -75,7 +108,7 @@ fn the_session_cookie_is_picked_out_of_set_cookie_headers() {
 fn authorize_sends_the_cookie() {
     let a = BetterAuthSession::new("http://localhost:3000");
     assert_eq!(
-        a.authorize(&session()),
+        a.authorize(&mut session()).unwrap(),
         vec![(
             "Cookie".to_string(),
             "better-auth.session_token=abc.def%3D".to_string()

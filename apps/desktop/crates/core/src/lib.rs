@@ -3,17 +3,25 @@
 
 pub mod auth;
 pub mod backoff;
+pub mod billing;
 pub mod calendar;
+pub mod csv_file;
 pub mod error;
 pub mod http;
 pub mod i18n;
+pub mod inventory;
 pub mod model;
 pub mod ops;
 pub mod pkce;
+pub mod reports;
+pub mod reviews;
 pub mod runner;
 pub mod sse;
+pub mod staff_portrait_image;
 pub mod store;
 pub mod sync;
+pub mod team_shifts;
+pub mod waitlist;
 
 #[cfg(test)]
 mod offline_tests;

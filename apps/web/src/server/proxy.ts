@@ -4,6 +4,7 @@
  *
  * - `/api/auth/*` is forwarded unchanged (Better Auth is mounted there in the API).
  * - every other `/api/<path>` is forwarded as `/<path>` (the API's REST routes live at the root).
+ * - the desktop's `/me` and sync paths are also accepted at the same origin.
  * - `/mcp` and `/.well-known/*` are forwarded unchanged. The OAuth issuer and the MCP resource
  *   are public URLs on this origin (ADR 0009), and RFC 8414 / RFC 9728 put their metadata under
  *   the origin's `/.well-known/`, so the browser-facing origin has to serve them.
@@ -15,7 +16,12 @@
  * server itself sits behind an edge proxy you operate, set `WEB_TRUST_PROXY=true` and the visitor
  * is the last inbound entry instead of the socket address.
  */
+import { DESKTOP_PROXY_ROUTE } from "@sob/contracts";
 import { visitorAddress } from "./client-address";
+
+export { DESKTOP_PROXY_ROUTE };
+
+const UPSTREAM_IDLE_TIMEOUT_MS = 20_000;
 
 const HOP_BY_HOP = [
   "connection",
@@ -39,17 +45,25 @@ export interface ProxyOptions {
   apiUrl: string;
   /** The web server is behind an edge proxy that appends to `X-Forwarded-For`. */
   trustProxy: boolean;
+  /** Idle deadline while forwarding the body and waiting for response headers. */
+  upstreamIdleTimeoutMs?: number;
   fetch?: typeof fetch;
 }
 
-export function createProxy({ apiUrl, trustProxy, fetch: doFetch = fetch }: ProxyOptions) {
+export function createProxy({
+  apiUrl,
+  trustProxy,
+  upstreamIdleTimeoutMs = UPSTREAM_IDLE_TIMEOUT_MS,
+  fetch: doFetch = fetch,
+}: ProxyOptions) {
   const base = apiUrl.replace(/\/+$/, "");
 
   function isPassthrough(url: URL): boolean {
     return (
       url.pathname === "/mcp" ||
       url.pathname.startsWith("/mcp/") ||
-      url.pathname.startsWith("/.well-known/")
+      url.pathname.startsWith("/.well-known/") ||
+      DESKTOP_PROXY_ROUTE.test(url.pathname)
     );
   }
 
@@ -87,12 +101,36 @@ export function createProxy({ apiUrl, trustProxy, fetch: doFetch = fetch }: Prox
     headers.set("x-forwarded-proto", url.protocol.replace(":", ""));
 
     const hasBody = request.method !== "GET" && request.method !== "HEAD";
+    const deadline = new AbortController();
+    const expire = () => deadline.abort();
+    let timeout: ReturnType<typeof setTimeout> | undefined = setTimeout(
+      expire,
+      upstreamIdleTimeoutMs,
+    );
+    function recordProgress() {
+      if (timeout === undefined) return;
+      clearTimeout(timeout);
+      timeout = setTimeout(expire, upstreamIdleTimeoutMs);
+    }
     try {
+      const body = hasBody
+        ? request.body?.pipeThrough(
+            new TransformStream<Uint8Array, Uint8Array>({
+              transform(chunk, controller) {
+                controller.enqueue(chunk);
+                if (chunk.byteLength > 0) recordProgress();
+              },
+              flush: recordProgress,
+            }),
+          )
+        : undefined;
       const upstream = await doFetch(targetFor(url), {
         method: request.method,
         headers,
-        body: hasBody ? request.body : undefined,
+        body,
         redirect: "manual",
+        // Let an accepted write finish when the downstream client disconnects.
+        signal: hasBody ? deadline.signal : AbortSignal.any([request.signal, deadline.signal]),
         // Required by the fetch spec when streaming a request body.
         ...(hasBody ? { duplex: "half" } : {}),
       } as RequestInit);
@@ -106,11 +144,13 @@ export function createProxy({ apiUrl, trustProxy, fetch: doFetch = fetch }: Prox
         headers: responseHeaders,
       });
     } catch (error) {
+      if (!hasBody && request.signal.aborted) return new Response(null, { status: 503 });
+      const timedOut = deadline.signal.aborted;
       console.error(
         JSON.stringify({
           time: new Date().toISOString(),
           level: "error",
-          msg: "api proxy failed",
+          msg: timedOut ? "api proxy timed out before response headers" : "api proxy failed",
           component: "web",
           requestId: headers.get("x-request-id"),
           error: error instanceof Error ? error.name : "unknown",
@@ -118,8 +158,12 @@ export function createProxy({ apiUrl, trustProxy, fetch: doFetch = fetch }: Prox
       );
       return Response.json(
         { error: { code: "internal_error", message: "The API is unavailable" } },
-        { status: 502 },
+        { status: timedOut ? 504 : 502, headers: { "cache-control": "no-store" } },
       );
+    } finally {
+      // A deadline for headers must never cancel an established event stream.
+      clearTimeout(timeout);
+      timeout = undefined;
     }
   }
 

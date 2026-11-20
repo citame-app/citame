@@ -74,6 +74,7 @@ pub struct RunnerCore {
     store: Store,
     transport: Arc<dyn Transport>,
     backoff: Backoff,
+    rate_limited: bool,
     jitter: Box<dyn FnMut() -> f64 + Send>,
     status: SharedStatus,
 }
@@ -84,6 +85,7 @@ impl RunnerCore {
             store,
             transport,
             backoff: Backoff::default(),
+            rate_limited: false,
             jitter: Box::new(|| {
                 let mut buf = [0u8; 8];
                 getrandom::fill(&mut buf).expect("system randomness");
@@ -117,6 +119,7 @@ impl RunnerCore {
     pub fn run_cycle(&mut self) -> Duration {
         self.update(|s| s.syncing = true);
         let result = sync::sync_cycle(&mut self.store, &*self.transport);
+        self.rate_limited = false;
         self.refresh_counts();
         let wait = match result {
             Ok(_) => {
@@ -129,8 +132,8 @@ impl RunnerCore {
                 });
                 POLL_INTERVAL
             }
-            Err(SyncError::AuthRequired) => {
-                let e = SyncError::AuthRequired.to_string();
+            Err(error @ (SyncError::AuthRequired | SyncError::Forbidden(_))) => {
+                let e = error.to_string();
                 self.update(|s| {
                     s.connectivity = Connectivity::AuthRequired;
                     s.last_error = Some(e);
@@ -140,20 +143,17 @@ impl RunnerCore {
             }
             Err(e) => {
                 let (connectivity, wait) = match &e {
-                    SyncError::Forbidden(_) => (Connectivity::Online, AUTH_WAIT),
                     SyncError::Fatal(_) => (Connectivity::Online, POLL_INTERVAL),
                     _ => {
-                        let retry_after = match &e {
-                            SyncError::RateLimited(after) => *after,
-                            _ => None,
+                        let (connectivity, retry_after) = match &e {
+                            SyncError::RateLimited(after) => {
+                                self.rate_limited = true;
+                                (Connectivity::Offline, *after)
+                            }
+                            SyncError::Offline(_) => (Connectivity::Offline, None),
+                            _ => (Connectivity::Online, None),
                         };
                         let jittered = self.backoff.next_delay_with((self.jitter)());
-                        let connectivity = match &e {
-                            SyncError::Offline(_) | SyncError::RateLimited(_) => {
-                                Connectivity::Offline
-                            }
-                            _ => Connectivity::Online,
-                        };
                         (connectivity, Backoff::at_least(jittered, retry_after))
                     }
                 };
@@ -194,6 +194,8 @@ impl SyncRunner {
                     let timeout = deadline.saturating_duration_since(Instant::now());
                     match rx.recv_timeout(timeout) {
                         Ok(Wake::Stop) | Err(RecvTimeoutError::Disconnected) => break,
+                        // Edits remain in SQLite and the scheduled cycle pulls from its cursor.
+                        Ok(_) if core.rate_limited && Instant::now() < deadline => continue,
                         Ok(Wake::Nudge(seq)) if !core.nudge_is_news(seq) => continue,
                         Ok(_) | Err(RecvTimeoutError::Timeout) => {}
                     }

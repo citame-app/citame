@@ -1,16 +1,19 @@
-import { type OAuthScope, parseScopes } from "@sob/contracts";
-import { type Database, oauthClient, oauthConsent } from "@sob/db";
-import { and, eq } from "drizzle-orm";
+import { isManagementScope, type OAuthScope, parseScopes } from "@sob/contracts";
+import { type Database, oauthClient } from "@sob/db";
+import { eq } from "drizzle-orm";
 import { createLocalJWKSet, type JSONWebKeySet, errors as joseErrors, jwtVerify } from "jose";
 import type { Auth } from "../auth/auth";
 import { loadPrincipal, type Principal } from "../auth/principal";
 import type { AppConfig } from "../config";
+import { currentOAuthGrant } from "../oauth/connections";
 
 /** What a request authenticated with a valid access token carries into the tools. */
 export interface McpIdentity {
   principal: Principal;
   scopes: OAuthScope[];
   clientId: string;
+  grantId?: string;
+  tokenId?: string;
 }
 
 /** Why a bearer token was refused. Maps to the RFC 6750 `error` parameter. */
@@ -50,6 +53,7 @@ export function createTokenVerifier(deps: {
   config: AppConfig;
   /** Minimum gap between key set refetches triggered by an unknown `kid`. */
   keyRefetchMs?: number;
+  audience?: string;
 }): TokenVerifier {
   const { auth, db, config, keyRefetchMs = DEFAULT_KEY_REFETCH_MS } = deps;
   const issuer = `${config.auth.baseURL.replace(/\/+$/, "")}/api/auth`;
@@ -71,10 +75,11 @@ export function createTokenVerifier(deps: {
   async function verifyJwt(token: string) {
     const options = {
       issuer,
-      audience: config.oauth.mcpResource,
+      audience: deps.audience ?? config.oauth.mcpResource,
       algorithms: ["ES256"],
       typ: "at+jwt",
       clockTolerance: 0,
+      requiredClaims: ["exp", "iat", "sub", "aud"],
     };
     try {
       return (await jwtVerify(token, await keys(false), options)).payload;
@@ -100,27 +105,30 @@ export function createTokenVerifier(deps: {
       }
       const userId = typeof payload.sub === "string" ? payload.sub : null;
       const clientId = typeof payload.azp === "string" ? payload.azp : null;
-      if (!userId || !clientId || typeof payload.scope !== "string") {
+      if (!userId || !clientId || payload.cnf || typeof payload.scope !== "string") {
         throw new BearerError("invalid_token", "The access token is invalid or expired");
       }
 
       const [client] = await db
-        .select({ disabled: oauthClient.disabled })
+        .select({ disabled: oauthClient.disabled, scopes: oauthClient.scopes })
         .from(oauthClient)
         .where(eq(oauthClient.clientId, clientId));
-      const [consent] = await db
-        .select({ id: oauthConsent.id })
-        .from(oauthConsent)
-        .where(and(eq(oauthConsent.clientId, clientId), eq(oauthConsent.userId, userId)))
-        .limit(1);
-      if (!client || client.disabled || !consent) {
+      const consent = await currentOAuthGrant(db, clientId, userId);
+      if (!client || client.disabled || !consent || payload.citame_grant !== consent.id) {
         throw new BearerError("invalid_token", "The access token is invalid or expired");
       }
       const principal = await loadPrincipal(db, userId);
       if (!principal)
         throw new BearerError("invalid_token", "The access token is invalid or expired");
 
-      return { principal, scopes: parseScopes(payload.scope), clientId };
+      const scopes = parseScopes(payload.scope).filter(
+        (scope) =>
+          consent.scopes.includes(scope) &&
+          (client.scopes?.includes(scope) ?? true) &&
+          (scope !== "billing:write" || principal.role === "owner") &&
+          (!isManagementScope(scope) || principal.role !== "client"),
+      );
+      return { principal, scopes, clientId, grantId: consent.id, tokenId: payload.jti };
     },
   };
 }

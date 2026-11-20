@@ -47,6 +47,8 @@ cd apps/web && bunx playwright install chromium
 E2E_OWNER_EMAIL=... E2E_OWNER_PASSWORD='correct horse battery staple' bun run e2e
 ```
 
+For checkout and finance changes, the README also documents [isolated E2E suites](README.md#end-to-end-tests) with seeded credentials.
+
 Load and contention tests ([k6/README.md](k6/README.md)): `bun run k6:contention` must end with exactly one 201 per slot and zero overlaps.
 
 Desktop (from `apps/desktop`):

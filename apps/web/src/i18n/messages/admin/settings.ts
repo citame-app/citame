@@ -1,8 +1,13 @@
 export const settingsEn = {
   "settings.title": "Settings",
   "settings.lead": "Salon-wide rules that shape what clients can book.",
+  "settings.search": "Search settings",
+  "settings.search.empty": "No settings match your search.",
   "settings.section.salon": "Salon",
   "settings.section.booking": "Online booking",
+  "settings.onlineBookingEnabled": "Accept new online bookings",
+  "settings.onlineBookingHint":
+    "When off, clients cannot make new bookings or join the waitlist online. Your team can still book from the calendar.",
   "settings.name": "Salon name",
   "settings.timezone": "Timezone",
   "settings.timezone.hint":
@@ -26,8 +31,13 @@ export const settingsEn = {
 export const settingsEsAR: Record<keyof typeof settingsEn, string> = {
   "settings.title": "Ajustes",
   "settings.lead": "Reglas generales del salón que definen qué pueden reservar los clientes.",
+  "settings.search": "Buscar en ajustes",
+  "settings.search.empty": "No hay ajustes que coincidan con la búsqueda.",
   "settings.section.salon": "Salón",
   "settings.section.booking": "Reservas en línea",
+  "settings.onlineBookingEnabled": "Aceptar nuevas reservas en línea",
+  "settings.onlineBookingHint":
+    "Al desactivarlo, los clientes no pueden reservar ni apuntarse a la lista de espera en línea. El equipo puede seguir reservando desde la agenda.",
   "settings.name": "Nombre del salón",
   "settings.timezone": "Zona horaria",
   "settings.timezone.hint":

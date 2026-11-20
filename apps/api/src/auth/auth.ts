@@ -1,5 +1,10 @@
 import { oauthProvider } from "@better-auth/oauth-provider";
-import { OAUTH_SCOPES } from "@sob/contracts";
+import {
+  DESKTOP_SIGN_IN_SCOPE,
+  MCP_MANAGEMENT_SCOPES,
+  MCP_SCOPES,
+  OAUTH_SCOPES,
+} from "@sob/contracts";
 import {
   account,
   clientProfile,
@@ -24,7 +29,10 @@ import { eq } from "drizzle-orm";
 import type { AppConfig } from "../config";
 import { localeFromRequest } from "../notifications/auth-emails";
 import type { EmailProvider } from "../notifications/providers/types";
+import { currentOAuthGrant } from "../oauth/connections";
+import { desktopResource } from "../oauth/desktop";
 import { type Logger, rootLogger } from "../observability/logger";
+import { desktopBrowserSession } from "./desktop-browser-session";
 import { type AuthMailer, createAuthMailer } from "./mailer";
 import { valkeySecondaryStorage } from "./secondary-storage";
 
@@ -163,6 +171,7 @@ export function createAuth({ db, valkey, config, emailProvider = null, logger }:
       },
     },
     plugins: [
+      desktopBrowserSession,
       // Signs the JWT access tokens (ES256). Keys live in the `jwks` table, private half encrypted.
       jwt({ jwks: { keyPairConfig: { alg: "ES256" } } }),
       oauthProvider({
@@ -175,17 +184,39 @@ export function createAuth({ db, valkey, config, emailProvider = null, logger }:
         accessTokenExpiresIn: config.oauth.accessTokenTtlSeconds,
         refreshTokenExpiresIn: config.oauth.refreshTokenTtlSeconds,
         // RFC 7591 for MCP clients, anonymous because they cannot hold credentials beforehand.
-        // Registered clients are public (PKCE) and get no capability beyond the catalogue.
+        // Public and confidential clients require PKCE and can request only known scopes.
         allowDynamicClientRegistration: true,
         allowUnauthenticatedClientRegistration: true,
+        clientRegistrationRequirePKCE: true,
         clientRegistrationDefaultApplicationType: "infer",
         clientRegistrationDefaultScopes: ["mcp:read", "mcp:book", "offline_access"],
-        clientRegistrationAllowedScopes: ["schedule:read"],
+        clientRegistrationAllowedScopes: ["schedule:read", ...MCP_MANAGEMENT_SCOPES],
         resources: [
           {
             identifier: config.oauth.mcpResource,
             name: "Sisters of Beauty MCP server",
-            allowedScopes: [...OAUTH_SCOPES],
+            allowedScopes: [...MCP_SCOPES],
+          },
+          {
+            identifier: desktopResource(config.auth.baseURL),
+            name: "Citame Desktop",
+            allowedScopes: [DESKTOP_SIGN_IN_SCOPE, "offline_access"],
+          },
+        ],
+        extensions: [
+          {
+            claims: {
+              accessToken: async ({ client, user, resources }) => {
+                if (!user) return {};
+                const desktop =
+                  client.clientId === "sob-desktop" &&
+                  resources?.includes(desktopResource(config.auth.baseURL));
+                if (!desktop && !resources?.includes(config.oauth.mcpResource)) return {};
+                if (desktop && resources?.length !== 1) return {};
+                const grant = await currentOAuthGrant(db, client.clientId, user.id);
+                return { citame_grant: grant?.id ?? null };
+              },
+            },
           },
         ],
         clientRegistrationDefaultResources: [config.oauth.mcpResource],
@@ -205,6 +236,7 @@ export function createAuth({ db, valkey, config, emailProvider = null, logger }:
     // Rate limiting is done by our own Valkey limiter in front of the router (src/rate-limit.ts).
     rateLimit: { enabled: false },
     advanced: {
+      cookiePrefix: config.auth.cookiePrefix,
       useSecureCookies: config.auth.secureCookies,
       // Explicit so the checks stay on under NODE_ENV=test (Better Auth disables them there).
       disableCSRFCheck: false,

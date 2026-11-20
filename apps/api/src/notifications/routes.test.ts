@@ -62,6 +62,8 @@ describe("GET/PATCH /me/notification-preferences", () => {
       locale: null,
       email: { transactional: true, reminder: true },
       sms: { transactional: false, reminder: false },
+      whatsapp: { transactional: false, reminder: false },
+      hasWhatsAppPhone: false,
       hasEmail: true,
       hasPhone: false,
     });

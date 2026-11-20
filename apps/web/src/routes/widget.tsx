@@ -13,6 +13,7 @@ export const Route = createFileRoute("/widget")({
     };
   },
   loader: async ({ context }) => {
+    if (context.salon.onlineBookingEnabled === false) return;
     await Promise.all([
       context.queryClient.prefetchQuery(servicesQuery),
       context.queryClient.prefetchQuery(staffQuery),
@@ -39,6 +40,7 @@ function Page() {
   return (
     <BookingWidget
       salonName={salon.name}
+      onlineBookingEnabled={salon.onlineBookingEnabled}
       initialSelection={{
         serviceIds: search.services?.split(",") ?? [],
         ...(search.staff ? { staffId: search.staff } : {}),

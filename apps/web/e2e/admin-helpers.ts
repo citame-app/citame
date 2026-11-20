@@ -5,10 +5,11 @@ import {
   type PlaywrightWorkerArgs,
   request as pwRequest,
 } from "@playwright/test";
+import { browserTarget } from "../test/browser-target";
 import { PASSWORD, signInThroughUi } from "./helpers";
 
-export const OWNER_EMAIL = process.env.E2E_OWNER_EMAIL ?? "owner@example.com";
-export const BASE_URL = process.env.E2E_BASE_URL ?? "http://localhost:4173";
+export const OWNER_EMAIL = browserTarget.ownerEmail;
+export const BASE_URL = browserTarget.baseURL;
 export const STYLIST_A = "0198f5a0-7b1c-7000-8000-000000000201";
 export const STYLIST_B = "0198f5a0-7b1c-7000-8000-000000000202";
 export const HAIRCUT = "0198f5a0-7b1c-7000-8000-000000000101";
@@ -25,7 +26,7 @@ export async function apiAs(email: string, password = PASSWORD): Promise<APIRequ
   return ctx;
 }
 
-export const asOwner = () => apiAs(OWNER_EMAIL);
+export const asOwner = () => apiAs(OWNER_EMAIL, browserTarget.password);
 
 /** `YYYY-MM-DD` of today in the salon timezone plus `days`. */
 export function salonDate(days = 0): string {
@@ -139,10 +140,15 @@ export async function ensureStaff(
   return { staffId };
 }
 
-export async function signInAs(page: Page, email: string, redirect = "/admin") {
-  await signInThroughUi(page, email, redirect);
+export async function signInAs(page: Page, email: string, redirect = "/admin/calendar") {
+  await signInThroughUi(
+    page,
+    email,
+    redirect,
+    email === OWNER_EMAIL ? browserTarget.password : PASSWORD,
+  );
   const path = redirect.split("?")[0] as string;
-  await page.waitForURL((url) => url.pathname === path);
+  await page.waitForURL((url) => url.pathname === (path === "/admin" ? "/admin/calendar" : path));
 }
 
 export type Playwright = PlaywrightWorkerArgs["playwright"];
@@ -152,6 +158,26 @@ export async function expectNoHorizontalScroll(page: Page) {
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
   );
+  if (overflow > 1)
+    console.error(
+      "Horizontal overflow",
+      page.url(),
+      await page.evaluate(() => ({
+        width: innerWidth,
+        elements: [...document.querySelectorAll("main *")]
+          .filter((el) => {
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.right > innerWidth + 1;
+          })
+          .slice(0, 12)
+          .map((el) => ({
+            tag: el.tagName,
+            class: el.getAttribute("class"),
+            width: el.getBoundingClientRect().width,
+            right: el.getBoundingClientRect().right,
+          })),
+      })),
+    );
   expect(overflow, "horizontal page scroll").toBeLessThanOrEqual(1);
 }
 

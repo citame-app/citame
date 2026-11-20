@@ -1,0 +1,563 @@
+GATE: OPEN 26 (rounds used up)
+
+Coherencia visual de /admin basada en /admin/calendar — 2026-11-17
+
+Resultado
+Implementado un sistema compartido para todo el panel: Hoy, calendario, clientes y detalle de cliente, servicios, equipo y detalle de profesional, ventas/caja, informes, lista de espera, reputación y ajustes. Se conserva la lógica, los permisos, las acciones y las protecciones existentes. Trabajo local; sin despliegue ni acceso o cambios a Booksy.
+
+Cambios
+La barra lateral de 64px, oscura, con inicial C y sección activa burdeos, es ahora la misma en todas las pantallas. La marca queda fuera de la navegación de secciones para evitar dos destinos activos en Hoy. Se conserva el nombre accesible de cada sección y el menú Más del móvil.
+Las cabeceras usan Nunito Sans, títulos de 28px (24px móvil), descripciones compactas, separación y superficies coherentes. Cuenta/preferencias y la campana mantienen su posición. El calendario conserva su cabecera con búsqueda y su escala temporal.
+Botones, pestañas, filtros, formularios, tablas, tarjetas móviles y gráficos comparten tipografía, radios y colores. Los botones mantienen objetivos de 44px. Los paneles en portales también heredan el sistema. Ajustes mantiene sus enlaces por fragmento y la protección de borradores.
+El detalle de cliente incorpora la cabecera de página que faltaba. Los metadatos identifican el panel como software, manteniendo noindex; el sitio público conserva su tipo place.
+La base se concentra en apps/web/src/styles/admin.css, con la navegación compartida en AdminShell; las reglas de navegación que estaban ligadas solo al calendario se han trasladado a la base común. No se añaden dependencias, fuentes, imágenes ni librerías de animación.
+
+Criterio visual y adaptación de la skill
+Tipo: software, panel operativo autenticado. La referencia y la identidad ya estaban elegidas por el usuario: calendario de Citame, burdeos #8f3c50, superficies blancas/marfil, Nunito Sans, navegación carbón y líneas finas. Se reutiliza esa referencia; no se genera otra paleta ni una maqueta nueva con imagegen en este cambio.
+Voz: español e inglés operativos existentes, sin afirmaciones comerciales nuevas. Se conservan textos y datos del dominio. No hay hechos de negocio asumidos, nueva marca acuñada, contactos ficticios añadidos al producto ni fotografías pendientes del cliente. Los datos de las capturas son los de la base sintética de pruebas.
+La instrucción del usuario de unificar /admin desde su calendario prevalece sobre recetas de landing page: no se incorporan hero, secciones comerciales, fotografías decorativas, escenas ni efectos WebGL. Se mantienen las transiciones de interacción y reduced-motion.
+
+Validación
+- Suite frontend: 780 aprobadas, 0 fallos (141 archivos).
+- Pruebas específicas del shell después del cambio de navegación: 6 aprobadas.
+- Recorrido de las diez secciones por sus enlaces reales, claro/oscuro, móvil/escritorio: 4 E2E aprobadas, 28,6 s; comprueba navegación activa única, tipografía, barra de 64px, ausencia de cabecera pública, cabecera sin cubrir el título, sin desbordamiento horizontal y borradores de ajustes. Anchos: 320, 390, 768, 820, 1024 y 1440px. Comprobaciones axe de cada sección en ambos temas.
+- Regresión del calendario: 9 E2E aprobadas, 1 omitida intencionadamente (arrastre táctil), 36,4 s. Incluye cuatro vistas, filtros, detalles, espera, bloqueos, ausencias, historial y archivo de notificaciones, SSE y recuperación tras desconexión, movimiento por arrastre/teclado y reversión por conflicto.
+- TypeScript, build y Biome: aprobados. git diff --check: aprobado.
+- Se detectó y corrigió el doble destino activo de la marca en la navegación de escritorio. Una pasada basada en recargas completas alcanzó el límite de reconexiones SSE de la fixture; se comprobó la causa y el recorrido final usa los enlaces SPA reales, sin relajar el límite de la aplicación.
+- La primera auditoría coincidió con una reconstrucción del bundle y vio un recurso antiguo 404. Se reinició el servidor con el build fijo y se repitió. El recorrido final y perf no registran recursos rotos.
+
+Revisión visual
+Se ejecutó shoot.mjs de la skill original, secuencialmente, en las diez secciones: Hoy/Clientes/Servicios/Caja/Reputación/Calendario a 1440px, Equipo a 820px, Informes a 1024px, Espera/Ajustes a 390px y Servicios también a 768px. Se inspeccionaron las capturas. Las capturas de página completa muestran la barra inferior solo en la primera pantalla; es la forma de ensamblado del script, no un cambio en su posición fija real.
+Los dos últimos ajustes de radio de los gráficos y metadatos no afectan a las capturas entregadas de Clientes, Caja y Ajustes; la captura inicial de Informes precede a ese refinamiento. Las pruebas E2E finales de todo el panel sí usan el build definitivo.
+No se ha ejecutado una nueva auditoría completa consistency de cinco tamaños por cada sección; el gate usa su pasada rápida a 1440/390 y el recorrido a 320. Su bloque layout se ejecutó en las pasadas del gate, sin hallazgos adicionales propios en el informe final. La cobertura de las otras anchuras corresponde a E2E y a las capturas indicadas. No se declara una certificación visual exhaustiva de cada estado posible de todas las herramientas administrativas.
+
+Rendimiento local de /admin/services
+Medición con perf.mjs, tres cargas por tamaño, 1440 y 390px. 2 FAIL (JavaScript) y 2 WARN (CSS), sin presupuestos ocultados:
+- JavaScript analizado: 1104,5 KiB; supera el presupuesto de 900 KiB. Sigue pendiente reducir el bundle inicial.
+- CSS: 120,5 KiB; supera ligeramente el nivel WARN de 120 KiB, por debajo del FAIL de 250 KiB.
+- Transferencia total aproximada: 1375 KiB; PASS. El adaptador de autenticación solicita identity, por lo que no representa transferencia comprimida real de producción.
+- Bloqueo mediano: 8ms escritorio / 2ms móvil. FCP y LCP medianos: 56ms / 52ms. CLS: 0,010 / 0,000. Cero solicitudes rotas, cero imágenes y cero WebGL; una familia de fuente en uso. Carga CPU 8/3%.
+Son mediciones locales, sin throttling; no se extrapolan a rendimiento de campo ni se declara aprobado todo el presupuesto.
+
+Auditoría de diseño
+Round 1: Servicios, 20 FAIL, con el recurso obsoleto ya descrito.
+Round 2: Servicios con build definitivo, 20 FAIL. Ya no figura el problema de recurso ni el de foco en la marca.
+Round 3: Ajustes con build definitivo, 26 FAIL, GATE: OPEN. Se conservan todos los hallazgos abajo. Los contrastes de texto atenuado 6,39:1 y 6,77:1 cumplen AA normal pero no el umbral 7:1 de la skill; este criterio más estricto permanece abierto. Las reglas de hero, imágenes, cantidad de acciones y una sección por pantalla están pensadas para una página comercial y se documentan sin convertir el panel en esa estructura.
+No se han editado scripts ni recursos de la skill, ocultado contenido al checker ni añadido excepciones globales. El acceso de lectura se realizó mediante un adaptador autenticado GET/HEAD en loopback que reenvía la aplicación sin reescribir el DOM.
+La skill .agents/skills/design-taste-frontend/SKILL.md, paso 6, indica al agotar rondas: “Stop fixing: put these open FAILs and the waivers in your report, then finish.” Se cumple esa salida documentando el resultado abierto; no se presenta GATE: PASS.
+
+Excepciones
+- WAIVED moment-none — (the page): La petición exige unificar un panel de gestión operativo a partir del calendario y conservar sus funciones. Una escena animada o sección comercial desplazaría los datos y controles de trabajo; se mantienen las transiciones de interacción.
+
+Servicios — ronda 2, todos los FAIL abiertos de esa revisión
+
+1. hero-fill | anchos [1440]
+   Dónde: main#main > div.admin-shell.w-full > div.admin-workspace.min-w-0 "Servicios"
+   Hallazgo: the next section shows on the first screen: it starts at 112px on a 900px screen (the hero ends at 1407px)
+   Propuesta del checker: let the hero fill the first screen alone (min-height: 100svh, less above it): nothing of the next section on load
+
+2. no-visual | anchos [1440, 390]
+   Dónde: main#main > div.admin-shell.w-full > div.admin-workspace.min-w-0 "Servicios"
+   Hallazgo: no picture, effect or mock in this section; a feature section needs a visual
+   Propuesta del checker: give the section a visual: a UI fragment on a ground, real icons, or a photograph that fits
+
+3. button-styles | anchos [1440]
+   Dónde: (one screen)
+   Hallazgo: 3 button styles on one screen: soft, fill #ffffff, outline #e6dfd8 ("Combinaciones de tratamientos"); soft, fill #8f3c50 ("Servicios"); square, fill #222326 ("C"); the odd one out: "C"
+   Propuesta del checker: one primary and one secondary button: one shape, one height per size, one label size
+
+4. button-styles | anchos [1440]
+   Dónde: (the page)
+   Hallazgo: 3 button styles on the page: square, fill #222326 x1 ("C"); soft, fill #8f3c50 x3 ("Servicios"); soft, fill #ffffff, outline #e6dfd8 x4 ("Combinaciones de tratamientos")
+   Propuesta del checker: one primary and one secondary button: one shape, one height per size, one label size
+
+5. cta | anchos [1440]
+   Dónde: main#main > div.admin-shell.w-full > aside.admin-sidebar.hidden
+   Hallazgo: the hero has no button (the nav's does not count)
+   Propuesta del checker: add the action: a button in the hero, one on every priced item, one in the closing section
+
+6. copy-headline | anchos [1440]
+   Dónde: div.admin-workspace.min-w-0 > div.view-services > header.page-heading.mb-8 > h1.text-title "Servicios"
+   Hallazgo: "Servicios" does not name what is sold (gestion del centro estetico, gestion, del, centro, from flags)
+   Propuesta del checker: put the category noun in the h1 (and who it is for, or where), in 2 to 8 words
+
+7. text-contrast | anchos [1440, 390]
+   Dónde: section#treatment-combinations > p.max-w-prose.text-muted "Prepara selecciones ordenadas de tratami"
+   Hallazgo: body text in #65585c on #fbf8f5 reads 6.39:1 (needs 7:1); 2 like it, like "Libera al profesional "
+   Propuesta del checker: body text in the ink at 7:1 or more; grey (4.5:1 or more) only for captions and labels
+
+8. action-repeat | anchos [1440]
+   Dónde: tbody > tr.border-t.border-line:nth-of-type(1) > td.px-4.align-middle:nth-of-type(7) > button.btn.inline-flex "desactivar"
+   Hallazgo: "desactivar" shows 6 times on the first screen at 1440px (hero, hero, hero, hero, hero, hero): three copies of one action on a screen read as clutter
+   Propuesta del checker: show the action once a screen besides the nav's button: the hero's, the close's or the phone bar's, never all at once
+
+9. hero-screen | anchos [1440]
+   Dónde: main#main > div.admin-shell.w-full "CSecciones del panelHoyAgendaLista de es"
+   Hallazgo: the hero ends at 1407px on a 900px screen, 507px below the fold: it ends at the fold, 1px either way (SR-1)
+   Propuesta del checker: make the hero exactly one screen (height: 100svh, its content fitted inside), never taller or shorter
+
+10. one-section | anchos [1440]
+   Dónde: main#main > div.admin-shell.w-full "CSecciones del panelHoyAgendaLista de es"
+   Hallazgo: a <div> sits directly in <main>: every part of <main> is a <section> (SR-4)
+   Propuesta del checker: put every block of <main> in a <section>, and give a band its own section instead of a ground inside one
+
+11. one-heading | anchos [1440]
+   Dónde: section#treatment-combinations > h2.text-heading "Combinaciones de tratamientos"
+   Hallazgo: the hero holds an h2 (2): its heading is the h1, and an h2 opens the next section (SR-5)
+   Propuesta del checker: give each section one h2, first in its .wrap, and the hero only its h1
+
+12. container-edges | anchos [1440]
+   Dónde: main#main > div.admin-shell.w-full "CSecciones del panelHoyAgendaLista de es"
+   Hallazgo: the content of section 1 runs 0px from the left and 0px from the right (read from its outermost blocks: no .wrap): the margin is 64-120px at 1440px (one container, equal margins, 2px either way) (SR-6)
+   Propuesta del checker: use one container on every section and the nav (.wrap): one margin left and right, 64-120px on a desktop, 16-24px on a phone
+
+13. container-edges | anchos [1440]
+   Dónde: a.sr-only.rounded-md "Saltar al contenido principal"
+   Hallazgo: a <a> at the top of the page, outside header.nav, main, footer.closing and nav.actionbar (SR-6)
+   Propuesta del checker: build the page as header.nav, a main of sections (each one in-flow .wrap plus background layers) and footer.closing
+
+14. container-edges | anchos [1440]
+   Dónde: div.admin-account-tools
+   Hallazgo: a <div> at the top of the page, outside header.nav, main, footer.closing and nav.actionbar (SR-6)
+   Propuesta del checker: build the page as header.nav, a main of sections (each one in-flow .wrap plus background layers) and footer.closing
+
+15. container-edges | anchos [1440]
+   Dónde: section#treatment-combinations > h2.text-heading "Combinaciones de tratamientos"
+   Hallazgo: 6 text blocks start on a left line at x 84, 84px from the container's left: text starts on the container's left, or on one split line (x 610, 732, 854) (also "Prepara selecciones ordenadas de", "Todavía no hay combinaciones. Cr", "Tiempo de exposición") (SR-6)
+   Propuesta del checker: start the text on the container's left, or on the one split line every split shares
+
+16. container-edges | anchos [1440]
+   Dónde: div.admin-shell.w-full > div.admin-workspace.min-w-0 > div.view-services > div.mb-6.flex "Combinaciones de tratamientosTiempo de e"
+   Hallazgo: a box over half the container wide runs 84-1420px, not on the container's lines at 0-1440px (SR-6)
+   Propuesta del checker: run the picture or box from the container's left line to its right line, or put it in a row or a split
+
+17. container-edges | anchos [1440]
+   Dónde: div.view-services > div.space-y-4 > div.space-y-3 > div.hidden.overflow-x-auto "ServicioDuraciónMargenPrecioEquipoEstado"
+   Hallazgo: a box over half the container wide runs 84-1420px, not on the container's lines at 0-1440px (and 3 more like it: "Combinaciones de tratami", "Tiempo de exposiciónLibe", "ServiciosEl catálogo des") (SR-6)
+   Propuesta del checker: run the picture or box from the container's left line to its right line, or put it in a row or a split
+
+18. card-visual | anchos [390]
+   Dónde: div.view-services > div.space-y-4 > div.space-y-3 > ul.space-y-2 "Blow dry Duración 30min Margen 0min Prec"
+   Hallazgo: 6 cards hold only text: no picture, icon, UI fragment or effect in any of them
+   Propuesta del checker: give the cards a visual: an inset panel with a UI fragment, a photograph or real icons
+
+19. copy-actions | anchos [390]
+   Dónde: div.admin-workspace.min-w-0 > div.view-services > div.space-y-4 > button.btn.inline-flex "Cabinas y equipos"
+   Hallazgo: 6 actions in the hero ("Combinaciones de tratamientos", "Tiempo de exposición", "Cabinas y equipos", "Columnas", "Nuevo servicio", "Nueva combinación"); at most 2
+   Propuesta del checker: few actions, one wording: at most 2 in the hero, the main action word for word in nav, hero and close
+
+20. container | anchos [1440, 390]
+   Dónde: page
+   Hallazgo: no .wrap
+   Propuesta del checker: put the content in one .wrap
+
+WARN conservados de esta revisión (no bloqueantes):
+[
+  {
+    "check": "copy-headline",
+    "where": "div.admin-workspace.min-w-0 > div.view-services > header.page-heading.mb-8 > h1.text-title \"Servicios\"",
+    "msg": "the h1 has 1 word (2 to 8 read at a glance)",
+    "fix": "put the category noun in the h1 (and who it is for, or where), in 2 to 8 words",
+    "widths": [
+      1440
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "copy-buttons",
+    "where": "div.admin-shell.w-full > aside.admin-sidebar.hidden > nav.sticky.top-16 > a.flex.min-h-11:nth-of-type(6) \"Servicios\"",
+    "msg": "\"Servicios\" does not start with a verb (book, buy, try, start, get, see...) (and 2 more like it: \"Tiempo de exposición\", \"Nuevo servicio\")",
+    "fix": "label buttons with a verb and what the visitor gets (\"Book a room\", \"Start free trial\")",
+    "widths": [
+      1440
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "copy-actions",
+    "where": "(the page)",
+    "msg": "the main action \"Nuevo servicio\" does not read word for word the same in the nav or hero",
+    "fix": "few actions, one wording: at most 2 in the hero, the main action word for word in nav, hero and close",
+    "widths": [
+      1440
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "heading-scale",
+    "where": "(the page)",
+    "msg": "the page has no visible h1",
+    "fix": "size headings by level: the h1 largest, one size per level, each level below the one above",
+    "widths": [
+      1440,
+      390
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "section-gaps",
+    "where": "main#main > div.admin-shell.w-full > aside.admin-sidebar.hidden / main#main > div.admin-shell.w-full > div.admin-workspace.min-w-0",
+    "msg": "the sections overlap by 472px",
+    "fix": "use one gap between sections (all within 25% of each other)",
+    "widths": [
+      1440
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "hole",
+    "where": "main#main > div.admin-shell.w-full > div.admin-workspace.min-w-0 \"Servicios\"",
+    "msg": "an empty hole 966x252px inside the section (28% of the screen's height), with content above and below it",
+    "fix": "close the empty space: move the content together, or give the space the visual it lacks",
+    "widths": [
+      1440
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "copy-length",
+    "where": "main#main > div.admin-shell.w-full > div.admin-workspace.min-w-0 \"Servicios\"",
+    "msg": "1 section over 90 words a screen outside the UI mocks (\"Servicios\" 112); 56 words a screen across the page (179 words in 3.2 screens): a tech page says it in about 80 or fewer",
+    "fix": "cut every section to its heading, one line and the product UI: the UI says the rest; no second paragraph, no list of feature sentences",
+    "widths": [
+      1440
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "share-meta",
+    "where": "head",
+    "msg": "the head lacks og:image: a shared link shows no picture or title of its own",
+    "fix": "copy the head block of starter.html: og tags, twitter:card, the icon and theme-color (references/system.md, Head)",
+    "widths": [
+      1440
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "section-height",
+    "where": "main#main",
+    "msg": "the page is 1.6 screens long (1407px on a 900px screen): a place page runs 3 to 6 screens (over 7 FAIL) (SR-2)",
+    "fix": "keep a place page at 3 to 6 screens: merge a short block into the section above, or cut a section",
+    "widths": [
+      1440
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "fold-action",
+    "where": "section#treatment-combinations > button.btn.inline-flex",
+    "msg": "the hero's second button \"Nueva combinación\" starts 1305px below the first screen (844px tall): it is not seen on load",
+    "fix": "bring the hero's buttons onto the first screen: a shorter headline or line, the picture under the buttons",
+    "widths": [
+      390
+    ],
+    "from": "consistency"
+  }
+]
+
+Ajustes — ronda 3, todos los FAIL abiertos del gate final
+
+1. flush | anchos [1440, 390]
+   Dónde: div#booking-policy > form.max-w-2xl.space-y-4 "Señales y cancelación de reservas Cada r"
+   Hallazgo: its first line sits 0px under the top edge of div#booking-policy, where the ground changes
+   Propuesta del checker: give the section its padding at the edge where the ground changes (the closing call keeps a clear gap above the footer)
+
+2. nav | anchos [1440, 390]
+   Dónde: (the first screen)
+   Hallazgo: no nav bar across the top of the first screen (a header with the brand, the section links and the main action)
+   Propuesta del checker: make the nav one bar from the content's left edge to its right edge, with every link and action inside it
+
+3. no-visual | anchos [1440, 390]
+   Dónde: div#salon-settings "Salón"
+   Hallazgo: no picture, effect or mock in this section; a feature section needs a visual
+   Propuesta del checker: give the section a visual: a UI fragment on a ground, real icons, or a photograph that fits
+
+4. no-visual | anchos [1440, 390]
+   Dónde: div#booking-policy "Señales y cancelación de reservas"
+   Hallazgo: no picture, effect or mock in this section; a feature section needs a visual
+   Propuesta del checker: give the section a visual: a UI fragment on a ground, real icons, or a photograph that fits
+
+5. text-only | anchos [1440, 390]
+   Dónde: div#intake-settings > section.max-w-3xl.space-y-5 "Formularios y consentimientos"
+   Hallazgo: the closing section is only text: no picture, icon, mock or effect in it
+   Propuesta del checker: give the section a visual: a photograph that fits, the real icons, or a UI fragment on a ground
+
+6. button-styles | anchos [1440]
+   Dónde: (one screen)
+   Hallazgo: 3 button styles on one screen: soft, fill #ffffff, outline #e6dfd8 ("Ajustes"); soft, fill #8f3c50 ("Ajustes"); square, fill #222326 ("C"); the odd one out: "C"
+   Propuesta del checker: one primary and one secondary button: one shape, one height per size, one label size
+
+7. button-styles | anchos [1440]
+   Dónde: (the page)
+   Hallazgo: 3 button styles on the page: square, fill #222326 x1 ("C"); soft, fill #8f3c50 x3 ("Ajustes"); soft, fill #ffffff, outline #e6dfd8 x5 ("Ajustes")
+   Propuesta del checker: one primary and one secondary button: one shape, one height per size, one label size
+
+8. cta | anchos [1440]
+   Dónde: main#main > div.admin-shell.w-full > aside.admin-sidebar.hidden
+   Hallazgo: the hero has no button (the nav's does not count)
+   Propuesta del checker: add the action: a button in the hero, one on every priced item, one in the closing section
+
+9. copy-headline | anchos [1440]
+   Dónde: div.admin-shell.w-full > div.admin-workspace.min-w-0 > header.page-heading.mb-8 > h1.text-title "Ajustes"
+   Hallazgo: "Ajustes" does not name what is sold (gestion del centro estetico, gestion, del, centro, from flags); only the line under it does
+   Propuesta del checker: put the category noun in the h1 (and who it is for, or where), in 2 to 8 words
+
+10. copy-headings | anchos [1440]
+   Dónde: h2#settings-salon "Salón"
+   Hallazgo: "Salón" names no product, part, place or section (3 headings like it; at most one brand line per page) (and 2 more like it: "Reservas en línea", "Recordatorios")
+   Propuesta del checker: name the thing in every heading: the product, a part, the place or a section noun
+
+11. text-contrast | anchos [1440, 390]
+   Dónde: form.settings-editor.max-w-2xl > section.space-y-4:nth-of-type(1) > div:nth-of-type(2) > p.text-sm.text-muted "Todos los horarios de la aplicación se m"
+   Hallazgo: body text in #65585c on #ffffff reads 6.77:1 (needs 7:1); 5 like it, like "Los clientes no pueden", "Cuándo se envían los r", "Por defecto 1440 (24 h"
+   Propuesta del checker: body text in the ink at 7:1 or more; grey (4.5:1 or more) only for captions and labels
+
+12. text-contrast | anchos [1440, 390]
+   Dónde: div#intake-settings > section.max-w-3xl.space-y-5 > p.text-muted:nth-of-type(1) "Empieza con textos propios aprobados. No"
+   Hallazgo: body text in #65585c on #fbf8f5 reads 6.39:1 (needs 7:1); 2 like it, like "No hay formularios cre"
+   Propuesta del checker: body text in the ink at 7:1 or more; grey (4.5:1 or more) only for captions and labels
+
+13. hero-screen | anchos [1440]
+   Dónde: main#main > div.admin-shell.w-full "CSecciones del panelHoyAgendaLista de es"
+   Hallazgo: the hero ends at 1753px on a 900px screen, 853px below the fold: it ends at the fold, 1px either way (SR-1)
+   Propuesta del checker: make the hero exactly one screen (height: 100svh, its content fitted inside), never taller or shorter
+
+14. one-section | anchos [1440]
+   Dónde: main#main > div.admin-shell.w-full "CSecciones del panelHoyAgendaLista de es"
+   Hallazgo: a <div> sits directly in <main>: every part of <main> is a <section> (SR-4)
+   Propuesta del checker: put every block of <main> in a <section>, and give a band its own section instead of a ground inside one
+
+15. one-heading | anchos [1440]
+   Dónde: h2#settings-salon "Salón"
+   Hallazgo: the hero holds an h2 (5): its heading is the h1, and an h2 opens the next section (SR-5)
+   Propuesta del checker: give each section one h2, first in its .wrap, and the hero only its h1
+
+16. container-edges | anchos [1440]
+   Dónde: main#main > div.admin-shell.w-full "CSecciones del panelHoyAgendaLista de es"
+   Hallazgo: the content of section 1 runs 0px from the left and 0px from the right (read from its outermost blocks: no .wrap): the margin is 64-120px at 1440px (one container, equal margins, 2px either way) (SR-6)
+   Propuesta del checker: use one container on every section and the nav (.wrap): one margin left and right, 64-120px on a desktop, 16-24px on a phone
+
+17. container-edges | anchos [1440]
+   Dónde: a.sr-only.rounded-md "Saltar al contenido principal"
+   Hallazgo: a <a> at the top of the page, outside header.nav, main, footer.closing and nav.actionbar (SR-6)
+   Propuesta del checker: build the page as header.nav, a main of sections (each one in-flow .wrap plus background layers) and footer.closing
+
+18. container-edges | anchos [1440]
+   Dónde: div.admin-account-tools
+   Hallazgo: a <div> at the top of the page, outside header.nav, main, footer.closing and nav.actionbar (SR-6)
+   Propuesta del checker: build the page as header.nav, a main of sections (each one in-flow .wrap plus background layers) and footer.closing
+
+19. container-edges | anchos [1440]
+   Dónde: h2#settings-reminders "Recordatorios"
+   Hallazgo: the h2 starts 1009px right of the container's left: every h1 and h2 starts on it, 2px either way (SR-6)
+   Propuesta del checker: start the text on the container's left, or on the one split line every split shares
+
+20. container-edges | anchos [1440]
+   Dónde: h2#settings-booking "Reservas en línea"
+   Hallazgo: the h2 starts 557px right of the container's left: every h1 and h2 starts on it, 2px either way (and 5 more like it: "Salón", "Señales y cancelación de", x 84) (SR-6)
+   Propuesta del checker: start the text on the container's left, or on the one split line every split shares
+
+21. container-edges | anchos [1440]
+   Dónde: div#intake-settings > section.max-w-3xl.space-y-5 "Formularios y consentimientosEmpieza con"
+   Hallazgo: a box over half the container wide runs 84-852px, not on the container's lines at 0-1440px (SR-6)
+   Propuesta del checker: run the picture or box from the container's left line to its right line, or put it in a row or a split
+
+22. row-lines | anchos [1440]
+   Dónde: div#booking-policy > form.max-w-2xl.space-y-4 > div.grid.gap-4 "Señal (% o EUR)Plazo para pagar (minutos"
+   Hallazgo: a row of 2 items: its first item starts at 105px, the container's left line at 0px; its last item ends at 735px, the container's right line at 1440px (2px either way) (SR-7)
+   Propuesta del checker: start the row's first item on the container's left line and end its last on the right line, every item one height
+
+23. row-lines | anchos [1440]
+   Dónde: div#salon-settings > form.settings-editor.max-w-2xl "SalónNombre del salónZona horariaAfrica/"
+   Hallazgo: a row of 3 items: its first item starts at 84px, the container's left line at 0px; its last item ends at 1420px, the container's right line at 1440px; its items are 307/447/409px tall, not one height (2px either way) (SR-7)
+   Propuesta del checker: start the row's first item on the container's left line and end its last on the right line, every item one height
+
+24. hero-fill | anchos [390]
+   Dónde: div#salon-settings "Salón"
+   Hallazgo: the next section shows on the first screen: it starts at 240px on a 844px screen (the hero ends at 104px)
+   Propuesta del checker: let the hero fill the first screen alone (min-height: 100svh, less above it): nothing of the next section on load
+
+25. cta | anchos [390]
+   Dónde: main#main > div.admin-shell.w-full > div.admin-workspace.min-w-0 > header.page-heading.mb-8
+   Hallazgo: the hero has no button (the nav's does not count)
+   Propuesta del checker: add the action: a button in the hero, one on every priced item, one in the closing section
+
+26. container | anchos [1440, 390]
+   Dónde: page
+   Hallazgo: no .wrap
+   Propuesta del checker: put the content in one .wrap
+
+WARN conservados de esta revisión (no bloqueantes):
+[
+  {
+    "check": "same-action",
+    "where": "div.admin-shell.w-full > aside.admin-sidebar.hidden > nav.sticky.top-16 > a.flex.min-h-11:nth-of-type(10) \"Ajustes\"",
+    "msg": "\"Ajustes\" appears 2 times in different looks: soft, fill #8f3c50 and soft, fill #ffffff, outline #e6dfd8 (inside a held section or scroll scene, whose motion --quick does not check)",
+    "fix": "draw one action the same way everywhere (only the nav copy may be one size smaller)",
+    "widths": [
+      1440
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "copy-headline",
+    "where": "div.admin-shell.w-full > div.admin-workspace.min-w-0 > header.page-heading.mb-8 > h1.text-title \"Ajustes\"",
+    "msg": "the h1 has 1 word (2 to 8 read at a glance)",
+    "fix": "put the category noun in the h1 (and who it is for, or where), in 2 to 8 words",
+    "widths": [
+      1440
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "copy-buttons",
+    "where": "div.admin-shell.w-full > aside.admin-sidebar.hidden > nav.sticky.top-16 > a.flex.min-h-11:nth-of-type(10) \"Ajustes\"",
+    "msg": "\"Ajustes\" does not start with a verb (book, buy, try, start, get, see...) (and 4 more like it: \"Guardar ajustes\", \"Guardar política de rese\", \"Recargar política actual\", \"Nuevo formulario\")",
+    "fix": "label buttons with a verb and what the visitor gets (\"Book a room\", \"Start free trial\")",
+    "widths": [
+      1440
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "copy-actions",
+    "where": "(the page)",
+    "msg": "the main action \"Guardar ajustes\" does not read word for word the same in the nav or hero and the closing section",
+    "fix": "few actions, one wording: at most 2 in the hero, the main action word for word in nav, hero and close",
+    "widths": [
+      1440
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "heading-scale",
+    "where": "(the page)",
+    "msg": "the page has no visible h1",
+    "fix": "size headings by level: the h1 largest, one size per level, each level below the one above",
+    "widths": [
+      1440,
+      390
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "body-size",
+    "where": "form.settings-editor.max-w-2xl > section.space-y-4:nth-of-type(1) > div:nth-of-type(2) > p.text-sm.text-muted \"Todos los horarios de la aplicación se m\"",
+    "msg": "7 of 7 paragraphs of running text are set under 16px (14px)",
+    "fix": "set running text at 16px or more",
+    "widths": [
+      1440,
+      390
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "section-gaps",
+    "where": "div#salon-settings / div#booking-policy",
+    "msg": "32px between these sections, -33% against the median 48px",
+    "fix": "use one gap between sections (all within 25% of each other)",
+    "widths": [
+      1440,
+      390
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "section-gaps",
+    "where": "div#booking-policy / div#intake-settings > section.max-w-3xl.space-y-5",
+    "msg": "64px between these sections, +33% against the median 48px",
+    "fix": "use one gap between sections (all within 25% of each other)",
+    "widths": [
+      1440,
+      390
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "nav-family",
+    "where": "div.admin-account-tools",
+    "msg": "the nav changes form as the page scrolls: nav.section-index gives way to div.admin-account-tools",
+    "fix": "keep one nav on every screen: the same bar, fill, links and type",
+    "widths": [
+      1440
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "copy-length",
+    "where": "div#salon-settings \"Salón\"",
+    "msg": "1 section over 90 words a screen outside the UI mocks (\"Salón\" 135); 45 words a screen across the page (265 words in 5.9 screens): a tech page says it in about 80 or fewer",
+    "fix": "cut every section to its heading, one line and the product UI: the UI says the rest; no second paragraph, no list of feature sentences",
+    "widths": [
+      1440
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "one-screen",
+    "where": "div#salon-settings \"Salón\"",
+    "msg": "2 sections are shorter than the screen, so the next one's heading or picture shows with them: \"Salón\" is 543px of the 808px under the nav, and \"Señales y cancelación de reser\" shows below it (\"Señales y cancelació\")",
+    "fix": "give each section the screen (min-height: 100svh less the nav, its content centred), or join two short ones into one",
+    "widths": [
+      1440
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "share-meta",
+    "where": "head",
+    "msg": "the head lacks og:image: a shared link shows no picture or title of its own",
+    "fix": "copy the head block of starter.html: og tags, twitter:card, the icon and theme-color (references/system.md, Head)",
+    "widths": [
+      1440
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "form-fields",
+    "where": "div#salon-settings > form.settings-editor.max-w-2xl",
+    "msg": "the submit button is disabled before anything is typed: it says nothing about what is missing",
+    "fix": "give each field its type, autocomplete and inputmode, never block paste or disable the button before a submit, and add the status line (references/system.md, Forms)",
+    "widths": [
+      1440
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "form-fields",
+    "where": "div#booking-policy > form.max-w-2xl.space-y-4",
+    "msg": "the submit button is disabled before anything is typed: it says nothing about what is missing",
+    "fix": "give each field its type, autocomplete and inputmode, never block paste or disable the button before a submit, and add the status line (references/system.md, Forms)",
+    "widths": [
+      1440
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "section-height",
+    "where": "main#main",
+    "msg": "the page is 1.9 screens long (1753px on a 900px screen): a place page runs 3 to 6 screens (over 7 FAIL) (SR-2)",
+    "fix": "keep a place page at 3 to 6 screens: merge a short block into the section above, or cut a section",
+    "widths": [
+      1440
+    ],
+    "from": "consistency"
+  },
+  {
+    "check": "container-edges",
+    "where": "main#main > div.admin-shell.w-full > div.admin-workspace.min-w-0 > header.page-heading.mb-8 \"AjustesReglas generales del salón que de\"",
+    "msg": "a box over half the container wide runs 64-1440px, not on the container's lines at 0-1440px (it sits in a part held on screen as the page scrolls: told as a WARN) (SR-6)",
+    "fix": "run the picture or box from the container's left line to its right line, or put it in a row or a split",
+    "widths": [
+      1440
+    ],
+    "from": "consistency"
+  }
+]
+
+Capturas entregadas
+- docs/design/admin-clients.png
+- docs/design/admin-commerce.png
+- docs/design/admin-settings-mobile.png
+El resto de capturas y los resultados JSON locales están en .taste-skill/admin-coherence/.

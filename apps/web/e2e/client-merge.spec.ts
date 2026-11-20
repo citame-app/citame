@@ -1,7 +1,7 @@
 import { expect, request, test } from "@playwright/test";
 import { RECURRING_FIXTURE as fixture } from "../../api/test/recurring-values";
 import { at, expectNoHorizontalScroll, nextWeekday, STYLIST_A } from "./admin-helpers";
-import { expectNoSeriousA11yViolations, signInThroughUi } from "./helpers";
+import { expectNoSeriousA11yViolations, signInThroughUi, switchLocale } from "./helpers";
 
 for (const scheme of ["light", "dark"] as const)
   test.describe(`client identity links — ${scheme}`, () => {
@@ -167,7 +167,7 @@ for (const scheme of ["light", "dark"] as const)
           page.getByRole("link", { name: "Open surviving profile", exact: true }),
         ).toBeVisible();
         await expect(page.getByLabel("Full name", { exact: true })).toBeDisabled();
-        await page.getByRole("radio", { name: "Español", exact: true }).check({ force: true });
+        await switchLocale(page, "Español");
         await expect(
           page.getByRole("link", { name: "Abrir ficha conservada", exact: true }),
         ).toBeVisible();

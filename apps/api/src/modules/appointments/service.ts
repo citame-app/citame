@@ -57,7 +57,7 @@ import { applyBookingPromotion } from "../rewards/booking";
 import { assertPromotionReschedule } from "../rewards/timing";
 import { releaseUnfulfilledAppointmentRewards } from "../rewards/value";
 import { getBookableServices } from "../services/service";
-import { getSalonSettings } from "../settings/service";
+import { assertOnlineBookingEnabled, getSalonSettings } from "../settings/service";
 import { loadDatedHours } from "../staff/date-hours";
 import { assertStaffActive } from "../staff/guards";
 import { assertStaffExists } from "../staff/service";
@@ -72,6 +72,7 @@ const MS_PER_MINUTE = 60_000;
 /** The authenticated caller on whose behalf a write happens; recorded in the audit log. */
 export interface Actor {
   userId: string;
+  role?: "owner" | "staff" | "client";
   /** Set when the change came through a delegated channel (an MCP client acting for the user). */
   via?: { channel: string; clientId: string };
 }
@@ -86,6 +87,7 @@ export function toAppointment(
 ): Appointment {
   return {
     ...(series ? { series } : {}),
+    ...(row.visitGroupId ? { visitGroupId: row.visitGroupId } : {}),
     id: row.id,
     staffId: row.staffId,
     clientId: row.clientId,
@@ -110,7 +112,10 @@ export function toAppointment(
               },
             }
           : {}),
-        priceCents: s.priceCents,
+        priceCents: s.reviewedPriceCents ?? s.priceCents,
+        ...(s.sourceUnpriced && s.reviewedPriceCents === null
+          ? { sourceUnpriced: true as const }
+          : {}),
         currency: s.currency,
       })),
     createdAt: row.createdAt.toISOString(),
@@ -195,7 +200,8 @@ export async function createAppointment(
     return await db.transaction(async (tx) => {
       await lockScheduling(tx);
       await lockCalendars(tx, [request.staffId]);
-      const settings = await getSalonSettings(tx);
+      const settings = await getSalonSettings(tx, actor?.role === "client" ? "share" : undefined);
+      assertOnlineBookingEnabled(settings, actor?.role);
       const services = await getBookableServices(tx, request.serviceIds, request.serviceQuotes);
       const endsAt = new Date(startsAt.getTime() + totalBlockMinutes(services) * MS_PER_MINUTE);
       await assertStaffPerforms(
@@ -232,6 +238,8 @@ export async function createAppointment(
           startsAt,
           endsAt,
           notes: request.notes,
+          requestedStaffId: request.professionalPreference === "specific" ? request.staffId : null,
+          customerComment: actor?.role === "client" ? request.notes?.trim() || null : null,
           ...(request.promotion ? { createdAt: now } : {}),
           ...(services.some((s) => s.processing)
             ? { workWindows: sql`${JSON.stringify(serviceWorkWindows(services))}::jsonb` }
@@ -312,8 +320,8 @@ const VIOLATION_MESSAGES: Record<BookingViolation, (minNotice: number, maxDays: 
   };
 
 /**
- * Enforces working hours, time off and the notice window for a new booking. The exclusion
- * constraint remains the source of truth for overlaps; these are the rules it cannot express.
+ * Checks capacity, working hours, time off and notice. Callers planning a write hold the
+ * scheduling lock and release expired reservations. The preview only reads occupancy.
  * Returns whether `override` actually bypassed the min-notice rule.
  */
 export async function assertBookable(
@@ -327,11 +335,12 @@ export async function assertBookable(
     settings: Awaited<ReturnType<typeof getSalonSettings>>;
     workWindows?: WorkWindow[];
     excludeAppointmentId?: string;
+    preview?: boolean;
   },
 ): Promise<boolean> {
   const { staffId, startsAt, endsAt, settings } = input;
   await assertStaffActive(tx, staffId);
-  await releaseExpiredStaffOffers(tx, [staffId], input.now);
+  if (!input.preview) await releaseExpiredStaffOffers(tx, [staffId], input.now);
   const [member] = await tx
     .select({ capacity: staffProfile.maxConcurrent })
     .from(staffProfile)
@@ -459,16 +468,14 @@ async function resolveClient(tx: Tx, request: CreateAppointmentRequest): Promise
 }
 
 /** Who an appointment belongs to, for authorization decisions. */
-export async function getAppointmentOwnership(
-  db: Database,
-  id: string,
-): Promise<{ staffId: string; clientId: string; status: AppointmentStatus; startsAt: Date }> {
+export async function getAppointmentOwnership(db: Database, id: string) {
   const [row] = await db
     .select({
       staffId: appointment.staffId,
       clientId: appointment.clientId,
       status: appointment.status,
       startsAt: appointment.startsAt,
+      version: appointment.version,
     })
     .from(appointment)
     .where(and(eq(appointment.id, id), isNull(appointment.deletedAt)));
@@ -612,7 +619,7 @@ export function planTransition(
  * appointment (reschedule, validated like a new booking) or changes its status.
  */
 export async function updateAppointment(
-  db: Database,
+  db: Database | Tx,
   id: string,
   request: UpdateAppointmentRequest,
   actor?: Actor,

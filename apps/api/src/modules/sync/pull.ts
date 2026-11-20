@@ -1,5 +1,5 @@
 import type { SyncChange, SyncEntity, SyncPullQuery, SyncPullResponse } from "@sob/contracts";
-import { permissionsFor } from "@sob/contracts";
+import { permissionsFor, type SyncLiveView, syncLiveViewSchema } from "@sob/contracts";
 import {
   appointment,
   clientProfile,
@@ -13,9 +13,10 @@ import {
   timeOff,
   workingHours,
 } from "@sob/db";
-import { and, asc, gt, inArray, isNull, max } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNotNull, isNull, max } from "drizzle-orm";
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
+import { calendarBadges } from "../appointments/context";
 import { loadSnapshots, toAppointment } from "../appointments/service";
 import { catalogMetadata, publicService } from "../services/options";
 
@@ -59,15 +60,42 @@ async function loadVisible(
   switch (entity) {
     case "appointment": {
       const rows = await db
-        .select()
+        .select({ row: appointment, clientName: clientProfile.name })
         .from(appointment)
+        .innerJoin(clientProfile, eq(clientProfile.id, appointment.clientId))
         .where(and(inArray(appointment.id, ids), isNull(appointment.deletedAt)));
-      const visible = rows.filter((r) => ownCalendar(r.staffId));
+      const visible = rows.filter(({ row }) => ownCalendar(row.staffId));
       const snapshots = await loadSnapshots(
         db,
-        visible.map((r) => r.id),
+        visible.map(({ row }) => row.id),
       );
-      for (const row of visible) put(row.id, toAppointment(row, snapshots.get(row.id) ?? []));
+      const badges = await calendarBadges(
+        db,
+        visible.map(({ row }) => row),
+        [...snapshots.values()].flat(),
+        { includeBilling: permissions.commerce },
+      );
+      for (const { row, clientName } of visible) {
+        const billing = badges.get(row.id);
+        put(row.id, {
+          ...toAppointment(row, snapshots.get(row.id) ?? []),
+          clientName,
+          ...(billing?.badges.some(
+            (badge) =>
+              badge.requested ||
+              badge.invoiced ||
+              badge.paid ||
+              badge.internalNote ||
+              badge.customerComment,
+          )
+            ? { serviceBadges: billing.badges }
+            : {}),
+          ...(billing?.reasons.length ? { billingReviewReasons: billing.reasons } : {}),
+          ...(billing?.externallySettled ? { externallySettled: true as const } : {}),
+          ...(billing?.externalBalance ? { externalBalance: billing.externalBalance } : {}),
+          ...(billing?.importedFromBooksy ? { importedFromBooksy: true as const } : {}),
+        });
+      }
       break;
     }
     case "client": {
@@ -231,7 +259,20 @@ export async function pullChanges(
   // Latest entry per row wins; Map keeps first-insertion order, so delete before set to order
   // the survivors by the seq of their last occurrence.
   const latest = new Map<string, (typeof page)[number]>();
+  const refresh = new Set<SyncLiveView>();
+  const permissions = permissionsFor(principal.role, principal.accessPreset);
   for (const row of page) {
+    if (row.entity === "live_view") {
+      const topic = syncLiveViewSchema.safeParse(row.rowId);
+      if (
+        topic.success &&
+        (topic.data !== "commerce" || permissions.commerce || permissions.manageCash) &&
+        (topic.data !== "review_requests" ||
+          (query.reviewRequests === "1" && permissions.editCatalog))
+      )
+        refresh.add(topic.data);
+      continue;
+    }
     const key = `${row.entity}\u0000${row.rowId}`;
     latest.delete(key);
     latest.set(key, row);
@@ -257,5 +298,32 @@ export async function pullChanges(
         : { seq: row.seq, entity, id: row.rowId, op: "delete", data: null },
     );
   }
-  return { changes, nextCursor, hasMore, headSeq: Math.max(head, nextCursor) };
+  const timeOffScope = !permissions.editCalendar
+    ? "none"
+    : permissions.editSchedules && permissions.allCalendars
+      ? "all"
+      : (principal.staffId ?? "none");
+  const catalogColors =
+    query.catalogColors === "1"
+      ? Object.fromEntries(
+          (
+            await db
+              .select({ id: service.id, color: service.color })
+              .from(service)
+              .where(and(isNull(service.deletedAt), isNotNull(service.color)))
+          ).flatMap(({ id, color }) => (color === null ? [] : [[id, color] as const])),
+        )
+      : undefined;
+  return {
+    changes,
+    ...(catalogColors ? { catalogColors } : {}),
+    ...(refresh.size ? { refresh: [...refresh] } : {}),
+    nextCursor,
+    hasMore,
+    headSeq: Math.max(head, nextCursor),
+    timeOffScope,
+    clientDirectory: permissions.clients,
+    viewerRole: principal.role === "owner" ? "owner" : "staff",
+    calendarScope: permissions.allCalendars ? "all" : (principal.staffId ?? "none"),
+  };
 }

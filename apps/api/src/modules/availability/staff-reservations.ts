@@ -2,9 +2,11 @@ import { type Database, staffProfile, staffReservation, waitlistOffer } from "@s
 import { and, asc, eq, gt, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
-import { repackResourceUnits } from "../resources/plan";
+import { hasMixedCapacityConflict, repackResourceUnits } from "../resources/plan";
 
 type Connection = Database | Tx;
+/** 0–5 are public booking units. The separate units are for frozen imported visits only. */
+export const IMPORTED_STAFF_UNIT_START = 6;
 /** Requires scheduling lock; does not lock waitlist queue entries. */
 export async function releaseExpiredStaffOffers(tx: Tx, ids: string[], now: Date) {
   if (!ids.length) return;
@@ -87,10 +89,17 @@ export async function repackStaff(
     )
     .orderBy(asc(staffReservation.startsAt), asc(staffReservation.id))
     .for("update");
-  const plan = repackResourceUnits(
-    capacity,
-    rows.map((row) => ({ id: row.id, start: row.startsAt.getTime(), end: row.endsAt.getTime() })),
-  );
+  const intervals = rows.map((row) => ({
+    id: row.id,
+    start: row.startsAt.getTime(),
+    end: row.endsAt.getTime(),
+    historical: row.unitIndex >= IMPORTED_STAFF_UNIT_START,
+  }));
+  const regular = intervals.filter((row) => !row.historical);
+  const plan =
+    regular.length < intervals.length && hasMixedCapacityConflict(capacity, intervals)
+      ? null
+      : repackResourceUnits(capacity, regular);
   if (!plan)
     throw new DomainError(
       "slot_taken",

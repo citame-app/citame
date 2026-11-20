@@ -1,6 +1,6 @@
 name: Release
 
-# Publishing is gated by the reusable CI suite and the required Linux desktop artifact.
+# Publishing is gated by the reusable CI suite and all desktop artifacts.
 # Validation and packaging also run locally without a repository, registry or domain.
 on:
   push:
@@ -8,18 +8,19 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to (re)release, e.g. v0.1.0"
+        description: "Existing tag selected as the workflow ref, e.g. v0.1.0"
         required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.event.inputs.tag || github.ref }}
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io
+  RELEASE_PUBLISHING: "1"
 
 jobs:
   meta:
@@ -33,7 +34,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.sha }}
+          fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -41,7 +43,7 @@ jobs:
         name: Validate release metadata and versions
         env:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
-        run: bun scripts/release.ts validate
+        run: bun scripts/release.ts validate-source
 
   checks:
     needs: meta
@@ -51,9 +53,11 @@ jobs:
 
   desktop-linux:
     needs: [meta, checks]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -62,7 +66,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake pkg-config libasound2-dev \
-            libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libssl-dev libzstd-dev libvulkan1
+            libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libssl-dev libzstd-dev libvulkan1 \
+            binutils desktop-file-utils
       - name: Rust toolchain
         working-directory: apps/desktop
         run: rustup show active-toolchain || rustup toolchain install
@@ -83,14 +88,96 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.meta.outputs.tag }}
         run: bash scripts/package-desktop.sh
+      - name: Verify and install the Linux package in an empty user directory
+        working-directory: .release/desktop
+        env:
+          EXPECTED_VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          sha256sum -c ./*.tar.gz.sha256
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          tar -xzf "$(find . -maxdepth 1 -name '*.tar.gz' -print -quit)" -C "$work"
+          XDG_DATA_HOME="$work/user data" bash "$work"/sisters-of-beauty-desktop-*/install.sh
+          desktop-file-validate "$work/user data/applications/app.citame.desktop.desktop"
+          binary="$work/user data/citame/bin/sob-desktop"
+          LC_ALL=C readelf -h "$binary" | grep -Eq '^[[:space:]]*Machine:[[:space:]]+Advanced Micro Devices X86-64$'
+          ldd "$binary" > "$work/libraries"
+          if grep -F 'not found' "$work/libraries"; then exit 1; fi
+          test "$("$binary" --check-installation)" = "Citame $EXPECTED_VERSION SQLite ready"
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: .release/desktop/sisters-of-beauty-desktop-${{ needs.meta.outputs.version }}-linux-x86_64.tar.gz
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-linux
           path: .release/desktop/*
+          include-hidden-files: true
+          overwrite: true
+          if-no-files-found: error
+
+  desktop-macos:
+    needs: [meta, checks]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    environment: macos-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            architecture: x86_64
+          - runner: macos-15
+            architecture: arm64
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.meta.outputs.revision }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Check native architecture and Xcode
+        run: |
+          test "$(uname -m)" = "${{ matrix.architecture }}"
+          xcrun --find metal
+      - name: Test GPUI and offline core
+        working-directory: apps/desktop
+        run: cargo test --workspace --locked
+      - name: Build native executable
+        working-directory: apps/desktop
+        run: cargo build --release --locked -p sob-desktop
+      - name: Sign, notarize and verify macOS application
+        env:
+          RELEASE_TAG: ${{ needs.meta.outputs.tag }}
+          RELEASE_REVISION: ${{ needs.meta.outputs.revision }}
+          CITAME_MAC_CERTIFICATE_BASE64: ${{ secrets.CITAME_MAC_CERTIFICATE_BASE64 }}
+          CITAME_MAC_CERTIFICATE_PASSWORD: ${{ secrets.CITAME_MAC_CERTIFICATE_PASSWORD }}
+          CITAME_MAC_SIGN_IDENTITY: ${{ vars.CITAME_MAC_SIGN_IDENTITY }}
+          CITAME_NOTARY_KEY_BASE64: ${{ secrets.CITAME_NOTARY_KEY_BASE64 }}
+          CITAME_NOTARY_KEY_ID: ${{ vars.CITAME_NOTARY_KEY_ID }}
+          CITAME_NOTARY_ISSUER: ${{ vars.CITAME_NOTARY_ISSUER }}
+        run: |
+          bash scripts/package-desktop-macos-ci.sh
+          cd .release/desktop
+          shasum -a 256 -c ./*.sha256
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: .release/desktop/sisters-of-beauty-desktop-${{ needs.meta.outputs.version }}-macos-${{ matrix.architecture }}.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-macos-${{ matrix.architecture }}
+          path: .release/desktop/*
+          include-hidden-files: true
+          overwrite: true
           if-no-files-found: error
 
   images:
-    needs: [meta, checks, desktop-linux]
+    needs: [meta, checks, desktop-linux, desktop-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -111,28 +198,34 @@ jobs:
           ref: ${{ needs.meta.outputs.revision }}
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Recheck the source tag before building images
+        env:
+          RELEASE_TAG: ${{ needs.meta.outputs.tag }}
+          RELEASE_REVISION: ${{ needs.meta.outputs.revision }}
+        run: bun scripts/release.ts verify-tag
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ needs.meta.outputs.image_prefix }}-${{ matrix.name }}
-          tags: |
-            type=semver,pattern={{version}},value=${{ needs.meta.outputs.tag }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ needs.meta.outputs.tag }}
-            type=raw,value=latest,enable=${{ !contains(needs.meta.outputs.tag, '-') }}
       - id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ needs.meta.outputs.image_prefix }}-${{ matrix.name }},push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=true
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.meta.outputs.version }}
+            org.opencontainers.image.revision=${{ needs.meta.outputs.revision }}
+          annotations: |
+            index:org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            index:org.opencontainers.image.version=${{ needs.meta.outputs.version }}
+            index:org.opencontainers.image.revision=${{ needs.meta.outputs.revision }}
           # SBOM and SLSA provenance attestations stored next to the image in the registry.
           sbom: true
           provenance: mode=max
@@ -143,12 +236,30 @@ jobs:
           subject-name: ${{ needs.meta.outputs.image_prefix }}-${{ matrix.name }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
+      - name: Promote the attested digest to the version tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_IMAGE: ${{ needs.meta.outputs.image_prefix }}-${{ matrix.name }}
+          RELEASE_TAG: ${{ needs.meta.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.meta.outputs.version }}
+          RELEASE_REVISION: ${{ needs.meta.outputs.revision }}
+          RELEASE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: bun scripts/release-registry.ts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-image-${{ matrix.name }}
+          path: .release/images/${{ matrix.name }}.digest
+          include-hidden-files: true
+          overwrite: true
+          if-no-files-found: error
 
   release:
-    needs: [meta, images, desktop-linux]
+    needs: [meta, images, desktop-linux, desktop-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      packages: read
+      attestations: read
     steps:
       - uses: actions/checkout@v7
         with:
@@ -158,26 +269,105 @@ jobs:
           bun-version: 1.4.4
       - uses: actions/download-artifact@v4
         with:
-          name: desktop-linux
+          pattern: desktop-*
+          merge-multiple: true
           path: .release/desktop
-      - name: Verify desktop artifact checksums
-        working-directory: .release/desktop
-        run: sha256sum -c *.sha256
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-image-*
+          merge-multiple: true
+          path: .release/images
       - name: Prepare verified release notes
         env:
           RELEASE_TAG: ${{ needs.meta.outputs.tag }}
         run: bun scripts/release.ts notes
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
       - name: Publish release with required desktop artifacts
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.meta.outputs.tag }}
+          RELEASE_TAG: ${{ needs.meta.outputs.tag }}
+          RELEASE_REVISION: ${{ needs.meta.outputs.revision }}
+          RELEASE_VERSION: ${{ needs.meta.outputs.version }}
+          RELEASE_IMAGE_PREFIX: ${{ needs.meta.outputs.image_prefix }}
+          VERSION: ${{ needs.meta.outputs.version }}
           PRERELEASE: ${{ needs.meta.outputs.prerelease }}
         run: |
+          set -o pipefail
+          bun scripts/release.ts verify-tag
+          suffixes=(linux-x86_64.tar.gz macos-x86_64.zip macos-arm64.zip)
+          prefix="sisters-of-beauty-desktop-$VERSION"
+          artifacts=()
+          patterns=()
+          for suffix in "${suffixes[@]}"; do
+            for name in "$prefix-$suffix" "$prefix-$suffix.sha256"; do
+              artifacts+=(".release/desktop/$name")
+              patterns+=(--pattern "$name")
+            done
+          done
+          verify_packages() {
+            local directory="$1" suffix name hash
+            for suffix in "${suffixes[@]}"; do
+              name="$prefix-$suffix"
+              hash="$(sha256sum -- "$directory/$name" | cut -d ' ' -f 1)"
+              test "$(cat -- "$directory/$name.sha256")" = "$hash  $name"
+              gh attestation verify "$directory/$name" --repo "$GITHUB_REPOSITORY" \
+                --source-digest "$RELEASE_REVISION" --source-ref "refs/tags/$TAG" \
+                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml"
+              case "$suffix" in
+                *.tar.gz) tar -xOzf "$directory/$name" "${name%.tar.gz}/release.json" ;;
+                *.zip) unzip -p "$directory/$name" Citame.app/Contents/Resources/metadata.json ;;
+              esac | bun scripts/release.ts verify-metadata
+            done
+          }
+          verify_images() {
+            local kind digest
+            for kind in api web; do
+              digest="$(cat -- ".release/images/$kind.digest")"
+              RELEASE_IMAGE="$RELEASE_IMAGE_PREFIX-$kind" RELEASE_DIGEST="$digest" \
+                bun scripts/release-registry.ts verify
+            done
+          }
           args=()
-          if [ "$PRERELEASE" = true ]; then args+=(--prerelease); fi
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release edit "$TAG" --notes-file .release/notes.md "${args[@]}"
-          else
-            gh release create "$TAG" --title "$TAG" --notes-file .release/notes.md --verify-tag "${args[@]}"
+          if [ "$PRERELEASE" = true ]; then args+=(--prerelease); else args+=(--prerelease=false); fi
+          if ! draft="$(gh release view "$TAG" --json isDraft --jq .isDraft)"; then
+            gh release create "$TAG" --draft --verify-tag --title "$TAG" --notes-file .release/notes.md "${args[@]}"
+            draft=true
           fi
-          gh release upload "$TAG" .release/desktop/*.tar.gz* --clobber
+          if [ "$draft" = true ]; then
+            verify_packages .release/desktop
+            gh release upload "$TAG" "${artifacts[@]}" --clobber
+          fi
+          uploaded="$(gh release view "$TAG" --json assets --jq '.assets[] | select(.state == "uploaded") | .name')"
+          for artifact in "${artifacts[@]}"; do
+            if ! grep -Fxq -- "${artifact##*/}" <<< "$uploaded"; then
+              echo "Release $TAG is missing uploaded asset ${artifact##*/}" >&2
+              exit 1
+            fi
+          done
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          gh release download "$TAG" --dir "$work" "${patterns[@]}"
+          if [ "$draft" = true ]; then
+            for artifact in "${artifacts[@]}"; do
+              if ! cmp -s -- "$artifact" "$work/${artifact##*/}"; then
+                echo "Release $TAG has different bytes for ${artifact##*/}" >&2
+                exit 1
+              fi
+            done
+            verify_images
+            bun scripts/release.ts verify-tag
+            gh release edit "$TAG" --notes-file .release/notes.md --draft=false "${args[@]}"
+          else
+            verify_packages "$work"
+            verify_images
+            published_notes="$(gh release view "$TAG" --json body --jq .body)"
+            for kind in api web; do
+              digest="$(cat -- ".release/images/$kind.digest")"
+              grep -Fxq -- "- \`$RELEASE_IMAGE_PREFIX-$kind@$digest\`" <<< "$published_notes"
+            done
+          fi

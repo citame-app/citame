@@ -1,6 +1,6 @@
 import type { ScheduleConflict, TimeOff } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { ConfirmDialog } from "~/components/ui/dialog";
 import { TextField } from "~/components/ui/field";
@@ -9,9 +9,9 @@ import { Sheet } from "~/components/ui/sheet";
 import { EmptyState, ErrorState, Skeleton } from "~/components/ui/states";
 import { useToast } from "~/components/ui/toast";
 import { useI18n } from "~/i18n/react";
-import { timeOffQuery } from "~/lib/admin-queries";
+import { teamShiftWeekKey, timeOffQuery } from "~/lib/admin-queries";
 import { api } from "~/lib/api/instance";
-import { formatDateWithYear, formatTime, localDateOf } from "~/lib/format";
+import { addDaysLocal, formatDateWithYear, formatTime, localDateOf } from "~/lib/format";
 import { describeProblem } from "../problems";
 import { ConflictList } from "./conflict-list";
 import { type TimeOffForm, zonedTimeOff } from "./hours";
@@ -28,6 +28,7 @@ export function TimeOffPanel({ staffId, editable }: { staffId: string; editable:
   const [conflicts, setConflicts] = useState<ScheduleConflict[]>([]);
 
   const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: teamShiftWeekKey });
     void queryClient.invalidateQueries({ queryKey: ["admin", "time-off", staffId] });
     void queryClient.invalidateQueries({ queryKey: ["admin", "calendar"] });
     void queryClient.invalidateQueries({ queryKey: ["availability"] });
@@ -153,16 +154,24 @@ function splitInstant(instant: string, timeZone: string) {
   };
 }
 
-function TimeOffSheet({
+export function TimeOffSheet({
   staffId,
   entry,
   onClose,
   onSaved,
+  initialForm,
+  title,
+  staffSelector,
+  initialAllDay,
 }: {
   staffId: string;
   entry: TimeOff | null;
   onClose: () => void;
   onSaved: (conflicts: ScheduleConflict[]) => void;
+  initialForm?: TimeOffForm;
+  title?: string;
+  staffSelector?: ReactNode;
+  initialAllDay?: boolean;
 }) {
   const { t, timeZone } = useI18n();
   const toast = useToast();
@@ -172,15 +181,20 @@ function TimeOffSheet({
         const e = splitInstant(entry.endsAt, timeZone);
         return { startDate: s.date, startTime: s.time, endDate: e.date, endTime: e.time };
       })()
-    : emptyForm;
+    : (initialForm ?? emptyForm);
   const [form, setForm] = useState<TimeOffForm>(initial);
+  const [allDay, setAllDay] = useState(initialAllDay ?? false);
   const [reason, setReason] = useState(entry?.reason ?? "");
   const [error, setError] = useState<"required" | "endBeforeStart" | null>(null);
   const [open, setOpen] = useState(true);
+  const effectiveForm = () =>
+    allDay && form.endDate
+      ? { ...form, startTime: "00:00", endTime: "00:00", endDate: addDaysLocal(form.endDate, 1) }
+      : form;
 
   const save = useMutation({
     mutationFn: async () => {
-      const zoned = zonedTimeOff(form, timeZone);
+      const zoned = zonedTimeOff(effectiveForm(), timeZone);
       if (!zoned.ok) throw new Error(zoned.error);
       const trimmed = reason.trim();
       if (!entry) {
@@ -206,7 +220,7 @@ function TimeOffSheet({
   });
 
   function submit() {
-    const zoned = zonedTimeOff(form, timeZone);
+    const zoned = zonedTimeOff(effectiveForm(), timeZone);
     if (!zoned.ok) {
       setError(zoned.error);
       return;
@@ -224,7 +238,7 @@ function TimeOffSheet({
         setOpen(next);
         if (!next) onClose();
       }}
-      title={t(entry ? "timeoff.edit" : "timeoff.add")}
+      title={title ?? t(entry ? "timeoff.edit" : "timeoff.add")}
       footer={
         <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
           <Button
@@ -250,6 +264,13 @@ function TimeOffSheet({
           submit();
         }}
       >
+        {staffSelector}
+        {initialAllDay !== undefined && (
+          <label className="flex min-h-11 items-center gap-3">
+            <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} />
+            {t("calendar.allDay")}
+          </label>
+        )}
         <div className="grid gap-4 sm:grid-cols-2">
           <TextField
             label={t("timeoff.startDate")}
@@ -257,24 +278,28 @@ function TimeOffSheet({
             value={form.startDate}
             onChange={(e) => set("startDate", e.target.value)}
           />
-          <TextField
-            label={t("timeoff.startTime")}
-            type="time"
-            value={form.startTime}
-            onChange={(e) => set("startTime", e.target.value)}
-          />
+          {!allDay && (
+            <TextField
+              label={t("timeoff.startTime")}
+              type="time"
+              value={form.startTime}
+              onChange={(e) => set("startTime", e.target.value)}
+            />
+          )}
           <TextField
             label={t("timeoff.endDate")}
             type="date"
             value={form.endDate}
             onChange={(e) => set("endDate", e.target.value)}
           />
-          <TextField
-            label={t("timeoff.endTime")}
-            type="time"
-            value={form.endTime}
-            onChange={(e) => set("endTime", e.target.value)}
-          />
+          {!allDay && (
+            <TextField
+              label={t("timeoff.endTime")}
+              type="time"
+              value={form.endTime}
+              onChange={(e) => set("endTime", e.target.value)}
+            />
+          )}
         </div>
         {error && (
           <p role="alert" className="text-sm font-medium text-danger-fg">

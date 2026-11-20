@@ -1,5 +1,9 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
-import { dateShiftPreviewSchema, dateShiftsResponseSchema } from "@sob/contracts";
+import {
+  dateShiftPreviewSchema,
+  dateShiftsResponseSchema,
+  teamShiftWeekSchema,
+} from "@sob/contracts";
 import { appointment, dateShift, dateShiftBatch, salonSettings } from "@sob/db";
 import {
   type Actor,
@@ -46,6 +50,44 @@ async function save(selection: unknown) {
   expect(response.status, await response.clone().text()).toBe(201);
   return { input, response };
 }
+test("the team week shows dated hours and clips absences without exposing personal reasons", async () => {
+  const week = "/admin/staff/team-shifts?week=2026-03-09";
+  await save(edit("2026-03-09", [{ startTime: "12:00", endTime: "14:00" }]));
+  const absence = await call(`/admin/staff/${f.anaId}/time-off`, "POST", {
+    startsAt: "2026-03-10T02:00:00.000Z",
+    endsAt: "2026-03-11T03:00:00.000Z",
+    reason: "Private absence reason",
+  });
+  expect(absence.status, await absence.clone().text()).toBe(201);
+  const result = await call(week);
+  expect(result.status, await result.clone().text()).toBe(200);
+  expect(result.headers.get("cache-control")).toBe("private, no-store");
+  const raw = await result.json();
+  const body = teamShiftWeekSchema.parse(raw);
+  expect(body.members.map((member) => member.id)).toContain(f.anaId);
+  expect(body.members.find((member) => member.id === f.anaId)?.days.slice(0, 2)).toMatchObject([
+    {
+      date: "2026-03-09",
+      custom: true,
+      ranges: [{ startTime: "12:00", endTime: "14:00" }],
+      absences: [
+        {
+          fullDay: false,
+          startsAt: "2026-03-10T02:00:00.000Z",
+          endsAt: "2026-03-10T03:00:00.000Z",
+        },
+      ],
+    },
+    { date: "2026-03-10", custom: false, absences: [{ fullDay: true }] },
+  ]);
+  expect(JSON.stringify(raw)).not.toContain("Private absence reason");
+  expect((await call("/admin/staff/team-shifts?week=2026-03-10")).status).toBe(400);
+  expect((await call("/admin/staff/team-shifts?week=9999-12-27")).status).toBe(400);
+  const professional = await actor(t, "staff", "team-week-staff@example.invalid", {
+    staffProfileId: f.anaId,
+  });
+  expect((await call(week, "GET", undefined, professional)).status).toBe(403);
+});
 test("a custom dated shift closes or opens only that date for availability and every booking path", async () => {
   const selection = edit("2026-03-09", [{ startTime: "12:00", endTime: "14:00" }]);
   await save(selection);

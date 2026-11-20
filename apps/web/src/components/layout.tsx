@@ -1,5 +1,7 @@
+import { Popover } from "@base-ui/react/popover";
 import type { MeResponse } from "@sob/contracts";
 import { Link } from "@tanstack/react-router";
+import { CalendarInbox } from "~/features/admin/calendar/inbox";
 import type { Locale } from "~/i18n";
 import { useI18n } from "~/i18n/react";
 import type { Theme } from "~/lib/theme";
@@ -27,8 +29,12 @@ export function Header({
   onLocaleChange,
   onThemeChange,
   showDiscovery = false,
+  adminMode = false,
+  calendarMode = false,
 }: {
   showDiscovery?: boolean;
+  adminMode?: boolean;
+  calendarMode?: boolean;
   salonName: string;
   session: MeResponse | null;
   theme: Theme | undefined;
@@ -38,6 +44,42 @@ export function Header({
 }) {
   const { t } = useI18n();
   const staff = session && session.user.role !== "client";
+  if (adminMode || calendarMode)
+    return (
+      <>
+        <SkipLink />
+        <div className="admin-account-tools" data-calendar={calendarMode || undefined}>
+          {!calendarMode && staff && <CalendarInbox userId={session.user.id} />}
+          <Popover.Root>
+            <Popover.Trigger
+              className="calendar-account-trigger"
+              aria-label={t("calendar.account")}
+            >
+              <UserIcon />
+            </Popover.Trigger>
+            <Popover.Portal>
+              <Popover.Positioner sideOffset={8} align="end" className="z-50">
+                <Popover.Popup
+                  className="flex w-64 flex-col gap-3 rounded-lg border border-line bg-surface p-4 shadow-lg"
+                  aria-label={t("calendar.account")}
+                >
+                  <Link to="/" className="text-sm font-semibold">
+                    {salonName}
+                  </Link>
+                  <LocaleSwitch locale={locale} onChange={onLocaleChange} />
+                  <div className="flex items-center justify-between">
+                    <Link to="/admin/calendar" className="text-sm">
+                      {t("nav.dashboard")}
+                    </Link>
+                    <ThemeToggle initial={theme} onChange={onThemeChange} />
+                  </div>
+                </Popover.Popup>
+              </Popover.Positioner>
+            </Popover.Portal>
+          </Popover.Root>
+        </div>
+      </>
+    );
   return (
     <header
       data-discovery={showDiscovery || undefined}
@@ -69,11 +111,12 @@ export function Header({
           </nav>
         )}
         <nav aria-label={t("nav.main")} className="flex items-center gap-1 sm:gap-2">
+          {staff && <CalendarInbox userId={session.user.id} />}
           <LocaleSwitch locale={locale} onChange={onLocaleChange} />
           <ThemeToggle initial={theme} onChange={onThemeChange} />
           {session ? (
             <Link
-              to={staff ? "/admin" : "/account"}
+              to={staff ? "/admin/calendar" : "/account"}
               className="inline-flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-md px-2 text-sm font-medium hover:bg-sunken sm:px-3"
               aria-label={staff ? t("nav.dashboard") : t("nav.account")}
             >

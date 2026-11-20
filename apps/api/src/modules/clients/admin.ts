@@ -1,11 +1,13 @@
+import { createHash } from "node:crypto";
 import type {
   AdminClient,
   ClientDetailResponse,
   ClientListQuery,
+  CreateClientRequest,
   ListClientsResponse,
   UpdateClientRequest,
 } from "@sob/contracts";
-import { appointment, clientProfile, type Database } from "@sob/db";
+import { appointment, auditLog, clientProfile, type Database } from "@sob/db";
 import {
   and,
   asc,
@@ -22,9 +24,12 @@ import {
   sql,
 } from "drizzle-orm";
 import { recordAudit } from "../../audit";
+import { requirePermission } from "../../auth/policy";
+import type { Principal } from "../../auth/principal";
 import { clientIdentityIds, clientRoot, requireClientRoot } from "../../client-identity";
 import { DomainError } from "../../errors";
 import { listClientAppointments } from "../appointments/service";
+import { groupName } from "./groups";
 
 export interface AdminActor {
   userId: string;
@@ -86,6 +91,10 @@ export async function listClients(
     isNull(clientProfile.deletedAt),
     isNull(clientProfile.mergedIntoId),
     searchFilter(query.search),
+    query.tag
+      ? sql`exists (select 1 from unnest(${clientProfile.tags}) as client_tag(name)
+          where ${groupName} = ${query.tag})`
+      : undefined,
   );
   const direction = query.order === "desc" ? desc : asc;
   const byName = sql`lower(${clientProfile.name})`;
@@ -109,6 +118,9 @@ export async function listClients(
         phone: clientProfile.phone,
         email: clientProfile.email,
         notes: clientProfile.notes,
+        tags: clientProfile.tags,
+        contactDetails: clientProfile.contactDetails,
+        detailsVersion: clientProfile.detailsVersion,
         createdAt: clientProfile.createdAt,
         updatedAt: clientProfile.updatedAt,
         visits: stats.visits,
@@ -133,6 +145,9 @@ export async function listClients(
       phone: row.phone,
       email: row.email,
       notes: row.notes,
+      tags: row.tags,
+      contactDetails: row.contactDetails,
+      detailsVersion: row.detailsVersion,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
       appointmentCount: Number(row.visits ?? 0),
@@ -153,6 +168,9 @@ export async function getAdminClient(
       phone: clientProfile.phone,
       email: clientProfile.email,
       notes: clientProfile.notes,
+      tags: clientProfile.tags,
+      contactDetails: clientProfile.contactDetails,
+      detailsVersion: clientProfile.detailsVersion,
       createdAt: clientProfile.createdAt,
       updatedAt: clientProfile.updatedAt,
       visits: stats.visits,
@@ -168,6 +186,9 @@ export async function getAdminClient(
     phone: row.phone,
     email: row.email,
     notes: row.notes,
+    tags: row.tags,
+    contactDetails: row.contactDetails,
+    detailsVersion: row.detailsVersion,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     appointmentCount: Number(row.visits ?? 0),
@@ -205,7 +226,7 @@ export async function getClientDetail(db: Database, id: string): Promise<ClientD
   );
 }
 
-const EDITABLE = ["name", "phone", "notes"] as const;
+type Editable = "name" | "phone" | "notes" | "contactDetails" | "detailsVersion";
 
 /** Changes only what differs; the audit entry lists field names, never the values (notes are private). */
 export async function updateClient(
@@ -213,6 +234,7 @@ export async function updateClient(
   id: string,
   input: UpdateClientRequest,
   actor: AdminActor,
+  expectedUpdatedAt?: string,
 ): Promise<AdminClient> {
   return db.transaction(async (tx) => {
     const [current] = await tx
@@ -223,10 +245,28 @@ export async function updateClient(
     if (!current) throw new DomainError("not_found", `Client ${id} not found`);
 
     requireClientRoot(current);
-    const changes: Partial<Pick<typeof clientProfile.$inferInsert, (typeof EDITABLE)[number]>> = {};
-    if (input.name !== undefined && input.name !== current.name) changes.name = input.name;
+    if (expectedUpdatedAt && Date.parse(expectedUpdatedAt) !== current.updatedAt.getTime())
+      throw new DomainError("version_conflict", "The client changed since this device reviewed it");
+    const changes: Partial<Pick<typeof clientProfile.$inferInsert, Editable>> = {};
+    if (input.name !== undefined && input.name !== current.name) {
+      changes.name = input.name;
+      if (
+        input.contactDetails === undefined &&
+        (current.contactDetails.firstName || current.contactDetails.lastName)
+      ) {
+        const { firstName: _, lastName: __, ...rest } = current.contactDetails;
+        changes.contactDetails = rest;
+        changes.detailsVersion = current.detailsVersion + 1;
+      }
+    }
     if (input.phone !== undefined && input.phone !== current.phone) changes.phone = input.phone;
     if (input.notes !== undefined && input.notes !== current.notes) changes.notes = input.notes;
+    if (input.contactDetails !== undefined) {
+      if (current.detailsVersion !== input.detailsVersion)
+        throw new DomainError("version_conflict", "Contact details changed; reload before saving");
+      changes.contactDetails = input.contactDetails;
+      changes.detailsVersion = current.detailsVersion + 1;
+    }
     const changed = Object.keys(changes).sort();
     if (changed.length > 0) {
       await tx.update(clientProfile).set(changes).where(eq(clientProfile.id, id));
@@ -286,4 +326,63 @@ export async function deleteClient(
       entityId: id,
     });
   });
+}
+
+export async function createClient(db: Database, input: CreateClientRequest, principal: Principal) {
+  requirePermission(principal, "editClients");
+  const fields = {
+    name: input.name,
+    tags: input.tags ?? [],
+    contactDetails: input.contactDetails ?? {},
+    phone: input.phone ?? null,
+    email: input.email ?? null,
+    notes: input.notes ?? null,
+  };
+  const digest = createHash("sha256").update(JSON.stringify(fields)).digest("hex");
+  return db.transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${`client-create:${input.id}`},0))`,
+    );
+    const [existing] = await tx
+      .select({ id: clientProfile.id })
+      .from(clientProfile)
+      .where(eq(clientProfile.id, input.id));
+    if (existing) {
+      const [created] = await tx
+        .select({ metadata: auditLog.metadata })
+        .from(auditLog)
+        .where(
+          and(
+            eq(auditLog.entity, "client"),
+            eq(auditLog.entityId, input.id),
+            eq(auditLog.action, "client.create"),
+            eq(auditLog.actorUserId, principal.userId),
+          ),
+        )
+        .limit(1);
+      if (!created || created.metadata.requestDigest !== digest)
+        throw new DomainError("invalid_state", "This contact request has already been used");
+      return getAdminClient(tx, input.id);
+    }
+    await tx.insert(clientProfile).values({ id: input.id, ...fields });
+    await recordAudit(tx, {
+      actorUserId: principal.userId,
+      action: "client.create",
+      entity: "client",
+      entityId: input.id,
+      metadata: { requestDigest: digest },
+    });
+    return getAdminClient(tx, input.id);
+  });
+}
+
+export async function clientGroups(db: Database) {
+  const rows = await db.execute<{ name: string; count: number }>(
+    sql`select ${groupName} as name, count(distinct ${clientProfile.id})::int as count
+        from ${clientProfile} cross join lateral unnest(${clientProfile.tags}) as client_tag(name)
+        where ${clientProfile.deletedAt} is null and ${clientProfile.mergedIntoId} is null
+          and ${groupName} <> ''
+        group by 1 order by 1`,
+  );
+  return { groups: [...rows] };
 }

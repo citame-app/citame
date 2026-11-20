@@ -17,6 +17,7 @@ import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { describeProblem } from "../problems";
 import { BlockedPanel } from "./blocked-panel";
+import { StaffPortrait } from "./staff-portrait";
 
 const helper = createColumnHelper<DataTableFeatures, AdminStaff>();
 
@@ -84,6 +85,12 @@ export function TeamList({
           id: "name",
           header: t("staff.col.name"),
           meta: { cardTitle: true },
+          cell: (cell) => (
+            <span className="inline-flex items-center gap-2">
+              <StaffPortrait member={cell.row.original} size={32} />
+              {cell.getValue()}
+            </span>
+          ),
         }),
         helper.accessor("active", {
           id: "status",

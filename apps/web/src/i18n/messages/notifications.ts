@@ -12,6 +12,9 @@ export const notificationsEn = {
   "notify.sms.lead":
     "Off unless you turn it on. By switching it on you agree to receive text messages about your appointments. Reply STOP to any message to opt out.",
   "notify.sms.missing": "Add a phone number in your profile to receive text messages.",
+  "notify.whatsapp.lead":
+    "Allow this salon to send WhatsApp messages about your appointments to the number on your profile. You can turn this off here at any time.",
+  "notify.whatsapp.missing": "Add a phone number with its country code to use WhatsApp.",
   "notify.transactional": "Booking confirmations, changes and cancellations",
   "notify.reminder": "Reminders before your appointment",
   "notify.save": "Save preferences",
@@ -22,10 +25,11 @@ export const notificationsEn = {
   "optout.meta.description": "Turn off reminder messages from the salon.",
   "optout.lead.email":
     "You will no longer receive reminder emails before your appointments. Booking confirmations and changes are not affected.",
+  "optout.lead.whatsapp":
+    "Stop reminders on WhatsApp. Your WhatsApp booking confirmations and changes are managed separately in your account.",
   "optout.confirm": "Stop reminders",
   "optout.done.title": "Reminders turned off",
-  "optout.done.lead":
-    "You will not get reminder emails any more. You can turn them back on in your account.",
+  "optout.done.lead": "You can turn these reminders back on in your account.",
   "optout.already": "Reminders are already turned off.",
   "optout.manage": "Manage notification preferences",
   "optout.invalid.title": "This link is not valid",
@@ -57,6 +61,9 @@ export const notificationsEsAR: Record<keyof typeof notificationsEn, string> = {
   "notify.sms.lead":
     "Está desactivado hasta que lo actives. Al activarlo aceptas recibir mensajes de texto sobre tus turnos. Responde STOP a cualquier mensaje para dejar de recibirlos.",
   "notify.sms.missing": "Agrega un teléfono en tu perfil para recibir mensajes de texto.",
+  "notify.whatsapp.lead":
+    "Autoriza al salón a enviarte mensajes de WhatsApp sobre tus turnos al número de tu perfil. Puedes retirar el permiso aquí cuando quieras.",
+  "notify.whatsapp.missing": "Agrega un teléfono con el prefijo internacional para usar WhatsApp.",
   "notify.transactional": "Confirmaciones, cambios y cancelaciones de turnos",
   "notify.reminder": "Recordatorios antes de tu turno",
   "notify.save": "Guardar preferencias",
@@ -67,10 +74,11 @@ export const notificationsEsAR: Record<keyof typeof notificationsEn, string> = {
   "optout.meta.description": "Desactiva los recordatorios de turnos del salón.",
   "optout.lead.email":
     "Vas a dejar de recibir recordatorios por correo antes de tus turnos. Las confirmaciones y los cambios de turno no se ven afectados.",
+  "optout.lead.whatsapp":
+    "Deja de recibir recordatorios por WhatsApp. Puedes gestionar las confirmaciones y cambios de turno por separado desde tu cuenta.",
   "optout.confirm": "Dejar de recibir recordatorios",
   "optout.done.title": "Recordatorios desactivados",
-  "optout.done.lead":
-    "No recibirás más recordatorios por correo. Puedes volver a activarlos desde tu cuenta.",
+  "optout.done.lead": "Puedes volver a activar estos recordatorios desde tu cuenta.",
   "optout.already": "Los recordatorios ya están desactivados.",
   "optout.manage": "Administrar preferencias de notificación",
   "optout.invalid.title": "Este enlace no es válido",

@@ -12,14 +12,17 @@ import { clientTransferEsAR } from "./client-transfer";
 import { combinationsEs } from "./combinations";
 import { commerceEsAR } from "./commerce";
 import { dateShiftsEsAR } from "./date-shifts";
+import { emailDeliveryEs } from "./email-delivery";
 import type { MessageKey } from "./en";
 import { giftCardsEsAR } from "./gift-cards";
 import { intakeEsAR } from "./intake";
 import { inventoryEsAR } from "./inventory";
 import { loyaltyEsAR } from "./loyalty";
+import { marketingEs } from "./marketing";
 import { notificationsEsAR } from "./notifications";
 import { passesEsAR } from "./passes";
 import { portfolioEsAR } from "./portfolio";
+import { posEs } from "./pos";
 import { reputationEsAR } from "./reputation";
 import { schedulingEsAR } from "./scheduling";
 import { serviceOptionsEsAR } from "./service-options";
@@ -30,6 +33,9 @@ import { waitlistEsAR } from "./waitlist";
 
 /** Neutral, professional Spanish for Argentina. */
 export const esAR: Record<MessageKey, string> = {
+  ...emailDeliveryEs,
+  ...posEs,
+  ...marketingEs,
   ...combinationsEs,
   ...bookingPromotionsEs,
   ...timedPromotionsEs,
@@ -160,9 +166,41 @@ export const esAR: Record<MessageKey, string> = {
   "oauth.consent.invalid.body":
     "Inicia la conexión de nuevo desde la aplicación que quieres conectar.",
   "oauth.consent.meta.description": "Revisa lo que una aplicación solicita hacer por ti.",
+  "desktop.devices.title": "Dispositivos de escritorio",
+  "desktop.devices.lead":
+    "Cada equipo sigue vinculado hasta que lo desconectes. Al desconectarlo, deja de sincronizar con esta cuenta.",
+  "desktop.devices.empty": "No hay dispositivos de escritorio vinculados.",
+  "desktop.devices.linked": "Vinculado el",
+  "desktop.devices.activity": "Último acceso de sincronización",
+  "desktop.devices.revoke": "Desconectar",
+  "desktop.devices.confirm": "Confirmar desconexión",
+  "desktop.devices.removed": "Dispositivo desconectado",
+  "desktop.devices.failed": "No se pudo desconectar el dispositivo",
+  "oauth.connections.title": "Aplicaciones conectadas",
+  "oauth.connections.lead": "Revisa qué aplicaciones tienen acceso a esta cuenta mediante OAuth.",
+  "oauth.connections.empty": "No hay aplicaciones conectadas.",
+  "oauth.connections.unnamed": "Aplicación sin nombre",
+  "oauth.connections.revoke": "Revocar acceso",
+  "oauth.connections.confirm": "Confirmar revocación",
+  "oauth.connections.removed": "Acceso revocado",
+  "oauth.connections.failed": "No se pudo revocar el acceso",
   "oauth.scope.mcp:read": "Ver servicios, disponibilidad y los turnos que puedes ver",
   "oauth.scope.mcp:book": "Reservar y cancelar turnos por ti",
+  "oauth.scope.desktop:sign-in": "Iniciar sesión en Citame Escritorio con tu cuenta del centro",
   "oauth.scope.schedule:read": "Leer la agenda del equipo y buscar clientes",
+  "oauth.scope.operations:read":
+    "Consultar las operaciones del centro, incluidas ventas, inventario, informes, fidelización y avisos de citas",
+  "oauth.scope.schedule:write":
+    "Reservar, mover y cancelar citas del centro y gestionar horarios, bloqueos, listas de espera y tu bandeja de avisos",
+  "oauth.scope.clients:write": "Crear y editar fichas de clientes",
+  "oauth.scope.catalog:write": "Cambiar servicios, equipo, recursos, bonos y promociones",
+  "oauth.scope.stock:write": "Cambiar productos y registrar movimientos de inventario",
+  "oauth.scope.sales:write": "Preparar o descartar borradores de venta sin cobrar",
+  "oauth.scope.billing:write": "Guardar precios y pagos verificados de citas importadas",
+  "oauth.scope.cash:write": "Abrir y cerrar caja y registrar pagos ya recibidos",
+  "oauth.scope.commissions:write": "Cambiar porcentajes de comisión y registrar liquidaciones",
+  "oauth.scope.settings:write":
+    "Cambiar los ajustes del centro y las reglas de fidelización y WhatsApp para citas",
   "oauth.scope.offline_access":
     "Mantener la conexión hasta que quites el acceso, sin volver a preguntar",
   "slots.date": "Elige una fecha",
@@ -216,6 +254,9 @@ export const esAR: Record<MessageKey, string> = {
     "Esta página de reservas es para clientes. Usa el panel para reservar en nombre de un cliente.",
   "booking.review.staff.link": "Ir al panel",
   "booking.review.sessionExpired": "Tu sesión venció. Ingresa nuevamente para confirmar.",
+  "booking.paused.title": "Las reservas en línea están pausadas",
+  "booking.paused.body":
+    "Contacta con el centro para reservar. Puedes seguir gestionando tus citas existentes desde tu cuenta.",
   "booking.review.catalogChanged":
     "Cambió el precio o la duración de un servicio. Revisa tu selección y vuelve a elegir un horario.",
   "booking.review.failed": "No pudimos confirmar tu reserva",

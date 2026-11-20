@@ -1,4 +1,6 @@
 import {
+  calendarArchiveInputSchema,
+  calendarInboxQuerySchema,
   notificationStatsSchema,
   optOutRequestSchema,
   updateNotificationPreferencesRequestSchema,
@@ -10,6 +12,8 @@ import { requireRole } from "../auth/policy";
 import type { AppEnv } from "../auth/principal";
 import { DomainError } from "../errors";
 import { parseOrThrow, readJson } from "../http";
+import { archiveCalendarNotices, calendarInbox } from "./calendar-inbox";
+import { getEmailDelivery } from "./email-delivery";
 import { processMetrics } from "./metrics";
 import {
   applyOptOut,
@@ -57,20 +61,47 @@ export function optOutRoutes({ db, config }: Pick<AppDeps, "db" | "config">) {
     });
 }
 
-/** Owner-only operational view, mounted at `/admin/notifications`. */
+/** Scoped appointment inbox plus owner-only worker statistics. */
 export function notificationAdminRoutes({ db, config }: Pick<AppDeps, "db" | "config">) {
-  return new Hono<AppEnv>().get("/stats", async (c) => {
-    requireRole(c.get("principal"), "owner");
-    return c.json(
-      notificationStatsSchema.parse({
-        queue: await queueStats(db),
-        accountEmails: await accountEmailQueueStats(db),
-        worker: processMetrics.snapshot(),
-        channels: {
-          email: config.notifications.email.provider !== "none",
-          sms: config.notifications.sms.provider !== "none",
-        },
-      }),
-    );
-  });
+  return new Hono<AppEnv>()
+    .use("/inbox", async (c, next) => {
+      c.header("Cache-Control", "private, no-store");
+      await next();
+    })
+    .get("/inbox", async (c) =>
+      c.json(
+        await calendarInbox(
+          db,
+          c.get("principal"),
+          parseOrThrow(calendarInboxQuerySchema, c.req.query()),
+        ),
+      ),
+    )
+    .post("/inbox/archive", async (c) =>
+      c.json(
+        await archiveCalendarNotices(
+          db,
+          c.get("principal"),
+          parseOrThrow(calendarArchiveInputSchema, await readJson(c)),
+        ),
+      ),
+    )
+    .get("/stats", async (c) => {
+      requireRole(c.get("principal"), "owner");
+      const email = await getEmailDelivery(db, config.notifications);
+      return c.json(
+        notificationStatsSchema.parse({
+          queue: await queueStats(db),
+          accountEmails: await accountEmailQueueStats(db),
+          worker: processMetrics.snapshot(),
+          channels: {
+            email:
+              email.settings.provider === "inherit"
+                ? email.serverEmailEnabled
+                : email.settings.provider !== "disabled",
+            sms: config.notifications.sms.provider !== "none",
+          },
+        }),
+      );
+    });
 }

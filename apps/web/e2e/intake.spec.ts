@@ -6,6 +6,7 @@ import {
   pickFirstTime,
   pickProfessional,
   signInThroughUi,
+  switchLocale,
 } from "./helpers";
 
 for (const scheme of ["light", "dark"] as const) {
@@ -45,6 +46,7 @@ for (const scheme of ["light", "dark"] as const) {
       current = await publish.json();
       try {
         await page.goto(`/admin/clients/${clientId}`);
+        await page.getByRole("button", { name: "Documents and consultation", exact: true }).click();
         await page.getByRole("button", { name: "Record a response", exact: true }).click();
         const sheet = page.getByRole("dialog", { name: "Record a response", exact: true });
         await sheet.getByRole("checkbox", { name: "Haircut", exact: true }).check();
@@ -143,6 +145,7 @@ for (const scheme of ["light", "dark"] as const) {
           ).ok(),
         ).toBe(true);
         await signInThroughUi(page, fixture.ownerEmail, "/admin/settings");
+        await page.getByRole("link", { name: "Forms and consent", exact: true }).click();
         await page.getByRole("heading", { name: "Forms and consent", exact: true }).waitFor();
         await page.getByRole("button", { name: "New form", exact: true }).click();
         const title = `Visit preferences ${crypto.randomUUID().slice(0, 8)}`;
@@ -314,7 +317,7 @@ for (const scheme of ["light", "dark"] as const) {
         await expect(recorded.getByText(/Completed by the client/)).toBeVisible();
         await expectNoSeriousA11yViolations(page, `frozen response ${scheme}`);
         await recorded.getByRole("button", { name: "Close response", exact: true }).click();
-        await page.getByRole("radio", { name: "Español", exact: true }).check();
+        await switchLocale(page, "Español");
         await page
           .getByRole("listitem")
           .filter({ hasText: title })

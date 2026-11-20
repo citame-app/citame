@@ -1,9 +1,17 @@
 import { queryOptions } from "@tanstack/react-query";
-import { createServerFn } from "@tanstack/react-start";
+import { createIsomorphicFn, createServerFn } from "@tanstack/react-start";
 import { getRequestHeaders } from "@tanstack/react-start/server";
-import { serverEndpoints } from "~/lib/api/instance";
+import { api, serverEndpoints } from "~/lib/api/instance";
 import { type Bootstrap, bootstrapForRequest } from "./bootstrap";
 import { resolveSession } from "./session";
+
+/** Use only in guarded route loaders. The credential stays in the server-side request. */
+export const routeEndpoints = createIsomorphicFn()
+  .server(() => {
+    const headers = getRequestHeaders();
+    return serverEndpoints(headers.get("cookie"), headers.get("x-request-id"));
+  })
+  .client(api);
 
 export type { Bootstrap } from "./bootstrap";
 

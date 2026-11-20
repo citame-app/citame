@@ -1,4 +1,4 @@
-import { createDb } from "@sob/db";
+import { assertNotBooksyReviewDatabase, createDb } from "@sob/db";
 import { RedisClient } from "bun";
 import { createApp } from "./app";
 import { loadConfig } from "./config";
@@ -10,14 +10,19 @@ import { startRewardsExpiry } from "./modules/rewards/runtime";
 import { startWaitlist } from "./modules/waitlist/runtime";
 import { createProviders } from "./notifications/providers";
 import { startNotificationRuntime } from "./notifications/runtime";
+import { ensureOAuthSeeds } from "./oauth/clients";
 import { rootLogger } from "./observability/logger";
 import { serveApi } from "./server";
+import { checkServiceDatabase } from "./startup-database";
 
 // Fails fast (with every problem listed) when the environment is incomplete.
 const config = loadConfig();
+assertNotBooksyReviewDatabase(config.databaseUrl);
 const { db, close: closeDb } = createDb(config.databaseUrl);
+await checkServiceDatabase(db);
 const valkey = new RedisClient(config.valkeyUrl);
 await valkey.send("PING", []);
+await ensureOAuthSeeds(db, config);
 
 // Account emails (verification, reset, invitation) use the same provider settings as reminders.
 const emailProvider = createProviders(config.notifications).email;

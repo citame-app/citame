@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /** Stop at Compose validation: exercise the real script and its EXIT cleanup without Docker. */
-async function failedValidation() {
+async function failedValidation(smokeEmail = false, smokeDesktop = false) {
   const dir = mkdtempSync(join(tmpdir(), "sob-smoke-regression-"));
   const log = join(dir, "commands");
   const docker = join(dir, "docker");
@@ -13,8 +13,13 @@ async function failedValidation() {
     `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$SMOKE_COMMAND_LOG"
 printf 'sms=%s tag=%s\\n' "$NOTIFY_SMS_PROVIDER" "$SOB_TAG" >> "$SMOKE_COMMAND_LOG"
+printf 'email=%s url=%s file=%s\\n' "$NOTIFY_EMAIL_PROVIDER" "$SMTP_URL" "$SMTP_URL_FILE" >> "$SMOKE_COMMAND_LOG"
 printf 'payments=%s\\n' "$PAYMENT_PROVIDER" >> "$SMOKE_COMMAND_LOG"
 printf 'recurring=%s\\n' "$REDSYS_RECURRING_ENABLED" >> "$SMOKE_COMMAND_LOG"
+printf 'meta=%s mcp=%s\\n' "$META_WHATSAPP_APP_ID" "$MCP_RESOURCE_URL" >> "$SMOKE_COMMAND_LOG"
+printf 'caddy=%s %s\\n' "$CADDY_HTTP_PORT" "$CADDY_HTTPS_PORT" >> "$SMOKE_COMMAND_LOG"
+printf 'recovery=%s %s %s\\n' "$SOB_DATABASE_NAME" "$VALKEY_KEY_PREFIX" "$SYNC_REPLICA_GENERATION" >> "$SMOKE_COMMAND_LOG"
+printf 'compose-images=%s %s\\n' "$SOB_API_IMAGE" "$SOB_WEB_IMAGE" >> "$SMOKE_COMMAND_LOG"
 exit 23
 `,
   );
@@ -27,9 +32,21 @@ exit 23
         SMOKE_COMMAND_LOG: log,
         COMPOSE_PROJECT_NAME: "real-salon",
         NOTIFY_SMS_PROVIDER: "twilio",
+        NOTIFY_EMAIL_PROVIDER: "smtp",
+        SMTP_URL: "smtps://live.example:465",
+        SMTP_URL_FILE: "/private/deployment-smtp",
+        SMOKE_EMAIL: smokeEmail ? "1" : "0",
+        SMOKE_DESKTOP: smokeDesktop ? "1" : "0",
         PAYMENT_PROVIDER: "redsys",
         REDSYS_RECURRING_ENABLED: "true",
+        META_WHATSAPP_APP_ID: "12345678",
+        MCP_RESOURCE_URL: "https://live.example/mcp",
         SOB_TAG: "live",
+        SOB_API_IMAGE: "live-api",
+        SOB_WEB_IMAGE: "live-web",
+        SOB_DATABASE_NAME: "live_recovered",
+        VALKEY_KEY_PREFIX: "live:recovered:",
+        SYNC_REPLICA_GENERATION: "live-recovered",
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -67,6 +84,23 @@ test("smoke never inherits a real SMS provider or overwrites deployment image ta
   const settings = lines.filter((line) => line.startsWith("sms="));
   expect(settings).toHaveLength(3);
   for (const line of settings) expect(line).toMatch(/^sms=none tag=sob-smoke-[a-z0-9-]+$/);
+  const images = lines.filter((line) => line.startsWith("compose-images="));
+  expect(images).toHaveLength(3);
+  for (const line of images)
+    expect(line).toMatch(/^compose-images=sob-api:(sob-smoke-[a-z0-9-]+) sob-web:\1$/);
+});
+
+test("smoke email only uses the private sink when explicitly enabled", async () => {
+  for (const [enabled, expected] of [
+    [false, "email=none url= file="],
+    [true, "email=smtp url=smtp://mailpit:1025 file="],
+  ] as const) {
+    const lines = await failedValidation(enabled);
+    const settings = lines.filter((line) => line.startsWith("email="));
+    expect(settings).toEqual([expected, expected, expected]);
+    const commands = lines.filter((line) => line.startsWith("compose "));
+    for (const command of commands) expect(command.includes("/mail.yaml")).toBe(enabled);
+  }
 });
 
 test("smoke cleanup removes only the images tagged for that run", async () => {
@@ -89,4 +123,33 @@ test("production smoke disables inherited automatic bank billing", async () => {
   const settings = lines.filter((line) => line.startsWith("recurring="));
   expect(settings).toHaveLength(3);
   for (const line of settings) expect(line).toBe("recurring=false");
+});
+
+test("production smoke clears inherited Meta and MCP endpoints", async () => {
+  const lines = await failedValidation();
+  const settings = lines.filter((line) => line.startsWith("meta="));
+  expect(settings).toHaveLength(3);
+  for (const line of settings) expect(line).toBe("meta= mcp=");
+});
+
+test("production smoke exposes the proxy only on loopback", async () => {
+  const lines = await failedValidation();
+  const settings = lines.filter((line) => line.startsWith("caddy="));
+  expect(settings).toHaveLength(3);
+  for (const line of settings) expect(line).toBe("caddy=127.0.0.1:8088 127.0.0.1:8443");
+});
+
+test("the disposable stack starts with its own database, cache and sync history", async () => {
+  const lines = await failedValidation();
+  const settings = lines.filter((line) => line.startsWith("recovery="));
+  expect(settings).toEqual(Array(3).fill("recovery=sob sob: initial"));
+});
+
+test("desktop burst limits are applied only to the disposable desktop run", async () => {
+  const normal = (await failedValidation()).filter((line) => line.startsWith("compose "));
+  expect(normal.every((line) => !line.includes("/desktop-limits.yaml"))).toBe(true);
+  const desktop = (await failedValidation(false, true)).filter((line) =>
+    line.startsWith("compose "),
+  );
+  expect(desktop.every((line) => line.includes("/desktop-limits.yaml"))).toBe(true);
 });

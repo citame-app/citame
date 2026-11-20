@@ -55,6 +55,9 @@ export const mcpCreateAppointmentInput = z.object({
   startsAt: instantSchema.describe(
     "Start instant, copied exactly from a slot returned by find_availability.",
   ),
+  professionalPreference: createAppointmentBaseSchema.shape.professionalPreference.describe(
+    "Use specific only if the client explicitly requested this professional. Use any otherwise.",
+  ),
   clientId: idSchema
     .optional()
     .describe(
@@ -101,6 +104,9 @@ export const mcpCreateAppointmentOutput = z.object({
 
 export const mcpCancelAppointmentInput = z.object({
   appointmentId: idSchema.describe("Id of the appointment, from list_my_appointments."),
+  version: appointmentSchema.shape.version
+    .optional()
+    .describe("Required for centre staff: the appointment version reviewed with the operator."),
 });
 export const mcpCancelAppointmentOutput = z.object({ appointment: appointmentSchema });
 
@@ -150,6 +156,7 @@ export const mcpFindClientInput = z.object({
 });
 export const mcpClientSchema = adminClientSchema.omit({
   notes: true,
+  contactDetails: true,
   createdAt: true,
   updatedAt: true,
 });

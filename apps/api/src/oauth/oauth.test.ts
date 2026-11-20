@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { OAUTH_SCOPES } from "@sob/contracts";
 import { type ApiTest, actor, setupApiTest } from "../../test/helpers";
-import { ISSUER, MCP_URL, REDIRECT_URI, registerClient } from "../../test/oauth";
+import { ISSUER, REDIRECT_URI, registerClient } from "../../test/oauth";
 
 let t: ApiTest;
 
@@ -27,12 +28,7 @@ describe("authorization server discovery", () => {
     expect(meta.code_challenge_methods_supported).toEqual(["S256"]);
     expect(meta.response_types_supported).toEqual(["code"]);
     expect(meta.grant_types_supported).toEqual(["authorization_code", "refresh_token"]);
-    expect(meta.scopes_supported).toEqual([
-      "mcp:read",
-      "mcp:book",
-      "schedule:read",
-      "offline_access",
-    ]);
+    expect(meta.scopes_supported).toEqual([...OAUTH_SCOPES]);
     expect(meta.token_endpoint_auth_methods_supported).toContain("none");
   });
 });
@@ -120,5 +116,3 @@ describe("pre-registered desktop client", () => {
     expect(body.client_name).toBe("Sisters of Beauty Desktop");
   });
 });
-
-export { MCP_URL };

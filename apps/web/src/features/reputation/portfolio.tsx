@@ -1,7 +1,7 @@
 import type { PortfolioAdminPhoto, PortfolioPublicPhoto } from "@sob/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button, buttonClasses } from "~/components/ui/button";
 import { ConfirmDialog } from "~/components/ui/dialog";
 import { SelectField } from "~/components/ui/select-field";
@@ -144,7 +144,15 @@ export function PublicPortfolio() {
     </section>
   );
 }
-export function PortfolioAdmin() {
+export function PortfolioAdmin({
+  associatedService,
+  onDirtyChange,
+  guardUnsaved = true,
+}: {
+  associatedService?: { id: string; name: string };
+  onDirtyChange?: (dirty: boolean) => void;
+  guardUnsaved?: boolean;
+} = {}) {
   const { t } = useI18n();
   const query = useQuery({
     queryKey: ["portfolio", "admin"],
@@ -153,6 +161,13 @@ export function PortfolioAdmin() {
   });
   const [selected, setSelected] = useState<PortfolioAdminPhoto | "upload">();
   const [dirty, setDirty] = useState(false);
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+    return () => onDirtyChange?.(false);
+  }, [dirty, onDirtyChange]);
+  const visiblePhotos = query.data?.photos.filter(
+    (photo) => !associatedService || photo.serviceId === associatedService.id,
+  );
   const [actions, setActions] = useState<HTMLDivElement | null>(null);
   const [discard, setDiscard] = useState(false);
   const client = useQueryClient();
@@ -165,7 +180,7 @@ export function PortfolioAdmin() {
   };
   return (
     <div className="space-y-5">
-      <UnsavedGuard dirty={dirty} />
+      <UnsavedGuard dirty={guardUnsaved && dirty} />
       <p className="text-muted">{t("portfolio.lead")}</p>
       <Button
         disabled={!query.data || query.data.photos.length >= query.data.limit}
@@ -180,9 +195,9 @@ export function PortfolioAdmin() {
       )}
       {query.isPending && <Skeleton className="h-40" />}
       {query.isError && <ErrorState error={query.error} onRetry={() => void query.refetch()} />}
-      {query.data?.photos.length === 0 && <EmptyState title={t("portfolio.draftsEmpty")} />}
+      {visiblePhotos?.length === 0 && <EmptyState title={t("portfolio.draftsEmpty")} />}
       <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {query.data?.photos.map((photo) => (
+        {visiblePhotos?.map((photo) => (
           <li
             key={photo.id}
             className="min-w-0 space-y-3 rounded-xl border border-line bg-surface p-3"
@@ -218,6 +233,7 @@ export function PortfolioAdmin() {
           <PortfolioEditor
             key={selected === "upload" ? "upload" : `${selected.id}-${selected.version}`}
             photo={selected === "upload" ? null : selected}
+            associatedService={associatedService}
             onDirtyChange={setDirty}
             actionsTarget={actions}
             onSaved={() => {

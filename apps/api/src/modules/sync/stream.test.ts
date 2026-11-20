@@ -1,5 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import {
+  appointment,
+  cashSession,
+  marketingCampaign,
+  marketingDelivery,
+  staffProfile,
+} from "@sob/db";
+import { eq } from "drizzle-orm";
+import { clientPhotoFixture } from "../../../test/client-photo-fixture";
+import {
   type Actor,
   actor,
   type Fixtures,
@@ -79,6 +88,8 @@ describe("GET /sync/stream", () => {
     const res = await open(owner);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/event-stream");
+    expect(res.headers.get("x-accel-buffering")).toBe("no");
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
     const head = (await pull(t, owner)).headSeq;
     const r = reader(res);
     await r.until((text) => nudges(text).length >= 1);
@@ -108,6 +119,61 @@ describe("GET /sync/stream", () => {
     await r.cancel();
   });
 
+  test("portrait changes nudge connected staff without putting portrait data into the replica", async () => {
+    const r = reader(await open(owner));
+    await r.until((text) => nudges(text).length >= 1);
+    let cursor = nudges(r.text)[0]!;
+    const path = `/admin/staff/${f.anaId}/portrait`;
+    const [staffBefore] = await t.db
+      .select({ updatedAt: staffProfile.updatedAt })
+      .from(staffProfile)
+      .where(eq(staffProfile.id, f.anaId));
+    const unchangedEditClock = staffBefore!.updatedAt.toISOString();
+    const imageBase64 = (await clientPhotoFixture()).toString("base64");
+    async function change(endpoint: string, body: unknown) {
+      const response = await json(t.app, endpoint, "PUT", body, owner.cookie);
+      expect(response.status).toBe(200);
+      const page = await pull(t, owner, { since: cursor });
+      expect(page.changes).toEqual([
+        expect.objectContaining({
+          id: f.anaId,
+          entity: "staff",
+          op: "upsert",
+          data: {
+            id: f.anaId,
+            active: true,
+            displayName: "Ana",
+            userId: null,
+            updatedAt: unchangedEditClock,
+          },
+        }),
+      ]);
+      expect(page.nextCursor).toBeGreaterThan(cursor);
+      cursor = page.nextCursor;
+      await r.until((text) => nudges(text).includes(cursor));
+      return (await response.json()) as { version: string | null };
+    }
+    try {
+      const saved = await change(path, { version: null, imageBase64 });
+      const visible = await change(`${path}/publication`, {
+        version: saved.version,
+        published: true,
+      });
+      const unchanged = await json(
+        t.app,
+        `${path}/publication`,
+        "PUT",
+        { version: visible.version, published: true },
+        owner.cookie,
+      );
+      expect(unchanged.status).toBe(200);
+      expect((await pull(t, owner, { since: cursor })).nextCursor).toBe(cursor);
+      await change(path, { version: visible.version, imageBase64: null });
+    } finally {
+      await r.cancel();
+    }
+  });
+
   test("a sync push nudges too, and every connection hears it", async () => {
     const a = reader(await open(owner));
     const b = reader(await open(owner));
@@ -122,6 +188,118 @@ describe("GET /sync/stream", () => {
       b.until((x) => nudges(x).includes(head)),
     ]);
     await Promise.all([a.cancel(), b.cancel()]);
+  });
+
+  test("background commits wake connected views without exposing payment records", async () => {
+    const r = reader(await open(owner));
+    try {
+      await r.until((text) => nudges(text).length >= 1);
+      const since = nudges(r.text)[0] ?? 0;
+      await t.db.transaction(async (tx) => {
+        await tx.insert(cashSession).values({ openingCents: 2300, openedBy: owner.userId });
+        await tx.update(cashSession).set({ openingCents: 2500 });
+      });
+      const response = await pull(t, owner, { since });
+      expect(response.changes).toEqual([]);
+      expect(response.refresh).toEqual(["commerce"]);
+      expect(response.nextCursor).toBe(response.headSeq);
+      expect(response.nextCursor - since).toBe(1);
+      await r.until((text) => nudges(text).includes(response.headSeq), 2500);
+      const restricted = await actor(t, "staff", "restricted@example.com", {
+        staffProfileId: f.anaId,
+      });
+      await t.db
+        .update(staffProfile)
+        .set({ accessPreset: "restricted" })
+        .where(eq(staffProfile.id, f.anaId));
+      const limited = await pull(t, restricted, { since });
+      expect(limited.refresh).toBeUndefined();
+      expect(limited.nextCursor).toBeGreaterThanOrEqual(response.nextCursor);
+    } finally {
+      await r.cancel();
+    }
+  });
+
+  test("review delivery commits wake opted-in managers without replicating review data", async () => {
+    const id = uuid();
+    const campaign = uuid();
+    const delivery = uuid();
+    const now = new Date();
+    await t.db.insert(appointment).values({
+      id,
+      clientId: f.clientId,
+      staffId: f.anaId,
+      status: "completed",
+      startsAt: new Date(now.getTime() - 7200000),
+      endsAt: new Date(now.getTime() - 3600000),
+    });
+    await t.db.insert(marketingCampaign).values({
+      id: campaign,
+      name: "Synthetic review invitation",
+      channel: "email",
+      purpose: "review_request",
+      requestDigest: "synthetic",
+    });
+    const professional = await actor(t, "staff", "review-professional@example.test", {
+      staffProfileId: f.anaId,
+    });
+    const manager = await actor(t, "staff", "review-manager@example.test", {
+      staffProfileId: f.beaId,
+    });
+    await t.db
+      .update(staffProfile)
+      .set({ accessPreset: "manager" })
+      .where(eq(staffProfile.id, f.beaId));
+    const stream = reader(await open(owner));
+    try {
+      await stream.until((message) => nudges(message).length > 0);
+      const since = nudges(stream.text)[0]!;
+      await t.db.transaction(async (tx) => {
+        await tx.insert(marketingDelivery).values({
+          id: delivery,
+          campaignId: campaign,
+          clientId: f.clientId,
+          channel: "email",
+          occurrence: "once",
+          reviewAppointmentId: id,
+          scheduledFor: now,
+        });
+        await tx
+          .update(marketingDelivery)
+          .set({ status: "processing" })
+          .where(eq(marketingDelivery.id, delivery));
+      });
+      const first = await pull(t, owner, { since, reviewRequests: "1" });
+      expect(first.refresh).toEqual(["review_requests"]);
+      expect(first.changes).toEqual([]);
+      expect(first.nextCursor - since).toBe(1);
+      expect((await pull(t, owner, { since })).refresh).toBeUndefined();
+      expect((await pull(t, manager, { since, reviewRequests: "1" })).refresh).toEqual([
+        "review_requests",
+      ]);
+      const limited = await pull(t, professional, { since, reviewRequests: "1" });
+      expect(limited.refresh).toBeUndefined();
+      expect(limited.nextCursor).toBe(first.nextCursor);
+      await stream.until((message) => nudges(message).includes(first.headSeq), 2500);
+
+      await t.db
+        .update(marketingDelivery)
+        .set({ lockedUntil: now })
+        .where(eq(marketingDelivery.id, delivery));
+      expect((await pull(t, owner, { since: first.nextCursor, reviewRequests: "1" })).headSeq).toBe(
+        first.headSeq,
+      );
+      await t.db
+        .update(marketingDelivery)
+        .set({ status: "sent" })
+        .where(eq(marketingDelivery.id, delivery));
+      const sent = await pull(t, owner, { since: first.nextCursor, reviewRequests: "1" });
+      expect(sent.refresh).toEqual(["review_requests"]);
+      expect(sent.changes).toEqual([]);
+      await stream.until((message) => nudges(message).includes(sent.headSeq), 2500);
+    } finally {
+      await stream.cancel();
+    }
   });
 
   test("shutdown ends open streams cleanly", async () => {

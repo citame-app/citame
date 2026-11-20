@@ -16,7 +16,7 @@ import {
   staffProfile,
   user,
 } from "@sob/db";
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { DomainError } from "../../errors";
 import { closeAppointment, scheduleNewAppointment } from "../../notifications/outbox";
@@ -65,6 +65,46 @@ export async function protectionView(
       : 0,
   };
 }
+
+/** Calendar projection: at most two queries for the complete visible range. */
+export async function calendarProtections(db: Connection, appointmentIds: string[]) {
+  const result = new Map<string, BookingProtection>();
+  if (!appointmentIds.length) return result;
+  const rows = await db
+    .select()
+    .from(bookingProtection)
+    .where(inArray(bookingProtection.appointmentId, appointmentIds));
+  const terminalIds = rows.filter((row) => terminal(row.state)).map((row) => row.checkoutId);
+  const totals = terminalIds.length
+    ? await db
+        .select({
+          id: checkout.id,
+          paid: sql<string>`(select coalesce(sum(p.amount_cents),0) from checkout_payment p where p.checkout_id="checkout"."id" and p.status in ('succeeded','reconciliation'))::text`,
+          refunded: sql<string>`(select coalesce(sum(r.amount_cents),0) from checkout_refund r join checkout_payment p on p.id=r.payment_id where p.checkout_id="checkout"."id" and r.status='succeeded')::text`,
+        })
+        .from(checkout)
+        .where(inArray(checkout.id, terminalIds))
+    : [];
+  const balances = new Map(totals.map((row) => [row.id, row]));
+  for (const row of rows) {
+    const balance = balances.get(row.checkoutId);
+    result.set(row.appointmentId, {
+      checkoutId: row.checkoutId,
+      state: row.state,
+      depositCents: row.depositCents,
+      policyVersion: row.policyVersion,
+      expiresAt: row.expiresAt.toISOString(),
+      cancellationCutoff: row.cancellationCutoff.toISOString(),
+      lateCancellationBasisPoints: row.terms.lateCancellationBasisPoints,
+      noShowBasisPoints: row.terms.noShowBasisPoints,
+      feeCents: row.feeCents,
+      refundDueCents: terminal(row.state)
+        ? Math.max(0, Number(balance?.paid ?? 0) - Number(balance?.refunded ?? 0) - row.feeCents)
+        : 0,
+    });
+  }
+  return result;
+}
 export async function createProtection(
   tx: Tx,
   booking: Booking,
@@ -109,6 +149,8 @@ export async function createProtection(
     .select()
     .from(appointmentService)
     .where(eq(appointmentService.appointmentId, booking.id));
+  if (snapshots.some((row) => row.sourceUnpriced))
+    throw new DomainError("invalid_state", "Reconcile imported prices before collecting a deposit");
   const subtotalCents = snapshots.reduce((sum, s) => sum + s.priceCents, 0);
   const discounts = await membershipDiscounts(
     tx,

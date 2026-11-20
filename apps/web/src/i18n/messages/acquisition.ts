@@ -17,6 +17,8 @@ export const acquisitionEn = {
   "acquisition.qrHelp":
     "Use the original black-on-white image and keep its white border when printing. Test the final printed code before distribution.",
   "acquisition.share": "Share booking link",
+  "acquisition.shareWhatsapp": "Share on WhatsApp",
+  "acquisition.shareFacebook": "Share on Facebook",
   "acquisition.preview": "Open booking website",
   "acquisition.widget": "Website widget",
   "acquisition.snippet": "Embed code",
@@ -57,6 +59,8 @@ export const acquisitionEsAR: Record<keyof typeof acquisitionEn, string> = {
   "acquisition.qrHelp":
     "Utiliza la imagen original en negro sobre blanco y conserva su margen blanco al imprimirla. Comprueba el código impreso antes de distribuirlo.",
   "acquisition.share": "Compartir enlace de reserva",
+  "acquisition.shareWhatsapp": "Compartir por WhatsApp",
+  "acquisition.shareFacebook": "Compartir en Facebook",
   "acquisition.preview": "Abrir web de reservas",
   "acquisition.widget": "Widget para tu web",
   "acquisition.snippet": "Código para insertar",

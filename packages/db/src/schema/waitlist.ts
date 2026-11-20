@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   check,
   date,
   index,
@@ -94,6 +95,31 @@ export const waitlistEntry = pgTable(
     ),
   ],
 );
+
+/** Incomplete source requests need operator confirmation before they can generate offers. */
+export const waitlistSourceEntry = pgTable(
+  "waitlist_source_entry",
+  {
+    id: uuid().primaryKey(),
+    clientId: uuid()
+      .notNull()
+      .references(() => clientProfile.id),
+    requestedDate: date().notNull(),
+    durationMinutes: integer().notNull(),
+    flexible: boolean().notNull(),
+    sourceOrder: integer().notNull(),
+    sourceHash: text().notNull(),
+    capturedAt: timestamptz().notNull(),
+    linkedEntryId: uuid().references(() => waitlistEntry.id),
+  },
+  (t) => [
+    index("waitlist_source_entry_queue_idx")
+      .on(t.requestedDate, t.sourceOrder)
+      .where(sql`${t.linkedEntryId} is null`),
+    check("waitlist_source_entry_valid", sql`${t.durationMinutes}>0 and ${t.sourceOrder}>=0`),
+  ],
+);
+
 export const waitlistOffer = pgTable(
   "waitlist_offer",
   {

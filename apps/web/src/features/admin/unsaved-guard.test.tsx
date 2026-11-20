@@ -5,7 +5,12 @@ import { UnsavedGuard } from "./unsaved-guard";
 
 const g = globalThis as {
   __blockerState?: unknown;
-  __blockerOptions?: { shouldBlockFn: () => boolean };
+  __blockerOptions?: {
+    shouldBlockFn: (locations: {
+      current: { pathname: string };
+      next: { pathname: string };
+    }) => boolean;
+  };
 };
 afterEach(() => {
   g.__blockerState = undefined;
@@ -14,9 +19,35 @@ afterEach(() => {
 describe("UnsavedGuard", () => {
   test("blocks navigation only while the form is dirty", () => {
     renderApp(<UnsavedGuard dirty />);
-    expect(g.__blockerOptions?.shouldBlockFn()).toBe(true);
+    expect(
+      g.__blockerOptions?.shouldBlockFn({
+        current: { pathname: "/admin/commerce" },
+        next: { pathname: "/admin/calendar" },
+      }),
+    ).toBe(true);
     renderApp(<UnsavedGuard dirty={false} />);
-    expect(g.__blockerOptions?.shouldBlockFn()).toBe(false);
+    expect(
+      g.__blockerOptions?.shouldBlockFn({
+        current: { pathname: "/admin/commerce" },
+        next: { pathname: "/admin/calendar" },
+      }),
+    ).toBe(false);
+  });
+
+  test("a persistent basket can switch its view without discarding but still guards leaving commerce", () => {
+    renderApp(<UnsavedGuard dirty preserveOnSearchChange />);
+    expect(
+      g.__blockerOptions?.shouldBlockFn({
+        current: { pathname: "/admin/commerce" },
+        next: { pathname: "/admin/commerce" },
+      }),
+    ).toBe(false);
+    expect(
+      g.__blockerOptions?.shouldBlockFn({
+        current: { pathname: "/admin/commerce" },
+        next: { pathname: "/admin/calendar" },
+      }),
+    ).toBe(true);
   });
 
   test("shows nothing while navigation is allowed", () => {

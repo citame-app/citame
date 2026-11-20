@@ -40,7 +40,7 @@ describe("salon timezone dates", () => {
 
   test("formats a time in the salon timezone, not the runtime one", () => {
     expect(plain(formatTime(instant, TZ, "en"))).toBe("9:00 AM");
-    expect(formatTime(instant, TZ, "es-AR")).toBe("9:00");
+    expect(formatTime(instant, TZ, "es-AR")).toBe("09:00");
     expect(formatTime(instant, "Asia/Tokyo", "es-AR")).toBe("21:00");
   });
 
@@ -56,7 +56,8 @@ describe("salon timezone dates", () => {
     }
     Intl.DateTimeFormat = NarrowSpaceFormat as typeof Intl.DateTimeFormat;
     try {
-      expect(formatTime(instant, TZ, "en")).toBe("9:00 AM");
+      // Use a fresh formatter key rather than the cached one from the previous test.
+      expect(formatTime(instant, "Etc/UTC", "en")).toBe("12:00 PM");
     } finally {
       Intl.DateTimeFormat = RealDateTimeFormat;
     }

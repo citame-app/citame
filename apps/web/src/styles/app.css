@@ -3,6 +3,48 @@
 @import "@fontsource-variable/lora/wght.css";
 @import "./tokens.css";
 @import "./redesign.css";
+@import "./calendar.css";
+@import "./admin.css";
+@import "./commerce.css";
+
+/* Snapshot only the workspace. The navigation rails, header and fixed controls stay live. */
+@media (prefers-reduced-motion: no-preference) {
+  html:active-view-transition-type(page-navigation) {
+    #main:not([data-area="admin"]),
+    .admin-workspace {
+      view-transition-name: page-content;
+    }
+  }
+
+  ::view-transition {
+    pointer-events: none;
+  }
+
+  ::view-transition-group(root),
+  ::view-transition-group(page-content),
+  ::view-transition-new(root) {
+    animation: none;
+  }
+
+  ::view-transition-old(root),
+  ::view-transition-old(page-content) {
+    display: none;
+  }
+
+  ::view-transition-new(page-content) {
+    mix-blend-mode: normal;
+    animation: page-content-enter 140ms ease-out both;
+  }
+}
+
+@keyframes page-content-enter {
+  from {
+    opacity: 0.72;
+  }
+  to {
+    opacity: 1;
+  }
+}
 
 @theme inline {
   --color-canvas: var(--bg);

@@ -14,11 +14,13 @@ export const uuid = () => Bun.randomUUIDv7();
 export async function pull(
   t: ApiTest,
   who: Actor | null,
-  query: { since?: number; limit?: number } = {},
+  query: { since?: number; limit?: number; catalogColors?: "1"; reviewRequests?: "1" } = {},
 ): Promise<SyncPullResponse> {
   const params = new URLSearchParams();
   if (query.since !== undefined) params.set("since", String(query.since));
   if (query.limit !== undefined) params.set("limit", String(query.limit));
+  if (query.catalogColors) params.set("catalogColors", query.catalogColors);
+  if (query.reviewRequests) params.set("reviewRequests", query.reviewRequests);
   const res = await json(t.app, `/sync/pull?${params}`, "GET", undefined, who?.cookie);
   if (res.status !== 200) throw new Error(`pull failed: ${res.status} ${await res.text()}`);
   return syncPullResponseSchema.parse(await res.json());

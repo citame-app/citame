@@ -1,0 +1,2 @@
+ALTER TABLE "client_profile" ADD COLUMN "contact_details" jsonb DEFAULT '{}'::jsonb NOT NULL;--> statement-breakpoint
+ALTER TABLE "client_profile" ADD COLUMN "details_version" integer DEFAULT 1 NOT NULL;

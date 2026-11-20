@@ -5,6 +5,7 @@ import {
   type WaitlistInput,
   type WaitlistPolicy,
   type WaitlistQuery,
+  type WaitlistSourceEntry,
 } from "@sob/contracts";
 import {
   appointment,
@@ -14,16 +15,18 @@ import {
   waitlistEntry,
   waitlistOffer,
   waitlistPolicy,
+  waitlistSourceEntry,
 } from "@sob/db";
-import { and, count, desc, eq, inArray, isNull, or, type SQL, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, isNull, lte, or, type SQL, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requirePermission, requireRole } from "../../auth/policy";
 import { ownedClientIds, ownsClient, type Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { lockCalendars, lockScheduling, type Tx } from "../../tx";
+import { totalBlockMinutes } from "../availability/compute";
 import { assertClientCanBook } from "../clients/controls";
 import { getBookableServices } from "../services/service";
-import { getSalonSettings } from "../settings/service";
+import { assertOnlineBookingEnabled, getSalonSettings } from "../settings/service";
 import { staffQualifiedFor } from "../staff/service";
 
 type Connection = Database | Tx;
@@ -60,7 +63,46 @@ export async function getWaitlistPolicy(db: Connection): Promise<WaitlistPolicy>
   const [row] = await db.select().from(waitlistPolicy).where(eq(waitlistPolicy.id, 1));
   return row ? { ...row.terms, version: row.version } : { ...DEFAULT_WAITLIST_POLICY };
 }
-export async function setWaitlistPolicy(db: Database, input: WaitlistPolicy, p: Principal) {
+
+function authorizeImportedWaitlist(principal: Principal) {
+  requirePermission(principal, "clients");
+  requirePermission(principal, "editCalendar");
+  requirePermission(principal, "allCalendars");
+}
+
+export async function listImportedWaitlist(
+  db: Database,
+  principal: Principal,
+  query: Pick<WaitlistQuery, "fromDate" | "toDate">,
+): Promise<WaitlistSourceEntry[]> {
+  if (!permissionsFor(principal.role, principal.accessPreset).allCalendars) return [];
+  return db
+    .select({
+      id: waitlistSourceEntry.id,
+      clientId: waitlistSourceEntry.clientId,
+      clientName: clientProfile.name,
+      requestedDate: waitlistSourceEntry.requestedDate,
+      durationMinutes: waitlistSourceEntry.durationMinutes,
+      flexible: waitlistSourceEntry.flexible,
+    })
+    .from(waitlistSourceEntry)
+    .innerJoin(clientProfile, eq(waitlistSourceEntry.clientId, clientProfile.id))
+    .where(
+      and(
+        isNull(waitlistSourceEntry.linkedEntryId),
+        isNull(clientProfile.deletedAt),
+        query.fromDate ? gte(waitlistSourceEntry.requestedDate, query.fromDate) : undefined,
+        query.toDate ? lte(waitlistSourceEntry.requestedDate, query.toDate) : undefined,
+      ),
+    )
+    .orderBy(
+      waitlistSourceEntry.requestedDate,
+      waitlistSourceEntry.sourceOrder,
+      waitlistSourceEntry.id,
+    )
+    .limit(100);
+}
+export async function setWaitlistPolicy(db: Connection, input: WaitlistPolicy, p: Principal) {
   requireRole(p, "owner");
   return db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('waitlist-policy',0))`);
@@ -211,6 +253,9 @@ export async function listWaitlist(db: Database, p: Principal, query: WaitlistQu
   const where = and(
     waitlistScope(p),
     query.state ? eq(waitlistEntry.state, query.state) : undefined,
+    query.active === "true" ? inArray(waitlistEntry.state, ["waiting", "offered"]) : undefined,
+    query.fromDate ? gte(waitlistEntry.toDate, query.fromDate) : undefined,
+    query.toDate ? lte(waitlistEntry.fromDate, query.toDate) : undefined,
   );
   return db.transaction(
     async (tx) => {
@@ -234,11 +279,12 @@ export async function listWaitlist(db: Database, p: Principal, query: WaitlistQu
   );
 }
 export async function joinWaitlist(
-  db: Database,
+  db: Connection,
   input: WaitlistInput,
   p: Principal,
   now: Date,
   adminClientId?: string,
+  importedEntryId?: string,
 ) {
   let staffId = input.staffId ?? null;
   if (p.role !== "client") {
@@ -251,7 +297,8 @@ export async function joinWaitlist(
   }
   const clientId = p.role === "client" ? p.clientId : adminClientId;
   if (!clientId) throw new DomainError("validation_error", "Choose a customer for the waitlist");
-  const requestHash = selectionHash({ input, clientId, staffId });
+  if (importedEntryId) authorizeImportedWaitlist(p);
+  const requestHash = selectionHash({ input, clientId, staffId, importedEntryId });
   return db.transaction(async (tx) => {
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtextextended(${`waitlist-create:${p.userId}:${input.idempotencyKey}`},0))`,
@@ -270,11 +317,37 @@ export async function joinWaitlist(
         throw new DomainError("invalid_state", "This request key has already been used");
       return entryView(tx, prior, p);
     }
+    let requestedDuration: number | undefined;
+    if (importedEntryId) {
+      const [source] = await tx
+        .select()
+        .from(waitlistSourceEntry)
+        .where(eq(waitlistSourceEntry.id, importedEntryId))
+        .for("update");
+      if (!source || source.clientId !== clientId)
+        throw new DomainError("not_found", "Imported waitlist request not found");
+      if (source.linkedEntryId)
+        throw new DomainError(
+          "version_conflict",
+          "The imported request is already in the waitlist",
+        );
+      if (source.requestedDate !== input.fromDate || source.requestedDate !== input.toDate)
+        throw new DomainError("validation_error", "Use the date from the imported request");
+      requestedDuration = source.durationMinutes;
+    }
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('waitlist-policy',0))`);
     const policy = await getWaitlistPolicy(tx);
-    if (!policy.enabled)
+    if (policy.enabled && importedEntryId)
+      throw new DomainError(
+        "invalid_state",
+        "Pause automatic offers before importing a waitlist request",
+      );
+    if (importedEntryId && input.staffId === undefined)
+      throw new DomainError("validation_error", "Confirm the imported request's staff preference");
+    if (!policy.enabled && !importedEntryId)
       throw new DomainError("invalid_state", "The salon waitlist is currently paused");
-    const settings = await getSalonSettings(tx);
+    const settings = await getSalonSettings(tx, p.role === "client" ? "share" : undefined);
+    assertOnlineBookingEnabled(settings, p.role);
     const today = localToday(now, settings.timezone);
     const last = Temporal.PlainDate.from(today).add({ days: settings.maxDaysAhead }).toString();
     if (input.fromDate < today || input.toDate > last)
@@ -283,6 +356,11 @@ export async function joinWaitlist(
         "The waitlist window must fit the salon booking horizon",
       );
     const services = await getBookableServices(tx, input.serviceIds);
+    if (requestedDuration !== undefined && totalBlockMinutes(services) !== requestedDuration)
+      throw new DomainError(
+        "validation_error",
+        "The selected services must match the imported slot duration",
+      );
     const qualified = await staffQualifiedFor(tx, input.serviceIds);
     if (!qualified.length || (staffId && !qualified.includes(staffId)))
       throw new DomainError(
@@ -355,12 +433,22 @@ export async function joinWaitlist(
       })
       .returning();
     if (!entry) throw new Error("Waitlist insert returned no entry");
+    if (importedEntryId)
+      await tx
+        .update(waitlistSourceEntry)
+        .set({ linkedEntryId: entry.id })
+        .where(eq(waitlistSourceEntry.id, importedEntryId));
     await recordAudit(tx, {
       actorUserId: p.userId,
       action: "waitlist.joined",
       entity: "waitlist_entry",
       entityId: entry.id,
-      metadata: { clientId, staffId, serviceIds: entry.serviceIds },
+      metadata: {
+        clientId,
+        staffId,
+        serviceIds: entry.serviceIds,
+        ...(importedEntryId ? { importedEntryId } : {}),
+      },
     });
     return entryView(tx, entry, p);
   });

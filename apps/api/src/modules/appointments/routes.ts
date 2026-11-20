@@ -1,9 +1,12 @@
 import {
+  appointmentContextUpdateSchema,
   appointmentListQuerySchema,
   appointmentSeriesCreateSchema,
   appointmentSeriesInputSchema,
   availabilityQuerySchema,
   bookingPromotionQuoteRequestSchema,
+  booksyContextApplySchema,
+  booksyContextImportSchema,
   calendarQuerySchema,
   createAppointmentBaseSchema,
   createAppointmentRequestSchema,
@@ -25,6 +28,12 @@ import { bookingOutcome } from "../../observability/booking";
 import { findAvailability } from "../availability/service";
 import { quoteBookingPromotion } from "../rewards/booking";
 import { getCalendar } from "./calendar";
+import {
+  getAppointmentContext,
+  importBooksyContext,
+  previewBooksyContext,
+  updateAppointmentContext,
+} from "./context";
 import { findAppointmentReplay } from "./replay";
 import { createAppointmentSeries, getAppointmentSeries, previewAppointmentSeries } from "./series";
 import {
@@ -36,9 +45,64 @@ import {
 } from "./service";
 
 /** Mounted behind `requireAuth`, so every handler can rely on `c.get("principal")`. */
-export function appointmentsRoutes({ db, now = () => new Date(), metrics }: AppDeps) {
+export function appointmentsRoutes({
+  db,
+  now = () => new Date(),
+  metrics,
+  booksyNativePreview,
+}: AppDeps) {
   return (
     new Hono<AppEnv>()
+      .post("/booksy-context/preview", async (c) =>
+        c.json(
+          await previewBooksyContext(
+            db,
+            parseOrThrow(booksyContextImportSchema, await readJson(c)),
+            c.get("principal"),
+            now(),
+          ),
+        ),
+      )
+      .post("/booksy-context/import", async (c) => {
+        const request = parseOrThrow(booksyContextApplySchema, await readJson(c));
+        return c.json(
+          await importBooksyContext(
+            db,
+            request.input,
+            request.reviewHash,
+            c.get("principal"),
+            now(),
+          ),
+        );
+      })
+      .get("/:id/context", async (c) =>
+        c.json(
+          await db.transaction(
+            (tx) =>
+              getAppointmentContext(
+                tx,
+                parseOrThrow(idSchema, c.req.param("id")),
+                c.get("principal"),
+              ),
+            { isolationLevel: "repeatable read", accessMode: "read only" },
+          ),
+          200,
+          { "Cache-Control": "private, no-store" },
+        ),
+      )
+      .patch("/:id/context", async (c) =>
+        c.json(
+          await updateAppointmentContext(
+            db,
+            parseOrThrow(idSchema, c.req.param("id")),
+            parseOrThrow(appointmentContextUpdateSchema, await readJson(c)),
+            c.get("principal"),
+            now(),
+          ),
+          200,
+          { "Cache-Control": "private, no-store" },
+        ),
+      )
       .post("/promotion-quote", async (c) =>
         c.json(
           await quoteBookingPromotion(
@@ -51,11 +115,13 @@ export function appointmentsRoutes({ db, now = () => new Date(), metrics }: AppD
       )
       .post("/series/preview", async (c) => {
         const input = parseOrThrow(appointmentSeriesInputSchema, await readJson(c));
-        const scoped = authorizeAppointmentCreate(c.get("principal"), input);
+        const principal = c.get("principal");
+        const scoped = authorizeAppointmentCreate(principal, input);
         return c.json(
           await previewAppointmentSeries(
             db,
             { ...input, ...scoped, client: scoped.client, clientId: scoped.clientId },
+            principal.role,
             now(),
           ),
         );
@@ -97,7 +163,10 @@ export function appointmentsRoutes({ db, now = () => new Date(), metrics }: AppD
       .get("/calendar", async (c) => {
         const query = parseOrThrow(calendarQuerySchema, c.req.query());
         const scope = authorizeCalendarQuery(c.get("principal"), query);
-        return c.json(await getCalendar(db, query, scope));
+        const calendar = await getCalendar(db, query, scope);
+        return c.json(
+          booksyNativePreview ? { ...calendar, importSnapshot: booksyNativePreview } : calendar,
+        );
       })
       .post("/", async (c) => {
         const principal = c.get("principal");
@@ -123,7 +192,7 @@ export function appointmentsRoutes({ db, now = () => new Date(), metrics }: AppD
           const created = await createAppointment(
             db,
             request,
-            { userId: principal.userId },
+            { userId: principal.userId, role: principal.role },
             { now: now() },
           );
           metrics?.booking.inc({ source: "rest", outcome: "created" });
@@ -184,7 +253,13 @@ export function appointmentsRoutes({ db, now = () => new Date(), metrics }: AppD
         const principal = c.get("principal");
         authorizeAppointmentChange(principal, await getAppointmentOwnership(db, id), body, now());
         return c.json(
-          await updateAppointment(db, id, body, { userId: principal.userId }, { now: now() }),
+          await updateAppointment(
+            db,
+            id,
+            body,
+            { userId: principal.userId, role: principal.role },
+            { now: now() },
+          ),
         );
       })
   );

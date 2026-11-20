@@ -1,0 +1,1 @@
+ALTER TABLE "marketing_campaign" ADD COLUMN "evaluated_at" timestamp with time zone;

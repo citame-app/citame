@@ -2,17 +2,24 @@
 //! conflict review. All state transitions go through `sob_core` (store, ops, runner); this file
 //! only renders and forwards user intent.
 
-use std::time::Duration;
+use std::cell::OnceCell;
+use std::collections::HashMap;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Datelike, Duration as Span, NaiveDate, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
 use gpui::prelude::*;
 use gpui::{
     App, ClickEvent, Context, ElementId, Entity, FontWeight, IntoElement, Render, SharedString,
-    Stateful, Subscription, Window, div, px,
+    Stateful, Subscription, Window, div, px, relative,
 };
-use sob_core::auth::{AuthError, Credentials, Session, TokenStore};
+use sob_core::auth::{AuthError, Session, TokenStore};
 use sob_core::calendar::{self, CalendarItem, DayView, SyncSummary};
+use sob_core::error::CoreError;
 use sob_core::i18n::{self, Key, Locale};
 use sob_core::model::*;
 use sob_core::ops::{self, NewAppointment, Resolution};
@@ -23,8 +30,134 @@ use crate::field::{FieldEvent, TextField};
 use crate::services::Services;
 use crate::theme;
 
+mod annotations;
+mod appointment_badges;
+mod billing;
+mod blocks;
+mod cash;
+mod checkout;
+mod connection;
+mod directory;
+mod inbox;
+mod inventory;
+mod notices;
+mod reports;
+mod review_moderation;
+mod reviews;
+mod scrollbar;
+mod settlement;
+mod slots;
+mod staff_portraits;
+mod team_shifts;
+mod unpaid;
+mod waitlist;
+
 const HOUR_PX: f32 = 60.0;
 const GUTTER_PX: f32 = 56.0;
+
+fn prompt_csv_export(
+    filename: &str,
+    write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()> + Send + 'static,
+    finish: impl FnOnce(&mut Root, Option<Key>, &mut Context<Root>) + 'static,
+    cx: &mut Context<Root>,
+) {
+    let directory = std::env::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"));
+    let picker = cx.prompt_for_new_path(&directory, Some(filename));
+    cx.spawn(async move |root, cx| {
+        let notice = match picker.await {
+            Ok(Ok(Some(path))) => {
+                let result = cx
+                    .background_executor()
+                    .spawn(async move { sob_core::csv_file::save(&path, write) })
+                    .await;
+                Some(if result.is_ok() {
+                    Key::ReportExported
+                } else {
+                    Key::ReportExportFailed
+                })
+            }
+            Ok(Ok(None)) => None,
+            _ => Some(Key::ReportExportFailed),
+        };
+        let _ = root.update(cx, |root, cx| finish(root, notice, cx));
+    })
+    .detach();
+}
+
+fn salon_local_instant(tz: Tz, date: NaiveDate, minutes: i64) -> Option<DateTime<Utc>> {
+    let day = date.checked_add_signed(Span::days(minutes.div_euclid(1440)))?;
+    let minute = minutes.rem_euclid(1440) as u32;
+    let wall = day.and_hms_opt(minute / 60, minute % 60, 0)?;
+    tz.from_local_datetime(&wall)
+        .single()
+        .map(|time| time.to_utc())
+}
+
+fn step_appointment_time(tz: Tz, start: DateTime<Utc>, minutes: i64) -> Option<DateTime<Utc>> {
+    let local = start.with_timezone(&tz);
+    let day = chrono::Days::new(1);
+    match minutes {
+        -1440 => local.checked_sub_days(day).map(|time| time.to_utc()),
+        1440 => local.checked_add_days(day).map(|time| time.to_utc()),
+        _ => start.checked_add_signed(Span::minutes(minutes)),
+    }
+}
+
+fn appointment_bounds(item: &CalendarItem, day: NaiveDate, tz: Tz) -> (f32, f32) {
+    let appointment = &item.appointment;
+    let wall_minute = |instant: DateTime<Utc>| {
+        let local = instant.with_timezone(&tz);
+        match local.date_naive().cmp(&day) {
+            std::cmp::Ordering::Less => 0,
+            std::cmp::Ordering::Greater => 1440,
+            std::cmp::Ordering::Equal => local.hour() * 60 + local.minute(),
+        }
+    };
+    let from = wall_minute(appointment.starts_at);
+    let to = wall_minute(appointment.ends_at);
+    let start = from as f32 * HOUR_PX / 60.;
+    let height = (to.saturating_sub(from) as f32 * HOUR_PX / 60. - 2.).max(22.);
+    (start, start + height)
+}
+
+fn appointment_lanes(bounds: &[(f32, f32)]) -> Vec<(usize, usize)> {
+    let mut placement = Vec::with_capacity(bounds.len());
+    let mut lane_ends = Vec::new();
+    let mut component_start = 0;
+    let mut indices: Vec<_> = (0..bounds.len()).collect();
+    indices.sort_by(|&left, &right| bounds[left].0.total_cmp(&bounds[right].0));
+    for &index in &indices {
+        let (start, end) = bounds[index];
+        if lane_ends
+            .iter()
+            .all(|&occupied_until| occupied_until <= start)
+        {
+            for (_, count) in &mut placement[component_start..] {
+                *count = lane_ends.len();
+            }
+            component_start = placement.len();
+            lane_ends.clear();
+        }
+        let lane = lane_ends
+            .iter()
+            .position(|&occupied_until| occupied_until <= start)
+            .unwrap_or(lane_ends.len());
+        if lane == lane_ends.len() {
+            lane_ends.push(end);
+        } else {
+            lane_ends[lane] = end;
+        }
+        placement.push((lane, 1));
+    }
+    for (_, count) in &mut placement[component_start..] {
+        *count = lane_ends.len();
+    }
+    let mut lanes = vec![(0, 1); bounds.len()];
+    for (index, lane) in indices.into_iter().zip(placement) {
+        lanes[index] = lane;
+    }
+    lanes
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -39,8 +172,10 @@ enum Screen {
 }
 
 struct LoginForm {
-    email: Entity<TextField>,
-    password: Entity<TextField>,
+    browser_attempt: Option<Arc<AtomicBool>>,
+    server: Entity<TextField>,
+    server_editor: bool,
+    server_error: Option<Key>,
     busy: bool,
     error: Option<Key>,
 }
@@ -48,16 +183,28 @@ struct LoginForm {
 struct NewForm {
     date: NaiveDate,
     minutes: i64,
+    selected_end: Option<i64>,
     staff_id: Option<String>,
     services: Vec<String>,
     client_id: Option<String>,
+    client_search: Entity<TextField>,
+    _client_search_sub: Subscription,
+    service_search: Entity<TextField>,
+    _service_search_sub: Subscription,
+    service_scroll: gpui::ScrollHandle,
     new_client: Entity<TextField>,
     new_client_phone: Entity<TextField>,
     notes: Entity<TextField>,
     error: Option<Key>,
 }
 
+enum AppointmentReturn {
+    TeamShifts(Box<team_shifts::Desk>),
+    Unpaid(Box<unpaid::Desk>),
+}
+
 struct Details {
+    return_to: Option<AppointmentReturn>,
     id: String,
     original_start: DateTime<Utc>,
     original_staff: String,
@@ -65,6 +212,11 @@ struct Details {
     staff_id: String,
     confirm_cancel: bool,
     error: Option<String>,
+    price_review: Option<billing::PriceReview>,
+    settlement_review: Option<settlement::SettlementReview>,
+    checkout: Option<checkout::CheckoutReview>,
+    annotations: Option<annotations::Annotations>,
+    annotations_requested_version: Option<i64>,
 }
 
 struct ConflictDraft {
@@ -76,11 +228,38 @@ struct ConflictDraft {
 enum Overlay {
     None,
     New(Box<NewForm>),
+    Slot(slots::SelectedSlot),
     Details(Box<Details>),
+    Block(Box<blocks::BlockForm>),
+    Blocks,
+    Inbox(inbox::Inbox),
+    Cash(cash::RegisterDesk),
+    Unpaid(Box<unpaid::Desk>),
+    Inventory(Box<inventory::Desk>),
+    Reports(Box<reports::Desk>),
+    TeamShifts(Box<team_shifts::Desk>),
+    StaffPortraits(Box<staff_portraits::Desk>),
+    Reviews(Box<reviews::Desk>),
+    ReviewModeration(Box<review_moderation::Desk>),
+    Waitlist(Box<waitlist::Desk>),
+    Directory(Box<directory::Directory>),
     Conflicts {
         editing: Option<ConflictDraft>,
         error: Option<String>,
     },
+}
+
+struct CalendarLayout {
+    first: u32,
+    last: u32,
+    columns_width: f32,
+    columns: Vec<CalendarColumnLayout>,
+}
+
+struct CalendarColumnLayout {
+    bounds: Vec<(f32, f32)>,
+    lanes: Vec<(usize, usize)>,
+    width: f32,
 }
 
 pub struct Root {
@@ -88,22 +267,42 @@ pub struct Root {
     locale: Locale,
     screen: Screen,
     login: LoginForm,
+    disconnecting: bool,
+    disconnect_failed: bool,
     date: NaiveDate,
+    calendar_now: DateTime<Utc>,
+    cloud_calendar_error: bool,
     tz: Tz,
     view: Option<DayView>,
     week_mode: bool,
     week_views: Vec<DayView>,
+    calendar_layout: OnceCell<CalendarLayout>,
+    slot_drag: Option<slots::SlotDrag>,
+    horizontal_scroll: scrollbar::Scrollbar,
+    vertical_scroll: scrollbar::Scrollbar,
     week_staff_id: String,
+    time_off_scope: String,
+    calendar_scope: Option<String>,
+    replica_generation: Option<String>,
     theme_override: Option<bool>,
     pending_local_today: bool,
     status: SyncStatus,
     summary: SyncSummary,
     conflicts: Vec<Conflict>,
     clients: Vec<(String, String)>,
+    client_search_names: Vec<String>,
     staff: Vec<Staff>,
+    report_staff_options: Vec<Staff>,
     services: Vec<Service>,
+    service_colors: HashMap<String, String>,
+    focus: gpui::FocusHandle,
     overlay: Overlay,
-    last_sig: Option<(SyncStatus, SyncSummary)>,
+    data_version: Option<i64>,
+    notice_cursor: i64,
+    notices: Vec<(Appointment, Instant)>,
+    inbox_generation: u64,
+    waitlist_generation: u64,
+    review_generation: u64,
     _subs: Vec<Subscription>,
 }
 
@@ -122,55 +321,75 @@ impl Root {
         let tz = calendar::salon_tz(&svc.store).unwrap_or(Tz::UTC);
         let pending_local_today =
             start_date.is_none() && svc.store.salon_settings().ok().flatten().is_none();
-        let t = |k| i18n::t(locale, k);
-        let email = cx.new(|cx| TextField::new(t(Key::Email), false, cx));
-        let password = cx.new(|cx| TextField::new(t(Key::Password), true, cx));
+        let server = cx.new(|cx| TextField::new("https://citame.example", false, cx));
+        let server_editor = svc.config.needs_server_setup();
         let mut subs = vec![];
-        for field in [&email, &password] {
-            subs.push(
-                cx.subscribe(field, |this: &mut Root, _, ev: &FieldEvent, cx| {
-                    if matches!(ev, FieldEvent::Submit) {
-                        this.submit_login(cx);
-                    }
-                }),
-            );
-        }
+        subs.push(
+            cx.subscribe(&server, |this: &mut Root, _, ev: &FieldEvent, cx| {
+                if matches!(ev, FieldEvent::Submit) {
+                    this.save_server(cx);
+                }
+            }),
+        );
         let mut root = Self {
             svc,
             locale,
             screen: Screen::Login,
             login: LoginForm {
-                email: email.clone(),
-                password,
+                browser_attempt: None,
+                server: server.clone(),
+                server_editor,
+                server_error: None,
                 busy: false,
                 error: None,
             },
+            disconnecting: false,
+            disconnect_failed: false,
             date: start_date.unwrap_or_else(|| Utc::now().with_timezone(&tz).date_naive()),
+            calendar_now: Utc::now(),
+            cloud_calendar_error: false,
             tz,
             view: None,
             week_mode: false,
             week_views: vec![],
+            calendar_layout: OnceCell::new(),
+            slot_drag: None,
+            horizontal_scroll: scrollbar::Scrollbar::default(),
+            vertical_scroll: scrollbar::Scrollbar::default(),
             week_staff_id: String::new(),
+            time_off_scope: String::new(),
+            calendar_scope: None,
+            replica_generation: None,
             theme_override,
             pending_local_today,
             status: SyncStatus::default(),
             summary: SyncSummary::default(),
             conflicts: vec![],
             clients: vec![],
+            client_search_names: vec![],
             staff: vec![],
+            report_staff_options: vec![],
             services: vec![],
+            service_colors: HashMap::new(),
+            focus: cx.focus_handle(),
             overlay: Overlay::None,
-            last_sig: None,
+            data_version: None,
+            notice_cursor: 0,
+            notices: vec![],
+            inbox_generation: 0,
+            waitlist_generation: 0,
+            review_generation: 0,
             _subs: subs,
         };
         if let Some(saved) = root.svc.load_saved_session() {
+            root.login.server_editor = false;
             // Offline-first: a saved session opens the app at once; validity is checked in the
             // background and only a definite "no" signs the user out.
             root.enter_main(cx);
             root.validate_saved(saved, cx);
             root.open_start_view(start_view.as_deref(), window, cx);
-        } else {
-            email.read(cx).focus(window);
+        } else if server_editor {
+            server.read(cx).focus(window);
         }
         cx.spawn(async move |this, cx| {
             loop {
@@ -189,6 +408,17 @@ impl Root {
     fn open_start_view(&mut self, view: Option<&str>, window: &mut Window, cx: &mut Context<Self>) {
         match view {
             Some("new") => self.open_new(window, cx),
+            Some("block") => self.open_block(None, self.date, cx),
+            Some("reports") => self.open_reports(cx),
+            Some("inventory") => self.open_inventory(cx),
+            Some("reviews") => self.open_review_requests(cx),
+            Some("review-moderation") => self.open_review_moderation(cx),
+            Some("reports-cancelled") => {
+                self.open_outcome_report(sob_core::reports::Outcome::Cancelled, cx)
+            }
+            Some("reports-no-show") => {
+                self.open_outcome_report(sob_core::reports::Outcome::NoShow, cx)
+            }
             Some("conflicts") => {
                 self.overlay = Overlay::Conflicts {
                     editing: None,
@@ -219,44 +449,69 @@ impl Root {
     // ---------------------------------------------------------------- session
 
     fn submit_login(&mut self, cx: &mut Context<Self>) {
-        if self.login.busy {
+        if self.login.busy || self.login.server_editor || !matches!(self.screen, Screen::Login) {
             return;
         }
-        let creds = Credentials {
-            email: self.login.email.read(cx).text().trim().to_owned(),
-            password: self.login.password.read(cx).text().to_owned(),
+        let auth = self.svc.auth.clone();
+        let Ok(flow) = auth.begin_browser_sign_in() else {
+            self.login.error = Some(Key::ErrNetwork);
+            cx.notify();
+            return;
         };
-        if creds.email.is_empty() || creds.password.is_empty() {
-            return;
-        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.login.browser_attempt = Some(cancel.clone());
         self.login.busy = true;
         self.login.error = None;
+        cx.open_url(&flow.url);
         cx.notify();
-        let auth = self.svc.auth.clone();
         cx.spawn(async move |this, cx| {
+            let attempt = cancel.clone();
             let res = cx
                 .background_executor()
-                .spawn(async move { sob_core::auth::AuthProvider::sign_in(&*auth, &creds) })
+                .spawn(async move { auth.complete_browser_sign_in(flow, &attempt) })
                 .await;
-            let _ = this.update(cx, |this, cx| this.finish_login(res, cx));
+            let _ = this.update(cx, |this, cx| {
+                if this
+                    .login
+                    .browser_attempt
+                    .as_ref()
+                    .is_some_and(|active| Arc::ptr_eq(active, &cancel))
+                {
+                    this.login.browser_attempt = None;
+                    this.finish_login(res, cx);
+                }
+            });
         })
         .detach();
+    }
+
+    fn cancel_browser_login(&mut self, cx: &mut Context<Self>) {
+        if let Some(attempt) = self.login.browser_attempt.take() {
+            attempt.store(true, Ordering::Relaxed);
+        }
+        self.login.busy = false;
+        cx.notify();
     }
 
     fn finish_login(&mut self, res: Result<Session, AuthError>, cx: &mut Context<Self>) {
         self.login.busy = false;
         match res {
             Ok(session) => {
-                let _ = self.svc.tokens.save(&session);
-                self.svc.set_session(Some(session));
-                self.login.password.update(cx, |f, cx| f.clear(cx));
+                if self.svc.open_session(session.clone()).is_err() {
+                    self.login.error = Some(Key::ErrGeneric);
+                    cx.notify();
+                    return;
+                }
+                if let Err(error) = self.svc.tokens.save(&session) {
+                    eprintln!("could not save the session: {error}");
+                }
                 self.enter_main(cx);
             }
             Err(e) => {
                 self.login.error = Some(match e {
-                    AuthError::InvalidCredentials => Key::ErrWrongCredentials,
                     AuthError::WrongRole(_) => Key::ErrWrongRole,
                     AuthError::Network(_) => Key::ErrNetwork,
+                    AuthError::Unexpected(_) => Key::ErrServerResponse,
                     _ => Key::ErrGeneric,
                 });
             }
@@ -266,31 +521,94 @@ impl Root {
 
     fn enter_main(&mut self, cx: &mut Context<Self>) {
         self.screen = Screen::Main;
+        self.tz = calendar::salon_tz(&self.svc.store).unwrap_or(Tz::UTC);
+        self.pending_local_today = self.svc.config.start_date.is_none()
+            && self.svc.store.salon_settings().ok().flatten().is_none();
+        self.date = self
+            .svc
+            .config
+            .start_date
+            .unwrap_or_else(|| Utc::now().with_timezone(&self.tz).date_naive());
+        self.week_mode = false;
+        self.week_staff_id.clear();
+        self.notices.clear();
+        self.notice_cursor = self.svc.store.booking_notice_head().unwrap_or_default();
         if let Err(e) = self.svc.start_sync() {
             eprintln!("could not start sync: {e}");
         }
-        self.last_sig = None;
         self.reload(cx);
     }
 
     fn validate_saved(&mut self, session: Session, cx: &mut Context<Self>) {
         let auth = self.svc.auth.clone();
+        let handle = self.svc.session.clone();
         cx.spawn(async move |this, cx| {
+            let validated = session.clone();
             let ok = cx
                 .background_executor()
-                .spawn(async move { sob_core::auth::AuthProvider::validate(&*auth, &session) })
+                .spawn(async move { sob_core::auth::AuthProvider::validate(&*auth, &validated) })
                 .await;
             if let Ok(false) = ok {
-                let _ = this.update(cx, |this, cx| this.sign_out(cx));
+                let _ = this.update(cx, |this, cx| {
+                    if std::sync::Arc::ptr_eq(&handle, &this.svc.session)
+                        && this.svc.current_session().as_ref() == Some(&session)
+                    {
+                        this.sign_out(cx);
+                    }
+                });
             }
         })
         .detach();
     }
 
+    fn request_sign_out(&mut self, cx: &mut Context<Self>) {
+        if self.disconnecting {
+            return;
+        }
+        let Some(session) = self.svc.current_session().filter(Session::has_device_link) else {
+            self.sign_out(cx);
+            return;
+        };
+        self.disconnecting = true;
+        self.disconnect_failed = false;
+        let auth = self.svc.auth.clone();
+        let handle = self.svc.session.clone();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { auth.disconnect_device(&session) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if !Arc::ptr_eq(&handle, &this.svc.session) || !this.disconnecting {
+                    return;
+                }
+                if result.is_ok() {
+                    this.sign_out(cx);
+                } else {
+                    this.disconnecting = false;
+                    this.disconnect_failed = true;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     fn sign_out(&mut self, cx: &mut Context<Self>) {
-        self.svc.sign_out();
+        if let Some(session) = self.svc.sign_out() {
+            let auth = self.svc.auth.clone();
+            cx.background_executor()
+                .spawn(async move {
+                    sob_core::auth::AuthProvider::sign_out(&*auth, &session);
+                })
+                .detach();
+        }
         self.screen = Screen::Login;
+        self.disconnecting = false;
+        self.disconnect_failed = false;
         self.overlay = Overlay::None;
+        self.notices.clear();
         cx.notify();
     }
 
@@ -300,24 +618,90 @@ impl Root {
         if !matches!(self.screen, Screen::Main) {
             return;
         }
-        let status = self.svc.status();
-        let summary = calendar::sync_summary(&self.svc.store).unwrap_or_default();
-        let sig = (status.clone(), summary);
-        if self.last_sig.as_ref() != Some(&sig) {
-            self.last_sig = Some(sig);
-            self.reload(cx);
+        let before = self.notices.len();
+        let now = Instant::now();
+        let wall_now = Utc::now();
+        let minute_changed =
+            wall_now.timestamp().div_euclid(60) != self.calendar_now.timestamp().div_euclid(60);
+        if minute_changed {
+            self.calendar_now = wall_now;
         }
-        if status.connectivity == Connectivity::AuthRequired && !self.status_is_auth() {
+        self.notices.retain(|(_, deadline)| *deadline > now);
+        let status = self.svc.status();
+        let reconnected = status.connectivity == Connectivity::Online
+            && self.status.connectivity != Connectivity::Online;
+        if status.connectivity == Connectivity::AuthRequired {
+            let linked = self
+                .svc
+                .current_session()
+                .is_some_and(|s| s.has_device_link());
+            self.sign_out(cx);
+            self.login.error = Some(if linked {
+                Key::DeviceDisconnected
+            } else {
+                Key::SessionExpired
+            });
+            return;
+        }
+        self.update_inbox_connectivity(&status, cx);
+        self.refresh_open_report(&status, cx);
+        if status.connectivity == Connectivity::Online {
+            self.refresh_register_if_changed(cx);
+            self.refresh_inventory(reconnected, cx);
+            self.refresh_checkout_if_changed(cx);
+            self.refresh_waitlist_if_changed(reconnected, cx);
+            self.refresh_review_requests(reconnected, cx);
+            self.refresh_review_moderation(reconnected, cx);
+            self.refresh_staff_portraits(reconnected, cx);
+        }
+        if self.svc.store.data_version().ok() != self.data_version {
+            self.reload(cx);
+        } else if minute_changed || self.status != status || self.notices.len() != before {
+            self.status = status;
             cx.notify();
         }
-    }
-
-    fn status_is_auth(&self) -> bool {
-        self.status.connectivity == Connectivity::AuthRequired
+        self.refresh_unpaid_if_changed(reconnected, cx);
+        if reconnected {
+            self.refresh_weekly_conflicts_if_ready(cx);
+            self.refresh_open_annotations(true, cx);
+        }
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
+        self.calendar_layout.take();
+        // Capture the version before reading the view. A sync commit during the reads must
+        // still trigger a refresh on the next tick.
+        self.data_version = self.svc.store.data_version().ok();
+        let generation = self.svc.store.refresh_reviewed_generation().ok();
         let store = &self.svc.store;
+        let scope = store.get_meta("calendar_scope").ok().flatten();
+        if (self.calendar_scope.is_some() && self.calendar_scope != scope)
+            || self.replica_generation != generation
+        {
+            self.overlay = Overlay::None;
+            self.notices.clear();
+            self.notice_cursor = store.booking_notice_head().unwrap_or_default();
+        }
+        self.calendar_scope = scope;
+        self.replica_generation = generation;
+        self.refresh_notices();
+        let store = &self.svc.store;
+        let previous_time_off_scope = std::mem::take(&mut self.time_off_scope);
+        self.time_off_scope = store
+            .get_meta("time_off_scope")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| {
+                if self
+                    .svc
+                    .current_session()
+                    .is_some_and(|s| s.role == "owner")
+                {
+                    "all".into()
+                } else {
+                    "none".into()
+                }
+            });
         self.tz = calendar::salon_tz(store).unwrap_or(Tz::UTC);
         if self.pending_local_today && store.salon_settings().ok().flatten().is_some() {
             self.date = Utc::now().with_timezone(&self.tz).date_naive();
@@ -348,20 +732,39 @@ impl Root {
         self.summary = calendar::sync_summary(store).unwrap_or_default();
         self.conflicts = store.conflicts().unwrap_or_default();
         self.clients = calendar::known_clients(store).unwrap_or_default();
-        self.staff = store.staff().unwrap_or_default();
-        self.services = store
-            .services()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|s| s.active)
+        self.client_search_names = self
+            .clients
+            .iter()
+            .map(|(_, name)| name.to_lowercase())
             .collect();
+        self.report_staff_options = store.staff_including_inactive().unwrap_or_default();
+        self.staff = self
+            .report_staff_options
+            .iter()
+            .filter(|member| member.active)
+            .cloned()
+            .collect();
+        let catalogue = store.services().unwrap_or_default();
+        self.service_colors = catalogue
+            .iter()
+            .filter_map(|service| {
+                service
+                    .color
+                    .as_ref()
+                    .map(|color| (service.id.clone(), color.clone()))
+            })
+            .collect();
+        self.services = catalogue.into_iter().filter(|s| s.active).collect();
+        self.reload_directory();
+        self.reload_team_shifts();
+        self.refresh_weekly_conflicts_if_ready(cx);
+        self.refresh_open_annotations(previous_time_off_scope != self.time_off_scope, cx);
         cx.notify();
     }
 
     /// After a local edit: show it now, and tell the worker.
     fn edited(&mut self, cx: &mut Context<Self>) {
         self.svc.wake(Wake::Local);
-        self.last_sig = None;
         self.reload(cx);
     }
 
@@ -388,6 +791,7 @@ impl Root {
     }
 
     fn set_week_staff(&mut self, id: String, cx: &mut Context<Self>) {
+        self.calendar_layout.take();
         self.week_staff_id = id;
         cx.notify();
     }
@@ -422,18 +826,6 @@ impl Root {
 
     // ---------------------------------------------------------------- time helpers
 
-    fn at_local(&self, date: NaiveDate, minutes: i64) -> DateTime<Utc> {
-        let m = minutes.clamp(0, 24 * 60 - 15);
-        let naive = date
-            .and_hms_opt((m / 60) as u32, (m % 60) as u32, 0)
-            .expect("valid time");
-        self.tz
-            .from_local_datetime(&naive)
-            .earliest()
-            .map(|d| d.with_timezone(&Utc))
-            .unwrap_or_else(|| Utc.from_utc_datetime(&naive))
-    }
-
     fn hhmm(&self, dt: DateTime<Utc>) -> String {
         let l = dt.with_timezone(&self.tz);
         format!("{:02}:{:02}", l.hour(), l.minute())
@@ -441,26 +833,34 @@ impl Root {
 
     fn date_time_label(&self, dt: DateTime<Utc>) -> String {
         let l = dt.with_timezone(&self.tz);
-        format!(
+        let mut label = format!(
             "{} {}",
             i18n::date_label(self.locale, l.date_naive()),
             self.hhmm(dt)
-        )
+        );
+        if matches!(
+            self.tz.from_local_datetime(&l.naive_local()),
+            chrono::LocalResult::Ambiguous(_, _)
+        ) {
+            label.push_str(&l.format(" (UTC%:z)").to_string());
+        }
+        label
     }
 
     fn staff_name(&self, id: &str) -> String {
-        self.staff
+        self.report_staff_options
             .iter()
             .find(|s| s.id == id)
             .map(|s| s.display_name.clone())
             .unwrap_or_default()
     }
 
-    fn client_name(&self, id: &str) -> String {
+    fn appointment_client_name(&self, appointment: &Appointment) -> String {
         self.clients
             .iter()
-            .find(|(cid, _)| cid == id)
+            .find(|(cid, _)| cid == &appointment.client_id)
             .map(|(_, n)| n.clone())
+            .or_else(|| appointment.client_name.clone())
             .unwrap_or_else(|| self.t(Key::UnknownClient).to_owned())
     }
 
@@ -471,13 +871,34 @@ impl Root {
         let new_client = cx.new(|cx| TextField::new(t(Key::ClientName), false, cx));
         let new_client_phone = cx.new(|cx| TextField::new(t(Key::ClientPhone), false, cx));
         let notes = cx.new(|cx| TextField::new(t(Key::Notes), false, cx));
+        let client_search = cx.new(|cx| TextField::new(t(Key::SearchClients), false, cx));
+        let client_search_sub = cx.subscribe(&client_search, |_, _, event, cx| {
+            if matches!(event, FieldEvent::Changed) {
+                cx.notify();
+            }
+        });
+        let service_search = cx.new(|cx| TextField::new(t(Key::SearchServices), false, cx));
+        let service_search_sub = cx.subscribe(&service_search, |this, _, event, cx| {
+            if matches!(event, FieldEvent::Changed) {
+                if let Overlay::New(form) = &this.overlay {
+                    form.service_scroll.set_offset(gpui::point(px(0.), px(0.)));
+                }
+                cx.notify();
+            }
+        });
         let _ = window;
         self.overlay = Overlay::New(Box::new(NewForm {
             date: self.date,
             minutes: 10 * 60,
+            selected_end: None,
             staff_id: self.staff.first().map(|s| s.id.clone()),
             services: vec![],
             client_id: None,
+            client_search,
+            _client_search_sub: client_search_sub,
+            service_search,
+            _service_search_sub: service_search_sub,
+            service_scroll: gpui::ScrollHandle::new(),
             new_client,
             new_client_phone,
             notes,
@@ -492,6 +913,7 @@ impl Root {
         if let Overlay::New(f) = &mut self.overlay {
             f.services.retain(|s| performed.contains(s));
             f.staff_id = Some(id);
+            f.service_scroll.set_offset(gpui::point(px(0.), px(0.)));
         }
         cx.notify();
     }
@@ -524,49 +946,73 @@ impl Root {
             cx.notify();
             return;
         }
+        let Some(starts_at) = salon_local_instant(self.tz, form.date, form.minutes) else {
+            form.error = Some(Key::ErrInvalidLocalStart);
+            cx.notify();
+            return;
+        };
+        if let Some(end) = form.selected_end {
+            let Some(end) =
+                salon_local_instant(self.tz, form.date, end).filter(|end| *end > starts_at)
+            else {
+                form.error = Some(Key::SelectedSlotInvalid);
+                cx.notify();
+                return;
+            };
+            let duration: i64 = self
+                .services
+                .iter()
+                .filter(|service| form.services.contains(&service.id))
+                .map(|service| service.duration_minutes + service.buffer_minutes)
+                .sum();
+            if end.signed_duration_since(starts_at).num_minutes() < duration {
+                form.error = Some(Key::SelectedSlotTooShort);
+                cx.notify();
+                return;
+            }
+        }
         if form.client_id.is_none() && name.is_empty() {
             form.error = Some(Key::ErrPickClient);
             cx.notify();
             return;
         }
-        let (date, minutes, services, chosen) = (
-            form.date,
-            form.minutes,
-            form.services.clone(),
-            form.client_id.clone(),
-        );
-        let starts_at = self.at_local(date, minutes);
-        let result = (|| {
-            let client_id = match chosen {
-                Some(id) => id,
-                None => ops::create_client(
-                    &mut self.svc.store,
-                    &name,
-                    (!phone.is_empty()).then_some(phone.as_str()),
-                )?,
-            };
-            ops::create_appointment(
+        let (services, chosen) = (form.services.clone(), form.client_id.clone());
+        let has_client = chosen.is_some();
+        let booking = NewAppointment {
+            staff_id,
+            service_ids: services,
+            starts_at,
+            client_id: chosen.unwrap_or_default(),
+            notes: (!notes.is_empty()).then_some(notes),
+            override_notice: false,
+        };
+        let result = if has_client {
+            ops::create_appointment(&mut self.svc.store, booking)
+        } else {
+            ops::create_appointment_for_new_client(
                 &mut self.svc.store,
-                NewAppointment {
-                    staff_id,
-                    service_ids: services,
-                    starts_at,
-                    client_id,
-                    notes: (!notes.is_empty()).then_some(notes),
-                    override_notice: false,
-                },
+                booking,
+                &name,
+                (!phone.is_empty()).then_some(phone.as_str()),
             )
-        })();
+        };
         match result {
             Ok(_) => {
                 self.overlay = Overlay::None;
                 self.date = starts_at.with_timezone(&self.tz).date_naive();
+                if self.week_mode {
+                    self.date -= Span::days(self.date.weekday().num_days_from_monday().into());
+                }
                 self.edited(cx);
             }
             Err(e) => {
                 eprintln!("booking failed: {e}");
                 if let Overlay::New(f) = &mut self.overlay {
-                    f.error = Some(Key::ErrGeneric);
+                    f.error = Some(match e {
+                        CoreError::TimeOffOverlap => Key::TimeOffOverlap,
+                        CoreError::StaffCapacityExceeded => Key::ConflictSlotTaken,
+                        _ => Key::ErrGeneric,
+                    });
                 }
                 cx.notify();
             }
@@ -579,7 +1025,18 @@ impl Root {
         let Ok(Some(a)) = calendar::effective_appointment(&self.svc.store, id) else {
             return;
         };
+        self.show_appointment_details(a, None, cx);
+    }
+
+    fn show_appointment_details(
+        &mut self,
+        a: Appointment,
+        return_to: Option<AppointmentReturn>,
+        cx: &mut Context<Self>,
+    ) {
+        let synced = a.version > 0;
         self.overlay = Overlay::Details(Box::new(Details {
+            return_to,
             id: a.id.clone(),
             original_start: a.starts_at,
             original_staff: a.staff_id.clone(),
@@ -587,11 +1044,42 @@ impl Root {
             staff_id: a.staff_id,
             confirm_cancel: false,
             error: None,
+            price_review: None,
+            settlement_review: None,
+            checkout: None,
+            annotations: None,
+            annotations_requested_version: None,
         }));
-        cx.notify();
+        if synced {
+            self.open_annotations(cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    fn close_appointment_details(&mut self, edited_appointment: bool) {
+        let Overlay::Details(details) = &mut self.overlay else {
+            return;
+        };
+        self.overlay = match details.return_to.take() {
+            Some(AppointmentReturn::TeamShifts(mut desk)) => {
+                if edited_appointment {
+                    desk.appointment_edited(&details.id);
+                }
+                Overlay::TeamShifts(desk)
+            }
+            Some(AppointmentReturn::Unpaid(mut desk)) => {
+                desk.needs_refresh = true;
+                Overlay::Unpaid(desk)
+            }
+            None => Overlay::None,
+        };
+        self.reload_team_shifts();
     }
 
     fn apply_move(&mut self, cx: &mut Context<Self>) {
+        let blocked = self.t(Key::TimeOffOverlap);
+        let taken = self.t(Key::ConflictSlotTaken);
         let Overlay::Details(d) = &mut self.overlay else {
             return;
         };
@@ -599,11 +1087,15 @@ impl Root {
         let staff = (d.staff_id != d.original_staff).then(|| d.staff_id.clone());
         match ops::reschedule_appointment(&mut self.svc.store, &d.id, start, staff.as_deref()) {
             Ok(()) => {
-                self.overlay = Overlay::None;
+                self.close_appointment_details(true);
                 self.edited(cx);
             }
             Err(e) => {
-                d.error = Some(e.to_string());
+                d.error = Some(match e {
+                    CoreError::TimeOffOverlap => blocked.to_owned(),
+                    CoreError::StaffCapacityExceeded => taken.to_owned(),
+                    e => e.to_string(),
+                });
                 cx.notify();
             }
         }
@@ -620,7 +1112,7 @@ impl Root {
         }
         match ops::cancel_appointment(&mut self.svc.store, &d.id) {
             Ok(()) => {
-                self.overlay = Overlay::None;
+                self.close_appointment_details(true);
                 self.edited(cx);
             }
             Err(e) => {
@@ -641,7 +1133,7 @@ impl Root {
         };
         match ops::set_appointment_status(&mut self.svc.store, &d.id, status, now) {
             Ok(()) => {
-                self.overlay = Overlay::None;
+                self.close_appointment_details(true);
                 self.edited(cx);
             }
             Err(error) => {
@@ -663,10 +1155,14 @@ impl Root {
                 self.edited(cx);
             }
             Err(e) => {
-                self.overlay = Overlay::Conflicts {
-                    editing: None,
-                    error: Some(e.to_string()),
+                let message = match e {
+                    CoreError::TimeOffOverlap => self.t(Key::TimeOffOverlap).to_owned(),
+                    CoreError::StaffCapacityExceeded => self.t(Key::ConflictSlotTaken).to_owned(),
+                    other => other.to_string(),
                 };
+                if let Overlay::Conflicts { error, .. } = &mut self.overlay {
+                    *error = Some(message);
+                }
                 cx.notify();
             }
         }
@@ -717,6 +1213,7 @@ impl Root {
             "conflict" => Key::ConflictStale,
             "not_found" => Key::ConflictNotFound,
             "invalid_state" => Key::ConflictInvalidState,
+            "sync_generation_changed" => Key::ConflictRestoredHistory,
             "intake_required" => Key::ConflictIntakeRequired,
             "booking_intent_conflict" => Key::ConflictBookingIntent,
             "forbidden" => Key::ConflictForbidden,
@@ -824,6 +1321,15 @@ impl Root {
             .child(SharedString::from(label.to_owned()))
     }
 
+    fn service_indicators(&self, badge: &CalendarServiceBadge) -> gpui::Div {
+        div().flex().flex_wrap().gap_1().children(
+            appointment_badges::service(badge)
+                .into_iter()
+                .flatten()
+                .map(|badge| badge.chip(self.t(badge.1), false)),
+        )
+    }
+
     fn label(&self, key: Key) -> gpui::Div {
         div()
             .text_xs()
@@ -864,12 +1370,8 @@ impl Root {
                         div()
                             .text_color(theme::muted())
                             .text_sm()
-                            .child(t(Key::SignInTitle)),
+                            .child(t(Key::BrowserSignInHelp)),
                     )
-                    .child(self.label(Key::Email))
-                    .child(self.login.email.clone())
-                    .child(self.label(Key::Password))
-                    .child(self.login.password.clone())
                     .when_some(self.login.error, |d, e| {
                         d.child(div().text_sm().text_color(theme::conflict_fg()).child(t(e)))
                     })
@@ -877,24 +1379,47 @@ impl Root {
                         self.button(
                             "sign-in",
                             if self.login.busy {
-                                t(Key::SigningIn)
+                                t(Key::BrowserSignInWaiting)
                             } else {
-                                t(Key::SignIn)
+                                t(Key::BrowserSignIn)
                             },
                             Kind::Primary,
                             cx.listener(|this, _, _, cx| this.submit_login(cx)),
                         )
                         .mt_2(),
                     )
+                    .when(self.login.busy, |d| {
+                        d.child(self.button(
+                            "cancel-browser-login",
+                            t(Key::Cancel),
+                            Kind::Ghost,
+                            cx.listener(|this, _, _, cx| this.cancel_browser_login(cx)),
+                        ))
+                    })
                     .child(
                         div()
-                            .text_xs()
-                            .text_color(theme::muted())
-                            .child(SharedString::from(format!(
-                                "{}: {}",
-                                t(Key::ServerUrl),
-                                self.svc.config.api_url
-                            ))),
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(theme::muted())
+                                    .child(SharedString::from(self.svc.config.api_url.clone())),
+                            )
+                            .when(!self.svc.config.api_url_locked && !self.login.busy, |d| {
+                                d.child(self.button(
+                                    "login-server",
+                                    t(Key::ChangeServer),
+                                    Kind::Ghost,
+                                    cx.listener(|this, _, window, cx| {
+                                        this.open_server_editor(window, cx)
+                                    }),
+                                ))
+                            }),
                     ),
             )
             .into_any_element()
@@ -989,6 +1514,65 @@ impl Root {
             ))
     }
 
+    fn cloud_calendar_url(&self) -> Option<url::Url> {
+        let origin = self.svc.config.network_origin();
+        let mut link = url::Url::parse(&origin)
+            .ok()?
+            .join("/admin/calendar")
+            .ok()?;
+        let mut query = link.query_pairs_mut();
+        query
+            .append_pair("date", &self.date.to_string())
+            .append_pair("view", if self.week_mode { "week" } else { "day" });
+        if self.week_mode && !self.week_staff_id.is_empty() {
+            query.append_pair("staff", &self.week_staff_id);
+        }
+        drop(query);
+        Some(link)
+    }
+
+    fn open_cloud_calendar(&mut self, cx: &mut Context<Self>) {
+        let Some(link) = self.cloud_calendar_url() else {
+            return;
+        };
+        let Some(session) = self.svc.current_session() else {
+            return;
+        };
+        self.cloud_calendar_error = false;
+        cx.notify();
+        let auth = self.svc.auth.clone();
+        let session_handle = self.svc.session.clone();
+        cx.spawn(async move |root, cx| {
+            let handoff = cx
+                .background_executor()
+                .spawn(async move { auth.begin_browser_calendar(&session, &link).ok().flatten() })
+                .await;
+            let should_open = root
+                .update(cx, |root, cx| {
+                    if !Arc::ptr_eq(&session_handle, &root.svc.session)
+                        || root.svc.current_session().is_none()
+                    {
+                        return false;
+                    }
+                    if let Some(local) = handoff.as_ref() {
+                        cx.open_url(&local.url());
+                        true
+                    } else {
+                        root.cloud_calendar_error = true;
+                        cx.notify();
+                        false
+                    }
+                })
+                .unwrap_or(false);
+            if should_open && let Some(handoff) = handoff {
+                cx.background_executor()
+                    .spawn(async move { handoff.serve() })
+                    .await;
+            }
+        })
+        .detach();
+    }
+
     fn render_header(&self, cx: &mut Context<Self>) -> gpui::Div {
         div()
             .flex()
@@ -1059,8 +1643,87 @@ impl Root {
                 },
                 cx.listener(|this, _, _, cx| this.set_week(true, cx)),
             ))
+            .when(self.cloud_calendar_url().is_some(), |d| {
+                d.child(
+                    self.button(
+                        "open-cloud-calendar",
+                        self.t(Key::OpenCloudCalendar),
+                        Kind::Ghost,
+                        cx.listener(|this, _, _, cx| this.open_cloud_calendar(cx)),
+                    )
+                    .gap_2()
+                    .child(appointment_badges::Icon::External.element(theme::muted())),
+                )
+            })
+            .when(self.cloud_calendar_error, |d| {
+                d.child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::conflict_fg())
+                        .child(self.t(Key::OpenCloudCalendarError)),
+                )
+            })
             .child(div().flex_1())
             .child(self.status_cluster(cx))
+            .when(self.directory_enabled(), |d| {
+                d.child(self.button(
+                    "directory",
+                    self.t(Key::ClientDirectory),
+                    Kind::Ghost,
+                    cx.listener(|this, _, _, cx| this.open_directory(cx)),
+                ))
+            })
+            .child(self.button(
+                "waitlist",
+                self.t(Key::Waitlist),
+                Kind::Ghost,
+                cx.listener(|this, _, _, cx| this.open_waitlist(true, 1, cx)),
+            ))
+            .child(self.button(
+                "cash-register",
+                self.t(Key::CashRegister),
+                Kind::Ghost,
+                cx.listener(|this, _, _, cx| this.load_register(cx)),
+            ))
+            .child(self.button(
+                "inventory",
+                self.t(Key::Inventory),
+                Kind::Ghost,
+                cx.listener(|this, _, _, cx| this.open_inventory(cx)),
+            ))
+            .child(self.button(
+                "reports",
+                self.t(Key::Reports),
+                Kind::Ghost,
+                cx.listener(|this, _, _, cx| this.open_reports(cx)),
+            ))
+            .child(
+                self.button(
+                    "team-shifts",
+                    self.t(Key::TeamShifts),
+                    Kind::Ghost,
+                    cx.listener(|this, _, _, cx| this.open_team_shifts(cx)),
+                )
+                .debug_selector(|| "team-shifts".to_owned()),
+            )
+            .child(self.button(
+                "staff-portraits",
+                self.t(Key::StaffPortraits),
+                Kind::Ghost,
+                cx.listener(|this, _, _, cx| this.open_staff_portraits(cx)),
+            ))
+            .child(self.button(
+                "review-requests",
+                self.t(Key::Reputation),
+                Kind::Ghost,
+                cx.listener(|this, _, _, cx| this.open_review_requests(cx)),
+            ))
+            .child(self.button(
+                "calendar-inbox",
+                self.t(Key::CalendarInbox),
+                Kind::Ghost,
+                cx.listener(|this, _, _, cx| this.open_inbox(false, 1, cx)),
+            ))
             .child(self.button(
                 "toggle-theme",
                 self.t(if theme::is_dark() {
@@ -1077,17 +1740,73 @@ impl Root {
                 Kind::Primary,
                 cx.listener(|this, _, window, cx| this.open_new(window, cx)),
             ))
+            .when(
+                self.staff
+                    .iter()
+                    .any(|staff| staff.active && self.can_manage_block(staff)),
+                |d| {
+                    d.child(self.button(
+                        "new-time-off",
+                        self.t(Key::BlockTime),
+                        Kind::Ghost,
+                        cx.listener(|this, _, _, cx| this.open_block(None, this.date, cx)),
+                    ))
+                },
+            )
+            .when(
+                self.calendar_columns()
+                    .iter()
+                    .any(|(_, col)| !col.blocks.is_empty()),
+                |d| {
+                    d.child(self.button(
+                        "list-time-off",
+                        self.t(Key::TimeOffList),
+                        Kind::Ghost,
+                        cx.listener(|this, _, _, cx| {
+                            this.overlay = Overlay::Blocks;
+                            cx.notify();
+                        }),
+                    ))
+                },
+            )
+            .when(!self.svc.config.api_url_locked, |d| {
+                d.child(self.button(
+                    "change-server",
+                    self.t(Key::ServerUrl),
+                    Kind::Ghost,
+                    cx.listener(|this, _, window, cx| this.open_server_editor(window, cx)),
+                ))
+            })
+            .when(self.disconnect_failed, |d| {
+                d.child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::conflict_fg())
+                        .child(self.t(Key::DeviceDisconnectFailed)),
+                )
+            })
             .child(self.button(
                 "sign-out",
-                self.t(Key::SignOut),
+                self.t(if self.disconnecting {
+                    Key::DeviceDisconnecting
+                } else {
+                    Key::SignOut
+                }),
                 Kind::Ghost,
-                cx.listener(|this, _, _, cx| this.sign_out(cx)),
+                cx.listener(|this, _, _, cx| this.request_sign_out(cx)),
             ))
     }
 
     fn visible_hours(&self, view: &DayView) -> (u32, u32) {
         let (mut first, mut last) = (8u32, 20u32);
         for col in &view.columns {
+            for block in &col.blocks {
+                let (start, end) = blocks::wall_minutes(&block.time_off, view.date, self.tz);
+                if start != 0 || end != 1440 {
+                    first = first.min(start / 60);
+                    last = last.max(end.div_ceil(60));
+                }
+            }
             for item in &col.items {
                 let s = item.appointment.starts_at.with_timezone(&self.tz);
                 let e = item.appointment.ends_at.with_timezone(&self.tz);
@@ -1108,22 +1827,24 @@ impl Root {
     fn render_block(
         &self,
         item: &CalendarItem,
-        date: NaiveDate,
+        (start, end): (f32, f32),
+        (lane, lane_count): (usize, usize),
         first_hour: u32,
+        total_h: f32,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let a = &item.appointment;
-        let start_local = a.starts_at.with_timezone(&self.tz);
-        let day_start = self.at_local(date, 0);
-        let from_min = ((a.starts_at - day_start).num_minutes() as f32).max(0.0);
-        let _ = start_local;
-        let top = (from_min - first_hour as f32 * 60.0) * HOUR_PX / 60.0;
-        let len_min = (a.ends_at - a.starts_at).num_minutes().max(15) as f32;
-        let height = (len_min * HOUR_PX / 60.0 - 2.0).max(22.0);
+        let top = start - first_hour as f32 * HOUR_PX;
         let (bg, edge) = if item.conflict {
             (theme::conflict_bg(), theme::conflict_fg())
         } else if item.pending {
             (theme::pending_bg(), theme::warn())
+        } else if let Some(service) = a.services.first() {
+            let color = service
+                .service_id
+                .as_ref()
+                .and_then(|id| self.service_colors.get(id));
+            theme::service_color(color.map(String::as_str), &service.name)
         } else {
             (theme::accent_soft(), theme::accent())
         };
@@ -1134,13 +1855,11 @@ impl Root {
             .map(|s| s.name.clone())
             .collect::<Vec<_>>()
             .join(", ");
-        div()
+        let indicators = appointment_badges::calendar(item);
+        let card = div()
             .id(SharedString::from(format!("appt-{}", a.id)))
-            .absolute()
-            .top(px(top))
-            .left(px(3.))
-            .right(px(3.))
-            .h(px(height))
+            .debug_selector(|| format!("calendar-appointment-{}", a.id))
+            .h_full()
             .px_2()
             .py_1()
             .overflow_hidden()
@@ -1151,7 +1870,11 @@ impl Root {
             .text_xs()
             .cursor_pointer()
             .hover(|s| s.opacity(0.85))
-            .on_click(cx.listener(move |this, _, _, cx| this.open_details(&id, cx)))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if matches!(this.overlay, Overlay::None) {
+                    this.open_details(&id, cx);
+                }
+            }))
             .child(
                 div()
                     .flex()
@@ -1160,28 +1883,34 @@ impl Root {
                     .gap_1()
                     .child(
                         div()
+                            .flex_1()
+                            .min_w_0()
                             .font_weight(FontWeight::SEMIBOLD)
                             .truncate()
                             .child(SharedString::from(item.client_name.clone())),
                     )
-                    .when(item.conflict, |d| {
-                        d.child(self.badge(
-                            self.t(Key::ConflictBadge),
-                            theme::conflict_fg(),
-                            theme::conflict_bg(),
-                        ))
-                    })
-                    .when(item.pending && !item.conflict, |d| {
-                        d.child(self.badge(
-                            self.t(Key::PendingBadge),
-                            theme::pending_fg(),
-                            rgb_white(),
-                        ))
+                    .when(indicators.iter().any(Option::is_some), |d| {
+                        d.child(
+                            div()
+                                .flex()
+                                .flex_none()
+                                .flex_wrap()
+                                .h(px(16.))
+                                .max_w(relative(0.65))
+                                .overflow_hidden()
+                                .gap(px(2.))
+                                .children(
+                                    indicators
+                                        .into_iter()
+                                        .flatten()
+                                        .map(|badge| badge.chip(self.t(badge.1), true)),
+                                ),
+                        )
                     }),
             )
             .child(
                 div()
-                    .text_color(theme::muted())
+                    .text_color(theme::text())
                     .truncate()
                     .child(SharedString::from(format!(
                         "{}-{}  {}",
@@ -1196,17 +1925,29 @@ impl Root {
                     .iter()
                     .filter_map(|s| s.processing.as_ref().map(|p| p.minutes))
                     .sum();
-                d.child(div().text_xs().text_color(theme::muted()).truncate().child(
+                d.child(div().text_xs().text_color(theme::text()).truncate().child(
                     SharedString::from(i18n::fill(
                         self.t(Key::ProcessingDuration),
                         &[("minutes", &minutes.to_string())],
                     )),
                 ))
-            })
+            });
+        div()
+            .absolute()
+            .top(relative(top / total_h))
+            .left(relative(lane as f32 / lane_count as f32))
+            .w(relative(1.0 / lane_count as f32))
+            .h(relative((end - start) / total_h))
+            .px(px(3.0))
+            .child(card)
             .into_any_element()
     }
 
-    fn render_calendar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_calendar(
+        &self,
+        viewport_height: gpui::Pixels,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let Some(view) = &self.view else {
             return div().into_any_element();
         };
@@ -1220,56 +1961,212 @@ impl Root {
                 .child(self.t(Key::NoStaff))
                 .into_any_element();
         }
-        let (first, last) = if self.week_mode {
-            self.week_views
-                .iter()
-                .map(|view| self.visible_hours(view))
-                .fold((8, 20), |(a, b), (c, d)| (a.min(c), b.max(d)))
-        } else {
-            self.visible_hours(view)
-        };
         let visible_columns = self.calendar_columns();
+        let CalendarLayout {
+            first,
+            last,
+            columns_width,
+            columns: layouts,
+        } = self.calendar_layout.get_or_init(|| {
+            let (first, last) = if self.week_mode {
+                self.week_views
+                    .iter()
+                    .map(|view| self.visible_hours(view))
+                    .fold((8, 20), |(a, b), (c, d)| (a.min(c), b.max(d)))
+            } else {
+                self.visible_hours(view)
+            };
+            let columns: Vec<_> = visible_columns
+                .iter()
+                .map(|(date, column)| {
+                    let bounds: Vec<_> = column
+                        .items
+                        .iter()
+                        .map(|item| appointment_bounds(item, *date, self.tz))
+                        .collect();
+                    let lanes = appointment_lanes(&bounds);
+                    let width =
+                        lanes.iter().map(|&(_, count)| count).max().unwrap_or(1) as f32 * 104.0;
+                    CalendarColumnLayout {
+                        bounds,
+                        lanes,
+                        width: width.max(160.0),
+                    }
+                })
+                .collect();
+            let columns_width = columns.iter().map(|layout| layout.width).sum();
+            CalendarLayout {
+                first,
+                last,
+                columns_width,
+                columns,
+            }
+        });
+        let (first, last) = (*first, *last);
         let total_h = (last - first) as f32 * HOUR_PX;
+        // Keep an hour of cards beyond the viewport. Lane placement still uses the whole column.
+        let height = f32::from(viewport_height);
+        let handle = &self.vertical_scroll.handle;
+        let last_body_height = f32::from(handle.bounds().size.height).min(height);
+        let scroll_y =
+            (-f32::from(handle.offset().y)).clamp(0., (total_h - last_body_height).max(0.));
+        let visible_start = first as f32 * HOUR_PX + scroll_y;
+        let visible_end = visible_start + height;
+        let local_now = self.calendar_now.with_timezone(&self.tz);
+        let today = local_now.date_naive();
+        let minute = local_now.hour() * 60 + local_now.minute();
+        let time_position = (first * 60..last * 60)
+            .contains(&minute)
+            .then(|| relative((minute - first * 60) as f32 / ((last - first) * 60) as f32));
         let hours = div()
             .w(px(GUTTER_PX))
             .flex_none()
             .relative()
-            .h(px(total_h))
+            .h_full()
+            .min_h(px(total_h))
             .children((first..last).map(|h| {
                 div()
                     .absolute()
-                    .top(px((h - first) as f32 * HOUR_PX - 7.0))
+                    .debug_selector(|| format!("calendar-hour-{h}"))
+                    .top(relative((h - first) as f32 / (last - first) as f32))
+                    .mt(px(if h == first { 1. } else { -7. }))
                     .right(px(8.))
                     .text_xs()
                     .text_color(theme::muted())
                     .child(SharedString::from(format!("{h:02}:00")))
-            }));
+            }))
+            .when_some(
+                time_position.filter(|_| visible_columns.iter().any(|(date, _)| *date == today)),
+                |rail, top| {
+                    rail.child(
+                        div()
+                            .absolute()
+                            .debug_selector(|| "calendar-now-label".to_string())
+                            .top(top)
+                            .mt(px(-9.))
+                            .right(px(2.))
+                            .px_1()
+                            .rounded_sm()
+                            .bg(theme::conflict_fg())
+                            .text_color(theme::conflict_bg())
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(local_now.format("%H:%M").to_string()),
+                    )
+                },
+            );
+        let selected_slot = self
+            .slot_drag
+            .as_ref()
+            .and_then(|drag| drag.selection(self.vertical_scroll.handle.offset().y));
+        let root = cx.entity().downgrade();
         let columns = visible_columns
             .iter()
             .enumerate()
             .map(|(index, (date, col))| {
+                let CalendarColumnLayout {
+                    bounds,
+                    lanes,
+                    width,
+                } = &layouts[index];
+                let weak = root.clone();
+                let preview = selected_slot
+                    .as_ref()
+                    .filter(|slot| slot.date == *date && slot.staff_id == col.staff.id);
                 div()
                     .debug_selector(|| format!("calendar-col-{index}"))
                     .flex_1()
-                    .min_w(px(160.))
+                    .min_w(px(*width))
                     .relative()
-                    .h(px(total_h))
+                    .h_full()
                     .border_l_1()
                     .border_color(theme::line())
-                    .children((first..last).map(|h| {
-                        div()
-                            .absolute()
-                            .top(px((h - first) as f32 * HOUR_PX))
-                            .left_0()
-                            .right_0()
-                            .h(px(1.))
-                            .bg(theme::line_soft())
-                    }))
+                    .child(
+                        gpui::canvas(
+                            |_, _, _| (),
+                            move |bounds, (), window, _| {
+                                let clip = window.content_mask().bounds;
+                                let weak = weak.clone();
+                                window.on_mouse_event(
+                                    move |event: &gpui::MouseDownEvent, phase, _, app| {
+                                        if phase.bubble()
+                                            && bounds.contains(&event.position)
+                                            && clip.contains(&event.position)
+                                        {
+                                            let _ = weak.update(app, |root, _| {
+                                                root.start_slot_drag(
+                                                    index, bounds, first, last, event,
+                                                )
+                                            });
+                                        }
+                                    },
+                                );
+                                for hour in first..last {
+                                    let y = bounds.top()
+                                        + bounds.size.height
+                                            * ((hour - first) as f32 / (last - first) as f32);
+                                    if y >= clip.top() && y < clip.bottom() {
+                                        window.paint_quad(gpui::fill(
+                                            gpui::Bounds::new(
+                                                gpui::point(bounds.left(), y),
+                                                gpui::size(bounds.size.width, px(1.)),
+                                            ),
+                                            theme::line_soft(),
+                                        ));
+                                    }
+                                }
+                            },
+                        )
+                        .absolute()
+                        .size_full(),
+                    )
+                    .when_some(preview, |column, slot| {
+                        column.child(
+                            div()
+                                .absolute()
+                                .debug_selector(|| "calendar-slot-selection".to_string())
+                                .top(relative(
+                                    (slot.start - i64::from(first) * 60) as f32 / total_h * HOUR_PX
+                                        / 60.,
+                                ))
+                                .h(relative(
+                                    (slot.end - slot.start) as f32 / total_h * HOUR_PX / 60.,
+                                ))
+                                .left_0()
+                                .right_0()
+                                .bg(theme::accent_soft())
+                                .border_1()
+                                .border_color(theme::accent()),
+                        )
+                    })
+                    .children(
+                        col.blocks
+                            .iter()
+                            .map(|block| self.render_time_off(block, *date, first, last, cx)),
+                    )
                     .children(
                         col.items
                             .iter()
-                            .map(|item| self.render_block(item, *date, first, cx)),
+                            .zip(bounds.iter().copied().zip(lanes.iter().copied()))
+                            .filter(|(_, ((start, end), _))| {
+                                *end >= visible_start - HOUR_PX && *start <= visible_end + HOUR_PX
+                            })
+                            .map(|(item, (bounds, lanes))| {
+                                self.render_block(item, bounds, lanes, first, total_h, cx)
+                            }),
                     )
+                    .when_some(time_position.filter(|_| *date == today), |column, top| {
+                        column.child(
+                            div()
+                                .debug_selector(|| format!("calendar-now-line-{date}-{index}"))
+                                .absolute()
+                                .top(top)
+                                .left_0()
+                                .right_0()
+                                .h(px(2.))
+                                .bg(theme::conflict_fg()),
+                        )
+                    })
             });
         let heads = visible_columns
             .iter()
@@ -1278,7 +2175,7 @@ impl Root {
                 div()
                     .debug_selector(|| format!("calendar-head-{index}"))
                     .flex_1()
-                    .min_w(px(160.))
+                    .min_w(px(layouts[index].width))
                     .h(px(36.))
                     .flex()
                     .items_center()
@@ -1304,17 +2201,35 @@ impl Root {
                         ))
                     })
             });
-        div()
+        let mut time_view = div()
+            .id("calendar-scroll")
+            .debug_selector(|| "calendar-scroll".to_string())
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .track_scroll(&self.vertical_scroll.handle)
+            .bg(theme::panel())
+            .child(
+                div()
+                    .h_full()
+                    .min_h(px(total_h))
+                    .flex_none()
+                    .flex()
+                    .children(columns),
+            );
+        time_view.style().restrict_scroll_to_axis = Some(true);
+        let mut days_view = div()
             .id("calendar-horizontal-scroll")
             .flex_1()
             .min_w_0()
             .min_h_0()
             .overflow_x_scroll()
+            .track_scroll(&self.horizontal_scroll.handle)
             .child(
                 div()
                     .w_full()
                     .h_full()
-                    .min_w(px(GUTTER_PX + visible_columns.len() as f32 * 160.))
+                    .min_w(px(*columns_width))
                     .flex()
                     .flex_col()
                     .child(
@@ -1324,17 +2239,69 @@ impl Root {
                             .border_b_1()
                             .border_color(theme::line())
                             .bg(theme::panel())
-                            .child(div().w(px(GUTTER_PX)).flex_none())
                             .children(heads),
                     )
+                    .child(time_view),
+            );
+        days_view.style().restrict_scroll_to_axis = Some(true);
+        // The time labels and calendar have identical vertical viewports. Sharing their offset
+        // keeps the labels aligned even when the wheel is over the fixed left rail.
+        let mut hour_view = div()
+            .id("calendar-hours-scroll")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .track_scroll(&self.vertical_scroll.handle)
+            .child(hours);
+        hour_view.style().restrict_scroll_to_axis = Some(true);
+        let hour_rail = div()
+            .debug_selector(|| "calendar-hour-rail".to_string())
+            .flex()
+            .flex_col()
+            .flex_none()
+            .w(px(GUTTER_PX))
+            .min_h_0()
+            .bg(theme::panel())
+            .child(
+                div()
+                    .flex_none()
+                    .h(px(37.))
+                    .border_b_1()
+                    .border_color(theme::line()),
+            )
+            .child(hour_view);
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_h_0()
+                    .child(hour_rail)
+                    .child(days_view)
                     .child(
                         div()
-                            .id("calendar-scroll")
-                            .flex_1()
-                            .min_h_0()
-                            .overflow_y_scroll()
-                            .bg(theme::panel())
-                            .child(div().flex().child(hours).children(columns)),
+                            .flex()
+                            .flex_col()
+                            .flex_none()
+                            .w(px(scrollbar::WIDTH))
+                            .child(div().flex_none().h(px(37.)))
+                            .child(self.vertical_scroll.render(scrollbar::Axis::Vertical, cx)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .pl(px(GUTTER_PX))
+                    .pr(px(scrollbar::WIDTH))
+                    .child(
+                        self.horizontal_scroll
+                            .render(scrollbar::Axis::Horizontal, cx),
                     ),
             )
             .into_any_element()
@@ -1342,7 +2309,67 @@ impl Root {
 
     // ---------------------------------------------------------------- render: overlays
 
+    fn dismiss_overlay(&mut self, cx: &mut Context<Self>) {
+        if self.saving_service_annotations() {
+            return;
+        }
+        match &mut self.overlay {
+            Overlay::None => return,
+            Overlay::ReviewModeration(desk) => {
+                if !desk.dismiss_editor(cx) {
+                    self.overlay = Overlay::None;
+                }
+            }
+            Overlay::Inventory(desk) => {
+                if !desk.dismiss_editor(cx) {
+                    self.overlay = Overlay::None;
+                }
+            }
+            Overlay::TeamShifts(desk) => {
+                if !desk.dismiss_editor(cx) {
+                    self.overlay = Overlay::None;
+                }
+            }
+            Overlay::Reviews(desk) if desk.confirm.is_some() && !desk.busy => {
+                desk.confirm = None;
+            }
+            Overlay::StaffPortraits(desk) if desk.confirming_removal => {
+                desk.confirming_removal = false;
+            }
+            Overlay::Details(details) if details.price_review.is_some() => {
+                details.price_review = None;
+            }
+            Overlay::Details(details) if details.settlement_review.is_some() => {
+                details.settlement_review = None;
+            }
+            Overlay::Details(details) if details.checkout.is_some() => {
+                if !details
+                    .checkout
+                    .as_ref()
+                    .is_some_and(|review| review.can_go_back())
+                {
+                    return;
+                }
+                details.checkout = None;
+            }
+            Overlay::Details(_) => self.close_appointment_details(false),
+            _ => self.overlay = Overlay::None,
+        }
+        self.refresh_weekly_conflicts_if_ready(cx);
+        cx.notify();
+    }
+
     fn modal(&self, body: gpui::Div) -> gpui::Div {
+        self.modal_with_height(body, px(560.), px(720.), None)
+    }
+
+    fn modal_with_height(
+        &self,
+        body: gpui::Div,
+        width: gpui::Pixels,
+        max_height: gpui::Pixels,
+        backdrop_context: Option<&mut Context<Self>>,
+    ) -> gpui::Div {
         div()
             .absolute()
             .top_0()
@@ -1352,9 +2379,21 @@ impl Root {
             .items_center()
             .justify_center()
             .bg(theme::backdrop())
+            .occlude()
+            .when_some(backdrop_context, |frame, cx| {
+                frame.child(
+                    div()
+                        .id("appointment-details-backdrop")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .on_click(cx.listener(|this, _, _, cx| this.dismiss_overlay(cx))),
+                )
+            })
             .child(
-                body.w(px(560.))
-                    .max_h(px(720.))
+                body.w(width)
+                    .max_h(max_height)
                     .p_5()
                     .flex()
                     .flex_col()
@@ -1363,14 +2402,15 @@ impl Root {
                     .border_1()
                     .border_color(theme::line())
                     .bg(theme::panel())
-                    .shadow_lg(),
+                    .shadow_lg()
+                    .occlude(),
             )
     }
 
     fn stepper(
         &self,
         prefix: &'static str,
-        start: DateTime<Utc>,
+        label: String,
         cx: &mut Context<Self>,
         step: fn(&mut Root, i64, &mut Context<Root>),
     ) -> gpui::Div {
@@ -1392,7 +2432,7 @@ impl Root {
                 div()
                     .px_2()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(SharedString::from(self.date_time_label(start))),
+                    .child(SharedString::from(label)),
             )
             .child(mk("m+", Key::MoveLater, 15, cx))
             .child(mk("d+", Key::MoveNextDay, 1440, cx))
@@ -1400,6 +2440,7 @@ impl Root {
 
     fn staff_chips(
         &self,
+        staff: &[Staff],
         prefix: &'static str,
         selected: &str,
         cx: &mut Context<Self>,
@@ -1409,7 +2450,7 @@ impl Root {
             .flex()
             .flex_wrap()
             .gap_2()
-            .children(self.staff.iter().enumerate().map(|(i, s)| {
+            .children(staff.iter().enumerate().map(|(i, s)| {
                 let id = s.id.clone();
                 self.chip(
                     (prefix, i),
@@ -1420,139 +2461,425 @@ impl Root {
             }))
     }
 
-    fn render_new(&self, f: &NewForm, cx: &mut Context<Self>) -> gpui::Div {
-        let start = self.at_local(f.date, f.minutes);
-        let selected_staff = f.staff_id.clone().unwrap_or_default();
+    fn render_new(
+        &self,
+        f: &NewForm,
+        viewport: gpui::Size<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        const CLIENT_LIMIT: usize = 12;
+        let wide = viewport.width >= px(850.);
+        let start_label = format!(
+            "{} {:02}:{:02}",
+            i18n::date_label(self.locale, f.date),
+            f.minutes / 60,
+            f.minutes % 60,
+        );
+        let staff = f.staff_id.as_deref().unwrap_or_default();
+        let search = f.client_search.read(cx).text().trim().to_lowercase();
+        let selected_client = self
+            .clients
+            .iter()
+            .find(|(id, _)| f.client_id.as_ref() == Some(id));
+        let mut candidates: Vec<_> = if search.is_empty() {
+            Vec::new()
+        } else {
+            self.clients
+                .iter()
+                .zip(&self.client_search_names)
+                .filter(|((id, _), name)| {
+                    f.client_id.as_ref() != Some(id) && name.contains(&search)
+                })
+                .map(|(client, _)| client)
+                .take(CLIENT_LIMIT + 1)
+                .collect()
+        };
+        let has_more = candidates.len() > CLIENT_LIMIT;
+        candidates.truncate(CLIENT_LIMIT);
+        if let Some(selected) = selected_client {
+            candidates.insert(0, selected);
+        }
         let clients = div()
             .id("new-clients")
-            .max_h(px(96.))
+            .max_h(px(120.))
             .overflow_y_scroll()
             .flex()
-            .flex_wrap()
-            .gap_2()
-            .children(self.clients.iter().enumerate().map(|(i, (id, name))| {
+            .flex_col()
+            .gap_1()
+            .children(candidates.iter().map(|(id, name)| {
                 let cid = id.clone();
                 self.chip(
-                    ("client", i),
+                    SharedString::from(format!("client-{id}")),
                     SharedString::from(name.clone()),
                     f.client_id.as_deref() == Some(id.as_str()),
                     cx.listener(move |this, _, _, cx| {
-                        if let Overlay::New(f) = &mut this.overlay {
-                            f.client_id = if f.client_id.as_deref() == Some(cid.as_str()) {
-                                None
-                            } else {
-                                Some(cid.clone())
-                            };
+                        if let Overlay::New(form) = &mut this.overlay {
+                            form.client_id =
+                                (form.client_id.as_deref() != Some(&cid)).then(|| cid.clone());
+                            form.error = None;
                         }
                         cx.notify();
                     }),
                 )
+                .flex_none()
             }));
-        let performed =
-            ops::performed_services(&self.svc.store, &selected_staff).unwrap_or_default();
-        let offered = self.services.iter().filter(|s| performed.contains(&s.id));
-        let services = div()
+        let booking_fields = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(self.label(Key::Staff))
+                    .child(self.staff_chips(
+                        &self.staff,
+                        "new-staff",
+                        staff,
+                        cx,
+                        Root::pick_new_staff,
+                    )),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(self.label(Key::Client))
+                    .child(f.client_search.clone())
+                    .when(!candidates.is_empty(), |section| section.child(clients))
+                    .when(candidates.is_empty() && !search.is_empty(), |section| {
+                        section.child(
+                            div()
+                                .text_sm()
+                                .text_color(theme::muted())
+                                .child(self.t(Key::NoMatchingClients)),
+                        )
+                    })
+                    .when(has_more, |section| {
+                        section.child(
+                            div()
+                                .text_sm()
+                                .text_color(theme::muted())
+                                .child(self.t(Key::RefineClientSearch)),
+                        )
+                    })
+                    .when(f.client_id.is_none(), |section| {
+                        section.child(self.label(Key::NewClient)).child(
+                            div()
+                                .flex()
+                                .flex_wrap()
+                                .gap_2()
+                                .child(div().flex_1().min_w(px(120.)).child(f.new_client.clone()))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(120.))
+                                        .child(f.new_client_phone.clone()),
+                                ),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(self.label(Key::Start))
+                    .child(
+                        self.stepper("new-start", start_label, cx, |this, minutes, cx| {
+                            if let Overlay::New(form) = &mut this.overlay {
+                                let total = form.minutes + minutes;
+                                form.date += Span::days(total.div_euclid(1440));
+                                form.minutes = total.rem_euclid(1440);
+                                form.selected_end = None;
+                                form.error = None;
+                            }
+                            cx.notify();
+                        })
+                        .flex_wrap(),
+                    )
+                    .when_some(f.selected_end, |section, end| {
+                        section.child(div().text_sm().text_color(theme::muted()).child(i18n::fill(
+                            self.t(Key::SelectedSlotEnd),
+                            &[("time", &format!("{:02}:{:02}", end / 60, end % 60))],
+                        )))
+                    }),
+            )
+            .child(f.notes.clone());
+
+        let performed: std::collections::HashSet<_> =
+            ops::performed_services(&self.svc.store, staff)
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+        let search = f.service_search.read(cx).text().trim().to_lowercase();
+        let offered: Vec<_> = self
+            .services
+            .iter()
+            .filter(|service| {
+                service.active
+                    && performed.contains(&service.id)
+                    && service.name.to_lowercase().contains(&search)
+            })
+            .collect();
+        let selected_minutes: i64 = self
+            .services
+            .iter()
+            .filter(|service| f.services.contains(&service.id))
+            .map(|service| service.duration_minutes)
+            .sum();
+        let service_picker = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
+            .rounded_lg()
+            .border_1()
+            .border_color(theme::line())
+            .bg(theme::bg())
+            .child(
+                div()
+                    .text_base()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(self.t(Key::Services)),
+            )
+            .child(f.service_search.clone())
+            .when(offered.is_empty(), |section| {
+                section.child(
+                    div()
+                        .p_2()
+                        .text_sm()
+                        .text_color(theme::muted())
+                        .child(self.t(if search.is_empty() {
+                            Key::NoStaffServices
+                        } else {
+                            Key::NoMatchingServices
+                        })),
+                )
+            })
+            .child(
+                div()
+                    .id("new-service-list")
+                    .debug_selector(|| "new-service-list".to_string())
+                    .track_scroll(&f.service_scroll)
+                    .max_h((viewport.height * 0.53).clamp(px(144.), px(440.)))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .children(
+                        offered
+                            .into_iter()
+                            .map(|service| self.new_service_row(f, service, cx)),
+                    ),
+            );
+
+        let footer = div()
+            .debug_selector(|| "new-appointment-footer".to_string())
+            .flex_none()
             .flex()
             .flex_wrap()
+            .justify_between()
+            .items_center()
             .gap_2()
-            .children(offered.enumerate().map(|(i, s)| {
-                let sid = s.id.clone();
-                self.chip(
-                    ("service", i),
-                    SharedString::from(match &s.processing {
-                        Some(processing) => format!(
-                            "{} ({} min · {})",
-                            s.name,
-                            s.duration_minutes,
-                            i18n::fill(
-                                self.t(Key::ProcessingDuration),
-                                &[("minutes", &processing.minutes.to_string())]
-                            )
-                        ),
-                        None => format!("{} ({} min)", s.name, s.duration_minutes),
-                    }),
-                    f.services.contains(&s.id),
-                    cx.listener(move |this, _, _, cx| {
-                        if let Overlay::New(f) = &mut this.overlay {
-                            match f.services.iter().position(|x| *x == sid) {
-                                Some(p) => {
-                                    f.services.remove(p);
-                                }
-                                None => f.services.push(sid.clone()),
-                            }
-                        }
-                        cx.notify();
-                    }),
-                )
-            }));
-        self.modal(
+            .pt_3()
+            .border_t_1()
+            .border_color(theme::line())
+            .child(div().text_sm().text_color(theme::muted()).child(i18n::fill(
+                self.t(Key::ServiceSelection),
+                &[
+                    ("count", &f.services.len().to_string()),
+                    ("minutes", &selected_minutes.to_string()),
+                ],
+            )))
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(self.button(
+                        "new-cancel",
+                        self.t(Key::Cancel),
+                        Kind::Ghost,
+                        cx.listener(|this, _, _, cx| this.dismiss_overlay(cx)),
+                    ))
+                    .child(self.button(
+                        "new-book",
+                        self.t(Key::Book),
+                        Kind::Primary,
+                        cx.listener(|this, _, _, cx| this.book(cx)),
+                    )),
+            );
+        self.modal_with_height(
             div()
+                .debug_selector(|| "new-appointment-panel".to_string())
+                .overflow_hidden()
                 .child(
                     div()
-                        .text_lg()
+                        .flex_none()
+                        .text_xl()
                         .font_weight(FontWeight::BOLD)
                         .child(self.t(Key::NewAppointment)),
                 )
-                .child(self.label(Key::Staff))
-                .child(
-                    self.staff_chips("new-staff", &selected_staff, cx, |this, id, cx| {
-                        this.pick_new_staff(id, cx)
-                    }),
-                )
-                .child(self.label(Key::Client))
-                .child(clients)
                 .child(
                     div()
-                        .flex()
-                        .gap_2()
-                        .child(div().flex_1().child(f.new_client.clone()))
-                        .child(div().flex_1().child(f.new_client_phone.clone())),
+                        .id("new-appointment-body")
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .child(
+                            div()
+                                .flex()
+                                .gap_4()
+                                .when(wide, |body| body.items_start())
+                                .when(!wide, |body| body.flex_col())
+                                .child(booking_fields)
+                                .child(service_picker),
+                        ),
                 )
-                .child(self.label(Key::Services))
-                .child(services)
-                .child(self.label(Key::Start))
-                .child(self.stepper("new-start", start, cx, |this, minutes, cx| {
-                    if let Overlay::New(f) = &mut this.overlay {
-                        let total = f.minutes + minutes;
-                        f.date += Span::days(total.div_euclid(1440));
-                        f.minutes = total.rem_euclid(1440);
-                    }
-                    cx.notify();
-                }))
-                .child(f.notes.clone())
-                .when_some(f.error, |d, e| {
-                    d.child(
+                .when_some(f.error, |panel, error| {
+                    panel.child(
                         div()
+                            .flex_none()
                             .text_sm()
                             .text_color(theme::conflict_fg())
-                            .child(self.t(e)),
+                            .child(self.t(error)),
                     )
                 })
-                .child(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .gap_2()
-                        .child(self.button(
-                            "new-cancel",
-                            self.t(Key::Cancel),
-                            Kind::Ghost,
-                            cx.listener(|this, _, _, cx| {
-                                this.overlay = Overlay::None;
-                                cx.notify();
-                            }),
-                        ))
-                        .child(self.button(
-                            "new-book",
-                            self.t(Key::Book),
-                            Kind::Primary,
-                            cx.listener(|this, _, _, cx| this.book(cx)),
-                        )),
-                ),
+                .child(footer),
+            (viewport.width - px(24.)).clamp(px(0.), px(if wide { 900. } else { 560. })),
+            (viewport.height - px(24.)).clamp(px(0.), px(720.)),
+            None,
         )
     }
 
-    fn render_details(&self, d: &Details, cx: &mut Context<Self>) -> gpui::Div {
+    fn new_service_row(
+        &self,
+        form: &NewForm,
+        service: &Service,
+        cx: &mut Context<Self>,
+    ) -> Stateful<gpui::Div> {
+        let id = service.id.clone();
+        let selected = form.services.contains(&id);
+        let mut duration = format!("{} min", service.duration_minutes);
+        if let Some(processing) = &service.processing {
+            duration.push_str(" · ");
+            duration.push_str(&i18n::fill(
+                self.t(Key::ProcessingDuration),
+                &[("minutes", &processing.minutes.to_string())],
+            ));
+        }
+        div()
+            .id(SharedString::from(format!("new-service-{id}")))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_2()
+            .min_h(px(44.))
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .border_1()
+            .border_color(if selected {
+                theme::accent()
+            } else {
+                theme::line()
+            })
+            .bg(if selected {
+                theme::accent_soft()
+            } else {
+                theme::panel()
+            })
+            .hover(|row| row.bg(theme::accent_soft()))
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if let Overlay::New(form) = &mut this.overlay {
+                    if let Some(index) = form.services.iter().position(|service| *service == id) {
+                        form.services.remove(index);
+                    } else {
+                        form.services.push(id.clone());
+                    }
+                    form.error = None;
+                }
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .size(px(22.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .bg(if selected {
+                        theme::accent()
+                    } else {
+                        theme::line_soft()
+                    })
+                    .text_color(if selected {
+                        theme::on_accent()
+                    } else {
+                        theme::muted()
+                    })
+                    .child(if selected { "✓" } else { "+" }),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(service.name.clone()),
+                    )
+                    .child(div().text_xs().text_color(theme::muted()).child(duration)),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .child(self.amount_label(service.price_cents, &service.currency)),
+            )
+    }
+
+    fn amount_label(&self, cents: i64, currency: &str) -> String {
+        let separator = if self.locale == Locale::EsAr {
+            ","
+        } else {
+            "."
+        };
+        let sign = if cents < 0 { "−" } else { "" };
+        let cents = cents.unsigned_abs();
+        format!(
+            "{sign}{}{separator}{:02} {currency}",
+            cents / 100,
+            cents % 100
+        )
+    }
+
+    fn render_details(
+        &self,
+        d: &Details,
+        viewport_height: gpui::Pixels,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        if let Some(review) = &d.price_review {
+            return self.render_price_review(review, cx);
+        }
+        if let Some(review) = &d.settlement_review {
+            return self.render_settlement_review(review, cx);
+        }
+        if let Some(checkout) = &d.checkout {
+            return self.render_checkout(checkout, cx);
+        }
         let current = calendar::effective_appointment(&self.svc.store, &d.id)
             .ok()
             .flatten();
@@ -1563,19 +2890,9 @@ impl Root {
                 .outbox(usize::MAX)
                 .map(|q| q.iter().any(|e| e.entity_id == d.id))
                 .unwrap_or(false);
-        let services = current
-            .as_ref()
-            .map(|a| {
-                a.services
-                    .iter()
-                    .map(|s| s.name.clone())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .unwrap_or_default();
         let client = current
             .as_ref()
-            .map(|a| self.client_name(&a.client_id))
+            .map(|a| self.appointment_client_name(a))
             .unwrap_or_default();
         let editable = current
             .as_ref()
@@ -1583,143 +2900,301 @@ impl Root {
         let can_set_outcome =
             editable && current.as_ref().is_some_and(|a| a.starts_at <= Utc::now());
         let changed = editable && (d.start != d.original_start || d.staff_id != d.original_staff);
-        self.modal(
-            div()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_lg()
-                                .font_weight(FontWeight::BOLD)
-                                .child(self.t(Key::Details)),
-                        )
-                        .when(pending, |x| {
-                            x.child(self.badge(
-                                self.t(Key::PendingBadge),
-                                theme::pending_fg(),
-                                theme::pending_bg(),
-                            ))
-                        }),
-                )
-                .child(
-                    div()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(SharedString::from(client)),
-                )
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(theme::muted())
-                        .child(SharedString::from(format!(
-                            "{} - {}",
-                            self.staff_name(&d.original_staff),
-                            services
-                        ))),
-                )
-                .child(
-                    div()
-                        .text_sm()
-                        .child(SharedString::from(self.date_time_label(d.original_start))),
-                )
-                .when(editable, |x| {
-                    x.child(self.label(Key::MoveTo))
-                        .child(self.stepper("move", d.start, cx, |this, minutes, cx| {
-                            if let Overlay::Details(d) = &mut this.overlay {
-                                d.start += Span::minutes(minutes);
-                            }
-                            cx.notify();
-                        }))
-                        .child(
-                            self.staff_chips("move-staff", &d.staff_id, cx, |this, id, cx| {
-                                if let Overlay::Details(d) = &mut this.overlay {
-                                    d.staff_id = id;
-                                }
-                                cx.notify();
-                            }),
-                        )
-                })
-                .when_some(
-                    current.as_ref().and_then(|a| match a.status {
-                        AppointmentStatus::Completed => Some(Key::Completed),
-                        AppointmentStatus::NoShow => Some(Key::NoShow),
-                        _ => None,
+        let content = div()
+            .id("appointment-details")
+            .min_h_0()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(FontWeight::BOLD)
+                            .child(self.t(Key::Details)),
+                    )
+                    .when(pending, |x| {
+                        x.child(self.badge(
+                            self.t(Key::PendingBadge),
+                            theme::pending_fg(),
+                            theme::pending_bg(),
+                        ))
                     }),
-                    |x, key| x.child(self.badge(self.t(key), theme::text(), theme::line_soft())),
-                )
-                .when(can_set_outcome, |x| {
-                    x.child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .child(self.button(
-                                "mark-completed",
-                                self.t(Key::MarkCompleted),
-                                Kind::Primary,
-                                cx.listener(|this, _, _, cx| {
-                                    this.set_outcome(AppointmentStatus::Completed, Utc::now(), cx)
-                                }),
-                            ))
-                            .child(self.button(
-                                "mark-no-show",
-                                self.t(Key::MarkNoShow),
-                                Kind::Ghost,
-                                cx.listener(|this, _, _, cx| {
-                                    this.set_outcome(AppointmentStatus::NoShow, Utc::now(), cx)
-                                }),
-                            )),
-                    )
-                })
-                .when_some(d.error.clone(), |x, e| {
-                    x.child(
-                        div()
-                            .text_sm()
-                            .text_color(theme::conflict_fg())
-                            .child(SharedString::from(e)),
-                    )
-                })
-                .child(
+            )
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(SharedString::from(client)),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme::muted())
+                    .child(SharedString::from(self.staff_name(&d.original_staff))),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .child(SharedString::from(self.date_time_label(d.original_start))),
+            )
+            .when_some(current.as_ref(), |x, appointment| {
+                x.child(
                     div()
+                        .debug_selector(|| "appointment-details-services".to_string())
                         .flex()
-                        .justify_between()
-                        .gap_2()
-                        .when(editable, |x| {
-                            x.child(self.button(
-                                "cancel-appointment",
-                                if d.confirm_cancel {
-                                    "Confirm: ".to_owned() + self.t(Key::CancelAppointment)
+                        .flex_col()
+                        .gap_1()
+                        .children(appointment.services.iter().enumerate().map(
+                            |(position, service)| {
+                                let amount = if service.source_unpriced {
+                                    self.t(Key::ImportedPriceUnknown).to_owned()
                                 } else {
-                                    self.t(Key::CancelAppointment).to_owned()
-                                },
-                                Kind::Danger,
-                                cx.listener(|this, _, _, cx| this.cancel_appointment(cx)),
+                                    self.amount_label(service.price_cents, &service.currency)
+                                };
+                                let line = div()
+                                    .flex()
+                                    .flex_wrap()
+                                    .justify_between()
+                                    .gap_2()
+                                    .child(SharedString::from(service.name.clone()))
+                                    .child(
+                                        div()
+                                            .text_color(theme::muted())
+                                            .child(SharedString::from(amount)),
+                                    );
+                                div().text_sm().child(line).when_some(
+                                    appointment
+                                        .service_badges
+                                        .iter()
+                                        .find(|badge| badge.service_position == position),
+                                    |line, badge| line.child(self.service_indicators(badge)),
+                                )
+                            },
+                        ))
+                        .when(appointment.externally_settled, |list| {
+                            list.child(self.badge(
+                                self.t(Key::SettlementSaved),
+                                theme::text(),
+                                theme::line_soft(),
                             ))
                         })
-                        .child(
-                            div()
-                                .flex()
-                                .gap_2()
-                                .child(self.button(
-                                    "details-close",
-                                    self.t(Key::Close),
-                                    Kind::Ghost,
-                                    cx.listener(|this, _, _, cx| {
-                                        this.overlay = Overlay::None;
-                                        cx.notify();
-                                    }),
+                        .when_some(appointment.external_balance, |list, balance| {
+                            list.child(div().text_sm().child(self.external_balance_label(balance)))
+                        })
+                        .when(
+                            appointment.status != AppointmentStatus::Cancelled
+                                && !appointment.externally_settled
+                                && appointment.external_balance.is_none(),
+                            |list| {
+                                list.children(appointment.billing_review_reasons.iter().filter_map(
+                                    |reason| {
+                                        let label = match reason {
+                                            BillingReviewReason::PaidInBooksy => Key::ImportedPaid,
+                                            BillingReviewReason::InvoicedInBooksy => {
+                                                Key::ImportedInvoiced
+                                            }
+                                            BillingReviewReason::UnknownAmount => {
+                                                return None;
+                                            }
+                                        };
+                                        Some(self.badge(
+                                            self.t(label),
+                                            theme::pending_fg(),
+                                            theme::pending_bg(),
+                                        ))
+                                    },
                                 ))
-                                .when(changed, |x| {
-                                    x.child(self.button(
-                                        "apply-move",
-                                        self.t(Key::ApplyMove),
-                                        Kind::Primary,
-                                        cx.listener(|this, _, _, cx| this.apply_move(cx)),
-                                    ))
-                                }),
+                            },
                         ),
-                ),
+                )
+            })
+            .when_some(current.as_ref(), |body, appointment| {
+                body.child(self.render_annotations(appointment, d.annotations.as_ref(), cx))
+            })
+            .when(
+                !pending
+                    && current
+                        .as_ref()
+                        .is_some_and(|a| self.can_open_appointment_checkout(a)),
+                |view| {
+                    view.child(self.button(
+                        "open-appointment-checkout",
+                        self.t(Key::OpenAppointmentCheckout),
+                        Kind::Primary,
+                        cx.listener(|this, _, _, cx| this.open_appointment_checkout(cx)),
+                    ))
+                },
+            )
+            .when(
+                !pending
+                    && current
+                        .as_ref()
+                        .is_some_and(|a| self.can_open_price_review(a)),
+                |x| {
+                    x.child(self.button(
+                        "open-imported-price-review",
+                        self.t(Key::ReviewImportedPrice),
+                        Kind::Ghost,
+                        cx.listener(|this, _, _, cx| this.open_price_review(cx)),
+                    ))
+                },
+            )
+            .when(
+                !pending
+                    && current
+                        .as_ref()
+                        .is_some_and(|a| self.can_open_settlement_review(a, false)),
+                |x| {
+                    x.child(self.button(
+                        "open-imported-settlement",
+                        self.t(Key::ReviewImportedSettlement),
+                        Kind::Ghost,
+                        cx.listener(|this, _, _, cx| this.open_settlement_review(false, cx)),
+                    ))
+                },
+            )
+            .when(
+                !pending
+                    && current
+                        .as_ref()
+                        .is_some_and(|a| self.can_open_settlement_review(a, true)),
+                |x| {
+                    x.child(self.button(
+                        "open-imported-partial-payment",
+                        self.t(Key::ReviewPartialPayment),
+                        Kind::Ghost,
+                        cx.listener(|this, _, _, cx| this.open_settlement_review(true, cx)),
+                    ))
+                },
+            )
+            .when(editable, |x| {
+                x.child(self.label(Key::MoveTo))
+                    .child(self.stepper(
+                        "move",
+                        self.date_time_label(d.start),
+                        cx,
+                        |this, minutes, cx| {
+                            let invalid = this.t(Key::ErrInvalidLocalStart);
+                            if let Overlay::Details(d) = &mut this.overlay {
+                                if let Some(start) =
+                                    step_appointment_time(this.tz, d.start, minutes)
+                                {
+                                    d.start = start;
+                                    d.error = None;
+                                } else {
+                                    d.error = Some(invalid.into());
+                                }
+                            }
+                            cx.notify();
+                        },
+                    ))
+                    .child(self.staff_chips(
+                        &self.staff,
+                        "move-staff",
+                        &d.staff_id,
+                        cx,
+                        |this, id, cx| {
+                            if let Overlay::Details(d) = &mut this.overlay {
+                                d.staff_id = id;
+                            }
+                            cx.notify();
+                        },
+                    ))
+            })
+            .when_some(
+                current.as_ref().and_then(|a| match a.status {
+                    AppointmentStatus::Completed => Some(Key::Completed),
+                    AppointmentStatus::NoShow => Some(Key::NoShow),
+                    _ => None,
+                }),
+                |x, key| x.child(self.badge(self.t(key), theme::text(), theme::line_soft())),
+            )
+            .when(can_set_outcome, |x| {
+                x.child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(self.button(
+                            "mark-completed",
+                            self.t(Key::MarkCompleted),
+                            Kind::Primary,
+                            cx.listener(|this, _, _, cx| {
+                                this.set_outcome(AppointmentStatus::Completed, Utc::now(), cx)
+                            }),
+                        ))
+                        .child(self.button(
+                            "mark-no-show",
+                            self.t(Key::MarkNoShow),
+                            Kind::Ghost,
+                            cx.listener(|this, _, _, cx| {
+                                this.set_outcome(AppointmentStatus::NoShow, Utc::now(), cx)
+                            }),
+                        )),
+                )
+            })
+            .when_some(d.error.clone(), |x, e| {
+                x.child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::conflict_fg())
+                        .child(SharedString::from(e)),
+                )
+            });
+        let footer = div()
+            .flex()
+            .flex_none()
+            .flex_wrap()
+            .justify_between()
+            .gap_2()
+            .when(editable, |x| {
+                x.child(self.button(
+                    "cancel-appointment",
+                    if d.confirm_cancel {
+                        "Confirm: ".to_owned() + self.t(Key::CancelAppointment)
+                    } else {
+                        self.t(Key::CancelAppointment).to_owned()
+                    },
+                    Kind::Danger,
+                    cx.listener(|this, _, _, cx| this.cancel_appointment(cx)),
+                ))
+            })
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(
+                        self.button(
+                            "details-close",
+                            self.t(match d.return_to {
+                                Some(AppointmentReturn::TeamShifts(_)) => Key::ShiftBackToSchedule,
+                                Some(AppointmentReturn::Unpaid(_)) => Key::DueBack,
+                                None => Key::Close,
+                            }),
+                            Kind::Ghost,
+                            cx.listener(|this, _, _, cx| this.dismiss_overlay(cx)),
+                        )
+                        .debug_selector(|| "calendar-details-close".to_string()),
+                    )
+                    .when(changed, |x| {
+                        x.child(self.button(
+                            "apply-move",
+                            self.t(Key::ApplyMove),
+                            Kind::Primary,
+                            cx.listener(|this, _, _, cx| this.apply_move(cx)),
+                        ))
+                    }),
+            );
+        self.modal_with_height(
+            div().child(content).child(footer),
+            px(560.),
+            (viewport_height - px(24.)).clamp(px(0.), px(720.)),
+            (!changed && !matches!(d.annotations, Some(annotations::Annotations::Editing(_))))
+                .then_some(cx),
         )
     }
 
@@ -1734,6 +3209,7 @@ impl Root {
                 "appointment.create" => Key::ConflictCreate,
                 "appointment.reschedule" => Key::ConflictReschedule,
                 "appointment.cancel" => Key::ConflictCancel,
+                "time_off.create" | "time_off.update" | "time_off.delete" => Key::TimeOff,
                 _ => Key::ConflictOther,
             });
             let when = c
@@ -1780,30 +3256,76 @@ impl Root {
                         self.conflict_reason(&c.reason)
                     },
                 ));
-            if !c.is_appointment() {
+            if !c.is_appointment() || c.requires_restored_review() {
                 let m = mid.clone();
-                return card.child(self.button(
-                    ("c-dismiss", i),
-                    self.t(Key::ConflictDismiss),
-                    Kind::Ghost,
-                    cx.listener(move |this, _, _, cx| this.resolve(&m, Resolution::Dismiss, cx)),
-                ));
+                return card.child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .when(c.requires_restored_review(), |row| {
+                            let details = serde_json::json!({
+                                "kind": c.kind,
+                                "createdAt": c.created_at,
+                                "entityId": c.entity_id,
+                                "payload": c.payload,
+                            });
+                            row.child(self.button(
+                                ("c-copy", i),
+                                self.t(Key::ConflictCopyChange),
+                                Kind::Ghost,
+                                move |_, _, cx| {
+                                    if let Ok(text) = serde_json::to_string_pretty(&details) {
+                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                            text,
+                                        ));
+                                    }
+                                },
+                            ))
+                        })
+                        .child(self.button(
+                            ("c-dismiss", i),
+                            self.t(Key::ConflictDismiss),
+                            Kind::Ghost,
+                            cx.listener(move |this, _, _, cx| {
+                                this.resolve(&m, Resolution::Dismiss, cx)
+                            }),
+                        )),
+                );
             }
             if let Some(dr) = draft {
                 let m = mid.clone();
                 let (start, staff_id) = (dr.start, dr.staff_id.clone());
                 return card
-                    .child(self.stepper("c-step", dr.start, cx, |this, minutes, cx| {
-                        if let Overlay::Conflicts {
-                            editing: Some(e), ..
-                        } = &mut this.overlay
-                        {
-                            e.start += Span::minutes(minutes);
-                        }
-                        cx.notify();
-                    }))
-                    .child(
-                        self.staff_chips("c-staff", &dr.staff_id, cx, |this, id, cx| {
+                    .child(self.stepper(
+                        "c-step",
+                        self.date_time_label(dr.start),
+                        cx,
+                        |this, minutes, cx| {
+                            let invalid = this.t(Key::ErrInvalidLocalStart);
+                            if let Overlay::Conflicts {
+                                editing: Some(e),
+                                error,
+                            } = &mut this.overlay
+                            {
+                                if let Some(start) =
+                                    step_appointment_time(this.tz, e.start, minutes)
+                                {
+                                    e.start = start;
+                                    *error = None;
+                                } else {
+                                    *error = Some(invalid.into());
+                                }
+                            }
+                            cx.notify();
+                        },
+                    ))
+                    .child(self.staff_chips(
+                        &self.staff,
+                        "c-staff",
+                        &dr.staff_id,
+                        cx,
+                        |this, id, cx| {
                             if let Overlay::Conflicts {
                                 editing: Some(e), ..
                             } = &mut this.overlay
@@ -1811,8 +3333,8 @@ impl Root {
                                 e.staff_id = id;
                             }
                             cx.notify();
-                        }),
-                    )
+                        },
+                    ))
                     .child(
                         div()
                             .flex()
@@ -1933,53 +3455,122 @@ impl Root {
     }
 }
 
-fn rgb_white() -> gpui::Rgba {
-    gpui::rgb(0xffffff)
-}
-
 impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if matches!(self.screen, Screen::Main)
+            && !self.login.server_editor
+            && !matches!(self.overlay, Overlay::None)
+            && window.focused(cx).is_none()
+        {
+            self.focus.focus(window);
+        }
         theme::set_dark(self.theme_override.unwrap_or(matches!(
             window.appearance(),
             gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
         )));
         let base = div()
-            .size_full()
+            .flex_1()
+            .w_full()
+            .min_h_0()
             .relative()
             .bg(theme::bg())
             .text_color(theme::text());
-        match self.screen {
-            Screen::Login => base.child(self.render_login(cx)),
-            Screen::Main => {
-                let overlay = match &self.overlay {
-                    Overlay::None => None,
-                    Overlay::New(f) => Some(self.render_new(f, cx)),
-                    Overlay::Details(d) => Some(self.render_details(d, cx)),
-                    Overlay::Conflicts { editing, error } => {
-                        Some(self.render_conflicts(editing, error, cx))
-                    }
-                };
-                base.flex()
-                    .flex_col()
-                    .child(self.render_header(cx))
-                    .when(self.week_mode, |d| {
-                        d.child(
-                            div()
-                                .px_4()
-                                .py_2()
-                                .bg(theme::panel())
-                                .child(self.staff_chips(
-                                    "week-staff",
-                                    &self.week_staff_id,
-                                    cx,
-                                    |this, id, cx| this.set_week_staff(id, cx),
-                                )),
-                        )
-                    })
-                    .child(self.render_calendar(cx))
-                    .children(overlay)
+        let content = if self.login.server_editor {
+            base.child(self.render_server_editor(cx))
+        } else {
+            match self.screen {
+                Screen::Login => base.child(self.render_login(cx)),
+                Screen::Main => {
+                    let overlay = match &self.overlay {
+                        Overlay::None => None,
+                        Overlay::New(f) => Some(self.render_new(f, window.viewport_size(), cx)),
+                        Overlay::Slot(slot) => Some(self.render_slot_actions(slot, cx)),
+                        Overlay::Details(d) => {
+                            Some(self.render_details(d, window.viewport_size().height, cx))
+                        }
+                        Overlay::Block(f) => Some(self.render_block_form(f, cx)),
+                        Overlay::Blocks => Some(self.render_time_off_list(cx)),
+                        Overlay::Inbox(inbox) => Some(self.render_inbox(inbox, cx)),
+                        Overlay::Cash(desk) => Some(self.render_cash_register(desk, cx)),
+                        Overlay::Unpaid(desk) => {
+                            Some(self.render_unpaid(desk, window.viewport_size(), cx))
+                        }
+                        Overlay::Inventory(desk) => {
+                            Some(self.render_inventory(desk, window.viewport_size(), cx))
+                        }
+                        Overlay::Reports(desk) => {
+                            Some(self.render_reports(desk, window.viewport_size(), cx))
+                        }
+                        Overlay::TeamShifts(desk) => {
+                            Some(self.render_team_shifts(desk, window.viewport_size(), cx))
+                        }
+                        Overlay::StaffPortraits(desk) => {
+                            Some(self.render_staff_portraits(desk, window.viewport_size(), cx))
+                        }
+                        Overlay::Reviews(desk) => {
+                            Some(self.render_review_requests(desk, window.viewport_size(), cx))
+                        }
+                        Overlay::ReviewModeration(desk) => {
+                            Some(self.render_review_moderation(desk, window.viewport_size(), cx))
+                        }
+                        Overlay::Waitlist(desk) => Some(self.render_waitlist(desk, cx)),
+                        Overlay::Directory(directory) => Some(self.render_directory(directory, cx)),
+                        Overlay::Conflicts { editing, error } => {
+                            Some(self.render_conflicts(editing, error, cx))
+                        }
+                    };
+                    base.flex()
+                        .flex_col()
+                        .child(self.render_header(cx))
+                        .when(self.week_mode, |d| {
+                            d.child(
+                                div()
+                                    .px_4()
+                                    .py_2()
+                                    .bg(theme::panel())
+                                    .child(self.staff_chips(
+                                        &self.staff,
+                                        "week-staff",
+                                        &self.week_staff_id,
+                                        cx,
+                                        |this, id, cx| this.set_week_staff(id, cx),
+                                    )),
+                            )
+                        })
+                        .child(self.render_calendar(window.viewport_size().height, cx))
+                        .when(!self.notices.is_empty(), |d| {
+                            d.child(self.render_notices(cx))
+                        })
+                        .children(self.render_slot_tooltip(window.viewport_size()))
+                        .children(overlay)
+                }
             }
-        }
+        };
+        div()
+            .size_full()
+            .track_focus(&self.focus)
+            .flex()
+            .flex_col()
+            .text_color(theme::text())
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape"
+                    && matches!(this.screen, Screen::Main)
+                    && !this.login.server_editor
+                    && !matches!(this.overlay, Overlay::None)
+                {
+                    if !event.is_held {
+                        this.dismiss_overlay(cx);
+                    }
+                    cx.stop_propagation();
+                }
+            }))
+            .on_mouse_move(
+                cx.listener(|this, event: &gpui::MouseMoveEvent, _, cx| this.drag_slot(event, cx)),
+            )
+            .capture_any_mouse_up(cx.listener(|this, event: &gpui::MouseUpEvent, _, cx| {
+                this.finish_slot_drag(event, cx)
+            }))
+            .child(content)
     }
 }
 
@@ -1993,6 +3584,14 @@ mod tests {
     use sob_core::auth::{FileTokenStore, TokenStore};
     use sob_core::store::Store;
 
+    #[test]
+    fn calendar_lanes_keep_overlapping_cards_separate_and_reclaim_width() {
+        assert_eq!(
+            super::appointment_lanes(&[(0.0, 22.0), (10.0, 32.0), (22.0, 36.0), (60.0, 90.0)]),
+            vec![(0, 2), (1, 2), (0, 2), (0, 1)],
+        );
+    }
+
     use super::*;
 
     const ANA: &str = "01a1d81e-0000-7000-8000-000000000001";
@@ -2000,7 +3599,7 @@ mod tests {
     const CUT: &str = "01a1d81e-0000-7000-8000-0000000000a1";
     const NAILS: &str = "01a1d81e-0000-7000-8000-0000000000a2";
     const LUCIA: &str = "01a1d81e-0000-7000-8000-0000000000c1";
-    const EXISTING: &str = "01a1d81e-0000-7000-8000-0000000000e1";
+    pub(super) const EXISTING: &str = "01a1d81e-0000-7000-8000-0000000000e1";
     const T0: &str = "2026-03-01T10:00:00.000Z";
 
     fn up(seq: i64, entity: &str, id: &str, data: serde_json::Value) -> RawChange {
@@ -2014,9 +3613,25 @@ mod tests {
     }
 
     /// A signed-in desk with a synced replica: two stylists, services, one client, one booking.
-    fn desk() -> (tempfile::TempDir, Config) {
+    pub(super) fn desk() -> (tempfile::TempDir, Config) {
         let dir = tempfile::tempdir().unwrap();
-        let mut store = Store::open(&dir.path().join("replica.db")).unwrap();
+        let config = Config {
+            api_url: "http://127.0.0.1:9".into(),
+            api_url_locked: false,
+            data_dir: dir.path().to_path_buf(),
+            locale: Locale::En,
+            start_date: Some("2026-03-09".parse().unwrap()),
+            start_view: None,
+        };
+        let session = Session {
+            cookie: "better-auth.session_token=x".into(),
+            oauth: None,
+            user_id: "u".into(),
+            name: "Owner".into(),
+            email: "o@x.test".into(),
+            role: "owner".into(),
+        };
+        let mut store = Store::open(&config.db_path(&session)).unwrap();
         store
             .apply_page(
                 &[
@@ -2037,26 +3652,13 @@ mod tests {
                 9,
             )
             .unwrap();
-        FileTokenStore::new(dir.path().join("session.json"))
-            .save(&Session {
-                cookie: "better-auth.session_token=x".into(),
-                user_id: "u".into(),
-                name: "Owner".into(),
-                email: "o@x.test".into(),
-                role: "owner".into(),
-            })
+        FileTokenStore::new(config.session_path())
+            .save(&session)
             .unwrap();
-        let config = Config {
-            api_url: "http://127.0.0.1:9".into(),
-            data_dir: dir.path().to_path_buf(),
-            locale: Locale::En,
-            start_date: Some("2026-03-09".parse().unwrap()),
-            start_view: None,
-        };
         (dir, config)
     }
 
-    fn open(cx: &mut TestAppContext) -> (tempfile::TempDir, gpui::WindowHandle<Root>) {
+    pub(super) fn open(cx: &mut TestAppContext) -> (tempfile::TempDir, gpui::WindowHandle<Root>) {
         let (dir, config) = desk();
         let win = cx.add_window(|window, cx| Root::new(config, window, cx));
         cx.run_until_parked();
@@ -2095,6 +3697,89 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn appointment_badges_distinguish_partial_billing_and_keep_note_flags(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, window) = open(cx);
+        window
+            .update(cx, |root, _, _| {
+                let mut item = root.view.as_ref().unwrap().columns[0].items[0].clone();
+                let service = item.appointment.services[0].clone();
+                item.appointment.services.push(service);
+                item.appointment.service_badges.push(CalendarServiceBadge {
+                    service_position: 0,
+                    paid: true,
+                    invoiced: true,
+                    billing_source: Some(CalendarBillingSource::Booksy),
+                    requested: true,
+                    internal_note: true,
+                    customer_comment: true,
+                });
+                item.pending = true;
+                let labels = appointment_badges::calendar(&item)
+                    .into_iter()
+                    .flatten()
+                    .map(|badge| root.t(badge.1))
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    labels,
+                    [
+                        root.t(Key::PendingBadge),
+                        root.t(Key::AppointmentPartialBillingBadge),
+                        root.t(Key::RequestedProfessional),
+                        root.t(Key::AppointmentInternalNote),
+                        root.t(Key::AppointmentCustomerComment),
+                    ]
+                );
+                let tooltip =
+                    appointment_badges::service(&item.appointment.service_badges[0])[0].unwrap();
+                assert_eq!(root.t(tooltip.1), root.t(Key::ImportedPaid));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    async fn web_calendar_link_uses_the_connected_server_and_current_view(cx: &mut TestAppContext) {
+        let (_dir, window) = open(cx);
+        window
+            .update(cx, |root, _, cx| {
+                assert_eq!(
+                    root.cloud_calendar_url().unwrap().as_str(),
+                    format!(
+                        "http://127.0.0.1:9/admin/calendar?date={}&view=day",
+                        root.date
+                    )
+                );
+                root.set_week(true, cx);
+                let link = root.cloud_calendar_url().unwrap();
+                let query: std::collections::HashMap<_, _> = link.query_pairs().collect();
+                assert_eq!(query["date"], root.date.to_string());
+                assert_eq!(query["view"], "week");
+                assert_eq!(query["staff"], root.week_staff_id);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    async fn opening_a_notice_selects_the_appointment_day_and_details(cx: &mut TestAppContext) {
+        let (_dir, win) = open(cx);
+        win.update(cx, |root, _, cx| {
+            let appointment = root.svc.store.appointment(EXISTING).unwrap().unwrap();
+            let day = appointment.starts_at.with_timezone(&root.tz).date_naive();
+            root.date = day + Span::days(7);
+            root.week_mode = true;
+            root.notices
+                .push((appointment, Instant::now() + Duration::from_secs(12)));
+            root.show_notice(EXISTING, cx);
+            assert_eq!(root.date, day);
+            assert!(!root.week_mode);
+            assert!(root.notices.is_empty());
+            assert!(matches!(&root.overlay, Overlay::Details(details) if details.id == EXISTING));
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
     async fn startup_opens_today_in_the_salons_timezone_not_the_utc_day(cx: &mut TestAppContext) {
         let (_dir, mut config) = desk();
         config.start_date = None;
@@ -2104,7 +3789,15 @@ mod tests {
             "Pacific/Kiritimati"
         };
         let tz: Tz = zone.parse().unwrap();
-        let mut store = Store::open(&config.db_path()).unwrap();
+        let mut store = Store::open(
+            &config.db_path(
+                &FileTokenStore::new(config.session_path())
+                    .load()
+                    .unwrap()
+                    .unwrap(),
+            ),
+        )
+        .unwrap();
         store.apply_page(&[up(10, "salon_settings", "1", json!({"name": "SoB", "timezone": zone,
             "slotGranularityMinutes": 15, "minNoticeMinutes": 60, "maxDaysAhead": 60, "updatedAt": T0}))], 10).unwrap();
         drop(store);
@@ -2131,10 +3824,17 @@ mod tests {
         ] {
             let (_dir, mut config) = desk();
             config.start_date = explicit;
-            Store::open(&config.db_path())
-                .unwrap()
-                .reset_replica()
-                .unwrap();
+            Store::open(
+                &config.db_path(
+                    &FileTokenStore::new(config.session_path())
+                        .load()
+                        .unwrap()
+                        .unwrap(),
+                ),
+            )
+            .unwrap()
+            .reset_replica()
+            .unwrap();
             let zone = if Utc::now().hour() < 10 {
                 "Pacific/Honolulu"
             } else {
@@ -2192,6 +3892,492 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn drawing_a_range_can_prefill_and_save_a_block(cx: &mut TestAppContext) {
+        let (_dir, config) = desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        cx.simulate_resize(gpui::size(px(800.), px(600.)));
+        cx.run_until_parked();
+        let column = cx.debug_bounds("calendar-col-1").unwrap();
+        let start = gpui::point(column.left() + px(40.), column.top() + px(64.));
+        let end = gpui::point(column.left() + px(40.), column.top() + px(119.));
+        cx.simulate_mouse_down(end, gpui::MouseButton::Left, Default::default());
+        let intermediate = gpui::point(px(795.), column.top() + px(96.));
+        cx.simulate_mouse_move(intermediate, gpui::MouseButton::Left, Default::default());
+        cx.run_until_parked();
+        let tooltip = cx
+            .debug_bounds("calendar-slot-tooltip")
+            .expect("live slot range on the first move");
+        assert!(tooltip.right() < intermediate.x);
+        root.update(cx, |root, _| {
+            let slot = root
+                .slot_drag
+                .as_ref()
+                .unwrap()
+                .selection(root.vertical_scroll.handle.offset().y)
+                .unwrap();
+            assert_eq!(slot.time_label(), "09:30–10:00");
+        });
+
+        cx.simulate_mouse_move(start, gpui::MouseButton::Left, Default::default());
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("calendar-slot-selection").is_some());
+        let tooltip = cx
+            .debug_bounds("calendar-slot-tooltip")
+            .expect("live slot range");
+        assert!(tooltip.bottom() <= start.y);
+        root.update(cx, |root, _| {
+            let drag = root.slot_drag.as_ref().unwrap();
+            let slot = drag
+                .selection(root.vertical_scroll.handle.offset().y)
+                .unwrap();
+            assert_eq!(slot.time_label(), "09:00–10:00");
+        });
+        cx.simulate_mouse_up(start, gpui::MouseButton::Left, Default::default());
+        cx.run_until_parked();
+        root.update(cx, |root, _| {
+            assert!(matches!(&root.overlay, Overlay::Slot(slot)
+                if slot.staff_id == BEA && slot.start == 540 && slot.end == 600));
+            assert!(
+                root.render_slot_tooltip(gpui::size(px(800.), px(600.)))
+                    .is_none()
+            );
+            assert!(outbox_kinds(root).is_empty());
+        });
+        let block_button = cx.debug_bounds("calendar-slot-block").unwrap().center();
+        cx.simulate_click(block_button, Default::default());
+        cx.run_until_parked();
+        root.update(cx, |root, cx| {
+            assert!(matches!(root.overlay, Overlay::Block(_)));
+            root.save_block(cx);
+            let block = &root.view.as_ref().unwrap().columns[1].blocks[0].time_off;
+            assert_eq!(block.staff_id, BEA);
+            assert_eq!(root.hhmm(block.starts_at), "09:00");
+            assert_eq!(root.hhmm(block.ends_at), "10:00");
+            assert_eq!(outbox_kinds(root), ["time_off.create"]);
+        });
+    }
+
+    #[gpui::test]
+    async fn booking_from_a_drawn_range_preserves_the_start_and_checks_service_duration(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, config) = desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        cx.simulate_resize(gpui::size(px(800.), px(600.)));
+        cx.run_until_parked();
+        let column = cx.debug_bounds("calendar-col-0").unwrap();
+        let start = gpui::point(column.left() + px(40.), column.top() + px(64.));
+        let end = gpui::point(column.left() + px(40.), column.top() + px(115.));
+        cx.simulate_click(start, Default::default());
+        root.update(cx, |root, _| assert!(matches!(root.overlay, Overlay::None)));
+        cx.simulate_mouse_down(start, gpui::MouseButton::Left, Default::default());
+        cx.simulate_mouse_move(end, gpui::MouseButton::Left, Default::default());
+        cx.simulate_mouse_up(end, gpui::MouseButton::Left, Default::default());
+        cx.run_until_parked();
+        let book_button = cx.debug_bounds("calendar-slot-book").unwrap().center();
+        cx.simulate_click(book_button, Default::default());
+        root.update(cx, |root, cx| {
+            let Overlay::New(form) = &mut root.overlay else { panic!("new booking should be open") };
+            assert_eq!((form.minutes, form.selected_end, form.staff_id.as_deref()), (540, Some(600), Some(ANA)));
+            form.selected_end = Some(585);
+            form.client_id = Some(LUCIA.into());
+            form.services = vec![CUT.into()];
+            root.book(cx);
+            assert!(matches!(&root.overlay, Overlay::New(form) if form.error == Some(Key::SelectedSlotTooShort)));
+            assert!(outbox_kinds(root).is_empty());
+        });
+    }
+
+    #[gpui::test]
+    async fn a_large_window_fills_the_calendar_and_keeps_the_drag_on_the_hour_grid(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, config) = desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        cx.simulate_resize(gpui::size(px(800.), px(550.)));
+        cx.run_until_parked();
+        let width = cx.debug_bounds("calendar-col-1").unwrap().size.width;
+
+        cx.simulate_resize(gpui::size(px(1600.), px(1100.)));
+        cx.run_until_parked();
+        let grid = cx.debug_bounds("calendar-scroll").unwrap();
+        let column = cx.debug_bounds("calendar-col-1").unwrap();
+        let header = cx.debug_bounds("calendar-head-1").unwrap();
+        assert!(column.size.width > width);
+        assert_eq!(column.left(), header.left());
+        assert_eq!(column.right(), header.right());
+        assert_eq!(column.bottom(), grid.bottom());
+        assert_eq!(column.right(), grid.right());
+        assert!(column.size.height > px(900.));
+        let hour = column.size.height / 12.;
+        let x = column.left() + px(40.);
+        let start = gpui::point(x, column.top() + hour + px(4.));
+        let end = gpui::point(x, column.top() + hour * 2. - px(4.));
+        cx.simulate_mouse_down(start, gpui::MouseButton::Left, Default::default());
+        cx.simulate_mouse_move(end, gpui::MouseButton::Left, Default::default());
+        cx.simulate_mouse_up(end, gpui::MouseButton::Left, Default::default());
+        cx.run_until_parked();
+        root.update(cx, |root, _| {
+            assert_eq!(root.vertical_scroll.handle.offset().y, px(0.));
+            assert!(matches!(&root.overlay, Overlay::Slot(slot)
+                if slot.staff_id == BEA && slot.start == 540 && slot.end == 600));
+        });
+    }
+
+    #[gpui::test]
+    async fn escape_closes_one_modal_at_a_time_even_without_a_focused_field(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, win) = open(cx);
+        win.update(cx, |root, _, cx| {
+            root.open_details(EXISTING, cx);
+            let Overlay::Details(details) = &mut root.overlay else {
+                panic!("expected appointment details");
+            };
+            details.checkout = Some(checkout::CheckoutReview::Failed);
+        })
+        .unwrap();
+        cx.simulate_keystrokes(win.into(), "escape");
+        win.update(cx, |root, _, _| {
+            assert!(
+                matches!(&root.overlay, Overlay::Details(details) if details.checkout.is_none())
+            );
+        })
+        .unwrap();
+        cx.simulate_keystrokes(win.into(), "escape");
+        win.update(cx, |root, _, _| {
+            assert!(matches!(root.overlay, Overlay::None));
+            assert!(outbox_kinds(root).is_empty());
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    async fn escape_closes_the_booking_form_with_a_focused_field(cx: &mut TestAppContext) {
+        let (_dir, win) = open(cx);
+        win.update(cx, |root, window, cx| {
+            root.open_new(window, cx);
+            let Overlay::New(form) = &root.overlay else {
+                panic!("expected booking form");
+            };
+            form.client_search.read(cx).focus(window);
+        })
+        .unwrap();
+        cx.simulate_keystrokes(win.into(), "escape");
+        win.update(cx, |root, _, _| {
+            assert!(matches!(root.overlay, Overlay::None));
+            assert!(outbox_kinds(root).is_empty());
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    async fn a_details_modal_blocks_the_calendar_and_closes_in_one_click(cx: &mut TestAppContext) {
+        let (_dir, config) = desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        cx.simulate_resize(gpui::size(px(1200.), px(600.)));
+        cx.run_until_parked();
+        const SELECTOR: &str = "calendar-appointment-01a1d81e-0000-7000-8000-0000000000e1";
+        let card = cx.debug_bounds(SELECTOR).unwrap();
+        let point = gpui::point(card.left() + px(15.), card.center().y);
+        cx.simulate_click(point, Default::default());
+        cx.run_until_parked();
+        root.update(cx, |root, _| {
+            assert!(matches!(root.overlay, Overlay::Details(_)))
+        });
+
+        let close = cx.debug_bounds("calendar-details-close").unwrap();
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: point,
+            delta: gpui::ScrollDelta::Lines(gpui::point(0., 12.)),
+            ..Default::default()
+        });
+        let content = cx.debug_bounds("appointment-details-services").unwrap();
+        cx.simulate_click(content.center(), Default::default());
+        cx.run_until_parked();
+        assert_eq!(cx.debug_bounds(SELECTOR).unwrap(), card);
+        root.update(cx, |root, _| {
+            assert!(matches!(root.overlay, Overlay::Details(_)))
+        });
+        cx.simulate_click(point, Default::default());
+        cx.run_until_parked();
+        root.update(cx, |root, _| {
+            assert!(matches!(root.overlay, Overlay::None));
+            assert!(root.slot_drag.is_none());
+            assert!(outbox_kinds(root).is_empty());
+        });
+
+        cx.simulate_click(point, Default::default());
+        cx.run_until_parked();
+        root.update(cx, |root, _| {
+            assert!(matches!(root.overlay, Overlay::Details(_)))
+        });
+        cx.simulate_click(close.center(), Default::default());
+        cx.run_until_parked();
+        root.update(cx, |root, _| assert!(matches!(root.overlay, Overlay::None)));
+    }
+
+    #[gpui::test]
+    async fn manual_booking_rejects_skipped_and_repeated_hours_before_queueing_a_client(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, win) = open(cx);
+        win.update(cx, |root, window, cx| {
+            root.tz = chrono_tz::Europe::Madrid;
+            root.open_new(window, cx);
+            for date in ["2026-03-29", "2026-10-25"] {
+                let Overlay::New(form) = &mut root.overlay else {
+                    panic!("expected booking form");
+                };
+                form.date = date.parse().unwrap();
+                form.minutes = 150;
+                form.staff_id = Some(ANA.into());
+                form.services = vec![CUT.into()];
+                form.new_client
+                    .update(cx, |field, cx| field.set_text("Synthetic DST contact", cx));
+                root.book(cx);
+                assert!(matches!(
+                    &root.overlay,
+                    Overlay::New(form) if form.error == Some(Key::ErrInvalidLocalStart)
+                ));
+                assert!(outbox_kinds(root).is_empty());
+            }
+            let Overlay::New(form) = &mut root.overlay else {
+                panic!("expected booking form");
+            };
+            form.minutes = 180;
+            root.book(cx);
+            assert_eq!(outbox_kinds(root), ["client.create", "appointment.create"]);
+            let queued = root.svc.store.outbox(2).unwrap();
+            let start = queued[1].payload["startsAt"].as_str().unwrap();
+            assert_eq!(
+                DateTime::parse_from_rfc3339(start).unwrap(),
+                "2026-10-25T02:00:00Z".parse::<DateTime<Utc>>().unwrap()
+            );
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn changing_day_keeps_the_local_hour_across_the_clock_change() {
+        let tz = chrono_tz::Europe::Madrid;
+        for (before, after, elapsed) in [
+            ("2026-03-28", "2026-03-29", 23),
+            ("2026-10-24", "2026-10-25", 25),
+        ] {
+            let before = before.parse().unwrap();
+            let after = after.parse().unwrap();
+            let start = salon_local_instant(tz, before, 600).unwrap();
+            let next = step_appointment_time(tz, start, 1440).unwrap();
+            assert_eq!(next, salon_local_instant(tz, after, 600).unwrap());
+            assert_eq!((next - start).num_hours(), elapsed);
+            assert_eq!(step_appointment_time(tz, next, -1440), Some(start));
+            let near_change = salon_local_instant(tz, before, 150).unwrap();
+            assert!(step_appointment_time(tz, near_change, 1440).is_none());
+        }
+    }
+
+    #[gpui::test]
+    async fn the_calendar_and_dragged_ranges_follow_local_time_on_clock_change_days(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, win) = open(cx);
+        win.update(cx, |root, _, _| {
+            let tz = chrono_tz::Europe::Madrid;
+            let spring = NaiveDate::from_ymd_opt(2026, 3, 29).unwrap();
+            let autumn = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
+            let mut item = root.view.as_ref().unwrap().columns[0].items[0].clone();
+            let (start, end) = slots::slot_times(tz, spring, 540, 600).unwrap();
+            item.appointment.starts_at = start;
+            item.appointment.ends_at = end;
+            assert_eq!(appointment_bounds(&item, spring, tz).0, 9. * HOUR_PX);
+            assert!(slots::slot_times(tz, spring, 120, 180).is_none());
+            assert!(slots::slot_times(tz, autumn, 120, 180).is_none());
+            let (start, end) = slots::slot_times(tz, spring, 90, 210).unwrap();
+            assert_eq!((end - start).num_minutes(), 60);
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    async fn large_catalog_stays_in_the_booking_panel_and_scrolls(cx: &mut TestAppContext) {
+        let (_dir, mut config) = desk();
+        config.start_view = Some("new".into());
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        cx.simulate_resize(gpui::size(px(1100.), px(690.)));
+        root.update(cx, |root, cx| {
+            let template = root
+                .services
+                .iter()
+                .find(|service| service.id == CUT)
+                .unwrap()
+                .clone();
+            let mut changes = Vec::new();
+            for i in 0..160 {
+                let mut service = template.clone();
+                service.id = format!("01a1d81e-0000-7000-8001-{i:012x}");
+                service.name = format!("Synthetic service {i}");
+                let id = service.id.clone();
+                let link = format!("fixture-service-staff-{i}");
+                changes.push(up(
+                    10 + i * 2,
+                    "service",
+                    &id,
+                    serde_json::to_value(service).unwrap(),
+                ));
+                changes.push(up(
+                    11 + i * 2,
+                    "service_staff",
+                    &link,
+                    json!({"id": link, "serviceId": id, "staffId": ANA}),
+                ));
+            }
+            root.svc.store.apply_page(&changes, 329).unwrap();
+            root.reload(cx);
+        });
+        cx.run_until_parked();
+        let panel = cx.debug_bounds("new-appointment-panel").unwrap();
+        let list = cx.debug_bounds("new-service-list").unwrap();
+        let footer = cx.debug_bounds("new-appointment-footer").unwrap();
+        assert!(list.bottom() <= footer.top());
+        assert!(footer.bottom() <= panel.bottom() && panel.bottom() < px(690.));
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: list.center(),
+            delta: gpui::ScrollDelta::Lines(gpui::point(0., -6.)),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+        root.update(cx, |root, _| {
+            let Overlay::New(form) = &root.overlay else {
+                panic!("missing booking");
+            };
+            assert!(form.service_scroll.offset().y < px(0.));
+        });
+        assert_eq!(cx.debug_bounds("new-appointment-footer").unwrap(), footer);
+        cx.simulate_resize(gpui::size(px(530.), px(410.)));
+        cx.run_until_parked();
+        let narrow = cx.debug_bounds("new-appointment-footer").unwrap();
+        assert!(narrow.right() < px(530.) && narrow.bottom() < px(410.));
+    }
+
+    #[gpui::test]
+    async fn calendar_now_marker_moves_with_the_centres_clock_and_only_shows_today(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, config) = desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        cx.simulate_resize(gpui::size(px(1050.), px(690.)));
+        root.update(cx, |root, cx| {
+            root.calendar_now = "2026-03-09T13:00:00Z".parse().unwrap();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let earlier = cx.debug_bounds("calendar-now-line-2026-03-09-0").unwrap();
+        assert_eq!(
+            cx.debug_bounds("calendar-now-line-2026-03-09-1")
+                .unwrap()
+                .top(),
+            earlier.top()
+        );
+        root.update(cx, |root, cx| {
+            root.calendar_now += Span::minutes(15);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(
+            (cx.debug_bounds("calendar-now-line-2026-03-09-0")
+                .unwrap()
+                .top()
+                - earlier.top())
+                >= px(14.)
+        );
+        root.update(cx, |root, cx| root.set_week(true, cx));
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("calendar-now-line-2026-03-09-0").is_some());
+        assert!(cx.debug_bounds("calendar-now-line-2026-03-10-1").is_none());
+        root.update(cx, |root, cx| root.shift_day(1, cx));
+        cx.run_until_parked();
+        root.update(cx, |root, _| {
+            let today = root.calendar_now.with_timezone(&root.tz).date_naive();
+            assert!(
+                root.calendar_columns()
+                    .iter()
+                    .all(|(date, _)| *date != today)
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn calendar_wheel_scrolls_the_hours_without_moving_the_headers(cx: &mut TestAppContext) {
+        let (_dir, config) = desk();
+        let (_root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        cx.simulate_resize(gpui::size(px(800.), px(550.)));
+        cx.run_until_parked();
+        let before = cx
+            .debug_bounds("calendar-col-0")
+            .expect("first professional");
+        let header = cx
+            .debug_bounds("calendar-head-0")
+            .expect("professional heading");
+        let hour = cx.debug_bounds("calendar-hour-12").unwrap();
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: gpui::point(px(350.), px(400.)),
+            delta: gpui::ScrollDelta::Lines(gpui::point(0., -12.)),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+        let after = cx.debug_bounds("calendar-col-0").unwrap();
+        assert!(after.origin.y < before.origin.y - px(100.));
+        assert_eq!(after.origin.x, before.origin.x);
+        assert_eq!(cx.debug_bounds("calendar-head-0").unwrap(), header);
+        let moved_hour = cx.debug_bounds("calendar-hour-12").unwrap();
+        assert_eq!(
+            moved_hour.origin.y - hour.origin.y,
+            after.origin.y - before.origin.y
+        );
+        let rail = cx.debug_bounds("calendar-hour-rail").unwrap();
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: gpui::point(rail.left() + px(10.), px(420.)),
+            delta: gpui::ScrollDelta::Lines(gpui::point(0., 12.)),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+        assert_eq!(cx.debug_bounds("calendar-col-0").unwrap(), before);
+        assert_eq!(cx.debug_bounds("calendar-hour-12").unwrap(), hour);
+    }
+
+    #[gpui::test]
+    async fn calendar_scrollbar_can_drag_to_later_hours(cx: &mut TestAppContext) {
+        let (_dir, config) = desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        cx.simulate_resize(gpui::size(px(800.), px(550.)));
+        cx.run_until_parked();
+        let track = cx.debug_bounds("calendar-vertical-scrollbar").unwrap();
+        let x = track.left() + px(6.);
+        cx.simulate_mouse_down(
+            gpui::point(x, track.top() + px(6.)),
+            gpui::MouseButton::Left,
+            Default::default(),
+        );
+        cx.simulate_event(gpui::MouseMoveEvent {
+            position: gpui::point(x, track.bottom() - px(6.)),
+            pressed_button: Some(gpui::MouseButton::Left),
+            ..Default::default()
+        });
+        cx.simulate_mouse_up(
+            gpui::point(x, track.bottom() - px(6.)),
+            gpui::MouseButton::Left,
+            Default::default(),
+        );
+        cx.run_until_parked();
+        root.update(cx, |root, _| {
+            let handle = &root.vertical_scroll.handle;
+            assert!(handle.max_offset().height > px(100.));
+            assert_eq!(handle.offset().y, -handle.max_offset().height);
+        });
+    }
+
+    #[gpui::test]
     async fn a_narrow_week_calendar_scrolls_headers_and_days_together(cx: &mut TestAppContext) {
         let (_dir, config) = desk();
         let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
@@ -2199,6 +4385,7 @@ mod tests {
         cx.simulate_resize(gpui::size(px(800.), px(700.)));
         cx.run_until_parked();
         let before = cx.debug_bounds("calendar-head-6").expect("Sunday heading");
+        let hour = cx.debug_bounds("calendar-hour-12").unwrap();
         assert!(before.right() > px(800.));
         cx.simulate_event(gpui::ScrollWheelEvent {
             position: gpui::point(px(400.), px(400.)),
@@ -2212,6 +4399,7 @@ mod tests {
             "horizontal scroll must reveal later days"
         );
         assert!(after.right() <= px(800.));
+        assert_eq!(cx.debug_bounds("calendar-hour-12").unwrap(), hour);
         assert_eq!(
             after.origin.x,
             cx.debug_bounds("calendar-col-6").unwrap().origin.x
@@ -2264,6 +4452,53 @@ mod tests {
                 .collect();
             assert_eq!(pending.len(), 1);
             assert_eq!(root.summary.pending, 1);
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    async fn time_off_is_visible_offline_and_removal_needs_confirmation(cx: &mut TestAppContext) {
+        let (_d, win) = open(cx);
+        win.update(cx, |root, _, cx| {
+            root.open_block(None, root.date, cx);
+            assert!(matches!(root.overlay, Overlay::Block(_)));
+            root.save_block(cx);
+            assert!(matches!(root.overlay, Overlay::None));
+            let column = &root.view.as_ref().unwrap().columns[0];
+            assert_eq!(column.items[0].appointment.id, EXISTING);
+            let block = &column.blocks[0];
+            assert!(block.pending);
+            root.open_block(Some(block.time_off.clone()), root.date, cx);
+            root.remove_block(cx);
+            assert_eq!(outbox_kinds(root), ["time_off.create"]);
+            root.remove_block(cx);
+            assert!(matches!(root.overlay, Overlay::None));
+            assert!(root.view.as_ref().unwrap().columns[0].blocks.is_empty());
+            assert_eq!(outbox_kinds(root), ["time_off.create", "time_off.delete"]);
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    async fn booking_inside_a_block_keeps_the_form_and_queues_no_new_client(
+        cx: &mut TestAppContext,
+    ) {
+        let (_d, win) = open(cx);
+        win.update(cx, |root, window, cx| {
+            root.open_block(None, root.date, cx);
+            root.save_block(cx);
+            root.open_new(window, cx);
+            let Overlay::New(form) = &mut root.overlay else {
+                panic!("booking form not open");
+            };
+            form.staff_id = Some(ANA.into());
+            form.services = vec![CUT.into()];
+            form.minutes = 10 * 60;
+            form.new_client.update(cx, |field, cx| field.set_text("Marta", cx));
+            root.book(cx);
+            assert!(matches!(&root.overlay, Overlay::New(form) if form.error == Some(Key::TimeOffOverlap)));
+            assert_eq!(outbox_kinds(root), ["time_off.create"]);
+            assert!(calendar::known_clients(&root.svc.store).unwrap().iter().all(|(_, name)| name != "Marta"));
         })
         .unwrap();
     }
@@ -2448,10 +4683,30 @@ mod tests {
                 },
                 cx,
             );
+            assert_eq!(root.summary.conflicts, 1);
+            assert!(root.svc.store.outbox(5).unwrap().is_empty());
+            let Overlay::Conflicts {
+                editing: Some(e),
+                error: Some(_),
+                ..
+            } = &mut root.overlay
+            else {
+                panic!("occupied retry must keep the draft");
+            };
+            e.start += Span::hours(1);
+            let (start, staff) = (e.start, e.staff_id.clone());
+            root.resolve(
+                &c.mutation_id,
+                Resolution::Reschedule {
+                    starts_at: start,
+                    staff_id: Some(staff),
+                },
+                cx,
+            );
             assert_eq!(root.summary.conflicts, 0);
             let q = root.svc.store.outbox(5).unwrap();
             assert_eq!(q.len(), 1);
-            assert_eq!(q[0].payload["startsAt"], json!("2026-03-09T15:00:00.000Z"));
+            assert_eq!(q[0].payload["startsAt"], json!("2026-03-09T16:00:00.000Z"));
             assert_ne!(q[0].mutation_id, c.mutation_id);
         })
         .unwrap();
@@ -2467,6 +4722,7 @@ mod tests {
                 "conflict",
                 "not_found",
                 "invalid_state",
+                "sync_generation_changed",
                 "forbidden",
                 "invalid",
                 "other",

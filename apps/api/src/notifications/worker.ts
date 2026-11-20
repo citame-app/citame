@@ -3,18 +3,34 @@ import {
   appointmentService,
   clientProfile,
   type Database,
+  reminder,
   salonSettings,
   staffProfile,
 } from "@sob/db";
-import { asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import type { NotificationConfig } from "../config";
+import { resolveNotificationEmail } from "./email-delivery";
 import { type Metrics, processMetrics } from "./metrics";
-import { categoryOf, isEnabled } from "./preferences";
+import { categoryOf, isEnabled, whatsappNumber } from "./preferences";
 import type { Providers } from "./providers";
 import { PermanentProviderError } from "./providers/types";
-import { backoffMs, claimDue, finishClaim, type ReminderRow, renewLeases } from "./queue";
+import {
+  backoffMs,
+  claimDue,
+  finishClaim,
+  type ReminderRow,
+  releaseUnstartedReminders,
+  renewLeases,
+} from "./queue";
 import { LOCALES, type Locale, type MessageData, renderEmail, renderSms } from "./templates";
 import { signOptOutToken } from "./tokens";
+import { createMeta, MetaRequestError } from "./whatsapp/meta";
+import {
+  activeRules,
+  buildTemplateMessage,
+  readConnection,
+  requestToken,
+} from "./whatsapp/service";
 
 export interface WorkerOptions {
   db: Database;
@@ -24,6 +40,8 @@ export interface WorkerOptions {
   workerId?: string;
   random?: () => number;
   /** Structured log sink; defaults to JSON lines on stdout. Receives ids, never addresses. */
+  whatsappFetch?: typeof fetch;
+  emailFetch?: typeof fetch;
   log?: (entry: Record<string, unknown>) => void;
   metrics?: Metrics;
 }
@@ -42,8 +60,7 @@ const E164 = /^\+[1-9]\d{7,14}$/;
 
 type Prepared =
   | { skip: string }
-  | { channel: "email"; to: string; data: MessageData }
-  | { channel: "sms"; to: string; data: MessageData };
+  | { channel: "email" | "sms" | "whatsapp"; to: string; data: MessageData; clientName: string };
 
 /** Reads the current state and decides whether (and what) to send. Never throws on bad data. */
 async function prepare(
@@ -53,7 +70,12 @@ async function prepare(
   providers: Providers,
   now: Date,
 ): Promise<Prepared> {
-  const provider = row.channel === "email" ? providers.email : providers.sms;
+  const provider =
+    row.channel === "email"
+      ? providers.email
+      : row.channel === "sms"
+        ? providers.sms
+        : config.whatsapp;
   if (!provider) return { skip: "channel_disabled" };
 
   const [appt] = await db.select().from(appointment).where(eq(appointment.id, row.appointmentId));
@@ -73,12 +95,16 @@ async function prepare(
   const rawAddress = row.channel === "email" ? client.email : client.phone;
   if (!rawAddress) return { skip: "no_address" };
   let to = rawAddress.trim();
-  if (row.channel === "sms") {
+  if (row.channel === "whatsapp") {
+    const whatsapp = whatsappNumber(to);
+    if (!whatsapp) return { skip: "invalid_phone" };
+    to = whatsapp;
+  } else if (row.channel === "sms") {
     to = to.replace(/[\s().-]/g, "");
     if (!E164.test(to)) return { skip: "invalid_phone" };
   }
   const category = categoryOf(row.kind);
-  if (!(await isEnabled(db, client.id, row.channel, category))) return { skip: "opted_out" };
+  if (!(await isEnabled(db, client.id, row.channel, category, to))) return { skip: "opted_out" };
 
   const [settings] = await db.select().from(salonSettings).limit(1);
   const [staff] = await db
@@ -96,8 +122,8 @@ async function prepare(
     ? (client.locale as Locale)
     : config.defaultLocale;
   const optOutToken =
-    category === "reminder" && row.channel === "email"
-      ? signOptOutToken(config.signingSecret, { clientId: client.id, channel: "email" })
+    category === "reminder" && row.channel !== "sms"
+      ? signOptOutToken(config.signingSecret, { clientId: client.id, channel: row.channel })
       : undefined;
   const data: MessageData = {
     kind: row.kind,
@@ -116,7 +142,7 @@ async function prepare(
       ? `${config.publicUrl}/notifications/opt-out?token=${optOutToken}`
       : undefined,
   };
-  return row.channel === "email" ? { channel: "email", to, data } : { channel: "sms", to, data };
+  return { channel: row.channel, to, data, clientName: client.name };
 }
 
 export function createNotificationWorker(options: WorkerOptions): NotificationWorker {
@@ -150,7 +176,11 @@ export function createNotificationWorker(options: WorkerOptions): NotificationWo
     };
 
     try {
-      const prepared = await prepare(db, row, config, providers, clock());
+      const email =
+        row.channel === "email"
+          ? await resolveNotificationEmail(db, config, providers.email, options.emailFetch)
+          : null;
+      const prepared = await prepare(db, row, config, { ...providers, email }, clock());
       if ("skip" in prepared) {
         metrics.inc("skipped");
         log({ level: "info", msg: "skipped", reason: prepared.skip, ...base });
@@ -163,7 +193,8 @@ export function createNotificationWorker(options: WorkerOptions): NotificationWo
         const optOut = prepared.data.optOutUrl
           ? new URL(prepared.data.optOutUrl).searchParams.get("token")
           : null;
-        result = await (providers.email as NonNullable<Providers["email"]>).send({
+        if (!email) throw new Error("Email provider missing after delivery preparation");
+        result = await email.send({
           to: prepared.to,
           subject: rendered.subject,
           text: rendered.text,
@@ -177,12 +208,84 @@ export function createNotificationWorker(options: WorkerOptions): NotificationWo
             : undefined,
           idempotencyKey: row.id,
         });
-      } else {
+      } else if (prepared.channel === "sms") {
         result = await (providers.sms as NonNullable<Providers["sms"]>).send({
           to: prepared.to,
           body: renderSms(prepared.data),
           idempotencyKey: row.id,
         });
+      } else {
+        const meta = config.whatsapp;
+        if (!meta) {
+          await finish({ status: "skipped", reason: "whatsapp_rule_inactive" });
+          return;
+        }
+        const dispatch = await db.transaction(async (tx) => {
+          // Rules and connection changes lock this row before retiring queued deliveries.
+          // Keep the chosen sender and template consistent with the dispatch marker.
+          const connection = await readConnection(tx, "share");
+          const rule = activeRules(connection, clock()).find((item) => item.kind === row.kind);
+          if (!connection || !rule) return { status: "inactive" } as const;
+          const locale = rule.template.language.replaceAll("_", "-");
+          const format = (options: Intl.DateTimeFormatOptions) =>
+            new Intl.DateTimeFormat(locale, {
+              ...options,
+              timeZone: prepared.data.timeZone,
+            }).format(prepared.data.startsAt);
+          const body = buildTemplateMessage(rule, prepared.to, row.id, {
+            client: prepared.clientName,
+            salon: prepared.data.salonName,
+            date: format({ dateStyle: "long" }),
+            time: format({ hour: "2-digit", minute: "2-digit", hour12: false }),
+            staff: prepared.data.staffName,
+            services: prepared.data.services.join(", "),
+            preferences: prepared.data.optOutUrl ?? `${config.publicUrl}/account/notifications`,
+          });
+          const token = requestToken(config, connection);
+          // Meta's Send API does not deduplicate by a client-supplied key.
+          const [claimed] = await tx
+            .update(reminder)
+            .set({
+              whatsappDispatchAt: clock(),
+              whatsappDispatchWabaId: connection.wabaId,
+              whatsappDispatchPhoneId: connection.phoneId,
+            })
+            .where(
+              and(
+                eq(reminder.id, row.id),
+                eq(reminder.status, "processing"),
+                eq(reminder.lockedBy, workerId),
+                isNull(reminder.whatsappDispatchAt),
+              ),
+            )
+            .returning({ id: reminder.id });
+          if (!claimed) return { status: "unavailable" } as const;
+          return { status: "ready", phoneId: connection.phoneId, token, body } as const;
+        });
+        if (dispatch.status === "inactive") {
+          await finish({ status: "skipped", reason: "whatsapp_rule_inactive" });
+          return;
+        }
+        if (dispatch.status === "unavailable") {
+          await finish({ status: "failed", error: "whatsapp_delivery_unknown" });
+          return;
+        }
+        try {
+          result = {
+            messageId: await createMeta(meta, options.whatsappFetch).send(
+              dispatch.phoneId,
+              dispatch.token,
+              dispatch.body,
+            ),
+          };
+        } catch (error) {
+          const status = error instanceof MetaRequestError ? error.status : 0;
+          throw new PermanentProviderError(
+            status >= 400 && status < 500
+              ? `whatsapp_rejected_${status}`
+              : "whatsapp_delivery_unknown",
+          );
+        }
       }
       if (await finish({ status: "sent", providerMessageId: result.messageId, at: clock() })) {
         metrics.inc("sent");
@@ -214,7 +317,10 @@ export function createNotificationWorker(options: WorkerOptions): NotificationWo
     }
   }
 
+  let draining = false;
+
   async function runOnce(): Promise<number> {
+    if (draining) return 0;
     const claimed = await claimDue(db, {
       now: clock(),
       limit: config.batchSize,
@@ -225,8 +331,17 @@ export function createNotificationWorker(options: WorkerOptions): NotificationWo
     metrics.inc("claimed", claimed.length);
     let waiting = [...claimed];
     while (waiting.length > 0) {
+      if (draining) {
+        await releaseUnstartedReminders(
+          db,
+          waiting.map((row) => row.id),
+          workerId,
+        );
+        break;
+      }
       const row = waiting.shift() as ReminderRow;
       await handle(row);
+      if (draining) continue;
       // Keep the leases of the jobs still waiting alive, and drop any that were taken over.
       const owned = new Set(
         await renewLeases(
@@ -274,12 +389,13 @@ export function createNotificationWorker(options: WorkerOptions): NotificationWo
     runOnce,
     start() {
       if (running) return;
+      draining = false;
       running = true;
       log({ level: "info", msg: "worker started", workerId });
       loop = poll();
     },
     async stop() {
-      if (!running) return;
+      draining = true;
       running = false;
       wake?.();
       await loop;

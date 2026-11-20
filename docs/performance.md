@@ -65,3 +65,24 @@ LCP is about 750 ms on every page at both settings (the first paint is server-re
 **What was tried, and why nothing was kept.** The calendar's appointment drawer, new-appointment sheet and shortcut help were moved behind `React.lazy` (they are only needed after a click). The transfer for the calendar fell by 6 kB (401 to 395 kB) but the median score and TBT did not move beyond noise (6x slowdown: 89 before, 86 after, with TBT swinging 350 to 880 ms between runs), and it removes the drawer's exit animation. It was reverted rather than claimed as a win. What remains in the critical path is the shared entry chunk (about 128 kB gzip: React, the router, TanStack Query and the Zod contracts), not route code; shrinking it means replacing Zod on the client with a lighter validator, which is a larger change than this phase.
 
 The route-level splitting TanStack Start already performs, the nonce CSP (no inline-script penalty) and long-lived immutable asset caching are in place; the CSP and the extra headers added in this phase do not show up in the numbers (the pre-CSP pages were not re-measured for comparison, so there is no before/after for that change).
+
+### React rendering and navigation recheck (2026-11-17)
+
+The built web app was checked in Chromium on localhost with synthetic data, fresh browser contexts and 4× CPU throttling. Each cell describes one local observation. The observer excludes layout shifts associated with recent user input.
+
+| Screen                  | 390 px initial CLS / LCP | 1440 px initial CLS / LCP |
+| ----------------------- | ------------------------ | ------------------------- |
+| Home                    | 0 / 460 ms               | 0 / 176 ms                |
+| Choose booking services | 0 / 180 ms               | 0 / 140 ms                |
+| Calendar                | 0 / 268 ms               | 0 / 248 ms                |
+| Reports                 | 0 / 852 ms               | 0 / 692 ms                |
+
+The original local preview showed a desktop calendar shift of 0.0078 when the staff list loaded. A second audit reproduced the booking catalog moving as the combinations section loaded and the reports toolbar moving as the currency picker appeared. The calendar now renders its first range, staff and waitlist count from the guarded loader. Booking combinations load with the first services screen. Currency selection keeps its place in the reports toolbar while the result loads.
+
+A separate check delayed the browser's range request by 700 ms. In the private calendar, the consultation banner, read-only controls and toolbar position stayed stable while the selected date loaded. The first paint for the copied day showed the 34 expected cards and Chromium reported no hydration errors in Spanish after the time-format normalization.
+
+Path changes use a short native workspace transition. Date and view changes keep their direct response. Chromium was checked with normal motion, reduced motion and the native transition API disabled. Navigation restored focus to the main region in each mode.
+
+Reports now loads the chart module (about 110 kB gzip) when a plot gets close to the viewport. At 390 × 550 the module was not requested until scrolling to the plot, which appeared without a layout shift. The chart summary and table are available independently of that module.
+
+These are local observations. At 4× CPU the chart content still produced a 428 ms task in the last desktop report measurement. Field percentiles and performance on other devices remain to be measured.

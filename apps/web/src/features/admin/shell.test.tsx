@@ -6,7 +6,7 @@ import { AdminShell } from "./shell";
 describe("AdminShell", () => {
   test("reserves room for the mobile bottom bar so toasts never sit on top of it", () => {
     const view = renderApp(
-      <AdminShell role="owner" active="today">
+      <AdminShell role="owner" active="calendar">
         <p>content</p>
       </AdminShell>,
     );
@@ -22,30 +22,20 @@ describe("AdminShell", () => {
       </AdminShell>,
     );
     const sidebar = screen.getByRole("navigation", { name: "Dashboard sections" });
-    for (const name of [
-      "Today",
-      "Calendar",
-      "Clients",
-      "Services",
-      "Team",
-      "Reports",
-      "Settings",
-    ]) {
+    for (const name of ["Calendar", "Clients", "Services", "Team", "Reports", "Settings"]) {
       expect(within(sidebar).getByRole("link", { name })).toBeInTheDocument();
     }
     expect(within(sidebar).getByRole("link", { name: "Clients" })).toHaveAttribute(
       "aria-current",
       "page",
     );
-    expect(within(sidebar).getByRole("link", { name: "Today" })).not.toHaveAttribute(
-      "aria-current",
-    );
+    expect(within(sidebar).queryByRole("link", { name: "Today" })).toBeNull();
     expect(screen.getByText("content")).toBeInTheDocument();
   });
 
   test("staff only see their sections, and their schedule is named for them", () => {
     renderApp(
-      <AdminShell role="staff" active="today">
+      <AdminShell role="staff" active="calendar">
         <p>content</p>
       </AdminShell>,
     );
@@ -55,14 +45,14 @@ describe("AdminShell", () => {
     expect(within(sidebar).getByRole("link", { name: "My schedule" })).toBeInTheDocument();
   });
 
-  test("on phones a bottom bar keeps four sections and moves the rest behind More", async () => {
+  test("on phones a bottom bar keeps three sections and moves the rest behind More", async () => {
     renderApp(
-      <AdminShell role="owner" active="today">
+      <AdminShell role="owner" active="calendar">
         <p>content</p>
       </AdminShell>,
     );
     const bar = screen.getByRole("navigation", { name: "Dashboard sections (mobile)" });
-    expect(within(bar).getAllByRole("link")).toHaveLength(4);
+    expect(within(bar).getAllByRole("link")).toHaveLength(3);
     fireEvent.click(within(bar).getByRole("button", { name: "More" }));
     const dialog = await screen.findByRole("dialog", { name: "More" });
     for (const name of ["Team", "Services", "Settings"]) {
@@ -72,12 +62,12 @@ describe("AdminShell", () => {
 
   test("a staff bottom bar keeps daily work including checkout and puts secondary tools in More", () => {
     renderApp(
-      <AdminShell role="staff" active="today">
+      <AdminShell role="staff" active="calendar">
         <p>content</p>
       </AdminShell>,
     );
     const bar = screen.getByRole("navigation", { name: "Dashboard sections (mobile)" });
-    expect(within(bar).getAllByRole("link")).toHaveLength(4);
+    expect(within(bar).getAllByRole("link")).toHaveLength(3);
     expect(within(bar).getByRole("link", { name: "Sales & register" })).toBeInTheDocument();
     expect(within(bar).getByRole("button", { name: "More" })).toBeInTheDocument();
   });

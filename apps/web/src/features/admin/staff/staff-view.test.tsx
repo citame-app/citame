@@ -1,13 +1,17 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { fireEvent, screen, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderApp } from "../../../../test/render";
+import { StaffPortraitEditor } from "./staff-portrait";
 import { StaffView, validateStaffSearch } from "./staff-view";
 
 const ANA = "0198f5a0-7b1c-7000-8000-000000000201";
 const BEA = "0198f5a0-7b1c-7000-8000-000000000202";
 const realFetch = globalThis.fetch;
 const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
 
 beforeEach(() => {
   globalThis.fetch = mock(async (input: string | URL | Request) => {
@@ -15,8 +19,20 @@ beforeEach(() => {
     if (url.pathname === "/api/admin/staff") {
       return json({
         staff: [
-          { id: ANA, displayName: "Ana", active: true, userId: "u1", serviceIds: [] },
-          { id: BEA, displayName: "Bea", active: true, userId: "u2", serviceIds: [] },
+          {
+            id: ANA,
+            displayName: "Ana",
+            active: true,
+            userId: "u1",
+            serviceIds: [],
+          },
+          {
+            id: BEA,
+            displayName: "Bea",
+            active: true,
+            userId: "u2",
+            serviceIds: [],
+          },
         ],
       });
     }
@@ -41,11 +57,46 @@ describe("validateStaffSearch", () => {
       member: ANA,
       tab: "timeoff",
     });
-    expect(validateStaffSearch({ member: "nope", tab: "x" })).toEqual({ tab: "hours" });
+    expect(validateStaffSearch({ member: "nope", tab: "x" })).toEqual({
+      tab: "hours",
+    });
   });
 });
 
 describe("StaffView", () => {
+  test("removing a portrait only sends a versioned deletion after confirmation", async () => {
+    const version = "0198f5a0-7b1c-7000-8000-000000000203";
+    const member = {
+      id: ANA,
+      displayName: "Ana",
+      active: true,
+      serviceIds: [],
+      userId: null,
+    };
+    const request = mock(async () => json({ version: null }));
+    globalThis.fetch = request as unknown as typeof fetch;
+    renderApp(<StaffPortraitEditor member={{ ...member, portraitVersion: version }} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove photo" }));
+    let dialog = await screen.findByRole("dialog", { name: "Remove photo" });
+    expect(request).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    expect(request).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove photo" }));
+    dialog = await screen.findByRole("dialog", { name: "Remove photo" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove photo" }));
+    await waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        expect.stringContaining(`/admin/staff/${ANA}/portrait`),
+        expect.objectContaining({
+          body: JSON.stringify({ version, imageBase64: null }),
+        }),
+      ),
+    );
+  });
+
   test("the owner starts on the team list", async () => {
     renderApp(
       <StaffView
@@ -123,6 +174,9 @@ describe("StaffView", () => {
       />,
     );
     fireEvent.click(await screen.findByRole("tab", { name: "Time off" }));
-    expect(onSearchChange).toHaveBeenCalledWith({ member: ANA, tab: "timeoff" });
+    expect(onSearchChange).toHaveBeenCalledWith({
+      member: ANA,
+      tab: "timeoff",
+    });
   });
 });

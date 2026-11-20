@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { check, integer, pgTable, text } from "drizzle-orm/pg-core";
+import { boolean, check, integer, pgTable, text } from "drizzle-orm/pg-core";
 import { createdAt, updatedAt } from "./helpers";
 
 /** Single-row table (id is pinned to 1) holding salon-wide configuration. */
@@ -13,6 +13,7 @@ export const salonSettings = pgTable(
     slotGranularityMinutes: integer().notNull().default(15),
     minNoticeMinutes: integer().notNull().default(60),
     maxDaysAhead: integer().notNull().default(60),
+    onlineBookingEnabled: boolean().notNull().default(true),
     /** Lead of the first reminder before the start, in minutes; null disables it. */
     reminderFirstLeadMinutes: integer().default(1440),
     /** Lead of the second reminder, in minutes; null disables it. */

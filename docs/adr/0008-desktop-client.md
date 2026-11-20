@@ -65,17 +65,11 @@ Appointments are server-authoritative. A rejected appointment mutation becomes a
 
 Bookings are validated locally against the synced catalog before queueing (unknown service or client, a staff member who does not perform every selected service), so avoidable rejections never leave the desk. The server stays the judge for everything else.
 
-### Auth: Better Auth cookie session today, behind a trait
+### Authentication and offline access
 
-ADR 0003 deliberately did not install `oauthProvider()` / `mcp()` (Phase 6). The desktop uses Better Auth email + password with a cookie session; OAuth/MCP now exists, but sync still uses session authentication (ADR 0009). The desktop therefore:
+The native client uses the selected server’s browser sign-in, OAuth authorization code with PKCE, and a bearer token scoped to desktop sync and supported routes. Tokens are refreshed by the shared transport and stored in the profile’s private session file. Earlier saved cookie sessions remain usable until the next sign-in. See [ADR 0009](0009-oauth-and-mcp.md).
 
-1. signs in with `POST /api/auth/sign-in/email` (JSON, no `Origin` header needed: the origin check only applies to browser-style cookie requests, verified against the running API);
-2. keeps the signed `better-auth.session_token` cookie (`name=value` exactly as set; the value is signed and never modified) and sends it as a `Cookie` header on `/sync/*` and `/me`;
-3. refuses accounts whose role is `client` at login (the server would answer `403` on every sync call anyway);
-4. stores the session in `session.json` in the data dir, created with mode `0600` through a temp file and an atomic rename (no OS keyring in v1: the cookie is a revocable session, not a password, and the file is owner-only; a keyring-backed `TokenStore` is a drop-in);
-5. opens the app straight from a saved session without a network round trip (offline-first), validates it in the background with `GET /me` and signs the user out only on a definite `401`.
-
-All of it is behind `AuthProvider` (`sign_in`, `authorize` headers, `validate`, `sign_out`) and `TokenStore`, so Phase 6 swaps `BetterAuthSession` for an OAuth 2.1 provider without touching the transport or the UI. The Authorization Code + PKCE building blocks for that swap already exist and are tested in isolation (`pkce`: S256 challenge checked against the RFC 7636 vector, loopback redirect listener on an ephemeral `127.0.0.1` port, `state` check), but the native OAuth provider and bearer sync integration remain a separate follow-up (ADR 0009).
+A saved profile opens offline. If the server explicitly denies sync or reports a different account role, the app returns to sign-in and preserves the old profile’s queue. Local files remain scoped to the server, account and role.
 
 ### i18n
 
@@ -92,4 +86,4 @@ All UI copy lives in `sob_core::i18n` (a macro-generated `Key` enum with an Engl
 - The Rust toolchain (stable, edition 2024) and, for the GUI crate, the system libraries GPUI needs on Linux (Wayland/X11, xkbcommon, fontconfig, Vulkan loader) are required to build `sob-desktop`; `sob-core` needs only a C compiler (bundled SQLite) and, for TLS, the ring build prerequisites.
 - Last-writer-wins entities (clients, time off, settings) are queued for push but the v1 UI only edits appointments and creates clients; the sync layer already carries all twelve mutation kinds.
 - Added in the 2026-11-15 release-readiness pass: day/week navigation with one staff member per week, native UTF-16/IME text input with grapheme editing and selection, persisted light/dark theme with system default, and completed/no-show controls backed by versioned offline mutations.
-- Not done in v1: OS keyring, system installers/auto-update, and macOS/Windows builds. Linux release archives are required artifacts, not best-effort jobs.
+- Initially deferred in v1: OS keyring, system installers and auto-update, and macOS/Windows builds. [ADR 0020](0020-desktop-release-platforms.md) updates the platform release decision.

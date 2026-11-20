@@ -5,19 +5,15 @@ import { BookingLinks } from "~/features/acquisition/booking-links";
 import { SocialCreative } from "~/features/acquisition/social-creative";
 import { adminHead } from "~/features/admin/route-head";
 import { PortfolioAdmin } from "~/features/reputation/portfolio";
+import { ReviewRequests } from "~/features/reputation/review-requests";
 import { ReviewModeration } from "~/features/reputation/reviews";
 import { useI18n } from "~/i18n/react";
+const tabs = ["reviews", "requests", "portfolio", "entry", "creative"] as const;
+type ReputationTab = (typeof tabs)[number];
+const isTab = (value: unknown): value is ReputationTab => tabs.some((tab) => value === tab);
 export const Route = createFileRoute("/admin/reputation")({
-  validateSearch: (
-    search: Record<string, unknown>,
-  ): { tab?: "reviews" | "portfolio" | "entry" | "creative" } =>
-    search.tab === "portfolio"
-      ? { tab: "portfolio" }
-      : search.tab === "creative"
-        ? { tab: "creative" }
-        : search.tab === "entry"
-          ? { tab: "entry" }
-          : {},
+  validateSearch: (search: Record<string, unknown>): { tab?: ReputationTab } =>
+    isTab(search.tab) ? { tab: search.tab } : {},
   head: adminHead("admin.nav.reputation"),
   component: Page,
 });
@@ -34,19 +30,13 @@ function Page() {
         value={tab}
         onValueChange={(value) =>
           void navigate({
-            search:
-              value === "portfolio"
-                ? { tab: "portfolio" }
-                : value === "creative"
-                  ? { tab: "creative" }
-                  : value === "entry"
-                    ? { tab: "entry" }
-                    : {},
+            search: isTab(value) && value !== "reviews" ? { tab: value } : {},
           })
         }
         label={t("admin.nav.reputation")}
         items={[
           { value: "reviews", label: t("reviews.title") },
+          { value: "requests", label: t("reviews.request.title") },
           { value: "portfolio", label: t("portfolio.title") },
           { value: "entry", label: t("acquisition.title") },
           { value: "creative", label: t("social.title") },
@@ -54,6 +44,9 @@ function Page() {
       >
         <TabPanel value="reviews">
           <ReviewModeration />
+        </TabPanel>
+        <TabPanel value="requests">
+          <ReviewRequests />
         </TabPanel>
         <TabPanel value="portfolio">
           <PortfolioAdmin />

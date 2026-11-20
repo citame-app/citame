@@ -18,6 +18,8 @@ export const service = pgTable(
     id: primaryId(),
     name: text().notNull(),
     description: text(),
+    category: text(),
+    color: text(),
     durationMinutes: integer().notNull(),
     /** Cleanup/transition time blocked after the service. */
     bufferMinutes: integer().notNull().default(0),

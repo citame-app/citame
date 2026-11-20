@@ -4,8 +4,9 @@ import { eq } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { DomainError } from "../../errors";
 
-export async function getSalonSettings(db: Pick<Database, "select">) {
-  const [settings] = await db.select().from(salonSettings).limit(1);
+export async function getSalonSettings(db: Pick<Database, "select">, lock?: "share" | "update") {
+  const query = db.select().from(salonSettings).limit(1);
+  const [settings] = await (lock ? query.for(lock) : query);
   if (!settings) {
     throw new DomainError("internal_error", "Salon settings are not configured; run db:seed");
   }
@@ -21,7 +22,13 @@ export function toSalonResponse(settings: Row): SalonResponse {
     slotGranularityMinutes: settings.slotGranularityMinutes,
     minNoticeMinutes: settings.minNoticeMinutes,
     maxDaysAhead: settings.maxDaysAhead,
+    onlineBookingEnabled: settings.onlineBookingEnabled,
   };
+}
+
+export function assertOnlineBookingEnabled(settings: Row, role?: string) {
+  if (role === "client" && !settings.onlineBookingEnabled)
+    throw new DomainError("online_booking_paused", "New online bookings are paused");
 }
 
 export function toOwnerSettings(settings: Row): OwnerSalonSettings {
@@ -38,6 +45,7 @@ const EDITABLE = [
   "slotGranularityMinutes",
   "minNoticeMinutes",
   "maxDaysAhead",
+  "onlineBookingEnabled",
   "reminderFirstLeadMinutes",
   "reminderSecondLeadMinutes",
 ] as const;
@@ -49,7 +57,7 @@ export async function updateSalonSettings(
   actor: { userId: string },
 ): Promise<OwnerSalonSettings> {
   return db.transaction(async (tx) => {
-    const current = await getSalonSettings(tx);
+    const current = await getSalonSettings(tx, "update");
     const changes = Object.fromEntries(
       EDITABLE.filter((key) => input[key] !== undefined && input[key] !== current[key]).map(
         (key) => [key, input[key]],

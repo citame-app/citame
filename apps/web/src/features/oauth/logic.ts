@@ -1,4 +1,4 @@
-import { type OAuthScope, parseScopes, type UserRole } from "@sob/contracts";
+import { isManagementScope, type OAuthScope, parseScopes, type UserRole } from "@sob/contracts";
 
 /** An authorization request as the consent and sign-in pages see it. */
 export interface OAuthRequest {
@@ -66,6 +66,17 @@ const FRONT_DESK: readonly UserRole[] = ["owner", "staff"];
  */
 export function consentScopes(requested: readonly OAuthScope[], role: UserRole): ConsentScope[] {
   return requested
-    .filter((scope) => scope !== "schedule:read" || FRONT_DESK.includes(role))
-    .map((scope) => ({ scope, required: scope === "mcp:read" }));
+    .filter(
+      (scope) =>
+        (scope !== "billing:write" || role === "owner") &&
+        ((scope !== "schedule:read" && scope !== "desktop:sign-in" && !isManagementScope(scope)) ||
+          FRONT_DESK.includes(role)),
+    )
+    .map((scope) => ({
+      scope,
+      required:
+        scope === "mcp:read" ||
+        scope === "desktop:sign-in" ||
+        (scope === "offline_access" && requested.includes("desktop:sign-in")),
+    }));
 }

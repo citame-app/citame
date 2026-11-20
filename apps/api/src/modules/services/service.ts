@@ -19,7 +19,15 @@ export async function listServices(db: Database): Promise<Service[]> {
       .orderBy(asc(service.name)),
   );
   const metadata = await catalogMetadata(db, rows);
-  return rows.map((r) => publicService(r, metadata.get(r.id)));
+  const activeBaseIds = new Set(
+    rows.filter((row) => row.catalogKind !== "addon").map((row) => row.id),
+  );
+  return rows.flatMap((row) => {
+    const catalog = metadata.get(row.id);
+    if (catalog?.kind === "addon" && !catalog.allowedServiceIds.some((id) => activeBaseIds.has(id)))
+      return [];
+    return [publicService(row, catalog)];
+  });
 }
 
 export type ServiceRow = Service;

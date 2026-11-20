@@ -183,3 +183,30 @@ export function createResourceCapacityCalendar(
     });
   };
 }
+
+/** Previously accepted overlaps can coexist. Adding regular work must stay within capacity. */
+export function hasMixedCapacityConflict(
+  capacity: number,
+  occupied: { start: number; end: number; historical: boolean }[],
+) {
+  const changes = new Map<number, { regular: number; historical: number }>();
+  for (const row of occupied) {
+    const kind = row.historical ? "historical" : "regular";
+    for (const [time, delta] of [
+      [row.start, 1],
+      [row.end, -1],
+    ] as const) {
+      const change = changes.get(time) ?? { regular: 0, historical: 0 };
+      change[kind] += delta;
+      changes.set(time, change);
+    }
+  }
+  let regular = 0;
+  let historical = 0;
+  for (const [, change] of [...changes].sort(([a], [b]) => a - b)) {
+    regular += change.regular;
+    historical += change.historical;
+    if (regular > 0 && regular + historical > capacity) return true;
+  }
+  return false;
+}

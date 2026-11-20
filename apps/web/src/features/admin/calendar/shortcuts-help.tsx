@@ -7,6 +7,8 @@ const ROWS = [
   ["→ / ]", "calendar.shortcuts.next"],
   ["d", "calendar.shortcuts.day"],
   ["w", "calendar.shortcuts.week"],
+  ["m", "calendar.shortcuts.month"],
+  ["l", "calendar.shortcuts.list"],
   ["n", "calendar.shortcuts.new"],
   ["r", "calendar.shortcuts.refresh"],
   ["?", "calendar.shortcuts.help"],

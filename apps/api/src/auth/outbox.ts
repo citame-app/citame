@@ -137,8 +137,10 @@ export function createAccountEmailWorker(options: {
       eq(jobs.lockedBy, workerId),
       eq(jobs.attempts, row.attempts),
     );
+  let draining = false;
+
   async function batch(): Promise<number> {
-    if (!provider) return 0;
+    if (!provider || draining) return 0;
     const now = clock();
     const claimed = await db.transaction(async (tx) => {
       await tx
@@ -214,8 +216,29 @@ export function createAccountEmailWorker(options: {
       Math.max(10, (config.visibilityTimeoutSeconds * 1000) / 3),
     );
     try {
-      for (const row of claimed) {
+      for (const [index, row] of claimed.entries()) {
         await renewal;
+        if (draining) {
+          await db
+            .update(jobs)
+            .set({
+              status: "pending",
+              attempts: sql`${jobs.attempts} - 1`,
+              lockedBy: null,
+              lockedUntil: null,
+            })
+            .where(
+              and(
+                inArray(
+                  jobs.id,
+                  claimed.slice(index).map(({ id }) => id),
+                ),
+                eq(jobs.status, "processing"),
+                eq(jobs.lockedBy, workerId),
+              ),
+            );
+          break;
+        }
         if (!waiting.has(row.id)) continue;
         if (row.expiresAt.getTime() <= clock().getTime()) {
           await db
@@ -321,6 +344,7 @@ export function createAccountEmailWorker(options: {
     runOnce,
     start() {
       if (running) return;
+      draining = false;
       running = true;
       loop = (async () => {
         while (running) {
@@ -342,6 +366,7 @@ export function createAccountEmailWorker(options: {
       })();
     },
     async stop() {
+      draining = true;
       running = false;
       wake?.();
       await loop;

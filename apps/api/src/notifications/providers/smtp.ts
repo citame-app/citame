@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import type SMTPTransport from "nodemailer/lib/smtp-transport";
 import {
   type EmailMessage,
   type EmailProvider,
@@ -8,9 +9,9 @@ import {
 } from "./types";
 
 /** SMTP codes: 5xx is a verdict about the message or recipient, 4xx and I/O errors are retryable. */
-function classify(error: unknown): Error {
+function classify(error: unknown, redact: boolean): Error {
   const e = error as { responseCode?: number; code?: string; message?: string };
-  const message = e.message ?? "SMTP error";
+  const message = redact ? "smtp_delivery_failed" : (e.message ?? "SMTP error");
   if (e.code === "EAUTH") return new PermanentProviderError(message);
   if (typeof e.responseCode === "number" && e.responseCode >= 500) {
     return new PermanentProviderError(message);
@@ -29,14 +30,15 @@ export const SMTP_TIMEOUTS = { connectionMs: 10_000, greetingMs: 10_000, socketM
  * receiving server or the operator spot a duplicate, but a crash between "server accepted" and
  * "row marked sent" can still deliver twice (at-least-once, see ADR 0010).
  */
-export function createSmtpProvider(options: {
-  url: string;
-  from: string;
-  timeouts?: typeof SMTP_TIMEOUTS;
-}): EmailProvider {
+export function createSmtpProvider(
+  options: { from: string; timeouts?: typeof SMTP_TIMEOUTS } & (
+    | { url: string }
+    | { connection: SMTPTransport.Options }
+  ),
+): EmailProvider {
   const timeouts = options.timeouts ?? SMTP_TIMEOUTS;
   const transport = nodemailer.createTransport({
-    url: options.url,
+    ...("url" in options ? { url: options.url } : options.connection),
     pool: true,
     maxConnections: 2,
     connectionTimeout: timeouts.connectionMs,
@@ -67,7 +69,7 @@ export function createSmtpProvider(options: {
         });
         return { messageId: info.messageId };
       } catch (error) {
-        throw classify(error);
+        throw classify(error, "connection" in options);
       }
     },
     async close() {

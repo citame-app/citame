@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { RECURRING_FIXTURE as fixture } from "../../api/test/recurring-values";
 import { at, expectNoHorizontalScroll, nextWeekday, STYLIST_A, STYLIST_B } from "./admin-helpers";
-import { expectNoSeriousA11yViolations, signInThroughUi } from "./helpers";
+import { expectNoSeriousA11yViolations, signInThroughUi, switchLocale } from "./helpers";
 
 for (const scheme of ["light", "dark"] as const) {
   test.describe(`shared resource capacity — ${scheme}`, () => {
@@ -12,6 +12,7 @@ for (const scheme of ["light", "dark"] as const) {
       const bookings: { id: string; version: number }[] = [];
       let resourceId: string | undefined;
       await signInThroughUi(page, fixture.ownerEmail, "/admin/services");
+      await page.getByRole("button", { name: "Resources", exact: true }).click();
       await expect(page).toHaveURL(/\/admin\/services$/);
       const catalog = await (await page.request.get("/api/admin/services")).json();
       const haircut = catalog.services.find((s: { id: string }) => s.id === fixture.haircut);
@@ -99,7 +100,7 @@ for (const scheme of ["light", "dark"] as const) {
         await expectNoHorizontalScroll(page);
         await expectNoSeriousA11yViolations(page, `resource editor ${scheme}`);
         await panel.getByRole("button", { name: "Close panel", exact: true }).click();
-        await page.getByRole("radio", { name: "Español", exact: true }).check({ force: true });
+        await switchLocale(page, "Español");
         await page.getByRole("button", { name: "Cabinas y equipos", exact: true }).click();
         const spanish = page.getByRole("dialog", { name: "Cabinas y equipos", exact: true });
         await spanish

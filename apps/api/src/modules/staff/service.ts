@@ -1,12 +1,20 @@
 import type { Staff } from "@sob/contracts";
-import { type Database, serviceStaff, staffProfile } from "@sob/db";
+import { type Database, serviceStaff, staffPortrait, staffProfile } from "@sob/db";
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { DomainError } from "../../errors";
 
 export async function listStaff(db: Database): Promise<Staff[]> {
   const members = await db
-    .select({ id: staffProfile.id, displayName: staffProfile.displayName })
+    .select({
+      id: staffProfile.id,
+      displayName: staffProfile.displayName,
+      portraitVersion: staffPortrait.version,
+    })
     .from(staffProfile)
+    .leftJoin(
+      staffPortrait,
+      and(eq(staffPortrait.staffId, staffProfile.id), eq(staffPortrait.published, true)),
+    )
     .where(and(eq(staffProfile.active, true), isNull(staffProfile.deletedAt)))
     .orderBy(asc(staffProfile.displayName));
 
@@ -15,8 +23,9 @@ export async function listStaff(db: Database): Promise<Staff[]> {
     .from(serviceStaff)
     .where(isNull(serviceStaff.deletedAt));
 
-  return members.map((member) => ({
+  return members.map(({ portraitVersion, ...member }) => ({
     ...member,
+    ...(portraitVersion ? { portraitVersion } : {}),
     serviceIds: links.filter((l) => l.staffId === member.id).map((l) => l.serviceId),
   }));
 }

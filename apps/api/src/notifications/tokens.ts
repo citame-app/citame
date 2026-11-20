@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 export interface OptOutClaims {
   clientId: string;
-  channel: "email" | "sms";
+  channel: "email" | "sms" | "whatsapp";
 }
 
 const VERSION = "v1";
@@ -33,7 +33,11 @@ export function verifyOptOutToken(secret: string, token: string): OptOutClaims |
       c?: unknown;
       ch?: unknown;
     };
-    if (typeof parsed.c !== "string" || (parsed.ch !== "email" && parsed.ch !== "sms")) return null;
+    if (
+      typeof parsed.c !== "string" ||
+      (parsed.ch !== "email" && parsed.ch !== "sms" && parsed.ch !== "whatsapp")
+    )
+      return null;
     return { clientId: parsed.c, channel: parsed.ch };
   } catch {
     return null;

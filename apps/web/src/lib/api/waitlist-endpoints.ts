@@ -16,8 +16,10 @@ export function waitlistEndpoints(client: ApiClient) {
   return {
     list: (mode: CommerceMode, query: WaitlistQuery = {}) =>
       client.get(base(mode), waitlistListSchema, { query: { ...query } }),
-    join: (mode: CommerceMode, input: WaitlistInput & { clientId?: string }) =>
-      client.post(base(mode), input, waitlistEntrySchema),
+    join: (
+      mode: CommerceMode,
+      input: WaitlistInput & { clientId?: string; importedEntryId?: string },
+    ) => client.post(base(mode), input, waitlistEntrySchema),
     savePolicy: (input: WaitlistPolicy) =>
       client.put("/admin/waitlist/policy", input, waitlistPolicySchema),
     cancel: (mode: CommerceMode, id: string, version: number) =>

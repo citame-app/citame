@@ -103,7 +103,15 @@ afterEach(() => {
 });
 
 const open = (role: "owner" | "staff" = "owner", onDeleted: () => void = () => {}) =>
-  renderApp(<ClientDetail clientId={CLIENT} role={role} onDeleted={onDeleted} now={NOW} />);
+  renderApp(
+    <ClientDetail
+      clientId={CLIENT}
+      role={role}
+      initialTab="profile"
+      onDeleted={onDeleted}
+      now={NOW}
+    />,
+  );
 
 describe("ClientDetail", () => {
   test("shows the contact form prefilled, with the email read-only", async () => {
@@ -117,6 +125,8 @@ describe("ClientDetail", () => {
 
   test("lists upcoming and past appointments with their status", async () => {
     open();
+    await screen.findByRole("heading", { name: "Lucia Perez" });
+    fireEvent.click(screen.getByRole("button", { name: "Calendar" }));
     const upcoming = (await screen.findByRole("heading", { name: "Upcoming" })).closest(
       "section",
     ) as HTMLElement;
@@ -145,7 +155,11 @@ describe("ClientDetail", () => {
   test("an invalid phone is explained and nothing is sent", async () => {
     open();
     fireEvent.change(await screen.findByLabelText("Phone"), { target: { value: "12" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    fireEvent.click(
+      within(screen.getByRole("form", { name: "Contact" })).getByRole("button", {
+        name: "Save changes",
+      }),
+    );
     expect(
       await screen.findByText("Enter a valid phone number or leave it empty"),
     ).toBeInTheDocument();
@@ -155,7 +169,11 @@ describe("ClientDetail", () => {
   test("clearing the phone sends null", async () => {
     open();
     fireEvent.change(await screen.findByLabelText("Phone"), { target: { value: "" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    fireEvent.click(
+      within(screen.getByRole("form", { name: "Contact" })).getByRole("button", {
+        name: "Save changes",
+      }),
+    );
     await waitFor(() => expect(patches).toEqual([{ phone: null }]));
   });
 

@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { RECURRING_FIXTURE as fixture } from "../../api/test/recurring-values";
 import { expectNoHorizontalScroll } from "./admin-helpers";
-import { expectNoSeriousA11yViolations, signInThroughUi } from "./helpers";
+import { expectNoSeriousA11yViolations, signInThroughUi, switchLocale } from "./helpers";
 
 for (const scheme of ["light", "dark"] as const)
   test.describe(`reviews — ${scheme}`, () => {
@@ -120,7 +120,7 @@ for (const scheme of ["light", "dark"] as const)
           .getByRole("button", { name: "Discard and reload", exact: true })
           .click();
         await expect(dialog).toHaveCount(0);
-        await page.getByRole("radio", { name: "Español", exact: true }).check();
+        await switchLocale(page, "Español");
         await ownCard.getByRole("button", { name: "Retirar reseña", exact: true }).click();
         const withdrawal = page.getByRole("dialog", { name: "Retirar reseña", exact: true });
         await expectNoSeriousA11yViolations(page, `withdrawal in Spanish ${scheme}`);

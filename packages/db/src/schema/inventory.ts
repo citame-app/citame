@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   check,
   index,
   integer,
@@ -41,7 +42,9 @@ export const stockReservation = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [
-    index("stock_reservation_expiry_idx").on(t.expiresAt).where(sql`${t.status} = 'reserved'`),
+    index("stock_reservation_expiry_idx")
+      .on(t.expiresAt)
+      .where(sql`${t.status} = 'reserved'`),
     index("stock_reservation_checkout_idx").on(t.checkoutId),
     check("stock_reservation_quantity_positive", sql`${t.quantity} between 1 and 999999999`),
   ],
@@ -61,6 +64,9 @@ export const stockMovement = pgTable(
     createdBy: text().references(() => user.id, { onDelete: "set null" }),
     idempotencyKey: text().notNull(),
     requestHash: text().notNull(),
+    ledgerPosition: bigint({ mode: "bigint" })
+      .notNull()
+      .default(sql`0`),
     createdAt: createdAt(),
   },
   (t) => [
@@ -69,6 +75,9 @@ export const stockMovement = pgTable(
       .on(t.checkoutLineId)
       .where(sql`${t.kind} = 'sale'`),
     index("stock_movement_product_created_idx").on(t.productId, t.createdAt),
+    uniqueIndex("stock_movement_ledger_position_idx")
+      .on(t.ledgerPosition)
+      .where(sql`${t.ledgerPosition} > 0`),
     check(
       "stock_movement_kind_valid",
       sql`${t.kind} in ('opening', 'receive', 'consume', 'count', 'sale', 'return')`,

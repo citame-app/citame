@@ -68,10 +68,19 @@ jobs:
       - run: bunx turbo run typecheck lint test build
       # Backup and restore round trip (real pg_dump/pg_restore through the postgres container).
       - run: PG_MODE=docker PG_CONTAINER="$(docker ps -q --filter ancestor=postgres:18-alpine)" bun run test:scripts
-      # Build and boot the hardened production images; verify migrations, proxy, auth,
-      # booking contention and runtime hardening against isolated throwaway volumes.
+      - name: Rust toolchain for production integration tests
+        working-directory: apps/desktop
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/target
+          key: desktop-production-smoke-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/desktop/Cargo.lock', 'apps/desktop/rust-toolchain.toml') }}
+      # The native core tests use the same isolated API, Caddy and SMTP fixtures.
       - name: Production deployment smoke test
-        run: bash scripts/smoke-prod.sh
+        run: SMOKE_EMAIL=1 SMOKE_UPGRADE=1 SMOKE_RESTORE=1 SMOKE_DESKTOP=1 bash scripts/smoke-prod.sh
 
   e2e:
     runs-on: ubuntu-latest
@@ -147,6 +156,10 @@ jobs:
         env:
           E2E_OWNER_EMAIL: ci-owner@example.com
           E2E_OWNER_PASSWORD: correct horse battery staple
+      - name: Checkout and center management on the isolated fixture
+        run: bun run --cwd apps/web e2e --output test-results/pos
+        env:
+          E2E_POS_FIXTURE: "true"
       # Contention under load against the same stack: one 201 per slot, the rest 409, then SQL proof.
       - uses: grafana/setup-k6-action@v1
       - run: |
@@ -242,7 +255,7 @@ jobs:
           done
           cat api.log
           exit 1
-      - run: cargo test -p sob-core --test headless_sync --locked -- --ignored --test-threads=1
+      - run: cargo test -p sob-core --test headless_sync --locked -- --ignored --test-threads=1 --skip through_the_proxy
         working-directory: apps/desktop
         env:
           SOB_TEST_API_URL: http://127.0.0.1:3055

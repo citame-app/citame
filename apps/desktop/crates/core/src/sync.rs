@@ -1,15 +1,17 @@
 //! Sync engine: push the outbox serially, pull with the cursor, per docs/sync-protocol.md.
 
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use thiserror::Error;
 
 use crate::error::CoreError;
 use crate::model::*;
-use crate::store::Store;
+use crate::store::{INITIAL_GENERATION, Store};
 
 pub const PUSH_BATCH: usize = 100;
 pub const PULL_PAGE: u32 = 200;
+pub type CatalogColors = BTreeMap<String, String>;
+pub(crate) const CATALOG_COLORS_CACHED: &str = "catalog_colors_cached";
 
 /// What a transport can tell the engine; classification follows the protocol's error table.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -35,11 +37,21 @@ pub enum TransportError {
     /// 409 on pull: the cursor is ahead of the server (restored backup).
     #[error("cursor ahead of server")]
     CursorAhead,
+    #[error("the server changed replica generation")]
+    ReplicaGenerationChanged,
 }
 
 pub trait Transport: Send + Sync {
     fn push(&self, request: &PushRequest) -> Result<PushResponse, TransportError>;
     fn pull(&self, since: i64, limit: u32) -> Result<PullResponse, TransportError>;
+
+    fn pull_with_catalog_colors(
+        &self,
+        since: i64,
+        limit: u32,
+    ) -> Result<(PullResponse, Option<CatalogColors>), TransportError> {
+        Ok((self.pull(since, limit)?, None))
+    }
 }
 
 #[derive(Debug, Error)]
@@ -55,6 +67,8 @@ pub enum SyncError {
     /// The server asked to resend (`status: retry`); nothing was lost.
     #[error("server asked to retry: {0}")]
     Retry(String),
+    #[error("the server changed replica generation")]
+    ReplicaGenerationChanged,
     #[error("{0}")]
     Fatal(String),
     #[error(transparent)]
@@ -102,6 +116,7 @@ fn classify(e: TransportError) -> SyncError {
             SyncError::Fatal(format!("the server rejected the request: {m}"))
         }
         TransportError::CursorAhead => SyncError::Fatal("unexpected cursor conflict".into()),
+        TransportError::ReplicaGenerationChanged => SyncError::ReplicaGenerationChanged,
     }
 }
 
@@ -109,12 +124,13 @@ fn classify(e: TransportError) -> SyncError {
 pub fn push_outbox(store: &mut Store, transport: &dyn Transport) -> Result<PushReport, SyncError> {
     let mut report = PushReport::default();
     loop {
-        let batch = store.outbox(PUSH_BATCH)?;
+        let (generation, batch) = store.push_snapshot(PUSH_BATCH)?;
         if batch.is_empty() {
             return Ok(report);
         }
         let request = PushRequest {
             device_id: store.device_id()?,
+            generation: Some(generation.clone()),
             mutations: batch.iter().map(OutboxEntry::to_wire).collect(),
         };
         let response = match transport.push(&request) {
@@ -133,7 +149,7 @@ pub fn push_outbox(store: &mut Store, transport: &dyn Transport) -> Result<PushR
                 return Err(classify(e));
             }
         };
-        let done = store.apply_push_results(&batch, &response.results)?;
+        let done = store.apply_push_results_in(&batch, &response.results, Some(&generation))?;
         report.batches += 1;
         report.applied += done.applied;
         report.rejected += done.rejected;
@@ -154,44 +170,114 @@ pub fn push_outbox(store: &mut Store, transport: &dyn Transport) -> Result<PushR
 /// Pulls until the log is drained, applying each page together with its cursor.
 pub fn pull_all(store: &mut Store, transport: &dyn Transport) -> Result<PullReport, SyncError> {
     let mut report = PullReport::default();
+    let mut generation = store.replica_generation()?;
+    let mut switched_generation = false;
+    let snapshot_complete = store.get_meta("calendar_snapshot_complete")?.is_some();
+    let mut request_colors = store.get_meta(CATALOG_COLORS_CACHED)?.is_none();
     loop {
         let since = store.cursor()?;
-        let page = match transport.pull(since, PULL_PAGE) {
+        let response = if request_colors {
+            transport.pull_with_catalog_colors(since, PULL_PAGE)
+        } else {
+            transport.pull(since, PULL_PAGE).map(|page| (page, None))
+        };
+        let (page, colors) = match response {
             Ok(p) => p,
             Err(TransportError::CursorAhead) if !report.replica_reset => {
                 // Restored server backup: our replica is from the future. Start over; the
                 // outbox is the user's work and stays.
-                store.reset_replica()?;
+                store.reset_replica_in(Some(&generation))?;
                 report.replica_reset = true;
+                request_colors = true;
                 continue;
             }
             Err(e) => return Err(classify(e)),
         };
+        let server_generation = page.generation.as_deref().unwrap_or(INITIAL_GENERATION);
+        if server_generation != generation {
+            if switched_generation {
+                return Err(SyncError::Retry(
+                    "The server changed replica generation during sync".into(),
+                ));
+            }
+            store.switch_replica_generation(&generation, server_generation)?;
+            generation = server_generation.to_owned();
+            switched_generation = true;
+            report.replica_reset = true;
+            request_colors = true;
+            continue;
+        }
+        if store.apply_visibility_scopes(
+            page.client_directory,
+            page.calendar_scope.as_deref(),
+            &generation,
+        )? {
+            if report.replica_reset {
+                return Err(SyncError::Retry(
+                    "Access changed while refreshing the replica".into(),
+                ));
+            }
+            report.replica_reset = true;
+            request_colors = true;
+            continue;
+        }
         if page.next_cursor < since {
             return Err(SyncError::Fatal(format!(
                 "the server moved the cursor backwards ({since} -> {})",
                 page.next_cursor
             )));
         }
-        store.apply_page(&page.changes, page.next_cursor)?;
-        report.pages += 1;
-        report.changes += page.changes.len();
-        if !page.has_more {
-            break;
-        }
-        if page.next_cursor <= since {
+        if page.has_more && page.next_cursor == since {
             return Err(SyncError::Fatal(
                 "the server reports more changes but did not advance the cursor".into(),
             ));
+        }
+        let applied = store.apply_sync_page(
+            &page.changes,
+            page.next_cursor,
+            snapshot_complete && !report.replica_reset,
+            !page.has_more,
+            &page.refresh,
+            Some(&generation),
+        )?;
+        if let Some(colors) = colors {
+            store.apply_catalog_colors(&colors, Some(&generation))?;
+        }
+        request_colors = false;
+        if let Some(scope) = page.time_off_scope.as_deref()
+            && store.get_meta("time_off_scope")?.as_deref() != Some(scope)
+        {
+            store.set_meta_in("time_off_scope", scope, &generation)?;
+        }
+        report.pages += 1;
+        report.changes += applied;
+        if !page.has_more {
+            break;
         }
     }
     report.cursor = store.cursor()?;
     Ok(report)
 }
 
-/// Push first, then pull (the pull then shows the effect of our own mutations).
+/// Push edits in the current history, then pull. A recovery fence stops the push before any
+/// stale edit is applied. Pull then switches histories and preserves the edits as conflicts.
 pub fn sync_cycle(store: &mut Store, transport: &dyn Transport) -> Result<CycleReport, SyncError> {
-    let push = push_outbox(store, transport)?;
+    let push = match push_outbox(store, transport) {
+        Ok(push) => push,
+        Err(SyncError::ReplicaGenerationChanged) => {
+            let pull = pull_all(store, transport)?;
+            if store.outbox_len()? != 0 {
+                return Err(SyncError::Retry(
+                    "The server has not finished switching replica generation".into(),
+                ));
+            }
+            return Ok(CycleReport {
+                push: PushReport::default(),
+                pull,
+            });
+        }
+        Err(error) => return Err(error),
+    };
     let pull = pull_all(store, transport)?;
     Ok(CycleReport { push, pull })
 }

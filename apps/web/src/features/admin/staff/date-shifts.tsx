@@ -6,6 +6,7 @@ import {
   dateShiftRangesSchema,
   localDateSchema,
   shiftDate,
+  shiftWeekStart,
 } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
@@ -17,6 +18,7 @@ import { Sheet } from "~/components/ui/sheet";
 import { ErrorState, Skeleton, useOnline } from "~/components/ui/states";
 import { useToast } from "~/components/ui/toast";
 import { useI18n } from "~/i18n/react";
+import { teamShiftWeekKey } from "~/lib/admin-queries";
 import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { formatDateLong, localDateOf } from "~/lib/format";
@@ -24,17 +26,16 @@ import { UnsavedGuard } from "../unsaved-guard";
 import { ConflictList } from "./conflict-list";
 
 type Review = { input: DateShiftInput; data: DateShiftPreview; key: string; stale: boolean };
-function monday(date: string) {
-  return shiftDate(date, -((new Date(`${date}T12:00Z`).getUTCDay() + 6) % 7));
-}
 export function DateShiftEditor({
   staffId,
   editable,
   now,
+  initialWeek,
 }: {
   staffId: string;
   editable: boolean;
   now?: Date;
+  initialWeek?: string;
 }) {
   const { t, locale, timeZone } = useI18n();
   const today = localDateOf((now ?? new Date()).toISOString(), timeZone);
@@ -42,7 +43,7 @@ export function DateShiftEditor({
   const toast = useToast();
   const queries = useQueryClient();
   const [week, setWeek] = useState(() =>
-    monday(localDateOf((now ?? new Date()).toISOString(), timeZone)),
+    shiftWeekStart(initialWeek ?? localDateOf((now ?? new Date()).toISOString(), timeZone)),
   );
   const validWeek = localDateSchema.safeParse(week).success;
   const query = useQuery({
@@ -103,6 +104,7 @@ export function DateShiftEditor({
       keys.current.clear();
       toast.success(t("shifts.saved"));
       void queries.invalidateQueries({ queryKey: ["date-shifts", staffId] });
+      void queries.invalidateQueries({ queryKey: teamShiftWeekKey });
       void queries.invalidateQueries({ queryKey: ["admin", "working-hours", staffId] });
       void queries.invalidateQueries({ queryKey: ["admin", "calendar"] });
       void queries.invalidateQueries({ queryKey: ["availability"] });

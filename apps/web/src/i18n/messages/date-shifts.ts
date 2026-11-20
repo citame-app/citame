@@ -1,5 +1,11 @@
 export const dateShiftsEn = {
   "shifts.title": "Dates and shifts",
+  "shifts.teamWeek": "Team shifts by week",
+  "shifts.thisWeek": "This week",
+  "shifts.professional": "Professional",
+  "shifts.noTeam": "There are no active team members.",
+  "shifts.absentAllDay": "Absent all day",
+  "shifts.absenceHours": "Absent {start}–{end}",
   "shifts.lead":
     "Adjust specific dates or copy a reviewed period. Existing appointments are never moved or cancelled.",
   "shifts.week": "Week starting",
@@ -47,6 +53,12 @@ export const dateShiftsEn = {
 } as const;
 export const dateShiftsEsAR: Record<keyof typeof dateShiftsEn, string> = {
   "shifts.title": "Fechas y turnos",
+  "shifts.teamWeek": "Turnos semanales del equipo",
+  "shifts.thisWeek": "Esta semana",
+  "shifts.professional": "Profesional",
+  "shifts.noTeam": "No hay profesionales en activo.",
+  "shifts.absentAllDay": "Ausencia todo el día",
+  "shifts.absenceHours": "Ausencia {start}–{end}",
   "shifts.lead":
     "Ajusta fechas concretas o copia un período revisado. Las citas existentes conservan su fecha y estado.",
   "shifts.week": "Semana desde",

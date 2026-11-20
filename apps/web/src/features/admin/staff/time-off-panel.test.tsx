@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderApp } from "../../../../test/render";
-import { TimeOffPanel } from "./time-off-panel";
+import { TimeOffPanel, TimeOffSheet } from "./time-off-panel";
 
 const STAFF = "0198f5a0-7b1c-7000-8000-000000000201";
 const CLIENT = "0198f5a0-7b1c-7000-8000-0000000000c1";
@@ -20,6 +20,33 @@ let writes: { method: string; path: string; body: unknown }[];
 let writeConflicts: unknown[];
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+test("a full-day absence uses the next local midnight, including Madrid's 25-hour autumn day", async () => {
+  renderApp(
+    <TimeOffSheet
+      staffId={STAFF}
+      entry={null}
+      onClose={() => {}}
+      onSaved={() => {}}
+      initialAllDay
+      initialForm={{
+        startDate: "2026-10-25",
+        endDate: "2026-10-25",
+        startTime: "09:00",
+        endTime: "09:30",
+      }}
+    />,
+    { timeZone: "Europe/Madrid" },
+  );
+  expect(await screen.findByLabelText("All day")).toBeChecked();
+  expect(screen.queryByLabelText("Start time")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Save time off" }));
+  await waitFor(() => expect(writes).toHaveLength(1));
+  expect(writes[0]?.body).toEqual({
+    startsAt: "2026-10-24T22:00:00.000Z",
+    endsAt: "2026-10-25T23:00:00.000Z",
+  });
+});
 
 beforeEach(() => {
   writes = [];

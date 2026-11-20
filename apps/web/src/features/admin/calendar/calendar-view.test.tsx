@@ -123,6 +123,43 @@ const open = (props: Partial<Parameters<typeof CalendarView>[0]> = {}) => {
 };
 
 describe("CalendarView", () => {
+  test("the week shows every professional and drills down to a professional's day", async () => {
+    const { onSearchChange } = open({ search: { date: "2026-03-09", view: "week" } });
+    const week = await screen.findByRole("region", { name: "Week" });
+    expect(within(week).getByText("Ana")).toBeInTheDocument();
+    expect(within(week).getByText("Bea")).toBeInTheDocument();
+    fireEvent.click(within(week).getByRole("button", { name: "Ana, 2026-03-09: Show all (1)" }));
+    expect(onSearchChange).toHaveBeenCalledWith(
+      expect.objectContaining({ view: "day", date: "2026-03-09", staff: ANA }),
+    );
+    expect(requests.find((r) => r.includes("/api/appointments/calendar"))).not.toContain(
+      "staffIds=",
+    );
+  });
+
+  test("month and list views open the original reservation and search filters locally", async () => {
+    const { unmount } = open({ search: { date: "2026-03-09", view: "month" } });
+    const month = await screen.findByRole("region", { name: "Month" });
+    fireEvent.click(within(month).getByRole("button", { name: /Lucia/ }));
+    expect(await screen.findByRole("dialog", { name: "Lucia" })).toBeInTheDocument();
+    unmount();
+    open({ search: { date: "2026-03-09", view: "list" } });
+    const agenda = await screen.findByRole("region", { name: "List" });
+    expect(within(agenda).getAllByText("Scheduled value")).toHaveLength(7);
+    const calls = requests.filter((r) => r.includes("/api/appointments/calendar")).length;
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search appointments" }), {
+      target: { value: "Nobody" },
+    });
+    expect(within(agenda).queryByRole("button", { name: /Lucia/ })).toBeNull();
+    expect(requests.filter((r) => r.includes("/api/appointments/calendar"))).toHaveLength(calls);
+  });
+
+  test("working-team filtering hides a member without hours without losing the URL state", async () => {
+    open({ search: { date: "2026-03-09", view: "day", working: true } });
+    await screen.findByRole("group", { name: /Schedule for Ana/ });
+    expect(screen.queryByRole("group", { name: /Schedule for Bea/ })).toBeNull();
+  });
+
   test("owner sees one column per team member and the appointment", async () => {
     open();
     expect(await screen.findByRole("group", { name: /Schedule for Ana/ })).toBeInTheDocument();
@@ -149,10 +186,10 @@ describe("CalendarView", () => {
     await screen.findByRole("group", { name: /Schedule for Ana/ });
     fireEvent.click(screen.getByRole("button", { name: "Next day" }));
     expect(onSearchChange).toHaveBeenLastCalledWith({ view: "day", date: "2026-03-10" });
-    fireEvent.click(screen.getByRole("radio", { name: "Week" }));
-    expect(onSearchChange).toHaveBeenLastCalledWith(
-      expect.objectContaining({ view: "week", staff: ANA }),
-    );
+    fireEvent.change(screen.getByRole("combobox", { name: "Calendar view" }), {
+      target: { value: "week" },
+    });
+    expect(onSearchChange).toHaveBeenLastCalledWith(expect.objectContaining({ view: "week" }));
     fireEvent.click(screen.getByRole("button", { name: "Today" }));
     expect(onSearchChange).toHaveBeenLastCalledWith({ view: "day", date: "2026-03-09" });
   });
@@ -192,7 +229,8 @@ describe("CalendarView", () => {
   test("the New appointment button and the n shortcut open the same sheet", async () => {
     open();
     await screen.findByRole("group", { name: /Schedule for Ana/ });
-    fireEvent.click(screen.getByRole("button", { name: "New appointment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to calendar" }));
+    fireEvent.click(await screen.findByRole("button", { name: "New appointment" }));
     expect(await screen.findByRole("dialog", { name: "New appointment" })).toBeInTheDocument();
   });
 
@@ -260,6 +298,7 @@ test("a receptionist's effective all-calendar view does not grant deposit-waiver
       now={NOW}
     />,
   );
+  fireEvent.click(await screen.findByRole("button", { name: "Add to calendar" }));
   fireEvent.click(await screen.findByRole("button", { name: "New appointment" }));
   await screen.findByRole("dialog", { name: "New appointment" });
   expect(screen.queryByLabelText("Deposit waiver reason (manager only)")).toBeNull();

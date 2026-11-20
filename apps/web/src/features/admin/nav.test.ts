@@ -3,22 +3,21 @@ import { adminGuard, adminNavFor, sectionOfPath } from "./nav";
 
 describe("sectionOfPath", () => {
   test("maps admin paths to their section", () => {
-    expect(sectionOfPath("/admin")).toBe("today");
-    expect(sectionOfPath("/admin/")).toBe("today");
+    expect(sectionOfPath("/admin")).toBe("calendar");
+    expect(sectionOfPath("/admin/")).toBe("calendar");
     expect(sectionOfPath("/admin/calendar")).toBe("calendar");
     expect(sectionOfPath("/admin/clients/0198f5a0")).toBe("clients");
     expect(sectionOfPath("/admin/settings")).toBe("settings");
   });
 
-  test("unknown admin paths fall back to the overview", () => {
-    expect(sectionOfPath("/admin/nope")).toBe("today");
+  test("unknown admin paths use the calendar as the shell fallback", () => {
+    expect(sectionOfPath("/admin/nope")).toBe("calendar");
   });
 });
 
 describe("adminNavFor", () => {
   test("the owner sees every section in order", () => {
     expect(adminNavFor("owner").map((item) => item.section)).toEqual([
-      "today",
       "calendar",
       "waitlist",
       "commerce",
@@ -26,6 +25,7 @@ describe("adminNavFor", () => {
       "services",
       "staff",
       "reports",
+      "marketing",
       "reputation",
       "settings",
     ]);
@@ -33,7 +33,6 @@ describe("adminNavFor", () => {
 
   test("staff do not see services or settings", () => {
     expect(adminNavFor("staff").map((item) => item.section)).toEqual([
-      "today",
       "calendar",
       "waitlist",
       "commerce",
@@ -57,13 +56,13 @@ describe("adminGuard", () => {
   test("redirects staff away from owner-only sections with a reason", () => {
     expect(adminGuard("/admin/services", "staff")).toEqual({
       type: "redirect",
-      to: "/admin",
+      to: "/admin/calendar",
       notice: "forbidden",
     });
     expect(adminGuard("/admin/settings", "staff").type).toBe("redirect");
   });
 
-  test("clients never enter, not even the overview", () => {
+  test("clients never enter, including the legacy entry point", () => {
     expect(adminGuard("/admin", "client")).toEqual({
       type: "redirect",
       to: "/account",
@@ -81,7 +80,6 @@ test("access presets expose permitted sections without granting owner account or
   expect(adminNavFor("staff", "manager").map((item) => item.section)).toContain("services");
   expect(adminNavFor("staff", "manager").map((item) => item.section)).not.toContain("settings");
   expect(adminNavFor("staff", "restricted").map((item) => item.section)).toEqual([
-    "today",
     "calendar",
     "staff",
   ]);

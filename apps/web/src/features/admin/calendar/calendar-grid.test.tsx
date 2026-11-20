@@ -3,6 +3,7 @@ import type { CalendarAppointment } from "@sob/contracts";
 import { fireEvent, screen, within } from "@testing-library/react";
 import { renderApp } from "../../../../test/render";
 import { CalendarGrid, type GridColumn } from "./calendar-grid";
+import { appointmentEntries, indexCalendar, localMinuteRange } from "./presentation";
 
 const TZ = "America/Argentina/Buenos_Aires";
 const ANA = "0198f5a0-7b1c-7000-8000-000000000201";
@@ -70,6 +71,96 @@ const base = {
 };
 
 describe("CalendarGrid", () => {
+  test("services have separate time blocks and open the same original reservation", () => {
+    const visit = appt("multi", ANA, "13:00");
+    visit.services = [
+      {
+        serviceId: null,
+        name: "Manicure",
+        durationMinutes: 45,
+        bufferMinutes: 0,
+        priceCents: 3000,
+        currency: "EUR",
+      },
+      {
+        serviceId: null,
+        name: "Brows",
+        durationMinutes: 15,
+        bufferMinutes: 0,
+        priceCents: 1500,
+        currency: "EUR",
+      },
+    ];
+    visit.serviceNames = ["Manicure", "Brows"];
+    visit.serviceBadges = [
+      {
+        servicePosition: 0,
+        requested: false,
+        invoiced: true,
+        paid: true,
+        billingSource: "booksy",
+        internalNote: false,
+        customerComment: true,
+      },
+      {
+        servicePosition: 1,
+        requested: true,
+        invoiced: false,
+        paid: false,
+        billingSource: null,
+        internalNote: true,
+        customerComment: false,
+      },
+    ];
+    const entries = appointmentEntries(visit);
+    expect(entries.map((entry) => entry.startsAt)).toEqual([
+      "2026-03-09T13:00:00.000Z",
+      "2026-03-09T13:45:00.000Z",
+    ]);
+    expect(entries[1]?.offsetMinutes).toBe(45);
+    const onOpenAppointment = mock();
+    renderApp(
+      <CalendarGrid {...base} appointments={[visit]} onOpenAppointment={onOpenAppointment} />,
+    );
+    const manicure = screen.getByRole("button", { name: /10:00 AM.*Lucia.*Manicure.*Booked/ });
+    const brows = screen.getByRole("button", { name: /10:45 AM.*Lucia.*Brows.*Booked/ });
+    expect(within(manicure).getByRole("img", { name: "Paid in Booksy" })).toBeInTheDocument();
+    expect(
+      within(manicure).getByRole("img", { name: "Client comment from booking" }),
+    ).toBeInTheDocument();
+    expect(
+      within(manicure).queryByRole("img", { name: "Client requested a specific professional" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(brows).getByRole("img", { name: "Client requested a specific professional" }),
+    ).toBeInTheDocument();
+    expect(within(brows).getByRole("img", { name: "Internal notes" })).toBeInTheDocument();
+    expect(within(brows).queryByRole("img", { name: "Paid in Booksy" })).not.toBeInTheDocument();
+    fireEvent.click(brows);
+    expect(onOpenAppointment).toHaveBeenCalledWith(visit);
+  });
+
+  test("overnight visits are indexed on both days and clipped at local midnight", () => {
+    const visit = {
+      ...appt("night", ANA, "13:00"),
+      startsAt: "2026-03-10T02:45:00.000Z",
+      endsAt: "2026-03-10T03:15:00.000Z",
+    };
+    const index = indexCalendar([visit], TZ);
+    expect(index.byDay.get("2026-03-09")).toEqual([visit]);
+    expect(index.byDay.get("2026-03-10")).toEqual([visit]);
+    expect(localMinuteRange(visit, "2026-03-09", TZ)).toEqual({ start: 1425, end: 1440 });
+    expect(localMinuteRange(visit, "2026-03-10", TZ)).toEqual({ start: 0, end: 15 });
+    expect(localMinuteRange(visit, "2026-03-11", TZ)).toBeNull();
+    expect(
+      localMinuteRange(
+        { startsAt: "2026-03-29T01:30:00Z", endsAt: "2026-03-29T02:30:00Z" },
+        "2026-03-29",
+        "Europe/Madrid",
+      ),
+    ).toEqual({ start: 210, end: 270 });
+  });
+
   test("has one labelled column per team member", () => {
     renderApp(<CalendarGrid {...base} />);
     expect(screen.getByRole("group", { name: /Schedule for Ana/ })).toBeInTheDocument();
@@ -79,11 +170,11 @@ describe("CalendarGrid", () => {
   test("an appointment is a button that names time, client, services and status", () => {
     renderApp(<CalendarGrid {...base} />);
     expect(
-      screen.getByRole("button", { name: "10:00 AM, Lucia, Haircut, Booked" }),
+      screen.getByRole("button", { name: /10:00 AM.*Lucia.*Haircut.*Booked/ }),
     ).toBeInTheDocument();
     // the no-show carries its own label, not just a color
     expect(
-      screen.getByRole("button", { name: "11:00 AM, Paula, Haircut, No-show" }),
+      screen.getByRole("button", { name: /11:00 AM.*Paula.*Haircut.*No-show/ }),
     ).toBeInTheDocument();
   });
 
@@ -119,7 +210,7 @@ describe("CalendarGrid", () => {
     renderApp(
       <CalendarGrid {...base} appointments={[...base.appointments, cancelled]} showCancelled />,
     );
-    expect(screen.getByRole("button", { name: /Gone, Haircut, Cancelled/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Gone.*Haircut.*Cancelled/ })).toBeInTheDocument();
   });
 
   test("clicking an empty spot reports the column and a snapped time", () => {

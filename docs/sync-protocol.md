@@ -2,7 +2,7 @@
 
 Audience: implementers of the desktop client (Phase 5). Rationale and trade-offs: [ADR 0007](adr/0007-sync-protocol.md). The machine-readable definition is `packages/contracts/src/sync.ts` (zod); this document is the contract in prose plus examples.
 
-All endpoints live on the API origin, require a session (the same Better Auth session cookie as the rest of the REST API; OAuth bearer tokens are accepted only at `/mcp`, not here) and are available to roles `owner` and `staff`. Anonymous calls get `401`, the `client` role gets `403`. All bodies are JSON (UTF-8), all timestamps ISO 8601 with offset, all ids UUIDs. Errors use the usual envelope `{ "error": { "code", "message" } }`.
+All endpoints live on the API origin and require either a Better Auth session cookie or a first-party desktop OAuth bearer token for the Citame desktop audience and are available to roles `owner` and `staff`. Anonymous calls get `401`, the `client` role gets `403`. All bodies are JSON (UTF-8), all timestamps ISO 8601 with offset, all ids UUIDs. Errors use the usual envelope `{ "error": { "code", "message" } }`.
 
 ## Concepts
 
@@ -25,7 +25,15 @@ Guarantee: if you have seen `seq = n`, you have seen every change that will ever
 
 Order of work when coming online: push first, then pull (pull then shows the effect of your own mutations and of everyone else's).
 
+Every pull page returns `generation`. Send the generation of the local mirror with every push. Normal upgrades keep the generation stable. Activating a restored database changes the generation across all API replicas. The server rejects a mismatched push with `409 sync_generation_changed` before executing any member of the batch. A missing generation identifies the original `initial` history for older clients.
+
+When a pull reports a different generation, the desktop atomically moves queued mutations to local Conflicts, resets the mirror and cursor, and stores the new generation. It rebuilds from zero even if the old cursor is still below the new head. The rebuild state survives restart and the client waits for the final page before accepting edits. Previously open conflicts also require manual review. Upgrade older desktops before reconnecting them. The pull endpoint stays available, but older apps with pending changes may stop before reaching it when their push is rejected.
+
 When a pull brings a row that has a pending local mutation, keep showing the local version until the mutation is acknowledged, then take the server version.
+
+The response includes the current `clientDirectory` permission and `calendarScope` even when the cursor is already at the log head. `calendarScope` is `all`, `none`, or a staff ID. When either scope changes, the native client clears its previous mirror and cached views before pulling a new snapshot from zero. It keeps its outbox and conflict records. Older servers can omit these fields.
+
+`viewerRole` carries the current staff or owner role. A desktop profile with a different saved role returns to sign-in so it can open the replica for the new role. It keeps the previous profile’s pending edits. A server response denying sync also returns the app to sign-in. A network outage keeps the offline profile open.
 
 ## POST /sync/push
 
@@ -34,6 +42,7 @@ Request:
 ```json
 {
   "deviceId": "front-desk-1",
+  "generation": "initial",
   "mutations": [
     {
       "mutationId": "01a1d81f-2231-75bd-ba65-bc41f42803e9",
@@ -57,6 +66,8 @@ Request:
 - `mutations`: 1 to 100 items, applied strictly in array order.
 - `mutationId`: UUIDv7, generated once per mutation and reused on every resend.
 - `createdAt`: when the user made the edit (device clock). Used by last-writer-wins kinds; ignored by appointment kinds.
+- `client.update` can carry `payload.expectedUpdatedAt`, the revision the operator reviewed. The API compares it under the contact row lock. A stale edit becomes a sync conflict even if it was submitted with a later device clock.
+- `time_off.update` and `time_off.delete` can carry `payload.expectedUpdatedAt`, the block revision the device displayed. The API checks it under the same calendar lock as web schedule edits and returns `version_conflict` for a stale revision. The field is optional for existing API clients.
 
 Response `200`:
 
@@ -101,7 +112,7 @@ A malformed envelope (no `deviceId`, empty or more than 100 mutations, an elemen
 | `appointment.cancel`     | `id`, `version`                                                                                                                                             | same                         | server-authoritative |
 | `appointment.set_status` | `id`, `version`, `status` (`completed` or `no_show`), `notes?`                                                                                              | same                         | server-authoritative |
 | `client.create`          | `id`, `name`, `phone?`, `email?`, `notes?`                                                                                                                  | owner, staff                 | LWW                  |
-| `client.update`          | `id`, any of `name`, `phone` (nullable), `notes` (nullable)                                                                                                 | owner, staff                 | LWW                  |
+| `client.update`          | `id`, any of `name`, `phone` (nullable), `notes` (nullable), optional `expectedUpdatedAt`                                                                      | users with client access     | revision or LWW                  |
 | `time_off.create`        | `id`, `staffId`, `startsAt`, `endsAt`, `reason?`                                                                                                            | owner; staff for self        | LWW                  |
 | `time_off.update`        | `id`, `staffId`, any of `startsAt`, `endsAt`, `reason`                                                                                                      | same                         | LWW                  |
 | `time_off.delete`        | `id`, `staffId`                                                                                                                                             | same                         | LWW                  |
@@ -138,7 +149,7 @@ Rejections are final and stored: resending the same `mutationId` returns the sam
 ### Idempotency, retries and backoff
 
 - Network failure, timeout or a 5xx with no body: resend the SAME batch. Replays are free and exact (`replayed: true`).
-- `429 rate_limited`: honor `Retry-After`.
+- `429 rate_limited`: honor `Retry-After`. In the desktop sync worker, local edits, manual sync and live notifications wait for the scheduled retry. Edits stay queued in SQLite.
 - Result `status: "retry"`: the mutation and every mutation after it in that batch were NOT processed; resend them in the next batch.
 - Backoff: exponential with full jitter, base 1 s, factor 2, cap 60 s; reset after any success. Do not retry `400`, `401` (re-authenticate first) or `403`.
 - Do not split or reorder a batch on resend; keep outbox order. Never run two pushes concurrently.
@@ -147,6 +158,8 @@ Rejections are final and stored: resending the same `mutationId` returns the sam
 
 - `since` (integer, default 0): your cursor. `0` returns a full snapshot.
 - `limit` (1 to 500, default 200): maximum change-log rows scanned.
+- `catalogColors=1` (optional, staff and owners): also return `catalogColors`, a map from service IDs to configured colors. It includes inactive services and excludes deleted services. An empty map means there are no configured colors. Desktop installations request it on upgrade even at the current cursor and record completion after repairing the local service projection.
+- `reviewRequests=1` (optional): ask for the `review_requests` refresh topic. The server requires the caller's current `editCatalog` permission. Clients that omit the flag still advance their cursor past these notices.
 
 ```json
 {
@@ -204,12 +217,19 @@ Rejections are final and stored: resending the same `mutationId` returns the sam
 
 Rules:
 
-- Entities: `appointment`, `client`, `service`, `staff`, `service_staff`, `working_hours`, `time_off`, `salon_settings` (its `id` is `"1"`). The `data` shapes are `syncXxxSchema` in `packages/contracts/src/sync.ts` (`appointment` is the same object as REST).
+- `timeOffScope` is the caller's current permission for blocking calendar time. It is returned even on an empty page and can be cached for offline controls. The values are `all`, `none`, or the caller's own staff ID.
+- Entities: `appointment`, `client`, `service`, `staff`, `service_staff`, `working_hours`, `time_off`, `salon_settings` (its `id` is `"1"`). The `data` shapes are `syncXxxSchema` in `packages/contracts/src/sync.ts`. Appointment upserts can include `serviceBadges` for visible appointments. Each badge identifies its line by `servicePosition` and records the professional request and whether an internal note or customer comment exists. Commerce access adds billing flags, billing source and any `billingReviewReasons` or external settlement details. The indicators contain no note text.
+- The preference indicator survives a staff reassignment. Checkout status changes can re-announce an appointment with the same version so the replica receives the current billing indicator.
+- When an operator verifies a partial Booksy payment, both calendar feeds show the reconciled split and clear the historical Booksy payment and invoice review reasons. An invoiced service can still show its invoice indicator while the remaining amount is due. The paid indicator returns when a Citame receipt settles the balance.
+- Desktop opens the text of appointment notes on demand over `GET /appointments/:id/context`. The ordinary calendar access rules apply, the response disables HTTP caching and the text stays out of the SQLite replica.
+- Internal notes and the service's professional preference save online through `PATCH /appointments/:id/context`. The editor submits the appointment version and the service annotation version from the same read. It sends a preference update only for an explicit change, so other edits preserve an originally requested professional after reassignment. The server rejects stale versions, and desktop keeps the rejected draft in memory for manual review.
+- Keep `sourceUnpriced` on unresolved imported service snapshots. The price becomes usable after the reviewed amount arrives in an appointment upsert. Evidence references and private source annotations stay on the server.
 - `data` is the row's CURRENT state, which may be newer than `seq`. Upserts are idempotent: apply by primary key. A later entry for the same row will carry the same or newer state.
 - Within one response a row appears at most once (latest entry wins).
 - `op: "delete"` has `data: null`: delete the local row (a no-op if absent). A tombstone also means "no longer visible to you" (for example an appointment moved to another staff member's calendar).
 - Store `nextCursor` and send it as the next `since`. It never decreases. If `hasMore` is true pull again immediately; `changes` may be empty while `hasMore` is true.
-- `409 invalid_state` means your cursor is ahead of the server (it was restored from a backup). Drop the local replica and resync from `since=0`.
+- The optional `refresh` list contains online view names (`commerce`, `waitlist`, `inbox`, `review_requests`). A page can contain only these notifications and still advance the cursor. Reload each view through its regular authenticated endpoint. The list carries no row data. Financial records and review invitations stay out of the offline replica. Persist the notifications and cursor together so a retry cannot skip them.
+- `409 invalid_state` means your cursor is ahead of the server. Drop the local mirror and resync from `since=0`. Check the returned generation before applying any page.
 - Staff only receive their own calendar's appointments, working hours and time off (everything else arrives as tombstones). The `userId` of `staff` rows is `null` for staff callers.
 - Apply a page in one local transaction together with the cursor update; apply `service_staff` and other references without assuming parents arrived first (insert order inside a page is by `seq`, not by dependency).
 
@@ -225,10 +245,11 @@ data: {"seq":415}
 : ping
 ```
 
-- A `change` event is sent right after connecting (current head) and after every committed write made through the API. It only means "pull now"; compare `seq` with your cursor to skip needless pulls.
+- A `change` event is sent on connection and when the committed head advances. API writes publish through Valkey. Each API process with active streams also checks the database head once a second to detect background commits and recover missed notifications. A `change` event only signals that clients should pull.
 - `: ping` comment lines arrive every 15 s; if nothing arrives for 45 s, reconnect.
 - Reconnect with the same backoff as above, then pull. `Last-Event-ID` is not needed: the cursor is the source of truth.
-- Authentication is the session cookie (bearer tokens are not accepted on `/sync/*`). Rate limited per caller: `429` with `Retry-After` (default 30 new connections per minute). `401`/`403` as for the other endpoints.
+- The web client lets the browser retry transient EventSource errors. If the browser closes the source after a terminal HTTP error, the web client checks every 30 seconds and opens a new source once online. A rate-limited web pull keeps its cursor and pauses recovery requests until `Retry-After` expires.
+- Authentication accepts a web session cookie or a first-party desktop OAuth bearer token. Rate limited per caller: `429` with `Retry-After` (default 30 new connections per minute). `401`/`403` as for the other endpoints.
 - The server closes streams when it shuts down; treat a closed stream like any disconnect.
 
 ## Error summary

@@ -3,10 +3,11 @@ import {
   type StaffAccessPreset,
   type UserRole,
   type WaitlistInput,
+  type WaitlistSourceEntry,
   waitlistInputSchema,
 } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { TextField } from "~/components/ui/field";
 import { SelectField } from "~/components/ui/select-field";
@@ -20,6 +21,9 @@ import type { CommerceMode } from "~/lib/api/commerce-endpoints";
 import { api } from "~/lib/api/instance";
 import { addDaysLocal, localDateOf } from "~/lib/format";
 import { salonQuery, servicesQuery, staffQuery } from "~/lib/queries";
+
+const unreviewedStaff = "unreviewed";
+
 export interface JoinFormProps {
   mode: CommerceMode;
   role: UserRole;
@@ -38,9 +42,12 @@ export function WaitlistJoinForm({
   initialServices = [],
   initialStaff,
   initialDate,
+  imported,
+  importRequiresPause = false,
   onJoined,
-}: JoinFormProps) {
+}: JoinFormProps & { imported?: WaitlistSourceEntry | null; importRequiresPause?: boolean }) {
   const { t, timeZone } = useI18n();
+  const importNoticeId = useId();
   const toast = useToast();
   const online = useOnline();
   const queries = useQueryClient();
@@ -49,22 +56,31 @@ export function WaitlistJoinForm({
   const staff = useQuery(staffQuery);
   const today = localDateOf(new Date().toISOString(), timeZone);
   const maxDate = addDaysLocal(today, salon.data?.maxDaysAhead ?? 60);
+  const importBlock =
+    imported && imported.requestedDate < today
+      ? "waitlist.importedPast"
+      : importRequiresPause
+        ? "waitlist.importedRequiresPause"
+        : null;
   const ownOnly = mode === "admin" && !permissionsFor(role, accessPreset).allCalendars;
-  const [selected, setSelected] = useState(initialServices);
+  const [selected, setSelected] = useState(imported ? [] : initialServices);
   const [chosenStaff, setChosenStaff] = useState(
-    initialStaff ??
+    (imported ? unreviewedStaff : initialStaff) ||
       (mode === "admin" && !permissionsFor(role, accessPreset).allCalendars
         ? (ownStaffId ?? "")
         : ""),
   );
-  const [fromDate, setFromDate] = useState(initialDate ?? today);
+  const [fromDate, setFromDate] = useState(imported?.requestedDate ?? initialDate ?? today);
   const [toDate, setToDate] = useState(
-    () => [addDaysLocal(initialDate ?? today, 14), maxDate].sort()[0] ?? maxDate,
+    () =>
+      imported?.requestedDate ??
+      [addDaysLocal(initialDate ?? today, 14), maxDate].sort()[0] ??
+      maxDate,
   );
-  const [fromTime, setFromTime] = useState("09:00");
-  const [toTime, setToTime] = useState("18:00");
+  const [fromTime, setFromTime] = useState(imported ? "" : "09:00");
+  const [toTime, setToTime] = useState(imported ? "" : "18:00");
   const [search, setSearch] = useState("");
-  const [clientId, setClientId] = useState("");
+  const [clientId, setClientId] = useState(imported?.clientId ?? "");
   const [invalid, setInvalid] = useState(false);
   const key = useRef({ signature: "", id: crypto.randomUUID() });
   const debounced = useDebounced(search.trim());
@@ -72,7 +88,7 @@ export function WaitlistJoinForm({
     queryKey: ["waitlist", "customers", debounced],
     queryFn: () =>
       api().admin.clients.list({ search: debounced, pageSize: 8, sort: "name", order: "asc" }),
-    enabled: mode === "admin" && debounced.length > 0,
+    enabled: mode === "admin" && !imported && debounced.length > 0,
   });
   const qualified = (staff.data ?? []).filter(
     (s) =>
@@ -80,7 +96,11 @@ export function WaitlistJoinForm({
       (mode !== "admin" || permissionsFor(role, accessPreset).allCalendars || s.id === ownStaffId),
   );
   const save = useMutation({
-    mutationFn: (input: WaitlistInput & { clientId?: string }) => api().waitlist.join(mode, input),
+    mutationFn: (input: WaitlistInput & { clientId?: string; importedEntryId?: string }) =>
+      api().waitlist.join(mode, input),
+    onError: () => {
+      if (imported) void queries.invalidateQueries({ queryKey: ["waitlist"] });
+    },
     onSuccess: () => {
       toast.success(t("waitlist.saved"));
       void queries.invalidateQueries({ queryKey: ["waitlist"] });
@@ -103,13 +123,15 @@ export function WaitlistJoinForm({
   return (
     <form
       aria-label={t("waitlist.new")}
+      aria-describedby={imported ? "waitlist-imported-help" : undefined}
       className="min-w-0 space-y-4 rounded-xl border border-line bg-surface p-4 sm:p-5"
       noValidate
       onSubmit={(e) => {
         e.preventDefault();
+        if (importBlock) return;
         const values = {
           serviceIds: selected,
-          staffId: chosenStaff || null,
+          staffId: chosenStaff && chosenStaff !== unreviewedStaff ? chosenStaff : null,
           fromDate,
           toDate,
           fromTime,
@@ -125,17 +147,31 @@ export function WaitlistJoinForm({
           fromDate >= today &&
           toDate <= maxDate &&
           selected.every((id) => services.data.some((s) => s.id === id)) &&
+          chosenStaff !== unreviewedStaff &&
           (!chosenStaff || qualified.some((s) => s.id === chosenStaff));
         setInvalid(!valid);
         if (input.success && valid)
-          save.mutate({ ...input.data, ...(mode === "admin" ? { clientId } : {}) });
+          save.mutate({
+            ...input.data,
+            ...(mode === "admin" ? { clientId, importedEntryId: imported?.id } : {}),
+          });
       }}
     >
-      <UnsavedGuard dirty={selected.length > 0 || Boolean(clientId)} />
+      <UnsavedGuard
+        dirty={selected.length > 0 || Boolean(imported ? fromTime || toTime : clientId)}
+      />
       <fieldset disabled={save.isPending} className="min-w-0 space-y-4">
         <h2 className="text-heading">{t("waitlist.new")}</h2>
         <p className="text-sm text-muted">{t("waitlist.help")}</p>
-        {mode === "admin" && (
+        {imported && (
+          <p id="waitlist-imported-help" className="rounded-lg bg-sunken p-3 text-sm">
+            {t("waitlist.importedRequest", {
+              client: imported.clientName,
+              minutes: imported.durationMinutes,
+            })}
+          </p>
+        )}
+        {mode === "admin" && !imported && (
           <div className="space-y-3">
             <TextField
               label={t("waitlist.searchClient")}
@@ -179,7 +215,7 @@ export function WaitlistJoinForm({
               setSelected(next);
               const performer = staff.data.find((person) => person.id === chosenStaff);
               if (performer && !next.every((id) => performer.serviceIds.includes(id)))
-                setChosenStaff("");
+                setChosenStaff(imported ? unreviewedStaff : "");
             }}
           />
         </fieldset>
@@ -189,6 +225,9 @@ export function WaitlistJoinForm({
           value={chosenStaff}
           onChange={setChosenStaff}
           options={[
+            ...(imported
+              ? [{ value: unreviewedStaff, label: t("waitlist.importedChooseStaff"), disabled: true }]
+              : []),
             ...(!ownOnly ? [{ value: "", label: t("waitlist.anyStaff") }] : []),
             ...qualified.map((s) => ({ value: s.id, label: s.displayName })),
           ]}
@@ -200,6 +239,7 @@ export function WaitlistJoinForm({
             min={today}
             max={maxDate}
             value={fromDate}
+            readOnly={Boolean(imported)}
             onChange={(e) => setFromDate(e.target.value)}
           />
           <TextField
@@ -208,6 +248,7 @@ export function WaitlistJoinForm({
             min={fromDate}
             max={maxDate}
             value={toDate}
+            readOnly={Boolean(imported)}
             onChange={(e) => setToDate(e.target.value)}
           />
           <TextField
@@ -215,6 +256,9 @@ export function WaitlistJoinForm({
             type="time"
             step={300}
             value={fromTime}
+            name="fromTime"
+            required={Boolean(imported)}
+            aria-describedby={imported ? "waitlist-imported-help" : undefined}
             onChange={(e) => setFromTime(e.target.value)}
           />
           <TextField
@@ -222,6 +266,9 @@ export function WaitlistJoinForm({
             type="time"
             step={300}
             value={toTime}
+            name="toTime"
+            required={Boolean(imported)}
+            aria-describedby={imported ? "waitlist-imported-help" : undefined}
             onChange={(e) => setToTime(e.target.value)}
           />
         </div>
@@ -233,10 +280,16 @@ export function WaitlistJoinForm({
             {t("waitlist.invalid")}
           </p>
         )}
-        {save.isError && <ErrorState error={save.error} />}
+        {save.isError && !importBlock && <ErrorState error={save.error} />}
+        {importBlock && (
+          <p id={importNoticeId} className="text-sm text-muted">
+            {t(importBlock)}
+          </p>
+        )}
         <Button
           type="submit"
-          disabled={!online}
+          disabled={!online || Boolean(importBlock)}
+          aria-describedby={importBlock ? importNoticeId : undefined}
           loading={save.isPending}
           className="whitespace-normal!"
         >

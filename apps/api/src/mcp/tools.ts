@@ -22,8 +22,7 @@ import {
   mcpListServicesOutput,
   type OAuthScope,
 } from "@sob/contracts";
-import { appointment, type Database } from "@sob/db";
-import { and, eq, isNull } from "drizzle-orm";
+import type { Database } from "@sob/db";
 import type { z } from "zod";
 import {
   authorizeAppointmentChange,
@@ -93,7 +92,9 @@ function guarded<Args, Out extends Record<string, unknown>>(
   body: (args: Args) => Promise<Out>,
 ) {
   return async (args: Args) => {
-    const required = MCP_TOOL_SCOPES[tool];
+    const scope = MCP_TOOL_SCOPES[tool];
+    const required =
+      scope === "mcp:book" && ctx.principal.role !== "client" ? "schedule:write" : scope;
     if (!ctx.scopes.includes(required)) {
       return errorResult({
         code: "forbidden",
@@ -193,14 +194,14 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Book an appointment",
       description:
-        "Books an appointment at a start time returned by find_availability. Clients book for themselves; staff and owners must pass clientId (use find_client). Pass a requestId you generate so a retry after a timeout cannot double-book. Fails with an actionable error if the slot was just taken.",
+        "Books an appointment at a start time returned by find_availability. Clients book for themselves; centre staff need schedule:write and must pass clientId (use find_client or list_clients). Pass a requestId you generate so a retry after a timeout cannot double-book. Record a requested professional only when the client asked for them.",
       inputSchema: mcpCreateAppointmentInput.shape,
       outputSchema: mcpCreateAppointmentOutput.shape,
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
         idempotentHint: false,
-        openWorldHint: false,
+        openWorldHint: true,
       },
     },
     guarded(ctx, "create_appointment", async (args: z.infer<typeof mcpCreateAppointmentInput>) => {
@@ -220,7 +221,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
         const previous = await findAppointmentReplay(db, authorized, principal.userId);
         if (previous) return { appointment: redactNotes(principal, previous), replayed: true };
       }
-      const actor = { userId: principal.userId, via: ctx.via };
+      const actor = { userId: principal.userId, role: principal.role, via: ctx.via };
       try {
         const created = await createAppointment(db, authorized, actor, { now: ctx.now() });
         ctx.onBooking?.("created");
@@ -247,25 +248,24 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Cancel an appointment",
       description:
-        "Cancels a booked appointment. This frees the time slot and cannot be undone. Clients can cancel only their own appointments.",
+        "Cancels a booked appointment and releases its slot. Clients can cancel only their own appointments. Centre staff need schedule:write and must confirm the appointment and pass the reviewed version.",
       inputSchema: mcpCancelAppointmentInput.shape,
       outputSchema: mcpCancelAppointmentOutput.shape,
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: true,
-        openWorldHint: false,
+        openWorldHint: true,
       },
     },
     guarded(ctx, "cancel_appointment", async (args: z.infer<typeof mcpCancelAppointmentInput>) => {
+      if (frontDesk && args.version === undefined) {
+        throw new DomainError("validation_error", "Review the appointment and pass its version");
+      }
       const ownership = await getAppointmentOwnership(db, args.appointmentId);
+      const change = { status: "cancelled" as const, version: args.version ?? ownership.version };
       try {
-        authorizeAppointmentChange(
-          principal,
-          ownership,
-          { status: "cancelled", version: 1 },
-          ctx.now(),
-        );
+        authorizeAppointmentChange(principal, ownership, change, ctx.now());
       } catch (error) {
         // Same answer as for an unknown id: a client must not learn that an id exists.
         if (principal.role === "client" && error instanceof DomainError) {
@@ -273,17 +273,13 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
         }
         throw error;
       }
-      const [current] = await db
-        .select({ version: appointment.version })
-        .from(appointment)
-        .where(and(eq(appointment.id, args.appointmentId), isNull(appointment.deletedAt)));
-      if (!current)
-        throw new DomainError("not_found", `Appointment ${args.appointmentId} not found`);
+      if (change.version !== ownership.version)
+        throw new DomainError("version_conflict", "The appointment has changed since review");
       const cancelled = await updateAppointment(
         db,
         args.appointmentId,
-        { status: "cancelled", version: current.version },
-        { userId: principal.userId, via: ctx.via },
+        change,
+        { userId: principal.userId, role: principal.role, via: ctx.via },
         { now: ctx.now() },
       );
       return { appointment: redactNotes(principal, cancelled) };
@@ -316,11 +312,11 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       }
       const scope = authorizeCalendarQuery(principal, query);
       const calendar = await getCalendar(db, query, scope);
-      return {
+      return mcpListScheduleOutput.parse({
         timezone: calendar.timezone,
         staff: calendar.staff,
         appointments: calendar.appointments.map((a) => redactNotes(principal, a)),
-      };
+      });
     }),
   );
 
@@ -346,7 +342,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       return {
         total: result.total,
         clients: result.clients.map(
-          ({ notes: _n, createdAt: _c, updatedAt: _u, ...client }) => client,
+          ({ notes: _n, contactDetails: _details, createdAt: _c, updatedAt: _u, ...client }) =>
+            client,
         ),
       };
     }),

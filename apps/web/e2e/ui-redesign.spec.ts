@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import { RECURRING_FIXTURE as fixture } from "../../api/test/recurring-values";
 import { expectNoHorizontalScroll } from "./admin-helpers";
 import {
@@ -11,7 +11,6 @@ import {
 
 // Paths explored in the running application before authoring these regressions.
 const adminPaths = [
-  "/admin",
   "/admin/calendar",
   "/admin/clients",
   "/admin/services",
@@ -20,8 +19,29 @@ const adminPaths = [
   "/admin/reports",
   "/admin/waitlist",
   "/admin/reputation",
+  "/admin/marketing",
   "/admin/settings",
 ];
+
+/** Follow the real workspace links: full reloads would reconnect SSE on every section. */
+async function openAdminSection(page: Page, path: string) {
+  const sidebar = page.getByRole("navigation", { name: "Dashboard sections", exact: true });
+  if (await sidebar.isVisible()) {
+    await sidebar.locator(`a[href="${path}"]`).click();
+  } else {
+    const bar = page.getByRole("navigation", { name: "Dashboard sections (mobile)", exact: true });
+    const link = bar.locator(`a[href="${path}"]`);
+    if (await link.count()) await link.click();
+    else {
+      await bar.getByRole("button", { name: "More", exact: true }).click();
+      await page
+        .getByRole("dialog", { name: "More", exact: true })
+        .locator(`a[href="${path}"]`)
+        .click();
+    }
+  }
+  await expect(page).toHaveURL((url) => url.pathname.replace(/\/$/, "") === path);
+}
 for (const scheme of ["light", "dark"] as const)
   test.describe(`redesigned UI — ${scheme}`, () => {
     test.use({ colorScheme: scheme });
@@ -81,9 +101,9 @@ for (const scheme of ["light", "dark"] as const)
       expect(errors).toEqual([]);
     });
 
-    test("all owner sections keep one current destination and settings drafts survive fragment navigation", async ({
+    test("all owner sections keep one current destination and settings drafts survive section navigation", async ({
       page,
-    }) => {
+    }, info) => {
       test.setTimeout(180000);
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
@@ -91,15 +111,33 @@ for (const scheme of ["light", "dark"] as const)
         if (message.type() === "error") errors.push(message.text());
       });
       await signInThroughUi(page, fixture.ownerEmail);
-      await expect(page).toHaveURL(/\/admin$/);
+      await expect(page).toHaveURL(/\/admin\/calendar$/);
       for (const path of adminPaths) {
-        await page.goto(path);
+        await openAdminSection(page, path);
         await expect(page.locator("main h1")).toBeVisible();
         const sidebar = page.getByRole("navigation", { name: "Dashboard sections", exact: true });
         const navigation = (await sidebar.isVisible())
           ? sidebar
           : page.getByRole("navigation", { name: "Dashboard sections (mobile)", exact: true });
         await expect(navigation.locator('[aria-current="page"]')).toHaveCount(1);
+        await expect(page.locator(".site-header")).toHaveCount(0);
+        await expect(page.getByRole("button", { name: "Account and preferences" })).toBeVisible();
+        const widths = info.project.name === "mobile" ? [320, 390] : [768, 820, 1024, 1440];
+        for (const width of widths) {
+          await page.setViewportSize({ width, height: width < 768 ? 844 : 900 });
+          await expectNoHorizontalScroll(page);
+          const heading = page.locator("main h1");
+          await expect(heading).toHaveCSS("font-family", /Nunito Sans/);
+          const title = await heading.boundingBox();
+          const tools = await page.locator(".admin-account-tools").boundingBox();
+          expect(title).not.toBeNull();
+          expect(tools).not.toBeNull();
+          if (!title || !tools) throw new Error(`Missing workspace header on ${path}`);
+          expect(title.x + title.width).toBeLessThanOrEqual(tools.x);
+          if (width >= 768) {
+            await expect(page.locator(".admin-sidebar")).toHaveCSS("width", "64px");
+          }
+        }
         await expectNoHorizontalScroll(page);
         if (path === "/admin/commerce") {
           // CSS decorations must never become part of a destination's accessible name.
@@ -117,8 +155,8 @@ for (const scheme of ["light", "dark"] as const)
       const original = await name.inputValue();
       await name.fill("Unsaved design review");
       const index = page.getByRole("navigation", { name: "Settings", exact: true });
-      await index.getByRole("link", { name: "Forms and consent" }).click();
-      await expect(page).toHaveURL(/#intake-settings$/);
+      await index.getByRole("button", { name: "Forms and consent", exact: true }).click();
+      await index.getByRole("button", { name: "Business settings", exact: true }).click();
       await expect(name).toHaveValue("Unsaved design review");
       await name.fill(original);
       expect(errors).toEqual([]);

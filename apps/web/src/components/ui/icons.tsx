@@ -2,6 +2,12 @@ import type { SVGProps } from "react";
 
 type IconProps = SVGProps<SVGSVGElement>;
 
+export const BellIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4M2 8a10 10 0 0 1 2-5M22 8a10 10 0 0 0-2-5" />
+  </Icon>
+);
+
 function Icon({ children, ...props }: IconProps) {
   return (
     <svg
@@ -230,5 +236,11 @@ export const CreditCardIcon = (p: IconProps) => (
   <Icon {...p}>
     <rect x="3" y="5" width="18" height="14" rx="3" />
     <path d="M3 10h18M7 15h3" />
+  </Icon>
+);
+
+export const MegaphoneIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="m3 10 15-6v16L3 14zM18 8h2a2 2 0 0 1 0 8h-2M6 15l1 6h4l-2-5" />
   </Icon>
 );

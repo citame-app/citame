@@ -1,5 +1,5 @@
 /** Disposable local web runtime for Playwright. Never imported by the production server. */
-export {};
+import { RECURRING_FIXTURE } from "../../api/test/recurring-values";
 
 if (process.env.NODE_ENV !== "test")
   throw new Error("Production browser fixture requires NODE_ENV=test");
@@ -21,13 +21,13 @@ const args = [
   "--tmpfs",
   "/tmp:rw,nosuid,size=128m",
   "-e",
-  "API_INTERNAL_URL=http://localhost:4300",
+  `API_INTERNAL_URL=http://localhost:${RECURRING_FIXTURE.apiPort}`,
   "-e",
   "HOST=127.0.0.1",
   "-e",
-  "PORT=4273",
+  `PORT=${new URL(RECURRING_FIXTURE.baseURL).port}`,
   "-e",
-  "PUBLIC_URL=http://localhost:4273",
+  `PUBLIC_URL=${RECURRING_FIXTURE.baseURL}`,
 ];
 if (process.env.E2E_ACQUISITION_FIXTURE === "true")
   args.push("-e", "BOOKING_WIDGET_ORIGINS=http://localhost:4274,http://127.0.0.1:4274");

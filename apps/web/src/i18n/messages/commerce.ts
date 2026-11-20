@@ -61,6 +61,7 @@ export const commerceEn = {
   "commerce.closeRegister": "Close and reconcile",
   "commerce.registerError":
     "The register could not be updated. Review its current state and try again.",
+  "commerce.cashChanged": "The expected cash changed. Review the balance and count the cash again.",
   "commerce.movements": "Cash movements",
   "commerce.deposit": "Add cash",
   "commerce.withdrawal": "Withdraw cash",
@@ -150,6 +151,7 @@ export const commerceEsAR: Record<keyof typeof commerceEn, string> = {
   "commerce.closeRegister": "Cerrar y conciliar",
   "commerce.registerError":
     "No pudimos actualizar la caja. Revisa su estado actual e inténtalo de nuevo.",
+  "commerce.cashChanged": "Cambió el efectivo esperado. Revisa el saldo y vuelve a contar la caja.",
   "commerce.movements": "Movimientos de caja",
   "commerce.deposit": "Añadir efectivo",
   "commerce.withdrawal": "Retirar efectivo",

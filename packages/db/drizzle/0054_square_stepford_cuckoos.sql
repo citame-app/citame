@@ -1,0 +1,3 @@
+ALTER TABLE "service_resource" DROP CONSTRAINT "service_resource_quantity_valid";--> statement-breakpoint
+ALTER TABLE "service_resource" ADD COLUMN "alternative" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+ALTER TABLE "service_resource" ADD CONSTRAINT "service_resource_quantity_valid" CHECK ("service_resource"."quantity" between 1 and 20 and (not "service_resource"."alternative" or "service_resource"."quantity"=1));

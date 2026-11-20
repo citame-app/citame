@@ -23,8 +23,13 @@ export function passEndpoints(client: ApiClient) {
       client.post("/admin/benefit-plans", input, benefitPlanSchema),
     updatePlan: (id: string, input: UpdateBenefitPlanInput) =>
       client.patch(`/admin/benefit-plans/${id}`, input, benefitPlanSchema),
-    list: (mode: CommerceMode, page = 1, search = "") =>
-      client.get(base(mode), passListSchema, { query: { page, search } }),
+    list: (
+      mode: CommerceMode,
+      page = 1,
+      search = "",
+      kind?: "package" | "membership",
+      clientId?: string,
+    ) => client.get(base(mode), passListSchema, { query: { page, search, kind, clientId } }),
     get: (id: string, mode: CommerceMode) => client.get(`${base(mode)}/${id}`, passContractSchema),
     periods: (id: string, mode: CommerceMode, page = 1) =>
       client.get(`${base(mode)}/${id}/periods`, passPeriodsSchema, { query: { page } }),

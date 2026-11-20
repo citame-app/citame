@@ -5,9 +5,13 @@ import {
   dateShiftsQuerySchema,
   idSchema,
   listTimeOffQuerySchema,
+  permissionsFor,
   setWorkingHoursRequestSchema,
   staffAccessInputSchema,
   staffCapacityInputSchema,
+  staffPortraitInputSchema,
+  staffPortraitPublicationSchema,
+  teamShiftWeekQuerySchema,
   updateStaffRequestSchema,
   updateTimeOffRequestSchema,
 } from "@sob/contracts";
@@ -18,6 +22,7 @@ import {
   authorizeStaffList,
   authorizeStaffScheduleRead,
   authorizeTimeOffManage,
+  requirePermission,
   requireRole,
 } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
@@ -26,6 +31,7 @@ import { getStaffAccess, setStaffAccess } from "./access";
 import { listAdminStaff, updateStaff } from "./admin";
 import { getStaffCapacity, setStaffCapacity } from "./capacity";
 import { commitDateShifts, getDateShifts, previewDateShifts } from "./date-shifts";
+import { readStaffPortrait, saveStaffPortrait } from "./portrait";
 import {
   createTimeOff,
   deleteTimeOff,
@@ -34,16 +40,45 @@ import {
   replaceWorkingHours,
   updateTimeOff,
 } from "./schedule";
+import { getTeamShiftWeek } from "./team-shifts";
 
 /**
  * Staff administration, mounted at `/admin/staff` behind `requireAuth`. Authorization is the
  * policy's job: the owner manages everything; staff read their own hours and manage their own
  * time off.
  */
-export function staffAdminRoutes({ db, now = () => new Date() }: AppDeps) {
+export function staffAdminRoutes({ db, config, now = () => new Date() }: AppDeps) {
   const staffId = (param: string) => parseOrThrow(idSchema, param);
 
   return new Hono<AppEnv>()
+    .get("/:id/portrait", (c) =>
+      readStaffPortrait(
+        db,
+        staffId(c.req.param("id")),
+        c.get("principal"),
+        c.req.query("v") === undefined ? undefined : parseOrThrow(idSchema, c.req.query("v")),
+      ),
+    )
+    .put("/:id/portrait", async (c) =>
+      c.json(
+        await saveStaffPortrait(
+          db,
+          staffId(c.req.param("id")),
+          parseOrThrow(staffPortraitInputSchema, await readJson(c)),
+          c.get("principal"),
+        ),
+      ),
+    )
+    .put("/:id/portrait/publication", async (c) =>
+      c.json(
+        await saveStaffPortrait(
+          db,
+          staffId(c.req.param("id")),
+          parseOrThrow(staffPortraitPublicationSchema, await readJson(c)),
+          c.get("principal"),
+        ),
+      ),
+    )
     .get("/:id/capacity", async (c) =>
       c.json(await getStaffCapacity(db, staffId(c.req.param("id")), c.get("principal"))),
     )
@@ -59,8 +94,19 @@ export function staffAdminRoutes({ db, now = () => new Date() }: AppDeps) {
       ),
     )
     .get("/", async (c) => {
-      const scope = authorizeStaffList(c.get("principal"));
-      return c.json({ staff: await listAdminStaff(db, scope) });
+      const principal = c.get("principal");
+      const scope = authorizeStaffList(principal);
+      c.header("cache-control", "private, no-store");
+      return c.json({
+        staff: await listAdminStaff(db, scope),
+        canEditPortraits: permissionsFor(principal.role, principal.accessPreset).editSchedules,
+      });
+    })
+    .get("/team-shifts", async (c) => {
+      requirePermission(c.get("principal"), "editSchedules");
+      c.header("cache-control", "private, no-store");
+      const { week } = parseOrThrow(teamShiftWeekQuerySchema, c.req.query());
+      return c.json(await getTeamShiftWeek(db, week));
     })
     .get("/:id/date-shifts", async (c) => {
       c.header("cache-control", "private, no-store");
@@ -125,14 +171,19 @@ export function staffAdminRoutes({ db, now = () => new Date() }: AppDeps) {
     .get("/:id/working-hours", async (c) => {
       const id = staffId(c.req.param("id"));
       authorizeStaffScheduleRead(c.get("principal"), id);
-      return c.json(await getWorkingHours(db, id, now()));
+      return c.json(await getWorkingHours(db, id, now(), config.syncReplicaGeneration));
     })
     .put("/:id/working-hours", async (c) => {
       const principal = c.get("principal");
       authorizeStaffAdmin(principal);
       const id = staffId(c.req.param("id"));
       const body = parseOrThrow(setWorkingHoursRequestSchema, await readJson(c));
-      return c.json(await replaceWorkingHours(db, id, body, principal, now()));
+      return c.json(
+        await replaceWorkingHours(db, id, body, principal, now(), {
+          generation: config.syncReplicaGeneration,
+          requireRevision: c.get("desktopRequest") === true,
+        }),
+      );
     })
     .get("/:id/time-off", async (c) => {
       const id = staffId(c.req.param("id"));

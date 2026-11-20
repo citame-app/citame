@@ -7,6 +7,22 @@ const original = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = original;
 });
+test("the paused widget keeps the salon link and skips the booking catalog", () => {
+  const fetch = mock(() => Promise.resolve(Response.json({})));
+  globalThis.fetch = fetch as unknown as typeof globalThis.fetch;
+  renderApp(
+    <BookingWidget
+      salonName="Sisters of Beauty"
+      onlineBookingEnabled={false}
+      initialSelection={{ serviceIds: [] }}
+    />,
+  );
+  expect(screen.getByRole("heading", { name: "Online booking is paused" })).toBeVisible();
+  expect(screen.getByRole("link", { name: "Sisters of Beauty" })).toBeVisible();
+  expect(screen.queryByRole("link", { name: /Continue to booking/ })).toBeNull();
+  expect(fetch).not.toHaveBeenCalled();
+});
+
 test("the widget only reads the public catalog and carries the chosen services to first-party booking in a new tab", async () => {
   const serviceId = "0198f5a0-7b1c-7000-8000-000000000001";
   const staffId = "0198f5a0-7b1c-7000-8000-000000000002";

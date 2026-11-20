@@ -29,6 +29,39 @@ pub fn muted() -> Rgba {
 pub fn accent() -> Rgba {
     rgb(if is_dark() { 0xd36a9b } else { 0xb4457a })
 }
+pub fn service_color(configured: Option<&str>, name: &str) -> (Rgba, Rgba) {
+    const FALLBACK: [u32; 8] = [
+        0xb75376, 0xa7652a, 0x577832, 0x2a8174, 0x3e73a4, 0x8260a2, 0x995f52, 0x567d83,
+    ];
+    let color = configured
+        .and_then(|color| color.strip_prefix('#'))
+        .filter(|hex| hex.len() == 6)
+        .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+        .unwrap_or_else(|| {
+            let hash = name
+                .trim()
+                .to_lowercase()
+                .bytes()
+                .fold(2166136261_u32, |hash, byte| {
+                    (hash ^ u32::from(byte)).wrapping_mul(16777619)
+                });
+            FALLBACK[hash as usize % FALLBACK.len()]
+        });
+    let edge = rgb(color);
+    let surface = panel();
+    let weight = if is_dark() { 0.22 } else { 0.18 };
+    let blend = |base, tint| base * (1. - weight) + tint * weight;
+    (
+        Rgba {
+            r: blend(surface.r, edge.r),
+            g: blend(surface.g, edge.g),
+            b: blend(surface.b, edge.b),
+            a: 1.,
+        },
+        edge,
+    )
+}
+
 pub fn accent_hover() -> Rgba {
     rgb(if is_dark() { 0xe17faf } else { 0x9c3868 })
 }
@@ -77,6 +110,25 @@ mod tests {
         };
         0.2126 * linear(c.r) + 0.7152 * linear(c.g) + 0.0722 * linear(c.b)
     }
+    #[test]
+    fn service_cards_keep_the_catalog_edge_and_readable_background() {
+        let original = is_dark();
+        for dark in [false, true] {
+            set_dark(dark);
+            let (red, edge) = service_color(Some("#bf3060"), "Example");
+            let (blue, _) = service_color(Some("#2061a0"), "Example");
+            assert_eq!(edge, rgb(0xbf3060));
+            assert_ne!(red, blue);
+            assert_eq!(
+                service_color(None, " Manicure "),
+                service_color(None, "manicure")
+            );
+            let (a, b) = (luminance(text()), luminance(red));
+            assert!((a.max(b) + 0.05) / (a.min(b) + 0.05) >= 4.5);
+        }
+        set_dark(original);
+    }
+
     #[test]
     fn both_palettes_keep_text_readable_and_dark_surfaces_are_distinct() {
         let original = is_dark();

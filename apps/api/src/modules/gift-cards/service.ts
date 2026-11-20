@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { type GiftCard, permissionsFor } from "@sob/contracts";
 import { checkoutLine, type Database, giftCard, giftCardMovement } from "@sob/db";
-import { and, asc, count, desc, eq, ilike, inArray, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
 import { ownedClientIds, type Principal } from "../../auth/principal";
@@ -67,10 +67,19 @@ export async function getGift(db: Database, id: string, principal: Principal) {
     accessMode: "read only",
   });
 }
-export async function listGifts(db: Database, principal: Principal, page = 1, search = "") {
+export async function listGifts(
+  db: Database,
+  principal: Principal,
+  page = 1,
+  search = "",
+  status?: GiftCard["status"],
+) {
   const escaped = search.replace(/[\\%_]/g, "\\$&");
   const where = and(
     giftScope(principal),
+    status
+      ? sql`(case when ${giftCard.status}='active' and ${giftCard.expiresAt}<=now() then 'expired'::text else ${giftCard.status}::text end)=${status}`
+      : undefined,
     search
       ? or(ilike(giftCard.label, `%${escaped}%`), eq(giftCard.codeLast4, search.toUpperCase()))
       : undefined,

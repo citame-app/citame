@@ -3,7 +3,7 @@ import { expect, type Locator, type Page, test } from "@playwright/test";
 import jsQR from "jsqr";
 import { RECURRING_FIXTURE as fixture } from "../../api/test/recurring-values";
 import { expectNoHorizontalScroll } from "./admin-helpers";
-import { expectNoSeriousA11yViolations, signInThroughUi } from "./helpers";
+import { expectNoSeriousA11yViolations, signInThroughUi, switchLocale } from "./helpers";
 
 async function exportArtwork(page: Page, image: Locator, path: string, height: number) {
   await expect(image).toBeVisible();
@@ -250,7 +250,7 @@ for (const scheme of ["light", "dark"] as const)
           route.fulfill({ json: staleDirectory }),
         );
         await customer.getByRole("button", { name: "Reload reviews", exact: true }).click();
-        await customer.getByRole("radio", { name: "Español", exact: true }).check();
+        await switchLocale(customer, "Español");
         const ownCard = customer.getByRole("listitem").filter({ hasText: publicName });
         await ownCard
           .getByRole("button", { name: "Retirar permiso para redes", exact: true })

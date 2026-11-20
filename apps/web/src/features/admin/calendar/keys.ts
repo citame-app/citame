@@ -1,4 +1,14 @@
-export type Shortcut = "today" | "previous" | "next" | "day" | "week" | "new" | "refresh" | "help";
+export type Shortcut =
+  | "today"
+  | "previous"
+  | "next"
+  | "day"
+  | "week"
+  | "month"
+  | "list"
+  | "new"
+  | "refresh"
+  | "help";
 
 const MAP: Record<string, Shortcut> = {
   t: "today",
@@ -8,6 +18,8 @@ const MAP: Record<string, Shortcut> = {
   "]": "next",
   d: "day",
   w: "week",
+  m: "month",
+  l: "list",
   n: "new",
   r: "refresh",
   "?": "help",

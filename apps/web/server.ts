@@ -22,7 +22,7 @@ const trustProxy = process.env.WEB_TRUST_PROXY === "true";
 const hsts =
   process.env.WEB_HSTS === "true" || (process.env.PUBLIC_URL ?? "").startsWith("https://");
 
-const distDir = join(import.meta.dir, "dist");
+const distDir = process.env.WEB_DIST_DIR ?? join(import.meta.dir, "dist");
 const entryUrl = pathToFileURL(join(distDir, "server", "server.js")).href;
 const entry = (await import(entryUrl)) as {
   default: { fetch: (request: Request) => Promise<Response> };
@@ -47,8 +47,18 @@ const server = serveWeb(web, {
 
 console.log(`web listening on http://${server.hostname}:${server.port} (api: ${apiUrl})`);
 
+let stopping = false;
+async function shutdown() {
+  if (stopping) return;
+  stopping = true;
+  try {
+    await server.stop();
+    process.exit(0);
+  } catch (error) {
+    console.error("Web shutdown failed", error);
+    process.exit(1);
+  }
+}
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.on(signal, () => {
-    void server.stop().then(() => process.exit(0));
-  });
+  process.on(signal, () => void shutdown());
 }

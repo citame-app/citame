@@ -7,7 +7,7 @@ import {
   type UserRole,
 } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { ConfirmDialog } from "~/components/ui/dialog";
 import { TextField } from "~/components/ui/field";
@@ -43,15 +43,23 @@ export interface NewAppointmentInitial {
 const hhmm = (minutes: number) =>
   `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 
-export function NewAppointmentSheet({
-  open,
-  onOpenChange,
-  initial,
-  role,
-  ownStaffId,
-  accessPreset,
-  onCreated,
-}: {
+function resolveStart(date: string, time: string, timeZone: string): string {
+  if (!date || !time) return "";
+  try {
+    const value = zonedInstant(date, time, timeZone);
+    const [hour = "", minute = ""] = time.split(":");
+    if (
+      localDateOf(value, timeZone) !== date ||
+      minutesIntoLocalDay(value, timeZone) !== Number(hour) * 60 + Number(minute)
+    )
+      return "";
+    return value;
+  } catch {
+    return "";
+  }
+}
+
+type NewAppointmentProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initial: NewAppointmentInitial;
@@ -59,6 +67,26 @@ export function NewAppointmentSheet({
   ownStaffId: string | null;
   accessPreset?: StaffAccessPreset | null;
   onCreated?: (appointment: Appointment) => void;
+};
+
+export function NewAppointmentSheet({ open, ownStaffId, ...props }: NewAppointmentProps) {
+  if (!open) return null;
+  const initial = {
+    date: props.initial.date,
+    minutesOfDay: props.initial.minutesOfDay ?? 9 * 60,
+    staffId: props.initial.staffId ?? ownStaffId ?? "",
+  };
+  return <AppointmentDraft key={JSON.stringify(initial)} {...props} initial={initial} />;
+}
+
+function AppointmentDraft({
+  onOpenChange,
+  initial,
+  role,
+  accessPreset,
+  onCreated,
+}: Omit<NewAppointmentProps, "open" | "initial" | "ownStaffId"> & {
+  initial: Required<NewAppointmentInitial>;
 }) {
   const { t, locale, timeZone } = useI18n();
   const toast = useToast();
@@ -68,6 +96,8 @@ export function NewAppointmentSheet({
   const staff = useQuery(adminStaffQuery);
   const granularity = salon.data?.slotGranularityMinutes ?? 15;
   const timeRef = useRef<HTMLInputElement>(null);
+  const formId = useId();
+  const submitting = useRef(false);
 
   const [values, setValues] = useState<WalkInValues>({
     clientMode: "existing",
@@ -75,7 +105,7 @@ export function NewAppointmentSheet({
     newName: "",
     newPhone: "",
     serviceIds: [],
-    staffId: initial.staffId ?? ownStaffId ?? "",
+    staffId: initial.staffId,
     startsAt: "",
     notes: "",
     override: true,
@@ -83,17 +113,17 @@ export function NewAppointmentSheet({
   const [waiver, setWaiver] = useState("");
   const [intent] = useState(() => createBookingIntent());
   const [date, setDate] = useState(initial.date);
-  const [time, setTime] = useState(hhmm(initial.minutesOfDay ?? 9 * 60));
+  const [time, setTime] = useState(hhmm(initial.minutesOfDay));
   const [search, setSearch] = useState("");
   const [pickedName, setPickedName] = useState("");
-  const [errors, setErrors] = useState<WalkInErrors>({});
+  const [showErrors, setShowErrors] = useState(false);
   const [failure, setFailure] = useState<ReturnType<typeof describeProblem> | null>(null);
   const [cadence, setCadence] = useState<"none" | "weekly" | "monthly">("none");
   const [interval, setInterval] = useState("1");
   const [count, setCount] = useState("3");
   const intake = useBookingForms({
     serviceIds: values.serviceIds,
-    enabled: open && values.serviceIds.length > 0,
+    enabled: values.serviceIds.length > 0,
     team: true,
     subjectKey:
       values.clientMode === "existing"
@@ -110,21 +140,6 @@ export function NewAppointmentSheet({
     data: AppointmentSeriesPreview;
     key: string;
   } | null>(null);
-  function resolveStart(): string {
-    if (!date || !time) return "";
-    try {
-      const value = zonedInstant(date, time, timeZone);
-      const [hour = "", minute = ""] = time.split(":");
-      if (
-        localDateOf(value, timeZone) !== date ||
-        minutesIntoLocalDay(value, timeZone) !== Number(hour) * 60 + Number(minute)
-      )
-        return "";
-      return value;
-    } catch {
-      return "";
-    }
-  }
   const signature = JSON.stringify({
     intake: intake.payload,
     values,
@@ -137,29 +152,7 @@ export function NewAppointmentSheet({
     timeZone,
   });
   const reviewed = review?.signature === signature ? review : null;
-
-  // A new slot click reuses the sheet: refill from it.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: only the slot identity resets the form
-  useEffect(() => {
-    if (!open) return;
-    setDate(initial.date);
-    setTime(hhmm(initial.minutesOfDay ?? 9 * 60));
-    setValues((v) => ({
-      ...v,
-      staffId: initial.staffId ?? ownStaffId ?? v.staffId,
-      serviceIds: [],
-    }));
-    setErrors({});
-    setFailure(null);
-    setWaiver("");
-    setCadence("none");
-    setInterval("1");
-    setCount("3");
-    setReview(null);
-    setSeriesError(false);
-    setDiscardIntake(false);
-    intake.reset();
-  }, [open, initial.date, initial.minutesOfDay, initial.staffId]);
+  const unavailableVisit = reviewed?.data.occurrences.some((occurrence) => !occurrence.available);
 
   const debounced = useDebounced(search.trim());
   const clients = useQuery({
@@ -187,7 +180,7 @@ export function NewAppointmentSheet({
     onError: (error) => setFailure(describeProblem(error)),
   });
   const create = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (startsAt: string) => {
       if (!intake.ready) throw new Error("Complete the current forms");
       if (cadence !== "none") {
         if (!reviewed) throw new Error("Review the recurring visits first");
@@ -202,7 +195,7 @@ export function NewAppointmentSheet({
       }
       const request = {
         ...intake.payload,
-        ...buildWalkInRequest({ ...values, startsAt: resolveStart() }),
+        ...buildWalkInRequest({ ...values, startsAt }),
         serviceQuotes: acceptedServiceQuotes(chosen),
         ...(waiver.trim() ? { protectionWaiverReason: waiver.trim() } : {}),
       };
@@ -239,10 +232,23 @@ export function NewAppointmentSheet({
     },
   });
 
+  async function runSubmission(request: () => Promise<unknown>) {
+    if (submitting.current) return;
+    submitting.current = true;
+    try {
+      await request();
+    } catch {
+      // Mutation callbacks present the error and keep the draft available for retry.
+    } finally {
+      submitting.current = false;
+    }
+  }
+
   function submit() {
-    const startsAt = resolveStart();
+    if (submitting.current || unavailableVisit) return;
+    const startsAt = resolveStart(date, time, timeZone);
     const found = validateWalkIn({ ...values, startsAt });
-    setErrors(found);
+    setShowErrors(Object.keys(found).length > 0);
     setFailure(null);
     const validSeries =
       Number.isInteger(Number(interval)) &&
@@ -256,45 +262,43 @@ export function NewAppointmentSheet({
       return;
     if (cadence !== "none" && !reviewed) {
       const { id: _id, ...booking } = buildWalkInRequest({ ...values, startsAt });
-      preview.mutate({
-        signature,
-        input: {
-          ...intake.payload,
-          ...booking,
-          serviceQuotes: acceptedServiceQuotes(chosen),
-          cadence,
-          interval: Number(interval),
-          count: Number(count),
-          ...(waiver.trim() ? { protectionWaiverReason: waiver.trim() } : {}),
-        },
-      });
-    } else create.mutate();
+      const input = {
+        ...intake.payload,
+        ...booking,
+        serviceQuotes: acceptedServiceQuotes(chosen),
+        cadence,
+        interval: Number(interval),
+        count: Number(count),
+        ...(waiver.trim() ? { protectionWaiverReason: waiver.trim() } : {}),
+      };
+      void runSubmission(() =>
+        preview.mutateAsync({
+          signature,
+          input,
+        }),
+      );
+    } else void runSubmission(() => create.mutateAsync(startsAt));
   }
 
-  // After a failed submit, keep the messages in step with what the form holds now.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: only edits re-run validation
-  useEffect(() => {
-    setErrors((current) => {
-      if (Object.keys(current).length === 0) return current;
-      const startsAt = resolveStart();
-      return validateWalkIn({ ...values, startsAt });
-    });
-  }, [values, date, time]);
-
+  const errors = useMemo(
+    () =>
+      showErrors ? validateWalkIn({ ...values, startsAt: resolveStart(date, time, timeZone) }) : {},
+    [showErrors, values, date, time, timeZone],
+  );
   const set = <K extends keyof WalkInValues>(key: K, value: WalkInValues[K]) =>
     setValues((v) => ({ ...v, [key]: value }));
   const errorText = (key: keyof WalkInErrors) =>
     errors[key] ? t(`walkin.error.${key}` as "walkin.error.client") : undefined;
 
   const close = () => {
-    if (create.isPending || preview.isPending) return;
+    if (submitting.current) return;
     if (intake.dirty) setDiscardIntake(true);
     else onOpenChange(false);
   };
 
   return (
     <Sheet
-      open={open}
+      open
       onOpenChange={(next) => {
         if (next) onOpenChange(true);
         else close();
@@ -312,10 +316,9 @@ export function NewAppointmentSheet({
           </Button>
           <Button
             loading={create.isPending || preview.isPending}
-            disabled={
-              !intake.ready || Boolean(reviewed?.data.occurrences.some((o) => !o.available))
-            }
-            onClick={submit}
+            disabled={!intake.ready || unavailableVisit}
+            type="submit"
+            form={formId}
           >
             {cadence === "none"
               ? t("walkin.submit")
@@ -327,6 +330,8 @@ export function NewAppointmentSheet({
       }
     >
       <form
+        id={formId}
+        method="post"
         className="space-y-6"
         noValidate
         onSubmit={(event) => {
@@ -580,7 +585,11 @@ export function NewAppointmentSheet({
                     variant="secondary"
                     loading={preview.isPending}
                     disabled={create.isPending}
-                    onClick={() => preview.mutate({ signature, input: reviewed.input })}
+                    onClick={() =>
+                      void runSubmission(() =>
+                        preview.mutateAsync({ signature, input: reviewed.input }),
+                      )
+                    }
                   >
                     {t("series.refresh")}
                   </Button>

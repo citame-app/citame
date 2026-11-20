@@ -98,6 +98,26 @@ export async function renewLeases(
   return renewed.map((r) => r.id);
 }
 
+/** Returns reserved jobs that this worker never started, without charging a delivery attempt. */
+export async function releaseUnstartedReminders(db: Database, ids: string[], workerId: string) {
+  if (!ids.length) return;
+  await db
+    .update(reminder)
+    .set({
+      status: "pending",
+      lockedBy: null,
+      lockedUntil: null,
+      attempts: sql`${reminder.attempts} - 1`,
+    })
+    .where(
+      and(
+        inArray(reminder.id, ids),
+        eq(reminder.status, "processing"),
+        eq(reminder.lockedBy, workerId),
+      ),
+    );
+}
+
 /**
  * Ends a claim. Fenced on `locked_by` and `processing`: a worker whose lease was taken over
  * cannot overwrite the new owner's outcome. Returns whether the claim was still ours.

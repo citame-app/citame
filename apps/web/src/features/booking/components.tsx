@@ -1,5 +1,5 @@
 import type { Service, Slot, Staff } from "@sob/contracts";
-import { type ReactNode, useEffect, useId, useRef } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { CheckIcon, ClockIcon } from "~/components/ui/icons";
 import { useI18n } from "~/i18n/react";
 import { cn } from "~/lib/cn";
@@ -104,6 +104,7 @@ export function ProfessionalChoice({
   selected,
   onSelect,
   initial,
+  portraitUrl,
 }: {
   value: string;
   name: string;
@@ -111,7 +112,9 @@ export function ProfessionalChoice({
   selected: boolean;
   onSelect: (value: string) => void;
   initial?: ReactNode;
+  portraitUrl?: string;
 }) {
+  const [unavailable, setUnavailable] = useState<string>();
   return (
     <div className="relative">
       <input
@@ -125,9 +128,20 @@ export function ProfessionalChoice({
       <label htmlFor={`staff-${value}`} className={cn(choiceCard, "items-center")}>
         <span
           aria-hidden="true"
-          className="grid size-11 shrink-0 place-items-center rounded-full bg-accent-soft font-display text-lg font-semibold text-accent-soft-fg"
+          className="grid size-11 shrink-0 place-items-center overflow-hidden rounded-full bg-accent-soft font-display text-lg font-semibold text-accent-soft-fg"
         >
-          {initial ?? name.slice(0, 1).toUpperCase()}
+          {portraitUrl && portraitUrl !== unavailable ? (
+            <img
+              src={portraitUrl}
+              alt=""
+              width={44}
+              height={44}
+              className="size-full object-cover"
+              onError={() => setUnavailable(portraitUrl)}
+            />
+          ) : (
+            (initial ?? name.slice(0, 1).toUpperCase())
+          )}
         </span>
         <span className="min-w-0 flex-1">
           <span className="block font-medium">{name}</span>

@@ -4,29 +4,33 @@ import {
   appointmentService,
   clientProfile,
   type Database,
+  service,
   staffProfile,
   timeOff,
   workingHours,
 } from "@sob/db";
-import { and, asc, eq, gt, inArray, isNull, lt } from "drizzle-orm";
+import { and, asc, eq, getTableColumns, gt, inArray, isNull, lt } from "drizzle-orm";
 import { DomainError } from "../../errors";
+import type { Tx } from "../../tx";
 import { workingWindows } from "../availability/windows";
-import { protectionView } from "../booking-protection/value";
+import { calendarProtections } from "../booking-protection/value";
 import { calendarResources } from "../resources/reservations";
 import { getSalonSettings } from "../settings/service";
 import { asDatedHours, loadShiftRows } from "../staff/date-hours";
+import { calendarBadges } from "./context";
 import { loadSeriesReferences } from "./series-references";
 
 /**
  * Everything a day/week calendar draws, in one round of queries: the columns (staff), the
  * appointments with client and service names already joined, time off, and the recurring hours
  * resolved to concrete windows in the salon timezone. `scope.staffIds` is whatever the policy
- * allowed; without it the calendar covers every active staff member.
+ * allowed. Without it the calendar covers active staff unless a historical view includes
+ * inactive staff explicitly.
  */
 export async function getCalendar(
-  db: Database,
+  db: Database | Tx,
   query: CalendarQuery,
-  scope: { staffIds?: string[] },
+  scope: { staffIds?: string[]; includeBilling: boolean; includeInactiveStaff?: boolean },
 ): Promise<CalendarResponse> {
   const settings = await getSalonSettings(db);
   const from = new Date(query.from);
@@ -39,7 +43,11 @@ export async function getCalendar(
     .where(
       and(
         isNull(staffProfile.deletedAt),
-        requested ? inArray(staffProfile.id, requested) : eq(staffProfile.active, true),
+        requested
+          ? inArray(staffProfile.id, requested)
+          : scope.includeInactiveStaff
+            ? undefined
+            : eq(staffProfile.active, true),
       ),
     )
     .orderBy(asc(staffProfile.displayName), asc(staffProfile.id));
@@ -105,8 +113,9 @@ export async function getCalendar(
 
   const snapshots = rows.length
     ? await db
-        .select()
+        .select({ ...getTableColumns(appointmentService), color: service.color })
         .from(appointmentService)
+        .leftJoin(service, eq(appointmentService.serviceId, service.id))
         .where(
           inArray(
             appointmentService.appointmentId,
@@ -115,60 +124,83 @@ export async function getCalendar(
         )
     : [];
 
-  const resources = await calendarResources(
-    db,
-    rows.map((r) => r.row.id),
-  );
-  const series = await loadSeriesReferences(
-    db,
-    rows.map((r) => r.row.id),
-  );
+  const appointmentIds = rows.map((r) => r.row.id);
+  const [resources, series, protections, badges] = await Promise.all([
+    calendarResources(db, appointmentIds),
+    loadSeriesReferences(db, appointmentIds),
+    calendarProtections(db, appointmentIds),
+    calendarBadges(
+      db,
+      rows.map((r) => r.row),
+      snapshots,
+      { includeBilling: scope.includeBilling },
+    ),
+  ]);
+  const serviceSnapshots = new Map<string, typeof snapshots>();
+  for (const snapshot of snapshots) {
+    const own = serviceSnapshots.get(snapshot.appointmentId) ?? [];
+    own.push(snapshot);
+    serviceSnapshots.set(snapshot.appointmentId, own);
+  }
   return {
     timezone: settings.timezone,
     from: query.from,
     to: query.to,
     staff: columns,
-    appointments: await Promise.all(
-      rows.map(async ({ row, clientName }) => {
-        const own = snapshots
-          .filter((s) => s.appointmentId === row.id)
-          .sort((a, b) => a.position - b.position);
-        return {
-          ...(series.has(row.id) ? { series: series.get(row.id) } : {}),
-          id: row.id,
-          staffId: row.staffId,
-          clientId: row.clientId,
-          startsAt: row.startsAt.toISOString(),
-          endsAt: row.endsAt.toISOString(),
-          status: row.status,
-          notes: row.notes,
-          version: row.version,
-          ...(row.workWindows ? { workWindows: row.workWindows } : {}),
-          services: own.map((s) => ({
-            serviceId: s.serviceId,
-            name: s.name,
-            durationMinutes: s.durationMinutes,
-            bufferMinutes: s.bufferMinutes,
-            ...(s.processingStartMinutes !== null && s.processingMinutes !== null
-              ? {
-                  processing: {
-                    startsAfterMinutes: s.processingStartMinutes,
-                    minutes: s.processingMinutes,
-                  },
-                }
-              : {}),
-            priceCents: s.priceCents,
-            currency: s.currency,
-          })),
-          createdAt: row.createdAt.toISOString(),
-          updatedAt: row.updatedAt.toISOString(),
-          protection: await protectionView(db, row.id),
-          resources: resources.get(row.id) ?? [],
-          clientName,
-          serviceNames: own.map((s) => s.name),
-        };
-      }),
-    ),
+    appointments: rows.map(({ row, clientName }) => {
+      const own = (serviceSnapshots.get(row.id) ?? []).sort((a, b) => a.position - b.position);
+      const context = badges.get(row.id);
+      const unresolved = own.filter((s) => s.sourceUnpriced && s.reviewedPriceCents === null);
+      return {
+        ...(series.has(row.id) ? { series: series.get(row.id) } : {}),
+        ...(row.visitGroupId ? { visitGroupId: row.visitGroupId } : {}),
+        id: row.id,
+        staffId: row.staffId,
+        clientId: row.clientId,
+        startsAt: row.startsAt.toISOString(),
+        endsAt: row.endsAt.toISOString(),
+        status: row.status,
+        notes: row.notes,
+        version: row.version,
+        ...(row.workWindows ? { workWindows: row.workWindows } : {}),
+        services: own.map((s) => ({
+          serviceId: s.serviceId,
+          name: s.name,
+          durationMinutes: s.durationMinutes,
+          bufferMinutes: s.bufferMinutes,
+          ...(s.processingStartMinutes !== null && s.processingMinutes !== null
+            ? {
+                processing: {
+                  startsAfterMinutes: s.processingStartMinutes,
+                  minutes: s.processingMinutes,
+                },
+              }
+            : {}),
+          priceCents: s.reviewedPriceCents ?? s.priceCents,
+          ...(s.sourceUnpriced && s.reviewedPriceCents === null
+            ? { sourceUnpriced: true as const }
+            : {}),
+          currency: s.currency,
+        })),
+        createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
+        protection: protections.get(row.id) ?? null,
+        resources: resources.get(row.id) ?? [],
+        clientName,
+        serviceBadges: context?.badges ?? [],
+        ...(context?.reasons.length ? { billingReviewReasons: context.reasons } : {}),
+        ...(context?.externallySettled ? { externallySettled: true as const } : {}),
+        ...(context?.importedFromBooksy ? { importedFromBooksy: true as const } : {}),
+        ...(context?.externalBalance ? { externalBalance: context.externalBalance } : {}),
+        ...(scope.includeBilling && unresolved.length && own.every((s) => s.currency === "EUR")
+          ? { unpricedServices: unresolved.map(({ id, name }) => ({ id, name })) }
+          : {}),
+        serviceNames: own.map((s) => s.name),
+        serviceColors: Object.fromEntries(
+          own.flatMap((s) => (s.serviceId && s.color ? [[s.serviceId, s.color]] : [])),
+        ),
+      };
+    }),
     timeOff: offs.map((o) => ({
       id: o.id,
       staffId: o.staffId,

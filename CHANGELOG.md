@@ -8,16 +8,40 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Added
 
+- Weekly team shifts in the web admin with dated overrides, absence intervals and links to individual schedules. [Scheduling guide](docs/date-shifts.md).
+- Native weekly team shifts read the offline replica, mark pending blocks and open the selected professional's calendar. Dates and names remain visible while scrolling, and a date field jumps directly to a week.
+
 - Single-location checkout, cash sessions, receipt/refund reconciliation, retail stock and staff commissions; configurable deposits and a hosted Redsys card/Bizum adapter, with optional explicitly consented membership renewal.
 - Gift cards, prepaid plans, memberships, loyalty points and bounded promotion codes. Customer booking reviews bind the offer, discounted total and deposit; uncertain requests recover their original visit.
 - Recurring appointment series, held waitlist offers, shared room/equipment capacity, service variants/extras/combinations, date-specific shifts, treatment processing intervals and explicitly configured concurrent professional work.
 - Client controls/tags, reviewed CSV transfer, private photos and versioned intake forms; completed-visit reviews, moderated public portfolio, booking links/QR/widget and separately consented local social creative.
 - Scoped staff access and English/Spanish operational interfaces, with regression coverage for mobile/desktop, light/dark, accessibility and uncertain-response recovery.
+- Per-visit review invitations for verified clients with commercial email permission. Reputation shows delivery status and the production smoke test checks replay and delivery through the standalone worker using an isolated SMTP sink.
+- Optional quantity and unit per inventory pack, independent of stock counts and available in product details and CSV. New isolated Booksy projections retain this data when the archived source provides it.
+- Native inventory search and product details in GPUI. Authorized users can update pack content with a version check and review concurrent changes without losing their draft.
+- Native stock history, deliveries, consumption and physical counts per product. Submitted movements survive a lost connection or app restart and retry against the original server generation.
 
 ### Changed
 
+- The web proxy bounds the wait for API response headers and keeps established sync streams open.
+- The agenda's new appointment form keeps one pending submission and starts a clean draft when a different slot is selected.
+- Recurring appointment reviews mark individual dates unavailable and use the same professional capacity and processing windows as appointment creation.
+- Pausing public booking also pauses new customer series previews and creation. Previously committed requests remain recoverable, and the team can still book.
+- Unpaid appointments and imported visits awaiting billing review remain visible to authorized cashiers after the assigned professional becomes inactive.
+- Web and GPUI stock movements retain the same set across pages and CSV exports when new movements commit. Load the latest movements explicitly to include them. [Inventory guide](docs/inventory.md).
+- Removing a staff portrait requires confirmation for the version shown when opening the dialog.
+- Open web and desktop staff views follow portrait changes through the existing sync stream. An upload retains the version reviewed when the file was selected.
+- Removing a team portrait retains a write revision, so a draft from before an intervening upload and removal cannot recreate the photo. Upload clients must use the directory's `portraitAbsenceVersion` when present.
+- Web stock movements can retry the original submission after a reload in the same tab. Stock writes require the server generation from the reviewed product.
 - Scheduling protects frozen active-work intervals independently from a visit's full client span. Rooms and equipment remain occupied during processing; legacy visits keep continuous blocking.
 - Offline desktop proposals retain reviewed catalog terms and timing across sync. Changed terms require a new proposal; rescheduling cannot silently accept them.
+- Production Compose waits for the standalone notification worker to start its queues and verify access to their PostgreSQL tables before treating it as ready.
+- Restored deployments check notification worker readiness before and after reopening Caddy. Interrupted or failed checks close the selected proxy.
+- Recovery reopening rejects stale Compose settings or a worker still connected to the previous database.
+- Portable Booksy recovery can rehearse a separate native database with public booking paused. It keeps the original archive private and verifies that credentials and outbound queues stay empty.
+- The restored-copy rehearsal checks secure owner sign-in, the imported calendar and the public booking pause through the normal API with synthetic accounts.
+- The optional operational write rehearsal moves an imported appointment through the agenda API and checks its frozen services, equipment, stale-version rejection and incremental sync.
+- The restored-agenda rehearsal exercises real desktop device enrollment, signed renewal, live updates and revocation with a disposable device key.
 
 ### Delivery status
 
@@ -34,7 +58,7 @@ First release: a self-hostable booking and salon-management platform for one sal
 - **Account security**: email verification, password reset and staff invitations without user enumeration, per-address email throttle, CSRF origin checks, security headers and a nonce-based CSP.
 - **Web app** (TanStack Start, English and Spanish es-AR, light and dark, responsive from 360 px): public booking flow, client account (appointments, reschedule, cancel, profile, notification preferences), staff and owner dashboard (today, drag-and-keyboard calendar, clients, services, team hours and time off, reports with CSV export, settings), consent screen and unsubscribe page.
 - **Offline sync**: `POST /sync/push` (idempotent), `GET /sync/pull` (cursor, tombstones) and `GET /sync/stream` (SSE), with a change log written by deferred Postgres triggers.
-- **Desktop client** (Rust, GPUI): offline-first front-desk calendar over a SQLite replica and outbox, sync engine, conflict review. Linux is the supported target.
+- **Desktop client** (Rust, GPUI): offline-first front-desk calendar over a SQLite replica and outbox, sync engine, conflict review. The release workflow requires Linux x86_64 and signed and notarized macOS 15+ packages for Intel and Apple Silicon.
 - **OAuth 2.1 and MCP**: authorization server with PKCE and dynamic client registration, consent screen, and an MCP server (Streamable HTTP) with client and staff tools that reuse the REST service layer.
 - **Notifications**: confirmation, reminder (24 h and 2 h by default), reschedule and cancellation messages by email and optional SMS (Twilio), Postgres-backed worker with retries and dead letter, `.ics` attachments, one-click unsubscribe.
 - **Operations**: `/health`, `/ready`, Prometheus `/metrics`, JSON logs with request ids, graceful shutdown, scheduled housekeeping, backup and restore scripts, hardened `compose.prod.yaml` with optional Caddy HTTPS, k6 load and contention scenarios with measured results, a production smoke script.

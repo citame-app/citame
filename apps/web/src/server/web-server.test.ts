@@ -226,6 +226,36 @@ describe("rate-limited renders", () => {
 });
 
 describe("api proxy", () => {
+  test("SSE bypasses gzip and delivers the first event before the stream closes", async () => {
+    let end: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        end = controller;
+        controller.enqueue(new TextEncoder().encode('event: change\ndata: {"seq":1}\n\n'));
+      },
+    });
+    const handler = createWebServer({
+      clientDir: dir,
+      ssr: () => new Response(""),
+      proxy: {
+        matches: () => true,
+        handle: async () =>
+          new Response(stream, { headers: { "content-type": "text/event-stream" } }),
+      },
+    });
+    const response = await get(handler, "/api/sync/stream", {
+      headers: { "accept-encoding": "gzip, br" },
+    });
+    expect(response.headers.get("content-encoding")).toBeNull();
+    const reader = response.body?.getReader();
+    try {
+      const event = await reader?.read();
+      expect(new TextDecoder().decode(event?.value)).toContain('data: {"seq":1}');
+    } finally {
+      end?.close();
+      await reader?.cancel();
+    }
+  });
   test("hands /api requests to the proxy with the socket address", async () => {
     const response = await get(server(), "/api/services");
     expect(await response.json()).toEqual({ proxied: true });

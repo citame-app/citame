@@ -64,8 +64,8 @@ describe("valkeySecondaryStorage", () => {
   });
 
   test("increment rejects a non-positive or fractional TTL", async () => {
-    expect(storage().increment("c", 0)).rejects.toThrow(/positive integer/);
-    expect(storage().increment("c", 1.5)).rejects.toThrow(/positive integer/);
+    await expect(storage().increment("c", 0)).rejects.toThrow(/positive integer/);
+    await expect(storage().increment("c", 1.5)).rejects.toThrow(/positive integer/);
   });
 
   test("different prefixes are isolated", async () => {

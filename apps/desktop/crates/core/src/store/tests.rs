@@ -2,6 +2,44 @@ use serde_json::{Value, json};
 
 use super::*;
 
+#[test]
+fn review_refresh_advances_the_topic_without_replica_changes() {
+    let mut store = Store::open_in_memory().unwrap();
+    assert_eq!(store.live_view_revision("review_requests").unwrap(), 0);
+    assert_eq!(
+        store
+            .apply_sync_page(&[], 7, false, false, &["review_requests".into()], None)
+            .unwrap(),
+        0,
+    );
+    assert_eq!(store.live_view_revision("review_requests").unwrap(), 7);
+    store
+        .apply_sync_page(&[], 8, false, false, &[], None)
+        .unwrap();
+    assert_eq!(store.live_view_revision("review_requests").unwrap(), 7);
+    store
+        .apply_page(&[staff_change(9, "manager", "Manager")], 9)
+        .unwrap();
+    assert_eq!(store.live_view_revision("review_requests").unwrap(), 9);
+}
+
+#[test]
+fn staff_directory_revision_advances_only_for_new_staff_rows() {
+    let mut store = Store::open_in_memory().unwrap();
+    let change = staff_change(3, "manager", "Manager");
+    assert_eq!(store.staff_directory_revision().unwrap(), 0);
+    store.apply_page(std::slice::from_ref(&change), 3).unwrap();
+    assert_eq!(store.staff_directory_revision().unwrap(), 3);
+    store.apply_page(&[change], 7).unwrap();
+    assert_eq!(store.staff_directory_revision().unwrap(), 3);
+    store
+        .apply_page(&[staff_change(8, "manager", "Manager")], 8)
+        .unwrap();
+    assert_eq!(store.staff_directory_revision().unwrap(), 8);
+    store.reset_replica().unwrap();
+    assert_eq!(store.staff_directory_revision().unwrap(), 0);
+}
+
 pub fn staff_change(seq: i64, id: &str, name: &str) -> RawChange {
     RawChange {
         seq,
@@ -57,13 +95,183 @@ fn migrations_run_once_and_survive_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("replica.db");
     {
-        let mut s = Store::open(&path).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 2);
-        s.apply_page(&[staff_change(3, "st1", "Ana")], 3).unwrap();
+        let mut conn = Connection::open(&path).unwrap();
+        for sql in &MIGRATIONS[..2] {
+            conn.execute_batch(sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 2).unwrap();
+        let tx = conn.transaction().unwrap();
+        apply_change(&tx, &staff_change(3, "st1", "Ana")).unwrap();
+        tx.execute("INSERT INTO meta (key,value) VALUES ('cursor','3')", [])
+            .unwrap();
+        tx.commit().unwrap();
     }
     let s = Store::open(&path).unwrap();
-    assert_eq!(s.schema_version().unwrap(), 2);
+    assert_eq!(s.schema_version().unwrap() as usize, MIGRATIONS.len());
     assert_eq!(s.staff().unwrap().len(), 1);
+    assert_eq!(s.cursor().unwrap(), 3);
+}
+
+#[test]
+fn booking_notices_skip_snapshot_import_and_local_echo_and_follow_visibility() {
+    let mut store = Store::open_in_memory().unwrap();
+    store
+        .apply_sync_page(&[appt_change(1, A1, 1)], 1, false, false, &[], None)
+        .unwrap();
+    assert!(
+        store
+            .get_meta("calendar_snapshot_complete")
+            .unwrap()
+            .is_none()
+    );
+    store
+        .apply_sync_page(&[appt_change(2, A2, 1)], 2, false, true, &[], None)
+        .unwrap();
+    assert!(
+        store
+            .get_meta("calendar_snapshot_complete")
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(store.booking_notice_head().unwrap(), 0);
+
+    let own = store
+        .enqueue("appointment.create", "own", json!({"id": "own"}))
+        .unwrap();
+    store
+        .apply_push_results(std::slice::from_ref(&own), &[applied(&own.mutation_id)])
+        .unwrap();
+    assert_eq!(store.outbox_len().unwrap(), 0);
+    let mut imported = appt_change(4, "imported", 1);
+    imported.data.as_mut().unwrap()["visitGroupId"] = json!("source-visit");
+    let mut legacy = appt_change(5, "legacy", 1);
+    legacy.data.as_mut().unwrap()["importedFromBooksy"] = json!(true);
+    let mut new = appt_change(6, "new", 1);
+    new.data.as_mut().unwrap()["clientName"] = json!("Lucía");
+    store
+        .apply_sync_page(
+            &[appt_change(3, "own", 1), imported, legacy, new.clone()],
+            6,
+            true,
+            true,
+            &[],
+            None,
+        )
+        .unwrap();
+    store
+        .apply_sync_page(&[new], 6, true, true, &[], None)
+        .unwrap();
+    let notices = store.booking_notices_after(0).unwrap();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].1.id, "new");
+    assert_eq!(notices[0].1.client_name.as_deref(), Some("Lucía"));
+    let cursor = notices[0].0;
+
+    store
+        .apply_sync_page(
+            &[tombstone(7, "appointment", "new")],
+            7,
+            true,
+            true,
+            &[],
+            None,
+        )
+        .unwrap();
+    assert!(store.booking_notices_after(0).unwrap().is_empty());
+    assert_eq!(store.booking_notice_head().unwrap(), 0);
+    store.reset_replica().unwrap();
+    assert!(
+        store
+            .get_meta("calendar_snapshot_complete")
+            .unwrap()
+            .is_none()
+    );
+    store
+        .apply_sync_page(&[appt_change(1, "restored", 1)], 1, false, true, &[], None)
+        .unwrap();
+    store
+        .apply_sync_page(&[appt_change(2, "another", 1)], 2, true, true, &[], None)
+        .unwrap();
+    assert_eq!(
+        store.booking_notices_after(cursor).unwrap()[0].1.id,
+        "another"
+    );
+}
+
+#[test]
+fn booksy_origin_refreshes_an_existing_appointment_at_the_same_version() {
+    let mut store = Store::open_in_memory().unwrap();
+    let mut imported = appt_change(1, A1, 1);
+    store.apply_page(&[imported.clone()], 1).unwrap();
+    assert!(!store.appointment(A1).unwrap().unwrap().imported_from_booksy);
+
+    imported.seq = 2;
+    imported.data.as_mut().unwrap()["importedFromBooksy"] = json!(true);
+    store
+        .apply_sync_page(&[imported], 2, true, true, &[], None)
+        .unwrap();
+    let saved = store.appointment(A1).unwrap().unwrap();
+    assert!(saved.imported_from_booksy);
+    assert_eq!(saved.version, 1);
+    assert_eq!(store.booking_notice_head().unwrap(), 0);
+}
+
+#[test]
+fn replica_keeps_imported_group_billing_holds_and_reviewed_price_across_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("replica.db");
+    {
+        let mut store = Store::open(&path).unwrap();
+        let mut imported = appt_change(1, A1, 1);
+        let data = imported.data.as_mut().unwrap();
+        data["visitGroupId"] = json!("imported-group");
+        data["services"][0]["sourceUnpriced"] = json!(true);
+        data["services"][0]["priceCents"] = json!(0);
+        data["billingReviewReasons"] = json!(["unknown_amount"]);
+        let mut paid = appt_change(2, A2, 1);
+        paid.data.as_mut().unwrap()["billingReviewReasons"] =
+            json!(["paid_in_booksy", "invoiced_in_booksy"]);
+        store.apply_page(&[imported, paid], 2).unwrap();
+    }
+    let mut store = Store::open(&path).unwrap();
+    let first = store.appointment(A1).unwrap().unwrap();
+    let second = store.appointment(A2).unwrap().unwrap();
+    assert_eq!(first.visit_group_id.as_deref(), Some("imported-group"));
+    assert!(first.services[0].source_unpriced);
+    assert_eq!(
+        first.billing_review_reasons,
+        [crate::model::BillingReviewReason::UnknownAmount]
+    );
+    assert!(second.visit_group_id.is_none());
+    assert!(!second.services[0].source_unpriced);
+    assert_eq!(
+        second.billing_review_reasons,
+        [
+            crate::model::BillingReviewReason::PaidInBooksy,
+            crate::model::BillingReviewReason::InvoicedInBooksy,
+        ]
+    );
+
+    let mut reviewed = appt_change(3, A1, 2);
+    reviewed.data.as_mut().unwrap()["services"][0]["priceCents"] = json!(3650);
+    let mut credited = appt_change(4, A2, 2);
+    credited.data.as_mut().unwrap()["externalBalance"] =
+        json!({"paidInBooksyCents": 3500, "dueInCitameCents": 6500});
+    store.apply_page(&[reviewed, credited], 4).unwrap();
+    drop(store);
+    let reopened = Store::open(&path).unwrap();
+    let stored = reopened.appointment(A1).unwrap().unwrap();
+    assert_eq!(stored.services[0].price_cents, 3650);
+    assert!(!stored.services[0].source_unpriced);
+    assert!(stored.billing_review_reasons.is_empty());
+    let balance = reopened
+        .appointment(A2)
+        .unwrap()
+        .unwrap()
+        .external_balance
+        .unwrap();
+    assert_eq!(balance.paid_in_booksy_cents, 3500);
+    assert_eq!(balance.due_in_citame_cents, 6500);
 }
 
 #[test]
@@ -76,14 +284,43 @@ fn device_id_is_generated_once_and_stable() {
 }
 
 #[test]
+fn calendar_inbox_keeps_separate_pages_and_clears_on_replica_reset() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("inbox.db");
+    let page = CalendarInbox {
+        page: 1,
+        page_size: 25,
+        total: 1,
+        entries: vec![],
+    };
+    let archived = CalendarInbox {
+        total: 2,
+        ..page.clone()
+    };
+    {
+        let store = Store::open(&path).unwrap();
+        store.cache_calendar_inbox(false, &page).unwrap();
+        store.cache_calendar_inbox(true, &archived).unwrap();
+    }
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(store.calendar_inbox_cache(false).unwrap(), Some(page));
+    assert_eq!(store.calendar_inbox_cache(true).unwrap(), Some(archived));
+    store.reset_replica().unwrap();
+    assert!(store.calendar_inbox_cache(false).unwrap().is_none());
+    assert!(store.calendar_inbox_cache(true).unwrap().is_none());
+}
+
+#[test]
 fn cursor_is_persisted_with_the_page_and_never_decreases() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("replica.db");
     {
         let mut s = Store::open(&path).unwrap();
         assert_eq!(s.cursor().unwrap(), 0);
-        s.apply_page(&[appt_change(5, A1, 1)], 7).unwrap();
-        s.apply_page(&[], 4).unwrap();
+        s.apply_page(&[appt_change(5, A1, 1)], 5).unwrap();
+        s.apply_page(&[appt_change(6, A1, 2)], 7).unwrap();
+        s.apply_page(&[appt_change(4, A1, 1)], 4).unwrap();
+        assert_eq!(s.appointment(A1).unwrap().unwrap().version, 2);
         assert_eq!(s.cursor().unwrap(), 7);
     }
     assert_eq!(Store::open(&path).unwrap().cursor().unwrap(), 7);
@@ -252,6 +489,14 @@ fn rejected_results_leave_the_outbox_and_become_conflicts() {
     let a = s
         .enqueue("appointment.create", A1, json!({"id": A1}))
         .unwrap();
+    assert_eq!(
+        s.appointment_edit_sync(A1).unwrap(),
+        AppointmentEditSync::Pending
+    );
+    assert_eq!(
+        s.appointment_edit_sync("unrelated").unwrap(),
+        AppointmentEditSync::Settled
+    );
     let rej = MutationResult::Rejected {
         mutation_id: a.mutation_id.clone(),
         reason: "slot_taken".into(),
@@ -268,6 +513,15 @@ fn rejected_results_leave_the_outbox_and_become_conflicts() {
     assert_eq!(conflicts[0].reason, "slot_taken");
     assert_eq!(conflicts[0].entity_id, A1);
     assert_eq!(conflicts[0].payload, json!({"id": A1}));
+    assert_eq!(
+        s.appointment_edit_sync(A1).unwrap(),
+        AppointmentEditSync::NeedsResolution
+    );
+    s.resolve_conflict(&a.mutation_id, "drop").unwrap();
+    assert_eq!(
+        s.appointment_edit_sync(A1).unwrap(),
+        AppointmentEditSync::Settled
+    );
 }
 
 #[test]
@@ -331,7 +585,7 @@ fn results_out_of_order_or_short_are_a_protocol_error_and_change_nothing() {
 }
 
 #[test]
-fn later_rejections_for_an_entity_with_an_open_conflict_do_not_pile_up() {
+fn distinct_rejected_edits_survive_and_replaying_a_rejection_does_not_duplicate_it() {
     let mut s = Store::open_in_memory().unwrap();
     let create = s
         .enqueue("appointment.create", A1, json!({"id": A1}))
@@ -351,9 +605,12 @@ fn later_rejections_for_an_entity_with_an_open_conflict_do_not_pile_up() {
         &[rej(&create, "slot_taken"), rej(&cancel, "not_found")],
     )
     .unwrap();
+    s.apply_push_results(std::slice::from_ref(&cancel), &[rej(&cancel, "not_found")])
+        .unwrap();
     let c = s.conflicts().unwrap();
-    assert_eq!(c.len(), 1);
+    assert_eq!(c.len(), 2);
     assert_eq!(c[0].reason, "slot_taken");
+    assert_eq!(c[1].payload, json!({"id": A1, "version": 2}));
 }
 
 #[test]
@@ -391,12 +648,14 @@ fn failures_are_counted_on_the_queued_mutation() {
 fn resetting_the_replica_drops_the_mirror_and_cursor_but_keeps_the_outbox() {
     let mut s = Store::open_in_memory().unwrap();
     s.apply_page(&[appt_change(1, A1, 1)], 40).unwrap();
+    s.apply_catalog_colors(&CatalogColors::new(), None).unwrap();
     s.enqueue("client.create", "c1", json!({"id": "c1"}))
         .unwrap();
     let dev = s.device_id().unwrap();
     s.reset_replica().unwrap();
     assert_eq!(s.cursor().unwrap(), 0);
     assert!(s.appointment(A1).unwrap().is_none());
+    assert!(s.get_meta(CATALOG_COLORS_CACHED).unwrap().is_none());
     assert_eq!(s.outbox_len().unwrap(), 1);
     assert_eq!(s.device_id().unwrap(), dev);
 }

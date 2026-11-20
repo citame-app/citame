@@ -11,12 +11,14 @@ import type { Tx } from "../../tx";
 import {
   createResourceCalendar,
   createResourceCapacityCalendar,
+  hasMixedCapacityConflict,
   type OccupiedUnit,
   type ResourceWindow,
   repackResourceUnits,
 } from "./plan";
 
 type Connection = Database | Tx;
+export const IMPORTED_RESOURCE_UNIT_START = 20;
 export type TimedService = {
   id: string;
   durationMinutes: number;
@@ -31,6 +33,7 @@ type Window = {
   endOffset: number;
   quantity: number;
   name: string;
+  alternative: boolean;
 };
 type Group = { pool: Pool; windows: Window[] };
 const unavailable = () =>
@@ -69,12 +72,68 @@ async function requirements(
         endOffset,
         quantity: row.link.quantity,
         name: row.pool.name,
+        alternative: row.link.alternative,
       });
       groups.set(row.pool.id, group);
     }
     offset = endOffset;
   }
   return [...groups.values()].sort((a, b) => a.pool.id.localeCompare(b.pool.id));
+}
+
+/** Service windows are sequential. Each alternative window needs a single eligible pool. */
+function selectPools(
+  groups: Group[],
+  accepts: (pool: Pool, window: Window) => boolean,
+): Group[] | null {
+  const alternatives = new Set<number>();
+  const selected = new Set<number>();
+  const result: Group[] = [];
+  for (const { pool, windows } of groups) {
+    const chosen: Window[] = [];
+    for (const window of windows) {
+      if (window.alternative) {
+        alternatives.add(window.position);
+        if (selected.has(window.position) || !pool.active || !accepts(pool, window)) continue;
+        selected.add(window.position);
+      } else if (!pool.active || !accepts(pool, window)) {
+        return null;
+      }
+      chosen.push(window);
+    }
+    if (chosen.length) result.push({ pool, windows: chosen });
+  }
+  return alternatives.size === selected.size ? result : null;
+}
+
+async function frozenRequirements(db: Connection, appointmentId: string): Promise<Group[]> {
+  const rows = await db
+    .select({ row: resourceReservation, pool: resourcePool })
+    .from(resourceReservation)
+    .innerJoin(resourcePool, eq(resourcePool.id, resourceReservation.resourceId))
+    .where(
+      and(
+        eq(resourceReservation.appointmentId, appointmentId),
+        eq(resourceReservation.active, true),
+      ),
+    );
+  const groups = new Map<string, Group>();
+  for (const { row, pool } of rows) {
+    const group = groups.get(pool.id) ?? { pool, windows: [] };
+    const samePosition = group.windows.find((window) => window.position === row.servicePosition);
+    if (samePosition) samePosition.quantity++;
+    else
+      group.windows.push({
+        position: row.servicePosition,
+        offset: row.offsetMinutes,
+        endOffset: row.endOffsetMinutes,
+        quantity: 1,
+        name: row.name,
+        alternative: false,
+      });
+    groups.set(pool.id, group);
+  }
+  return [...groups.values()];
 }
 function absolute(windows: Window[], start: number): ResourceWindow[] {
   return windows.map((w) => ({
@@ -122,6 +181,17 @@ const busy = (rows: Awaited<ReturnType<typeof occupied>>, id: string): OccupiedU
       start: row.startsAt.getTime(),
       end: row.endsAt.getTime(),
     }));
+
+function availableUnits(capacity: number, windows: ResourceWindow[], occupied: OccupiedUnit[]) {
+  const regular = occupied.filter((row) => row.unitIndex < IMPORTED_RESOURCE_UNIT_START);
+  if (
+    regular.length < occupied.length &&
+    !createResourceCapacityCalendar(capacity, occupied)?.(windows)
+  )
+    return null;
+  return createResourceCalendar(capacity, regular)?.(windows) ?? null;
+}
+
 /** Requires the salon scheduling lock; clears expired offer units without locking their queue entries. */
 export async function releaseExpiredResourceOffers(tx: Tx, ids: string[], now: Date) {
   if (!ids.length) return;
@@ -144,10 +214,10 @@ export async function filterResourceAvailability<T extends { startsAt: Date; end
   excludeAppointmentId?: string,
 ): Promise<T[]> {
   if (!slots.length) return slots;
-  const groups = await requirements(db, services);
+  const groups = excludeAppointmentId
+    ? await frozenRequirements(db, excludeAppointmentId)
+    : await requirements(db, services);
   if (!groups.length) return slots;
-  if (groups.some((g) => !g.pool.active || g.windows.some((w) => w.quantity > g.pool.capacity)))
-    return [];
   const from = new Date(slots.reduce((n, s) => Math.min(n, s.startsAt.getTime()), Infinity));
   const to = new Date(slots.reduce((n, s) => Math.max(n, s.endsAt.getTime()), -Infinity));
   const rows = await occupied(
@@ -158,13 +228,25 @@ export async function filterResourceAvailability<T extends { startsAt: Date; end
     now,
     excludeAppointmentId,
   );
-  const calendars = groups.map((g) => ({
-    group: g,
-    calendar: createResourceCapacityCalendar(g.pool.capacity, busy(rows, g.pool.id)),
-  }));
+  const calendars = new Map(
+    groups.map(({ pool }) => [
+      pool.id,
+      createResourceCapacityCalendar(pool.capacity, busy(rows, pool.id)),
+    ]),
+  );
+  if (groups.every(({ windows }) => windows.every((window) => !window.alternative)))
+    return slots.filter((slot) =>
+      groups.every(({ pool, windows }) =>
+        Boolean(
+          pool.active && calendars.get(pool.id)?.(absolute(windows, slot.startsAt.getTime())),
+        ),
+      ),
+    );
   return slots.filter((slot) =>
-    calendars.every(({ group, calendar }) =>
-      Boolean(calendar?.(absolute(group.windows, slot.startsAt.getTime()))),
+    Boolean(
+      selectPools(groups, (pool, window) =>
+        Boolean(calendars.get(pool.id)?.(absolute([window], slot.startsAt.getTime()))),
+      ),
     ),
   );
 }
@@ -190,22 +272,29 @@ export async function reserveResources(
     owner.endsAt,
     now,
   );
+  const occupancy = new Map(groups.map(({ pool }) => [pool.id, busy(rows, pool.id)]));
+  const selected = selectPools(groups, (pool, window) => {
+    if (!window.alternative) return true;
+    const required = absolute([window], owner.startsAt.getTime());
+    const existing = occupancy.get(pool.id) ?? [];
+    return Boolean(
+      owner.startsAt >= now || options.repackRaw
+        ? createResourceCapacityCalendar(pool.capacity, existing)?.(required)
+        : availableUnits(pool.capacity, required, existing),
+    );
+  });
+  if (!selected) throw unavailable();
   const values: (typeof resourceReservation.$inferInsert)[] = [];
   const repack: string[] = [];
-  for (const group of groups) {
-    if (!group.pool.active) throw unavailable();
-    let plan = createResourceCalendar(
-      group.pool.capacity,
-      busy(rows, group.pool.id),
-    )?.(absolute(group.windows, owner.startsAt.getTime()));
+  for (const group of selected) {
+    const windows = absolute(group.windows, owner.startsAt.getTime());
+    const busyUnits = occupancy.get(group.pool.id) ?? [];
+    let plan = availableUnits(group.pool.capacity, windows, busyUnits);
     if (
       options.repackRaw ||
       (!plan &&
         owner.startsAt >= now &&
-        createResourceCapacityCalendar(
-          group.pool.capacity,
-          busy(rows, group.pool.id),
-        )?.(absolute(group.windows, owner.startsAt.getTime())))
+        createResourceCapacityCalendar(group.pool.capacity, busyUnits)?.(windows))
     ) {
       plan = group.windows.flatMap((w) =>
         Array.from({ length: w.quantity }, (_, unitIndex) => ({ position: w.position, unitIndex })),
@@ -289,14 +378,13 @@ export async function reassignAppointmentResources(tx: Tx, id: string, now: Date
       group.quantity++;
       grouped.set(row.servicePosition, group);
     }
-    let plan = createResourceCalendar(
-      pool.capacity,
-      busy(rows, resourceId),
-    )?.([...grouped.values()]);
+    const windows = [...grouped.values()];
+    const busyUnits = busy(rows, resourceId);
+    let plan = availableUnits(pool.capacity, windows, busyUnits);
     if (
       !plan &&
       from >= now &&
-      createResourceCapacityCalendar(pool.capacity, busy(rows, resourceId))?.([...grouped.values()])
+      createResourceCapacityCalendar(pool.capacity, busyUnits)?.(windows)
     ) {
       plan = [...grouped.values()].flatMap((w) =>
         Array.from({ length: w.quantity }, (_, unitIndex) => ({ position: w.position, unitIndex })),
@@ -376,7 +464,20 @@ export async function repackFutureResources(
     const pool = pools.find((p) => p.id === resourceId);
     if (!pool) throw unavailable();
     const capacity = options.capacities?.get(resourceId) ?? pool.capacity;
-    const own = rows.filter((r) => r.resourceId === resourceId);
+    const active = rows.filter((r) => r.resourceId === resourceId);
+    const own = active.filter((r) => r.unitIndex < IMPORTED_RESOURCE_UNIT_START);
+    if (
+      own.length < active.length &&
+      hasMixedCapacityConflict(
+        capacity,
+        active.map((row) => ({
+          start: Math.max(row.startsAt.getTime(), now.getTime()),
+          end: row.endsAt.getTime(),
+          historical: row.unitIndex >= IMPORTED_RESOURCE_UNIT_START,
+        })),
+      )
+    )
+      throw unavailable();
     const fixed = own.filter((r) => r.startsAt <= now && !flexible.has(r.id));
     const future = own.filter((r) => r.startsAt > now || flexible.has(r.id));
     const assignment = repackResourceUnits(

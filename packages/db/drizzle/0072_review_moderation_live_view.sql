@@ -1,0 +1,3 @@
+CREATE CONSTRAINT TRIGGER sync_review_revision AFTER UPDATE ON review
+DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.version IS DISTINCT FROM NEW.version)
+EXECUTE FUNCTION sync_record_live_view('review_requests');

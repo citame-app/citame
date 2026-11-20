@@ -3,8 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Button } from "~/components/ui/button";
 import { ErrorState, Skeleton } from "~/components/ui/states";
 import { useI18n } from "~/i18n/react";
-import { api } from "~/lib/api/instance";
 import { formatDuration, formatMoney } from "~/lib/format";
+import { publicCombinationsQuery } from "~/lib/queries";
 import { normalizeCatalogSelection } from "./catalog-selection";
 import { bookingTotals, eligibleStaff } from "./logic";
 export function combinationAvailable(ids: string[], catalog: Service[], staff: Staff[]) {
@@ -27,11 +27,7 @@ export function CombinationChoices({
   onChange: (ids: string[]) => void;
 }) {
   const { t, locale } = useI18n();
-  const query = useQuery({
-    queryKey: ["combinations", "public"],
-    queryFn: () => api().combinations.list(),
-    staleTime: 30000,
-  });
+  const query = useQuery(publicCombinationsQuery);
   if (query.isPending) return <Skeleton className="h-20" />;
   if (query.isError) return <ErrorState error={query.error} onRetry={() => void query.refetch()} />;
   const combinations = query.data.combinations.filter(

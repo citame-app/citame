@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { clientPhotoUploadSchema } from "./client-photos";
 import { idSchema, instantSchema, LIMITS } from "./common";
 import { staffAccessPresetSchema } from "./permissions";
 
@@ -6,6 +7,7 @@ export const staffSchema = z.object({
   id: idSchema,
   displayName: z.string().min(1),
   serviceIds: z.array(idSchema),
+  portraitVersion: idSchema.optional(),
 });
 
 export type Staff = z.infer<typeof staffSchema>;
@@ -22,11 +24,30 @@ export const adminStaffSchema = z.object({
   userId: z.string().nullable(),
   accessPreset: staffAccessPresetSchema.optional(),
   accessVersion: z.number().int().positive().optional(),
+  portraitVersion: idSchema.optional(),
+  portraitPublished: z.boolean().optional(),
+  portraitAbsenceVersion: idSchema.optional(),
   serviceIds: z.array(idSchema),
 });
 export type AdminStaff = z.infer<typeof adminStaffSchema>;
 
-export const listAdminStaffResponseSchema = z.object({ staff: z.array(adminStaffSchema) });
+export const listAdminStaffResponseSchema = z.object({
+  staff: z.array(adminStaffSchema),
+  canEditPortraits: z.boolean().optional(),
+});
+
+export const staffPortraitInputSchema = z.strictObject({
+  /** The image version, or the absence version from the admin directory. */
+  version: idSchema.nullable(),
+  imageBase64: clientPhotoUploadSchema.shape.imageBase64.nullable(),
+});
+export type StaffPortraitInput = z.infer<typeof staffPortraitInputSchema>;
+export const staffPortraitPublicationSchema = z.strictObject({
+  version: idSchema,
+  published: z.boolean(),
+});
+export type StaffPortraitPublication = z.infer<typeof staffPortraitPublicationSchema>;
+export const staffPortraitResultSchema = z.object({ version: idSchema.nullable() });
 export type ListAdminStaffResponse = z.infer<typeof listAdminStaffResponseSchema>;
 
 export const updateStaffRequestSchema = z
@@ -51,12 +72,17 @@ export const workingRangeSchema = z.object({
 });
 export type WorkingRange = z.infer<typeof workingRangeSchema>;
 
+const weeklyHoursRevisionSchema = z.string().regex(/^[a-f0-9]{64}$/);
+
 /**
  * Replaces the staff member's whole weekly schedule. Weekdays that are not mentioned become
  * days off. Several ranges per weekday are fine (a lunch break); they may touch but not overlap.
  */
 export const setWorkingHoursRequestSchema = z
-  .object({ hours: z.array(workingRangeSchema).max(7 * 8) })
+  .object({
+    hours: z.array(workingRangeSchema).max(7 * 8),
+    expectedRevision: weeklyHoursRevisionSchema.optional(),
+  })
   .superRefine((value, ctx) => {
     value.hours.forEach((range, index) => {
       if (range.startTime >= range.endTime) {
@@ -105,6 +131,7 @@ export type ScheduleConflict = z.infer<typeof scheduleConflictSchema>;
 export const workingHoursResponseSchema = z.object({
   staffId: idSchema,
   hours: z.array(workingRangeSchema),
+  revision: weeklyHoursRevisionSchema.optional(),
   conflicts: z.array(scheduleConflictSchema),
 });
 export type WorkingHoursResponse = z.infer<typeof workingHoursResponseSchema>;

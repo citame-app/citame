@@ -61,6 +61,7 @@ fn http(status: &str, headers: &[&str], body: &str) -> String {
 fn signed_in(base: &str) -> HttpTransport {
     let session: SessionHandle = Arc::new(RwLock::new(Some(Session {
         cookie: "better-auth.session_token=tok%3D".into(),
+        oauth: None,
         user_id: "u".into(),
         name: "n".into(),
         email: "e".into(),
@@ -69,8 +70,289 @@ fn signed_in(base: &str) -> HttpTransport {
     HttpTransport::new(base, session, Arc::new(BetterAuthSession::new(base)))
 }
 
+#[test]
+fn report_transport_reads_the_filtered_summary_and_exports_safe_csv() {
+    let counts = serde_json::json!({"booked": 1, "completed": 0, "cancelled": 0, "no_show": 0});
+    let slice = serde_json::json!({"appointments": 1, "revenueCents": 0, "byStatus": counts});
+    let response = serde_json::json!({
+        "from": "2026-11-18", "to": "2026-11-18", "currency": "EUR", "currencies": ["EUR"],
+        "totals": slice, "series": [], "perStaff": [], "topServices": [],
+        "appointmentBreakdown": {"hour": [], "category": [], "addon": [], "service": [
+            {"label": "=1,2", "appointments": 1, "byStatus": counts}
+        ]},
+    });
+    let (base, seen) = serve(vec![http("200 OK", &[], &response.to_string())]);
+    let query = ReportQuery {
+        from: "2026-11-18".parse().unwrap(),
+        to: "2026-11-18".parse().unwrap(),
+        staff_id: Some("aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa".into()),
+        currency: Some("EUR".into()),
+    };
+    let report = signed_in(&base).report_summary(&query).unwrap();
+    assert_eq!(report.totals.appointments, 1);
+    assert!(!report.can_report_clients);
+    assert!(report.to_csv().contains("service,\"'=1,2\",1,1,0,0,0\r\n"));
+    let seen = seen.lock().unwrap();
+    assert!(seen[0].starts_with(concat!(
+        "GET /admin/reports/summary?from=2026-11-18&to=2026-11-18",
+        "&staffId=aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa&currency=EUR "
+    )));
+    assert!(
+        seen[0]
+            .to_lowercase()
+            .contains("cookie: better-auth.session_token=tok%3d")
+    );
+}
+
+#[test]
+fn report_csv_distinguishes_unknown_amounts_from_free_services() {
+    let report: crate::reports::ReportSummary = serde_json::from_value(serde_json::json!({
+        "from": "2026-11-18", "to": "2026-11-18", "currency": "EUR",
+        "totals": {"appointments": 1, "revenueCents": 0, "unpricedServices": 1,
+            "byStatus": {"booked": 0, "completed": 1, "cancelled": 0, "no_show": 0}},
+        "series": [], "perStaff": [],
+        "topServices": [
+            {"name": "Pending care", "count": 1, "revenueCents": 0, "unpricedServices": 1},
+            {"name": "Free care", "count": 1, "revenueCents": 0}
+        ],
+    }))
+    .unwrap();
+    assert_eq!(report.totals.unpriced_services, 1);
+    assert!(report.to_csv().contains(concat!(
+        "service,completed,revenue,currency,unpriced_services\r\n",
+        "Pending care,1,0.00,EUR,1\r\n",
+        "Free care,1,0.00,EUR,0\r\n",
+    )));
+}
+
+#[test]
+fn client_reports_use_the_professional_and_dates_without_currency() {
+    let (base, seen) = serve(vec![http(
+        "200 OK",
+        &["Content-Type: application/json"],
+        r#"{"from":"2026-11-18","to":"2026-11-20","totals":{"newClients":2,"returningClients":3},"rows":[{"date":"2026-11-19","newClients":2,"returningClients":3}]}"#,
+    )]);
+    let report = signed_in(&base)
+        .report_clients(&ReportQuery {
+            from: "2026-11-18".parse().unwrap(),
+            to: "2026-11-20".parse().unwrap(),
+            staff_id: Some("aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa".into()),
+            currency: Some("EUR".into()),
+        })
+        .unwrap();
+    assert_eq!(report.totals.returning_clients, 3);
+    assert_eq!(
+        report.to_csv(),
+        "date,new_clients,returning_clients\r\n2026-11-19,2,3\r\n"
+    );
+    assert!(seen.lock().unwrap()[0].starts_with(concat!(
+        "GET /admin/reports/clients?from=2026-11-18&to=2026-11-20",
+        "&staffId=aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa "
+    )));
+}
+
+#[test]
+fn outcome_lists_are_paged_and_the_export_stream_uses_the_same_filters() {
+    let (base, seen) = serve(vec![
+        http(
+            "200 OK",
+            &["Content-Type: application/json"],
+            r#"{"timezone":"Europe/Madrid","total":28,"page":2,"pageSize":25,"rows":[{"startsAt":"2026-11-19T11:42:00.000031Z","client":null,"staff":"Ada","services":["Haircut"]}]}"#,
+        ),
+        http(
+            "200 OK",
+            &["Content-Type: text/csv; charset=utf-8"],
+            "status\r\nno_show\r\n",
+        ),
+        http(
+            "403 Forbidden",
+            &["Content-Type: application/json"],
+            r#"{"error":{}}"#,
+        ),
+    ]);
+    let query = ReportQuery {
+        from: "2026-11-18".parse().unwrap(),
+        to: "2026-11-20".parse().unwrap(),
+        staff_id: None,
+        currency: Some("EUR".into()),
+    };
+    let transport = signed_in(&base);
+    let page = transport
+        .report_outcomes(&query, Outcome::NoShow, 2)
+        .unwrap();
+    assert_eq!((page.total, page.page, page.page_size), (28, 2, 25));
+    assert_eq!(page.rows[0].starts_at.timestamp_subsec_micros(), 31);
+    assert!(page.rows[0].client.is_none());
+    let mut output = Vec::new();
+    transport
+        .write_report_outcomes_csv(&query, Outcome::NoShow, &mut output)
+        .unwrap();
+    assert_eq!(output, b"status\r\nno_show\r\n");
+    assert!(matches!(
+        transport.write_report_outcomes_csv(&query, Outcome::Cancelled, &mut output),
+        Err(TransportError::Forbidden(_))
+    ));
+    assert_eq!(output, b"status\r\nno_show\r\n");
+    let seen = seen.lock().unwrap();
+    assert!(seen[0].starts_with(concat!(
+        "GET /admin/reports/outcomes?",
+        "from=2026-11-18&to=2026-11-20&currency=EUR&status=no_show&page=2 "
+    )));
+    assert!(seen[1].starts_with(concat!(
+        "GET /admin/reports/outcomes/export?",
+        "from=2026-11-18&to=2026-11-20&currency=EUR&status=no_show "
+    )));
+}
+
+#[test]
+fn price_review_reads_the_version_and_sends_exact_prices_to_the_guarded_endpoint() {
+    use crate::billing::ReviewedServicePrice;
+    let id = "01a1d81f-2231-75bd-ba65-bc41f42803e9";
+    let (base, seen) = serve(vec![
+        http(
+            "200 OK",
+            &[],
+            &serde_json::json!({"appointmentVersion": 4, "lines": [{"id": id, "name": "Haircut"}]})
+                .to_string(),
+        ),
+        http("200 OK", &[], r#"{ "ok": true }"#),
+    ]);
+    let transport = signed_in(&base);
+    let preview = transport.imported_price_preview(id).unwrap();
+    assert_eq!(preview.appointment_version, 4);
+    transport
+        .review_imported_price(
+            id,
+            &ImportedPriceReview {
+                appointment_version: preview.appointment_version,
+                reference: "Checked fixture quote".into(),
+                lines: vec![ReviewedServicePrice {
+                    id: preview.lines[0].id.clone(),
+                    amount_cents: 3650,
+                }],
+            },
+        )
+        .unwrap();
+    let seen = seen.lock().unwrap();
+    let path = format!("/admin/commerce/appointments/{id}/imported-price");
+    assert!(seen[0].starts_with(&format!("GET {path} ")));
+    assert!(seen[1].starts_with(&format!("PUT {path} ")));
+    assert!(
+        seen[1]
+            .to_lowercase()
+            .contains("cookie: better-auth.session_token=tok%3d")
+    );
+    let body: serde_json::Value =
+        serde_json::from_str(seen[1].split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(body["lines"][0]["amountCents"], 3650);
+    assert_eq!(body["appointmentVersion"], 4);
+}
+
+#[test]
+fn checkout_retries_the_exact_cash_registration_when_a_response_is_lost() {
+    use serde_json::{Value, json};
+
+    let appointment = "01a1d81f-2231-75bd-ba65-bc41f42803e9";
+    let id = "01a1d81f-2231-75bd-ba65-bc41f4280300";
+    let balance = ExternalBalance {
+        paid_in_booksy_cents: 3500,
+        due_in_citame_cents: 6500,
+    };
+    let open = json!({
+        "id": id, "appointmentId": appointment, "currency": "EUR", "status": "open",
+        "totalCents": 6500, "discountCents": 0, "paidCents": 0, "balanceCents": 6500, "externalBalance": balance,
+        "payments": [],
+    });
+    let payment = json!({"method":"cash", "amountCents": 6500, "status":"succeeded"});
+    let mut paid = open.clone();
+    paid["status"] = json!("paid");
+    paid["paidCents"] = json!(6500);
+    paid["balanceCents"] = json!(0);
+    paid["payments"] = json!([payment.clone()]);
+    let (base, seen) = serve(vec![
+        http("201 Created", &[], &open.to_string()),
+        http("503 Service Unavailable", &[], ""),
+        http(
+            "201 Created",
+            &[],
+            &json!({ "payment": payment }).to_string(),
+        ),
+        http("200 OK", &[], &paid.to_string()),
+    ]);
+
+    let transport = signed_in(&base);
+    let checkout = transport
+        .open_appointment_checkout(appointment, Some(balance))
+        .unwrap();
+    let attempt = PaymentAttempt::new(ManualTender::Cash, 6500);
+    assert!(
+        transport
+            .record_appointment_payment(&checkout, attempt)
+            .is_err()
+    );
+    let recorded = transport
+        .record_appointment_payment(&checkout, attempt)
+        .unwrap();
+    assert_eq!(recorded.paid_cents, 6500);
+    assert_eq!(recorded.collectible_cents(), 0);
+
+    let requests = seen.lock().unwrap();
+    let body = |index: usize| -> Value {
+        serde_json::from_str(requests[index].split_once("\r\n\r\n").unwrap().1).unwrap()
+    };
+    assert!(body(0).get("useClientDiscount").is_none());
+    assert_eq!(body(1), body(2));
+    assert_eq!(body(2)["amountCents"], 6500);
+    assert_eq!(body(2)["method"], "cash");
+    assert!(requests[3].starts_with(&format!("GET /admin/commerce/checkouts/{id} ")));
+}
+
+#[test]
+fn appointment_checkout_uses_the_server_payable_limit_and_blocks_unresolved_payments() {
+    use crate::billing::{ManualTender, PaymentAttempt};
+    use serde_json::{Value, json};
+
+    let appointment = "01a1d81f-2231-75bd-ba65-bc41f42803e9";
+    let id = "01a1d81f-2231-75bd-ba65-bc41f4280300";
+    let open = json!({
+        "id": id, "appointmentId": appointment, "currency": "EUR", "status": "open",
+        "totalCents": 9000, "discountCents": 1000, "paidCents": 1000,
+        "balanceCents": 8000, "payableCents": 1500, "payments": [],
+    });
+    let mut pending = open.clone();
+    pending["payments"] = json!([{ "status": "reconciliation" }]);
+    let (base, seen) = serve(vec![
+        http("201 Created", &[], &open.to_string()),
+        http("201 Created", &[], &pending.to_string()),
+    ]);
+    let transport = signed_in(&base);
+    let checkout = transport
+        .open_appointment_checkout(appointment, None)
+        .unwrap();
+    assert_eq!(checkout.collectible_cents(), 1500);
+    assert!(matches!(
+        transport
+            .record_appointment_payment(&checkout, PaymentAttempt::new(ManualTender::Cash, 1501)),
+        Err(TransportError::BadRequest(_))
+    ));
+    let checkout = transport
+        .open_appointment_checkout(appointment, None)
+        .unwrap();
+    assert_eq!(checkout.collectible_cents(), 0);
+    assert!(
+        transport
+            .record_appointment_payment(&checkout, PaymentAttempt::new(ManualTender::Cash, 1000))
+            .is_err()
+    );
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    let body: Value = serde_json::from_str(requests[0].split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(body["useClientDiscount"], true);
+}
+
 fn req() -> PushRequest {
     PushRequest {
+        generation: None,
         device_id: "dev-1".into(),
         mutations: vec![WireMutation {
             mutation_id: "01a1d81f-2231-75bd-ba65-bc41f42803e9".into(),
@@ -126,7 +408,65 @@ fn pull_sends_cursor_and_limit_and_parses_the_page() {
     let p = signed_in(&base).pull(2, 200).unwrap();
     assert_eq!((p.next_cursor, p.has_more, p.head_seq), (3, true, 9));
     assert_eq!(p.changes[0].op, "delete");
-    assert!(seen.lock().unwrap()[0].starts_with("GET /sync/pull?since=2&limit=200 HTTP/1.1"));
+    assert!(
+        seen.lock().unwrap()[0]
+            .starts_with("GET /sync/pull?since=2&limit=200&reviewRequests=1 HTTP/1.1")
+    );
+}
+
+#[test]
+fn an_upgraded_replica_recovers_service_colors_without_rewinding_its_cursor() {
+    use crate::store::Store;
+    use crate::sync::pull_all;
+    use serde_json::json;
+
+    let mut store = Store::open_in_memory().unwrap();
+    store
+        .apply_page(
+            &[RawChange {
+                seq: 1,
+                entity: "service".into(),
+                id: "s1".into(),
+                op: "upsert".into(),
+                data: Some(json!({
+                    "id": "s1", "name": "Haircut", "durationMinutes": 45,
+                    "bufferMinutes": 0, "priceCents": 100, "currency": "EUR",
+                    "active": true, "updatedAt": "2026-03-01T10:00:00.000Z",
+                    "quoteHash": "a".repeat(64)
+                })),
+            }],
+            42,
+        )
+        .unwrap();
+    let pending = store
+        .enqueue("client.create", "local", json!({"id":"local","name":"Ana"}))
+        .unwrap();
+    let page = r#"{"changes":[],"nextCursor":42,"hasMore":false,"headSeq":42}"#;
+    let repaired = r##"{"changes":[],"nextCursor":42,"hasMore":false,"headSeq":42,"catalogColors":{"s1":"#AC3456"}}"##;
+    let (base, seen) = serve(
+        [page, repaired, page]
+            .map(|body| http("200 OK", &["Content-Type: application/json"], body))
+            .to_vec(),
+    );
+    let transport = signed_in(&base);
+    assert_eq!(pull_all(&mut store, &transport).unwrap().cursor, 42);
+    assert_eq!(store.services().unwrap()[0].color, None);
+    assert_eq!(pull_all(&mut store, &transport).unwrap().cursor, 42);
+    let service = store.services().unwrap().remove(0);
+    assert_eq!(service.name, "Haircut");
+    assert_eq!(service.color.as_deref(), Some("#AC3456"));
+    assert_eq!(store.outbox(1).unwrap()[0].mutation_id, pending.mutation_id);
+    pull_all(&mut store, &transport).unwrap();
+    let requests = seen.lock().unwrap();
+    assert!(
+        requests[0]
+            .starts_with("GET /sync/pull?since=42&limit=200&catalogColors=1&reviewRequests=1 ")
+    );
+    assert!(
+        requests[1]
+            .starts_with("GET /sync/pull?since=42&limit=200&catalogColors=1&reviewRequests=1 ")
+    );
+    assert!(requests[2].starts_with("GET /sync/pull?since=42&limit=200&reviewRequests=1 "));
 }
 
 fn status_of(code: &str, headers: &[&str], body: &str, pull: bool) -> TransportError {
@@ -200,6 +540,15 @@ fn classify_is_pure() {
     assert_eq!(
         classify_status(429, Some("Wed, 21 Oct 2026 07:28:00 GMT"), "", true),
         TransportError::RateLimited(None)
+    );
+    assert_eq!(
+        classify_status(
+            409,
+            None,
+            r#"{"error":{"code":"sync_generation_changed"}}"#,
+            false
+        ),
+        TransportError::ReplicaGenerationChanged
     );
 }
 
@@ -302,17 +651,28 @@ fn sign_in_failures_are_distinguished() {
 fn validate_asks_the_server_whether_the_session_is_alive() {
     let s = Session {
         cookie: "better-auth.session_token=a".into(),
+        oauth: None,
         user_id: "u".into(),
         name: "n".into(),
         email: "e".into(),
         role: "owner".into(),
     };
     let (base, seen) = serve(vec![
-        http("200 OK", &[], r#"{"role":"owner"}"#),
+        http(
+            "200 OK",
+            &[],
+            r#"{"user":{"id":"u","name":"n","email":"e","role":"owner"}}"#,
+        ),
+        http(
+            "200 OK",
+            &[],
+            r#"{"user":{"id":"u","name":"n","email":"e","role":"staff"}}"#,
+        ),
         http("401 Unauthorized", &[], "{}"),
     ]);
     let a = BetterAuthSession::new(&base);
     assert_eq!(a.validate(&s), Ok(true));
+    assert_eq!(a.validate(&s), Ok(false));
     assert_eq!(a.validate(&s), Ok(false));
     assert!(seen.lock().unwrap()[0].starts_with("GET /me HTTP/1.1"));
 }
@@ -368,11 +728,186 @@ fn the_listener_reconnects_after_the_stream_closes_and_wakes_the_runner() {
     let live = Arc::new(AtomicBool::new(false));
     let stop = Arc::new(AtomicBool::new(false));
     let h = spawn_stream_listener(t, tx, live.clone(), stop.clone());
-    let got: Vec<_> = (0..2)
+    let got: Vec<_> = (0..4)
         .map(|_| rx.recv_timeout(Duration::from_secs(10)).unwrap())
         .collect();
-    assert_eq!(got, vec![Wake::Nudge(5), Wake::Nudge(7)]);
+    assert_eq!(
+        got,
+        vec![Wake::Manual, Wake::Nudge(5), Wake::Manual, Wake::Nudge(7)]
+    );
     stop.store(true, Ordering::SeqCst);
     h.join().unwrap();
     assert!(!live.load(Ordering::SeqCst));
+}
+
+#[test]
+fn neither_credentials_nor_synced_data_follow_a_redirect_to_another_server() {
+    let target = TcpListener::bind("127.0.0.1:0").unwrap();
+    target.set_nonblocking(true).unwrap();
+    let location = format!(
+        "Location: http://{}/unexpected",
+        target.local_addr().unwrap()
+    );
+    let (origin, seen) = serve(vec![
+        http("307 Temporary Redirect", &[&location], ""),
+        http("307 Temporary Redirect", &[&location], ""),
+    ]);
+    let browser_session = Arc::new(BetterAuthSession::new(&origin));
+    let result = browser_session.sign_in(&Credentials {
+        email: "operator@local.test".into(),
+        password: "synthetic sign in".into(),
+    });
+    assert!(matches!(result, Err(crate::auth::AuthError::Unexpected(_))));
+    let handle = Arc::new(std::sync::RwLock::new(Some(Session {
+        cookie: "better-auth.session_token=synthetic".into(),
+        oauth: None,
+        user_id: "id".into(),
+        role: "owner".into(),
+        name: "Owner".into(),
+        email: "operator@local.test".into(),
+    })));
+    let transport = HttpTransport::new(&origin, handle, browser_session);
+    assert!(transport.pull(0, 20).is_err());
+    assert_eq!(seen.lock().unwrap().len(), 2);
+    assert_eq!(
+        target.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+#[test]
+fn concurrent_requests_share_one_rotated_desktop_token_and_save_it() {
+    let tokens = r#"{"access_token":"next","refresh_token":"next-refresh","expires_in":900}"#;
+    let page = r#"{"changes":[],"nextCursor":0,"hasMore":false,"headSeq":0}"#;
+    let (base, seen) = serve(vec![
+        http("200 OK", &[], tokens),
+        http("200 OK", &[], page),
+        http("200 OK", &[], page),
+    ]);
+    let expired: Session = serde_json::from_value(serde_json::json!({
+        "oauth": {"access_token": "old", "refresh_token": "old-refresh", "expires_at": 0},
+        "user_id": "u", "name": "Owner", "email": "owner@example.com", "role": "owner"
+    }))
+    .unwrap();
+    let state = Arc::new(RwLock::new(Some(expired)));
+    let saved = Arc::new(crate::auth::MemoryTokenStore::default());
+    let t = Arc::new(
+        HttpTransport::new(
+            &base,
+            state.clone(),
+            Arc::new(BetterAuthSession::new(&base)),
+        )
+        .with_token_store(saved.clone()),
+    );
+    std::thread::scope(|scope| {
+        let parallel = t.clone();
+        let first = scope.spawn(move || parallel.pull(0, 20).unwrap());
+        let second = t.pull(0, 20).unwrap();
+        assert_eq!(first.join().unwrap(), second);
+    });
+    assert_eq!(saved.load().unwrap(), state.read().unwrap().clone());
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert!(requests[0].starts_with("POST /api/auth/oauth2/token"));
+    assert!(requests[0].contains("refresh_token=old-refresh"));
+    for req in &requests[1..] {
+        assert!(
+            req.to_ascii_lowercase()
+                .contains("authorization: bearer next")
+        );
+        assert!(!req.to_ascii_lowercase().contains("cookie:"));
+    }
+}
+
+#[test]
+fn a_replica_for_an_old_role_does_not_accept_the_new_roles_snapshot() {
+    let (base, _) = serve(vec![http(
+        "200 OK",
+        &[],
+        r#"{"changes":[],"nextCursor":3,"hasMore":false,"headSeq":3,"viewerRole":"staff"}"#,
+    )]);
+    assert_eq!(
+        signed_in(&base).pull(0, 20),
+        Err(TransportError::Unauthorized)
+    );
+}
+
+#[test]
+fn staff_portrait_transport_loads_authorized_directory_and_fences_writes() {
+    let id = "01a1d81f-2231-75bd-ba65-bc41f42803e9";
+    let version = "01a1d81f-2231-75bd-ba65-bc41f4280300";
+    let absence = "01a1d81f-2231-75bd-ba65-bc41f4280311";
+    let staff = serde_json::json!({"canEditPortraits": true, "staff": [{
+        "id": id, "displayName": "Example", "active": true, "portraitVersion": version
+    }]});
+    let after_removal = serde_json::json!({"canEditPortraits": true, "staff": [{
+        "id": id, "displayName": "Example", "active": true, "portraitAbsenceVersion": absence
+    }]});
+    let (base, seen) = serve(vec![
+        http("200 OK", &[], &staff.to_string()),
+        http("404 Not Found", &[], ""),
+        http(
+            "409 Conflict",
+            &[],
+            r#"{"error":{"code":"version_conflict"}}"#,
+        ),
+        http("200 OK", &[], r#"{"version":null}"#),
+        http("200 OK", &[], &after_removal.to_string()),
+        http("200 OK", &[], &staff.to_string()),
+    ]);
+    let transport = signed_in(&base);
+    let directory = transport.portrait_directory().unwrap();
+    assert!(directory.can_edit);
+    assert!(!directory.staff[0].portrait_published);
+    assert_eq!(directory.staff[0].upload_version(), Some(version));
+    assert!(transport.staff_portrait(id, version).is_err());
+    assert!(
+        transport
+            .set_staff_portrait(
+                id,
+                PortraitUpdate::Publish {
+                    version: version.into(),
+                    published: true,
+                }
+            )
+            .is_err()
+    );
+    transport
+        .set_staff_portrait(
+            id,
+            PortraitUpdate::Remove {
+                version: version.into(),
+            },
+        )
+        .unwrap();
+    let directory = transport.portrait_directory().unwrap();
+    assert!(directory.staff[0].portrait_version.is_none());
+    transport
+        .set_staff_portrait(
+            id,
+            PortraitUpdate::Upload {
+                version: directory.staff[0].upload_version().map(str::to_owned),
+                jpeg: vec![255, 216, 255],
+            },
+        )
+        .unwrap();
+
+    let requests = seen.lock().unwrap();
+    let body = |index: usize| -> serde_json::Value {
+        serde_json::from_str(requests[index].split_once("\r\n\r\n").unwrap().1).unwrap()
+    };
+    assert!(requests[1].starts_with(&format!("GET /admin/staff/{id}/portrait?v={version} ")));
+    assert!(requests[2].starts_with(&format!("PUT /admin/staff/{id}/portrait/publication ")));
+    assert_eq!(
+        body(2),
+        serde_json::json!({"version":version,"published":true})
+    );
+    assert_eq!(
+        body(3),
+        serde_json::json!({"version":version,"imageBase64":null})
+    );
+    assert_eq!(
+        body(5),
+        serde_json::json!({"version":absence,"imageBase64":"/9j/"})
+    );
 }

@@ -1,0 +1,3 @@
+ALTER TABLE "marketing_delivery" ADD COLUMN "review_appointment_id" uuid;--> statement-breakpoint
+ALTER TABLE "marketing_delivery" ADD CONSTRAINT "marketing_delivery_review_appointment_id_appointment_id_fk" FOREIGN KEY ("review_appointment_id") REFERENCES "public"."appointment"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "marketing_delivery" ADD CONSTRAINT "marketing_delivery_review_appointment_unique" UNIQUE("review_appointment_id");

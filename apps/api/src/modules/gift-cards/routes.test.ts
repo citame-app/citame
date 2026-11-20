@@ -506,3 +506,27 @@ test("purchase replay returns its original receipt even after the requested expi
     clock.mockRestore();
   }
 });
+
+test("gift status filtering uses effective expiry before counting and paginating", async () => {
+  const pending = await buy();
+  const paid = await active();
+  const expired = await active();
+  await t.db.execute(
+    sql`update gift_card set expires_at=now()-interval '1 day' where id=${expired.card.id}::uuid`,
+  );
+  for (const [status, expected] of [
+    ["pending", pending.card.id],
+    ["active", paid.card.id],
+    ["expired", expired.card.id],
+  ] as const) {
+    const response = await call(owner, `/admin/gift-cards?status=${status}`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      cards: { id: string; status: string }[];
+      pagination: { total: number };
+    };
+    expect(body.pagination.total).toBe(1);
+    expect(body.cards).toMatchObject([{ id: expected, status }]);
+  }
+  expect((await call(owner, "/admin/gift-cards?status=other")).status).toBe(400);
+});

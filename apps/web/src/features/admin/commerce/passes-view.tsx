@@ -22,17 +22,23 @@ import { CheckoutPanel } from "./checkout-panel";
 import { invalidateCommerce } from "./invalidate";
 import { centsInput, inputCents } from "./money";
 
-type Props = { mode: CommerceMode; role: UserRole; accessPreset?: StaffAccessPreset | null };
-export function PassesView({ mode, role, accessPreset }: Props) {
+type Props = {
+  mode: CommerceMode;
+  role: UserRole;
+  accessPreset?: StaffAccessPreset | null;
+  kind?: "package" | "membership";
+  clientId?: string;
+};
+export function PassesView({ mode, role, accessPreset, kind, clientId }: Props) {
   const { t, locale } = useI18n();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [managing, setManaging] = useState(false);
-  const canManage = mode === "admin" && permissionsFor(role, accessPreset).editCatalog;
+  const canManage = !clientId && mode === "admin" && permissionsFor(role, accessPreset).editCatalog;
   const passes = useQuery({
-    queryKey: ["passes", mode, "list", page, search],
-    queryFn: () => api().passes.list(mode, page, search),
+    queryKey: ["passes", mode, "list", page, search, kind, clientId],
+    queryFn: () => api().passes.list(mode, page, search, kind, clientId),
     refetchOnMount: "always",
     refetchInterval: 30000,
   });
@@ -44,6 +50,10 @@ export function PassesView({ mode, role, accessPreset }: Props) {
     queryKey: ["commerce", mode, "capabilities"],
     queryFn: () => api().commerce.capabilities(mode),
   });
+  const visiblePlans = (plans.data?.plans ?? []).filter((p) => !kind || p.kind === kind);
+  const title = kind
+    ? t(kind === "package" ? "pos.packages" : "pos.memberships")
+    : t("passes.title");
   const unavailable = mode === "client" && !capabilities.data?.card && !capabilities.data?.bizum;
   if (selected)
     return (
@@ -55,10 +65,10 @@ export function PassesView({ mode, role, accessPreset }: Props) {
       </div>
     );
   return (
-    <section aria-label={t("passes.title")} className="space-y-5">
+    <section aria-label={title} className="space-y-5">
       <div className="flex flex-wrap justify-between gap-3">
         <div>
-          <h2 className="text-heading">{t("passes.title")}</h2>
+          <h2 className="text-heading">{title}</h2>
           <p className="text-muted">{t("passes.lead")}</p>
         </div>
         {canManage && (
@@ -67,32 +77,36 @@ export function PassesView({ mode, role, accessPreset }: Props) {
           </Button>
         )}
       </div>
-      {managing && canManage && <PlanManager plans={plans.data?.plans ?? []} />}
+      {managing && canManage && <PlanManager plans={visiblePlans} kind={kind} />}
       {unavailable && capabilities.isSuccess && (
         <p className="text-sm text-muted">{t("passes.unavailable")}</p>
       )}
-      <h3 className="font-semibold">{t("passes.catalog")}</h3>
-      {plans.isPending ? (
-        <Skeleton className="h-24" />
-      ) : plans.isError ? (
-        <ErrorState error={plans.error} onRetry={() => void plans.refetch()} />
-      ) : plans.data.plans.filter((p) => p.active).length === 0 ? (
-        <p className="text-sm text-muted">{t("passes.noPlans")}</p>
-      ) : (
-        <div className="grid gap-4 sm:grid-cols-2">
-          {plans.data.plans
-            .filter((p) => p.active)
-            .map((plan) => (
-              <BenefitPlanPurchase
-                key={plan.id}
-                plan={plan}
-                mode={mode}
-                disabled={unavailable || !capabilities.isSuccess}
-                automaticAvailable={capabilities.data?.recurring ?? false}
-                onCreated={setSelected}
-              />
-            ))}
-        </div>
+      {!clientId && (
+        <>
+          <h3 className="font-semibold">{t("passes.catalog")}</h3>
+          {plans.isPending ? (
+            <Skeleton className="h-24" />
+          ) : plans.isError ? (
+            <ErrorState error={plans.error} onRetry={() => void plans.refetch()} />
+          ) : visiblePlans.filter((p) => p.active).length === 0 ? (
+            <p className="text-sm text-muted">{t("passes.noPlans")}</p>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2">
+              {visiblePlans
+                .filter((p) => p.active)
+                .map((plan) => (
+                  <BenefitPlanPurchase
+                    key={plan.id}
+                    plan={plan}
+                    mode={mode}
+                    disabled={unavailable || !capabilities.isSuccess}
+                    automaticAvailable={capabilities.data?.recurring ?? false}
+                    onCreated={setSelected}
+                  />
+                ))}
+            </div>
+          )}
+        </>
       )}
       <TextField
         label={t("passes.search")}
@@ -341,7 +355,7 @@ function PassDetail({ id, mode, role }: { id: string; mode: CommerceMode; role: 
     </section>
   );
 }
-function PlanManager({ plans }: { plans: BenefitPlan[] }) {
+function PlanManager({ plans, kind }: { plans: BenefitPlan[]; kind?: "package" | "membership" }) {
   const { t } = useI18n();
   const [editing, setEditing] = useState<BenefitPlan | null | undefined>(undefined);
   return (
@@ -369,19 +383,30 @@ function PlanManager({ plans }: { plans: BenefitPlan[] }) {
         <PlanEditor
           key={editing?.id ?? "new"}
           plan={editing}
+          initialKind={kind}
           onSaved={() => setEditing(undefined)}
         />
       )}
     </div>
   );
 }
-function PlanEditor({ plan, onSaved }: { plan: BenefitPlan | null; onSaved: () => void }) {
+function PlanEditor({
+  plan,
+  onSaved,
+  initialKind,
+}: {
+  plan: BenefitPlan | null;
+  onSaved: () => void;
+  initialKind?: "package" | "membership";
+}) {
   const { t } = useI18n();
   const queries = useQueryClient();
   const online = useOnline();
   const [name, setName] = useState(plan?.name ?? "");
   const [description, setDescription] = useState(plan?.description ?? "");
-  const [kind, setKind] = useState<"package" | "membership">(plan?.kind ?? "package");
+  const [kind, setKind] = useState<"package" | "membership">(
+    plan?.kind ?? initialKind ?? "package",
+  );
   const [price, setPrice] = useState(plan ? centsInput(plan.priceCents) : "");
   const [uses, setUses] = useState(String(plan?.includedUses ?? 1));
   const [discount, setDiscount] = useState(String((plan?.discountBasisPoints ?? 0) / 100));

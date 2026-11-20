@@ -1,0 +1,1 @@
+ALTER TABLE "staff_profile" ADD COLUMN "portrait_absence_version" uuid;

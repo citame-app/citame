@@ -1,4 +1,34 @@
 import { z } from "zod";
+import { idSchema, instantSchema, pageInfoSchema, pageSchema } from "./common";
+
+export const calendarNoticeKindSchema = z.enum(["new", "rescheduled", "cancelled"]);
+export const calendarNoticeSchema = z.object({
+  id: idSchema,
+  kind: calendarNoticeKindSchema,
+  createdAt: instantSchema,
+  appointmentId: idSchema,
+  staffId: idSchema,
+  startsAt: instantSchema,
+  appointmentStartsAt: instantSchema,
+  clientName: z.string(),
+  serviceNames: z.array(z.string()),
+});
+export type CalendarNotice = z.infer<typeof calendarNoticeSchema>;
+export const calendarInboxSchema = pageInfoSchema.extend({
+  entries: z.array(calendarNoticeSchema),
+});
+export const calendarInboxQuerySchema = z.object({
+  page: pageSchema.optional(),
+  archived: z.enum(["true", "false"]).optional(),
+  kind: calendarNoticeKindSchema.optional(),
+});
+export type CalendarInboxQuery = z.infer<typeof calendarInboxQuerySchema>;
+export const calendarArchiveInputSchema = z
+  .object({
+    ids: z.array(idSchema).min(1).max(50),
+    archived: z.boolean(),
+  })
+  .strict();
 
 export const NOTIFICATION_LOCALES = ["en", "es-AR"] as const;
 export const notificationLocaleSchema = z.enum(NOTIFICATION_LOCALES);
@@ -18,6 +48,8 @@ export const notificationPreferencesSchema = z.object({
   email: categoryPrefsSchema,
   /** SMS is off by default: turning it on is the client's consent to be texted. */
   sms: categoryPrefsSchema,
+  whatsapp: categoryPrefsSchema.optional(),
+  hasWhatsAppPhone: z.boolean().optional(),
   /** Whether messages could reach the client at all. */
   hasEmail: z.boolean(),
   hasPhone: z.boolean(),
@@ -29,6 +61,7 @@ export const updateNotificationPreferencesRequestSchema = z
     locale: notificationLocaleSchema.nullable(),
     email: categoryPrefsSchema.partial(),
     sms: categoryPrefsSchema.partial(),
+    whatsapp: categoryPrefsSchema.partial(),
   })
   .partial()
   .refine((value) => Object.values(value).some((v) => v !== undefined), {
@@ -41,7 +74,7 @@ export type UpdateNotificationPreferencesRequest = z.infer<
 
 /** What an opt-out link does, shown before the visitor confirms. */
 export const optOutPreviewSchema = z.object({
-  channel: z.enum(["email", "sms"]),
+  channel: z.enum(["email", "sms", "whatsapp"]),
   category: z.literal("reminder"),
   /** True when the reminders are already off. */
   optedOut: z.boolean(),
@@ -66,3 +99,80 @@ export const notificationStatsSchema = z.object({
   channels: z.object({ email: z.boolean(), sms: z.boolean() }),
 });
 export type NotificationStats = z.infer<typeof notificationStatsSchema>;
+
+export const whatsappKindSchema = z.enum([
+  "confirmation",
+  "reminder_24h",
+  "reminder_2h",
+  "rescheduled",
+  "cancellation",
+]);
+export const whatsappVariableSchema = z.enum([
+  "client",
+  "salon",
+  "date",
+  "time",
+  "staff",
+  "services",
+  "preferences",
+]);
+export const whatsappRuleSchema = z
+  .object({
+    kind: whatsappKindSchema,
+    templateId: z.string().regex(/^\d{5,32}$/),
+    variables: z.array(whatsappVariableSchema).max(20),
+  })
+  .strict();
+export const whatsappRulesSchema = z
+  .array(whatsappRuleSchema)
+  .max(5)
+  .refine(
+    (rules) => new Set(rules.map(({ kind }) => kind)).size === rules.length,
+    "Choose one WhatsApp template per event",
+  );
+export const whatsappCompleteSchema = z
+  .object({
+    code: z.string().min(8).max(4096),
+    wabaId: z.string().regex(/^\d{5,32}$/),
+    phoneId: z
+      .string()
+      .regex(/^\d{5,32}$/)
+      .optional(),
+    pin: z
+      .string()
+      .regex(/^\d{6}$/)
+      .optional(),
+  })
+  .strict();
+export const whatsappTemplateSchema = z.object({
+  id: z.string().regex(/^\d{5,32}$/),
+  name: z.string(),
+  language: z.string(),
+  body: z.string(),
+  parameters: z.array(z.string()).max(20),
+  named: z.boolean(),
+});
+export const whatsappSettingsSchema = z.object({
+  setup: z.object({ appId: z.string(), configId: z.string(), version: z.string() }).nullable(),
+  connection: z
+    .object({
+      phone: z.string(),
+      coexistence: z.boolean(),
+      rules: whatsappRulesSchema,
+      expiresAt: instantSchema.nullable(),
+    })
+    .nullable(),
+});
+export type WhatsAppRule = z.infer<typeof whatsappRuleSchema>;
+export type WhatsAppTemplate = z.infer<typeof whatsappTemplateSchema>;
+
+export const whatsappDeliveriesSchema = z.array(
+  z.object({
+    id: idSchema,
+    kind: whatsappKindSchema,
+    scheduledFor: instantSchema,
+    status: z.enum(["pending", "processing", "sent", "skipped", "cancelled", "failed"]),
+    delivery: z.enum(["sent", "delivered", "read", "failed"]).nullable(),
+    lastError: z.string().nullable(),
+  }),
+);

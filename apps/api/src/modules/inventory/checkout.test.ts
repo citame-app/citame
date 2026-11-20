@@ -35,6 +35,7 @@ const stock = async (id: string) =>
     stockOnHand: number;
     stockReserved: number;
     available: number;
+    inventoryGeneration: string;
   };
 beforeAll(async () => {
   t = await setupApiTest({
@@ -145,6 +146,7 @@ test("a physical count cannot dispose of units already reserved for checkout", a
         quantity: 1,
         reason: "Physical count",
         version: held.version,
+        generation: held.inventoryGeneration,
         idempotencyKey: key(),
       })
     ).status,

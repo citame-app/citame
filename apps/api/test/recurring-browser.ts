@@ -36,7 +36,7 @@ const config = loadConfig({
   VALKEY_KEY_PREFIX: valkey.prefix,
   BETTER_AUTH_SECRET: "local-recurring-fixture-secret-0123456789",
   BETTER_AUTH_URL: fixture.baseURL,
-  TRUSTED_ORIGINS: fixture.baseURL,
+  TRUSTED_ORIGINS: `${fixture.baseURL},http://127.0.0.1:4275`,
   AUTH_REQUIRE_EMAIL_VERIFICATION: "false",
   PAYMENT_PROVIDER: "redsys",
   REDSYS_MERCHANT_CODE: "999008881",
@@ -48,6 +48,10 @@ const config = loadConfig({
   RATE_LIMIT_GLOBAL_MAX: "1000000",
 });
 await seedSampleData(database.db);
+if (process.env.E2E_CALENDAR_FIXTURE === "true") {
+  const { seedCalendarFixture } = await import("./calendar-fixture");
+  await seedCalendarFixture(database.db);
+}
 await database.db.update(service).set({ currency: "EUR" });
 await database.db
   .update(service)
@@ -235,7 +239,12 @@ app.post("/__recurring-fixture/waitlist/run", async (c) => {
       .where(eq(waitlistOffer.id, body.expireOfferId));
   return c.json(await runWaitlist(database.db));
 });
-const server = Bun.serve({ hostname: "127.0.0.1", port: fixture.apiPort, fetch: app.fetch });
+const server = Bun.serve({
+  hostname: "127.0.0.1",
+  port: fixture.apiPort,
+  idleTimeout: 30,
+  fetch: app.fetch,
+});
 console.log(`Recurring fixture listening on ${server.port}`);
 let stopping = false;
 for (const signal of ["SIGTERM", "SIGINT"] as const)

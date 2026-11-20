@@ -20,11 +20,13 @@ epoch="${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct)}"
 name="sisters-of-beauty-desktop-$version-linux-$arch"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-mkdir -p "$work/$name" "$output"
-cp "$binary" "$work/$name/sob-desktop"
-chmod 755 "$work/$name/sob-desktop"
-cp LICENSE apps/desktop/README.md "$work/$name/"
-cp "$metadata" "$work/$name/release.json"
+mkdir -m 755 "$work/$name"
+mkdir -p "$output"
+install -m 755 "$binary" "$work/$name/sob-desktop"
+install -m 644 LICENSE apps/desktop/README.md "$work/$name/"
+install -m 755 scripts/install-desktop-linux.sh "$work/$name/install.sh"
+install -m 644 apps/web/public/favicon.svg "$work/$name/icon.svg"
+install -m 644 "$metadata" "$work/$name/release.json"
 tar --sort=name --mtime="@$epoch" --owner=0 --group=0 --numeric-owner --format=gnu \
   -C "$work" -cf - "$name" | gzip -n > "$output/$name.tar.gz"
 (cd "$output"; sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")

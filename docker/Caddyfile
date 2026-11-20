@@ -12,8 +12,8 @@
 		output stdout
 		format filter {
 			wrap json
-			request>uri regexp "(/reset-password/|[?&]token=)[^/?&#]*" "${1}REDACTED"
-			request>headers>Referer regexp "(/reset-password/|[?&]token=)[^/?&#]*" "${1}REDACTED"
+			request>uri regexp "(/reset-password/|[?&](token|hub[.]verify_token)=)[^/?&#]*" "${1}REDACTED"
+			request>headers>Referer regexp "(/reset-password/|[?&](token|hub[.]verify_token)=)[^/?&#]*" "${1}REDACTED"
 		}
 	}
 }
@@ -25,7 +25,9 @@
 	# reads the LAST entry, so the rate limiter and logs see the real client, not Caddy.
 	reverse_proxy web:4173 {
 		health_uri /healthz
-		health_interval 10s
+		# The local liveness endpoint is cheap. Check again quickly after the web process restarts.
+		health_interval 2s
+		health_timeout 1s
 		# Server-sent events (offline sync) must not be buffered.
 		flush_interval -1
 	}
@@ -40,8 +42,8 @@
 		output stdout
 		format filter {
 			wrap json
-			request>uri regexp "(/reset-password/|[?&]token=)[^/?&#]*" "${1}REDACTED"
-			request>headers>Referer regexp "(/reset-password/|[?&]token=)[^/?&#]*" "${1}REDACTED"
+			request>uri regexp "(/reset-password/|[?&](token|hub[.]verify_token)=)[^/?&#]*" "${1}REDACTED"
+			request>headers>Referer regexp "(/reset-password/|[?&](token|hub[.]verify_token)=)[^/?&#]*" "${1}REDACTED"
 		}
 	}
 }

@@ -6,6 +6,7 @@ import {
   pickFirstTime,
   pickProfessional,
   signInThroughUi,
+  switchLocale,
 } from "./helpers";
 
 for (const scheme of ["light", "dark"] as const)
@@ -75,6 +76,7 @@ for (const scheme of ["light", "dark"] as const)
         const extra = await serviceResponse.json();
         extraId = extra.id;
         await signInThroughUi(page, fixture.ownerEmail, "/admin/services");
+        await page.getByRole("button", { name: "Combos", exact: true }).click();
         await page.getByRole("button", { name: "New combination", exact: true }).click();
         let form = page.getByRole("dialog", { name: "New combination", exact: true });
         await form.getByLabel("Combination name", { exact: true }).fill(name);
@@ -162,7 +164,7 @@ for (const scheme of ["light", "dark"] as const)
         ).toBeChecked();
         await expectNoHorizontalScroll(customer);
         await expectNoSeriousA11yViolations(customer, `long combination choice ${scheme}`);
-        await customer.getByRole("radio", { name: "Español", exact: true }).check();
+        await switchLocale(customer, "Español");
         await expect(
           customer.getByRole("button", { name: `Elegir combinación: ${finalName}`, exact: true }),
         ).toBeVisible();
@@ -171,7 +173,7 @@ for (const scheme of ["light", "dark"] as const)
           path: `/tmp/sob-combinations-es-${scheme}-${info.project.name}.png`,
           fullPage: true,
         });
-        await customer.getByRole("radio", { name: "English", exact: true }).check();
+        await switchLocale(customer, "English");
         await customer.getByRole("button", { name: "Continue", exact: true }).click();
         await pickProfessional(customer, "Stylist A");
         await pickFirstTime(customer);

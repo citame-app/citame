@@ -31,7 +31,9 @@ export function giftCardRoutes(deps: AppDeps) {
     })
     .get("/", async (c) => {
       const query = parseOrThrow(giftCardQuerySchema, c.req.query());
-      return c.json(await listGifts(deps.db, c.get("principal"), query.page, query.search));
+      return c.json(
+        await listGifts(deps.db, c.get("principal"), query.page, query.search, query.status),
+      );
     })
     .post("/", async (c) =>
       c.json(

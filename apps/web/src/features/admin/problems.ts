@@ -21,6 +21,8 @@ export function describeProblem(error: unknown): Problem {
         return { messageKey: "intake.changed", recovery: "reload" };
       case "booking_intent_conflict":
         return { messageKey: "intake.conflict", recovery: "none" };
+      case "online_booking_paused":
+        return { messageKey: "booking.paused.title", recovery: "none" };
       case "slot_taken":
         return { messageKey: "problem.slotTaken", recovery: "pickAnotherTime" };
       case "slot_unavailable":

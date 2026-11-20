@@ -23,6 +23,9 @@ export const appointmentServiceSchema = z
     bufferMinutes: z.number().int().min(0),
     processing: processingTimeSchema.optional(),
     priceCents: z.number().int().min(0),
+    /** Imported rows may explicitly lack a quoted amount; never treat these as free. */
+    sourceUnpriced: z.literal(true).optional(),
+    priceDisplayLabel: z.string().optional(),
     currency: z.string().length(3),
   })
   .refine(
@@ -32,7 +35,19 @@ export const appointmentServiceSchema = z
   );
 
 export const appointmentSchema = z.object({
+  /** Immutable import consultation; actions stay disabled in every appointment view. */
+  sourceCopy: z
+    .object({
+      system: z.literal("booksy"),
+      businessId: z.string(),
+      groupRef: z.string(),
+      itemRef: z.string(),
+      capturedAt: instantSchema,
+      readOnly: z.literal(true),
+    })
+    .optional(),
   id: idSchema,
+  visitGroupId: idSchema.optional(),
   staffId: idSchema,
   clientId: idSchema,
   startsAt: instantSchema,
@@ -72,6 +87,7 @@ export const createAppointmentBaseSchema = z.object({
   /** Optional client-generated UUID (v7) so offline clients can pre-assign ids. */
   id: idSchema.optional(),
   staffId: idSchema,
+  professionalPreference: z.enum(["specific", "any"]).optional(),
   serviceIds: z.array(idSchema).min(1).max(24),
   /** Optional compatibility fence: reject changed reviewed catalog terms before creating a visit. */
   serviceQuotes: z

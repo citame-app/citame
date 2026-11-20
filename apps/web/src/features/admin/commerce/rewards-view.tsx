@@ -11,9 +11,12 @@ export function RewardsView(props: {
   role: UserRole;
   accessPreset?: StaffAccessPreset | null;
   clientId?: string | null;
+  initialTab?: "gift" | "packages" | "memberships" | "loyalty";
 }) {
   const { t } = useI18n();
-  const [tab, setTab] = useState<"gift" | "passes" | "loyalty">("gift");
+  const [tab, setTab] = useState<"gift" | "packages" | "memberships" | "loyalty">(
+    props.initialTab ?? "gift",
+  );
   return (
     <div className="space-y-5">
       <fieldset aria-label={t("rewards.title")} className="flex flex-wrap gap-3">
@@ -24,13 +27,16 @@ export function RewardsView(props: {
         >
           {t("gift.title")}
         </Button>
-        <Button
-          variant={tab === "passes" ? "primary" : "secondary"}
-          aria-pressed={tab === "passes"}
-          onClick={() => setTab("passes")}
-        >
-          {t("passes.title")}
-        </Button>
+        {(["packages", "memberships"] as const).map((value) => (
+          <Button
+            key={value}
+            variant={tab === value ? "primary" : "secondary"}
+            aria-pressed={tab === value}
+            onClick={() => setTab(value)}
+          >
+            {t(`pos.${value}`)}
+          </Button>
+        ))}
         <Button
           variant={tab === "loyalty" ? "primary" : "secondary"}
           aria-pressed={tab === "loyalty"}
@@ -41,8 +47,13 @@ export function RewardsView(props: {
       </fieldset>
       {tab === "gift" ? (
         <GiftCardsView {...props} />
-      ) : tab === "passes" ? (
-        <PassesView {...props} />
+      ) : tab === "packages" || tab === "memberships" ? (
+        <PassesView
+          key={tab}
+          {...props}
+          clientId={props.clientId ?? undefined}
+          kind={tab === "packages" ? "package" : "membership"}
+        />
       ) : (
         <LoyaltyView {...props} />
       )}

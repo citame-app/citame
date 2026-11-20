@@ -3,6 +3,37 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CalendarNoticeKind {
+    New,
+    Rescheduled,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarNotice {
+    pub id: String,
+    pub kind: CalendarNoticeKind,
+    pub created_at: DateTime<Utc>,
+    pub appointment_id: String,
+    pub staff_id: String,
+    pub starts_at: DateTime<Utc>,
+    pub appointment_starts_at: DateTime<Utc>,
+    pub client_name: String,
+    pub service_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarInbox {
+    pub entries: Vec<CalendarNotice>,
+    pub page: u32,
+    pub page_size: u32,
+    pub total: u32,
+}
 use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,6 +85,8 @@ fn is_one(value: &i64) -> bool {
 pub struct AppointmentService {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub processing: Option<ProcessingTime>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub source_unpriced: bool,
     pub service_id: Option<String>,
     pub name: String,
     pub duration_minutes: i64,
@@ -64,16 +97,106 @@ pub struct AppointmentService {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WorkWindow {
+    pub offset_minutes: i64,
+    pub end_offset_minutes: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BillingReviewReason {
+    UnknownAmount,
+    PaidInBooksy,
+    InvoicedInBooksy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalBalance {
+    pub paid_in_booksy_cents: u32,
+    pub due_in_citame_cents: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CalendarBillingSource {
+    Citame,
+    Booksy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarServiceBadge {
+    pub service_position: usize,
+    pub requested: bool,
+    pub invoiced: bool,
+    pub paid: bool,
+    pub billing_source: Option<CalendarBillingSource>,
+    pub internal_note: bool,
+    pub customer_comment: bool,
+}
+
+/// Read directly from the authorized appointment endpoint, separate from the offline replica.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppointmentAnnotations {
+    pub appointment_version: Option<i64>,
+    pub can_edit: Option<bool>,
+    pub default_requested: Option<bool>,
+    pub rows: Vec<ServiceAnnotations>,
+    pub customer_comment: Option<String>,
+    pub business_message: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceAnnotations {
+    pub service_position: usize,
+    pub version: u32,
+    pub requested_staff_id: Option<String>,
+    pub internal_note: Option<String>,
+    pub customer_comment: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateServiceAnnotations {
+    pub appointment_version: i64,
+    pub service_position: usize,
+    pub version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested: Option<bool>,
+    pub internal_note: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Appointment {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visit_group_id: Option<String>,
     pub staff_id: String,
     pub client_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_name: Option<String>,
     pub starts_at: DateTime<Utc>,
     pub ends_at: DateTime<Utc>,
     pub status: AppointmentStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_windows: Option<Vec<WorkWindow>>,
     pub notes: Option<String>,
     pub version: i64,
     pub services: Vec<AppointmentService>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub service_badges: Vec<CalendarServiceBadge>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub billing_review_reasons: Vec<BillingReviewReason>,
+    #[serde(default)]
+    pub externally_settled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_balance: Option<ExternalBalance>,
+    #[serde(default)]
+    pub imported_from_booksy: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -101,6 +224,8 @@ pub struct Service {
     pub quote_hash: Option<String>,
     pub id: String,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
     pub description: Option<String>,
     pub duration_minutes: i64,
     pub buffer_minutes: i64,
@@ -196,10 +321,22 @@ pub struct RawChange {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PullResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<String>,
     pub changes: Vec<RawChange>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refresh: Vec<String>,
     pub next_cursor: i64,
     pub has_more: bool,
     pub head_seq: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_off_scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_directory: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar_scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewer_role: Option<String>,
 }
 
 /// A mutation exactly as sent in `POST /sync/push`.
@@ -216,6 +353,8 @@ pub struct WireMutation {
 #[serde(rename_all = "camelCase")]
 pub struct PushRequest {
     pub device_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<String>,
     pub mutations: Vec<WireMutation>,
 }
 
@@ -261,6 +400,13 @@ pub struct PushResponse {
     pub head_seq: i64,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum AppointmentEditSync {
+    Pending,
+    NeedsResolution,
+    Settled,
+}
+
 /// A queued local mutation, as stored in the outbox.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutboxEntry {
@@ -291,6 +437,8 @@ impl OutboxEntry {
     }
 }
 
+pub(crate) const RESTORED_HISTORY: &str = "sync_generation_changed";
+
 /// A rejected mutation the user has to look at (never discarded silently).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Conflict {
@@ -304,6 +452,10 @@ pub struct Conflict {
 }
 
 impl Conflict {
+    pub fn requires_restored_review(&self) -> bool {
+        self.reason == RESTORED_HISTORY
+    }
+
     /// Only appointment mutations have a resolution flow (reschedule or cancel).
     pub fn is_appointment(&self) -> bool {
         self.kind.starts_with("appointment.")

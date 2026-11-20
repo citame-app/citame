@@ -1,11 +1,36 @@
 import type { AppointmentStatus, UserRole } from "@sob/contracts";
-import { addDaysLocal } from "~/lib/format";
-import { localDayBounds, minutesIntoLocalDay, weekDates } from "~/lib/zoned";
+import { addDaysLocal, localDateOf } from "~/lib/format";
+import { localDayBounds, minutesIntoLocalDay, startOfWeek, weekDates } from "~/lib/zoned";
+import { localMinuteRange } from "./presentation";
 
-export type CalendarView = "day" | "week";
+export type CalendarView = "day" | "week" | "month" | "list";
+
+export function shiftMonth(date: string, offset: number): string {
+  const value = new Date(`${date.slice(0, 7)}-01T12:00:00Z`);
+  value.setUTCMonth(value.getUTCMonth() + offset);
+  const end = new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth() + 1, 0)).getUTCDate();
+  return `${value.toISOString().slice(0, 7)}-${String(Math.min(Number(date.slice(8)), end)).padStart(2, "0")}`;
+}
+
+/** Complete Monday-first weeks, including the adjoining days of the previous/next month. */
+export function monthDates(date: string): string[] {
+  const first = `${date.slice(0, 7)}-01`;
+  const last = addDaysLocal(shiftMonth(first, 1), -1);
+  const start = startOfWeek(first);
+  const end = addDaysLocal(startOfWeek(last), 7);
+  const days = Math.round((Date.parse(end) - Date.parse(start)) / 86_400_000);
+  return Array.from({ length: days }, (_, i) => addDaysLocal(start, i));
+}
 
 export function rangeFor(view: CalendarView, date: string, timeZone: string) {
-  const dates = view === "day" ? [date] : weekDates(date);
+  const dates =
+    view === "month"
+      ? monthDates(date)
+      : view === "list"
+        ? Array.from({ length: 7 }, (_, i) => addDaysLocal(date, i))
+        : view === "day"
+          ? [date]
+          : weekDates(date);
   const first = dates[0] as string;
   const last = dates[dates.length - 1] as string;
   return {
@@ -34,14 +59,16 @@ export function layoutBlocks(
   items: TimedItem[],
   timeZone: string,
   gridStartMinutes: number,
+  date?: string,
+  minimumVisualMinutes = 0,
 ): Block[] {
   const placed = items
     .map((item) => {
-      const rawStart = minutesIntoLocalDay(item.startsAt, timeZone);
-      const duration = Math.max(
-        5,
-        Math.round((Date.parse(item.endsAt) - Date.parse(item.startsAt)) / 60_000),
-      );
+      const clipped = date ? localMinuteRange(item, date, timeZone) : null;
+      const rawStart = clipped?.start ?? minutesIntoLocalDay(item.startsAt, timeZone);
+      const duration = clipped
+        ? clipped.end - clipped.start
+        : Math.max(5, Math.round((Date.parse(item.endsAt) - Date.parse(item.startsAt)) / 60_000));
       const start = Math.max(rawStart, gridStartMinutes);
       const end = rawStart + duration;
       return {
@@ -70,10 +97,13 @@ export function layoutBlocks(
     }
     let lane = laneEnds.findIndex((end) => end <= block.startMinutes);
     if (lane === -1) lane = laneEnds.length;
-    laneEnds[lane] = block.startMinutes + block.durationMinutes;
+    laneEnds[lane] = block.startMinutes + Math.max(block.durationMinutes, minimumVisualMinutes);
     block.lane = lane;
     group.push(block);
-    groupEnd = Math.max(groupEnd, block.startMinutes + block.durationMinutes);
+    groupEnd = Math.max(
+      groupEnd,
+      block.startMinutes + Math.max(block.durationMinutes, minimumVisualMinutes),
+    );
   }
   flush();
   return placed;
@@ -111,12 +141,7 @@ export function offsetToSnappedMinutes(
 
 export function nowMarkerMinutes(now: Date, localDate: string, timeZone: string): number | null {
   const instant = now.toISOString();
-  const today = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(now);
+  const today = localDateOf(instant, timeZone);
   return today === localDate ? minutesIntoLocalDay(instant, timeZone) : null;
 }
 
@@ -138,6 +163,7 @@ export function statusAppearance(status: AppointmentStatus): {
 }
 
 export interface Actionable {
+  sourceCopy?: { readOnly: boolean };
   status: AppointmentStatus;
   startsAt: string;
   staffId: string;
@@ -165,7 +191,7 @@ export function availableActions(
     cancel: false,
     reschedule: false,
   };
-  if (!canEdit || role === "client") return none;
+  if (!canEdit || role === "client" || appointment.sourceCopy?.readOnly) return none;
   if (role === "staff" && appointment.staffId !== ownStaffId) return none;
   const started = Date.parse(appointment.startsAt) <= now.getTime();
   switch (appointment.status) {

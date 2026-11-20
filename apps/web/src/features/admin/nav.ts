@@ -1,7 +1,6 @@
 import { permissionsFor, type StaffAccessPreset, type UserRole } from "@sob/contracts";
 
 export type AdminSection =
-  | "today"
   | "calendar"
   | "waitlist"
   | "commerce"
@@ -9,6 +8,7 @@ export type AdminSection =
   | "services"
   | "staff"
   | "reports"
+  | "marketing"
   | "reputation"
   | "settings";
 
@@ -22,7 +22,6 @@ const BOTH = ["owner", "staff"] as const;
 
 /** Navigation order. The API enforces the same matrix (ADR 0004); this decides what to show. */
 const SECTIONS: readonly SectionConfig[] = [
-  { section: "today", to: "/admin", roles: BOTH },
   { section: "calendar", to: "/admin/calendar", roles: BOTH },
   { section: "waitlist", to: "/admin/waitlist", roles: BOTH },
   { section: "commerce", to: "/admin/commerce", roles: BOTH },
@@ -30,13 +29,15 @@ const SECTIONS: readonly SectionConfig[] = [
   { section: "services", to: "/admin/services", roles: ["owner"] },
   { section: "staff", to: "/admin/staff", roles: BOTH },
   { section: "reports", to: "/admin/reports", roles: BOTH },
+  { section: "marketing", to: "/admin/marketing", roles: ["owner"] },
   { section: "reputation", to: "/admin/reputation", roles: BOTH },
   { section: "settings", to: "/admin/settings", roles: ["owner"] },
 ];
 
 export function sectionOfPath(pathname: string): AdminSection {
+  if (pathname === "/admin/whatsapp" || pathname === "/admin/whatsapp/") return "settings";
   const segment = pathname.replace(/^\/admin\/?/, "").split("/")[0] ?? "";
-  return SECTIONS.find((s) => s.to === `/admin/${segment}`)?.section ?? "today";
+  return SECTIONS.find((s) => s.to === `/admin/${segment}`)?.section ?? "calendar";
 }
 
 export function adminNavFor(
@@ -51,6 +52,7 @@ export function adminNavFor(
         return permissions.clients && permissions.editCalendar;
       case "services":
       case "reputation":
+      case "marketing":
         return permissions.editCatalog;
       case "settings":
         return permissions.manageSettings;
@@ -72,7 +74,7 @@ export function adminNavFor(
 
 export type AdminGuardDecision =
   | { type: "allow" }
-  | { type: "redirect"; to: "/admin" | "/account"; notice: "forbidden" };
+  | { type: "redirect"; to: "/admin/calendar" | "/account"; notice: "forbidden" };
 
 export function adminGuard(
   pathname: string,
@@ -83,5 +85,5 @@ export function adminGuard(
   const config = SECTIONS.find((s) => s.section === sectionOfPath(pathname));
   if (adminNavFor(role, preset).some((item) => item.section === config?.section))
     return { type: "allow" };
-  return { type: "redirect", to: "/admin", notice: "forbidden" };
+  return { type: "redirect", to: "/admin/calendar", notice: "forbidden" };
 }

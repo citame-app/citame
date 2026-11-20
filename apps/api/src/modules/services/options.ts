@@ -47,6 +47,8 @@ export function publicService(row: CatalogRow, catalog?: ServiceCatalog): Servic
     id: row.id,
     name: row.name,
     description: row.description,
+    category: row.category,
+    color: row.color,
     durationMinutes: row.durationMinutes,
     bufferMinutes: row.bufferMinutes,
     ...(row.processingStartMinutes !== null && row.processingMinutes !== null

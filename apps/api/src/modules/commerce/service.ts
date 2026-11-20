@@ -1,6 +1,13 @@
 import { createHash, randomBytes, randomInt } from "node:crypto";
-import type { Checkout, CreateCheckoutInput, StartPaymentInput } from "@sob/contracts";
-import { permissionsFor } from "@sob/contracts";
+import {
+  type Checkout,
+  type CheckoutList,
+  type CheckoutListQuery,
+  type CreateCheckoutInput,
+  checkoutListQuerySchema,
+  permissionsFor,
+  type StartPaymentInput,
+} from "@sob/contracts";
 import {
   appointment,
   appointmentService,
@@ -10,6 +17,7 @@ import {
   checkoutLine,
   checkoutPayment,
   checkoutRefund,
+  clientProfile,
   type Database,
   staffProfile,
 } from "@sob/db";
@@ -17,7 +25,7 @@ import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
 import { ownsClient, type Principal } from "../../auth/principal";
-import { lockClientRoot } from "../../client-identity";
+import { clientIdentityIds, lockClientRoot } from "../../client-identity";
 import { DomainError } from "../../errors";
 import type { BankNotification } from "../../payments/redsys";
 import type { PaymentGateway, RecurringPaymentSettings } from "../../payments/types";
@@ -55,6 +63,8 @@ import {
 } from "../passes/value";
 import { assertRewardPayment, checkoutRewardView } from "../rewards/discounts";
 import { releaseCheckoutReward, syncCheckoutRewards } from "../rewards/value";
+import { assertAppointmentBillable, importedPartialPayments } from "./appointment-billing";
+import { checkoutServices } from "./catalog";
 import { allocateDiscount } from "./money";
 
 type Connection = Database | Tx;
@@ -144,7 +154,12 @@ async function snapshot(
     .reduce((a, b) => a + b.amountCents, 0);
   const balanceCents = row.status === "void" ? 0 : Math.max(0, row.totalCents - paidCents);
   const protection = row.appointmentId ? await protectionView(db, row.appointmentId) : null;
+  const externalBalance =
+    row.appointmentId && lines.some((line) => line.kind === "external_balance")
+      ? (await importedPartialPayments(db, [row.appointmentId])).get(row.appointmentId)
+      : undefined;
   return {
+    ...(externalBalance ? { externalBalance } : {}),
     id: row.id,
     appointmentId: row.appointmentId,
     clientId: row.clientId,
@@ -168,6 +183,8 @@ async function snapshot(
     lines: lines.map((line) => ({
       id: line.id,
       kind: line.kind,
+      serviceId: line.serviceId,
+      productId: line.productId,
       description: line.description,
       quantity: line.quantity,
       unitAmountCents: line.unitAmountCents,
@@ -208,23 +225,52 @@ export async function getCheckout(
     accessMode: "read only",
   });
 }
-export async function listCheckouts(db: Database, principal: Principal) {
+export async function listCheckouts(
+  db: Database,
+  principal: Principal,
+  query: CheckoutListQuery = checkoutListQuerySchema.parse({}),
+): Promise<CheckoutList> {
   requireOperator(principal);
+  const permissions = permissionsFor(principal.role, principal.accessPreset);
+  if (query.clientId && !permissions.clients)
+    throw new DomainError("forbidden", "Client access is required");
   return db.transaction(
     async (tx) => {
+      const clientIds = query.clientId ? await clientIdentityIds(tx, query.clientId) : null;
+      const where = and(
+        permissions.allSales
+          ? undefined
+          : sql`(${checkout.staffId} = ${principal.staffId} or (${checkout.staffId} is null and ${checkout.createdBy} = ${principal.userId}))`,
+        query.status ? eq(checkout.status, query.status) : undefined,
+        clientIds ? inArray(checkout.clientId, clientIds) : undefined,
+        query.from ? sql`${checkout.createdAt} >= ${query.from}::timestamptz` : undefined,
+        query.to ? sql`${checkout.createdAt} < ${query.to}::timestamptz` : undefined,
+        query.method
+          ? sql`exists(select 1 from ${checkoutPayment} where ${checkoutPayment.checkoutId} = ${checkout.id} and ${checkoutPayment.method} = ${query.method})`
+          : undefined,
+        query.search
+          ? sql`(${checkout.id}::text ilike ${`%${query.search.replace(/[\\%_]/g, "\\$&")}%`} or exists(select 1 from ${checkoutLine} where ${checkoutLine.checkoutId}=${checkout.id} and ${checkoutLine.description} ilike ${`%${query.search.replace(/[\\%_]/g, "\\$&")}%`}))`
+          : undefined,
+      );
       const rows = await tx
         .select()
         .from(checkout)
-        .where(
-          permissionsFor(principal.role, principal.accessPreset).allSales
-            ? undefined
-            : sql`(${checkout.staffId} = ${principal.staffId} or (${checkout.staffId} is null and ${checkout.createdBy} = ${principal.userId}))`,
-        )
+        .where(where)
         .orderBy(desc(checkout.createdAt), desc(checkout.id))
-        .limit(100);
+        .limit(query.pageSize)
+        .offset((query.page - 1) * query.pageSize);
+      const [count] = await tx
+        .select({ total: sql<number>`count(*)::int` })
+        .from(checkout)
+        .where(where);
       const results: Checkout[] = [];
       for (const row of rows) results.push(await snapshot(tx, row));
-      return results;
+      return {
+        checkouts: results,
+        total: count?.total ?? 0,
+        page: query.page,
+        pageSize: query.pageSize,
+      };
     },
     { isolationLevel: "repeatable read", accessMode: "read only" },
   );
@@ -334,7 +380,11 @@ export async function createCheckoutInTransaction(
   if (
     principal.role === "client" &&
     !giftPurchase &&
-    (!input.appointmentId || input.lines.length || input.discountCents || input.staffId)
+    (!input.appointmentId ||
+      input.lines.length ||
+      input.discountCents ||
+      input.staffId ||
+      input.useClientDiscount)
   )
     throw new DomainError("forbidden", "Clients can check out only their own appointment");
   if (principal.role !== "client") requireOperator(principal);
@@ -432,6 +482,7 @@ export async function createCheckoutInTransaction(
         checkReplay(previous, requestHash);
       return snapshot(tx, previous);
     }
+    await assertAppointmentBillable(tx, booking.id);
     const booked = await tx
       .select()
       .from(appointmentService)
@@ -442,24 +493,59 @@ export async function createCheckoutInTransaction(
         "validation_error",
         "Appointment currency must match the EUR merchant currency",
       );
-    lines.push(
-      ...booked.map((s) => ({
-        kind: "service",
-        serviceId: s.serviceId,
-        description: s.name,
+    const partial = (await importedPartialPayments(tx, [booking.id])).get(booking.id);
+    if (partial) {
+      if (input.lines.length || input.discountCents || input.tipCents || input.useClientDiscount)
+        throw new DomainError(
+          "validation_error",
+          "A Booksy balance cannot include extra lines, tips or discounts",
+        );
+      if (
+        (await protectionView(tx, booking.id)) ||
+        booked.reduce((sum, line) => sum + (line.reviewedPriceCents ?? line.priceCents), 0) !==
+          partial.paidInBooksyCents + partial.dueInCitameCents
+      )
+        throw new DomainError("invalid_state", "The original Booksy balance needs review");
+      lines.push({
+        kind: "external_balance",
+        description: "Saldo de Booksy",
         quantity: 1,
-        unitAmountCents: s.priceCents,
+        unitAmountCents: partial.dueInCitameCents,
         taxBasisPoints: 0,
-      })),
-    );
+      });
+    } else
+      lines.push(
+        ...booked.map((s) => ({
+          kind: "service",
+          serviceId: s.serviceId,
+          description: s.name,
+          quantity: 1,
+          unitAmountCents: s.reviewedPriceCents ?? s.priceCents,
+          taxBasisPoints: 0,
+        })),
+      );
   }
   const products = await loadCheckoutProducts(tx, input.lines);
+  const services = await checkoutServices(tx, input);
   if (clientId && !input.appointmentId) {
     const root = await lockClientRoot(tx, clientId);
     if (root.id !== clientId)
       throw new DomainError("client_merged", "Review the surviving client before creating a sale");
   }
   for (const line of input.lines) {
+    if (line.kind === "service") {
+      const item = services.get(line.serviceId ?? "");
+      if (!item) throw new DomainError("not_found", "Service not found");
+      lines.push({
+        kind: "service",
+        serviceId: item.id,
+        description: item.name,
+        quantity: line.quantity,
+        unitAmountCents: item.priceCents,
+        taxBasisPoints: 0,
+      });
+      continue;
+    }
     if (line.kind === "gift_card") {
       const card = await pendingGiftForCheckout(tx, line.giftCardId ?? "", principal);
       lines.push({
@@ -497,9 +583,20 @@ export async function createCheckoutInTransaction(
     });
   }
   const subtotalCents = lines.reduce((a, b) => a + b.quantity * b.unitAmountCents, 0);
+  const [discountClient] =
+    input.useClientDiscount && clientId
+      ? await tx
+          .select({ details: clientProfile.contactDetails })
+          .from(clientProfile)
+          .where(eq(clientProfile.id, clientId))
+      : [];
+  const personalDiscount = discountClient?.details.discountBasisPoints ?? 0;
+  const reviewedDiscount = input.useClientDiscount
+    ? Math.round((subtotalCents * personalDiscount) / 10000)
+    : input.discountCents;
   const manualDiscounts = allocateDiscount(
     lines.map((line) => line.quantity * line.unitAmountCents),
-    Math.min(input.discountCents, subtotalCents),
+    Math.min(reviewedDiscount, subtotalCents),
   );
   const memberDiscounts = await membershipDiscounts(tx, clientId, input.appointmentId, lines);
   const effectiveDiscounts = lines.map((_, index) =>
@@ -566,8 +663,11 @@ export async function createCheckoutInTransaction(
   });
   return snapshot(tx, row);
 }
-async function openSession(tx: Tx) {
+async function lockCashRegister(tx: Tx) {
   await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('sob.cash-session', 0))`);
+}
+async function openSession(tx: Tx) {
+  await lockCashRegister(tx);
   const [session] = await tx
     .select()
     .from(cashSession)
@@ -578,6 +678,13 @@ async function openSession(tx: Tx) {
       "invalid_state",
       "Open the cash register before recording cash movements",
     );
+  return session;
+}
+async function cashSessionForMovement(tx: Tx, id: string | undefined) {
+  if (!id) return openSession(tx);
+  await lockCashRegister(tx);
+  const [session] = await tx.select().from(cashSession).where(eq(cashSession.id, id)).for("update");
+  if (!session) throw new DomainError("not_found", "Cash session not found");
   return session;
 }
 export async function startPayment(
@@ -610,10 +717,18 @@ export async function startPayment(
           eq(checkoutPayment.idempotencyKey, input.idempotencyKey),
         ),
       );
+    if (sale.appointmentId && (!previous || previous.status === "pending"))
+      await assertAppointmentBillable(tx, sale.appointmentId);
     let payment = previous;
     if (previous) checkReplay(previous, requestHash);
     else {
       const view = await snapshot(tx, sale);
+      if (
+        view.externalBalance &&
+        (!["cash", "external_card", "redsys_card", "redsys_bizum"].includes(input.method) ||
+          view.totalCents !== view.externalBalance.dueInCitameCents)
+      )
+        throw new DomainError("invalid_state", "Collect only the verified Booksy balance in money");
       await assertRewardPayment(tx, sale, input.method);
       await assertProtectedPayment(
         tx,
@@ -910,15 +1025,28 @@ export async function currentCashSession(db: Database, principal: Principal) {
     { isolationLevel: "repeatable read", accessMode: "read only" },
   );
 }
-export async function openCashSession(db: Database, openingCents: number, principal: Principal) {
+export async function openCashSession(
+  db: Database,
+  openingCents: number,
+  principal: Principal,
+  id?: string,
+) {
   requirePermission(principal, "manageCash");
   return db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('sob.cash-session', 0))`);
+    await lockCashRegister(tx);
+    if (id) {
+      const [previous] = await tx.select().from(cashSession).where(eq(cashSession.id, id));
+      if (previous) {
+        if (previous.openedBy !== principal.userId || previous.openingCents !== openingCents)
+          throw new DomainError("invalid_state", "This opening request has already been used");
+        return cashView(tx, previous);
+      }
+    }
     if ((await tx.select().from(cashSession).where(isNull(cashSession.closedAt))).length)
       throw new DomainError("invalid_state", "The cash register is already open");
     const [row] = await tx
       .insert(cashSession)
-      .values({ openingCents, openedBy: principal.userId })
+      .values({ id, openingCents, openedBy: principal.userId })
       .returning();
     if (!row) throw new Error("Cash session insert failed");
     await recordAudit(tx, {
@@ -936,10 +1064,11 @@ export async function closeCashSession(
   id: string,
   countedCents: number,
   principal: Principal,
+  reviewedExpectedCents?: number,
 ) {
   requirePermission(principal, "manageCash");
   return db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('sob.cash-session', 0))`);
+    await lockCashRegister(tx);
     const [row] = await tx.select().from(cashSession).where(eq(cashSession.id, id)).for("update");
     if (!row) throw new DomainError("not_found", "Cash session not found");
     if (row.closedAt) {
@@ -948,6 +1077,11 @@ export async function closeCashSession(
       return cashView(tx, row);
     }
     const view = await cashView(tx, row);
+    if (reviewedExpectedCents !== undefined && view.expectedCents !== reviewedExpectedCents)
+      throw new DomainError(
+        "version_conflict",
+        "Cash movements changed. Review the register again",
+      );
     const [closed] = await tx
       .update(cashSession)
       .set({
@@ -972,6 +1106,7 @@ export async function closeCashSession(
 export async function adjustCash(
   db: Database,
   input: {
+    sessionId?: string;
     kind: "deposit" | "withdrawal";
     amountCents: number;
     reason: string;
@@ -981,7 +1116,7 @@ export async function adjustCash(
 ) {
   requirePermission(principal, "manageCash");
   return db.transaction(async (tx) => {
-    const session = await openSession(tx);
+    const session = await cashSessionForMovement(tx, input.sessionId);
     const requestHash = idemHash(input);
     const [previous] = await tx
       .select()
@@ -996,6 +1131,8 @@ export async function adjustCash(
       checkReplay(previous, requestHash);
       return cashView(tx, session);
     }
+    if (session.closedAt)
+      throw new DomainError("invalid_state", "The reviewed cash register has already closed");
     const expected = (await cashView(tx, session)).expectedCents;
     const next = expected + (input.kind === "withdrawal" ? -input.amountCents : input.amountCents);
     if (next < 0 || next > 999999999)

@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import type { Service, Slot } from "@sob/contracts";
 import { fireEvent, screen, within } from "@testing-library/react";
 import { renderApp } from "../../../test/render";
-import { DateStrip, ServiceChoice, Stepper, TimeSlotGrid } from "./components";
+import { DateStrip, ProfessionalChoice, ServiceChoice, Stepper, TimeSlotGrid } from "./components";
 import { groupSlots } from "./logic";
 
 const TZ = "America/Argentina/Buenos_Aires";
@@ -34,6 +34,28 @@ describe("ServiceChoice", () => {
     renderApp(<ServiceChoice service={haircut} selected onToggle={() => {}} />);
     expect(screen.getByRole("checkbox", { name: /Haircut/ })).toBeChecked();
   });
+});
+
+test("a withdrawn professional portrait falls back to the initial without affecting selection", () => {
+  const onSelect = mock();
+  const { container } = renderApp(
+    <ProfessionalChoice
+      value={id(2)}
+      name="Ana"
+      selected={false}
+      onSelect={onSelect}
+      portraitUrl={`/api/staff/${id(2)}/portrait/${id(3)}`}
+    />,
+  );
+  const image = container.querySelector("img");
+  if (!image) throw new Error("Expected a professional portrait");
+  expect(image).toHaveAttribute("alt", "");
+  expect(image).toHaveAttribute("width", "44");
+  fireEvent.error(image);
+  expect(container.querySelector("img")).toBeNull();
+  expect(screen.getByText("A")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("radio", { name: "Ana" }));
+  expect(onSelect).toHaveBeenCalledWith(id(2));
 });
 
 describe("Stepper", () => {

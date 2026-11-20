@@ -10,7 +10,7 @@ use crate::sync::TransportError;
 
 struct Scripted {
     fail_with: Mutex<Option<TransportError>>,
-    pushes: AtomicUsize,
+    push_attempts: Mutex<Vec<Instant>>,
     pulls: AtomicUsize,
     cursor_after: i64,
 }
@@ -19,7 +19,7 @@ impl Scripted {
     fn healthy() -> Arc<Self> {
         Arc::new(Self {
             fail_with: Mutex::new(None),
-            pushes: 0.into(),
+            push_attempts: Mutex::new(Vec::new()),
             pulls: 0.into(),
             cursor_after: 5,
         })
@@ -36,7 +36,7 @@ impl Scripted {
 
 impl Transport for Scripted {
     fn push(&self, req: &PushRequest) -> Result<PushResponse, TransportError> {
-        self.pushes.fetch_add(1, Ordering::SeqCst);
+        self.push_attempts.lock().unwrap().push(Instant::now());
         if let Some(e) = self.fail_with.lock().unwrap().clone() {
             return Err(e);
         }
@@ -59,9 +59,15 @@ impl Transport for Scripted {
             return Err(e);
         }
         Ok(PullResponse {
+            generation: None,
             changes: vec![],
             next_cursor: since.max(self.cursor_after),
             has_more: false,
+            refresh: vec![],
+            time_off_scope: None,
+            client_directory: None,
+            calendar_scope: None,
+            viewer_role: None,
             head_seq: 5,
         })
     }
@@ -134,7 +140,6 @@ fn recovery_resets_the_backoff() {
     t.heal();
     assert_eq!(core.run_cycle(), POLL_INTERVAL);
     assert_eq!(snap(&status).connectivity, Connectivity::Online);
-    t.pushes.store(0, Ordering::SeqCst);
     *t.fail_with.lock().unwrap() = Some(TransportError::Offline("x".into()));
     assert_eq!(
         core.run_cycle(),
@@ -150,6 +155,30 @@ fn retry_after_is_honored_as_a_floor() {
         1,
     );
     assert_eq!(core.run_cycle(), Duration::from_secs(30));
+}
+
+#[test]
+fn worker_wakes_cannot_bypass_a_rate_limit_and_pending_edits_sync_afterward() {
+    let retry_after = Duration::from_secs(1);
+    let t = Scripted::failing(TransportError::RateLimited(Some(retry_after)));
+    let (core, status) = core_with(t.clone(), 1);
+    let runner = SyncRunner::spawn(core);
+    wait_for(&status, "rate limit", |s| {
+        !s.syncing && s.retry_in.is_some()
+    });
+    assert_eq!(snap(&status).pending, 1);
+    t.heal();
+
+    runner.wake(Wake::Manual);
+    runner.wake(Wake::Local);
+    runner.wake(Wake::Nudge(6));
+    wait_for(&status, "sync after cooldown", |s| {
+        s.connectivity == Connectivity::Online && s.pending == 0 && !s.syncing
+    });
+    let attempts = t.push_attempts.lock().unwrap();
+    assert_eq!(attempts.len(), 2);
+    assert!(attempts[1].duration_since(attempts[0]) >= retry_after);
+    runner.stop();
 }
 
 #[test]

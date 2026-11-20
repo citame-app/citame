@@ -2,6 +2,7 @@ import { expect, type Page, request as playwrightRequest, test } from "@playwrig
 import { RECURRING_FIXTURE as fixture } from "../../api/test/recurring-values";
 import { expectNoHorizontalScroll } from "./admin-helpers";
 import { expectNoSeriousA11yViolations, signInThroughUi } from "./helpers";
+import { addCustomItem, reviewReceipt } from "./pos-helpers";
 
 async function openRewards(page: Page) {
   await page.goto("/admin/commerce");
@@ -10,14 +11,20 @@ async function openRewards(page: Page) {
 }
 async function newCustomerSale(page: Page, description: string, clientId: string) {
   await page.getByRole("button", { name: "New sale", exact: true }).click();
-  await page.getByLabel("Search customer for points", { exact: true }).fill(fixture.clientEmail);
-  await page.getByLabel("Customer points account", { exact: true }).selectOption(clientId);
-  await page.getByLabel("Item or service", { exact: true }).fill(description);
-  await page.getByLabel("Price (EUR)", { exact: true }).fill("100.00");
+  await page.getByRole("button", { name: "Select a customer or leave blank", exact: true }).click();
+  await page
+    .getByLabel("Search by name, phone or email", { exact: true })
+    .fill(fixture.clientEmail);
+  await page
+    .getByRole("dialog", { name: "Select a customer", exact: true })
+    .getByRole("button")
+    .filter({ hasText: fixture.clientEmail })
+    .click();
+  await addCustomItem(page, description, "100.00");
   const created = page.waitForResponse(
     (r) => r.url().endsWith("/api/admin/commerce/checkouts") && r.request().method() === "POST",
   );
-  await page.getByRole("button", { name: "Create checkout", exact: true }).click();
+  await reviewReceipt(page);
   const response = await created;
   expect(response.status(), await response.text()).toBe(201);
   const sale = await response.json();
@@ -127,12 +134,11 @@ for (const scheme of ["light", "dark"] as const) {
           headers: { origin: fixture.baseURL },
           data: {},
         });
-        await signInThroughUi(page, fixture.ownerEmail, "/admin/commerce");
-        await page
-          .locator("li")
-          .filter({ has: page.getByText(description, { exact: true }) })
-          .getByRole("button", { name: "View receipt", exact: true })
-          .click();
+        await signInThroughUi(
+          page,
+          fixture.ownerEmail,
+          `/admin/commerce?view=transactions&checkout=${saleId}`,
+        );
         await receipt.getByRole("button", { name: "Refund payment", exact: true }).click();
         await receipt.getByLabel("Refund amount", { exact: true }).fill("90.00");
         await receipt

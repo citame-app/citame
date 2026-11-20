@@ -6,6 +6,7 @@ export interface ReportsSearch {
   from?: string;
   to?: string;
   staff?: string;
+  currency?: string;
 }
 
 export function validateReportsSearch(raw: Record<string, unknown>): ReportsSearch {
@@ -19,6 +20,9 @@ export function validateReportsSearch(raw: Record<string, unknown>): ReportsSear
     ...(preset === "custom" && from.success ? { from: from.data } : {}),
     ...(preset === "custom" && to.success ? { to: to.data } : {}),
     ...(staff.success ? { staff: staff.data } : {}),
+    ...(typeof raw.currency === "string" && /^[A-Z]{3}$/.test(raw.currency)
+      ? { currency: raw.currency }
+      : {}),
   };
 }
 

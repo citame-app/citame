@@ -34,7 +34,8 @@ test("a salon sale explicitly links the selected customer so points belong to th
       bodies.push(JSON.parse(String(init.body)));
       return Response.json(receipt);
     }
-    if (path.endsWith("/checkouts")) return Response.json({ checkouts: [] });
+    if (path.endsWith("/checkouts"))
+      return Response.json({ checkouts: [], total: 0, page: 1, pageSize: 25 });
     if (path.endsWith("/staff")) return Response.json({ staff: [] });
     if (path.endsWith("/current")) return Response.json({ session: null });
     if (path.endsWith("/clients"))
@@ -56,6 +57,7 @@ test("a salon sale explicitly links the selected customer so points belong to th
         pageSize: 8,
         total: 1,
       });
+    if (path === "/api/services") return Response.json({ services: [] });
     if (path.endsWith("/products"))
       return Response.json({ products: [], pagination: { page: 1, pageSize: 20, total: 0 } });
     if (path.endsWith("/capabilities"))
@@ -72,14 +74,16 @@ test("a salon sale explicitly links the selected customer so points belong to th
   }) as unknown as typeof fetch;
   renderApp(<CommerceView role="owner" />);
   fireEvent.click(await screen.findByRole("button", { name: "New sale" }));
-  fireEvent.change(await screen.findByLabelText("Search customer for points"), {
+  fireEvent.click(await screen.findByRole("button", { name: "Select a customer or leave blank" }));
+  fireEvent.change(await screen.findByLabelText("Search by name, phone or email"), {
     target: { value: "Known" },
   });
-  await screen.findByRole("option", { name: "Known buyer" });
-  fireEvent.change(screen.getByLabelText("Customer points account"), { target: { value: id } });
+  fireEvent.click(await screen.findByRole("button", { name: "Known buyer" }));
+  fireEvent.click(screen.getByRole("button", { name: "Custom amount" }));
   fireEvent.change(screen.getByLabelText("Item or service"), { target: { value: "Salon visit" } });
-  fireEvent.change(screen.getByLabelText("Price (EUR)"), { target: { value: "10" } });
-  fireEvent.click(screen.getByRole("button", { name: "Create checkout" }));
+  fireEvent.change(screen.getByLabelText("Amount (EUR)"), { target: { value: "10" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add to receipt" }));
+  fireEvent.click(screen.getByRole("button", { name: "Select payment method" }));
   await waitFor(() =>
     expect(bodies[0]).toMatchObject({
       clientId: id,

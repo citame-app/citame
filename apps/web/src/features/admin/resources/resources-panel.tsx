@@ -23,15 +23,15 @@ const selectClass =
 const requirementsKey = (id: string) => ["admin", "resources", "service", id];
 const resourceQuery = { queryKey: ["admin", "resources"], queryFn: () => api().resources.list() };
 type DraftProps = { onDirty: (dirty: boolean) => void; onBusy: (busy: boolean) => void };
-function useDraftStatus(dirty: boolean, busy: boolean, props: DraftProps) {
+function useDraftStatus(dirty: boolean, busy: boolean, { onDirty, onBusy }: DraftProps) {
   useEffect(() => {
-    props.onDirty(dirty);
-    return () => props.onDirty(false);
-  }, [dirty, props.onDirty]);
+    onDirty(dirty);
+    return () => onDirty(false);
+  }, [dirty, onDirty]);
   useEffect(() => {
-    props.onBusy(busy);
-    return () => props.onBusy(false);
-  }, [busy, props.onBusy]);
+    onBusy(busy);
+    return () => onBusy(false);
+  }, [busy, onBusy]);
 }
 function useRefreshResources() {
   const queries = useQueryClient();
@@ -380,6 +380,8 @@ function RequirementForm({
   const refresh = useRefreshResources();
   const queries = useQueryClient();
   const [base, setBase] = useState(initial);
+  const modeId = useId();
+  const [selectionMode, setSelectionMode] = useState(initial.selectionMode ?? "all");
   const valuesOf = (r: ServiceResources) =>
     Object.fromEntries(
       resources.map((pool) => [
@@ -396,6 +398,7 @@ function RequirementForm({
     onSuccess: (r) => {
       queries.setQueryData(requirementsKey(r.serviceId), r);
       setBase(r);
+      setSelectionMode(r.selectionMode ?? "all");
       setValues(valuesOf(r));
       setSaved(true);
       refresh();
@@ -413,6 +416,7 @@ function RequirementForm({
       queries.setQueryData(resourceQuery.queryKey, pools);
       queries.setQueryData(requirementsKey(r.serviceId), r);
       setBase(r);
+      setSelectionMode(r.selectionMode ?? "all");
       setValues(valuesOf(r));
       setInvalid(false);
       setSaved(false);
@@ -420,16 +424,20 @@ function RequirementForm({
     },
   });
   const busy = save.isPending || reload.isPending;
-  const dirty = resources.some(
-    (r) =>
-      (values[r.id] ?? "0") !==
-      String(base.requirements.find((v) => v.resourceId === r.id)?.quantity ?? 0),
-  );
+  const modeChanged = selectionMode !== (base.selectionMode ?? "all");
+  const dirty =
+    modeChanged ||
+    resources.some(
+      (r) =>
+        (values[r.id] ?? "0") !==
+        String(base.requirements.find((v) => v.resourceId === r.id)?.quantity ?? 0),
+    );
   useEffect(() => {
     // A background refresh may finish after mounting from stale cache. Adopt it only
     // while untouched; concurrent updates must never erase an operator's draft.
     if (initial.version > base.version && !dirty && !busy) {
       setBase(initial);
+      setSelectionMode(initial.selectionMode ?? "all");
       setValues(
         Object.fromEntries(
           resources.map((r) => [
@@ -450,7 +458,12 @@ function RequirementForm({
         setSaved(false);
         const quantities = resources.map((r) => ({
           resourceId: r.id,
-          quantity: /^\d+$/.test(values[r.id] ?? "0") ? Number(values[r.id] ?? "0") : -1,
+          quantity:
+            selectionMode === "one_of"
+              ? Number(Number(values[r.id]) > 0)
+              : /^\d+$/.test(values[r.id] ?? "0")
+                ? Number(values[r.id] ?? "0")
+                : -1,
         }));
         const validCapacity = quantities.every((q) => {
           const r = resources.find((r) => r.id === q.resourceId);
@@ -458,27 +471,77 @@ function RequirementForm({
         });
         const input = serviceResourceInputSchema.safeParse({
           version: base.version,
+          ...(modeChanged ? { selectionMode } : {}),
           requirements: quantities.filter((q) => q.quantity !== 0),
         });
         setInvalid(!validCapacity || !input.success);
         if (validCapacity && input.success && online && !busy) save.mutate(input.data);
       }}
     >
-      <p className="text-sm text-muted">{t("resources.zero")}</p>
-      {resources.map((r) => (
-        <TextField
-          key={r.id}
-          disabled={busy}
-          label={t("resources.quantity", { name: r.name })}
-          hint={!r.active ? t("resources.inactive") : undefined}
-          type="number"
-          min={0}
-          max={r.capacity}
-          step={1}
-          value={values[r.id] ?? "0"}
-          onChange={(e) => setValues((v) => ({ ...v, [r.id]: e.target.value }))}
-        />
-      ))}
+      <fieldset disabled={busy} className="space-y-1" aria-describedby={`${modeId}-help`}>
+        <legend className="mb-1 text-sm font-medium">{t("resources.selectionMode")}</legend>
+        {(["all", "one_of"] as const).map((mode) => (
+          <label key={mode} className="flex min-h-12 cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="radio"
+              name={modeId}
+              value={mode}
+              checked={selectionMode === mode}
+              onChange={() => {
+                setSelectionMode(mode);
+                setInvalid(false);
+              }}
+              className="accent-current"
+            />
+            {t(mode === "all" ? "resources.useAll" : "resources.useOne")}
+          </label>
+        ))}
+      </fieldset>
+      <p id={`${modeId}-help`} className="text-sm text-muted">
+        {t(selectionMode === "one_of" ? "resources.alternativesHelp" : "resources.zero")}
+      </p>
+      {selectionMode === "one_of" ? (
+        <fieldset disabled={busy} className="space-y-1">
+          <legend className="text-sm font-medium">{t("resources.eligible")}</legend>
+          {resources.map((r) => {
+            const checked = Number(values[r.id]) > 0;
+            return (
+              <label key={r.id} className="flex min-h-12 items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  name="resource"
+                  value={r.id}
+                  checked={checked}
+                  disabled={!r.active && !checked}
+                  onChange={(e) => {
+                    const value = e.target.checked ? "1" : "0";
+                    setValues((previous) => ({ ...previous, [r.id]: value }));
+                    setInvalid(false);
+                  }}
+                  className="accent-current"
+                />
+                {r.name}
+                {!r.active && <span className="text-muted">({t("resources.inactive")})</span>}
+              </label>
+            );
+          })}
+        </fieldset>
+      ) : (
+        resources.map((r) => (
+          <TextField
+            key={r.id}
+            disabled={busy}
+            label={t("resources.quantity", { name: r.name })}
+            hint={!r.active ? t("resources.inactive") : undefined}
+            type="number"
+            min={0}
+            max={r.capacity}
+            step={1}
+            value={values[r.id] ?? "0"}
+            onChange={(e) => setValues((v) => ({ ...v, [r.id]: e.target.value }))}
+          />
+        ))
+      )}
       {invalid && (
         <p role="alert" className="text-danger-fg">
           {t("resources.requirementsInvalid")}

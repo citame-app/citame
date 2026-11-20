@@ -2,7 +2,17 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 
 // Keep Bun's native Web API: happy-dom's versions follow browser rules (forbidden headers such
 // as Cookie and Set-Cookie), which is wrong for server-side code under test.
-const nativeKeys = ["fetch", "Request", "Response", "Headers", "FormData"] as const;
+const nativeKeys = [
+  "fetch",
+  "Request",
+  "Response",
+  "Headers",
+  "FormData",
+  "AbortController",
+  "AbortSignal",
+  "ReadableStream",
+  "TransformStream",
+] as const;
 const native = Object.fromEntries(
   nativeKeys.map((key) => [key, (globalThis as Record<string, unknown>)[key]]),
 );

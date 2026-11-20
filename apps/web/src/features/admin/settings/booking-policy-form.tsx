@@ -100,7 +100,7 @@ function PolicyEditor({ initial }: { initial: BookingPolicy }) {
         else setInvalid(true);
       }}
     >
-      <UnsavedGuard dirty={dirty} />
+      <UnsavedGuard dirty={dirty} preserveOnSearchChange />
       <h2 className="text-heading">{t("protection.title")}</h2>
       <p className="text-sm text-muted">{t("protection.help")}</p>
       <label className="flex min-h-11 items-center gap-3">

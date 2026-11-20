@@ -1,61 +1,76 @@
 import { Popover } from "@base-ui/react/popover";
-import type { CalendarAppointment, UserRole } from "@sob/contracts";
+import type { CalendarAppointment, ScheduleConflict, UserRole } from "@sob/contracts";
+import { permissionsFor } from "@sob/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Button } from "~/components/ui/button";
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
   KeyboardIcon,
+  MenuIcon,
   PlusIcon,
   RefreshIcon,
+  SearchIcon,
 } from "~/components/ui/icons";
 import { EmptyState, ErrorState, Skeleton } from "~/components/ui/states";
 import { useI18n } from "~/i18n/react";
 import { adminStaffQuery, calendarQuery } from "~/lib/admin-queries";
-import {
-  dayOfMonth,
-  formatDateLong,
-  formatTime,
-  localDateOf,
-  monthShort,
-  weekdayShort,
-} from "~/lib/format";
+import { addDaysLocal, formatDateLong, formatTime, localDateOf } from "~/lib/format";
 import { salonQuery } from "~/lib/queries";
 import { zonedInstant } from "~/lib/zoned";
+import { ConflictList } from "../staff/conflict-list";
 import { useNow } from "../use-now";
 import { AppointmentDrawer } from "./appointment-drawer";
-import { CalendarGrid, type GridColumn } from "./calendar-grid";
+import { BooksyContextImport } from "./booksy-context-import";
+import { CalendarGrid, type GridColumn, type MoveRequest } from "./calendar-grid";
+import { CalendarInbox } from "./inbox";
 import { shortcutFor } from "./keys";
+import { useCalendarLive } from "./live-provider";
 import {
   availableActions,
   rangeFor,
   statusAppearance,
   type CalendarView as ViewName,
 } from "./logic";
+import { MiniCalendar } from "./mini-calendar";
 import { type NewAppointmentInitial, NewAppointmentSheet } from "./new-appointment";
+import { CalendarOverview } from "./overview";
+import { indexCalendar, personInitials, serviceHue } from "./presentation";
 import { type CalendarSearch, shiftDate } from "./search";
 import { ShortcutsHelp } from "./shortcuts-help";
-import { STATUS_CLASSES } from "./status-badge";
+import { CalendarTimeOff } from "./time-off";
 import { useMoveAppointment } from "./use-move";
+import { CalendarWaitlist } from "./waitlist";
 
 function isTyping(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
-  if (!el?.tagName) return false;
-  return ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || el.isContentEditable;
+  return (
+    !!el?.tagName && (["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || el.isContentEditable)
+  );
 }
 
 export function CalendarView({
   search,
+  userId = "operator",
   onSearchChange,
   role,
   bookingRole = role,
   ownStaffId,
   accessPreset,
-  readOnly = false,
+  readOnly: providedReadOnly = false,
   now: fixedNow,
 }: {
   search: CalendarSearch;
+  userId?: string;
   onSearchChange: (search: CalendarSearch) => void;
   role: UserRole;
   bookingRole?: UserRole;
@@ -65,80 +80,142 @@ export function CalendarView({
   now?: Date;
 }) {
   const { t, locale, timeZone } = useI18n();
+  const live = useCalendarLive();
   const ticking = useNow(30_000);
   const now = fixedNow ?? ticking;
+  const today = localDateOf(now.toISOString(), timeZone);
   const queryClient = useQueryClient();
   const salon = useQuery(salonQuery);
   const allStaff = useQuery(adminStaffQuery);
-  const granularity = salon.data?.slotGranularityMinutes ?? 15;
-  const range = rangeFor(search.view, search.date, timeZone);
-  const selectedIds = search.staff ? search.staff.split(",") : [];
+  const selectedIds = useMemo(() => search.staff?.split(",") ?? [], [search.staff]);
   const apiStaffIds = role === "owner" && selectedIds.length > 0 ? selectedIds : undefined;
-  const query = useQuery(calendarQuery({ from: range.from, to: range.to, staffIds: apiStaffIds }));
-  const { move, conflict, clearConflict } = useMoveAppointment();
-
-  const [showCancelled, setShowCancelled] = useState(false);
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [creating, setCreating] = useState<NewAppointmentInitial | null>(null);
-  const [helpOpen, setHelpOpen] = useState(false);
-
+  const range = useMemo(
+    () => rangeFor(search.view, search.date, timeZone),
+    [search.view, search.date, timeZone],
+  );
+  const query = useQuery({
+    ...calendarQuery({ from: range.from, to: range.to, staffIds: apiStaffIds }),
+    ...(live ? { refetchInterval: false } : {}),
+  });
   const calendar = query.data;
-  const staffName = useCallback(
-    (id: string) => calendar?.staff.find((s) => s.id === id)?.displayName ?? "",
-    [calendar],
+  const [lastConsultation, setLastConsultation] = useState(Boolean(calendar?.importSnapshot));
+  const consultation = calendar ? Boolean(calendar.importSnapshot) : lastConsultation;
+  useEffect(() => {
+    if (calendar) setLastConsultation(Boolean(calendar.importSnapshot));
+  }, [calendar]);
+  const readOnly = providedReadOnly || consultation;
+  const { move, conflict, clearConflict } = useMoveAppointment();
+  const [showCancelled, setShowCancelled] = useState(false);
+  const [status, setStatus] = useState("all");
+  const [text, setText] = useState("");
+  const deferredText = useDeferredValue(text);
+  const [openId, setOpenId] = useState<string | null>(search.appointment ?? null);
+  useEffect(() => setOpenId(search.appointment ?? null), [search.appointment]);
+  const [creating, setCreating] = useState<NewAppointmentInitial | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [blocking, setBlocking] = useState<"time" | "absence" | null>(null);
+  const [timeOffConflicts, setTimeOffConflicts] = useState<ScheduleConflict[]>([]);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [dateOpen, setDateOpen] = useState(false);
+  const granularity = salon.data?.slotGranularityMinutes ?? 15;
+  const permissions = permissionsFor(bookingRole, accessPreset);
+  const timeOffStaff = (allStaff.data ?? []).filter(
+    (member) => member.active && (permissions.editSchedules || member.id === ownStaffId),
   );
 
-  // The week view shows one team member's seven days: pick one when switching.
-  const weekStaffId = selectedIds[0] ?? ownStaffId ?? calendar?.staff[0]?.id;
-  const columns: GridColumn[] = useMemo(() => {
-    if (!calendar) return [];
-    if (search.view === "day") {
-      return calendar.staff.map((s) => ({
-        key: s.id,
-        staffId: s.id,
+  const staff = useMemo(
+    () =>
+      (calendar?.staff ?? []).filter((member) => {
+        if (selectedIds.length && !selectedIds.includes(member.id)) return false;
+        if (!search.working) return true;
+        return calendar?.workingWindows.some(
+          (window) =>
+            window.staffId === member.id &&
+            window.startsAt < range.to &&
+            window.endsAt > range.from,
+        );
+      }),
+    [calendar?.staff, calendar?.workingWindows, search.working, selectedIds, range.from, range.to],
+  );
+  const staffIds = useMemo(() => new Set(staff.map((member) => member.id)), [staff]);
+  const appointments = useMemo(() => {
+    const needle = deferredText.trim().toLocaleLowerCase(locale);
+    return (calendar?.appointments ?? []).filter(
+      (a) =>
+        staffIds.has(a.staffId) &&
+        (showCancelled || a.status !== "cancelled") &&
+        (status === "all" || a.status === status) &&
+        (!needle ||
+          `${a.clientName} ${a.serviceNames.join(" ")}`.toLocaleLowerCase(locale).includes(needle)),
+    );
+  }, [calendar?.appointments, showCancelled, status, deferredText, locale, staffIds]);
+  const isDay = search.view === "day";
+  const index = useMemo(
+    () => (isDay ? null : indexCalendar(appointments, timeZone)),
+    [isDay, appointments, timeZone],
+  );
+  const serviceNames = useMemo(
+    () =>
+      [...new Set((calendar?.appointments ?? []).flatMap((a) => a.serviceNames))].sort((a, b) =>
+        a.localeCompare(b, locale),
+      ),
+    [calendar?.appointments, locale],
+  );
+  const columns: GridColumn[] = useMemo(
+    () =>
+      staff.map((member) => ({
+        key: member.id,
+        staffId: member.id,
         date: search.date,
-        title: s.displayName,
-      }));
-    }
-    const member = calendar.staff.find((s) => s.id === weekStaffId) ?? calendar.staff[0];
-    if (!member) return [];
-    return range.dates.map((date) => ({
-      key: `${member.id}-${date}`,
-      staffId: member.id,
-      date,
-      title: weekdayShort(date, locale),
-      subtitle: `${dayOfMonth(date)} ${monthShort(date, locale)}`,
-    }));
-  }, [calendar, search.view, search.date, range.dates, locale, weekStaffId]);
-
+        title: member.displayName,
+        subtitle: (calendar?.workingWindows ?? [])
+          .filter(
+            (window) =>
+              window.staffId === member.id &&
+              localDateOf(window.startsAt, timeZone) === search.date,
+          )
+          .map(
+            (window) =>
+              `${formatTime(window.startsAt, timeZone, locale)}–${formatTime(window.endsAt, timeZone, locale)}`,
+          )
+          .join(", "),
+      })),
+    [staff, search.date, calendar?.workingWindows, timeZone, locale],
+  );
   const openAppointment = calendar?.appointments.find((a) => a.id === openId) ?? null;
+  const onOpenAppointment = useCallback((appointment: CalendarAppointment) => {
+    setOpenId(appointment.id);
+  }, []);
+  const onMoveAppointment = useCallback(
+    (appointment: CalendarAppointment, to: MoveRequest) => {
+      move({ appointment, to });
+    },
+    [move],
+  );
   const canMove = useCallback(
     (a: CalendarAppointment) => availableActions(role, a, now, ownStaffId, !readOnly).reschedule,
     [role, now, ownStaffId, readOnly],
   );
-
   const go = useCallback(
     (patch: Partial<CalendarSearch>) => onSearchChange({ ...search, ...patch }),
     [search, onSearchChange],
   );
-  const setView = (view: ViewName) =>
-    onSearchChange({
-      ...search,
-      view,
-      ...(view === "week" && weekStaffId ? { staff: weekStaffId } : {}),
-    });
-  const today = localDateOf(now.toISOString(), timeZone);
+  const setView = (view: ViewName) => go({ view });
   const openNew = useCallback(
-    (slot?: Partial<NewAppointmentInitial>) =>
-      !readOnly &&
-      setCreating({
-        staffId: slot?.staffId ?? (role === "staff" ? (ownStaffId ?? undefined) : weekStaffId),
-        date: slot?.date ?? search.date,
-        minutesOfDay: slot?.minutesOfDay,
-      }),
-    [role, ownStaffId, weekStaffId, search.date, readOnly],
+    (slot?: Partial<NewAppointmentInitial>) => {
+      if (!readOnly && calendar)
+        setCreating({
+          staffId:
+            slot?.staffId ??
+            (role === "staff" ? (ownStaffId ?? undefined) : (selectedIds[0] ?? staff[0]?.id)),
+          date: slot?.date ?? search.date,
+          minutesOfDay: slot?.minutesOfDay,
+        });
+    },
+    [readOnly, calendar, role, ownStaffId, selectedIds, staff, search.date],
   );
-
   const handlers = useRef({
     go,
     setView,
@@ -148,14 +225,12 @@ export function CalendarView({
     refetch: () => void query.refetch(),
   });
   handlers.current = { go, setView, openNew, search, today, refetch: () => void query.refetch() };
-
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.defaultPrevented) return;
-      const dialogOpen = document.querySelector("[role='dialog']") !== null;
       const action = shortcutFor({
         key: event.key,
-        typing: isTyping(event.target) || dialogOpen,
+        typing: isTyping(event.target) || document.querySelector("[role='dialog']") !== null,
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,
         altKey: event.altKey,
@@ -179,6 +254,12 @@ export function CalendarView({
         case "week":
           h.setView("week");
           break;
+        case "month":
+          h.setView("month");
+          break;
+        case "list":
+          h.setView("list");
+          break;
         case "new":
           h.openNew();
           break;
@@ -194,165 +275,496 @@ export function CalendarView({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const unit = t(search.view === "day" ? "calendar.unit.day" : "calendar.unit.week");
+  // Prefetch only on intent. Never label old-range appointments with the newly selected date.
+  const prefetch = (direction: 1 | -1) => {
+    const next = rangeFor(search.view, shiftDate(search.date, search.view, direction), timeZone);
+    void queryClient.prefetchQuery(
+      calendarQuery({ from: next.from, to: next.to, staffIds: apiStaffIds }),
+    );
+  };
+  const onDay = (date: string, staffId?: string) =>
+    go({ view: "day", date, ...(staffId ? { staff: staffId, working: undefined } : {}) });
+  const unit = t(
+    search.view === "month"
+      ? "calendar.unit.month"
+      : search.view === "day"
+        ? "calendar.unit.day"
+        : "calendar.unit.week",
+  );
   const title =
-    search.view === "day"
-      ? formatDateLong(search.date, locale)
-      : `${formatDateLong(range.dates[0] as string, locale)} - ${formatDateLong(range.dates[6] as string, locale)}`;
-  const updated = query.dataUpdatedAt
-    ? formatTime(new Date(query.dataUpdatedAt).toISOString(), timeZone, locale)
-    : null;
+    search.view === "month"
+      ? new Intl.DateTimeFormat(locale, { month: "long", year: "numeric", timeZone: "UTC" }).format(
+          new Date(`${search.date}T12:00:00Z`),
+        )
+      : search.view === "day"
+        ? formatDateLong(search.date, locale)
+        : `${formatDateLong(range.dates[0] as string, locale)} – ${formatDateLong(range.dates.at(-1) as string, locale)}`;
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="flex items-center gap-1">
-          <Button
-            variant="secondary"
-            aria-label={t("calendar.nav.previous", { unit })}
-            onClick={() => go({ date: shiftDate(search.date, search.view, -1) })}
+    <div className="calendar-workbench" data-sidebar-collapsed={sidebarCollapsed || undefined}>
+      {consultation && (
+        <p role="status" className="border-b border-line bg-sunken px-5 py-3 text-sm text-muted">
+          {t("badge.consultation")}
+        </p>
+      )}
+      <header className="calendar-page-header">
+        <div className="calendar-page-heading">
+          <button
+            type="button"
+            className="calendar-icon-button calendar-toggle-desktop"
+            aria-label={t("calendar.toggleSidebar")}
+            aria-expanded={!sidebarCollapsed}
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
           >
-            <ChevronLeftIcon />
-          </Button>
-          <Button variant="secondary" onClick={() => go({ date: today })}>
-            {t("calendar.nav.today")}
-          </Button>
-          <Button
-            variant="secondary"
-            aria-label={t("calendar.nav.next", { unit })}
-            onClick={() => go({ date: shiftDate(search.date, search.view, 1) })}
+            <MenuIcon />
+          </button>
+          <button
+            type="button"
+            className="calendar-icon-button calendar-toggle-mobile"
+            aria-label={t("calendar.filters")}
+            aria-expanded={filtersOpen}
+            aria-controls="calendar-filters"
+            onClick={() => setFiltersOpen(!filtersOpen)}
           >
-            <ChevronRightIcon />
-          </Button>
+            <MenuIcon />
+          </button>
+          <div>
+            <h1>{t("calendar.title")}</h1>
+            <p>{t("calendar.workspaceLead")}</p>
+          </div>
         </div>
-        <h2
-          className="mx-1 min-w-0 basis-full font-display text-lg font-semibold sm:flex-1 sm:basis-auto sm:text-xl"
-          aria-live="polite"
-        >
-          {title}
-        </h2>
-        <fieldset className="inline-flex rounded-md border border-line p-0.5">
-          <legend className="sr-only">{t("calendar.view.label")}</legend>
-          {(["day", "week"] as const).map((view) => (
-            <span key={view} className="relative">
-              <input
-                type="radio"
-                name="calendar-view"
-                aria-label={t(`calendar.view.${view}`)}
-                className="peer absolute inset-0 z-10 m-0 size-full cursor-pointer opacity-0"
-                checked={search.view === view}
-                onChange={() => setView(view)}
-              />
-              <span className="flex min-h-11 min-w-16 items-center justify-center rounded px-3 text-sm font-medium text-muted peer-checked:bg-accent peer-checked:text-accent-fg peer-focus-visible:outline-3 peer-focus-visible:outline-ring">
-                {t(`calendar.view.${view}`)}
-              </span>
+        <div className="calendar-toolbar-actions">
+          <CalendarInbox userId={userId} />
+          {live !== undefined && (
+            <span
+              className="calendar-live-state"
+              role="img"
+              data-live={live || undefined}
+              title={t(live ? "calendar.live.connected" : "calendar.live.reconnecting")}
+              aria-label={t(live ? "calendar.live.connected" : "calendar.live.reconnecting")}
+            >
+              <i aria-hidden="true" />
             </span>
-          ))}
-        </fieldset>
-        {role === "owner" && (
-          <StaffFilter
-            staff={(allStaff.data ?? []).filter((s) => s.active)}
-            selected={search.view === "week" ? [weekStaffId ?? ""] : selectedIds}
-            single={search.view === "week"}
-            onChange={(ids) => go({ staff: ids.length > 0 ? ids.join(",") : undefined })}
-          />
-        )}
-        {!readOnly && (
-          <Button onClick={() => openNew()}>
-            <PlusIcon />
-            {t("calendar.newAppointment")}
-          </Button>
-        )}
-      </div>
-
-      <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted">
-        <label className="flex min-h-11 cursor-pointer items-center gap-2">
-          <input
-            type="checkbox"
-            className="size-5 accent-[var(--accent)]"
-            checked={showCancelled}
-            onChange={(e) => setShowCancelled(e.target.checked)}
-          />
-          {t("calendar.showCancelled")}
-        </label>
-        <div className="flex items-center gap-1">
-          {updated && <span>{t("calendar.updatedAt", { time: updated })}</span>}
-          <Button
-            variant="ghost"
+          )}
+          <label className="calendar-search">
+            <SearchIcon width={16} />
+            <span className="sr-only">{t("calendar.search")}</span>
+            <input
+              type="search"
+              placeholder={t("calendar.search")}
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            className="calendar-icon-button"
             aria-label={t("calendar.refresh")}
+            aria-busy={query.isFetching}
             onClick={() => void query.refetch()}
-            loading={query.isFetching && !query.isPending}
           >
-            {!(query.isFetching && !query.isPending) && <RefreshIcon />}
-          </Button>
-          <Button
-            variant="ghost"
+            <RefreshIcon className={query.isFetching ? "animate-spin" : undefined} />
+          </button>
+          <button
+            type="button"
+            className="calendar-icon-button calendar-shortcuts"
             aria-label={t("shortcuts.open")}
             onClick={() => setHelpOpen(true)}
           >
             <KeyboardIcon />
-          </Button>
+          </button>
+          {!readOnly && (
+            <Popover.Root open={adding} onOpenChange={setAdding}>
+              <Popover.Trigger
+                className="calendar-create calendar-primary-action"
+                disabled={!calendar}
+                aria-label={t("calendar.add")}
+                title={t("calendar.add")}
+              >
+                <PlusIcon width={18} height={18} />
+                <span>{t("calendar.add")}</span>
+              </Popover.Trigger>
+              <Popover.Portal>
+                <Popover.Positioner side="bottom" align="end" sideOffset={12} className="z-40">
+                  <Popover.Popup className="calendar-add-menu">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAdding(false);
+                        openNew();
+                      }}
+                    >
+                      {t("calendar.newAppointment")}
+                    </button>
+                    {(permissions.editSchedules || ownStaffId) && (
+                      <>
+                        <button
+                          type="button"
+                          disabled={!timeOffStaff.length}
+                          onClick={() => {
+                            setAdding(false);
+                            setBlocking("time");
+                          }}
+                        >
+                          {t("calendar.blockTime")}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!timeOffStaff.length}
+                          onClick={() => {
+                            setAdding(false);
+                            setBlocking("absence");
+                          }}
+                        >
+                          {t("calendar.addAbsence")}
+                        </button>
+                      </>
+                    )}
+                  </Popover.Popup>
+                </Popover.Positioner>
+              </Popover.Portal>
+            </Popover.Root>
+          )}
+        </div>
+      </header>
+      <div className="calendar-body">
+        <aside
+          id="calendar-filters"
+          className="calendar-filters"
+          data-mobile-open={filtersOpen || undefined}
+        >
+          <MiniCalendar
+            headingLevel={2}
+            date={search.date}
+            today={today}
+            onSelect={(date) => {
+              go({ date });
+              setFiltersOpen(false);
+            }}
+          />
+          <details className="calendar-filter-section calendar-jump-options">
+            <summary>{t("calendar.jumpWeeks")}</summary>
+            {[1, -1].map((direction) => (
+              <div key={direction} className="grid grid-cols-6 gap-1">
+                {[1, 2, 3, 4, 5, 6].map((n) => (
+                  <button
+                    type="button"
+                    key={n}
+                    className="calendar-week-jump"
+                    aria-label={t("calendar.jumpByWeeks", { count: n * direction })}
+                    onClick={() => go({ date: addDaysLocal(search.date, n * direction * 7) })}
+                  >
+                    {direction === 1 ? "+" : "−"}
+                    {n}
+                  </button>
+                ))}
+              </div>
+            ))}
+          </details>
+          {role === "owner" && (
+            <details className="calendar-filter-section" open>
+              <summary>{t("calendar.staffFilter")}</summary>
+              <label className="calendar-filter-check">
+                <input
+                  type="checkbox"
+                  checked={!!search.working}
+                  onChange={(event) => go({ working: event.target.checked || undefined })}
+                />
+                {t("calendar.workingOnly")}
+              </label>
+              <label className="calendar-filter-check">
+                <input
+                  type="checkbox"
+                  checked={selectedIds.length === 0}
+                  onChange={() => go({ staff: undefined })}
+                />
+                {t("calendar.staffFilter.all")}
+              </label>
+              {(allStaff.data ?? calendar?.staff ?? [])
+                .filter((member) => !("active" in member) || member.active)
+                .map((member) => (
+                  <label key={member.id} className="calendar-filter-check">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.length === 0 || selectedIds.includes(member.id)}
+                      onChange={(event) => {
+                        const current = selectedIds.length
+                          ? selectedIds
+                          : (allStaff.data ?? calendar?.staff ?? [])
+                              .filter((s) => !("active" in s) || s.active)
+                              .map((s) => s.id);
+                        const next = event.target.checked
+                          ? [...new Set([...current, member.id])]
+                          : current.filter((id) => id !== member.id);
+                        // An empty API filter means everyone. Keep the last visible member selected.
+                        if (next.length) go({ staff: next.join(",") });
+                      }}
+                    />
+                    <span
+                      className="calendar-filter-avatar"
+                      aria-hidden="true"
+                      style={{ "--person-hue": serviceHue(member.displayName) } as CSSProperties}
+                    >
+                      {personInitials(member.displayName)}
+                    </span>
+                    {member.displayName}
+                  </label>
+                ))}
+            </details>
+          )}
+          {role === "owner" && !readOnly && <BooksyContextImport />}
+          <section className="calendar-filter-section">
+            <h3>
+              <label htmlFor="calendar-status">{t("calendar.statusFilter")}</label>
+            </h3>
+            <select
+              id="calendar-status"
+              aria-label={t("calendar.statusFilter")}
+              className="calendar-filter-select"
+              value={status}
+              onChange={(event) => {
+                setStatus(event.target.value);
+                if (event.target.value === "cancelled") setShowCancelled(true);
+              }}
+            >
+              <option value="all">{t("calendar.allStatuses")}</option>
+              {(["booked", "completed", "no_show", "cancelled"] as const).map((value) => (
+                <option key={value} value={value}>
+                  {t(statusAppearance(value).labelKey)}
+                </option>
+              ))}
+            </select>
+            <label className="calendar-filter-check">
+              <input
+                type="checkbox"
+                checked={showCancelled}
+                onChange={(event) => {
+                  setShowCancelled(event.target.checked);
+                  if (!event.target.checked && status === "cancelled") setStatus("all");
+                }}
+              />
+              {t("calendar.showCancelled")}
+            </label>
+            <button
+              type="button"
+              className="calendar-reset"
+              onClick={() => {
+                setStatus("all");
+                setShowCancelled(false);
+                setText("");
+                go({ staff: undefined, working: undefined });
+              }}
+            >
+              {t("calendar.clearFilters")}
+            </button>
+          </section>
+          {serviceNames.length > 0 && (
+            <section className="calendar-filter-section calendar-service-legend">
+              <h3>{t("calendar.serviceColors")}</h3>
+              <ul>
+                {serviceNames.map((name) => (
+                  <li key={name}>
+                    <i
+                      className="calendar-service-swatch"
+                      aria-hidden="true"
+                      style={{ "--service-hue": serviceHue(name) } as CSSProperties}
+                    />
+                    <span>{name}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+          {query.dataUpdatedAt > 0 && (
+            <p className="calendar-updated">
+              {t("calendar.updatedAt", {
+                time: formatTime(new Date(query.dataUpdatedAt).toISOString(), timeZone, locale),
+              })}
+            </p>
+          )}
+        </aside>
+        <div className="calendar-main" aria-busy={query.isPending}>
+          <div className="calendar-toolbar">
+            <div className="calendar-date-navigation">
+              <button
+                type="button"
+                className="calendar-today-button"
+                onClick={() => go({ date: today })}
+              >
+                {t("calendar.nav.today")}
+              </button>
+              <button
+                type="button"
+                className="calendar-icon-button"
+                aria-label={t("calendar.nav.previous", { unit })}
+                onPointerEnter={() => prefetch(-1)}
+                onFocus={() => prefetch(-1)}
+                onClick={() => go({ date: shiftDate(search.date, search.view, -1) })}
+              >
+                <ChevronLeftIcon />
+              </button>
+              <Popover.Root open={dateOpen} onOpenChange={setDateOpen}>
+                <Popover.Trigger
+                  className="calendar-date-title"
+                  aria-label={`${title}. ${t("calendar.datePicker")}`}
+                >
+                  <h2 aria-live="polite">{title}</h2>
+                </Popover.Trigger>
+                <Popover.Portal>
+                  <Popover.Positioner sideOffset={8} className="z-40">
+                    <Popover.Popup className="w-64 rounded-lg border border-line bg-surface p-3 shadow-lg">
+                      <MiniCalendar
+                        date={search.date}
+                        today={today}
+                        onSelect={(date) => {
+                          go({ date });
+                          setDateOpen(false);
+                        }}
+                      />
+                      <label className="mt-3 block text-xs text-muted">
+                        {t("calendar.goToDate")}
+                        <input
+                          type="date"
+                          className="mt-1 block w-full rounded border border-line bg-surface p-2 text-fg"
+                          value={search.date}
+                          onChange={(event) => {
+                            if (/^\d{4}-\d{2}-\d{2}$/.test(event.target.value)) {
+                              go({ date: event.target.value });
+                              setDateOpen(false);
+                            }
+                          }}
+                        />
+                      </label>
+                    </Popover.Popup>
+                  </Popover.Positioner>
+                </Popover.Portal>
+              </Popover.Root>
+              <button
+                type="button"
+                className="calendar-icon-button"
+                aria-label={t("calendar.nav.next", { unit })}
+                onPointerEnter={() => prefetch(1)}
+                onFocus={() => prefetch(1)}
+                onClick={() => go({ date: shiftDate(search.date, search.view, 1) })}
+              >
+                <ChevronRightIcon />
+              </button>
+            </div>
+            <label className="sr-only" htmlFor="calendar-view">
+              {t("calendar.view.label")}
+            </label>
+            <select
+              id="calendar-view"
+              className="calendar-view-select"
+              value={search.view}
+              onChange={(event) => setView(event.target.value as ViewName)}
+            >
+              {(["day", "week", "month", "list"] as const).map((view) => (
+                <option key={view} value={view}>
+                  {t(`calendar.view.${view}`)}
+                </option>
+              ))}
+            </select>
+            <fieldset className="calendar-view-segments">
+              <legend className="sr-only">{t("calendar.view.label")}</legend>
+              {(["day", "week", "month", "list"] as const).map((view) => (
+                <button
+                  key={view}
+                  type="button"
+                  aria-pressed={search.view === view}
+                  onClick={() => setView(view)}
+                >
+                  {t(`calendar.view.${view}`)}
+                </button>
+              ))}
+            </fieldset>
+            {permissions.clients && permissions.editCalendar && (
+              <CalendarWaitlist
+                fromDate={range.dates[0] ?? search.date}
+                toDate={range.dates.at(-1) ?? search.date}
+                role={bookingRole}
+                ownStaffId={ownStaffId}
+                accessPreset={accessPreset}
+              />
+            )}
+          </div>
+          {conflict && (
+            <div role="alert" className="calendar-conflict">
+              <div>
+                <strong>{t("calendar.conflict.title")}</strong>
+                <p>{t(conflict.problem.messageKey)}</p>
+              </div>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setOpenId(conflict.appointmentId);
+                  clearConflict();
+                }}
+              >
+                {t("calendar.conflict.open")}
+              </Button>
+              <Button variant="ghost" onClick={clearConflict}>
+                {t("calendar.conflict.dismiss")}
+              </Button>
+            </div>
+          )}
+          {query.isPending ? (
+            <div
+              role="status"
+              aria-label={t("admin.loading")}
+              className="flex min-h-0 flex-1 flex-col gap-2 p-4"
+            >
+              <Skeleton className="h-16 shrink-0" />
+              <Skeleton className="min-h-0 flex-1" />
+            </div>
+          ) : query.isError ? (
+            <ErrorState error={query.error} onRetry={() => void query.refetch()} />
+          ) : calendar && staff.length === 0 ? (
+            <EmptyState title={t("calendar.grid.empty")} />
+          ) : calendar && search.view === "day" ? (
+            <CalendarGrid
+              columns={columns}
+              appointments={appointments}
+              timeOff={calendar.timeOff}
+              workingWindows={calendar.workingWindows}
+              timeZone={timeZone}
+              now={now}
+              granularity={granularity}
+              showCancelled={showCancelled}
+              canMove={canMove}
+              highlightId={conflict?.appointmentId ?? null}
+              onSlotClick={openNew}
+              onOpenAppointment={onOpenAppointment}
+              onMove={onMoveAppointment}
+            />
+          ) : calendar && index ? (
+            <CalendarOverview
+              view={search.view as Exclude<ViewName, "day">}
+              dates={range.dates}
+              date={search.date}
+              today={today}
+              staff={staff}
+              index={index}
+              timeOff={calendar.timeOff}
+              workingWindows={calendar.workingWindows}
+              timeZone={timeZone}
+              onDay={onDay}
+              onOpen={onOpenAppointment}
+            />
+          ) : null}
         </div>
       </div>
-
-      {conflict && (
-        <div
-          role="alert"
-          className="flex flex-col gap-3 rounded-lg border border-danger-fg/40 bg-danger-soft p-4 text-danger-fg sm:flex-row sm:items-center"
-        >
-          <div className="min-w-0 flex-1">
-            <p className="font-medium">{t("calendar.conflict.title")}</p>
-            <p className="text-sm">{t(conflict.problem.messageKey)}</p>
-          </div>
-          <Button
-            variant="secondary"
-            onClick={() => {
-              setOpenId(conflict.appointmentId);
-              clearConflict();
-            }}
-          >
-            {t("calendar.conflict.open")}
-          </Button>
-          <Button variant="ghost" onClick={clearConflict}>
-            {t("calendar.conflict.dismiss")}
-          </Button>
-        </div>
-      )}
-
-      {query.isPending ? (
-        <div role="status" aria-label={t("admin.loading")} className="space-y-2">
-          <Skeleton className="h-12" />
-          <Skeleton className="h-[28rem]" />
-        </div>
-      ) : query.isError ? (
-        <ErrorState error={query.error} onRetry={() => void query.refetch()} />
-      ) : calendar && columns.length === 0 ? (
-        <EmptyState title={t("calendar.grid.empty")} />
-      ) : calendar ? (
-        <CalendarGrid
-          columns={columns}
-          appointments={calendar.appointments}
-          timeOff={calendar.timeOff}
-          workingWindows={calendar.workingWindows}
-          timeZone={timeZone}
-          now={now}
-          granularity={granularity}
-          showCancelled={showCancelled}
-          canMove={canMove}
-          highlightId={conflict?.appointmentId ?? null}
-          onSlotClick={(slot) => openNew(slot)}
-          onOpenAppointment={(a) => setOpenId(a.id)}
-          onMove={(appointment, to) => move({ appointment, to })}
-        />
-      ) : null}
-
-      <Legend />
-
       <AppointmentDrawer
         appointment={openAppointment}
-        staffName={openAppointment ? staffName(openAppointment.staffId) : ""}
-        onClose={() => setOpenId(null)}
+        staffName={
+          calendar?.staff.find((s) => s.id === openAppointment?.staffId)?.displayName ?? ""
+        }
+        onClose={() => {
+          setOpenId(null);
+          if (search.appointment) go({ appointment: undefined });
+        }}
         role={role}
+        billingRole={bookingRole}
         readOnly={readOnly}
         ownStaffId={ownStaffId}
         now={now}
@@ -368,112 +780,26 @@ export function CalendarView({
           accessPreset={accessPreset}
         />
       )}
+      {blocking && !readOnly && (
+        <CalendarTimeOff
+          staff={timeOffStaff}
+          date={search.date}
+          initialStaffId={permissions.editSchedules ? selectedIds[0] : (ownStaffId ?? undefined)}
+          absence={blocking === "absence"}
+          onClose={() => setBlocking(null)}
+          onConflicts={setTimeOffConflicts}
+        />
+      )}
+      {timeOffConflicts.length > 0 && (
+        <div className="calendar-timeoff-conflicts">
+          <ConflictList conflicts={timeOffConflicts} />
+          <Button variant="secondary" onClick={() => setTimeOffConflicts([])}>
+            {t("common.dismiss")}
+          </Button>
+        </div>
+      )}
       <ShortcutsHelp open={helpOpen} onOpenChange={setHelpOpen} />
     </div>
   );
 }
-
-function StaffFilter({
-  staff,
-  selected,
-  single,
-  onChange,
-}: {
-  staff: { id: string; displayName: string }[];
-  selected: string[];
-  single: boolean;
-  onChange: (ids: string[]) => void;
-}) {
-  const { t } = useI18n();
-  return (
-    <Popover.Root>
-      <Popover.Trigger render={<Button variant="secondary" />}>
-        {single ? t("calendar.staffFilter.week") : t("calendar.staffFilter")}
-        {!single && selected.length > 0 && (
-          <span className="rounded-full bg-accent px-2 text-xs text-accent-fg">
-            {selected.length}
-          </span>
-        )}
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Positioner sideOffset={8} align="end" className="z-50">
-          <Popover.Popup className="max-h-[60dvh] min-w-56 overflow-y-auto rounded-lg border border-line bg-surface p-2 shadow-lg">
-            <fieldset className="m-0 border-0 p-0">
-              <legend className="sr-only">
-                {single ? t("calendar.staffFilter.week") : t("calendar.staffFilter")}
-              </legend>
-              {!single && (
-                <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-md px-2 hover:bg-sunken">
-                  <input
-                    type="radio"
-                    name="staff-all"
-                    className="size-5 accent-[var(--accent)]"
-                    checked={selected.length === 0}
-                    onChange={() => onChange([])}
-                  />
-                  {t("calendar.staffFilter.all")}
-                </label>
-              )}
-              {staff.map((member) => (
-                <label
-                  key={member.id}
-                  className="flex min-h-11 cursor-pointer items-center gap-3 rounded-md px-2 hover:bg-sunken"
-                >
-                  <input
-                    type={single ? "radio" : "checkbox"}
-                    name="staff-filter"
-                    className="size-5 accent-[var(--accent)]"
-                    checked={selected.includes(member.id)}
-                    onChange={(e) =>
-                      single
-                        ? onChange([member.id])
-                        : onChange(
-                            e.target.checked
-                              ? [...selected, member.id]
-                              : selected.filter((id) => id !== member.id),
-                          )
-                    }
-                  />
-                  {member.displayName}
-                </label>
-              ))}
-            </fieldset>
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
-  );
-}
-
-function Legend() {
-  const { t } = useI18n();
-  return (
-    <section
-      aria-label={t("calendar.legend")}
-      className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-muted"
-    >
-      {(["booked", "completed", "no_show", "cancelled"] as const).map((status) => (
-        <span
-          key={status}
-          className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${STATUS_CLASSES[status]}`}
-        >
-          {t(statusAppearance(status).labelKey)}
-        </span>
-      ))}
-      <span className="inline-flex items-center gap-1.5">
-        <span className="size-4 rounded border border-line bg-surface" />
-        {t("calendar.legend.working")}
-      </span>
-      <span className="inline-flex items-center gap-1.5">
-        <span className="size-4 rounded border border-line bg-sunken" />
-        {t("calendar.legend.off")}
-      </span>
-      <span className="inline-flex items-center gap-1.5">
-        <span className="size-4 rounded border border-line-strong bg-[repeating-linear-gradient(135deg,var(--surface-sunken)_0_3px,var(--border)_3px_5px)]" />
-        {t("calendar.legend.timeOff")}
-      </span>
-    </section>
-  );
-}
-
 export { zonedInstant };

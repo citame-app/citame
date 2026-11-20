@@ -17,6 +17,10 @@ export const reportQuerySchema = z
     from: localDateSchema,
     to: localDateSchema,
     staffId: idSchema.optional(),
+    currency: z
+      .string()
+      .regex(/^[A-Z]{3}$/)
+      .optional(),
   })
   .refine((value) => daysBetween(value.from, value.to) >= 0, {
     message: "`to` must not be before `from`",
@@ -29,6 +33,39 @@ export const reportQuerySchema = z
 export type ReportQuery = z.infer<typeof reportQuerySchema>;
 
 const count = z.number().int().min(0);
+const reportClientCounts = z.object({ newClients: count, returningClients: count });
+export const reportClientsSchema = z.object({
+  from: localDateSchema,
+  to: localDateSchema,
+  totals: reportClientCounts,
+  rows: z.array(reportClientCounts.extend({ date: localDateSchema })),
+  groups: z.array(z.object({ name: z.string().min(1), clients: count })).optional(),
+});
+export type ReportClients = z.infer<typeof reportClientsSchema>;
+export const reportOutcomeSchema = z.enum(["cancelled", "no_show"]);
+export type ReportOutcome = z.infer<typeof reportOutcomeSchema>;
+export const reportOutcomesQuerySchema = reportQuerySchema.safeExtend({
+  status: reportOutcomeSchema,
+  page: z.coerce.number().int().min(1).max(1_000_000).default(1),
+});
+export type ReportOutcomesQuery = z.infer<typeof reportOutcomesQuerySchema>;
+export const reportOutcomeRowSchema = z.object({
+  id: idSchema,
+  startsAt: z.iso.datetime(),
+  endsAt: z.iso.datetime(),
+  client: z.string().nullable(),
+  staff: z.string(),
+  services: z.array(z.string()),
+});
+export type ReportOutcomeRow = z.infer<typeof reportOutcomeRowSchema>;
+export const reportOutcomesPageSchema = z.object({
+  rows: z.array(reportOutcomeRowSchema),
+  total: count,
+  page: count,
+  pageSize: count,
+  timezone: z.string(),
+});
+
 export const statusCountsSchema = z.object({
   booked: count,
   completed: count,
@@ -37,20 +74,39 @@ export const statusCountsSchema = z.object({
 });
 export type StatusCounts = z.infer<typeof statusCountsSchema>;
 
+export const reportBreakdownKinds = ["hour", "service", "category", "addon"] as const;
+export type ReportBreakdownKind = (typeof reportBreakdownKinds)[number];
+export const reportBreakdownRowSchema = z.object({
+  key: z.string(),
+  /** Null identifies appointments whose service has no recorded category. */
+  label: z.string().nullable(),
+  appointments: count,
+  byStatus: statusCountsSchema,
+});
+export type ReportBreakdownRow = z.infer<typeof reportBreakdownRowSchema>;
+
 /** Share of no-shows among appointments that should have happened; null when there were none. */
 const rateSchema = z.number().min(0).max(1).nullable();
 
 export const reportSliceSchema = z.object({
   appointments: z.number().int().min(0),
   byStatus: statusCountsSchema,
-  /** Sum of price snapshots of completed appointments, in the minor currency unit. */
+  /** Sum of known prices of completed appointment services, in the minor currency unit. */
   revenueCents: z.number().int().min(0),
+  /** Completed service lines omitted from the amount while their original price is unknown. */
+  unpricedServices: z.number().int().positive().optional(),
 });
 
 export const reportSummarySchema = z.object({
+  canReportClients: z.boolean().optional(),
   from: localDateSchema,
   to: localDateSchema,
   timezone: z.string(),
+  currency: z
+    .string()
+    .regex(/^[A-Z]{3}$/)
+    .optional(),
+  currencies: z.array(z.string().regex(/^[A-Z]{3}$/)).optional(),
   /** The staff member the report is limited to, if any. */
   staffId: idSchema.nullable(),
   totals: reportSliceSchema.extend({
@@ -66,6 +122,7 @@ export const reportSummarySchema = z.object({
       name: z.string(),
       count: z.number().int().min(0),
       revenueCents: z.number().int().min(0),
+      unpricedServices: z.number().int().positive().optional(),
     }),
   ),
   perStaff: z.array(
@@ -75,5 +132,8 @@ export const reportSummarySchema = z.object({
       noShowRate: rateSchema,
     }),
   ),
+  appointmentBreakdown: z
+    .record(z.enum(reportBreakdownKinds), z.array(reportBreakdownRowSchema))
+    .optional(),
 });
 export type ReportSummary = z.infer<typeof reportSummarySchema>;

@@ -27,6 +27,7 @@ SITE_ADDRESS=salon.example
 | `DATABASE_URL`                                           | `postgres://sob:sob@localhost:5432/sob`  | Postgres. Secret (`DATABASE_URL_FILE` supported).                                                                                                                                |
 | `VALKEY_URL`                                             | `redis://localhost:6379`                 | Sessions, rate limits, SSE fan-out.                                                                                                                                              |
 | `VALKEY_KEY_PREFIX`                                      | `sob:`                                   | Namespace for every Valkey key.                                                                                                                                                  |
+| `SYNC_REPLICA_GENERATION`                                | `initial`                                | Desktop sync history. Use the same value across API replicas and set a new value when activating a restored database. |
 | `BETTER_AUTH_SECRET`                                     | none, **required**                       | 32+ characters. Signs sessions and opt-out links, encrypts OAuth signing keys. Secret (`_FILE` supported). Rotation effects: [operations](operations.md#6-secrets-rotation).     |
 | `BETTER_AUTH_URL`                                        | `http://localhost:3000`                  | Public base URL. In the production compose it is `PUBLIC_URL` (the web origin). https makes cookies `Secure`.                                                                    |
 | `TRUSTED_ORIGINS`                                        | empty                                    | Comma-separated browser origins allowed to send cookies (the web app origin).                                                                                                    |
@@ -48,9 +49,14 @@ SITE_ADDRESS=salon.example
 | `RATE_LIMIT_OAUTH_REGISTER_MAX` / `_WINDOW_SECONDS`      | `10` / `60`                              | Anonymous dynamic client registration.                                                                                                                                           |
 | `RATE_LIMIT_MCP_MAX` / `_WINDOW_SECONDS`                 | `120` / `60`                             | `/mcp` requests.                                                                                                                                                                 |
 | `MCP_RESOURCE_URL`                                       | `<BETTER_AUTH_URL>/mcp`                  | Public URL of the MCP endpoint; the OAuth resource and token audience.                                                                                                           |
+| `MCP_ALLOWED_ORIGINS`                                    | empty                                  | Additional exact browser origins for `/mcp`, comma-separated. The auth and resource origins are included automatically.                                                           |
 | `OAUTH_ACCESS_TOKEN_TTL_SECONDS`                         | `900`                                    | JWT access token lifetime.                                                                                                                                                       |
 | `OAUTH_REFRESH_TOKEN_TTL_SECONDS`                        | `1209600`                                | Refresh token lifetime (rotated on use).                                                                                                                                         |
 | `NOTIFY_WORKER_ENABLED`                                  | `false`                                  | Run the reminder worker inside the API process. The production compose runs a separate `worker` service and sets this to `false` on the API.                                     |
+| `NOTIFY_EXTERNAL_WORKER_ENABLED` | `false` (prod compose: `true`) | Declare a separate worker for campaign scheduling. The API still does not start an embedded worker. |
+| `META_WHATSAPP_APP_ID`, `META_WHATSAPP_CONFIG_ID` | unset | Public Meta app and Embedded Signup configuration IDs. |
+| `META_WHATSAPP_APP_SECRET`, `META_WHATSAPP_VERIFY_TOKEN` | unset | Backend-only credentials for token exchange and webhook verification. Both support a `_FILE` variable pointing to a secret mounted in the API and worker containers. |
+| `META_WHATSAPP_GRAPH_VERSION` | `v27.0` | Graph API version for WhatsApp. See [WhatsApp Business](whatsapp-business.md) for configuration. |
 | `NOTIFY_EMAIL_PROVIDER`                                  | `none` (prod compose: `smtp`)            | `none` or `smtp`.                                                                                                                                                                |
 | `SMTP_URL`                                               | unset                                    | `smtp://user:pass@host:587` or `smtps://...:465`. Required for `smtp`. Secret (`_FILE` supported).                                                                               |
 | `NOTIFY_EMAIL_FROM`                                      | `Sisters of Beauty <no-reply@localhost>` | Sender. Use a domain you control (SPF, DKIM, DMARC).                                                                                                                             |
@@ -63,6 +69,7 @@ SITE_ADDRESS=salon.example
 | `NOTIFY_VISIBILITY_TIMEOUT_SECONDS`                      | `120`                                    | How long a claimed job is invisible to other workers before retry.                                                                                                               |
 | `NOTIFY_MAX_ATTEMPTS`                                    | `5`                                      | Attempts before dead letter.                                                                                                                                                     |
 | `NOTIFY_BACKOFF_BASE_SECONDS` / `_MAX_SECONDS`           | `30` / `3600`                            | Retry backoff.                                                                                                                                                                   |
+| `WORKER_HEALTH_PORT`                                     | Unset (production Compose: `3001`)        | Optional standalone worker health listener on `127.0.0.1`. `GET /ready` returns 204 once started with PostgreSQL queue access, or 503 when that check fails.                           |
 | `MAINTENANCE_ENABLED`                                    | `true`                                   | Scheduled housekeeping in the worker.                                                                                                                                            |
 | `MAINTENANCE_INTERVAL_HOURS`                             | `24`                                     |                                                                                                                                                                                  |
 | `SYNC_LOG_RETENTION_DAYS`                                | `30`                                     | Superseded sync rows (tombstones are never purged).                                                                                                                              |
@@ -81,6 +88,7 @@ SITE_ADDRESS=salon.example
 | `API_INTERNAL_URL`         | `http://localhost:3000` | Where the web server reaches the API (proxy and SSR). Read at runtime. Compose: `http://api:3000`.                                                                                          |
 | `PUBLIC_URL`               | unset                   | Public origin. An https value enables HSTS and `upgrade-insecure-requests` in the CSP and feeds canonical URLs.                                                                             |
 | `WEB_HSTS`                 | unset                   | `true` forces HSTS without an https `PUBLIC_URL`.                                                                                                                                           |
+| `WEB_DIST_DIR`             | `apps/web/dist`         | Absolute path to a Vite bundle with `client` and `server` directories. Use a directory under `apps/web` for local previews so Bun resolves the workspace dependencies.                       |
 | `WEB_TRUST_PROXY`          | `false`                 | Visitor address from the last `X-Forwarded-For` entry; only behind a proxy you operate. Refused at startup when `WEB_PUBLISH` is not loopback (`WEB_TRUST_PROXY_UNSAFE_OK=true` overrides). |
 | `WEB_PUBLISH`              | unset                   | Host binding of the published port; compose passes it so the check above can run.                                                                                                           |
 | `WEB_IDLE_TIMEOUT_SECONDS` | `30`                    | Idle connection timeout. `/api/sync/stream` is exempt (its heartbeat is longer than Bun's 10 s default).                                                                                    |
@@ -91,9 +99,13 @@ SITE_ADDRESS=salon.example
 | Variable                              | Default            | Notes                                                                                                                              |
 | ------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `POSTGRES_PASSWORD`                   | none, **required** | Also builds `DATABASE_URL` for the services.                                                                                       |
+| `SOB_DATABASE_NAME`                   | `sob`              | Existing Postgres database for the migrator, API, worker and owner setup.                                                        |
+| `VALKEY_KEY_PREFIX`                   | `sob:`             | Shared API and worker cache namespace. Use a fresh one when restoring a backup.                                                   |
+| `SYNC_REPLICA_GENERATION`            | `initial`          | Stable sync generation on ordinary deploys. Use a unique value when activating a restored database. |
 | `BETTER_AUTH_SECRET`                  | none, **required** | See above.                                                                                                                         |
 | `PUBLIC_URL`                          | none, **required** | Becomes `BETTER_AUTH_URL`, `TRUSTED_ORIGINS`, `NOTIFY_PUBLIC_URL` and the web `PUBLIC_URL`. No trailing slash.                     |
 | `SOB_TAG`                             | `local`            | Image tag (`sob-api:<tag>`, `sob-web:<tag>`).                                                                                      |
+| `SOB_API_IMAGE`, `SOB_WEB_IMAGE`       | unset              | Prebuilt image references from the release notes. Set both to digest references for a prebuilt deployment. |
 | `WEB_PUBLISH`                         | `127.0.0.1:4173`   | Host binding of the web port.                                                                                                      |
 | `SITE_ADDRESS`                        | `localhost`        | Caddy (`tls` profile): public host name. Certificate-expiry contact: uncomment the `email` block at the top of `docker/Caddyfile`. |
 | `CADDY_HTTP_PORT`, `CADDY_HTTPS_PORT` | `80`, `443`        | Caddy host ports.                                                                                                                  |
@@ -106,12 +118,25 @@ The production services also receive `AUTH_REQUIRE_EMAIL_VERIFICATION`, `NOTIFY_
 | Variable                                                                                        | Notes                                                                                    |
 | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `BETTER_AUTH_SECRET`                                                                            | Export before `docker compose up api web`; not required for postgres and valkey only.    |
-| `E2E_OWNER_EMAIL`, `E2E_OWNER_PASSWORD`                                                         | Playwright signs in as the bootstrapped owner.                                           |
-| `E2E_BASE_URL`, `E2E_MAILPIT_URL`                                                               | Web origin (default `http://localhost:4173`) and Mailpit API (`http://localhost:8025`).  |
+| `E2E_OWNER_EMAIL`, `E2E_OWNER_PASSWORD`                                                         | Owner credentials for a separately started Playwright test stack.                        |
+| `E2E_BASE_URL`, `E2E_MAILPIT_URL`                                                               | Standalone web origin (default `http://localhost:4173`) and Mailpit API (`http://localhost:8025`). |
+| `E2E_FINANCIAL_FIXTURE`, `E2E_POS_FIXTURE`, `E2E_CALENDAR_FIXTURE`                               | Set one to `true` to run that suite against the isolated local test stack with seeded credentials. |
 | `E2E_AUTH_SECRET`                                                                               | The API's `BETTER_AUTH_SECRET`; enables the opt-out link e2e tests and screenshots.      |
 | `K6_EMAIL`, `K6_PASSWORD`, `BASE_URL`, `API_PREFIX`, `ORIGIN`, `VUS`, `DURATION`, `ROUNDS`, `K` | k6 scenarios, see [k6/README.md](../k6/README.md).                                       |
-| `PG_MODE`, `PG_CONTAINER`                                                                       | `scripts/backup.sh` and `restore.sh` run `pg_dump` in a container when `PG_MODE=docker`. |
+| `PG_MODE`, `PG_CONTAINER`                                                                       | Backup and restore can run PostgreSQL tools inside the selected container with `PG_MODE=docker`. Use a default-port loopback URL with no options in Docker mode and `PG_MODE=native` for remote servers. |
 | `SOB_TEST_API_URL`, `SOB_TEST_EMAIL`, `SOB_TEST_PASSWORD`                                       | Desktop headless sync tests.                                                             |
+| `SOB_TEST_IMPORTED_WAITLIST`                                                                    | Fixture ID supplied by the smoke script when `SMOKE_DESKTOP=1`. Used only by the desktop integration test. |
+
+## Booksy import and recovery tools
+
+Set these variables through a private environment file or for a single command. The production API and worker use `DATABASE_URL`.
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `BOOKSY_REHEARSAL_DATABASE_URL` | unset | Required by the Booksy rehearsal, consultation, backup and candidate-report commands. Use the private connection file for the designated local database and keep the credentials out of command output. |
+| `BOOKSY_RECOVERY_PASSPHRASE_FILE` | unset | Optional private passphrase file for OpenPGP decryption during portable recovery or a scheduling rehearsal. The file must be accessible only to the invoking user. |
+
+Booksy tools use the explicit TCP endpoint and database name in their private connection URL. A conflicting `PGDATABASE`, port override, host override or Unix socket is rejected before opening the connection. Include the port in the URL when the local PostgreSQL container uses a port other than 5432.
 
 ## Desktop client
 

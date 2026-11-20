@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import type { WaitlistSourceEntry } from "@sob/contracts";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderApp } from "../../../test/render";
 import { WaitlistView } from "./waitlist-view";
 
@@ -9,17 +10,21 @@ const staffId = "0198f5a0-7b1c-7000-8000-000000000201";
 const clientId = "0198f5a0-7b1c-7000-8000-0000000000c1";
 let enabled = true;
 let posts: unknown[];
+let imports: WaitlistSourceEntry[];
 const json = (v: unknown, status = 200) =>
   new Response(JSON.stringify(v), { status, headers: { "content-type": "application/json" } });
 beforeEach(() => {
   enabled = true;
   posts = [];
+  imports = [];
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
-    if (url.pathname === "/api/me/waitlist") {
+    if (url.pathname === "/api/me/waitlist" || url.pathname === "/api/admin/waitlist") {
       if (init?.method === "POST") {
         const body = JSON.parse(String(init.body));
         posts.push(body);
+        if (body.importedEntryId)
+          imports = imports.filter((entry) => entry.id !== body.importedEntryId);
         return json(
           {
             id: crypto.randomUUID(),
@@ -47,6 +52,7 @@ beforeEach(() => {
         page: 1,
         pageSize: 10,
         total: 0,
+        ...(url.pathname === "/api/admin/waitlist" ? { imported: imports } : {}),
       });
     }
     if (url.pathname === "/api/services")
@@ -75,6 +81,81 @@ beforeEach(() => {
       });
     return json({}, 404);
   }) as unknown as typeof fetch;
+});
+function addImportedRequest(days = 1) {
+  const requestedDate = Temporal.Now.plainDateISO("America/Argentina/Buenos_Aires")
+    .add({ days })
+    .toString();
+  const id = "0198f5a0-7b1c-7000-8000-000000000301";
+  imports = [
+    {
+      id,
+      clientId,
+      clientName: "Imported customer",
+      requestedDate,
+      durationMinutes: 60,
+      flexible: false,
+    },
+  ];
+  return { id, requestedDate };
+}
+
+test("the imported review explains why the request cannot be saved while offers are enabled", async () => {
+  addImportedRequest();
+  renderApp(<WaitlistView mode="admin" role="owner" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Complete request" }));
+  const save = await screen.findByRole("button", { name: "Save waitlist request" });
+  expect(save).toBeDisabled();
+  expect(save).toHaveAccessibleDescription(/an owner must pause automatic offers/i);
+  fireEvent.click(screen.getByRole("checkbox", { name: /Haircut/ }));
+  fireEvent.change(screen.getByLabelText("Preferred team member"), { target: { value: staffId } });
+  fireEvent.change(screen.getByLabelText("Earliest start"), { target: { value: "10:00" } });
+  fireEvent.change(screen.getByLabelText("Latest finish"), { target: { value: "13:00" } });
+  await act(async () => {
+    fireEvent.submit(screen.getByRole("form", { name: "New waitlist request" }));
+  });
+  expect(posts).toHaveLength(0);
+});
+
+test("the previous salon date remains visible as a past Booksy request", async () => {
+  addImportedRequest(-1);
+  renderApp(<WaitlistView mode="admin" role="owner" />);
+  expect(await screen.findByText("Imported customer")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Past Booksy requests" })).toBeInTheDocument();
+  expect(screen.getByText("The requested date has passed.")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Complete request" })).toBeNull();
+});
+
+test("an operator can complete a Booksy request while automatic offers are paused", async () => {
+  enabled = false;
+  const { id, requestedDate } = addImportedRequest();
+  renderApp(<WaitlistView mode="admin" role="owner" initialServices={[serviceId]} />);
+  expect(await screen.findByText("Imported customer")).toBeInTheDocument();
+  expect(screen.getByText(/while automatic offers are paused/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Complete request" }));
+  const from = await screen.findByLabelText("Earliest start");
+  expect(from).toHaveValue("");
+  expect(screen.getByLabelText("From date")).toHaveValue(requestedDate);
+  expect(screen.getByLabelText("From date")).toHaveProperty("readOnly", true);
+  fireEvent.click(screen.getByRole("checkbox", { name: /Haircut/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Save waitlist request" }));
+  expect(posts).toHaveLength(0);
+  fireEvent.change(from, { target: { value: "10:00" } });
+  fireEvent.change(screen.getByLabelText("Latest finish"), { target: { value: "13:00" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save waitlist request" }));
+  expect(posts).toHaveLength(0);
+  fireEvent.change(screen.getByLabelText("Preferred team member"), { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save waitlist request" }));
+  await waitFor(() => expect(posts).toHaveLength(1));
+  expect(posts[0]).toMatchObject({
+    clientId,
+    importedEntryId: id,
+    staffId: null,
+    fromDate: requestedDate,
+    toDate: requestedDate,
+    fromTime: "10:00",
+    toTime: "13:00",
+  });
 });
 afterEach(() => {
   globalThis.fetch = realFetch;

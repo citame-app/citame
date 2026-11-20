@@ -24,7 +24,9 @@ describe("validateCalendarSearch", () => {
   });
 
   test("drops junk instead of failing", () => {
-    expect(validateCalendarSearch({ view: "month", date: "tomorrow", staff: "x" }, TODAY)).toEqual({
+    expect(
+      validateCalendarSearch({ view: "unknown", date: "tomorrow", staff: "x" }, TODAY),
+    ).toEqual({
       view: "day",
       date: TODAY,
     });
@@ -33,10 +35,28 @@ describe("validateCalendarSearch", () => {
 });
 
 describe("shiftDate", () => {
+  test("moves months without overflowing February and lists by seven days", () => {
+    expect(shiftDate("2026-01-31", "month", 1)).toBe("2026-02-28");
+    expect(shiftDate("2024-01-31", "month", 1)).toBe("2024-02-29");
+    expect(shiftDate("2026-01-15", "month", -1)).toBe("2025-12-15");
+    expect(shiftDate("2026-03-09", "list", 1)).toBe("2026-03-16");
+  });
   test("moves by a day in the day view and by a week in the week view", () => {
     expect(shiftDate("2026-03-09", "day", 1)).toBe("2026-03-10");
     expect(shiftDate("2026-03-09", "day", -1)).toBe("2026-03-08");
     expect(shiftDate("2026-03-09", "week", 1)).toBe("2026-03-16");
     expect(shiftDate("2026-03-01", "week", -1)).toBe("2026-02-22");
   });
+});
+
+test("all four views and the working-team filter survive URL validation", () => {
+  for (const view of ["day", "week", "month", "list"] as const) {
+    expect(validateCalendarSearch({ view, staff: ID, working: "true" }, TODAY)).toEqual({
+      view,
+      date: TODAY,
+      staff: ID,
+      working: true,
+    });
+  }
+  expect(validateCalendarSearch({ working: "false" }, TODAY).working).toBeUndefined();
 });

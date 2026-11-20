@@ -13,6 +13,8 @@ Status as of 2026-11-15, commit range up to the 0.1.0 release candidate. This is
 
 The previously accepted transitive esbuild advisory is resolved by the exact root override `esbuild: 0.28.2`. Migration generation, production builds, unit/integration tests and the pinned Bun 1.4.4 Docker build/smoke were checked with that override. Keep the pin until upstream tooling resolves its old transitive dependency, then remove it with those same checks.
 
+On 2026-11-18, `bun audit` reported one high-severity advisory for `picomatch@4.0.7`. TanStack Start and Vite use it at build time. Vite bundles the Start runtime when compiling the web client and server. Declaring Start as a build dependency removed `picomatch` from the production dependency tree. The production smoke test verified that the web container ships without `picomatch`, the Start build plugin or Vite. The complete smoke suite and a browser check against that image passed. `bun audit --production` checked 239 packages and reported zero advisories. The build dependency remains on the affected version pending an upstream fix. [CVE-2026-112366](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)
+
 ### Rust (`cargo audit` 0.23.0, advisory database of 2026-11-14, 738 crates in `apps/desktop/Cargo.lock`)
 
 **0 vulnerabilities, 16 warnings.** All 16 are transitive dependencies of `gpui` 0.2.2 (pinned exactly, [ADR 0008](adr/0008-desktop-client.md)); none is a direct dependency of `sob-core` or `sob-desktop`.

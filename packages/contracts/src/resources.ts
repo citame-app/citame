@@ -29,6 +29,7 @@ export const resourceRequirementSchema = z
 export const serviceResourceInputSchema = z
   .object({
     version: z.number().int().positive(),
+    selectionMode: z.enum(["all", "one_of"]).optional(),
     requirements: z
       .array(resourceRequirementSchema)
       .max(8)
@@ -41,6 +42,7 @@ export type ServiceResourceInput = z.infer<typeof serviceResourceInputSchema>;
 export const serviceResourcesSchema = z.object({
   serviceId: idSchema,
   version: z.number().int().positive(),
+  selectionMode: z.enum(["all", "one_of"]).optional(),
   requirements: z.array(
     resourceRequirementSchema.extend({
       name: z.string(),

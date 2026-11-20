@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { renderApp } from "../../../../test/render";
-import { NewAppointmentSheet } from "./new-appointment";
+import { type NewAppointmentInitial, NewAppointmentSheet } from "./new-appointment";
 
 const ANA = "0198f5a0-7b1c-7000-8000-000000000201";
 const BEA = "0198f5a0-7b1c-7000-8000-000000000202";
@@ -111,8 +112,8 @@ const open = (props: Partial<Parameters<typeof NewAppointmentSheet>[0]> = {}) =>
   );
 
 async function clickReady(name: string) {
-  const button = screen.getByRole("button", { name });
-  await waitFor(() => expect(button).toBeEnabled());
+  const button = screen.getByRole<HTMLButtonElement>("button", { name });
+  await waitFor(() => expect(button.disabled).toBe(false));
   fireEvent.click(button);
 }
 
@@ -129,6 +130,38 @@ describe("NewAppointmentSheet", () => {
     open({ initial: { staffId: BEA, date: "2026-03-09", minutesOfDay: 600 } });
     expect(await screen.findByRole("checkbox", { name: /Haircut/ })).toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: /Hair color/ })).toBeNull();
+  });
+
+  test("rerenders keep the draft for the same slot and a different slot starts a clean draft", async () => {
+    const first = { staffId: ANA, date: "2026-03-09", minutesOfDay: 540 };
+    let selectSlot: (slot: NewAppointmentInitial) => void = () => {};
+    function CalendarSelection() {
+      const [initial, select] = useState<NewAppointmentInitial>(first);
+      selectSlot = select;
+      return (
+        <NewAppointmentSheet
+          open
+          onOpenChange={() => {}}
+          initial={initial}
+          role="owner"
+          ownStaffId={null}
+        />
+      );
+    }
+    renderApp(<CalendarSelection />);
+    fireEvent.click(await screen.findByRole("radio", { name: "New client" }));
+    fireEvent.change(screen.getByLabelText("Full name"), { target: { value: "Private draft" } });
+    fireEvent.click(await screen.findByRole("checkbox", { name: /Haircut/ }));
+    act(() => selectSlot({ ...first }));
+    expect(screen.getByLabelText("Full name")).toHaveValue("Private draft");
+    expect(screen.getByRole("checkbox", { name: /Haircut/ })).toBeChecked();
+
+    act(() => selectSlot({ staffId: BEA, date: "2026-03-10", minutesOfDay: 615 }));
+    expect(await screen.findByLabelText("Team member")).toHaveValue(BEA);
+    expect(screen.getByLabelText("Date")).toHaveValue("2026-03-10");
+    expect(screen.getByLabelText("Start time")).toHaveValue("10:15");
+    expect(screen.queryByDisplayValue("Private draft")).toBeNull();
+    expect(screen.getByRole("checkbox", { name: /Haircut/ })).not.toBeChecked();
   });
 
   test("submitting an empty form lists what is missing and sends nothing", async () => {
@@ -179,6 +212,36 @@ describe("NewAppointmentSheet", () => {
     });
   });
 
+  test("a second form submission cannot create another visit while the first is pending", async () => {
+    const fetch = globalThis.fetch;
+    const reply = Promise.withResolvers<void>();
+    const onCreated = mock();
+    let requests = 0;
+    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith("/api/appointments") && init?.method === "POST") {
+        requests++;
+        await reply.promise;
+      }
+      return fetch(input, init);
+    }) as unknown as typeof fetch;
+    open({ onCreated });
+    fireEvent.click(await screen.findByRole("radio", { name: "New client" }));
+    const name = screen.getByLabelText<HTMLInputElement>("Full name");
+    fireEvent.change(name, { target: { value: "First draft" } });
+    fireEvent.click(await screen.findByRole("checkbox", { name: /Haircut/ }));
+    await clickReady("Create appointment");
+    await waitFor(() => expect(requests).toBe(1));
+    fireEvent.change(screen.getByLabelText("Notes (optional)"), {
+      target: { value: "Edited during request" },
+    });
+    fireEvent.submit(name.form!);
+    reply.resolve();
+    await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+    expect(requests).toBe(1);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toMatchObject({ client: { name: "First draft" } });
+  });
+
   test("slot_taken keeps the form and explains how to recover", async () => {
     postReply = { status: 409, body: { error: { code: "slot_taken", message: "taken" } } };
     open();
@@ -202,10 +265,13 @@ test("a recurring appointment reviews dates and never submits a stale preview af
   const current = globalThis.fetch;
   const previews: unknown[] = [];
   const series: unknown[] = [];
+  const refresh = Promise.withResolvers<void>();
+  const onOpenChange = mock();
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     const path = new URL(String(input), "http://localhost").pathname;
     if (path === "/api/appointments/series/preview") {
       previews.push(JSON.parse(String(init?.body)));
+      if (previews.length === 2) await refresh.promise;
       return json({
         reviewHash: "a".repeat(64),
         timezone: "America/Argentina/Buenos_Aires",
@@ -251,7 +317,7 @@ test("a recurring appointment reviews dates and never submits a stale preview af
     }
     return current(input, init);
   }) as unknown as typeof fetch;
-  open();
+  open({ onOpenChange });
   fireEvent.click(await screen.findByRole("radio", { name: "New client" }));
   fireEvent.change(screen.getByLabelText("Full name"), { target: { value: "Recurring customer" } });
   fireEvent.click(await screen.findByRole("checkbox", { name: /Haircut/ }));
@@ -260,6 +326,16 @@ test("a recurring appointment reviews dates and never submits a stale preview af
   await clickReady("Review recurring visits");
   expect(await screen.findByRole("button", { name: "Create 2 appointments" })).toBeInTheDocument();
   expect(previews).toHaveLength(1);
+  expect(series).toHaveLength(0);
+  await clickReady("Review availability again");
+  await waitFor(() => expect(previews).toHaveLength(2));
+  fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
+  expect(onOpenChange).not.toHaveBeenCalled();
+  fireEvent.submit(screen.getByLabelText<HTMLInputElement>("Start time").form!);
+  refresh.resolve();
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Create 2 appointments" })).not.toBeDisabled(),
+  );
   expect(series).toHaveLength(0);
   fireEvent.change(screen.getByLabelText("Start time"), { target: { value: "10:00" } });
   expect(screen.queryByRole("button", { name: "Create 2 appointments" })).toBeNull();

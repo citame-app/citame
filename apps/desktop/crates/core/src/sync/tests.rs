@@ -75,9 +75,15 @@ fn applied_all(req: &PushRequest) -> Result<PushResponse, TransportError> {
 
 fn empty_pull(since: i64, _limit: u32) -> Result<PullResponse, TransportError> {
     Ok(PullResponse {
+        generation: None,
         changes: vec![],
         next_cursor: since,
         has_more: false,
+        refresh: vec![],
+        time_off_scope: None,
+        client_directory: None,
+        calendar_scope: None,
+        viewer_role: None,
         head_seq: since,
     })
 }
@@ -94,6 +100,123 @@ fn enqueue_clients(s: &mut Store, n: usize) -> Vec<String> {
             .mutation_id
         })
         .collect()
+}
+
+#[test]
+fn restored_generation_rebuilds_even_when_the_old_cursor_is_still_valid() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("replica.sqlite");
+    let mut store = Store::open(&path).unwrap();
+    store.apply_page(&[], 40).unwrap();
+    let ids = enqueue_clients(&mut store, PUSH_BATCH + 1);
+    let peer = Fake::new(
+        Box::new(|request| {
+            if request.generation.as_deref() != Some("restored-test") {
+                return Err(TransportError::ReplicaGenerationChanged);
+            }
+            applied_all(request)
+        }),
+        Box::new(|since, limit| {
+            let mut page = empty_pull(since, limit)?;
+            page.generation = Some("restored-test".into());
+            page.next_cursor = 42;
+            page.head_seq = 42;
+            Ok(page)
+        }),
+    );
+    let cycle = sync_cycle(&mut store, &peer).unwrap();
+    assert!(cycle.pull.replica_reset);
+    assert_eq!(cycle.pull.cursor, 42);
+    assert_eq!(peer.log(), ["push:100", "pull:40", "pull:0"]);
+    drop(store);
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(store.outbox_len().unwrap(), 0);
+    let conflicts = store.conflicts().unwrap();
+    assert_eq!(conflicts.len(), ids.len());
+    for (i, (conflict, id)) in conflicts.iter().zip(ids).enumerate() {
+        assert_eq!(conflict.mutation_id, id);
+        assert_eq!(conflict.reason, "sync_generation_changed");
+        assert_eq!(conflict.payload["name"], format!("N{i}"));
+    }
+    enqueue_clients(&mut store, 1);
+    assert_eq!(sync_cycle(&mut store, &peer).unwrap().push.applied, 1);
+    assert_eq!(
+        peer.pushes()[1].generation.as_deref(),
+        Some("restored-test")
+    );
+    assert_eq!(store.conflicts().unwrap().len(), conflicts.len());
+}
+
+#[test]
+fn conflicting_server_generations_never_consume_or_retry_the_queue_on_the_wrong_peer() {
+    let mut store = Store::open_in_memory().unwrap();
+    enqueue_clients(&mut store, 1);
+    let peer = Fake::new(
+        Box::new(|_| Err(TransportError::ReplicaGenerationChanged)),
+        Box::new(empty_pull),
+    );
+    assert!(matches!(
+        sync_cycle(&mut store, &peer),
+        Err(SyncError::Retry(_))
+    ));
+    assert_eq!(store.outbox_len().unwrap(), 1);
+    assert_eq!(store.conflicts().unwrap().len(), 0);
+    assert_eq!(peer.log(), ["push:1", "pull:0"]);
+}
+
+#[test]
+fn a_restore_fences_stale_views_and_late_pages_until_the_rebuild_finishes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("replica.sqlite");
+    let mut runner = Store::open(&path).unwrap();
+    let mut view = Store::open(&path).unwrap();
+    let ids = enqueue_clients(&mut view, 1);
+    let batch = runner.outbox(1).unwrap();
+    runner
+        .apply_push_results(
+            &batch,
+            &[MutationResult::Rejected {
+                mutation_id: ids[0].clone(),
+                reason: "conflict".into(),
+                message: "An earlier rejection".into(),
+                replayed: false,
+            }],
+        )
+        .unwrap();
+    runner
+        .switch_replica_generation(INITIAL_GENERATION, "restored-test")
+        .unwrap();
+    assert_eq!(
+        runner.conflicts().unwrap()[0].message,
+        "An earlier rejection"
+    );
+    assert!(runner.conflicts().unwrap()[0].requires_restored_review());
+    assert!(
+        runner
+            .apply_sync_page(&[], 60, false, true, &[], Some(INITIAL_GENERATION))
+            .is_err()
+    );
+    assert!(
+        view.enqueue("client.create", "stale", json!({"id":"stale"}))
+            .is_err()
+    );
+    view.refresh_reviewed_generation().unwrap();
+    runner
+        .apply_sync_page(&[], 41, false, false, &[], Some("restored-test"))
+        .unwrap();
+    drop(runner);
+    let mut runner = Store::open(&path).unwrap();
+    assert!(
+        view.enqueue("client.create", "partial", json!({"id":"partial"}))
+            .is_err()
+    );
+    runner
+        .apply_sync_page(&[], 42, false, true, &[], Some("restored-test"))
+        .unwrap();
+    enqueue_clients(&mut view, 1);
+    let (generation, batch) = runner.push_snapshot(100).unwrap();
+    assert_eq!(generation, "restored-test");
+    assert_eq!(batch.len(), 1);
 }
 
 #[test]
@@ -261,6 +384,7 @@ fn a_retry_result_stops_the_push_and_leaves_the_rest_for_the_next_attempt() {
 
 fn page(from: i64, n: i64, has_more: bool) -> PullResponse {
     PullResponse {
+        generation: None,
         changes: (from + 1..=from + n)
             .map(|seq| RawChange {
                 seq,
@@ -273,6 +397,10 @@ fn page(from: i64, n: i64, has_more: bool) -> PullResponse {
             .collect(),
         next_cursor: from + n,
         has_more,
+        refresh: vec![],        time_off_scope: None,
+            client_directory: None,
+            calendar_scope: None,
+            viewer_role: None,
         head_seq: 6,
     }
 }
@@ -297,6 +425,46 @@ fn pull_follows_has_more_and_stores_the_cursor_with_each_page() {
     assert_eq!(t.log(), ["pull:0", "pull:2", "pull:4"]);
     assert_eq!(s.cursor().unwrap(), 6);
     assert_eq!(s.clients().unwrap().len(), 6);
+}
+
+#[test]
+fn client_visibility_change_purges_the_previous_replica_and_keeps_the_outbox() {
+    let mut store = Store::open_in_memory().unwrap();
+    let allowed = Fake::new(
+        Box::new(applied_all),
+        Box::new(|since, _| {
+            let mut response = page(since, 1, false);
+            response.client_directory = Some(true);
+            response.calendar_scope = Some("all".into());
+            Ok(response)
+        }),
+    );
+    pull_all(&mut store, &allowed).unwrap();
+    assert_eq!(crate::calendar::directory_clients(&store).unwrap().len(), 1);
+    let id = crate::ops::create_directory_client(&mut store, "Walk in", "", "", "").unwrap();
+    let denied = Fake::new(
+        Box::new(applied_all),
+        Box::new(|_, _| {
+            Ok(PullResponse {
+                generation: None,
+                changes: vec![],
+                next_cursor: 1,
+                has_more: false,
+                head_seq: 1,
+                refresh: vec![],
+                time_off_scope: None,
+                client_directory: Some(false),
+                calendar_scope: Some("staff".into()),
+                viewer_role: None,
+            })
+        }),
+    );
+    assert!(pull_all(&mut store, &denied).unwrap().replica_reset);
+    assert!(!store.client_directory_enabled().unwrap());
+    assert!(store.clients().unwrap().is_empty());
+    assert_eq!(store.outbox(10).unwrap()[0].entity_id, id);
+    assert!(pull_all(&mut store, &allowed).unwrap().replica_reset);
+    assert_eq!(crate::calendar::directory_clients(&store).unwrap().len(), 2);
 }
 
 #[test]
@@ -325,6 +493,7 @@ fn tombstones_in_a_pull_remove_local_rows() {
         Box::new(applied_all),
         Box::new(|_since, _| {
             Ok(PullResponse {
+                generation: None,
                 changes: vec![RawChange {
                     seq: 3,
                     entity: "client".into(),
@@ -334,6 +503,11 @@ fn tombstones_in_a_pull_remove_local_rows() {
                 }],
                 next_cursor: 3,
                 has_more: false,
+                refresh: vec![],
+                time_off_scope: None,
+                client_directory: None,
+                calendar_scope: None,
+                viewer_role: None,
                 head_seq: 3,
             })
         }),
@@ -344,10 +518,32 @@ fn tombstones_in_a_pull_remove_local_rows() {
 
 #[test]
 fn a_cursor_ahead_of_the_server_resets_the_replica_and_resyncs_from_zero_keeping_the_outbox() {
+    struct RestoredPeer(Fake);
+
+    impl Transport for RestoredPeer {
+        fn push(&self, request: &PushRequest) -> Result<PushResponse, TransportError> {
+            self.0.push(request)
+        }
+
+        fn pull(&self, since: i64, limit: u32) -> Result<PullResponse, TransportError> {
+            self.0.pull(since, limit)
+        }
+
+        fn pull_with_catalog_colors(
+            &self,
+            since: i64,
+            limit: u32,
+        ) -> Result<(PullResponse, Option<CatalogColors>), TransportError> {
+            self.0.log.lock().unwrap().push(format!("colors:{since}"));
+            Ok((self.pull(since, limit)?, Some(CatalogColors::new())))
+        }
+    }
+
     let mut s = Store::open_in_memory().unwrap();
     s.apply_page(&page(0, 2, false).changes, 99).unwrap();
+    s.apply_catalog_colors(&CatalogColors::new(), None).unwrap();
     enqueue_clients(&mut s, 1);
-    let t = Fake::new(
+    let t = RestoredPeer(Fake::new(
         Box::new(applied_all),
         Box::new(|since, _| {
             if since > 10 {
@@ -356,10 +552,11 @@ fn a_cursor_ahead_of_the_server_resets_the_replica_and_resyncs_from_zero_keeping
                 Ok(page(since, 1, false))
             }
         }),
-    );
+    ));
     let r = pull_all(&mut s, &t).unwrap();
     assert!(r.replica_reset);
-    assert_eq!(t.log(), ["pull:99", "pull:0"]);
+    assert_eq!(t.0.log(), ["pull:99", "colors:0", "pull:0"]);
+    assert!(s.get_meta(CATALOG_COLORS_CACHED).unwrap().is_some());
     assert_eq!(s.cursor().unwrap(), 1);
     assert_eq!(s.clients().unwrap().len(), 1);
     assert_eq!(s.outbox_len().unwrap(), 1);
@@ -372,9 +569,15 @@ fn a_server_that_says_has_more_without_progress_cannot_spin_the_client() {
         Box::new(applied_all),
         Box::new(|since, _| {
             Ok(PullResponse {
+                generation: None,
                 changes: vec![],
                 next_cursor: since,
                 has_more: true,
+                refresh: vec![],
+                time_off_scope: None,
+                client_directory: None,
+                calendar_scope: None,
+                viewer_role: None,
                 head_seq: 9,
             })
         }),
@@ -392,9 +595,15 @@ fn empty_pages_that_still_advance_the_cursor_are_followed() {
         Box::new(applied_all),
         Box::new(|since, _| {
             Ok(PullResponse {
+                generation: None,
                 changes: vec![],
                 next_cursor: since + 5,
                 has_more: since < 10,
+                refresh: vec![],
+                time_off_scope: None,
+                client_directory: None,
+                calendar_scope: None,
+                viewer_role: None,
                 head_seq: 15,
             })
         }),
@@ -520,6 +729,7 @@ fn offline_create_then_reconnect_applies_and_clears_the_pending_flag() {
         Box::new(applied_all),
         Box::new(move |since, _| {
             Ok(PullResponse {
+                generation: None,
                 changes: vec![RawChange {
                     seq: 4,
                     entity: "appointment".into(),
@@ -531,6 +741,11 @@ fn offline_create_then_reconnect_applies_and_clears_the_pending_flag() {
                 }],
                 next_cursor: since.max(4),
                 has_more: false,
+                refresh: vec![],
+                time_off_scope: None,
+                client_directory: None,
+                calendar_scope: None,
+                viewer_role: None,
                 head_seq: 4,
             })
         }),

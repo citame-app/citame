@@ -2,6 +2,7 @@ import { CLIENT_PAGE_SIZE_DEFAULT, type ClientListQuery, clientSortSchema } from
 
 export interface ClientsSearch {
   q?: string;
+  group?: string;
   page: number;
   sort: ClientListQuery["sort"];
   order: ClientListQuery["order"];
@@ -14,6 +15,9 @@ export function validateClientsSearch(raw: Record<string, unknown>): ClientsSear
   const sort = clientSortSchema.safeParse(raw.sort);
   return {
     ...(q ? { q } : {}),
+    ...(typeof raw.group === "string" && raw.group.trim()
+      ? { group: raw.group.trim().slice(0, 40) }
+      : {}),
     page: Number.isInteger(page) && page >= 1 ? page : 1,
     sort: sort.success ? sort.data : "name",
     order: raw.order === "desc" ? "desc" : "asc",
@@ -32,6 +36,7 @@ export function sortingToSearch(
 export function searchToQuery(search: ClientsSearch): ClientListQuery {
   return {
     ...(search.q ? { search: search.q } : {}),
+    ...(search.group ? { tag: search.group } : {}),
     page: search.page,
     pageSize: CLIENT_PAGE_SIZE_DEFAULT,
     sort: search.sort,

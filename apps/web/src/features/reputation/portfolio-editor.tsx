@@ -1,5 +1,6 @@
 import {
   type PortfolioAdminPhoto,
+  type PortfolioEdit,
   type PortfolioUpload,
   portfolioEditSchema,
   portfolioUploadSchema,
@@ -24,7 +25,9 @@ export function PortfolioEditor({
   onDirtyChange,
   prepareFile = preparePrivatePhoto,
   actionsTarget,
+  associatedService,
 }: {
+  associatedService?: { id: string; name: string };
   photo: PortfolioAdminPhoto | null;
   onSaved: () => void;
   onDirtyChange: (dirty: boolean) => void;
@@ -35,7 +38,7 @@ export function PortfolioEditor({
   const catalog = useQuery(servicesQuery);
   const [caption, setCaption] = useState(photo?.caption ?? "");
   const [alt, setAlt] = useState(photo?.alt ?? "");
-  const [serviceId, setServiceId] = useState(photo?.serviceId ?? "");
+  const [serviceId, setServiceId] = useState(photo?.serviceId ?? associatedService?.id ?? "");
   const [base64, setBase64] = useState("");
   const [permission, setPermission] = useState(false);
   const [reading, setReading] = useState(false);
@@ -49,14 +52,14 @@ export function PortfolioEditor({
   const packet = useRef<PortfolioUpload | null>(null);
   useEffect(() => {
     mounted.current = true;
+    generation.current++;
     return () => {
       mounted.current = false;
-      generation.current++;
     };
   }, []);
   const metadataDirty = photo
     ? caption !== photo.caption || alt !== photo.alt || serviceId !== (photo.serviceId ?? "")
-    : Boolean(caption || alt || serviceId || base64);
+    : Boolean(caption || alt || (serviceId && serviceId !== associatedService?.id) || base64);
   useEffect(() => {
     onDirtyChange(metadataDirty || permission || reading);
   }, [metadataDirty, permission, reading, onDirtyChange]);
@@ -74,20 +77,25 @@ export function PortfolioEditor({
     imageBase64: base64,
   });
   const mutation = useMutation({
-    mutationFn: async (kind: "save" | "publish" | "unpublish" | "remove") => {
-      if (kind === "save") {
-        if (photo) {
-          if (!edit.success) throw new Error("Invalid metadata");
-          return api().portfolio.edit(photo.id, edit.data);
-        }
-        if (!upload.success) throw new Error("Invalid upload");
-        packet.current ??= upload.data;
-        return api().portfolio.upload(packet.current);
+    mutationFn: async (request: {
+      kind: "save" | "publish" | "unpublish" | "remove";
+      upload?: PortfolioUpload;
+      edit?: PortfolioEdit;
+      photoId?: string;
+      version?: number;
+    }) => {
+      if (request.kind === "save") {
+        if (request.photoId && request.edit)
+          return api().portfolio.edit(request.photoId, request.edit);
+        if (request.upload) return api().portfolio.upload(request.upload);
+        throw new Error("Invalid photo draft");
       }
-      if (!photo) throw new Error("Save the private draft first");
-      if (kind === "publish") return api().portfolio.publish(photo.id, photo.version);
-      if (kind === "unpublish") return api().portfolio.unpublish(photo.id, photo.version);
-      return api().portfolio.remove(photo.id, photo.version);
+      if (!request.photoId || !request.version) throw new Error("Save the private draft first");
+      if (request.kind === "publish")
+        return api().portfolio.publish(request.photoId, request.version);
+      if (request.kind === "unpublish")
+        return api().portfolio.unpublish(request.photoId, request.version);
+      return api().portfolio.remove(request.photoId, request.version);
     },
     onSuccess: () => {
       if (!mounted.current) return;
@@ -101,6 +109,16 @@ export function PortfolioEditor({
       else packet.current = null;
     },
   });
+  const submit = (kind: "save" | "publish" | "unpublish" | "remove") => {
+    if (kind === "save" && !photo && upload.success) packet.current ??= upload.data;
+    mutation.mutate({
+      kind,
+      photoId: photo?.id,
+      version: photo?.version,
+      ...(photo && edit.success ? { edit: edit.data } : {}),
+      ...(!photo && packet.current ? { upload: packet.current } : {}),
+    });
+  };
   const disabled = reading || mutation.isPending || uncertain;
   const changed = () => {
     mutation.reset();
@@ -115,6 +133,8 @@ export function PortfolioEditor({
     { value: "", label: t("portfolio.noService") },
     ...(catalog.data ?? []).map((service) => ({ value: service.id, label: service.name })),
   ];
+  if (associatedService && !options.some((option) => option.value === associatedService.id))
+    options.push({ value: associatedService.id, label: associatedService.name });
   if (photo?.serviceId && !options.some((option) => option.value === photo.serviceId))
     options.push({ value: photo.serviceId, label: photo.serviceName ?? photo.serviceId });
   const actions = (
@@ -126,16 +146,13 @@ export function PortfolioEditor({
             reading ||
             (photo ? !edit.success || !metadataDirty : !upload.success)
           }
-          onClick={() => mutation.mutate("save")}
+          onClick={() => submit("save")}
         >
           {t("portfolio.save")}
         </Button>
       )}
       {photo?.status === "draft" && !metadataDirty && (
-        <Button
-          disabled={mutation.isPending || !permission}
-          onClick={() => mutation.mutate("publish")}
-        >
+        <Button disabled={mutation.isPending || !permission} onClick={() => submit("publish")}>
           {t("portfolio.publish")}
         </Button>
       )}
@@ -143,7 +160,7 @@ export function PortfolioEditor({
         <Button
           variant="secondary"
           disabled={mutation.isPending || metadataDirty}
-          onClick={() => mutation.mutate("unpublish")}
+          onClick={() => submit("unpublish")}
         >
           {t("portfolio.unpublish")}
         </Button>
@@ -186,16 +203,16 @@ export function PortfolioEditor({
               changed();
               void prepareFile(file)
                 .then((value) => {
-                  if (generation.current === ticket) setBase64(value);
+                  if (mounted.current && generation.current === ticket) setBase64(value);
                 })
                 .catch(() => {
-                  if (generation.current === ticket) {
+                  if (mounted.current && generation.current === ticket) {
                     setFileError(true);
                     setBase64("");
                   }
                 })
                 .finally(() => {
-                  if (generation.current === ticket) setReading(false);
+                  if (mounted.current && generation.current === ticket) setReading(false);
                 });
             }}
           />
@@ -237,7 +254,7 @@ export function PortfolioEditor({
         label={t("portfolio.service")}
         value={serviceId}
         options={options}
-        disabled={disabled || catalog.isPending}
+        disabled={disabled || catalog.isPending || Boolean(associatedService)}
         onChange={(value) => {
           setServiceId(value);
           changed();
@@ -284,7 +301,7 @@ export function PortfolioEditor({
         cancelLabel={t("reviews.close")}
         destructive
         pending={mutation.isPending}
-        onConfirm={() => mutation.mutate("remove")}
+        onConfirm={() => submit("remove")}
       >
         {mutation.isError && (
           <ReviewFailure error={mutation.error} changedKey="portfolio.changed" />

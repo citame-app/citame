@@ -5,7 +5,6 @@ import { expectNoSeriousA11yViolations } from "./helpers";
 // Both themes deliberately share a date: fixture identities must remain unambiguous.
 const [auditDate] = runDays(1, -1);
 const ROUTES = [
-  ["/admin", "Today"],
   ["/admin/calendar", "Calendar"],
   ["/admin/clients", "Clients"],
   ["/admin/services", "Services"],

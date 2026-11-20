@@ -195,7 +195,9 @@ for (const scheme of ["light", "dark"] as const)
         await expect(
           publicPage.getByRole("heading", { name: "No published work yet", exact: true }),
         ).toBeVisible();
+        await page.getByRole("button", { name: "Account and preferences", exact: true }).click();
         await page.getByRole("radio", { name: "Español", exact: true }).check();
+        await page.keyboard.press("Escape");
         await card.getByRole("button", { name: "Revisar foto del portfolio", exact: true }).click();
         const spanish = page.getByRole("dialog", {
           name: "Revisar foto del portfolio",

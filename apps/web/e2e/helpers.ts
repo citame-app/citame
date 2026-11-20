@@ -42,10 +42,15 @@ export async function createClient(
 }
 
 /** Signs in through the UI so cookies, redirects and the session refresh are all exercised. */
-export async function signInThroughUi(page: Page, email: string, redirect?: string) {
+export async function signInThroughUi(
+  page: Page,
+  email: string,
+  redirect?: string,
+  password = PASSWORD,
+) {
   await page.goto(redirect ? `/sign-in?redirect=${encodeURIComponent(redirect)}` : "/sign-in");
   await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
+  await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
 }
 
@@ -70,6 +75,16 @@ export async function expectNoSeriousA11yViolations(page: Page, context = "") {
         .map((n) => n.target.join(" "))
         .join("\n  ")}`,
   );
+  if (blocking.length)
+    console.error(
+      "Accessibility details",
+      JSON.stringify(
+        blocking.map((v) => ({
+          id: v.id,
+          nodes: v.nodes.map((n) => ({ target: n.target, summary: n.failureSummary })),
+        })),
+      ),
+    );
   expect(summary, `axe violations ${context}`.trim()).toEqual([]);
 }
 
@@ -95,4 +110,16 @@ export async function pickFirstTime(page: Page): Promise<string> {
   const label = (await page.locator(`label[for="${id}"]`).textContent())?.trim() ?? "";
   await first.check();
   return label;
+}
+
+/** Admin preferences live in the account popover; public pages keep the language control visible. */
+export async function switchLocale(page: Page, label: "Español" | "English") {
+  const radio = page.getByRole("radio", { name: label, exact: true });
+  const inMenu = !(await radio.isVisible());
+  if (inMenu)
+    await page
+      .getByRole("button", { name: /^(Account and preferences|Cuenta y preferencias)$/ })
+      .click();
+  await radio.check();
+  if (inMenu) await page.keyboard.press("Escape");
 }

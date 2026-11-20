@@ -23,6 +23,10 @@ export function usePolicySubmission<Input, Output>(
     },
     onSuccess: async (result) => {
       if (mounted.current) await onSaved(result);
+      if (mounted.current) {
+        setUncertain(false);
+        packet.current = undefined;
+      }
     },
     onError: (error) => {
       if (!mounted.current) return;

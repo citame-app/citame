@@ -1,13 +1,14 @@
 /// <reference types="vite/client" />
 
-import frauncesLatin from "@fontsource-variable/lora/files/lora-latin-wght-normal.woff2?url";
-import interLatin from "@fontsource-variable/nunito-sans/files/nunito-sans-latin-wght-normal.woff2?url";
+import loraLatin from "@fontsource-variable/lora/files/lora-latin-wght-normal.woff2?url";
+import nunitoLatin from "@fontsource-variable/nunito-sans/files/nunito-sans-latin-wght-normal.woff2?url";
 import type { QueryClient } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   createRootRouteWithContext,
   HeadContent,
   Outlet,
+  redirect,
   Scripts,
   useRouter,
   useRouterState,
@@ -18,7 +19,7 @@ import { OfflineBanner } from "~/components/ui/states";
 import { ToastHost } from "~/components/ui/toast";
 import { createTranslator, DEFAULT_LOCALE, type Locale } from "~/i18n";
 import { I18nProvider } from "~/i18n/react";
-import { buildCsp } from "~/lib/csp";
+import { buildCsp, isWhatsAppSettingsPath } from "~/lib/csp";
 import { salonQuery } from "~/lib/queries";
 import { pageMeta } from "~/lib/seo";
 import type { Theme } from "~/lib/theme";
@@ -31,9 +32,13 @@ const FALLBACK_SALON = {
   slotGranularityMinutes: 15,
   minNoticeMinutes: 60,
   maxDaysAhead: 60,
+  onlineBookingEnabled: true,
 };
 
-export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
+export const Route = createRootRouteWithContext<{
+  queryClient: QueryClient;
+  documentAllowsMetaPopup?: boolean;
+}>()({
   // Session-dependent HTML must never be cached by a shared cache.
   // Annotated by hand: reading `ssr` from the inferred context makes it depend on `beforeLoad`.
   headers: ({ ssr }: { ssr?: { nonce?: string } }) => ({
@@ -48,6 +53,14 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       : {}),
   }),
   beforeLoad: async ({ context, location }) => {
+    // CSP and COOP belong to the original response. Crossing this route boundary in either
+    // direction needs a fresh document, even when navigation did not originate from a Link.
+    if (
+      context.documentAllowsMetaPopup !== undefined &&
+      context.documentAllowsMetaPopup !== isWhatsAppSettingsPath(location.pathname)
+    ) {
+      throw redirect({ href: location.href, reloadDocument: true });
+    }
     const [bootstrap, salon] = await Promise.all([
       context.queryClient.ensureQueryData(
         location.pathname === "/widget" ? publicBootstrapQuery : bootstrapQuery,
@@ -61,10 +74,12 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       salon,
     };
   },
-  head: ({ match }) => {
+  head: ({ match, matches }) => {
     const locale = (match.context as { locale?: Locale }).locale ?? DEFAULT_LOCALE;
     const salon = (match.context as { salon?: typeof FALLBACK_SALON }).salon ?? FALLBACK_SALON;
     const t = createTranslator(locale);
+    const pathname = matches.at(-1)?.pathname ?? "/";
+    const inAdmin = pathname === "/admin" || pathname.startsWith("/admin/");
     return {
       meta: [
         { charSet: "utf-8" },
@@ -84,18 +99,22 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       links: [
         {
           rel: "preload",
-          href: interLatin,
+          href: nunitoLatin,
           as: "font",
           type: "font/woff2",
           crossOrigin: "anonymous",
         },
-        {
-          rel: "preload",
-          href: frauncesLatin,
-          as: "font",
-          type: "font/woff2",
-          crossOrigin: "anonymous",
-        },
+        ...(inAdmin
+          ? []
+          : [
+              {
+                rel: "preload",
+                href: loraLatin,
+                as: "font",
+                type: "font/woff2",
+                crossOrigin: "anonymous" as const,
+              },
+            ]),
         { rel: "stylesheet", href: appCss },
         { rel: "stylesheet", href: "/taste/motion/motion.css" },
         { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },
@@ -110,6 +129,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 });
 
 function RootDocument({ children }: { children: ReactNode }) {
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const inAdmin = pathname === "/admin" || pathname.startsWith("/admin/");
   const state = useRouterState({ select: (s) => s.matches[0]?.context }) as
     | { locale?: Locale; theme?: "light" | "dark" }
     | undefined;
@@ -117,7 +138,7 @@ function RootDocument({ children }: { children: ReactNode }) {
     <html
       lang={state?.locale ?? DEFAULT_LOCALE}
       data-theme={state?.theme}
-      data-type="place"
+      data-type={inAdmin ? "software" : "place"}
       data-radius="soft"
       data-buttons="block"
       data-motion="true"
@@ -211,6 +232,8 @@ function Chrome({
       <OfflineBanner />
       {!inWidget && (
         <Header
+          adminMode={inAdmin}
+          calendarMode={pathname === "/admin/calendar"}
           showDiscovery={["/", "/reviews", "/portfolio"].includes(pathname)}
           salonName={salonName}
           session={session}

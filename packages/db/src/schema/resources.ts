@@ -52,10 +52,14 @@ export const serviceResource = pgTable(
       .notNull()
       .references(() => resourcePool.id),
     quantity: integer().notNull(),
+    alternative: boolean().notNull().default(false),
   },
   (t) => [
     unique("service_resource_unique").on(t.serviceId, t.resourceId),
-    check("service_resource_quantity_valid", sql`${t.quantity} between 1 and 20`),
+    check(
+      "service_resource_quantity_valid",
+      sql`${t.quantity} between 1 and 20 and (not ${t.alternative} or ${t.quantity}=1)`,
+    ),
   ],
 );
 /** The deferred exclusion constraint and owner-window triggers live in the SQL migration. */
@@ -81,6 +85,9 @@ export const resourceReservation = pgTable(
   },
   (t) => [
     check("resource_reservation_release_owner", sql`not ${t.released} or ${t.offerId} is not null`),
+    uniqueIndex("resource_reservation_source_appointment")
+      .on(t.appointmentId)
+      .where(sql`${t.unitIndex} >= 20`),
     index("resource_reservation_appointment_idx").on(t.appointmentId),
     index("resource_reservation_offer_idx").on(t.offerId),
     index("resource_reservation_pool_time_idx")
@@ -88,7 +95,7 @@ export const resourceReservation = pgTable(
       .where(sql`${t.active}`),
     check(
       "resource_reservation_valid",
-      sql`num_nonnulls(${t.appointmentId},${t.offerId})=1 and ${t.servicePosition}>=0 and ${t.unitIndex} between 0 and 19 and ${t.offsetMinutes}>=0 and ${t.endOffsetMinutes}>${t.offsetMinutes} and ${t.endOffsetMinutes}<=100000 and ${t.endsAt}>${t.startsAt}`,
+      sql`num_nonnulls(${t.appointmentId},${t.offerId})=1 and ${t.servicePosition}>=0 and ${t.unitIndex} between 0 and 39 and ${t.offsetMinutes}>=0 and ${t.endOffsetMinutes}>${t.offsetMinutes} and ${t.endOffsetMinutes}<=100000 and ${t.endsAt}>${t.startsAt}`,
     ),
   ],
 );

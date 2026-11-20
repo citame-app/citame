@@ -156,19 +156,13 @@ test.describe("admin screenshots", () => {
     };
     const dayUrl = `/admin/calendar?date=${day}&staff=${STYLIST_A},${STYLIST_B}`;
 
-    // ---- empty "today" (a weekend in real time) and forbidden notice ----
+    // ---- the default agenda ----
     await signInAs(page, OWNER_EMAIL, "/admin");
-    await expect(page.getByRole("heading", { level: 1, name: "Today" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Calendar" })).toBeVisible();
     await page.waitForLoadState("networkidle");
-    await shoot(page, project, "today-real-day");
+    await shoot(page, project, "calendar-default");
 
-    // ---- today with data: the browser clock is pinned to 14:00 on the fixture day ----
     page = await pinnedPage();
-    await page.goto("/admin");
-    await expect(page.getByRole("heading", { name: "Waiting for an outcome" })).toBeVisible();
-    await page.waitForLoadState("networkidle");
-    await shoot(page, project, "today-with-data");
-
     await page.goto(dayUrl);
     await expect(page.getByRole("button", { name: /Report Fixture A/ })).toBeVisible();
     await page.waitForLoadState("networkidle");
@@ -394,7 +388,6 @@ test.describe("admin screenshots", () => {
     // ---- dark mode and Spanish ----
     page = await pinnedPage("dark");
     for (const [path, name] of [
-      ["/admin", "dark-today"],
       [dayUrl, "dark-calendar-day"],
       [
         `/admin/reports?preset=custom&from=${salonDate(off - 6)}&to=${day}&staff=${STYLIST_A}`,
@@ -417,8 +410,6 @@ test.describe("admin screenshots", () => {
     await expect(page.getByRole("heading", { level: 1, name: "Agenda" })).toBeVisible();
     await page.waitForLoadState("networkidle");
     await shoot(page, project, "es-calendar-day");
-    await page.goto("/admin");
-    await shoot(page, project, "es-today");
     await page.goto("/admin/staff");
     await shoot(page, project, "es-team");
     for (const [path, name] of [
@@ -446,7 +437,8 @@ test.describe("admin screenshots", () => {
     await page.goto("/admin");
     await page.getByLabel("English").check({ force: true });
     await page.context().clearCookies();
-    await signInAs(page, "e2e-staff@example.com", "/admin/services");
+    await signInAs(page, "e2e-staff@example.com");
+    await page.goto("/admin/services");
     await expect(
       page.getByRole("alert").filter({ hasText: "You do not have access" }),
     ).toBeVisible();

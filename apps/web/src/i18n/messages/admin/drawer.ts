@@ -1,4 +1,40 @@
 export const drawerEn = {
+  "badge.save": "Save service details",
+  "badge.importAdd": "Add details",
+  "badge.importUpdate": "Replace existing details",
+  "badge.importUnchanged": "Already imported, no changes",
+  "badge.import": "Import Booksy details",
+  "badge.importDescription":
+    "Add preferences, billing indicators and comments to future appointments already linked in Citame. The prepared JSON file must map each Booksy service to its Citame appointment and service.",
+  "badge.importSafety":
+    "Copies details only. Appointments in Booksy stay untouched. Payments and revenue are not generated, and no messages are sent to clients.",
+  "badge.importFile": "Prepared import file (JSON, up to 500 services)",
+  "badge.importInvalid":
+    "Invalid file. Check the appointment and service mapping and the 2 MB limit.",
+  "badge.importPreview": "Review import",
+  "badge.importAppointments": "Future appointments",
+  "badge.importError":
+    "Could not import. Check mappings and reload the appointments before reviewing again.",
+  "badge.importDone": "Details imported successfully.",
+  "badge.importApply": "Import reviewed details",
+  "badge.details": "Service preferences and comments",
+  "badge.consultation":
+    "Imported Booksy data · consultation copy without automatic synchronization. Booksy remains the salon’s operational calendar.",
+  "badge.originalReservation": "Original Booksy reservation:",
+  "badge.unquoted": "Amount not specified in Booksy",
+  "badge.businessMessage": "Message from the business to the client",
+  "badge.requested": "Client requested a specific professional",
+  "badge.internal": "Internal notes",
+  "badge.customer": "Client comment from booking",
+  "badge.private": "Only visible to the team with access to this appointment.",
+  "badge.paidBooksy": "Paid in Booksy",
+  "badge.paidCitame": "Paid in Citame",
+  "badge.invoicedCitame": "Sale recorded in Citame",
+  "badge.invoicedBooksy": "Invoiced in Booksy",
+  "badge.loadError": "Could not load the comments. Please reopen the appointment.",
+  "badge.saveError": "Could not save. Reload the appointment before retrying.",
+  "badge.saveConflict": "This appointment changed. Your draft is still here and you can copy it.",
+  "badge.discardDraft": "Discard draft and load saved details",
   "drawer.title": "Appointment",
   "drawer.when": "Date and time",
   "drawer.staff": "Team member",
@@ -26,6 +62,42 @@ export const drawerEn = {
 } as const;
 
 export const drawerEsAR: Record<keyof typeof drawerEn, string> = {
+  "badge.save": "Guardar detalles del servicio",
+  "badge.importAdd": "Añadir detalles",
+  "badge.importUpdate": "Sustituir los detalles existentes",
+  "badge.importUnchanged": "Ya importado, sin cambios",
+  "badge.import": "Importar detalles de Booksy",
+  "badge.importDescription":
+    "Añade preferencias, indicadores de facturación y comentarios a citas futuras ya vinculadas en Citame. El archivo JSON preparado debe relacionar cada servicio de Booksy con su cita y servicio en Citame.",
+  "badge.importSafety":
+    "Solo copia detalles. Las citas de Booksy permanecen intactas. No genera cobros ni ingresos ni envía mensajes a clientes.",
+  "badge.importFile": "Archivo de importación preparado (JSON, hasta 500 servicios)",
+  "badge.importInvalid":
+    "Archivo no válido. Revisa la vinculación de citas y servicios y el límite de 2 MB.",
+  "badge.importPreview": "Revisar importación",
+  "badge.importAppointments": "Citas futuras",
+  "badge.importError":
+    "No se pudo importar. Revisa las vinculaciones y recarga las citas antes de volver a revisar.",
+  "badge.importDone": "Detalles importados correctamente.",
+  "badge.importApply": "Importar detalles revisados",
+  "badge.details": "Preferencias y comentarios por servicio",
+  "badge.consultation":
+    "Datos importados de Booksy · copia de consulta, sin sincronización automática. Booksy sigue siendo la agenda operativa del centro.",
+  "badge.originalReservation": "Reserva original de Booksy:",
+  "badge.unquoted": "Importe no indicado en Booksy",
+  "badge.businessMessage": "Mensaje del negocio para el cliente",
+  "badge.requested": "El cliente solicitó una profesional concreta",
+  "badge.internal": "Notas internas",
+  "badge.customer": "Comentario del cliente al reservar",
+  "badge.private": "Solo las ve el equipo con acceso a esta cita.",
+  "badge.paidBooksy": "Pagada en Booksy",
+  "badge.paidCitame": "Pagada en Citame",
+  "badge.invoicedCitame": "Venta registrada en Citame",
+  "badge.invoicedBooksy": "Facturada en Booksy",
+  "badge.loadError": "No se pudieron cargar los comentarios. Vuelve a abrir la cita.",
+  "badge.saveError": "No se pudo guardar. Recarga la cita antes de intentarlo de nuevo.",
+  "badge.saveConflict": "La cita cambió. Puedes copiar el borrador que sigue en pantalla.",
+  "badge.discardDraft": "Descartar borrador y cargar datos guardados",
   "drawer.title": "Turno",
   "drawer.when": "Fecha y hora",
   "drawer.staff": "Integrante del equipo",

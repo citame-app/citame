@@ -14,6 +14,8 @@ export const errorCodeSchema = z.enum([
   "storage_limit",
   "intake_required",
   "booking_intent_conflict",
+  "sync_generation_changed",
+  "online_booking_paused",
   /** A staff member (or client) cannot be deactivated while they still have upcoming bookings. */
   "has_future_appointments",
   /** The requested time is outside working hours, during time off, or breaks the notice window. */
@@ -50,6 +52,8 @@ export const errorStatus = {
   storage_limit: 409,
   intake_required: 409,
   booking_intent_conflict: 409,
+  sync_generation_changed: 409,
+  online_booking_paused: 409,
   has_future_appointments: 409,
   slot_unavailable: 409,
   rate_limited: 429,

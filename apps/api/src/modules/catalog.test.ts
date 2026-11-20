@@ -1,8 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { listServicesResponseSchema, listStaffResponseSchema } from "@sob/contracts";
-import { service, staffProfile } from "@sob/db";
+import {
+  listAdminServicesResponseSchema,
+  listServicesResponseSchema,
+  listStaffResponseSchema,
+} from "@sob/contracts";
+import { service, serviceAddon, staffProfile } from "@sob/db";
 import { eq } from "drizzle-orm";
-import { type Fixtures, seedFixtures, setupApiTest } from "../../test/helpers";
+import { actor, type Fixtures, seedFixtures, setupApiTest } from "../../test/helpers";
 
 let t: Awaited<ReturnType<typeof setupApiTest>>;
 let f: Fixtures;
@@ -37,6 +41,37 @@ describe("GET /services", () => {
     await t.db.update(service).set({ deletedAt: new Date() }).where(eq(service.id, f.haircutId));
     const body = listServicesResponseSchema.parse(await (await t.app.request("/services")).json());
     expect(body.services).toEqual([]);
+  });
+
+  test("unconfigured imported add-ons remain editable without appearing in the public catalogue", async () => {
+    const [addon] = await t.db
+      .insert(service)
+      .values({
+        name: "Imported add-on",
+        catalogKind: "addon",
+        durationMinutes: 0,
+        priceCents: 500,
+      })
+      .returning();
+    if (!addon) throw new Error("Expected the fixture add-on");
+    const owner = await actor(t, "owner", "catalog-owner@example.com");
+    const admin = await t.app.request("/admin/services", { headers: { cookie: owner.cookie } });
+    expect(admin.status).toBe(200);
+    expect(listAdminServicesResponseSchema.parse(await admin.json()).services).toContainEqual(
+      expect.objectContaining({
+        id: addon.id,
+        catalog: { kind: "addon", version: 1, allowedServiceIds: [] },
+      }),
+    );
+    const publicIds = async () =>
+      listServicesResponseSchema
+        .parse(await (await t.app.request("/services")).json())
+        .services.map(({ id }) => id);
+    expect(await publicIds()).not.toContain(addon.id);
+    await t.db.insert(serviceAddon).values({ addonId: addon.id, serviceId: f.haircutId });
+    expect(await publicIds()).toContain(addon.id);
+    await t.db.update(service).set({ active: false }).where(eq(service.id, f.haircutId));
+    expect(await publicIds()).not.toContain(addon.id);
   });
 });
 

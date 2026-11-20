@@ -27,7 +27,7 @@ export function resolveAccess(
 }
 
 export function homeFor(role: UserRole): string {
-  return role === "client" ? "/account" : "/admin";
+  return role === "client" ? "/account" : "/admin/calendar";
 }
 
 const AUTH_PATHS = ["/sign-in", "/sign-up"];

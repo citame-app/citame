@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import { appointmentSeriesPreviewSchema, appointmentSeriesSchema } from "@sob/contracts";
-import { appointment, clientProfile, reminder, service } from "@sob/db";
+import { appointment, clientProfile, reminder, service, staffProfile } from "@sob/db";
 import { eq } from "drizzle-orm";
 import {
   type Actor,
@@ -27,14 +27,10 @@ const input = () => ({
   interval: 1,
   count: 3,
 });
-async function review(body = input()) {
-  const r = await call(owner, "/appointments/series/preview", body);
+async function review(body = input(), who = owner) {
+  const r = await call(who, "/appointments/series/preview", body);
   expect(r.status, await r.clone().text()).toBe(200);
-  return (await r.json()) as {
-    reviewHash: string;
-    timezone: string;
-    occurrences: { startsAt: string; endsAt: string; available: boolean }[];
-  };
+  return appointmentSeriesPreviewSchema.parse(await r.json());
 }
 beforeAll(async () => {
   t = await setupApiTest({ dbSuffix: "appointment_series" });
@@ -96,6 +92,49 @@ test("one newly occupied occurrence rolls back the entire series and its notific
   });
   expect(r.status).toBe(409);
   expect(await t.db.select().from(appointment)).toHaveLength(1);
+});
+test("pausing online booking blocks new customer series but preserves replay and team bookings", async () => {
+  const previewPath = "/appointments/series/preview";
+  const createPath = "/appointments/series";
+  const reviewedRequest = async (who: Actor, body: ReturnType<typeof input>) => {
+    const { reviewHash } = await review(body, who);
+    return { ...body, reviewHash, idempotencyKey: crypto.randomUUID() };
+  };
+  const original = await reviewedRequest(buyer, input());
+  const booked = await call(buyer, createPath, original);
+  expect(booked.status, await booked.clone().text()).toBe(201);
+  const saved = appointmentSeriesSchema.parse(await booked.json());
+  const next = { ...input(), startsAt: "2026-03-09T15:00:00.000Z" };
+  const pending = await reviewedRequest(buyer, next);
+  const pause = (onlineBookingEnabled: boolean) =>
+    json(t.app, "/admin/settings", "PATCH", { onlineBookingEnabled }, owner.cookie);
+  expect((await pause(false)).status).toBe(200);
+
+  for (const response of [
+    await call(buyer, previewPath, next),
+    await call(buyer, createPath, pending),
+  ]) {
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: { code: "online_booking_paused" } });
+  }
+  expect(await t.db.select().from(appointment)).toHaveLength(3);
+  const replay = await call(buyer, createPath, original);
+  expect(replay.status).toBe(201);
+  const recovered = appointmentSeriesSchema.parse(await replay.json());
+  expect(recovered.id).toBe(saved.id);
+  expect(recovered.appointments.map((item) => item.id)).toEqual(
+    saved.appointments.map((item) => item.id),
+  );
+  const existing = await call(buyer, `${createPath}/${saved.id}`);
+  expect(existing.status).toBe(200);
+  expect(appointmentSeriesSchema.parse(await existing.json())).toEqual(recovered);
+
+  const staff = await actor(t, "staff", "staff-pause@test.local", { staffProfileId: f.anaId });
+  const desk = await reviewedRequest(staff, { ...next, startsAt: "2026-03-09T17:00:00.000Z" });
+  expect((await call(staff, createPath, desk)).status).toBe(201);
+  expect((await pause(true)).status).toBe(200);
+  expect((await call(buyer, createPath, await reviewedRequest(buyer, next))).status).toBe(201);
+  expect(await t.db.select().from(appointment)).toHaveLength(9);
 });
 test("a changed service price requires reviewing the series again", async () => {
   const body = input();
@@ -172,6 +211,65 @@ test("preview exposes unavailable dates beyond the booking horizon and creation 
   expect(r.status).toBe(409);
   expect(await t.db.select().from(appointment)).toHaveLength(0);
   expect(await t.db.select().from(reminder)).toHaveLength(0);
+});
+test("preview marks only an occupied occurrence and uses the same professional capacity as creation", async () => {
+  const body = input();
+  const busy = await call(owner, "/appointments", {
+    staffId: body.staffId,
+    clientId: other.clientId,
+    serviceIds: body.serviceIds,
+    startsAt: "2026-03-16T12:00:00.000Z",
+  });
+  expect(busy.status, await busy.clone().text()).toBe(201);
+  const request = (reviewHash: string) => ({
+    ...body,
+    reviewHash,
+    idempotencyKey: crypto.randomUUID(),
+  });
+  const blocked = await review(body);
+  expect(blocked.occurrences.map((visit) => visit.available)).toEqual([true, false, true]);
+  expect((await call(owner, "/appointments/series", request(blocked.reviewHash))).status).toBe(409);
+  expect(await t.db.select().from(appointment)).toHaveLength(1);
+
+  await t.db
+    .update(staffProfile)
+    .set({ maxConcurrent: 2 })
+    .where(eq(staffProfile.id, body.staffId));
+  const available = await review(body);
+  expect(available.occurrences.map((visit) => visit.available)).toEqual([true, true, true]);
+  const created = await call(owner, "/appointments/series", request(available.reviewHash));
+  expect(created.status, await created.clone().text()).toBe(201);
+  expect(await t.db.select().from(appointment)).toHaveLength(4);
+});
+test("preview and creation can use a treatment's processing gap at capacity one", async () => {
+  const processing = await json(
+    t.app,
+    `/admin/services/${f.colorId}/processing`,
+    "PUT",
+    { version: 1, processing: { startsAfterMinutes: 30, minutes: 30 } },
+    owner.cookie,
+  );
+  expect(processing.status, await processing.clone().text()).toBe(200);
+  await t.db
+    .update(service)
+    .set({ durationMinutes: 30, bufferMinutes: 0 })
+    .where(eq(service.id, f.haircutId));
+  const body = { ...input(), serviceIds: [f.colorId] };
+  const busy = await call(owner, "/appointments", {
+    staffId: body.staffId,
+    clientId: other.clientId,
+    serviceIds: [f.haircutId],
+    startsAt: "2026-03-16T12:30:00.000Z",
+  });
+  expect(busy.status, await busy.clone().text()).toBe(201);
+  const preview = await review(body);
+  expect(preview.occurrences.map((visit) => visit.available)).toEqual([true, true, true]);
+  const created = await call(owner, "/appointments/series", {
+    ...body,
+    reviewHash: preview.reviewHash,
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(created.status, await created.clone().text()).toBe(201);
 });
 test("series creation preserves calendar permissions and moved visits are scoped to their current calendar", async () => {
   const ana = await actor(t, "staff", "ana-series@test.local", { staffProfileId: f.anaId });

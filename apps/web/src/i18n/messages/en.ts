@@ -12,13 +12,16 @@ import { clientTransferEn } from "./client-transfer";
 import { combinationsEn } from "./combinations";
 import { commerceEn } from "./commerce";
 import { dateShiftsEn } from "./date-shifts";
+import { emailDeliveryEn } from "./email-delivery";
 import { giftCardsEn } from "./gift-cards";
 import { intakeEn } from "./intake";
 import { inventoryEn } from "./inventory";
 import { loyaltyEn } from "./loyalty";
+import { marketingEn } from "./marketing";
 import { notificationsEn } from "./notifications";
 import { passesEn } from "./passes";
 import { portfolioEn } from "./portfolio";
+import { posEn } from "./pos";
 import { reputationEn } from "./reputation";
 import { schedulingEn } from "./scheduling";
 import { serviceOptionsEn } from "./service-options";
@@ -28,6 +31,9 @@ import { timingEn } from "./timing";
 import { waitlistEn } from "./waitlist";
 /** English is the source catalog: its keys define what every other catalog must provide. */
 export const en = {
+  ...emailDeliveryEn,
+  ...posEn,
+  ...marketingEn,
   ...bookingPromotionsEn,
   ...timedPromotionsEn,
   ...combinationsEn,
@@ -157,9 +163,40 @@ export const en = {
   "oauth.consent.invalid.title": "This link is not valid",
   "oauth.consent.invalid.body": "Start the connection again from the app you want to connect.",
   "oauth.consent.meta.description": "Review what an app is asking to do for you.",
+  "desktop.devices.title": "Desktop devices",
+  "desktop.devices.lead":
+    "Each device stays linked until you disconnect it. Disconnecting a device stops it from syncing with this account.",
+  "desktop.devices.empty": "No desktop devices linked.",
+  "desktop.devices.linked": "Linked on",
+  "desktop.devices.activity": "Last sync access",
+  "desktop.devices.revoke": "Disconnect",
+  "desktop.devices.confirm": "Confirm disconnection",
+  "desktop.devices.removed": "Device disconnected",
+  "desktop.devices.failed": "Could not disconnect the device",
+  "oauth.connections.title": "Connected apps",
+  "oauth.connections.lead": "Review which apps can access this account through OAuth.",
+  "oauth.connections.empty": "No apps are connected.",
+  "oauth.connections.unnamed": "Unnamed app",
+  "oauth.connections.revoke": "Remove access",
+  "oauth.connections.confirm": "Confirm removal",
+  "oauth.connections.removed": "Access removed",
+  "oauth.connections.failed": "Could not remove access",
   "oauth.scope.mcp:read": "View services, availability and the appointments you can see",
   "oauth.scope.mcp:book": "Book and cancel appointments for you",
+  "oauth.scope.desktop:sign-in": "Sign in to Citame Desktop with your centre account",
   "oauth.scope.schedule:read": "Read the staff schedule and look up clients",
+  "oauth.scope.operations:read":
+    "Read centre operations including sales, stock, reports, loyalty and appointment notices",
+  "oauth.scope.schedule:write":
+    "Book, move and cancel centre appointments and manage schedules, waiting lists and your appointment inbox",
+  "oauth.scope.clients:write": "Create and edit customer profiles",
+  "oauth.scope.catalog:write": "Change services, team, resources, benefit plans and promotions",
+  "oauth.scope.stock:write": "Change products and record inventory movements",
+  "oauth.scope.sales:write": "Prepare or discard unpaid checkout drafts",
+  "oauth.scope.billing:write": "Save verified prices and payments for imported appointments",
+  "oauth.scope.cash:write": "Open and close cash sessions and record already received payments",
+  "oauth.scope.commissions:write": "Change commission rates and record commission payouts",
+  "oauth.scope.settings:write": "Change centre settings, loyalty and WhatsApp appointment rules",
   "oauth.scope.offline_access": "Stay connected until you remove access, without asking again",
   "slots.date": "Choose a date",
   "slots.dateLabel": "Dates",
@@ -211,6 +248,9 @@ export const en = {
     "This booking page is for clients. Use the dashboard to book on behalf of a client.",
   "booking.review.staff.link": "Go to the dashboard",
   "booking.review.sessionExpired": "Your session expired. Please sign in again to confirm.",
+  "booking.paused.title": "Online booking is paused",
+  "booking.paused.body":
+    "Contact the salon to book. You can still manage existing appointments from your account.",
   "booking.review.catalogChanged":
     "Service prices or duration changed. Review your selection and choose a time again.",
   "booking.review.failed": "We could not confirm your booking",

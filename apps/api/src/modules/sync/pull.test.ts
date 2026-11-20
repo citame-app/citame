@@ -1,6 +1,13 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { clientProfile, staffProfile } from "@sob/db";
-import { eq } from "drizzle-orm";
+import { calendarResponseSchema } from "@sob/contracts";
+import {
+  appointmentContext,
+  appointmentService,
+  clientProfile,
+  service,
+  staffProfile,
+} from "@sob/db";
+import { eq, sql } from "drizzle-orm";
 import {
   type Actor,
   actor,
@@ -54,6 +61,251 @@ async function book(staffId = f.anaId, startsAt = MONDAY_0900) {
   return (await res.json()) as { id: string; version: number };
 }
 
+test("staff can repair service colors at the head without replaying the log", async () => {
+  await t.db
+    .update(service)
+    .set({ color: "#AC3456", active: false })
+    .where(eq(service.id, f.haircutId));
+  const cursor = await head();
+  expect(await pull(t, ana, { since: cursor, catalogColors: "1" })).toMatchObject({
+    changes: [],
+    nextCursor: cursor,
+    hasMore: false,
+    catalogColors: { [f.haircutId]: "#AC3456" },
+  });
+  expect((await pull(t, ana, { since: cursor })).catalogColors).toBeUndefined();
+  const unauthorized = await call(client, "GET", `/sync/pull?since=${cursor}&catalogColors=1`);
+  expect(unauthorized.status).toBe(403);
+});
+
+test("an existing replica learns Booksy origin without an appointment edit", async () => {
+  const imported = await book();
+  const native = await book(f.beaId);
+  await t.db.insert(appointmentContext).values({
+    appointmentId: imported.id,
+    servicePosition: 0,
+    source: "booksy",
+    sourceRef: "private-source-reference",
+  });
+  const cursor = await head();
+  const migration = await Bun.file(
+    new URL(
+      "../../../../../packages/db/drizzle/0058_sync_booksy_appointment_origin.sql",
+      import.meta.url,
+    ),
+  ).text();
+  await t.db.transaction(async (tx) => {
+    for (const statement of migration.split("--> statement-breakpoint")) {
+      await tx.execute(sql.raw(statement.trim()));
+    }
+  });
+  const page = await pull(t, owner, { since: cursor });
+  expect(page.changes).toMatchObject([
+    {
+      id: imported.id,
+      op: "upsert",
+      data: { importedFromBooksy: true, version: imported.version },
+    },
+  ]);
+  expect(page.changes.some(({ id }) => id === native.id)).toBe(false);
+  expect(JSON.stringify(page)).not.toContain("private-source-reference");
+  expect((await pull(t, bea, { since: cursor })).changes).toMatchObject([
+    { id: imported.id, op: "delete", data: null },
+  ]);
+});
+
+test("billing holds and verified prices replicate without exposing the evidence reference or notes", async () => {
+  const pending = await book();
+  const legacy = await book(f.beaId);
+  const [line] = await t.db
+    .update(appointmentService)
+    .set({ currency: "EUR", priceCents: 0, sourceUnpriced: true })
+    .where(eq(appointmentService.appointmentId, pending.id))
+    .returning();
+  await t.db.insert(appointmentContext).values({
+    appointmentId: legacy.id,
+    servicePosition: 0,
+    source: "booksy",
+    sourceRef: "legacy-proof",
+    requestedStaffId: f.beaId,
+    paid: true,
+    invoiced: true,
+    internalNote: "Fixture financial annotation",
+    customerComment: "Fixture private customer comment",
+  });
+  const initial = await pullAll(t, owner);
+  expect(initial.changes).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        id: pending.id,
+        data: expect.objectContaining({
+          billingReviewReasons: ["unknown_amount"],
+          services: [expect.objectContaining({ sourceUnpriced: true, priceCents: 0 })],
+        }),
+      }),
+      expect.objectContaining({
+        id: legacy.id,
+        data: expect.objectContaining({
+          billingReviewReasons: ["paid_in_booksy", "invoiced_in_booksy"],
+          serviceBadges: [
+            {
+              servicePosition: 0,
+              billingSource: "booksy",
+              requested: true,
+              invoiced: true,
+              paid: true,
+              internalNote: true,
+              customerComment: true,
+            },
+          ],
+        }),
+      }),
+    ]),
+  );
+  expect(JSON.stringify(initial)).not.toContain("Fixture financial annotation");
+  expect(JSON.stringify(initial)).not.toContain("Fixture private customer comment");
+  expect((await pullAll(t, ana)).changes.find((row) => row.id === legacy.id)).toMatchObject({
+    op: "delete",
+    data: null,
+  });
+
+  const migration = await Bun.file(
+    new URL(
+      "../../../../../packages/db/drizzle/0057_sync_import_billing_holds.sql",
+      import.meta.url,
+    ),
+  ).text();
+  await t.db.transaction(async (tx) => {
+    for (const statement of migration.split("--> statement-breakpoint")) {
+      await tx.execute(sql.raw(statement.trim()));
+    }
+  });
+  const backfill = await pull(t, owner, { since: initial.cursor });
+  expect(backfill.changes.map(({ id }) => id).sort()).toEqual([pending.id, legacy.id].sort());
+
+  const saved = await call(
+    owner,
+    "PUT",
+    `/admin/commerce/appointments/${pending.id}/imported-price`,
+    {
+      appointmentVersion: pending.version,
+      lines: [{ id: line!.id, amountCents: 3650 }],
+      reference: "Private fixture evidence",
+    },
+  );
+  expect(saved.status, await saved.clone().text()).toBe(200);
+  const page = await pull(t, owner, { since: backfill.nextCursor });
+  const updated = page.changes.find((row) => row.entity === "appointment" && row.id === pending.id);
+  expect(updated?.data).toMatchObject({
+    version: pending.version + 1,
+    services: [{ priceCents: 3650 }],
+  });
+  expect(updated?.data).not.toHaveProperty("billingReviewReasons");
+  expect(JSON.stringify(page)).not.toContain("Private fixture evidence");
+});
+
+test("restricted staff receive visible calendar badges without billing data or note text", async () => {
+  const own = await book();
+  const colleague = await book(f.beaId);
+  await book(f.anaId, new Date(Date.parse(MONDAY_0900) + 2 * 60 * 60_000).toISOString());
+  const sourceOnly = await book(
+    f.anaId,
+    new Date(Date.parse(MONDAY_0900) + 3 * 60 * 60_000).toISOString(),
+  );
+  await t.db
+    .update(staffProfile)
+    .set({ accessPreset: "restricted" })
+    .where(eq(staffProfile.id, f.anaId));
+  await t.db.insert(appointmentContext).values(
+    [own, colleague].map((visit, index) => ({
+      appointmentId: visit.id,
+      servicePosition: 0,
+      source: "booksy",
+      sourceRef: `fixture-proof-${index}`,
+      requestedStaffId: index === 0 ? f.anaId : f.beaId,
+      internalNote: "Private fixture note",
+      customerComment: "Private fixture comment",
+      paid: true,
+      invoiced: true,
+    })),
+  );
+  await t.db.insert(appointmentContext).values({
+    appointmentId: sourceOnly.id,
+    servicePosition: 0,
+    source: "booksy",
+    sourceRef: "fixture-proof-source-only",
+  });
+
+  const page = await pullAll(t, ana);
+  const row = page.changes.find(
+    (change) => change.entity === "appointment" && change.op === "upsert" && change.id === own.id,
+  );
+  const visibleContext = {
+    importedFromBooksy: true,
+    serviceBadges: [
+      {
+        servicePosition: 0,
+        requested: true,
+        internalNote: true,
+        customerComment: true,
+        paid: false,
+        invoiced: false,
+        billingSource: null,
+      },
+    ],
+  };
+  expect(row).toMatchObject({ op: "upsert", data: visibleContext });
+  expect(row?.data).not.toHaveProperty("billingReviewReasons");
+  expect(row?.data).not.toHaveProperty("externalBalance");
+  expect(row?.data).not.toHaveProperty("externallySettled");
+  expect(JSON.stringify(page)).not.toContain("Private fixture");
+  expect(JSON.stringify(page)).not.toContain("fixture-proof");
+  expect(page.changes.find(({ id }) => id === colleague.id)).toMatchObject({
+    op: "delete",
+    data: null,
+  });
+
+  const range = new URLSearchParams({
+    from: MONDAY_0900,
+    to: new Date(Date.parse(MONDAY_0900) + 4 * 60 * 60_000).toISOString(),
+  });
+  const calendar = await call(ana, "GET", `/appointments/calendar?${range}`);
+  expect(calendar.status).toBe(200);
+  const agenda = calendarResponseSchema.parse(await calendar.json());
+  const visibleVisit = agenda.appointments.find((visit) => visit.id === own.id);
+  expect(visibleVisit).toMatchObject(visibleContext);
+  expect(visibleVisit?.billingReviewReasons).toBeUndefined();
+  expect(visibleVisit?.externalBalance).toBeUndefined();
+  expect(agenda.appointments.some((visit) => visit.id === colleague.id)).toBe(false);
+  expect(JSON.stringify(agenda)).not.toContain("Private fixture");
+  const context = await call(ana, "GET", `/appointments/${own.id}/context`);
+  expect(context.status).toBe(200);
+  expect(await context.json()).toMatchObject({
+    canEdit: false,
+    rows: [{ internalNote: "Private fixture note", invoiced: null, paid: null }],
+  });
+
+  const backfill = await Bun.file(
+    new URL(
+      "../../../../../packages/db/drizzle/0076_sync_calendar_annotation_badges.sql",
+      import.meta.url,
+    ),
+  ).text();
+  await t.db.transaction(async (tx) => {
+    for (const statement of backfill.split("--> statement-breakpoint")) {
+      await tx.execute(sql.raw(statement.trim()));
+    }
+  });
+  const catchUp = await pull(t, ana, { since: page.cursor });
+  expect(catchUp.changes.map(({ id }) => id).sort()).toEqual(
+    [own.id, colleague.id, sourceOnly.id].sort(),
+  );
+  expect(catchUp.changes.find(({ id }) => id === own.id)?.data).toEqual(row?.data);
+  const reannounced = catchUp.changes.find(({ id }) => id === sourceOnly.id);
+  expect(reannounced?.data).toMatchObject({ importedFromBooksy: true });
+  expect(reannounced?.data).not.toHaveProperty("serviceBadges");
+});
+
 describe("authorization", () => {
   test("anonymous callers get 401", async () => {
     const res = await call(null, "GET", "/sync/pull");
@@ -65,6 +317,44 @@ describe("authorization", () => {
     const res = await call(client, "GET", "/sync/pull");
     expect(res.status).toBe(403);
     expect(await errorCodeOf(res)).toBe("forbidden");
+  });
+  test("contact and calendar visibility follow access changes even at the log head", async () => {
+    await t.db
+      .update(staffProfile)
+      .set({ accessPreset: "receptionist" })
+      .where(eq(staffProfile.id, f.anaId));
+    expect(await pull(t, ana, { since: await head() })).toMatchObject({
+      changes: [],
+      clientDirectory: true,
+      calendarScope: "all",
+      viewerRole: "staff",
+    });
+    await t.db
+      .update(staffProfile)
+      .set({ accessPreset: "restricted" })
+      .where(eq(staffProfile.id, f.anaId));
+    expect(await pull(t, ana, { since: await head() })).toMatchObject({
+      changes: [],
+      clientDirectory: false,
+      calendarScope: f.anaId,
+    });
+  });
+
+  test("time off scope follows the caller's current preset even on an empty pull", async () => {
+    await t.db
+      .update(staffProfile)
+      .set({ accessPreset: "manager" })
+      .where(eq(staffProfile.id, f.anaId));
+    let h = await head();
+    expect((await pull(t, ana, { since: h })).timeOffScope).toBe("all");
+    await t.db
+      .update(staffProfile)
+      .set({ accessPreset: "restricted" })
+      .where(eq(staffProfile.id, f.anaId));
+    h = await head();
+    const page = await pull(t, ana, { since: h });
+    expect(page.changes).toEqual([]);
+    expect(page.timeOffScope).toBe("none");
   });
 });
 
@@ -91,7 +381,17 @@ describe("snapshot (since=0)", () => {
   test("an empty pull at the head returns the same cursor and no more pages", async () => {
     const h = await head();
     const page = await pull(t, owner, { since: h });
-    expect(page).toEqual({ changes: [], nextCursor: h, hasMore: false, headSeq: h });
+    expect(page).toEqual({
+      generation: "initial",
+      changes: [],
+      nextCursor: h,
+      hasMore: false,
+      headSeq: h,
+      timeOffScope: "all",
+      clientDirectory: true,
+      calendarScope: "all",
+      viewerRole: "owner",
+    });
   });
 
   test("a cursor ahead of the server is refused so the client can resync", async () => {
@@ -243,6 +543,7 @@ describe("role filtering", () => {
   });
 
   test("staff do not receive other calendars' schedules or login links", async () => {
+    expect((await pull(t, ana, { since: 0 })).timeOffScope).toBe(f.anaId);
     await call(owner, "POST", `/admin/staff/${f.beaId}/time-off`, {
       startsAt: "2026-03-12T12:00:00.000Z",
       endsAt: "2026-03-12T14:00:00.000Z",

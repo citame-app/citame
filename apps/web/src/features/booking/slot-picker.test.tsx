@@ -76,10 +76,12 @@ describe("SlotPicker", () => {
 
   test("days without availability are disabled once known and the next one is flagged", async () => {
     renderApp(<SlotPicker {...base} />);
+    expect(await screen.findByText("Next available")).toBeInTheDocument();
     await waitFor(() =>
-      expect(screen.getByRole("radio", { name: /Monday, March 9/ })).toBeDisabled(),
+      expect(
+        screen.getByRole<HTMLInputElement>("radio", { name: /Monday, March 9/ }).disabled,
+      ).toBe(true),
     );
-    expect(screen.getByText("Next available")).toBeInTheDocument();
   });
 
   test("with 'any professional' one start time shows once even if two people are free", async () => {

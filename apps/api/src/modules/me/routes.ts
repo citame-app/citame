@@ -6,6 +6,8 @@ import type { AppDeps } from "../../app";
 import type { AppEnv, Principal } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
 import { preferenceRoutes } from "../../notifications/routes";
+import { oauthConnectionRoutes } from "../../oauth/connections";
+import { desktopDeviceAccountRoutes } from "../../oauth/desktop-devices";
 import { getPhone, updateProfile } from "./service";
 
 export function meRoutes({ db }: Pick<AppDeps, "db">) {
@@ -23,6 +25,8 @@ export function meRoutes({ db }: Pick<AppDeps, "db">) {
   });
 
   return new Hono<AppEnv>()
+    .route("/connections", oauthConnectionRoutes(db))
+    .route("/desktop-devices", desktopDeviceAccountRoutes(db))
     .route("/notification-preferences", preferenceRoutes({ db }))
     .get("/", async (c) => c.json(await respond(c.get("principal"))))
     .patch("/", async (c) => {

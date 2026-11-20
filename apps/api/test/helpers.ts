@@ -50,7 +50,16 @@ export interface SetupOptions {
   dbSuffix?: string;
   /** Extra application dependencies, for example a short SSE heartbeat. */
   deps?: Partial<
-    Pick<AppDeps, "syncHeartbeatMs" | "jwksRefetchMs" | "emailProvider" | "paymentGateway" | "now">
+    Pick<
+      AppDeps,
+      | "syncHeartbeatMs"
+      | "jwksRefetchMs"
+      | "emailProvider"
+      | "paymentGateway"
+      | "now"
+      | "whatsappFetch"
+      | "emailFetch"
+    >
   >;
 }
 

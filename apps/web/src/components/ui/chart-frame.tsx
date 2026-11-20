@@ -32,7 +32,7 @@ export function ChartFrame({
   return (
     <figure
       aria-labelledby={titleId}
-      className="rounded-xl border border-line bg-surface p-4 sm:p-5"
+      className="min-w-0 overflow-hidden rounded-xl border border-line bg-surface p-4 sm:p-5"
     >
       <figcaption className="mb-3 flex flex-wrap items-start justify-between gap-2">
         <div>

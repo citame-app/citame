@@ -26,7 +26,7 @@ test.describe("role access matrix", () => {
     page,
   }) => {
     await signInAs(page, STAFF_EMAIL);
-    await expect(page.getByRole("heading", { level: 1, name: "Today" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Calendar" })).toBeVisible();
     const nav = page.getByRole("navigation", { name: "Dashboard sections" });
     const mobileNav = page.getByRole("navigation", { name: "Dashboard sections (mobile)" });
     const visibleNav = (await nav.isVisible()) ? nav : mobileNav;
@@ -43,7 +43,7 @@ test.describe("role access matrix", () => {
     await expect(visibleNav.getByRole("link", { name: "Settings" })).toHaveCount(0);
     for (const path of ["/admin/services", "/admin/settings"]) {
       await page.goto(path);
-      await expect(page).toHaveURL(/\/admin\?notice=forbidden$/);
+      await expect(page).toHaveURL(/\/admin\/calendar\?notice=forbidden$/);
       await expect(
         page.getByRole("alert").filter({ hasText: "You do not have access to that page" }),
       ).toBeVisible();
@@ -64,7 +64,6 @@ test.describe("role access matrix", () => {
   test("the owner reaches every section", async ({ page }) => {
     await signInAs(page, OWNER_EMAIL);
     for (const [path, heading] of [
-      ["/admin", "Today"],
       ["/admin/calendar", "Calendar"],
       ["/admin/clients", "Clients"],
       ["/admin/services", "Services"],

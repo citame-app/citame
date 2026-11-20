@@ -1,9 +1,11 @@
-import { createDb } from "@sob/db";
+import { assertNotBooksyReviewDatabase, createDb } from "@sob/db";
 import { loadConfig } from "./config";
 import { startMaintenance } from "./maintenance";
 import { startInventoryExpiry } from "./modules/inventory/runtime";
 import { startNotificationRuntime } from "./notifications/runtime";
 import { rootLogger } from "./observability/logger";
+import { startWorkerReadiness } from "./observability/worker-ready";
+import { checkServiceDatabase } from "./startup-database";
 
 /**
  * Standalone background worker (`bun run worker`): the reminder queue and the scheduled
@@ -14,7 +16,9 @@ import { rootLogger } from "./observability/logger";
  */
 const loaded = loadConfig();
 const config = { ...loaded, notifications: { ...loaded.notifications, workerEnabled: true } };
+assertNotBooksyReviewDatabase(config.databaseUrl);
 const { db, close } = createDb(config.databaseUrl);
+await checkServiceDatabase(db);
 const runtime = startNotificationRuntime({ db, config });
 const inventoryExpiry = startInventoryExpiry(db);
 const maintenance = config.maintenance.enabled
@@ -24,6 +28,9 @@ const maintenance = config.maintenance.enabled
       retention: config.maintenance.retention,
     })
   : null;
+const readiness = config.workerHealthPort
+  ? startWorkerReadiness(db, config.workerHealthPort)
+  : null;
 rootLogger.info("worker started", { maintenance: config.maintenance.enabled });
 
 let stopping = false;
@@ -32,7 +39,12 @@ async function shutdown(signal: string) {
   stopping = true;
   rootLogger.info("worker shutdown requested", { signal });
   try {
-    await Promise.all([runtime?.stop(), maintenance?.stop(), inventoryExpiry.stop()]);
+    await Promise.all([
+      readiness?.stop(true),
+      runtime?.stop(),
+      maintenance?.stop(),
+      inventoryExpiry.stop(),
+    ]);
     await close();
     rootLogger.info("worker shutdown complete");
     process.exit(0);

@@ -16,3 +16,4 @@ backups/
 .release/
 # Local browser profiles and generated visual audit captures (may contain demo sessions).
 .taste-skill/
+.playwright-cli/

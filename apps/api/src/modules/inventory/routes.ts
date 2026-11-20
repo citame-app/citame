@@ -1,9 +1,15 @@
 import {
   createProductSchema,
   idSchema,
+  productExportQuerySchema,
+  productFiltersSchema,
+  productPhotoInputSchema,
   productQuerySchema,
+  stockLedgerFiltersSchema,
+  stockLedgerQuerySchema,
   stockMovementInputSchema,
   stockReturnSchema,
+  updatePackageContentSchema,
   updateProductSchema,
 } from "@sob/contracts";
 import { Hono } from "hono";
@@ -11,6 +17,9 @@ import type { AppDeps } from "../../app";
 import { requirePermission } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
+import { exportStockLedger, inventoryFacets, stockLedger } from "./ledger";
+import { readProductPhoto, saveProductPhoto } from "./photo";
+import { exportInventory, inventoryReport } from "./report";
 import {
   createProduct,
   getProduct,
@@ -21,12 +30,55 @@ import {
   updateProduct,
 } from "./service";
 export function inventoryRoutes(deps: AppDeps) {
+  const generation = deps.config.syncReplicaGeneration;
   return new Hono<AppEnv>()
     .use("*", async (c, next) => {
       requirePermission(c.get("principal"), "readInventory");
-      if (c.req.method !== "GET") requirePermission(c.get("principal"), "writeInventory");
+      if (c.req.method !== "GET" && c.req.method !== "HEAD")
+        requirePermission(c.get("principal"), "writeInventory");
       await next();
     })
+    .get("/facets", async (c) => c.json(await inventoryFacets(deps.db, c.get("principal"))))
+    .get("/products/report", async (c) =>
+      c.json(
+        await inventoryReport(
+          deps.db,
+          parseOrThrow(productFiltersSchema, c.req.query()),
+          c.get("principal"),
+        ),
+        200,
+        { "Cache-Control": "private, no-store" },
+      ),
+    )
+    .get("/products/export", (c) =>
+      exportInventory(
+        deps.db,
+        parseOrThrow(productExportQuerySchema, c.req.query()),
+        c.get("principal"),
+        c.req.raw.method === "HEAD",
+      ),
+    )
+    .get("/movements/export", (c) =>
+      exportStockLedger(
+        deps.db,
+        parseOrThrow(stockLedgerFiltersSchema, c.req.query()),
+        c.get("principal"),
+        generation,
+        c.req.raw.method === "HEAD",
+      ),
+    )
+    .get("/movements", async (c) =>
+      c.json(
+        await stockLedger(
+          deps.db,
+          parseOrThrow(stockLedgerQuerySchema, c.req.query()),
+          c.get("principal"),
+          generation,
+        ),
+        200,
+        { "Cache-Control": "private, no-store" },
+      ),
+    )
     .get("/products", async (c) =>
       c.json(
         await listProducts(
@@ -38,52 +90,104 @@ export function inventoryRoutes(deps: AppDeps) {
     )
     .post("/products", async (c) =>
       c.json(
-        await createProduct(
-          deps.db,
-          parseOrThrow(createProductSchema, await readJson(c)),
-          c.get("principal"),
-        ),
+        {
+          ...(await createProduct(
+            deps.db,
+            parseOrThrow(createProductSchema, await readJson(c)),
+            c.get("principal"),
+          )),
+          inventoryGeneration: generation,
+        },
         201,
       ),
     )
     .get("/products/:id", async (c) =>
       c.json(
-        await getProduct(deps.db, parseOrThrow(idSchema, c.req.param("id")), c.get("principal")),
+        {
+          ...(await getProduct(
+            deps.db,
+            parseOrThrow(idSchema, c.req.param("id")),
+            c.get("principal"),
+          )),
+          inventoryGeneration: generation,
+        },
+        200,
+        { "Cache-Control": "private, no-store" },
+      ),
+    )
+    .get("/products/:id/photo/:version", (c) =>
+      readProductPhoto(
+        deps.db,
+        parseOrThrow(idSchema, c.req.param("id")),
+        parseOrThrow(idSchema, c.req.param("version")),
+        c.get("principal"),
+      ),
+    )
+    .put("/products/:id/photo", async (c) =>
+      c.json(
+        await saveProductPhoto(
+          deps.db,
+          parseOrThrow(idSchema, c.req.param("id")),
+          parseOrThrow(productPhotoInputSchema, await readJson(c)),
+          c.get("principal"),
+        ),
       ),
     )
     .patch("/products/:id", async (c) =>
-      c.json(
-        await updateProduct(
+      c.json({
+        ...(await updateProduct(
           deps.db,
           parseOrThrow(idSchema, c.req.param("id")),
           parseOrThrow(updateProductSchema, await readJson(c)),
           c.get("principal"),
-        ),
-      ),
+        )),
+        inventoryGeneration: generation,
+      }),
+    )
+    .patch("/products/:id/package-content", async (c) =>
+      c.json({
+        ...(await updateProduct(
+          deps.db,
+          parseOrThrow(idSchema, c.req.param("id")),
+          parseOrThrow(updatePackageContentSchema, await readJson(c)),
+          c.get("principal"),
+        )),
+        inventoryGeneration: generation,
+      }),
     )
     .get("/products/:id/movements", async (c) => {
       const query = parseOrThrow(productQuerySchema, c.req.query());
       return c.json(
-        await listMovements(
-          deps.db,
-          parseOrThrow(idSchema, c.req.param("id")),
-          query.page,
-          query.pageSize,
-          c.get("principal"),
-        ),
+        {
+          ...(await listMovements(
+            deps.db,
+            parseOrThrow(idSchema, c.req.param("id")),
+            query.page,
+            query.pageSize,
+            c.get("principal"),
+          )),
+          inventoryGeneration: generation,
+        },
+        200,
+        { "Cache-Control": "private, no-store" },
       );
     })
-    .post("/products/:id/movements", async (c) =>
-      c.json(
-        await moveStock(
-          deps.db,
-          parseOrThrow(idSchema, c.req.param("id")),
-          parseOrThrow(stockMovementInputSchema, await readJson(c)),
-          c.get("principal"),
-        ),
+    .post("/products/:id/movements", async (c) => {
+      const movement = parseOrThrow(stockMovementInputSchema, await readJson(c));
+      return c.json(
+        {
+          ...(await moveStock(
+            deps.db,
+            parseOrThrow(idSchema, c.req.param("id")),
+            movement,
+            c.get("principal"),
+            generation,
+          )),
+          inventoryGeneration: generation,
+        },
         201,
-      ),
-    )
+      );
+    })
     .post("/returns", async (c) =>
       c.json(
         await returnStock(

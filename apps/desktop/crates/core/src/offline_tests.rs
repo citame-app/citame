@@ -3,9 +3,9 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use serde_json::json;
 
-use crate::calendar::*;
+use crate::calendar::{self, *};
 use crate::model::*;
-use crate::ops::*;
+use crate::ops::{self, *};
 use crate::store::Store;
 
 const ANA: &str = "01a1d81e-0000-7000-8000-000000000001";
@@ -23,6 +23,19 @@ fn at(iso: &str) -> DateTime<Utc> {
 
 fn day(s: &str) -> NaiveDate {
     s.parse().unwrap()
+}
+
+#[test]
+fn a_local_day_uses_the_exact_end_of_a_gap_at_midnight() {
+    let boundary = at("1985-12-31T18:30:00Z");
+    assert_eq!(
+        local_day_range(chrono_tz::Asia::Kathmandu, day("1985-12-31")).1,
+        boundary
+    );
+    assert_eq!(
+        local_day_range(chrono_tz::Asia::Kathmandu, day("1986-01-01")).0,
+        boundary
+    );
 }
 
 fn up(seq: i64, entity: &str, id: &str, data: serde_json::Value) -> RawChange {
@@ -131,6 +144,126 @@ fn the_day_view_has_one_column_per_active_staff_with_server_appointments() {
 }
 
 #[test]
+fn team_week_resolves_local_shifts_absences_and_replica_permissions() {
+    let mut store = seeded();
+    store.set_meta("calendar_scope", "all").unwrap();
+    store.set_meta("time_off_scope", "all").unwrap();
+    let changes = [
+        up(
+            40,
+            "staff",
+            ANA,
+            json!({"id": ANA, "displayName": "Ana", "active": true, "userId": null, "updatedAt": T0}),
+        ),
+        up(
+            41,
+            "working_hours",
+            "tuesday",
+            json!({"id": "tuesday", "staffId": ANA, "weekday": 2, "startTime": "09:00", "endTime": "17:00"}),
+        ),
+        up(
+            42,
+            "date_shift",
+            "monday",
+            json!({"id": "monday", "staffId": ANA, "date": "2026-03-09", "ranges": [{"startTime": "12:00", "endTime": "14:00"}], "version": 1, "updatedAt": T0}),
+        ),
+        up(
+            43,
+            "date_shift",
+            "wednesday",
+            json!({"id": "wednesday", "staffId": ANA, "date": "2026-03-11", "ranges": [], "version": 1, "updatedAt": T0}),
+        ),
+    ];
+    store.apply_page(&changes, 43).unwrap();
+    let start = at("2026-03-10T02:00:00Z");
+    let end = at("2026-03-11T03:00:00Z");
+    ops::create_time_off(&mut store, ANA, start, end, "Private reason").unwrap();
+    let week = crate::team_shifts::team_week(&store, day("2026-03-12")).unwrap();
+    assert_eq!(week.week, day("2026-03-09"));
+    assert_eq!(week.members.len(), 2);
+    let ana = &week.members[0];
+    assert_eq!(ana.name, "Ana");
+    assert!(ana.days[0].custom);
+    assert_eq!(ana.days[0].ranges[0].start_time, "12:00");
+    assert!(!ana.days[1].custom);
+    assert_eq!(ana.days[1].ranges[0].start_time, "09:00");
+    assert!(ana.days[2].custom && ana.days[2].ranges.is_empty());
+    assert_eq!(ana.days[0].absences[0].end, at("2026-03-10T03:00:00Z"));
+    assert!(ana.days[1].absences[0].full_day && ana.days[1].absences[0].pending);
+    assert!(ana.days[2].absences.is_empty());
+
+    store.set_meta("time_off_scope", ANA).unwrap();
+    let own = crate::team_shifts::team_week(&store, week.week).unwrap();
+    assert_eq!(
+        own.members
+            .iter()
+            .map(|member| member.id.as_str())
+            .collect::<Vec<_>>(),
+        [ANA]
+    );
+    store.set_meta("calendar_scope", ANA).unwrap();
+    store.set_meta("time_off_scope", "none").unwrap();
+    assert_eq!(
+        crate::team_shifts::team_week(&store, week.week)
+            .unwrap()
+            .members[0]
+            .id,
+        ANA
+    );
+    store.set_meta("calendar_scope", "none").unwrap();
+    assert!(
+        crate::team_shifts::team_week(&store, week.week)
+            .unwrap()
+            .members
+            .is_empty()
+    );
+}
+
+#[test]
+fn offline_blocks_move_between_days_and_keep_existing_visits() {
+    let mut store = seeded();
+    let date = day("2026-03-09");
+    let start = at("2026-03-09T15:00:00Z");
+    let end = at("2026-03-09T16:00:00Z");
+    let id = ops::create_time_off(&mut store, ANA, start, end, " Lunch ").unwrap();
+    let view = calendar::day_view(&store, date).unwrap();
+    let ana = column(&view, "Ana");
+    let block = &ana.blocks[0];
+    assert!(block.pending);
+    assert_eq!(block.time_off.id, id);
+    assert_eq!(block.time_off.reason.as_deref(), Some("Lunch"));
+    assert_eq!(ana.items[0].appointment.id, EXISTING);
+    assert!(
+        calendar::effective_time_off(&store, end, end + chrono::Duration::hours(1))
+            .unwrap()
+            .is_empty()
+    );
+    let tomorrow = chrono::Duration::days(1);
+    ops::update_time_off(
+        &mut store,
+        &block.time_off,
+        start + tomorrow,
+        end + tomorrow,
+        "",
+    )
+    .unwrap();
+    assert!(ops::delete_time_off(&mut store, &block.time_off).is_err());
+    let view = calendar::day_view(&store, date).unwrap();
+    let ana = column(&view, "Ana");
+    assert!(ana.blocks.is_empty());
+    assert_eq!(ana.items[0].appointment.status, AppointmentStatus::Booked);
+    let view = calendar::day_view(&store, date.succ_opt().unwrap()).unwrap();
+    let next = &column(&view, "Ana").blocks[0].time_off;
+    assert_eq!(next.reason, None);
+    ops::delete_time_off(&mut store, next).unwrap();
+    assert!(
+        column(&calendar::day_view(&store, view.date).unwrap(), "Ana")
+            .blocks
+            .is_empty()
+    );
+}
+
+#[test]
 fn days_are_cut_in_the_salon_timezone_not_utc() {
     let mut s = seeded();
     // 02:00 UTC on the 9th is 23:00 on the 8th in Buenos Aires (UTC-3).
@@ -199,6 +332,55 @@ fn booking_with_an_unknown_service_or_client_is_refused_locally() {
     bad.service_ids = vec![];
     assert!(create_appointment(&mut s, bad).is_err());
     assert_eq!(s.outbox_len().unwrap(), 0);
+}
+
+#[test]
+fn pending_bookings_use_the_local_capacity_and_cancellation_releases_it() {
+    let mut s = seeded();
+    s.apply_page(
+        &[up(
+            8,
+            "staff",
+            BEA,
+            json!({
+                "id":BEA,"displayName":"Bea","active":true,"userId":null,
+                "maxConcurrent":2,"updatedAt":T0
+            }),
+        )],
+        8,
+    )
+    .unwrap();
+    let booking = new_appt("2026-03-10T13:00:00Z");
+    let first = create_appointment(&mut s, booking.clone()).unwrap();
+    create_appointment(&mut s, booking.clone()).unwrap();
+    assert!(matches!(
+        create_appointment(&mut s, booking.clone()),
+        Err(crate::error::CoreError::StaffCapacityExceeded)
+    ));
+    assert_eq!(s.outbox_len().unwrap(), 2);
+    cancel_appointment(&mut s, &first).unwrap();
+    create_appointment(&mut s, booking).unwrap();
+    create_appointment(&mut s, new_appt("2026-03-10T14:30:00Z")).unwrap();
+}
+
+#[test]
+fn the_replica_keeps_the_frozen_processing_gap_available() {
+    let mut s = seeded();
+    s.apply_page(&[up(8,"appointment",EXISTING,json!({
+      "id":EXISTING,"staffId":ANA,"clientId":LUCIA,
+      "startsAt":"2026-03-09T15:00:00Z","endsAt":"2026-03-09T16:00:00Z",
+      "status":"booked","version":3,"notes":null,"services":[],"createdAt":T0,"updatedAt":T0,
+      "workWindows":[{"offsetMinutes":0,"endOffsetMinutes":10},{"offsetMinutes":40,"endOffsetMinutes":60}]
+    }))],8).unwrap();
+    let mut booking = new_appt("2026-03-09T15:00:00Z");
+    booking.staff_id = ANA.into();
+    booking.service_ids = vec![DRY.into()];
+    assert!(matches!(
+        create_appointment(&mut s, booking.clone()),
+        Err(crate::error::CoreError::StaffCapacityExceeded)
+    ));
+    booking.starts_at = at("2026-03-09T15:10:00Z");
+    create_appointment(&mut s, booking).unwrap();
 }
 
 #[test]

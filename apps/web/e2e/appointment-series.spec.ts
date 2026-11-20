@@ -53,6 +53,7 @@ for (const scheme of ["light", "dark"] as const) {
         const busy = await occupied.json();
         created.push(busy.id);
         await signInThroughUi(page, fixture.ownerEmail, `/admin/calendar?date=${date}`);
+        await page.getByRole("button", { name: "Add to calendar", exact: true }).click();
         await page.getByRole("button", { name: "New appointment", exact: true }).click();
         const dialog = page.getByRole("dialog", { name: "New appointment", exact: true });
         await dialog
@@ -64,7 +65,10 @@ for (const scheme of ["light", "dark"] as const) {
         await dialog.getByLabel("Start time", { exact: true }).fill("09:00");
         await dialog.getByLabel("Repeat appointment", { exact: true }).selectOption("weekly");
         await dialog.getByLabel("Number of visits", { exact: true }).fill("3");
-        await dialog.getByRole("button", { name: "Review recurring visits", exact: true }).click();
+        await expect(
+          dialog.getByRole("button", { name: "Review recurring visits", exact: true }),
+        ).toBeEnabled();
+        await dialog.getByLabel("Number of visits", { exact: true }).press("Enter");
         const dates = dialog.getByRole("region", { name: "Recurring visit dates", exact: true });
         await expect(
           dates.getByText("Unavailable — choose a different date or time", { exact: true }),
@@ -98,9 +102,7 @@ for (const scheme of ["light", "dark"] as const) {
         created.push(...series.appointments.map((a: { id: string }) => a.id));
         await expect(page.getByText("3 appointments created", { exact: true })).toBeVisible();
         await expect(dialog).toBeHidden();
-        await page
-          .getByRole("button", { name: /Recurring fixture client, Haircut, Booked/ })
-          .click();
+        await page.getByRole("button", { name: /Recurring fixture client Haircut Booked/ }).click();
         const drawer = page.getByRole("dialog", { name: "Recurring fixture client", exact: true });
         await expect(drawer.getByText("Recurring visit 1 of 3", { exact: true })).toBeVisible();
         await drawer.getByRole("button", { name: "View recurring visits", exact: true }).click();

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { idSchema, instantSchema } from "./common";
+import { campaignDeliverySchema } from "./marketing";
 
 const text = (max: number) =>
   z
@@ -47,7 +48,9 @@ const paging = {
 export const reviewPublicQuerySchema = z
   .object({ ...paging, serviceId: idSchema.optional() })
   .strict();
-export const reviewPrivateQuerySchema = z.object(paging).strict();
+export const reviewPrivateQuerySchema = z
+  .object({ ...paging, appointmentId: idSchema.optional() })
+  .strict();
 export const reviewAdminQuerySchema = z
   .object({ ...paging, status: reviewStatusSchema.optional() })
   .strict();
@@ -106,9 +109,34 @@ export const adminReviewsSchema = z.object({
   reviews: z.array(reviewPrivateSchema),
   nextBefore: idSchema.nullable(),
 });
+export const REVIEW_REQUEST_MAX_PAGE = 10000;
+export const REVIEW_REQUEST_SEARCH_LENGTH = 100;
+export const reviewRequestQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).max(REVIEW_REQUEST_MAX_PAGE).default(1),
+    search: z.string().trim().max(REVIEW_REQUEST_SEARCH_LENGTH).default(""),
+  })
+  .strict();
+export const reviewEmailStatusSchema = campaignDeliverySchema.shape.status;
+export const reviewEmailRequestSchema = z.object({ status: reviewEmailStatusSchema });
+export const reviewRequestsSchema = z.object({
+  visits: z.array(
+    z.object({
+      appointmentId: idSchema,
+      startsAt: instantSchema,
+      clientName: z.string(),
+      link: z.url({ protocol: /^https?$/ }).nullable(),
+      canEmail: z.boolean().default(false),
+      emailStatus: reviewEmailStatusSchema.nullable().default(null),
+    }),
+  ),
+  hasMore: z.boolean(),
+  emailEnabled: z.boolean().default(false),
+});
 export type ReviewCreate = z.infer<typeof reviewCreateSchema>;
 export type ReviewEdit = z.infer<typeof reviewEditSchema>;
 export type ReviewModeration = z.infer<typeof reviewModerationSchema>;
 export type ReviewPublic = z.infer<typeof reviewPublicSchema>;
 export type ReviewPrivate = z.infer<typeof reviewPrivateSchema>;
 export type ReviewSocial = z.infer<typeof reviewSocialSchema>;
+export type ReviewRequestQuery = z.infer<typeof reviewRequestQuerySchema>;

@@ -2,7 +2,8 @@ import { expect, request as playwrightRequest, test } from "@playwright/test";
 import { RECURRING_FIXTURE as fixture } from "../../api/test/recurring-values";
 import { addDaysLocal, localDateOf } from "../src/lib/format";
 import { expectNoHorizontalScroll } from "./admin-helpers";
-import { expectNoSeriousA11yViolations, signInThroughUi } from "./helpers";
+import { expectNoSeriousA11yViolations, signInThroughUi, switchLocale } from "./helpers";
+import { closeReceipt } from "./pos-helpers";
 
 for (const scheme of ["light", "dark"] as const)
   test.describe(`timed offers — ${scheme}`, () => {
@@ -131,12 +132,10 @@ for (const scheme of ["light", "dark"] as const)
             exact: true,
           }),
         ).toBeVisible();
-        await page.getByRole("button", { name: "Back to sales", exact: true }).click();
-        await page
-          .locator("li")
-          .filter({ has: page.getByText(name, { exact: true }) })
-          .getByRole("button", { name: "View receipt", exact: true })
-          .click();
+        await page.getByRole("button", { name: "Transactions", exact: true }).click();
+        const transactions = page.getByRole("region", { name: "Transactions", exact: true });
+        await transactions.getByLabel("Search by item or receipt number").fill(name);
+        await transactions.getByRole("button").filter({ hasText: name }).click();
         const receipt = page.getByRole("region", { name: "Receipt", exact: true });
         await receipt.locator("summary").filter({ hasText: "Loyalty & promotions" }).click();
         await receipt.getByLabel("Promotion code", { exact: true }).fill(code);
@@ -207,7 +206,9 @@ for (const scheme of ["light", "dark"] as const)
         const saved = await (await owner.get(`/api/admin/commerce/checkouts/${bill.id}`)).json();
         expect(saved.totalCents).toBe(9000);
         expect(saved.reward.appointmentTiming.timing.lastMinuteHours).toBe(hours);
-        await page.getByRole("radio", { name: "Español", exact: true }).check();
+        await closeReceipt(page);
+        await switchLocale(page, "Español");
+        await page.goto(`/admin/commerce?view=transactions&checkout=${bill.id}`);
         const spanishReceipt = page.getByRole("region", { name: "Comprobante", exact: true });
         await expect(
           spanishReceipt.getByText(

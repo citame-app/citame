@@ -27,6 +27,11 @@ export const resourcesEn = {
   "resources.service": "Service resources",
   "resources.choose": "Choose a service",
   "resources.quantity": "Units of {name}",
+  "resources.selectionMode": "Resource assignment",
+  "resources.useAll": "Use all required resources",
+  "resources.useOne": "Use one available resource",
+  "resources.eligible": "Eligible resources",
+  "resources.alternativesHelp": "Citame chooses one available resource from the selected options.",
   "resources.zero":
     "0 means this service does not need this resource. Units are reserved for the entire service, including cleanup time.",
   "resources.saveRequirements": "Save requirements",
@@ -71,6 +76,12 @@ export const resourcesEsAR: Record<keyof typeof resourcesEn, string> = {
   "resources.service": "Recursos por servicio",
   "resources.choose": "Elige un servicio",
   "resources.quantity": "Unidades de {name}",
+  "resources.selectionMode": "Asignación de recursos",
+  "resources.useAll": "Usar todos los recursos requeridos",
+  "resources.useOne": "Usar un recurso disponible",
+  "resources.eligible": "Recursos admitidos",
+  "resources.alternativesHelp":
+    "Citame elige un recurso disponible entre las opciones seleccionadas.",
   "resources.zero":
     "0 indica que el servicio no necesita este recurso. Se reserva durante todo el servicio, incluido el tiempo de limpieza.",
   "resources.saveRequirements": "Guardar requisitos",

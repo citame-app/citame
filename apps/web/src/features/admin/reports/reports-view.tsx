@@ -1,7 +1,13 @@
-import type { ReportSummary, UserRole } from "@sob/contracts";
+import {
+  type ReportBreakdownKind,
+  type ReportBreakdownRow,
+  type ReportSummary,
+  reportBreakdownKinds,
+  type UserRole,
+} from "@sob/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { createColumnHelper, type SortingState } from "@tanstack/react-table";
-import { useMemo, useState } from "react";
+import { lazy, type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { ChartFrame } from "~/components/ui/chart-frame";
 import { DataTable, type DataTableFeatures } from "~/components/ui/data-table";
@@ -12,25 +18,65 @@ import { EmptyState, ErrorState, Skeleton } from "~/components/ui/states";
 import { useToast } from "~/components/ui/toast";
 import { useI18n } from "~/i18n/react";
 import { adminStaffQuery, reportQuery } from "~/lib/admin-queries";
+import { api } from "~/lib/api/instance";
 import { formatDateWithYear, formatMoney, localDateOf } from "~/lib/format";
 import { useNow } from "../use-now";
-import { RevenueChart, StatusChart } from "./charts";
+import { AppointmentOutcomes } from "./appointment-outcomes";
+import { ClientReportView, clientGroupReportCsv, clientReportCsv } from "./client-report";
 import { formatRate, REPORT_PRESETS, reportToCsv } from "./logic";
 import { type ReportsSearch, rangeError, resolveRange } from "./range";
 
 const topHelper = createColumnHelper<DataTableFeatures, ReportSummary["topServices"][number]>();
 const staffHelper = createColumnHelper<DataTableFeatures, ReportSummary["perStaff"][number]>();
+const breakdownHelper = createColumnHelper<DataTableFeatures, ReportBreakdownRow>();
+const breakdownStatuses = ["booked", "completed", "cancelled", "no_show"] as const;
+const BREAKDOWN_PAGE_SIZE = 15;
+const RevenueChart = lazy(() =>
+  import("./charts").then((module) => ({ default: module.RevenueChart })),
+);
+const StatusChart = lazy(() =>
+  import("./charts").then((module) => ({ default: module.StatusChart })),
+);
+
+/** The summary and data table are independent of SVG plotting and remain immediately available. */
+function ReportPlot({ children }: { children: ReactNode }) {
+  const container = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    if (!container.current || typeof IntersectionObserver === "undefined") {
+      setVisible(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting) return;
+        setVisible(true);
+        observer.disconnect();
+      },
+      { rootMargin: "80px" },
+    );
+    observer.observe(container.current);
+    return () => observer.disconnect();
+  }, []);
+  return (
+    <div ref={container} className="h-64 min-w-0">
+      {visible && <Suspense fallback={null}>{children}</Suspense>}
+    </div>
+  );
+}
 
 export function ReportsView({
   search,
   onSearchChange,
   role,
   now: fixedNow,
+  showClients = false,
 }: {
   search: ReportsSearch;
   onSearchChange: (search: ReportsSearch) => void;
   role: UserRole;
   now?: Date;
+  showClients?: boolean;
 }) {
   const { t, locale, timeZone } = useI18n();
   const toast = useToast();
@@ -40,15 +86,25 @@ export function ReportsView({
   const range = resolveRange(search, today);
   const problem = rangeError(range);
   const staff = useQuery({ ...adminStaffQuery, enabled: role === "owner" });
+  const scoped = { ...range, ...(search.staff ? { staffId: search.staff } : {}) };
   const query = useQuery({
-    ...reportQuery({ ...range, ...(search.staff ? { staffId: search.staff } : {}) }),
-    enabled: problem === null,
+    ...reportQuery({
+      ...scoped,
+      currency: search.currency,
+    }),
+    enabled: problem === null && !showClients,
+  });
+  const clients = useQuery({
+    queryKey: ["admin", "report", "clients", scoped],
+    queryFn: () => api().admin.clientReport(scoped),
+    enabled: problem === null && showClients,
   });
   const [topSort, setTopSort] = useState<SortingState>([{ id: "count", desc: true }]);
   const [staffSort, setStaffSort] = useState<SortingState>([{ id: "revenue", desc: true }]);
 
-  const report = query.data;
-  const money = (cents: number) => formatMoney(cents, "ARS", locale);
+  const report = showClients ? undefined : query.data;
+  const currency = report?.currency ?? "ARS";
+  const money = (cents: number) => formatMoney(cents, currency, locale);
   const day = (date: string) => formatDateWithYear(date, locale);
 
   const topRows = useMemo(
@@ -89,10 +145,17 @@ export function ReportsView({
           id: "revenue",
           header: t("reports.col.revenue"),
           meta: { numeric: true },
-          cell: (c) => formatMoney(c.getValue(), "ARS", locale),
+          cell: (c) => {
+            const { count, unpricedServices } = c.row.original;
+            if (unpricedServices === count) return t("reports.revenue.noKnownPrice");
+            const amount = formatMoney(c.getValue(), currency, locale);
+            return unpricedServices
+              ? `${amount} · ${t("reports.revenue.pendingCount", { count: unpricedServices })}`
+              : amount;
+          },
         }),
       ]),
-    [t, locale],
+    [t, locale, currency],
   );
   const staffColumns = useMemo(
     () =>
@@ -122,19 +185,29 @@ export function ReportsView({
           id: "revenue",
           header: t("reports.col.revenue"),
           meta: { numeric: true },
-          cell: (c) => formatMoney(c.getValue(), "ARS", locale),
+          cell: (c) => formatMoney(c.getValue(), currency, locale),
         }),
       ]),
-    [t, locale],
+    [t, locale, currency],
   );
 
   function exportCsv() {
-    if (!report) return;
-    const blob = new Blob([reportToCsv(report)], { type: "text/csv;charset=utf-8" });
+    const data =
+      showClients && clients.data
+        ? clientReportCsv(clients.data)
+        : report
+          ? reportToCsv(report)
+          : undefined;
+    if (!data) return;
+    downloadCsv(data, showClients ? "clients" : "report");
+  }
+
+  function downloadCsv(data: string, name: string) {
+    const blob = new Blob([data], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `report-${report.from}-${report.to}.csv`;
+    link.download = `${name}-${range.from}-${range.to}.csv`;
     document.body.append(link);
     link.click();
     link.remove();
@@ -156,7 +229,13 @@ export function ReportsView({
     ? [
         { label: t("reports.tile.appointments"), value: String(totals.appointments) },
         { label: t("reports.tile.completed"), value: String(totals.byStatus.completed) },
-        { label: t("reports.tile.revenue"), value: money(totals.revenueCents) },
+        {
+          label: t("reports.tile.revenue"),
+          value: money(totals.revenueCents),
+          hint: totals.unpricedServices
+            ? t("reports.revenue.pending", { count: totals.unpricedServices })
+            : undefined,
+        },
         {
           label: t("reports.tile.noShowRate"),
           value: formatRate(totals.noShowRate, locale),
@@ -204,6 +283,7 @@ export function ReportsView({
         )}
         {role === "owner" && (
           <SelectField
+            className="w-52 max-w-full"
             label={t("reports.staff")}
             value={search.staff ?? ""}
             options={[
@@ -216,10 +296,30 @@ export function ReportsView({
             }}
           />
         )}
+        {!showClients && (
+          <SelectField
+            className="w-28 max-w-full"
+            label={t("services.field.currency")}
+            value={report ? currency : ""}
+            disabled={!report?.currencies?.length}
+            options={
+              report
+                ? [...new Set([currency, ...(report.currencies ?? [])])].map((value) => ({
+                    value,
+                    label: value,
+                  }))
+                : [{ value: "", label: "—" }]
+            }
+            onChange={(value) => onSearchChange({ ...search, currency: value })}
+          />
+        )}
         <Button
           variant="secondary"
           className="ml-auto"
-          disabled={!report || report.totals.appointments === 0}
+          disabled={
+            Boolean(problem) ||
+            (showClients ? !clients.data?.rows.length : !report?.totals.appointments)
+          }
           onClick={exportCsv}
         >
           <DownloadIcon />
@@ -236,7 +336,22 @@ export function ReportsView({
         </p>
       )}
 
-      {!problem && query.isPending && (
+      {showClients &&
+        !problem &&
+        (clients.isPending ? (
+          <Skeleton className="h-48" />
+        ) : clients.isError ? (
+          <ErrorState error={clients.error} onRetry={() => void clients.refetch()} />
+        ) : (
+          <ClientReportView
+            report={clients.data}
+            onExportGroups={() => {
+              const groups = clients.data?.groups;
+              if (groups?.length) downloadCsv(clientGroupReportCsv(groups), "client-groups");
+            }}
+          />
+        ))}
+      {!showClients && !problem && query.isPending && (
         <div role="status" aria-label={t("admin.loading")} className="space-y-4">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             {Array.from({ length: 4 }, (_, i) => (
@@ -247,7 +362,7 @@ export function ReportsView({
           <Skeleton className="h-72" />
         </div>
       )}
-      {!problem && query.isError && (
+      {!showClients && !problem && query.isError && (
         <ErrorState error={query.error} onRetry={() => void query.refetch()} />
       )}
 
@@ -288,7 +403,9 @@ export function ReportsView({
                     rows: report.series.map((d) => [day(d.date), money(d.revenueCents)]),
                   }}
                 >
-                  <RevenueChart series={report.series} currency="ARS" />
+                  <ReportPlot>
+                    <RevenueChart series={report.series} currency={currency} />
+                  </ReportPlot>
                 </ChartFrame>
                 <ChartFrame
                   title={t("reports.chart.status")}
@@ -319,17 +436,27 @@ export function ReportsView({
                     ]),
                   }}
                 >
-                  <StatusChart
-                    series={report.series}
-                    labels={{
-                      completed: t("reports.status.completed"),
-                      booked: t("reports.status.booked"),
-                      no_show: t("reports.status.no_show"),
-                      cancelled: t("reports.status.cancelled"),
-                    }}
-                  />
+                  <ReportPlot>
+                    <StatusChart
+                      series={report.series}
+                      labels={{
+                        completed: t("reports.status.completed"),
+                        booked: t("reports.status.booked"),
+                        no_show: t("reports.status.no_show"),
+                        cancelled: t("reports.status.cancelled"),
+                      }}
+                    />
+                  </ReportPlot>
                 </ChartFrame>
               </div>
+
+              {report.appointmentBreakdown && (
+                <AppointmentBreakdown breakdown={report.appointmentBreakdown} />
+              )}
+
+              <AppointmentOutcomes
+                filters={{ ...range, staffId: search.staff, currency: report.currency }}
+              />
 
               <section className="space-y-2" aria-labelledby="top-services">
                 <h2 id="top-services" className="text-heading">
@@ -375,6 +502,94 @@ export function ReportsView({
         </>
       )}
     </div>
+  );
+}
+
+function AppointmentBreakdown({
+  breakdown,
+}: {
+  breakdown: NonNullable<ReportSummary["appointmentBreakdown"]>;
+}) {
+  const { t } = useI18n();
+  const [kind, setKind] = useState<ReportBreakdownKind>("hour");
+  const [requestedPage, setPage] = useState(1);
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const columns = useMemo(
+    () =>
+      breakdownHelper.columns([
+        breakdownHelper.accessor((row) => row.label ?? t("reports.breakdown.uncategorized"), {
+          id: "label",
+          header: t(`reports.breakdown.${kind}`),
+          meta: { cardTitle: true },
+        }),
+        breakdownHelper.accessor("appointments", {
+          header: t("reports.col.appointments"),
+          meta: { numeric: true },
+        }),
+        ...breakdownStatuses.map((status) =>
+          breakdownHelper.accessor((row) => row.byStatus[status], {
+            id: status,
+            header: t(`reports.status.${status}`),
+            meta: { numeric: true },
+          }),
+        ),
+      ]),
+    [kind, t],
+  );
+  const rows = useMemo(
+    () =>
+      sortBy(breakdown[kind], sorting, {
+        label: (row) => (row.label ?? t("reports.breakdown.uncategorized")).toLowerCase(),
+        appointments: (row) => row.appointments,
+        booked: (row) => row.byStatus.booked,
+        completed: (row) => row.byStatus.completed,
+        cancelled: (row) => row.byStatus.cancelled,
+        no_show: (row) => row.byStatus.no_show,
+      }),
+    [breakdown, kind, sorting, t],
+  );
+  const page = Math.min(requestedPage, Math.max(1, Math.ceil(rows.length / BREAKDOWN_PAGE_SIZE)));
+  return (
+    <section className="space-y-2" aria-labelledby="appointments-breakdown">
+      <h2 id="appointments-breakdown" className="text-heading">
+        {t("reports.breakdown.title")}
+      </h2>
+      <DataTable
+        label={t("reports.breakdown.title")}
+        columns={columns}
+        data={rows.slice((page - 1) * BREAKDOWN_PAGE_SIZE, page * BREAKDOWN_PAGE_SIZE)}
+        getRowId={(row) => row.key}
+        total={rows.length}
+        page={page}
+        pageSize={BREAKDOWN_PAGE_SIZE}
+        paginate={rows.length > BREAKDOWN_PAGE_SIZE}
+        sorting={sorting}
+        onSortingChange={(next) => {
+          setSorting(next);
+          setPage(1);
+        }}
+        onPageChange={setPage}
+        empty={<p className="text-muted">{t("reports.breakdown.empty")}</p>}
+        toolbar={
+          <SelectField
+            className="w-52 max-w-full"
+            label={t("reports.breakdown.group")}
+            value={kind}
+            options={reportBreakdownKinds.map((value) => ({
+              value,
+              label: t(`reports.breakdown.${value}`),
+            }))}
+            onChange={(value) => {
+              const next = reportBreakdownKinds.find((option) => option === value);
+              if (!next) return;
+              setKind(next);
+              setSorting([]);
+              setPage(1);
+            }}
+          />
+        }
+      />
+    </section>
   );
 }
 

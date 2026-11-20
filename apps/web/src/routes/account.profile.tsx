@@ -4,6 +4,8 @@ import { useState } from "react";
 import { ProfileForm } from "~/features/account/profile-form";
 import { UnsavedGuard } from "~/features/admin/unsaved-guard";
 import { IntakeRecord } from "~/features/intake/record";
+import { OAuthConnections } from "~/features/oauth/connections";
+import { DesktopDevices } from "~/features/oauth/desktop-devices";
 import { useI18n } from "~/i18n/react";
 import { bootstrapQuery } from "~/server/request";
 
@@ -32,9 +34,15 @@ function ProfilePage() {
           void router.invalidate();
         }}
       />
-      <div className="mt-8">
-        <IntakeRecord onDirtyChange={setIntakeDirty} />
+      {session.user.role !== "client" && <DesktopDevices userId={session.user.id} />}
+      <div className="mt-8" id="connected-apps">
+        <OAuthConnections />
       </div>
+      {session.user.role === "client" && session.clientId && (
+        <div className="mt-8">
+          <IntakeRecord onDirtyChange={setIntakeDirty} />
+        </div>
+      )}
     </section>
   );
 }

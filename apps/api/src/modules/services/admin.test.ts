@@ -291,3 +291,29 @@ describe("PUT /admin/services/:id/staff", () => {
     ).toBe(400);
   });
 });
+
+test("category and calendar color persist through service creation and configuration", async () => {
+  const created = await call(owner, "POST", "/admin/services", {
+    ...newService,
+    category: "Hair",
+    color: "#2C7B79",
+    staffIds: [f.anaId],
+  });
+  expect(created.status).toBe(201);
+  const row = adminServiceSchema.parse(await created.json());
+  expect(row).toMatchObject({ category: "Hair", color: "#2C7B79" });
+  const saved = await call(owner, "PUT", `/admin/services/${row.id}/configuration`, {
+    version: row.version,
+    staffIds: row.staffIds,
+    service: { category: "Color", color: "#9F4661" },
+  });
+  expect(saved.status, await saved.clone().text()).toBe(200);
+  const pub = listServicesResponseSchema.parse(await (await call(null, "GET", "/services")).json());
+  expect(pub.services.find((s) => s.id === row.id)).toMatchObject({
+    category: "Color",
+    color: "#9F4661",
+  });
+  expect(
+    (await call(owner, "PATCH", `/admin/services/${row.id}`, { color: "red;url(bad)" })).status,
+  ).toBe(400);
+});

@@ -1,4 +1,9 @@
-import { DESKTOP_CLIENT_ID, type OAuthScope, type UserRole } from "@sob/contracts";
+import {
+  DESKTOP_CLIENT_ID,
+  isManagementScope,
+  type OAuthScope,
+  type UserRole,
+} from "@sob/contracts";
 import { useId, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { useI18n } from "~/i18n/react";
@@ -43,7 +48,7 @@ export function ConsentView({
   const groupId = useId();
   const scopes = consentScopes(request.scopes, role);
   const [granted, setGranted] = useState<Record<string, boolean>>(
-    Object.fromEntries(scopes.map((s) => [s.scope, true])),
+    Object.fromEntries(scopes.map((s) => [s.scope, !isManagementScope(s.scope)])),
   );
   const [pending, setPending] = useState<"allow" | "deny" | null>(null);
   const [failed, setFailed] = useState(false);

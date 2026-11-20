@@ -82,6 +82,7 @@ test.describe("services", () => {
     await expect(
       dialog.getByRole("region", { name: "How clients see it" }).getByText(name),
     ).toBeVisible();
+    await dialog.getByRole("button", { name: "Employees", exact: true }).click();
     await dialog.getByRole("checkbox", { name: "Stylist A" }).check();
     await dialog.getByRole("button", { name: "Create" }).click();
     await expect(page.getByText("Service created")).toBeVisible();
@@ -363,7 +364,6 @@ test.describe("preferences and layout", () => {
   test("no section scrolls the page sideways", async ({ page }) => {
     await signInAs(page, OWNER_EMAIL, "/admin");
     for (const path of [
-      "/admin",
       "/admin/calendar",
       "/admin/clients",
       "/admin/services",

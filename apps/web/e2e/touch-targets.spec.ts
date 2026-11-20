@@ -9,7 +9,6 @@ import { asOwner, OWNER_EMAIL, signInAs } from "./admin-helpers";
  */
 const PUBLIC = ["/", "/book", "/sign-in", "/sign-up", "/forgot-password"];
 const ADMIN = [
-  "/admin",
   "/admin/calendar",
   "/admin/clients",
   "/admin/services",

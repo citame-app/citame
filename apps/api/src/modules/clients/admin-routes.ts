@@ -1,4 +1,5 @@
 import {
+  type AdminClient,
   clientControlsInputSchema,
   clientExportQuerySchema,
   clientImportInputSchema,
@@ -9,6 +10,7 @@ import {
   clientPhotoDeleteQuerySchema,
   clientPhotoUpdateSchema,
   clientPhotoUploadSchema,
+  createClientRequestSchema,
   idSchema,
   updateClientRequestSchema,
 } from "@sob/contracts";
@@ -17,7 +19,14 @@ import type { AppDeps } from "../../app";
 import { authorizeClientAccess, authorizeClientDelete } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
-import { deleteClient, getClientDetail, listClients, updateClient } from "./admin";
+import {
+  clientGroups,
+  createClient,
+  deleteClient,
+  getClientDetail,
+  listClients,
+  updateClient,
+} from "./admin";
 import { getClientControls, updateClientControls } from "./controls";
 import { clientDuplicates } from "./duplicates";
 import { mergeClients, previewClientMerge } from "./merge";
@@ -31,7 +40,35 @@ import {
 import { exportClients, importClients, previewClientImport } from "./transfer";
 
 /** Client directory, mounted at `/admin/clients` behind `requireAuth`. */
-export function clientAdminRoutes({ db, now = () => new Date() }: AppDeps) {
+export function clientAdminRoutes({ db, now = () => new Date(), booksyConsultation }: AppDeps) {
+  const sourceGroups = new Map<string, { clientId: string; startsAt: string }>();
+  for (const a of booksyConsultation?.appointments ?? []) {
+    const key = a.sourceCopy?.groupRef ?? a.id;
+    const old = sourceGroups.get(key);
+    if (!old || a.startsAt < old.startsAt)
+      sourceGroups.set(key, { clientId: a.clientId, startsAt: a.startsAt });
+  }
+  const sourceStats = new Map<string, { count: number; last: string }>();
+  for (const g of sourceGroups.values()) {
+    const old = sourceStats.get(g.clientId);
+    sourceStats.set(g.clientId, {
+      count: (old?.count ?? 0) + 1,
+      last: old && old.last > g.startsAt ? old.last : g.startsAt,
+    });
+  }
+  const withSourceStats = (client: AdminClient): AdminClient => {
+    const source = sourceStats.get(client.id);
+    return source
+      ? {
+          ...client,
+          appointmentCount: client.appointmentCount + source.count,
+          lastVisitAt:
+            client.lastVisitAt && client.lastVisitAt > source.last
+              ? client.lastVisitAt
+              : source.last,
+        }
+      : client;
+  };
   return new Hono<AppEnv>()
     .post("/merge/preview", async (c) =>
       c.json(
@@ -53,6 +90,10 @@ export function clientAdminRoutes({ db, now = () => new Date() }: AppDeps) {
         201,
       ),
     )
+    .get("/groups", async (c) => {
+      authorizeClientAccess(c.get("principal"));
+      return c.json(await clientGroups(db));
+    })
     .get("/export", async (c) => {
       const principal = c.get("principal");
       authorizeClientDelete(principal);
@@ -74,10 +115,42 @@ export function clientAdminRoutes({ db, now = () => new Date() }: AppDeps) {
       c.header("cache-control", "private, no-store");
       return c.json(await importClients(db, input, principal), 201);
     })
+    .post("/", async (c) =>
+      c.json(
+        await createClient(
+          db,
+          parseOrThrow(createClientRequestSchema, await readJson(c)),
+          c.get("principal"),
+        ),
+        201,
+      ),
+    )
     .get("/", async (c) => {
       authorizeClientAccess(c.get("principal"));
       const query = parseOrThrow(clientListQuerySchema, c.req.query());
-      return c.json(await listClients(db, query));
+      const sortedCopy = booksyConsultation && query.sort === "lastVisitAt";
+      const data = await listClients(
+        db,
+        sortedCopy
+          ? {
+              ...query,
+              page: 1,
+              pageSize: booksyConsultation.base.clients.length + 100,
+              sort: "name",
+            }
+          : query,
+      );
+      let clients = data.clients.map(withSourceStats);
+      if (sortedCopy) {
+        clients.sort((a, b) => {
+          if (!a.lastVisitAt || !b.lastVisitAt)
+            return a.lastVisitAt ? -1 : b.lastVisitAt ? 1 : a.name.localeCompare(b.name);
+          const n = Date.parse(a.lastVisitAt) - Date.parse(b.lastVisitAt);
+          return (query.order === "asc" ? n : -n) || a.name.localeCompare(b.name);
+        });
+        clients = clients.slice((query.page - 1) * query.pageSize, query.page * query.pageSize);
+      }
+      return c.json({ ...data, page: query.page, pageSize: query.pageSize, clients });
     })
     .get("/:id/duplicates", async (c) => {
       c.header("cache-control", "private, no-store");
@@ -163,7 +236,15 @@ export function clientAdminRoutes({ db, now = () => new Date() }: AppDeps) {
     .get("/:id", async (c) => {
       authorizeClientAccess(c.get("principal"));
       const id = parseOrThrow(idSchema, c.req.param("id"));
-      return c.json(await getClientDetail(db, id));
+      const detail = await getClientDetail(db, id);
+      return c.json({
+        ...detail,
+        client: withSourceStats(detail.client),
+        appointments: [
+          ...detail.appointments,
+          ...(booksyConsultation?.appointments.filter((a) => a.clientId === id) ?? []),
+        ].sort((a, b) => b.startsAt.localeCompare(a.startsAt)),
+      });
     })
     .patch("/:id", async (c) => {
       const principal = c.get("principal");

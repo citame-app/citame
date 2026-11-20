@@ -37,8 +37,8 @@ describe("resolveAccess", () => {
 describe("homeFor", () => {
   test("staff and owner land on the dashboard, clients on their account", () => {
     expect(homeFor("client")).toBe("/account");
-    expect(homeFor("staff")).toBe("/admin");
-    expect(homeFor("owner")).toBe("/admin");
+    expect(homeFor("staff")).toBe("/admin/calendar");
+    expect(homeFor("owner")).toBe("/admin/calendar");
   });
 });
 

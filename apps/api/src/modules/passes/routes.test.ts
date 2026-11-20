@@ -710,3 +710,26 @@ test("salon pass records identify the buyer without exposing private client note
   await call(owner, `/admin/clients/${client.clientId}`, "PATCH", { name: "Updated buyer" });
   expect(await get(bought.pass.id)).toMatchObject({ clientName: "Updated buyer" });
 });
+
+test("package and membership lists filter before pagination and keep client isolation", async () => {
+  const pkg = await plan();
+  const membership = await plan({ name: "Monthly access", kind: "membership", periodMonths: 1 });
+  const first = await purchase(pkg.id);
+  const second = await purchase(membership.id);
+  const packages = (await (await call(owner, "/admin/passes?kind=package")).json()) as {
+    passes: { id: string }[];
+    pagination: { total: number };
+  };
+  expect(packages.passes.map((row) => row.id)).toEqual([first.pass.id]);
+  expect(packages.pagination.total).toBe(1);
+  const memberships = (await (await call(client, "/me/passes?kind=membership")).json()) as {
+    passes: { id: string }[];
+    pagination: { total: number };
+  };
+  expect(memberships.passes.map((row) => row.id)).toEqual([second.pass.id]);
+  expect(await (await call(other, "/me/passes?kind=membership")).json()).toMatchObject({
+    passes: [],
+    pagination: { total: 0 },
+  });
+  expect((await call(owner, "/admin/passes?kind=invalid")).status).toBe(400);
+});

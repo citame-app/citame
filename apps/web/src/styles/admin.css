@@ -1,0 +1,478 @@
+/* Shared workspace system, taken from the calendar. Public and customer pages keep
+   their editorial identity. Root-scoped tokens also reach dialogs rendered in portals. */
+:root:has(main[data-area="admin"]) {
+  --font-display: var(--font-text);
+  --admin-heading-height: 5.5rem;
+  --admin-gutter: 1.25rem;
+}
+
+main[data-area="admin"] {
+  scroll-margin-top: var(--admin-heading-height);
+}
+
+.admin-shell {
+  max-width: none;
+  min-height: 100dvh;
+}
+
+.admin-workspace {
+  padding: var(--admin-gutter);
+  padding-bottom: calc(5.5rem + env(safe-area-inset-bottom));
+  font-size: 0.875rem;
+}
+
+.admin-shell :is(h1, h2, h3, .font-display) {
+  font-family: var(--font-text);
+  letter-spacing: -0.02em;
+}
+
+.admin-shell h1 {
+  font-weight: 750;
+}
+
+.admin-workspace .page-heading {
+  position: sticky;
+  z-index: 30;
+  top: 0;
+  display: flex;
+  min-height: var(--admin-heading-height);
+  flex-direction: column;
+  justify-content: center;
+  margin: calc(-1 * var(--admin-gutter)) calc(-1 * var(--admin-gutter)) 1.25rem;
+  padding: 1rem 8.5rem 1rem 1.75rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.admin-workspace .page-heading h1 {
+  font-size: 1.75rem;
+  line-height: 1.2;
+}
+
+.admin-workspace .page-heading > p:last-child {
+  max-width: none;
+  margin-top: 0.35rem;
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.admin-account-tools {
+  position: fixed;
+  z-index: 35;
+  top: 1.35rem;
+  right: 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.admin-account-tools .calendar-account-trigger {
+  position: static;
+  flex: none;
+}
+
+.admin-rail-brand {
+  display: none;
+}
+
+/* Controls share the calendar's 44px targets, compact labels and restrained corners. */
+:root:has(main[data-area="admin"]) :is(.btn, .app-tabs [role="tab"]) {
+  min-height: 2.75rem;
+  border-radius: 0.625rem;
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+:root:has(main[data-area="admin"]) .btn--secondary {
+  border-color: var(--border);
+}
+
+:root:has(main[data-area="admin"]) :is(input, select, textarea) {
+  accent-color: var(--accent);
+}
+
+:root:has(main[data-area="admin"])
+  :is(input:not([type="checkbox"], [type="radio"], [type="hidden"]), select, textarea) {
+  border-radius: 0.625rem;
+}
+
+:root:has(main[data-area="admin"]) :is(input, select, textarea, button, a):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+:root:has(main[data-area="admin"]) [role="dialog"] :is(h2, h3) {
+  font-family: var(--font-text);
+  font-weight: 700;
+}
+
+:root:has(main[data-area="admin"]) [role="dialog"] > header {
+  background: var(--bg);
+}
+
+.admin-shell .app-tabs {
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border-radius: 0.75rem;
+  background: var(--surface);
+}
+
+.admin-shell .app-tabs [role="tab"] {
+  flex: none;
+  border-radius: 0.5rem;
+  padding-right: 1rem;
+  padding-left: 1rem;
+}
+
+.admin-shell .app-tabs [role="tab"][aria-selected="true"] {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.admin-shell .section-index {
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.admin-shell .section-index a {
+  border-radius: 0.625rem;
+  font-size: 0.8125rem;
+}
+
+.admin-shell :is(section, form, details, ul, li, article, fieldset, figure, div).border.bg-surface {
+  border-color: var(--border);
+  border-radius: 0.875rem;
+  box-shadow: none;
+}
+
+.admin-shell table {
+  font-size: 0.875rem;
+}
+
+.admin-shell thead {
+  background: color-mix(in srgb, var(--surface-sunken) 40%, var(--surface));
+}
+
+.admin-shell th {
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.admin-shell .reports-toolbar fieldset {
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border-radius: 0.75rem;
+}
+
+.admin-shell .reports-toolbar fieldset > span > span {
+  border-radius: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.admin-shell .empty-state {
+  border-radius: 0.875rem;
+}
+
+.admin-shell .settings-editor > section {
+  padding: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.875rem;
+  background: var(--surface);
+}
+
+@media (min-width: 768px) {
+  .admin-shell {
+    grid-template-columns: 4rem minmax(0, 1fr);
+  }
+
+  .admin-workspace {
+    padding-bottom: 2.5rem;
+  }
+
+  .admin-shell .admin-sidebar {
+    background: #222326;
+  }
+
+  .admin-shell .admin-sidebar nav {
+    top: 5.25rem;
+    min-height: calc(100dvh - 5.25rem);
+    max-height: calc(100dvh - 5.25rem);
+    padding: 0 0.4rem 0.75rem;
+    gap: 0.5rem;
+    border: 0;
+    scrollbar-width: thin;
+  }
+
+  .admin-shell .admin-sidebar nav > a {
+    justify-content: center;
+    min-height: 2.75rem;
+    padding: 0;
+    border-radius: 0.625rem;
+    color: #ced0d1;
+  }
+
+  .admin-shell .admin-sidebar nav > a:hover {
+    background: #343539;
+    color: white;
+  }
+
+  .admin-shell .admin-sidebar nav > a[aria-current="page"] {
+    background: var(--accent);
+    color: var(--accent-fg);
+  }
+
+  .admin-shell .admin-sidebar nav > a[aria-current="page"]::after {
+    display: none;
+  }
+
+  .admin-shell .admin-sidebar > .admin-rail-brand {
+    position: sticky;
+    z-index: 1;
+    top: 0;
+    display: grid;
+    height: 5.25rem;
+    place-items: center;
+    background: #222326;
+    color: white;
+    font-size: 2rem;
+    font-weight: 850;
+    letter-spacing: -0.1em;
+  }
+
+  .admin-shell .sidebar-label {
+    display: none;
+  }
+
+  .admin-shell .admin-nav-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  :root:has(main[data-area="admin"]) .admin-sidebar a:focus-visible {
+    outline: 2px solid white;
+    outline-offset: -3px;
+  }
+}
+
+@media (max-width: 767px) {
+  :root:has(main[data-area="admin"]) {
+    --admin-gutter: 1rem;
+  }
+
+  .admin-workspace .page-heading {
+    min-height: 5rem;
+    padding: 1rem 7.5rem 1rem 1rem;
+  }
+
+  .admin-workspace .page-heading h1 {
+    font-size: 1.5rem;
+  }
+
+  .admin-workspace .page-heading > p:last-child {
+    font-size: 0.8125rem;
+  }
+
+  .admin-account-tools {
+    top: 1rem;
+    right: 0.75rem;
+    gap: 0.25rem;
+  }
+
+  .admin-account-tools[data-calendar] {
+    top: 0.75rem;
+  }
+
+  .admin-shell .app-tabs {
+    max-width: 100%;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1023px) {
+  .admin-account-tools[data-calendar] {
+    top: 0.75rem;
+    right: 0.75rem;
+  }
+}
+
+.catalog-directory {
+  display: grid;
+  grid-template-columns: 13rem minmax(0, 1fr);
+  gap: 1.25rem;
+}
+.catalog-directory-categories {
+  min-width: 0;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.875rem;
+  background: var(--surface);
+  align-self: start;
+}
+.catalog-directory-categories :is(button, .settings-section-link) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.65rem 0.75rem;
+  text-align: left;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  border-radius: 0.5rem;
+  overflow-wrap: anywhere;
+}
+.catalog-directory-categories :is(button, .settings-section-link):hover {
+  background: var(--surface-sunken);
+}
+.catalog-directory-categories :is(button[aria-pressed="true"], .settings-section-link[aria-current="page"]) {
+  background: var(--accent-soft);
+  color: var(--accent-soft-fg);
+}
+.catalog-directory-categories button span {
+  color: var(--fg-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 767px) {
+  .catalog-directory {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1rem;
+  }
+  .catalog-directory-categories {
+    display: flex;
+    overflow-x: auto;
+  }
+  .catalog-directory-categories :is(button, .settings-section-link) {
+    flex: none;
+    width: auto;
+    white-space: nowrap;
+  }
+}
+.client-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--border);
+  border-radius: 0.875rem;
+  background: var(--surface);
+  padding: 1.25rem;
+  gap: 1rem;
+}
+.client-summary dt {
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  font-weight: 600;
+}
+.client-summary dd {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-top: 0.5rem;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 767px) {
+  .client-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.client-workspace {
+  display: grid;
+  grid-template-columns: 17rem minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+.client-directory {
+  min-width: 0;
+  position: sticky;
+  top: 1rem;
+  max-height: calc(100dvh - 8rem);
+  overflow-y: auto;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.875rem;
+  background: var(--surface);
+  scrollbar-width: thin;
+}
+.client-directory ul {
+  margin: 1rem -0.5rem;
+}
+.client-directory a {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  min-height: 4.5rem;
+  padding: 0.75rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+.client-directory a:hover,
+.client-directory a[aria-current="page"] {
+  background: var(--accent-soft);
+}
+.client-directory a strong {
+  display: block;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.client-directory-avatar {
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  flex: none;
+  border-radius: 50%;
+  background: var(--surface-sunken);
+  color: var(--fg-muted);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+@media (max-width: 1100px) {
+  .client-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .client-directory {
+    display: none;
+  }
+}
+.marketing-tool {
+  display: flex;
+  min-height: 14rem;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 1.5rem;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 0.875rem;
+  background: var(--surface);
+  transition:
+    background-color 120ms,
+    border-color 120ms;
+}
+.marketing-tool:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.marketing-tool strong {
+  font-size: 1.125rem;
+  font-weight: 700;
+}
+.marketing-tool > span {
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--fg-muted);
+}
+.marketing-tool > .marketing-tool-action {
+  margin-top: auto;
+  color: var(--accent-text);
+  font-weight: 700;
+}
+@media (prefers-reduced-motion: reduce) {
+  .marketing-tool {
+    transition: none;
+  }
+}

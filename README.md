@@ -116,7 +116,7 @@ Errors look like `{ "error": { "code", "message" } }` with codes `validation_err
 
 ## MCP server and OAuth 2.1
 
-AI assistants connect to `<origin>/mcp` (Streamable HTTP, stateless) and sign in through the OAuth 2.1 authorization server built into the API (Better Auth `oauthProvider()` + `jwt()`): dynamic client registration, authorization code with mandatory PKCE `S256`, consent screen in the web app (en and es-AR), 15 minute JWT access tokens bound to the MCP resource, rotating refresh tokens, RFC 8414 and RFC 9728 discovery, audit log of grants. Tools (`list_services`, `find_availability`, `create_appointment`, `cancel_appointment`, `list_my_appointments`, and staff-only `list_schedule`, `find_client`) call the same services and policy as REST, so a client token can never see another client's data. Connection guide, scopes and tool catalogue: [docs/mcp.md](docs/mcp.md). Decisions and threat model: [ADR 0009](docs/adr/0009-oauth-and-mcp.md). The desktop client is not on OAuth yet (follow-up listed there).
+AI assistants connect to `<origin>/mcp` over stateless Streamable HTTP. The API issues audience-bound OAuth 2.1 tokens through authorization code with mandatory PKCE `S256`, web consent and rotating refresh tokens. Assistants can book appointments and use centre management tools for the calendar, waitlist, clients, team, catalogue, stock, sales, cash, loyalty, notifications and settings. Staff tools require explicit scopes and use the same permissions as the web API. Each user can revoke access under **My account → Profile → Connected apps**. See the [connection guide and tool catalogue](docs/mcp.md) and [OAuth and MCP decisions](docs/adr/0009-oauth-and-mcp.md).
 
 Tests: `apps/api/src/oauth` (flow, PKCE, refresh rotation, CORS, rate limits, audit), `apps/api/src/mcp` (authorization matrix, booking rules, concurrency, token expiry, and an end-to-end test that runs the official MCP TypeScript SDK client against a live server through discovery, registration, PKCE and tool calls) in a dedicated `sob_test_mcp*` database, and `apps/web/e2e/oauth-consent.spec.ts` for the browser leg.
 
@@ -149,14 +149,22 @@ API_INTERNAL_URL=http://localhost:3000 PORT=4173 bun apps/web/server.ts   # http
 
 ### End-to-end tests
 
-The suite books real appointments, so run it against a fresh database (a database saturated by many runs offers no free slots; the admin specs randomize dates to tolerate a few reruns, and the report fixture is a fixed past Tuesday created once). The admin specs also create a staff account (`e2e-staff@example.com`) through the owner API, so `E2E_OWNER_EMAIL` and the owner password (`correct horse battery staple`) must match the bootstrapped owner. Playwright runs against the real stack at a mobile and a desktop viewport (booking flow, slot race, cancel and reschedule, auth errors, i18n, dark mode, axe, keyboard-only). Start Postgres and Valkey, migrate, seed, bootstrap an owner, start the API and the web server as above (raise `RATE_LIMIT_AUTH_MAX` and `RATE_LIMIT_GLOBAL_MAX` for the run), then:
+The suite books real appointments, so run it against a fresh database (a database saturated by many runs offers no free slots; the admin specs randomize dates to tolerate a few reruns, and the report fixture is a fixed past Tuesday created once). The admin specs also create a staff account (`e2e-staff@example.com`) through the owner API, so set `E2E_OWNER_EMAIL` and `E2E_OWNER_PASSWORD` to match the bootstrapped owner. Playwright runs against the real stack at a mobile and a desktop viewport (booking flow, slot race, cancel and reschedule, auth errors, i18n, dark mode, axe, keyboard-only). Start Postgres and Valkey, migrate, seed, bootstrap an owner, start the API and the web server as above (raise `RATE_LIMIT_AUTH_MAX` and `RATE_LIMIT_GLOBAL_MAX` for the run), then:
 
 ```sh
 cd apps/web && bunx playwright install chromium
 E2E_OWNER_EMAIL=... E2E_OWNER_PASSWORD=... bun run e2e
 ```
 
-The e2e suite follows the real confirmation, reset and invitation links, so it needs a mail sink and an API that sends to it: `docker compose --profile mail up -d mailpit`, then start the API with `BETTER_AUTH_URL=http://localhost:4173 NOTIFY_EMAIL_PROVIDER=smtp SMTP_URL=smtp://localhost:1025` (see `.github/workflows/ci.yml` for the full command lines). The owner is bootstrapped with `OWNER_PASSWORD="correct horse battery staple"`, which the helpers use; `E2E_MAILPIT_URL` overrides the inbox API (default `http://localhost:8025`).
+The e2e suite follows the real confirmation, reset and invitation links, so it needs a mail sink and an API that sends to it: `docker compose --profile mail up -d mailpit`, then start the API with `BETTER_AUTH_URL=http://localhost:4173 NOTIFY_EMAIL_PROVIDER=smtp SMTP_URL=smtp://localhost:1025` (see `.github/workflows/ci.yml` for the full command lines). The owner helper defaults to `correct horse battery staple`. `E2E_MAILPIT_URL` overrides the inbox API (default `http://localhost:8025`).
+
+For the isolated financial and checkout suites, start local Postgres and Valkey, build the web app and run the suites one at a time. Playwright starts the API and web on loopback ports 4300 and 4273 and uses the seeded owner from `sob_test_recurring_browser`. `E2E_BASE_URL`, `E2E_OWNER_EMAIL` and `E2E_OWNER_PASSWORD` apply only to runs against a separately started stack. CI runs checkout and center management with the isolated fixture because both expect the same seeded EUR catalogue.
+
+```sh
+bun run --cwd apps/web build
+E2E_FINANCIAL_FIXTURE=true bun run --cwd apps/web e2e
+E2E_POS_FIXTURE=true bun run --cwd apps/web e2e
+```
 
 ### Account security, observability and operations
 

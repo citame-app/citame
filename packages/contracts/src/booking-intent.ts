@@ -2,7 +2,7 @@ import type { CreateAppointmentRequest } from "./appointments";
 
 type BookingIntent = Pick<
   CreateAppointmentRequest,
-  "staffId" | "serviceIds" | "startsAt" | "clientId" | "client" | "notes"
+  "staffId" | "serviceIds" | "startsAt" | "clientId" | "client" | "notes" | "professionalPreference"
 >;
 
 /** Stable intent identity. Refreshed quotes/consent never create a second visit on retry. */
@@ -16,5 +16,6 @@ export function bookingIntentKey(input: BookingIntent): string {
       ? [input.client.name, input.client.email ?? null, input.client.phone ?? null]
       : null,
     input.notes ?? null,
+    ...(input.professionalPreference ? [input.professionalPreference] : []),
   ]);
 }

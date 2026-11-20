@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
 import type {
   CreateProductInput,
+  PackageContent,
   Product,
+  ProductFilters,
   ProductQuery,
+  ProductSort,
   StockMovementInput,
   StockReturnInput,
   UpdateProductInput,
@@ -14,6 +17,7 @@ import {
   type Database,
   pgErrorCode,
   retailProduct,
+  retailProductPhoto,
   stockMovement,
 } from "@sob/db";
 import { and, asc, count, desc, eq, ilike, or, sql } from "drizzle-orm";
@@ -25,6 +29,12 @@ import type { Tx } from "../../tx";
 
 type Connection = Database | Tx;
 export type ProductRow = typeof retailProduct.$inferSelect;
+function packageColumns(content: PackageContent | null | undefined) {
+  return {
+    packageContentQuantity: content?.quantity ?? null,
+    packageContentUnit: content?.unit ?? null,
+  };
+}
 const fingerprint = (input: Record<string, unknown>) => {
   const { idempotencyKey: _, ...value } = input;
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -38,21 +48,34 @@ function mapWriteError(error: unknown): never {
     throw new DomainError("invalid_state", "A product with this SKU or barcode already exists");
   throw error;
 }
-export function productView(row: ProductRow, principal: Principal): Product {
+export function productView(
+  row: ProductRow,
+  principal: Principal,
+  photoVersion?: string | null,
+): Product {
   const available = row.stockOnHand - row.stockReserved;
+  const permissions = permissionsFor(principal.role, principal.accessPreset);
   return {
     id: row.id,
     name: row.name,
+    ...(photoVersion ? { photoVersion } : {}),
     sku: row.sku,
     barcode: row.barcode,
     description: row.description,
+    category: row.category,
+    brand: row.brand,
+    resellable: row.resellable,
+    targetStock: row.targetStock,
     currency: "EUR",
     priceCents: row.priceCents,
-    ...(permissionsFor(principal.role, principal.accessPreset).readCosts
-      ? { costCents: row.costCents }
-      : {}),
+    ...(permissions.readCosts ? { costCents: row.costCents } : {}),
     taxBasisPoints: row.taxBasisPoints,
     unitLabel: row.unitLabel,
+    packageContent:
+      row.packageContentQuantity !== null && row.packageContentUnit !== null
+        ? { quantity: row.packageContentQuantity, unit: row.packageContentUnit }
+        : null,
+    canManage: permissions.writeInventory,
     storageLocation: row.storageLocation,
     active: row.active,
     stockOnHand: row.stockOnHand,
@@ -73,12 +96,23 @@ export async function productRow(db: Connection, id: string, lock = false): Prom
 }
 export async function getProduct(db: Database, id: string, principal: Principal) {
   requirePermission(principal, "readInventory");
-  return productView(await productRow(db, id), principal);
+  const [product] = await productWithPhoto(db).where(eq(retailProduct.id, id));
+  if (!product) throw new DomainError("not_found", "Product not found");
+  return productView(product.row, principal, product.photoVersion);
 }
-export async function listProducts(db: Database, query: ProductQuery, principal: Principal) {
-  requirePermission(principal, "readInventory");
+
+function productWithPhoto(db: Connection) {
+  return db
+    .select({ row: retailProduct, photoVersion: retailProductPhoto.version })
+    .from(retailProduct)
+    .leftJoin(retailProductPhoto, eq(retailProduct.id, retailProductPhoto.productId));
+}
+export function productFilter(query: ProductFilters) {
   const escaped = query.search.replace(/[\\%_]/g, "\\$&");
-  const where = and(
+  return and(
+    query.category ? eq(retailProduct.category, query.category) : undefined,
+    query.brand ? eq(retailProduct.brand, query.brand) : undefined,
+    query.resellable === undefined ? undefined : eq(retailProduct.resellable, query.resellable),
     query.active === "all" ? undefined : eq(retailProduct.active, query.active === "active"),
     query.search
       ? or(
@@ -91,18 +125,42 @@ export async function listProducts(db: Database, query: ProductQuery, principal:
       ? sql`${retailProduct.stockOnHand} - ${retailProduct.stockReserved} <= ${retailProduct.lowStockThreshold}`
       : undefined,
   );
+}
+
+export function productOrder(sort: ProductSort) {
+  const column =
+    sort === "updated_desc"
+      ? retailProduct.updatedAt
+      : sort === "stock_asc"
+        ? sql`${retailProduct.stockOnHand} - ${retailProduct.stockReserved}`
+        : retailProduct.name;
+  const descending = sort === "name_desc" || sort === "updated_desc";
+  const order = descending ? desc : asc;
+  const operator = descending ? sql`<` : sql`>`;
+  const cast =
+    sort === "updated_desc" ? sql`timestamptz` : sort === "stock_asc" ? sql`integer` : sql`text`;
+  return {
+    orderBy: [order(column), order(retailProduct.id)],
+    // PostgreSQL timestamps have more precision than the Date returned by the driver.
+    cursorKey: sql<string>`(${column})::text`,
+    after: (key: string, id: string) =>
+      sql`(${column}, ${retailProduct.id}) ${operator} (${key}::${cast}, ${id}::uuid)`,
+  };
+}
+
+export async function listProducts(db: Database, query: ProductQuery, principal: Principal) {
+  requirePermission(principal, "readInventory");
+  const where = productFilter(query);
   return db.transaction(
     async (tx) => {
       const [total] = await tx.select({ n: count() }).from(retailProduct).where(where);
-      const rows = await tx
-        .select()
-        .from(retailProduct)
+      const rows = await productWithPhoto(tx)
         .where(where)
-        .orderBy(asc(retailProduct.name), asc(retailProduct.id))
+        .orderBy(...productOrder(query.sort).orderBy)
         .limit(query.pageSize)
         .offset((query.page - 1) * query.pageSize);
       return {
-        products: rows.map((row) => productView(row, principal)),
+        products: rows.map(({ row, photoVersion }) => productView(row, principal, photoVersion)),
         pagination: { page: query.page, pageSize: query.pageSize, total: total?.n ?? 0 },
       };
     },
@@ -116,7 +174,8 @@ export async function createProduct(db: Database, input: CreateProductInput, pri
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtextextended(${`product:${principal.userId}:${input.idempotencyKey}`}, 0))`,
       );
-      const requestHash = fingerprint(input);
+      const { packageContent, ...baseInput } = input;
+      const requestHash = fingerprint(packageContent ? input : baseInput);
       const [previous] = await tx
         .select()
         .from(retailProduct)
@@ -130,11 +189,13 @@ export async function createProduct(db: Database, input: CreateProductInput, pri
         replay(previous, requestHash);
         return productView(previous, principal);
       }
-      const { openingStock, idempotencyKey, ...fields } = input;
+      const { openingStock, idempotencyKey, ...fields } = baseInput;
       const [row] = await tx
         .insert(retailProduct)
         .values({
           ...fields,
+          ...packageColumns(packageContent),
+          sku: input.sku ?? `SKU-${crypto.randomUUID().toUpperCase()}`,
           costCents: input.costCents ?? null,
           stockOnHand: openingStock,
           idempotencyKey,
@@ -167,7 +228,7 @@ export async function createProduct(db: Database, input: CreateProductInput, pri
   }
 }
 export async function updateProduct(
-  db: Database,
+  db: Connection,
   id: string,
   input: UpdateProductInput,
   principal: Principal,
@@ -178,10 +239,14 @@ export async function updateProduct(
       const row = await productRow(tx, id, true);
       if (row.version !== input.version)
         throw new DomainError("version_conflict", "Product changed; reload before editing");
-      const { version: _, ...fields } = input;
+      const { version: _, packageContent, ...fields } = input;
       const [updated] = await tx
         .update(retailProduct)
-        .set({ ...fields, version: row.version + 1 })
+        .set({
+          ...fields,
+          ...(packageContent === undefined ? {} : packageColumns(packageContent)),
+          version: row.version + 1,
+        })
         .where(eq(retailProduct.id, id))
         .returning();
       if (!updated) throw new Error("Product update failed");
@@ -190,7 +255,12 @@ export async function updateProduct(
         action: "inventory.product_updated",
         entity: "retail_product",
         entityId: id,
-        metadata: { fields: Object.keys(fields) },
+        metadata: {
+          fields: [
+            ...Object.keys(fields),
+            ...(packageContent === undefined ? [] : ["packageContent"]),
+          ],
+        },
       });
       return productView(updated, principal);
     });
@@ -199,12 +269,21 @@ export async function updateProduct(
   }
 }
 export async function moveStock(
-  db: Database,
+  db: Connection,
   id: string,
-  input: StockMovementInput,
+  reviewed: StockMovementInput,
   principal: Principal,
+  executingGeneration: string,
 ) {
   requirePermission(principal, "writeInventory");
+  const { generation: reviewedGeneration, actorUserId, ...input } = reviewed;
+  if (actorUserId !== undefined && principal.userId !== actorUserId)
+    throw new DomainError("forbidden", "Switch back to the account that prepared this movement");
+  if (reviewedGeneration !== executingGeneration)
+    throw new DomainError(
+      "sync_generation_changed",
+      "Refresh inventory before recording a movement",
+    );
   return db.transaction(async (tx) => {
     const row = await productRow(tx, id, true);
     const requestHash = fingerprint(input);

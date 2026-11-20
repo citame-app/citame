@@ -1,7 +1,7 @@
 import type { CalendarAppointment, Slot, UserRole } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Button } from "~/components/ui/button";
 import { TextAreaField } from "~/components/ui/select-field";
 import { Sheet } from "~/components/ui/sheet";
@@ -18,8 +18,12 @@ import { formatDateLong, formatDuration, formatMoney, formatTime, localDateOf } 
 import { processingRanges } from "~/lib/processing";
 import { salonQuery } from "~/lib/queries";
 import { AppointmentCheckout } from "../commerce/appointment-checkout";
+import { BillingReviewReasons } from "../commerce/billing-review-reasons";
+import { ImportedPriceReview } from "../commerce/imported-price-review";
+import { ImportedSettlementForm } from "../commerce/imported-settlement";
 import { describeProblem, type Problem } from "../problems";
 import { AppointmentActions } from "./appointment-actions";
+import { AppointmentContext } from "./appointment-context";
 import { invalidateCalendarData, mergeAppointment } from "./cache";
 import { availableActions } from "./logic";
 import { StatusBadge } from "./status-badge";
@@ -31,6 +35,7 @@ export function AppointmentDrawer({
   staffName,
   onClose,
   role,
+  billingRole = role,
   ownStaffId,
   now,
   onReload,
@@ -40,6 +45,7 @@ export function AppointmentDrawer({
   staffName: string;
   onClose: () => void;
   role: UserRole;
+  billingRole?: UserRole;
   ownStaffId: string | null;
   now: Date;
   /** Refetch the calendar so the drawer shows the latest version after a conflict. */
@@ -60,11 +66,12 @@ export function AppointmentDrawer({
           appointment={appointment}
           staffName={staffName}
           role={role}
+          billingRole={billingRole}
           ownStaffId={ownStaffId}
           now={now}
           onClose={onClose}
           onReload={onReload}
-          readOnly={readOnly}
+          readOnly={readOnly || Boolean(appointment.sourceCopy)}
         />
       )}
     </Sheet>
@@ -75,6 +82,7 @@ function DrawerBody({
   appointment,
   staffName,
   role,
+  billingRole,
   ownStaffId,
   now,
   onClose,
@@ -84,6 +92,7 @@ function DrawerBody({
   appointment: CalendarAppointment;
   staffName: string;
   role: UserRole;
+  billingRole: UserRole;
   ownStaffId: string | null;
   now: Date;
   onClose: () => void;
@@ -95,7 +104,12 @@ function DrawerBody({
   const queryClient = useQueryClient();
   const client = useQuery({ ...clientDetailQuery(appointment.clientId), enabled: !readOnly });
   const salon = useQuery(salonQuery);
-  const [notes, setNotes] = useState(appointment.notes ?? "");
+  const savedNotes = appointment.notes ?? "";
+  const [notesDraft, setNotesDraft] = useState<{
+    notes: string;
+    original: string;
+    version: number;
+  } | null>(null);
   const [problem, setProblem] = useState<Problem | null>(null);
   const [moving, setMoving] = useState(false);
   const [days, setDays] = useState(PAGE);
@@ -109,10 +123,6 @@ function DrawerBody({
     (Date.parse(appointment.endsAt) - Date.parse(appointment.startsAt)) / 60_000,
   );
 
-  // The calendar refetches in the background; a fresh version resets the draft.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the version marks a fresh server copy
-  useEffect(() => setNotes(appointment.notes ?? ""), [appointment.notes, appointment.version]);
-
   const afterSave = (saved: Parameters<typeof mergeAppointment>[1]) => {
     queryClient.setQueriesData<import("@sob/contracts").CalendarResponse>(
       { queryKey: ["admin", "calendar"] },
@@ -122,15 +132,20 @@ function DrawerBody({
   };
 
   const saveNotes = useMutation({
-    mutationFn: () =>
-      api().appointments.update(appointment.id, { version: appointment.version, notes }),
+    mutationFn: (draft: NonNullable<typeof notesDraft>) =>
+      api().appointments.update(appointment.id, {
+        version: draft.original === savedNotes ? appointment.version : draft.version,
+        notes: draft.notes,
+      }),
     onSuccess: (saved) => {
+      setNotesDraft(null);
       setProblem(null);
       toast.success(t("calendar.toast.notesSaved"));
       afterSave(saved);
     },
     onError: (error) => setProblem(describeProblem(error)),
   });
+  const notesConflict = saveNotes.isError && describeProblem(saveNotes.error).recovery === "reload";
 
   const move = useMutation({
     mutationFn: () => {
@@ -226,7 +241,10 @@ function DrawerBody({
               <li key={`${s.serviceId}-${s.name}`} className="flex justify-between gap-3">
                 <span>{s.name}</span>
                 <span className="tabular-nums text-muted">
-                  {formatMoney(s.priceCents, s.currency, locale)}
+                  {s.priceDisplayLabel ??
+                    (s.sourceUnpriced
+                      ? t("badge.unquoted")
+                      : formatMoney(s.priceCents, s.currency, locale))}
                 </span>
               </li>
             ))}
@@ -241,7 +259,11 @@ function DrawerBody({
           ))}
           <p className="mt-1 flex justify-between gap-3 border-t border-line pt-1 font-medium">
             <span>{t("drawer.total")}</span>
-            <span className="tabular-nums">{formatMoney(totalCents, currency, locale)}</span>
+            <span className="tabular-nums">
+              {appointment.services.some((s) => s.sourceUnpriced)
+                ? t("badge.unquoted")
+                : formatMoney(totalCents, currency, locale)}
+            </span>
           </p>
         </dd>
         {Boolean(appointment.resources?.length) && (
@@ -290,29 +312,129 @@ function DrawerBody({
         </section>
       )}
 
+      {appointment.sourceCopy && (
+        <p className="rounded-lg bg-sunken p-3 text-sm text-muted">
+          {t("badge.originalReservation")} {appointment.sourceCopy.groupRef}
+        </p>
+      )}
+      {(!readOnly || appointment.sourceCopy) && (
+        <AppointmentContext appointment={appointment} readOnly={readOnly} />
+      )}
       <div className="space-y-3">
         <TextAreaField
           label={t("drawer.notes")}
-          value={notes}
-          readOnly={readOnly}
-          onChange={(e) => setNotes(e.target.value)}
+          value={notesDraft?.notes ?? savedNotes}
+          readOnly={readOnly || saveNotes.isPending}
+          onChange={(e) => {
+            const notes = e.target.value;
+            setNotesDraft((draft) =>
+              notes === (draft?.original ?? savedNotes)
+                ? null
+                : { original: savedNotes, version: appointment.version, ...draft, notes },
+            );
+          }}
         />
         <Button
           variant="secondary"
           loading={saveNotes.isPending}
-          disabled={readOnly || notes === (appointment.notes ?? "")}
-          onClick={() => saveNotes.mutate()}
+          disabled={readOnly || !notesDraft || notesConflict}
+          onClick={() => notesDraft && saveNotes.mutate(notesDraft)}
         >
           {t("drawer.notes.save")}
         </Button>
+        {!readOnly && notesConflict && (
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setNotesDraft(null);
+              saveNotes.reset();
+              setProblem(null);
+              onReload?.();
+              void queryClient.invalidateQueries({ queryKey: ["admin", "calendar"] });
+            }}
+          >
+            {t("badge.discardDraft")}
+          </Button>
+        )}
       </div>
 
+      {appointment.externallySettled && (
+        <p
+          className="rounded-xl border border-line bg-sunken p-4 text-sm font-medium"
+          role="status"
+        >
+          {t("pos.billingReview.settlementSaved")}
+        </p>
+      )}
+      {appointment.externalBalance && (
+        <p className="rounded-xl border border-line bg-sunken p-4 text-sm" role="status">
+          {t("pos.billingReview.externalBalance", {
+            paid: formatMoney(appointment.externalBalance.paidInBooksyCents, "EUR", locale),
+            due: formatMoney(appointment.externalBalance.dueInCitameCents, "EUR", locale),
+          })}
+        </p>
+      )}
+      {appointment.billingReviewReasons &&
+        !appointment.externallySettled &&
+        appointment.status !== "cancelled" && (
+          <section
+            aria-labelledby="drawer-billing-review"
+            className="space-y-2 rounded-xl border border-line bg-sunken p-4"
+          >
+            <h3 id="drawer-billing-review" className="font-medium">
+              {t("pos.billingReview.title")}
+            </h3>
+            <BillingReviewReasons reasons={appointment.billingReviewReasons} />
+            <p className="text-sm text-muted">{t("pos.billingReview.help")}</p>
+            {!readOnly &&
+              billingRole === "owner" &&
+              appointment.unpricedServices?.length &&
+              appointment.billingReviewReasons.length === 1 &&
+              appointment.billingReviewReasons.includes("unknown_amount") && (
+                <ImportedPriceReview
+                  key={appointment.version}
+                  appointmentId={appointment.id}
+                  version={appointment.version}
+                  services={appointment.unpricedServices}
+                />
+              )}
+            {!readOnly &&
+              billingRole === "owner" &&
+              (appointment.billingReviewReasons.includes("paid_in_booksy") ||
+                appointment.billingReviewReasons.includes("invoiced_in_booksy")) && (
+                <ImportedSettlementForm
+                  key={appointment.version}
+                  id={appointment.id}
+                  version={appointment.version}
+                />
+              )}
+          </section>
+        )}
+      {!readOnly &&
+        billingRole === "owner" &&
+        appointment.importedFromBooksy &&
+        !appointment.externallySettled &&
+        !appointment.externalBalance &&
+        appointment.status !== "cancelled" &&
+        totalCents > 0 &&
+        appointment.services.every(
+          (service) => service.currency === "EUR" && !service.sourceUnpriced,
+        ) && (
+          <ImportedSettlementForm
+            key={`partial-${appointment.version}`}
+            id={appointment.id}
+            version={appointment.version}
+            originalTotal={totalCents}
+          />
+        )}
       {!readOnly &&
         appointment.status !== "cancelled" &&
+        !appointment.externallySettled &&
+        !appointment.billingReviewReasons &&
         appointment.services.length > 0 &&
-        appointment.services.every((service) => service.currency === "EUR") && (
-          <AppointmentCheckout appointmentId={appointment.id} mode="admin" role={role} />
-        )}
+        appointment.services.every(
+          (service) => service.currency === "EUR" && !service.sourceUnpriced,
+        ) && <AppointmentCheckout appointmentId={appointment.id} mode="admin" role={billingRole} />}
       <AppointmentActions
         readOnly={readOnly}
         appointment={appointment}

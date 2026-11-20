@@ -2,7 +2,7 @@ import type { ClientListQuery } from "@sob/contracts";
 import { queryOptions } from "@tanstack/react-query";
 import { api } from "./api/instance";
 
-/** Calendar data is the busiest screen: refetch on focus and on an interval (push comes in Phase 4). */
+/** SSE refreshes the web calendar; focus/interval remain the fallback when disconnected. */
 export const CALENDAR_POLL_MS = 30_000;
 
 export interface CalendarParams {
@@ -11,20 +11,35 @@ export interface CalendarParams {
   staffIds?: string[];
 }
 
-export const calendarQuery = (params: CalendarParams) =>
+export const calendarQuery = (params: CalendarParams, endpoints = api) =>
   queryOptions({
     queryKey: ["admin", "calendar", params.from, params.to, (params.staffIds ?? []).join(",")],
-    queryFn: () => api().admin.calendar(params),
+    queryFn: () => endpoints().admin.calendar(params),
     staleTime: 5_000,
     refetchInterval: CALENDAR_POLL_MS,
     refetchOnWindowFocus: true,
   });
 
-export const adminStaffQuery = queryOptions({
-  queryKey: ["admin", "staff"],
-  queryFn: async () => (await api().admin.staff.list()).staff,
-  staleTime: 30_000,
-});
+export const staffQuery = (endpoints = api) =>
+  queryOptions({
+    queryKey: ["admin", "staff"],
+    queryFn: async ({ signal }) => (await endpoints().admin.staff.list(signal)).staff,
+    staleTime: 30_000,
+  });
+export const adminStaffQuery = staffQuery();
+
+export const teamShiftWeekKey = ["admin", "team-shifts"] as const;
+
+export const calendarWaitlistQuery = (
+  range: { fromDate: string; toDate: string },
+  endpoints = api,
+) =>
+  queryOptions({
+    queryKey: ["waitlist", "calendar-count", range],
+    queryFn: async () =>
+      (await endpoints().waitlist.list("admin", { ...range, active: "true", pageSize: 1 })).total,
+    refetchInterval: 15_000,
+  });
 
 export const adminServicesQuery = queryOptions({
   queryKey: ["admin", "services"],
@@ -63,7 +78,12 @@ export const timeOffQuery = (staffId: string) =>
     queryFn: async () => (await api().admin.staff.timeOff(staffId)).timeOff,
   });
 
-export const reportQuery = (params: { from: string; to: string; staffId?: string }) =>
+export const reportQuery = (params: {
+  from: string;
+  to: string;
+  staffId?: string;
+  currency?: string;
+}) =>
   queryOptions({
     queryKey: ["admin", "report", params],
     queryFn: () => api().admin.reports(params),

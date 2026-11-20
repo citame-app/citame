@@ -13,6 +13,7 @@ import type { BookingEntrySelection } from "./links";
 
 export function BookingWidget(props: {
   salonName: string;
+  onlineBookingEnabled?: boolean;
   initialSelection: BookingEntrySelection;
 }) {
   const initial = useI18n();
@@ -25,18 +26,20 @@ export function BookingWidget(props: {
 }
 function WidgetBody({
   salonName,
+  onlineBookingEnabled = true,
   initialSelection,
   locale,
   onLocaleChange,
 }: {
   salonName: string;
+  onlineBookingEnabled?: boolean;
   initialSelection: BookingEntrySelection;
   locale: Locale;
   onLocaleChange: (locale: Locale) => void;
 }) {
   const { t } = useI18n();
-  const services = useQuery(servicesQuery);
-  const staff = useQuery(staffQuery);
+  const services = useQuery({ ...servicesQuery, enabled: onlineBookingEnabled });
+  const staff = useQuery({ ...staffQuery, enabled: onlineBookingEnabled });
   const [selected, setSelected] = useState(initialSelection.serviceIds);
   const [staffId, setStaffId] = useState(initialSelection.staffId ?? "");
   const ids = normalizeCatalogSelection(selected, services.data ?? [], 24);
@@ -71,15 +74,23 @@ function WidgetBody({
           />
         </div>
       </div>
-      <h1 className="text-title">{t("widget.title", { name: salonName })}</h1>
-      <p className="text-muted">{t("widget.lead")}</p>
-      {services.isPending || staff.isPending ? <Skeleton className="h-40" /> : null}
+      <h1 className="text-title">
+        {onlineBookingEnabled ? t("widget.title", { name: salonName }) : t("booking.paused.title")}
+      </h1>
+      <p className="text-muted">
+        {t(onlineBookingEnabled ? "widget.lead" : "booking.paused.body")}
+      </p>
+      {onlineBookingEnabled && (services.isPending || staff.isPending) && (
+        <Skeleton className="h-40" />
+      )}
       {services.isError && (
         <ErrorState error={services.error} onRetry={() => void services.refetch()} />
       )}
       {staff.isError && <ErrorState error={staff.error} onRetry={() => void staff.refetch()} />}
-      {ready && services.data?.length === 0 && <EmptyState title={t("widget.empty")} />}
-      {ready && (
+      {onlineBookingEnabled && ready && services.data?.length === 0 && (
+        <EmptyState title={t("widget.empty")} />
+      )}
+      {onlineBookingEnabled && ready && (
         <>
           <CatalogChoices
             catalog={services.data ?? []}

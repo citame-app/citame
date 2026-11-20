@@ -9,6 +9,7 @@ export const salonResponseSchema = z.object({
   slotGranularityMinutes: z.number().int().positive(),
   minNoticeMinutes: z.number().int().min(0),
   maxDaysAhead: z.number().int().positive(),
+  onlineBookingEnabled: z.boolean().optional(),
 });
 export type SalonResponse = z.infer<typeof salonResponseSchema>;
 
@@ -69,6 +70,7 @@ export const updateSalonSettingsRequestSchema = z
       .min(0)
       .max(60 * 24 * 30),
     maxDaysAhead: z.number().int().min(1).max(365),
+    onlineBookingEnabled: z.boolean(),
     reminderFirstLeadMinutes: reminderLeadSchema,
     reminderSecondLeadMinutes: reminderLeadSchema,
   })

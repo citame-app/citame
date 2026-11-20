@@ -3,16 +3,35 @@ import {
   boolean,
   index,
   integer,
+  jsonb,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   unique,
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 import { appointment } from "./appointment";
+import { auditLog } from "./audit";
+import { user } from "./auth";
 import { clientProfile } from "./client";
 import { createdAt, primaryId, timestamptz, updatedAt } from "./helpers";
+
+/** Per-user inbox state. Events remain in the audit trail; archiving never deletes them. */
+export const calendarNoticeArchive = pgTable(
+  "calendar_notice_archive",
+  {
+    userId: text()
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    auditId: uuid()
+      .notNull()
+      .references(() => auditLog.id, { onDelete: "cascade" }),
+    archivedAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.auditId] })],
+);
 
 export const reminderKind = pgEnum("reminder_kind", [
   "confirmation",
@@ -22,7 +41,7 @@ export const reminderKind = pgEnum("reminder_kind", [
   "rescheduled",
 ]);
 
-export const notificationChannel = pgEnum("notification_channel", ["email", "sms"]);
+export const notificationChannel = pgEnum("notification_channel", ["email", "sms", "whatsapp"]);
 
 export const reminderStatus = pgEnum("reminder_status", [
   "pending",
@@ -88,6 +107,12 @@ export const reminder = pgTable(
     attempts: integer().notNull().default(0),
     lastError: text(),
     providerMessageId: text(),
+    whatsappDispatchAt: timestamptz(),
+    /** Sender recorded when the WhatsApp send starts, independent of the active connection. */
+    whatsappDispatchWabaId: text(),
+    whatsappDispatchPhoneId: text(),
+    whatsappStartsAt: timestamptz(),
+    whatsappDelivery: text(),
     /** Visibility timeout: a `processing` row whose lease expired is claimable again. */
     lockedUntil: timestamptz(),
     lockedBy: text(),
@@ -102,6 +127,13 @@ export const reminder = pgTable(
       t.channel,
       t.appointmentVersion,
     ),
+    // Only timed WhatsApp reminders populate this field. Notes and edits unrelated to
+    // scheduling can bump the appointment version without creating a new time slot.
+    uniqueIndex("reminder_whatsapp_once_per_slot")
+      .on(t.appointmentId, t.kind, t.whatsappStartsAt)
+      .where(
+        sql`${t.whatsappStartsAt} is not null and (${t.status} in ('pending', 'processing', 'sent') or ${t.whatsappDispatchAt} is not null)`,
+      ),
     // The claim query scans only rows that can still run.
     index("reminder_due_idx")
       .on(t.scheduledFor)
@@ -126,8 +158,22 @@ export const notificationPreference = pgTable(
     channel: notificationChannel().notNull(),
     category: notificationCategory().notNull(),
     enabled: boolean().notNull(),
+    destinationHash: text(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => [uniqueIndex("notification_preference_unique").on(t.clientId, t.channel, t.category)],
 );
+
+/** One sender per Citame installation, matching the singleton salon settings. */
+export const whatsappConnection = pgTable("whatsapp_connection", {
+  id: integer().primaryKey().default(1),
+  wabaId: text().notNull(),
+  phoneId: text().notNull(),
+  phone: text().notNull(),
+  coexistence: boolean().notNull(),
+  encryptedToken: text().notNull(),
+  expiresAt: timestamptz(),
+  rules: jsonb().notNull().default(sql`'[]'::jsonb`),
+  updatedAt: updatedAt(),
+});

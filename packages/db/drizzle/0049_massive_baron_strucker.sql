@@ -1,0 +1,2 @@
+ALTER TABLE "reminder" ADD COLUMN "whatsapp_starts_at" timestamp with time zone;--> statement-breakpoint
+CREATE UNIQUE INDEX "reminder_whatsapp_once_per_slot" ON "reminder" USING btree ("appointment_id","kind","whatsapp_starts_at") WHERE "reminder"."whatsapp_starts_at" is not null and ("reminder"."status" in ('pending', 'processing', 'sent') or "reminder"."whatsapp_dispatch_at" is not null);

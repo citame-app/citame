@@ -281,6 +281,11 @@ test("joined point credits remain conserved and concurrent redemptions cannot sp
   const balance = await call(customer, "/me/rewards");
   expect(await balance.json()).toMatchObject({ availablePoints: 200 });
   expect((await call(customer, `/me/checkouts/${original.id}`)).status).toBe(200);
+  const history = await call(owner, `/admin/commerce/checkouts?clientId=${pair().targetId}`);
+  expect(await history.json()).toMatchObject({
+    checkouts: [{ id: original.id, clientId: f.clientId }],
+    total: 1,
+  });
   expect((await call(stranger, `/me/checkouts/${original.id}`)).status).toBe(404);
   const sales = [original];
   for (let i = 0; i < 1; i++) {

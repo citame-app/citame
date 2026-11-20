@@ -66,6 +66,46 @@ describe("ConsentView", () => {
     expect(screen.getByRole("checkbox", { name: /staff schedule/i })).toBeChecked();
   });
 
+  test("management permissions are opt-in for the owner", async () => {
+    const { decide } = view({
+      role: "owner",
+      request: {
+        ...request,
+        scopes: [
+          "mcp:read",
+          "operations:read",
+          "schedule:write",
+          "commissions:write",
+          "billing:write",
+        ],
+      },
+    });
+    const read = screen.getByRole("checkbox", { name: /Read centre operations/ });
+    const write = screen.getByRole("checkbox", {
+      name: /Book, move and cancel centre appointments/,
+    });
+    expect(read).not.toBeChecked();
+    expect(write).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Change commission rates/ })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Save verified prices/ })).not.toBeChecked();
+    fireEvent.click(read);
+    fireEvent.click(screen.getByRole("button", { name: "Allow access" }));
+    await waitFor(() =>
+      expect(decide).toHaveBeenCalledWith({
+        accept: true,
+        scopes: ["mcp:read", "operations:read"],
+      }),
+    );
+  });
+
+  test("billing review is unavailable to staff in the consent screen", () => {
+    view({
+      role: "staff",
+      request: { ...request, scopes: ["mcp:read", "billing:write"] },
+    });
+    expect(screen.queryByRole("checkbox", { name: /Save verified prices/ })).toBeNull();
+  });
+
   test("allow sends only the scopes left on and then navigates to the returned URL", async () => {
     const { decide, navigate } = view();
     fireEvent.click(screen.getByRole("checkbox", { name: /Book and cancel appointments/ }));

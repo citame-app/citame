@@ -2,7 +2,7 @@ import { join, normalize, sep } from "node:path";
 import { gzipSync } from "node:zlib";
 import { resolveLocale } from "../i18n";
 import type { ServerRequestContext } from "../lib/api/request-context";
-import { createNonce } from "../lib/csp";
+import { createNonce, isWhatsAppSettingsPath } from "../lib/csp";
 import { parseThemeCookie } from "../lib/theme";
 import { visitorAddress } from "./client-address";
 import { renderRateLimitedPage } from "./rate-limited-page";
@@ -110,6 +110,8 @@ export function createWebServer({
     const type = response.headers.get("content-type") ?? "";
     if (
       !response.body ||
+      // Gzip streams buffer small writes. SSE must deliver each nudge immediately.
+      type.split(";")[0]?.trim().toLowerCase() === "text/event-stream" ||
       response.headers.has("content-encoding") ||
       !COMPRESSIBLE.test(type.split(";")[0] ?? "") ||
       !acceptsGzip(request)
@@ -203,6 +205,22 @@ export function createWebServer({
       }
       if (out.status === 200 && (out.headers.get("content-type") ?? "").startsWith("text/html")) {
         applyWidgetFramePolicy(out.headers, url.pathname, allowedWidgetParents);
+        if (isWhatsAppSettingsPath(url.pathname)) {
+          out.headers.set("cross-origin-opener-policy", "same-origin-allow-popups");
+          const csp = out.headers.get("content-security-policy");
+          if (csp)
+            out.headers.set(
+              "content-security-policy",
+              csp
+                .replace(/script-src [^;]+/, "$& https://connect.facebook.net")
+                .replace(
+                  /connect-src [^;]+/,
+                  "$& https://www.facebook.com https://graph.facebook.com https://connect.facebook.net",
+                )
+                .replace(/img-src [^;]+/, "$& https://www.facebook.com")
+                .concat("; frame-src https://www.facebook.com https://web.facebook.com"),
+            );
+        }
       }
       if (hsts && !out.headers.has("strict-transport-security")) {
         out.headers.set("strict-transport-security", "max-age=31536000; includeSubDomains");

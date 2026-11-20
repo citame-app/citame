@@ -7,12 +7,18 @@
 use std::path::Path;
 
 use chrono::{SecondsFormat, Utc};
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::error::{CoreError, Result};
 use crate::model::*;
+use crate::sync::{CATALOG_COLORS_CACHED, CatalogColors};
+
+pub(crate) const INITIAL_GENERATION: &str = "initial";
+const GENERATION_KEY: &str = "sync_generation";
+const REBUILD_KEY: &str = "sync_rebuilding";
+const STAFF_DIRECTORY_TOPIC: &str = "staff_directory";
 
 const MIGRATIONS: &[&str] = &[
     // 1: initial schema
@@ -62,6 +68,21 @@ const MIGRATIONS: &[&str] = &[
     CREATE TABLE date_shift (id TEXT PRIMARY KEY, staff_id TEXT NOT NULL, date TEXT NOT NULL, json TEXT NOT NULL);
     CREATE INDEX date_shift_staff_date ON date_shift(staff_id,date);
     "#,
+    // 3: bound native calendar notices and suppress echoes of acknowledged local bookings.
+    r#"
+    CREATE TABLE booking_notice (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        appointment_id TEXT NOT NULL UNIQUE REFERENCES appointment(id) ON DELETE CASCADE
+    );
+    CREATE TABLE local_booking_confirmation (
+        appointment_id TEXT PRIMARY KEY,
+        applied_seq INTEGER
+    );
+    "#,
+    r#"
+    CREATE INDEX appointment_client_history
+        ON appointment (json_extract(json, '$.clientId'), starts_at_ms DESC, id);
+    "#,
 ];
 
 const MIRROR_TABLES: &[&str] = &[
@@ -78,6 +99,7 @@ const MIRROR_TABLES: &[&str] = &[
 
 pub struct Store {
     conn: Connection,
+    reviewed_generation: String,
 }
 
 /// What `apply_push_results` did.
@@ -237,6 +259,14 @@ fn outbox_from_row(r: &rusqlite::Row) -> rusqlite::Result<OutboxEntry> {
 const OUTBOX_COLS: &str =
     "seq, mutation_id, created_at, kind, entity_id, payload, attempts, last_error";
 
+fn inbox_key(archived: bool) -> &'static str {
+    if archived {
+        "calendar_inbox_archived"
+    } else {
+        "calendar_inbox_active"
+    }
+}
+
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
@@ -254,6 +284,7 @@ impl Store {
     fn init(mut conn: Connection) -> Result<Self> {
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
+        conn.pragma_update(None, "foreign_keys", true)?;
         let current: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
         for (i, sql) in MIGRATIONS.iter().enumerate().skip(current as usize) {
             let tx = conn.transaction()?;
@@ -261,7 +292,11 @@ impl Store {
             tx.pragma_update(None, "user_version", (i + 1) as i64)?;
             tx.commit()?;
         }
-        Ok(Self { conn })
+        let reviewed_generation = Self::generation_at(&conn)?;
+        Ok(Self {
+            conn,
+            reviewed_generation,
+        })
     }
 
     pub fn schema_version(&self) -> Result<i64> {
@@ -271,16 +306,96 @@ impl Store {
     }
 
     pub fn get_meta(&self, key: &str) -> Result<Option<String>> {
-        Ok(self
-            .conn
+        Self::meta_at(&self.conn, key)
+    }
+
+    fn meta_at(conn: &Connection, key: &str) -> Result<Option<String>> {
+        Ok(conn
             .query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| {
                 r.get(0)
             })
             .optional()?)
     }
 
+    fn generation_at(conn: &Connection) -> Result<String> {
+        Ok(Self::meta_at(conn, GENERATION_KEY)?.unwrap_or_else(|| INITIAL_GENERATION.into()))
+    }
+
+    pub(crate) fn replica_generation(&self) -> Result<String> {
+        Self::generation_at(&self.conn)
+    }
+
+    /// Call before rendering an agenda snapshot. Edits from a stale view remain fenced.
+    pub fn refresh_reviewed_generation(&mut self) -> Result<String> {
+        self.reviewed_generation = self.replica_generation()?;
+        Ok(self.reviewed_generation.clone())
+    }
+
+    fn ensure_generation(conn: &Connection, expected: Option<&str>) -> Result<()> {
+        if let Some(expected) = expected
+            && Self::generation_at(conn)? != expected
+        {
+            return Err(CoreError::Protocol(
+                "Replica generation changed during sync".into(),
+            ));
+        }
+        Ok(())
+    }
+
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
-        self.conn.execute(
+        Self::set_meta_at(&self.conn, key, value)
+    }
+
+    pub fn pending_stock(
+        &self,
+        id: crate::inventory::ProductId,
+    ) -> Result<Option<crate::inventory::PendingStock>> {
+        let Some(value) = self.get_meta(&format!("inventory_pending:{id}"))? else {
+            return Ok(None);
+        };
+        let pending: crate::inventory::PendingStock = serde_json::from_str(&value)?;
+        if pending.product_id != id {
+            return Err(CoreError::Protocol(
+                "Pending stock product identity mismatch".into(),
+            ));
+        }
+        Ok(Some(pending))
+    }
+
+    /// A second instance must retry the original command, even if its product view is newer.
+    pub fn reserve_pending_stock(&self, pending: &crate::inventory::PendingStock) -> Result<bool> {
+        Ok(self.conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO NOTHING",
+            params![
+                format!("inventory_pending:{}", pending.product_id),
+                serde_json::to_string(pending)?
+            ],
+        )? == 1)
+    }
+
+    /// A delayed result cannot remove a different command reserved by another instance.
+    pub fn clear_pending_stock(&self, pending: &crate::inventory::PendingStock) -> Result<bool> {
+        Ok(self.conn.execute(
+            "DELETE FROM meta WHERE key = ?1 AND value = ?2",
+            params![
+                format!("inventory_pending:{}", pending.product_id),
+                serde_json::to_string(pending)?
+            ],
+        )? == 1)
+    }
+
+    pub(crate) fn set_meta_in(&mut self, key: &str, value: &str, generation: &str) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::ensure_generation(&tx, Some(generation))?;
+        Self::set_meta_at(&tx, key, value)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn set_meta_at(conn: &Connection, key: &str, value: &str) -> Result<()> {
+        conn.execute(
             "INSERT INTO meta (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             params![key, value],
@@ -308,12 +423,169 @@ impl Store {
             .unwrap_or(0))
     }
 
+    /// Changes when another connection commits to this replica.
+    pub fn data_version(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .pragma_query_value(None, "data_version", |r| r.get(0))?)
+    }
+
+    /// Latest applied invalidation for an online-only view. It shares the cursor transaction.
+    pub fn staff_directory_revision(&self) -> Result<i64> {
+        self.live_view_revision(STAFF_DIRECTORY_TOPIC)
+    }
+
+    pub fn live_view_revision(&self, topic: &str) -> Result<i64> {
+        Ok(self
+            .get_meta(&format!("live_view:{topic}"))?
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0))
+    }
+
+    /// Keeps a compound local action invisible to the sync connection until both writes succeed.
+    pub(crate) fn write_transaction<T>(
+        &mut self,
+        write: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<T> {
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = write(self).and_then(|value| {
+            self.conn.execute_batch("COMMIT")?;
+            Ok(value)
+        });
+        if result.is_err() {
+            self.conn.execute_batch("ROLLBACK")?;
+        }
+        result
+    }
+
     /// Applies one pull page and moves the cursor in a single transaction. The cursor never
     /// decreases. Returns the number of changes applied.
     pub fn apply_page(&mut self, changes: &[RawChange], next_cursor: i64) -> Result<usize> {
-        let tx = self.conn.transaction()?;
-        for c in changes {
+        self.apply_sync_page(changes, next_cursor, false, false, &[], None)
+    }
+
+    /// Repairs the catalog projection even if an earlier release consumed its change log.
+    pub(crate) fn apply_catalog_colors(
+        &mut self,
+        colors: &CatalogColors,
+        generation: Option<&str>,
+    ) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::ensure_generation(&tx, generation)?;
+        tx.execute(
+            "UPDATE service SET json = json_remove(json, '$.color') WHERE json_type(json, '$.color') = 'text'",
+            [],
+        )?;
+        {
+            let mut update = tx
+                .prepare("UPDATE service SET json = json_set(json, '$.color', ?2) WHERE id = ?1")?;
+            for (id, color) in colors {
+                update.execute(params![id, color])?;
+            }
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO meta (key,value) VALUES (?1,'1')",
+            [CATALOG_COLORS_CACHED],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn apply_sync_page(
+        &mut self,
+        changes: &[RawChange],
+        next_cursor: i64,
+        alert: bool,
+        complete: bool,
+        refresh: &[String],
+        generation: Option<&str>,
+    ) -> Result<usize> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::ensure_generation(&tx, generation)?;
+        let cursor = tx
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'cursor'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        let mut applied = 0;
+        for c in changes.iter().filter(|change| change.seq > cursor) {
+            let fresh_booking = alert
+                && c.entity == "appointment" && c.op == "upsert"
+                && c.data.as_ref().is_some_and(|data|
+                    data["status"] == "booked"
+                        && data["version"].as_i64() == Some(1)
+                        && data["importedFromBooksy"].as_bool() != Some(true)
+                        && data["visitGroupId"].is_null())
+                && !tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM appointment WHERE id=?1
+                       UNION ALL SELECT 1 FROM local_booking_confirmation WHERE appointment_id=?1
+                       UNION ALL SELECT 1 FROM outbox WHERE entity_id=?1 AND kind='appointment.create')",
+                    params![c.id], |row| row.get::<_, bool>(0),
+                )?;
             apply_change(&tx, c)?;
+            if fresh_booking {
+                tx.execute(
+                    "INSERT OR IGNORE INTO booking_notice (appointment_id) VALUES (?1)",
+                    params![c.id],
+                )?;
+            }
+            if c.entity == "appointment" {
+                tx.execute(
+                    "DELETE FROM local_booking_confirmation WHERE appointment_id=?1",
+                    params![c.id],
+                )?;
+            }
+            applied += 1;
+        }
+        tx.execute(
+            "DELETE FROM local_booking_confirmation WHERE applied_seq <= ?1",
+            params![next_cursor],
+        )?;
+        if alert {
+            tx.execute("DELETE FROM booking_notice WHERE id NOT IN (SELECT id FROM booking_notice ORDER BY id DESC LIMIT 12)",[])?;
+        }
+        if complete {
+            tx.execute(
+                "INSERT OR IGNORE INTO meta (key,value) VALUES ('calendar_snapshot_complete','1')",
+                [],
+            )?;
+            tx.execute("DELETE FROM meta WHERE key = ?1", [REBUILD_KEY])?;
+        }
+        if next_cursor > cursor {
+            let staff_changed = changes
+                .iter()
+                .any(|change| change.seq > cursor && change.entity == "staff");
+            let review_dependencies_changed = changes
+                .iter()
+                .any(|change| matches!(change.entity.as_str(), "appointment" | "client" | "staff"));
+            for topic in refresh
+                .iter()
+                .map(String::as_str)
+                .chain(review_dependencies_changed.then_some(crate::reviews::LIVE_TOPIC))
+                .chain(staff_changed.then_some(STAFF_DIRECTORY_TOPIC))
+            {
+                if matches!(
+                    topic,
+                    "commerce"
+                        | "waitlist"
+                        | "inbox"
+                        | STAFF_DIRECTORY_TOPIC
+                        | crate::reviews::LIVE_TOPIC
+                ) {
+                    tx.execute(
+                        "INSERT INTO meta (key, value) VALUES (?1, ?2)
+                         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                        params![format!("live_view:{topic}"), next_cursor.to_string()],
+                    )?;
+                }
+            }
         }
         tx.execute(
             "INSERT INTO meta (key, value) VALUES ('cursor', ?1)
@@ -321,19 +593,170 @@ impl Store {
             params![next_cursor.to_string()],
         )?;
         tx.commit()?;
-        Ok(changes.len())
+        Ok(applied)
     }
 
     /// Drops the mirror and the cursor (cursor ahead of the server, ADR 0007). The outbox, the
     /// open conflicts and the device id are kept: they are the user's work.
     pub fn reset_replica(&mut self) -> Result<()> {
-        let tx = self.conn.transaction()?;
+        self.reset_replica_in(None)
+    }
+
+    pub(crate) fn reset_replica_in(&mut self, generation: Option<&str>) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::ensure_generation(&tx, generation)?;
+        Self::clear_replica(&tx)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Keep work from a different history for manual review, without ever replaying it there.
+    pub(crate) fn switch_replica_generation(
+        &mut self,
+        expected: &str,
+        generation: &str,
+    ) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::ensure_generation(&tx, Some(expected))?;
+        tx.execute(
+            "UPDATE conflict SET reason = ?1 WHERE resolved_at IS NULL",
+            [RESTORED_HISTORY],
+        )?;
+        tx.execute(
+            "INSERT INTO conflict (mutation_id, kind, entity_id, payload, reason, message, created_at)
+             SELECT mutation_id, kind, entity_id, payload, ?1,
+                    'Review this change against the restored calendar', created_at
+             FROM outbox ORDER BY seq ON CONFLICT(mutation_id) DO NOTHING",
+            [RESTORED_HISTORY],
+        )?;
+        tx.execute("DELETE FROM outbox", [])?;
+        tx.execute("DELETE FROM booking_notice", [])?;
+        Self::clear_replica(&tx)?;
+        tx.execute(
+            "INSERT INTO meta (key, value) VALUES (?1, ?2), (?3, '1')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [GENERATION_KEY, generation, REBUILD_KEY],
+        )?;
+        tx.commit()?;
+        self.reviewed_generation = generation.to_owned();
+        Ok(())
+    }
+
+    fn clear_replica(tx: &Transaction) -> Result<()> {
         for t in MIRROR_TABLES {
             tx.execute(&format!("DELETE FROM {t}"), [])?;
         }
-        tx.execute("DELETE FROM meta WHERE key = 'cursor'", [])?;
-        tx.commit()?;
+        tx.execute(
+            "DELETE FROM meta WHERE key IN ('cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','desk_waitlist',?1) OR key LIKE 'live_view:%'",
+            [CATALOG_COLORS_CACHED],
+        )?;
+        tx.execute("DELETE FROM local_booking_confirmation", [])?;
         Ok(())
+    }
+
+    pub fn client_directory_enabled(&self) -> Result<bool> {
+        Ok(self.get_meta("client_directory")?.as_deref() == Some("allowed"))
+    }
+
+    pub(crate) fn apply_visibility_scopes(
+        &mut self,
+        directory: Option<bool>,
+        calendar: Option<&str>,
+        generation: &str,
+    ) -> Result<bool> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::ensure_generation(&tx, Some(generation))?;
+        let directory = directory.map(|allowed| if allowed { "allowed" } else { "denied" });
+        let mut changes = Vec::new();
+        for (key, scope) in [
+            ("client_directory", directory),
+            ("calendar_scope", calendar),
+        ] {
+            if let Some(scope) = scope
+                && Self::meta_at(&tx, key)?.as_deref() != Some(scope)
+            {
+                changes.push((key, scope));
+            }
+        }
+        if changes.is_empty() {
+            return Ok(false);
+        }
+        let restart = Self::meta_at(&tx, "cursor")?.is_some_and(|cursor| cursor != "0");
+        if restart {
+            Self::clear_replica(&tx)?;
+        }
+        for (key, scope) in changes {
+            tx.execute(
+                "INSERT INTO meta(key,value) VALUES(?1,?2)
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                [key, scope],
+            )?;
+        }
+        tx.commit()?;
+        Ok(restart)
+    }
+
+    pub fn booking_notice_head(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row("SELECT coalesce(max(id),0) FROM booking_notice", [], |r| {
+                r.get(0)
+            })?)
+    }
+
+    pub fn calendar_inbox_cache(&self, archived: bool) -> Result<Option<CalendarInbox>> {
+        self.get_meta(inbox_key(archived))?
+            .map(|raw| serde_json::from_str(&raw).map_err(CoreError::from))
+            .transpose()
+    }
+
+    pub fn cache_calendar_inbox(&self, archived: bool, inbox: &CalendarInbox) -> Result<()> {
+        self.set_meta(inbox_key(archived), &serde_json::to_string(inbox)?)
+    }
+
+    pub fn clear_calendar_inbox_cache(&self) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM meta WHERE key IN ('calendar_inbox_archived','calendar_inbox_active')",
+            [],
+        )?;
+        Ok(())
+    }
+
+    pub fn waitlist_cache(&self) -> Result<Option<crate::waitlist::WaitlistPage>> {
+        self.get_meta("desk_waitlist")?
+            .map(|raw| serde_json::from_str(&raw).map_err(CoreError::from))
+            .transpose()
+    }
+
+    pub fn cache_waitlist(&self, page: &crate::waitlist::WaitlistPage) -> Result<()> {
+        self.set_meta("desk_waitlist", &serde_json::to_string(page)?)
+    }
+
+    pub fn clear_waitlist_cache(&self) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM meta WHERE key = 'desk_waitlist'", [])?;
+        Ok(())
+    }
+
+    pub fn booking_notices_after(&self, after: i64) -> Result<Vec<(i64, Appointment)>> {
+        let mut query = self.conn.prepare(
+            "SELECT n.id,a.json FROM booking_notice n JOIN appointment a ON a.id=n.appointment_id
+             WHERE n.id>?1 AND a.status='booked' ORDER BY n.id DESC LIMIT 3",
+        )?;
+        let rows = query.query_map(params![after], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })?;
+        rows.map(|row| {
+            let (id, json) = row?;
+            Ok((id, serde_json::from_str(&json)?))
+        })
+        .collect()
     }
 
     fn rows<T: DeserializeOwned>(&self, sql: &str) -> Result<Vec<T>> {
@@ -345,8 +768,13 @@ impl Store {
     }
 
     pub fn staff(&self) -> Result<Vec<Staff>> {
+        let mut staff = self.staff_including_inactive()?;
+        staff.retain(|member| member.active);
+        Ok(staff)
+    }
+
+    pub fn staff_including_inactive(&self) -> Result<Vec<Staff>> {
         let mut v: Vec<Staff> = self.rows("SELECT json FROM staff")?;
-        v.retain(|s| s.active);
         v.sort_by(|a, b| {
             a.display_name
                 .to_lowercase()
@@ -388,6 +816,25 @@ impl Store {
 
     pub fn date_shifts(&self) -> Result<Vec<DateShift>> {
         self.rows("SELECT json FROM date_shift ORDER BY date,staff_id,id")
+    }
+
+    pub(crate) fn date_shifts_between(&self, from: &str, until: &str) -> Result<Vec<DateShift>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT json FROM date_shift WHERE date >= ?1 AND date < ?2 ORDER BY date,staff_id,id",
+        )?;
+        let raw = stmt
+            .query_map(params![from, until], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        raw.iter()
+            .map(|json| Ok(serde_json::from_str(json)?))
+            .collect()
+    }
+
+    pub(crate) fn read_snapshot<T>(&self, read: impl FnOnce(&Self) -> Result<T>) -> Result<T> {
+        let snapshot = self.conn.unchecked_transaction()?;
+        let value = read(self)?;
+        snapshot.commit()?;
+        Ok(value)
     }
 
     pub fn time_off_between(&self, from_ms: i64, to_ms: i64) -> Result<Vec<TimeOff>> {
@@ -432,22 +879,77 @@ impl Store {
         raw.iter().map(|j| Ok(serde_json::from_str(j)?)).collect()
     }
 
+    pub fn client_history(&self, id: &str) -> Result<Vec<Appointment>> {
+        if !self.client_directory_enabled()? {
+            return Ok(vec![]);
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT json FROM appointment WHERE json_extract(json, '$.clientId') IN (
+                SELECT ?1 UNION ALL
+                SELECT id FROM client WHERE json_extract(json, '$.mergedIntoId') = ?1
+             ) ORDER BY starts_at_ms DESC, id LIMIT 25",
+        )?;
+        let rows = stmt
+            .query_map([id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.iter()
+            .map(|row| Ok(serde_json::from_str(row)?))
+            .collect()
+    }
+
     /// Queues a mutation. The id and `createdAt` are fixed here, at the moment the user acts,
     /// and reused verbatim on every resend.
     pub fn enqueue(&mut self, kind: &str, entity_id: &str, payload: Value) -> Result<OutboxEntry> {
+        self.enqueue_with_timestamp(kind, entity_id, payload, now_iso())
+    }
+
+    /// Chained timestamp-checked changes must remain ordered even in the same millisecond.
+    pub(crate) fn enqueue_after(
+        &mut self,
+        kind: &str,
+        entity_id: &str,
+        payload: Value,
+        previous: chrono::DateTime<Utc>,
+    ) -> Result<OutboxEntry> {
+        let timestamp = Utc::now().max(previous + chrono::Duration::milliseconds(1));
+        self.enqueue_with_timestamp(
+            kind,
+            entity_id,
+            payload,
+            timestamp.to_rfc3339_opts(SecondsFormat::Millis, true),
+        )
+    }
+
+    fn enqueue_with_timestamp(
+        &mut self,
+        kind: &str,
+        entity_id: &str,
+        payload: Value,
+        created_at: String,
+    ) -> Result<OutboxEntry> {
         let mutation_id = uuid::Uuid::now_v7().to_string();
-        let created_at = now_iso();
-        self.conn.execute(
+        let inserted = self.conn.execute(
             "INSERT INTO outbox (mutation_id, created_at, kind, entity_id, payload)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+             SELECT ?1, ?2, ?3, ?4, ?5
+             WHERE coalesce((SELECT value FROM meta WHERE key = ?6), ?7) = ?8
+               AND NOT EXISTS (SELECT 1 FROM meta WHERE key = ?9)",
             params![
                 mutation_id,
                 created_at,
                 kind,
                 entity_id,
-                serde_json::to_string(&payload)?
+                serde_json::to_string(&payload)?,
+                GENERATION_KEY,
+                INITIAL_GENERATION,
+                self.reviewed_generation,
+                REBUILD_KEY,
             ],
         )?;
+        if inserted == 0 {
+            return Err(CoreError::Invalid(
+                "Refresh the restored calendar before editing".into(),
+            ));
+        }
         let seq = self.conn.last_insert_rowid();
         Ok(OutboxEntry {
             seq,
@@ -461,8 +963,41 @@ impl Store {
         })
     }
 
+    pub fn appointment_edit_sync(&self, id: &str) -> Result<AppointmentEditSync> {
+        let (pending, rejected): (bool, bool) = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM outbox WHERE entity_id = ?1 AND kind LIKE 'appointment.%'),
+                    EXISTS(SELECT 1 FROM conflict WHERE entity_id = ?1 AND kind LIKE 'appointment.%'
+                           AND resolved_at IS NULL)",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        Ok(if pending {
+            AppointmentEditSync::Pending
+        } else if rejected {
+            AppointmentEditSync::NeedsResolution
+        } else {
+            AppointmentEditSync::Settled
+        })
+    }
+
     pub fn outbox(&self, limit: usize) -> Result<Vec<OutboxEntry>> {
-        let mut stmt = self.conn.prepare(&format!(
+        Self::outbox_at(&self.conn, limit)
+    }
+
+    pub(crate) fn push_snapshot(&self, limit: usize) -> Result<(String, Vec<OutboxEntry>)> {
+        let tx = self.conn.unchecked_transaction()?;
+        let generation = Self::generation_at(&tx)?;
+        let batch = if Self::meta_at(&tx, REBUILD_KEY)?.is_none() {
+            Self::outbox_at(&tx, limit)?
+        } else {
+            Vec::new()
+        };
+        tx.commit()?;
+        Ok((generation, batch))
+    }
+
+    fn outbox_at(conn: &Connection, limit: usize) -> Result<Vec<OutboxEntry>> {
+        let mut stmt = conn.prepare(&format!(
             "SELECT {OUTBOX_COLS} FROM outbox ORDER BY seq LIMIT ?1"
         ))?;
         Ok(stmt
@@ -485,6 +1020,15 @@ impl Store {
         sent: &[OutboxEntry],
         results: &[MutationResult],
     ) -> Result<PushApplied> {
+        self.apply_push_results_in(sent, results, None)
+    }
+
+    pub(crate) fn apply_push_results_in(
+        &mut self,
+        sent: &[OutboxEntry],
+        results: &[MutationResult],
+        generation: Option<&str>,
+    ) -> Result<PushApplied> {
         if results.len() != sent.len() {
             return Err(CoreError::Protocol(format!(
                 "push returned {} results for {} mutations",
@@ -501,11 +1045,21 @@ impl Store {
                 )));
             }
         }
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::ensure_generation(&tx, generation)?;
         let mut out = PushApplied::default();
         for (s, r) in sent.iter().zip(results) {
             match r {
-                MutationResult::Applied { .. } => {
+                MutationResult::Applied { applied_seq, .. } => {
+                    if s.kind == "appointment.create" {
+                        tx.execute(
+                            "INSERT OR REPLACE INTO local_booking_confirmation (appointment_id,applied_seq)
+                             VALUES (?1,?2)",
+                            params![s.entity_id, applied_seq],
+                        )?;
+                    }
                     tx.execute(
                         "DELETE FROM outbox WHERE mutation_id = ?1",
                         params![s.mutation_id],
@@ -519,26 +1073,21 @@ impl Store {
                         "DELETE FROM outbox WHERE mutation_id = ?1",
                         params![s.mutation_id],
                     )?;
-                    let open: i64 = tx.query_row(
-                        "SELECT COUNT(*) FROM conflict WHERE entity_id = ?1 AND resolved_at IS NULL",
-                        params![s.entity_id],
-                        |r| r.get(0),
+                    // A second rejected edit to the same appointment is still the user's work.
+                    tx.execute(
+                        "INSERT INTO conflict (mutation_id, kind, entity_id, payload, reason, message, created_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                         ON CONFLICT(mutation_id) DO NOTHING",
+                        params![
+                            s.mutation_id,
+                            s.kind,
+                            s.entity_id,
+                            serde_json::to_string(&s.payload)?,
+                            reason,
+                            message,
+                            now_iso()
+                        ],
                     )?;
-                    if open == 0 {
-                        tx.execute(
-                            "INSERT INTO conflict (mutation_id, kind, entity_id, payload, reason, message, created_at)
-                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                            params![
-                                s.mutation_id,
-                                s.kind,
-                                s.entity_id,
-                                serde_json::to_string(&s.payload)?,
-                                reason,
-                                message,
-                                now_iso()
-                            ],
-                        )?;
-                    }
                     out.rejected += 1;
                 }
                 MutationResult::Retry { message, .. } => {

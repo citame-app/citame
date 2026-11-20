@@ -1,5 +1,6 @@
 import {
   type GiftCard,
+  giftCardStatusSchema,
   permissionsFor,
   type StaffAccessPreset,
   type UserRole,
@@ -32,12 +33,13 @@ export function GiftCardsView({
 }) {
   const { t, locale } = useI18n();
   const [page, setPage] = useState(1);
+  const [status, setStatus] = useState<GiftCard["status"] | undefined>();
   const [search, setSearch] = useState("");
   const [creating, setCreating] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const cards = useQuery({
-    queryKey: ["gift-cards", mode, "list", page, search],
-    queryFn: () => api().giftCards.list(mode, page, search),
+    queryKey: ["gift-cards", mode, "list", page, search, status],
+    queryFn: () => api().giftCards.list(mode, page, search, status),
     refetchOnMount: "always",
     refetchInterval: 30_000,
   });
@@ -94,6 +96,21 @@ export function GiftCardsView({
               ? value.replace(/[ -]/g, "").slice(-4)
               : value,
           );
+          setPage(1);
+        }}
+      />
+      <SelectField
+        label={t("inventory.filter")}
+        value={status ?? ""}
+        options={[
+          { value: "", label: t("pos.allStatuses") },
+          ...giftCardStatusSchema.options.map((value) => ({
+            value,
+            label: t(`gift.status.${value}`),
+          })),
+        ]}
+        onChange={(v) => {
+          setStatus(v ? (v as GiftCard["status"]) : undefined);
           setPage(1);
         }}
       />

@@ -1,7 +1,7 @@
 import { expect, type Page, request as playwrightRequest, test } from "@playwright/test";
 import { RECURRING_FIXTURE as fixture } from "../../api/test/recurring-values";
 import { expectNoHorizontalScroll, STYLIST_A } from "./admin-helpers";
-import { expectNoSeriousA11yViolations, signInThroughUi } from "./helpers";
+import { expectNoSeriousA11yViolations, signInThroughUi, switchLocale } from "./helpers";
 
 const timezone = "America/Argentina/Buenos_Aires";
 const nextMonday = () => {
@@ -120,7 +120,7 @@ for (const scheme of ["light", "dark"] as const) {
         await expect(card.getByText("With Stylist A", { exact: true })).toBeVisible();
         const held = await (await owner.get("/api/me/waitlist")).json();
         expect(held.error).toBeDefined();
-        await page.getByRole("radio", { name: "Español", exact: true }).check({ force: true });
+        await switchLocale(page, "Español");
         await expect(
           page.getByRole("heading", { name: "Lista de espera", exact: true, level: 1 }),
         ).toBeVisible();
@@ -131,7 +131,7 @@ for (const scheme of ["light", "dark"] as const) {
           fullPage: true,
           animations: "disabled",
         });
-        await page.getByRole("radio", { name: "English", exact: true }).check({ force: true });
+        await switchLocale(page, "English");
         await card.getByRole("button", { name: "Review this offer", exact: true }).click();
         const review = page.getByRole("dialog", { name: "Review waitlist offer", exact: true });
         const accept = review.getByRole("button", {

@@ -11,13 +11,17 @@ export function adminHead(titleKey: TranslationKey) {
     const { locale, salon } = match.context;
     const t = createTranslator(locale);
     return {
-      meta: pageMeta({
-        title: t(titleKey),
-        description: t("admin.lead"),
-        siteName: salon.name,
-        locale,
-        noindex: true,
-      }),
+      meta: [
+        ...pageMeta({
+          title: t(titleKey),
+          description: t("admin.lead"),
+          siteName: salon.name,
+          locale,
+          noindex: true,
+        }),
+        { name: "page-type", content: "software" },
+        { name: "site-kind", content: "software" },
+      ],
     };
   };
 }

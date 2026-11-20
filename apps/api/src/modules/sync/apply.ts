@@ -22,6 +22,7 @@ import {
 } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
+import { lockCalendars } from "../../tx";
 import {
   createAppointment,
   getAppointmentOwnership,
@@ -115,7 +116,7 @@ export async function applyMutation(
   mutation: SyncMutation,
   ctx: ApplyContext,
 ): Promise<void> {
-  const actor = { userId: principal.userId };
+  const actor = { userId: principal.userId, role: principal.role };
   const now = ctx.now();
   const at = editTime(mutation.createdAt);
 
@@ -167,14 +168,14 @@ export async function applyMutation(
     }
     case "client.update": {
       authorizeClientAccess(principal);
-      const { id, ...changes } = mutation.payload;
+      const { id, expectedUpdatedAt, ...changes } = mutation.payload;
       const [current] = await db
         .select()
         .from(clientProfile)
         .where(and(eq(clientProfile.id, id), isNull(clientProfile.deletedAt)));
       if (!current) throw notFound("Client", id);
       assertNewer(current.updatedAt, at);
-      await updateClient(db, id, changes, actor);
+      await updateClient(db, id, changes, actor, expectedUpdatedAt);
       await db.update(clientProfile).set({ updatedAt: at }).where(eq(clientProfile.id, id));
       return;
     }
@@ -194,13 +195,20 @@ export async function applyMutation(
     }
     case "time_off.update":
     case "time_off.delete": {
-      const { id, staffId, ...changes } = mutation.payload;
+      const { id, staffId, expectedUpdatedAt, ...changes } = mutation.payload;
       authorizeTimeOffManage(principal, staffId);
+      await lockCalendars(db, [staffId]);
       const [current] = await db
         .select()
         .from(timeOff)
         .where(and(eq(timeOff.id, id), eq(timeOff.staffId, staffId), isNull(timeOff.deletedAt)));
       if (!current) throw notFound("Time off", id);
+      if (expectedUpdatedAt && Date.parse(expectedUpdatedAt) !== current.updatedAt.getTime()) {
+        throw new DomainError(
+          "version_conflict",
+          "The time off changed since this device last reviewed it",
+        );
+      }
       assertNewer(current.updatedAt, at);
       if (mutation.kind === "time_off.delete") await deleteTimeOff(db, staffId, id, actor, now);
       else await updateTimeOff(db, staffId, id, changes, actor, now);

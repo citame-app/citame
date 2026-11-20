@@ -13,9 +13,11 @@ export const giftCardPurchaseSchema = z
     idempotencyKey: idempotencyKeySchema,
   })
   .strict();
+export const giftCardStatusSchema = z.enum(["pending", "active", "void", "expired"]);
 export const giftCardQuerySchema = z.object({
   page: z.coerce.number().int().min(1).max(100000).default(1),
   search: z.string().trim().max(100).default(""),
+  status: giftCardStatusSchema.optional(),
 });
 export const giftCardSchema = z.object({
   id: idSchema,
@@ -27,7 +29,7 @@ export const giftCardSchema = z.object({
   reservedCents: moneyCentsSchema,
   availableCents: moneyCentsSchema,
   currency: z.literal("EUR"),
-  status: z.enum(["pending", "active", "void", "expired"]),
+  status: giftCardStatusSchema,
   codeLast4: z.string(),
   codeRevision: z.string(),
   expiresAt: instantSchema.nullable(),

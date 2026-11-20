@@ -1,0 +1,2 @@
+ALTER TABLE "appointment_service" ADD COLUMN "reviewed_price_cents" integer;--> statement-breakpoint
+ALTER TABLE "appointment_service" ADD CONSTRAINT "appointment_service_reviewed_price_valid" CHECK ("appointment_service"."reviewed_price_cents" is null or ("appointment_service"."source_unpriced" and "appointment_service"."currency" = 'EUR' and "appointment_service"."reviewed_price_cents" between 0 and 999999999));

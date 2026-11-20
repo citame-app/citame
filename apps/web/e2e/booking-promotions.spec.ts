@@ -6,6 +6,7 @@ import {
   pickFirstTime,
   pickProfessional,
   signInThroughUi,
+  switchLocale,
 } from "./helpers";
 
 for (const scheme of ["light", "dark"] as const)
@@ -197,7 +198,7 @@ for (const scheme of ["light", "dark"] as const)
           protection: { depositCents: 1875, policyVersion },
           reward: { code, appointmentTiming: { timing: { lastMinuteHours: 168 } } },
         });
-        await page.getByRole("radio", { name: "Español", exact: true }).check();
+        await switchLocale(page, "Español");
         await expectNoHorizontalScroll(page);
         await expectNoSeriousA11yViolations(page, `confirmed discounted deposit ${scheme}`);
         await page.screenshot({

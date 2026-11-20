@@ -14,7 +14,13 @@ import { requirePermission, requireRole } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
 import { acceptWaitlist } from "./accept";
-import { endWaitlist, joinWaitlist, listWaitlist, setWaitlistPolicy } from "./service";
+import {
+  endWaitlist,
+  joinWaitlist,
+  listImportedWaitlist,
+  listWaitlist,
+  setWaitlistPolicy,
+} from "./service";
 
 function entryActions(app: Hono<AppEnv>, { db, now = () => new Date() }: AppDeps) {
   return app
@@ -102,18 +108,24 @@ export function waitlistAdminRoutes(deps: AppDeps) {
           ),
         ),
       )
-      .get("/", async (c) =>
-        c.json(
-          await listWaitlist(
-            db,
-            c.get("principal"),
-            parseOrThrow(waitlistQuerySchema, c.req.query()),
-          ),
-        ),
-      )
+      .get("/", async (c) => {
+        const principal = c.get("principal");
+        const query = parseOrThrow(waitlistQuerySchema, c.req.query());
+        const [list, imported] = await Promise.all([
+          listWaitlist(db, principal, query),
+          listImportedWaitlist(db, principal, query),
+        ]);
+        return c.json({ ...list, ...(imported.length ? { imported } : {}) });
+      })
       .post("/", async (c) => {
-        const { clientId, ...input } = parseOrThrow(waitlistAdminInputSchema, await readJson(c));
-        return c.json(await joinWaitlist(db, input, c.get("principal"), now(), clientId), 201);
+        const { clientId, importedEntryId, ...input } = parseOrThrow(
+          waitlistAdminInputSchema,
+          await readJson(c),
+        );
+        return c.json(
+          await joinWaitlist(db, input, c.get("principal"), now(), clientId, importedEntryId),
+          201,
+        );
       }),
     deps,
   );

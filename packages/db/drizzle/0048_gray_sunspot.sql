@@ -1,0 +1,1 @@
+ALTER TABLE "appointment_service" ADD COLUMN "source_unpriced" boolean DEFAULT false NOT NULL;

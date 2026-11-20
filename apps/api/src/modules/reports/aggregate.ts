@@ -8,6 +8,7 @@ export interface DayStaffStatusRow {
   count: number;
   /** Price snapshots of completed appointments; zero for every other status. */
   revenueCents: number;
+  unpricedServices?: number;
 }
 
 export interface ServiceRow {
@@ -15,6 +16,7 @@ export interface ServiceRow {
   name: string;
   count: number;
   revenueCents: number;
+  unpricedServices?: number;
 }
 
 export interface AggregateInput {
@@ -35,6 +37,7 @@ interface Slice {
   appointments: number;
   byStatus: StatusCounts;
   revenueCents: number;
+  unpricedServices?: number;
 }
 
 const emptySlice = (): Slice => ({ appointments: 0, byStatus: emptyCounts(), revenueCents: 0 });
@@ -43,6 +46,8 @@ function add(slice: Slice, row: DayStaffStatusRow) {
   slice.appointments += row.count;
   slice.byStatus[row.status] += row.count;
   slice.revenueCents += row.revenueCents;
+  if (row.unpricedServices)
+    slice.unpricedServices = (slice.unpricedServices ?? 0) + row.unpricedServices;
 }
 
 /**

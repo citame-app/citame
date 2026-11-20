@@ -1,9 +1,7 @@
 export const commonEn = {
   "admin.title": "Dashboard",
   "admin.lead": "Run the salon day to day: calendar, clients, services and reports.",
-  "admin.welcome": "Signed in as {name}",
   "admin.nav.label": "Dashboard sections",
-  "admin.nav.today": "Today",
   "admin.nav.calendar": "Calendar",
   "admin.nav.clients": "Clients",
   "admin.nav.services": "Services",
@@ -74,9 +72,7 @@ export const commonEn = {
 export const commonEsAR: Record<keyof typeof commonEn, string> = {
   "admin.title": "Panel",
   "admin.lead": "Gestiona el día a día del salón: agenda, clientes, servicios e informes.",
-  "admin.welcome": "Sesión iniciada como {name}",
   "admin.nav.label": "Secciones del panel",
-  "admin.nav.today": "Hoy",
   "admin.nav.calendar": "Agenda",
   "admin.nav.clients": "Clientes",
   "admin.nav.services": "Servicios",

@@ -19,7 +19,12 @@ test("SKUs normalize consistently and unknown cost differs from a known zero cos
   expect(createProductSchema.parse({ ...value, costCents: 0 }).costCents).toBe(0);
 });
 test("physical consumption is positive but an inventory count can explicitly be zero", () => {
-  const base = { version: 1, reason: "Physical check", idempotencyKey: "stock-test-key" };
+  const base = {
+    version: 1,
+    reason: "Physical check",
+    idempotencyKey: "stock-test-key",
+    generation: "initial",
+  };
   expect(
     stockMovementInputSchema.safeParse({ ...base, kind: "consume", quantity: 0 }).success,
   ).toBe(false);

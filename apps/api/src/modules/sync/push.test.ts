@@ -61,6 +61,49 @@ const rows = async <T>(query: ReturnType<typeof sql>) =>
   (await t.db.execute(query)) as unknown as T[];
 
 describe("authorization and envelope", () => {
+  test("a restored generation rejects legacy and stale batches before writing or recording them", async () => {
+    const restored = await setupApiTest({
+      dbSuffix: "sync_recovery",
+      env: { SYNC_REPLICA_GENERATION: "restored-20261118" },
+    });
+    try {
+      await restored.reset();
+      const fixtures = await seedFixtures(restored.db);
+      const operator = await actor(restored, "owner", "recovery@example.com");
+      const page = await pull(restored, operator);
+      expect(page.generation).toBe("restored-20261118");
+      const mutations = [
+        mutation("appointment.create", {
+          id: uuid(),
+          staffId: fixtures.anaId,
+          clientId: fixtures.clientId,
+          serviceIds: [fixtures.haircutId],
+          startsAt: MONDAY_0900,
+        }),
+      ];
+      const send = (generation?: string) =>
+        json(
+          restored.app,
+          "/sync/push",
+          "POST",
+          { deviceId: "offline", generation, mutations },
+          operator.cookie,
+        );
+      for (const generation of [undefined, "initial", "another-restore"]) {
+        const rejected = await send(generation);
+        expect(rejected.status).toBe(409);
+        expect(await errorCodeOf(rejected)).toBe("sync_generation_changed");
+      }
+      expect(await restored.db.select().from(appointment)).toHaveLength(0);
+      expect(await restored.db.select().from(syncMutation)).toHaveLength(0);
+      const accepted = await send(page.generation);
+      expect(accepted.status).toBe(200);
+      expect(await restored.db.select().from(appointment)).toHaveLength(1);
+    } finally {
+      await restored.close();
+    }
+  });
+
   test("anonymous is 401 and the client role is 403", async () => {
     expect((await push(t, null, [createAppt()])).status).toBe(401);
     const denied = await push(t, client, [createAppt()]);
@@ -410,6 +453,30 @@ describe("clients and last-writer-wins", () => {
     const { body } = await push(t, ana, [stale]);
     expect(body.results[0]).toMatchObject({ status: "rejected", reason: "conflict" });
     expect((await clientRow(id))?.notes).toBe("web edit");
+  });
+
+  test("an offline contact edit cannot overwrite a newer contact state it never reviewed", async () => {
+    const id = f.clientId;
+    const baseline = ago(3_600_000);
+    await setUpdatedAt(id, baseline);
+    const first = await push(t, ana, [
+      mutation(
+        "client.update",
+        { id, expectedUpdatedAt: baseline, notes: "Reviewed edit" },
+        { createdAt: ago(120_000) },
+      ),
+    ]);
+    expect(first.body.results[0]?.status).toBe("applied");
+
+    const second = await push(t, bea, [
+      mutation(
+        "client.update",
+        { id, expectedUpdatedAt: baseline, notes: "Unreviewed edit from a later clock" },
+        { createdAt: ago(30_000) },
+      ),
+    ]);
+    expect(second.body.results[0]).toMatchObject({ status: "rejected", reason: "conflict" });
+    expect((await clientRow(id))?.notes).toBe("Reviewed edit");
   });
 
   test("two devices editing offline: the later edit wins regardless of arrival order", async () => {

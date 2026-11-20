@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { expectNoHorizontalScroll, OWNER_EMAIL, signInAs } from "./admin-helpers";
 import { expectNoSeriousA11yViolations } from "./helpers";
+import { addCustomItem, closeReceipt, reviewReceipt } from "./pos-helpers";
 
 for (const scheme of ["light", "dark"] as const) {
   test.describe(`gift cards — ${scheme}`, () => {
@@ -56,9 +57,8 @@ for (const scheme of ["light", "dark"] as const) {
       await expectNoSeriousA11yViolations(page, `gift voucher ${scheme}`);
       await page.getByRole("button", { name: "Back to sales", exact: true }).click();
       await page.getByRole("button", { name: "New sale", exact: true }).click();
-      await page.getByLabel("Item or service", { exact: true }).fill(`Gift redemption ${label}`);
-      await page.getByLabel("Price (EUR)", { exact: true }).fill("20");
-      await page.getByRole("button", { name: "Create checkout", exact: true }).click();
+      await addCustomItem(page, `Gift redemption ${label}`, "20");
+      await reviewReceipt(page);
       const receipt = page.getByRole("region", { name: "Receipt", exact: true });
       await receipt.getByLabel("Payment method", { exact: true }).selectOption("gift_card");
       await receipt.getByLabel("Gift card code", { exact: true }).fill(code);
@@ -73,6 +73,7 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(
         receipt.getByRole("status").filter({ hasText: /^Partially refunded$/ }),
       ).toBeVisible();
+      await closeReceipt(page);
       await page.getByRole("button", { name: "Gift cards & rewards", exact: true }).click();
       await page.getByLabel("Gift card code", { exact: true }).fill(code);
       await page.getByRole("button", { name: "Check gift balance", exact: true }).click();

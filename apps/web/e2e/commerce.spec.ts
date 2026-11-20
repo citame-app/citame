@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { asOwner, expectNoHorizontalScroll, OWNER_EMAIL, signInAs } from "./admin-helpers";
 import { expectNoSeriousA11yViolations } from "./helpers";
+import { addCustomItem, closeReceipt, reviewReceipt } from "./pos-helpers";
 
 for (const scheme of ["light", "dark"] as const) {
   test.describe(`checkout and register — ${scheme}`, () => {
@@ -23,15 +24,16 @@ for (const scheme of ["light", "dark"] as const) {
         await owner.dispose();
       }
       await signInAs(page, OWNER_EMAIL, "/admin/commerce");
+      await page.getByRole("button", { name: "Cash registers", exact: true }).click();
       await page.getByLabel("Opening cash", { exact: true }).fill("50.00");
       await page.getByRole("button", { name: "Open register", exact: true }).click();
       await expect(page.getByText("The cash register is open", { exact: true })).toBeVisible();
       await page.getByRole("button", { name: "New sale", exact: true }).click();
       const label = `Checkout ${crypto.randomUUID()}`;
-      await page.getByLabel("Item or service", { exact: true }).fill(label);
-      await page.getByLabel("Price (EUR)", { exact: true }).fill("25.00");
-      await page.getByLabel("Tip", { exact: true }).fill("1.50");
-      await page.getByRole("button", { name: "Create checkout", exact: true }).click();
+      await addCustomItem(page, label, "25.00");
+      await page.locator("summary").filter({ hasText: "Discount · Tip" }).click();
+      await page.getByLabel("Tip (EUR)", { exact: true }).fill("1.50");
+      await reviewReceipt(page);
       const receipt = page.getByRole("region", { name: "Receipt", exact: true });
       await expect(receipt.getByText(label)).toBeVisible();
       await receipt.getByLabel("Amount", { exact: true }).fill("12.50");
@@ -55,9 +57,12 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(receipt.getByText("Refund recorded", { exact: true })).toBeVisible();
       await expectNoHorizontalScroll(page);
       await expectNoSeriousA11yViolations(page, `commerce ${scheme}`);
-      await page.getByLabel("Counted cash", { exact: true }).fill("57.00");
-      await page.getByRole("button", { name: "Close and reconcile", exact: true }).click();
+      await closeReceipt(page);
+      await page.getByRole("button", { name: "Cash registers", exact: true }).click();
       const register = page.getByRole("region", { name: "Cash register", exact: true });
+      await expect(register.getByText("€57.50", { exact: true })).toBeVisible();
+      await register.getByLabel("Counted cash", { exact: true }).fill("57.00");
+      await register.getByRole("button", { name: "Close and reconcile", exact: true }).click();
       await expect(
         register.getByText("The cash register is closed", { exact: true }),
       ).toBeVisible();

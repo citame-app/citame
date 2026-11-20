@@ -1,7 +1,24 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
-import { checkoutSchema } from "@sob/contracts";
-import { appointment, appointmentService } from "@sob/db";
-import { sql } from "drizzle-orm";
+import {
+  calendarResponseSchema,
+  checkoutSchema,
+  importedSettlementResponseSchema,
+  syncPullResponseSchema,
+  unpaidAppointmentsSchema,
+} from "@sob/contracts";
+import {
+  appointment,
+  appointmentContext,
+  appointmentService,
+  auditLog,
+  checkoutPayment,
+  checkout as checkoutTable,
+  clientProfile,
+  service,
+  serviceAddon,
+  staffProfile,
+} from "@sob/db";
+import { eq, sql } from "drizzle-orm";
 import {
   type Actor,
   actor,
@@ -116,6 +133,393 @@ beforeEach(async () => {
     priceCents: 10000,
     currency: "EUR",
   });
+});
+
+test("a Booksy invoice on an existing checkout freezes further collections without rewriting payments", async () => {
+  const sale = await checkout();
+  expect((await pay(sale.id, "external_card", 1000)).status).toBe(201);
+  await t.db.insert(appointmentContext).values({
+    appointmentId,
+    servicePosition: 0,
+    source: "booksy",
+    sourceRef: "source-line-invoice",
+    invoiced: true,
+  });
+  const blocked = await pay(sale.id, "external_card", 9000);
+  expect(blocked.status).toBe(409);
+  const existing = checkoutSchema.parse(
+    await (await call(owner, `/admin/commerce/checkouts/${sale.id}`)).json(),
+  );
+  expect(existing.paidCents).toBe(1000);
+  expect(
+    (
+      await call(
+        owner,
+        `/admin/commerce/appointments/${appointmentId}/imported-settlement`,
+        "PUT",
+        {
+          appointmentVersion: 1,
+          amountCents: 10000,
+          reference: "Original external receipt",
+        },
+      )
+    ).status,
+  ).toBe(409);
+  const unpaid = await call(
+    owner,
+    "/admin/commerce/unpaid?from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z",
+  );
+  expect(await unpaid.json()).toMatchObject({
+    appointments: [],
+    billingReview: [{ id: appointmentId, reasons: ["invoiced_in_booksy"] }],
+  });
+});
+
+test("a Booksy charge indicator prevents a duplicate appointment checkout", async () => {
+  await t.db.insert(appointmentContext).values({
+    appointmentId,
+    servicePosition: 0,
+    source: "booksy",
+    sourceRef: "source-line-paid",
+    paid: true,
+    invoiced: true,
+    internalNote: "Private billing note",
+  });
+  const result = await call(owner, "/admin/commerce/checkouts", "POST", {
+    appointmentId,
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(result.status).toBe(409);
+  const review = await call(
+    owner,
+    "/admin/commerce/unpaid?from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z",
+  );
+  const body = await review.json();
+  expect(body).toMatchObject({
+    appointments: [],
+    billingReview: [{ id: appointmentId, reasons: ["paid_in_booksy", "invoiced_in_booksy"] }],
+  });
+  expect(JSON.stringify(body)).not.toContain("Private billing note");
+});
+
+test("the owner can reconcile a full Booksy settlement without a receipt or a second charge", async () => {
+  const path = `/admin/commerce/appointments/${appointmentId}/imported-settlement`;
+  const input = {
+    appointmentVersion: 1,
+    amountCents: 10000,
+    reference: "Private original receipt",
+  };
+  expect((await call(owner, path, "PUT", input)).status).toBe(409);
+  await t.db.insert(appointmentContext).values({
+    appointmentId,
+    servicePosition: 0,
+    source: "booksy",
+    sourceRef: "settlement-test",
+    invoiced: true,
+    paid: null,
+  });
+  expect((await call(staff, path, "PUT", input)).status).toBe(403);
+  expect((await call(owner, path, "PUT", { ...input, amountCents: 2000 })).status).toBe(400);
+  expect((await call(owner, path, "PUT", { ...input, appointmentVersion: 2 })).status).toBe(409);
+  const responses = await Promise.all([
+    call(owner, path, "PUT", input),
+    call(owner, path, "PUT", input),
+  ]);
+  const [first, retry] = await Promise.all(
+    responses.map(async (res) => {
+      expect(res.status, await res.clone().text()).toBe(200);
+      expect(res.headers.get("cache-control")).toBe("private, no-store");
+      return importedSettlementResponseSchema.parse(await res.json());
+    }),
+  );
+  expect(first).toMatchObject({
+    settlement: { amountCents: 10000, reference: input.reference },
+  });
+  expect(retry).toEqual(first);
+  expect(
+    (await call(owner, path, "PUT", { ...input, reference: "Different evidence" })).status,
+  ).toBe(409);
+  expect((await call(staff, path)).status).toBe(403);
+  expect(await (await call(owner, path)).json()).toEqual(first);
+
+  const range = "?from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z";
+  const calendar = await (await call(owner, `/appointments/calendar${range}`)).text();
+  expect(JSON.parse(calendar)).toMatchObject({
+    appointments: [{ id: appointmentId, version: 2, externallySettled: true }],
+  });
+  expect(calendar).not.toContain(input.reference);
+  expect(await (await call(owner, `/admin/commerce/unpaid${range}`)).json()).toEqual({
+    appointments: [],
+  });
+  expect(
+    (
+      await call(owner, "/admin/commerce/checkouts", "POST", {
+        appointmentId,
+        idempotencyKey: crypto.randomUUID(),
+      })
+    ).status,
+  ).toBe(409);
+  expect(await t.db.select().from(checkoutTable)).toHaveLength(0);
+  expect(await t.db.select().from(checkoutPayment)).toHaveLength(0);
+  expect(await t.db.select().from(appointmentContext)).toMatchObject([
+    { invoiced: true, paid: null },
+  ]);
+  await t.db.delete(appointmentContext).where(eq(appointmentContext.appointmentId, appointmentId));
+  expect(
+    (
+      await call(owner, "/admin/commerce/checkouts", "POST", {
+        appointmentId,
+        idempotencyKey: crypto.randomUUID(),
+      })
+    ).status,
+  ).toBe(409);
+  const audit = await t.db
+    .select()
+    .from(auditLog)
+    .where(eq(auditLog.action, "commerce.imported_settlement_recorded"));
+  expect(audit).toHaveLength(1);
+});
+
+test("a verified Booksy part-payment leaves only the outstanding balance collectible", async () => {
+  await t.db.insert(appointmentContext).values({
+    appointmentId,
+    servicePosition: 0,
+    source: "booksy",
+    sourceRef: "synthetic-partial-payment",
+    paid: true,
+    invoiced: true,
+  });
+  const readSync = async (since: number) =>
+    syncPullResponseSchema.parse(
+      await (await call(owner, `/sync/pull?since=${since}&limit=500`)).json(),
+    );
+  const initial = await readSync(0);
+  expect(initial.changes.find(({ id }) => id === appointmentId)?.data).toMatchObject({
+    billingReviewReasons: ["paid_in_booksy", "invoiced_in_booksy"],
+    serviceBadges: [{ invoiced: true, paid: true, billingSource: "booksy" }],
+  });
+  const path = `/admin/commerce/appointments/${appointmentId}/imported-partial-payment`;
+  const input = {
+    appointmentVersion: 1,
+    amountCents: 3500,
+    reference: "Private installment receipt",
+  };
+  expect((await call(staff, path)).status).toBe(403);
+  const preview = await call(owner, path);
+  expect(preview.headers.get("cache-control")).toBe("private, no-store");
+  expect(await preview.json()).toEqual({ appointmentVersion: 1, originalTotalCents: 10000 });
+  expect((await call(staff, path, "PUT", input)).status).toBe(403);
+  expect((await call(owner, path, "PUT", { ...input, amountCents: 10000 })).status).toBe(400);
+  const [confirmation, retry] = await Promise.all([
+    call(owner, path, "PUT", input),
+    call(owner, path, "PUT", input),
+  ]);
+  expect(confirmation.status, await confirmation.clone().text()).toBe(200);
+  expect(retry.status).toBe(200);
+  const externalBalance = { paidInBooksyCents: 3500, dueInCitameCents: 6500 };
+  expect(await confirmation.json()).toEqual({ appointmentVersion: 2, externalBalance });
+  expect(await (await call(owner, path)).json()).toEqual({
+    appointmentVersion: 2,
+    externalBalance,
+  });
+  expect(await t.db.select().from(checkoutPayment)).toHaveLength(0);
+  expect(await t.db.select().from(checkoutTable)).toHaveLength(0);
+  expect((await call(owner, path, "PUT", { ...input, amountCents: 4000 })).status).toBe(409);
+  const range = "?from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z";
+  const unpaid = await (await call(owner, `/admin/commerce/unpaid${range}`)).text();
+  expect(JSON.parse(unpaid)).toMatchObject({
+    appointments: [{ id: appointmentId, externalBalance }],
+  });
+  expect(unpaid).not.toContain(input.reference);
+  const calendar = async () =>
+    calendarResponseSchema
+      .parse(await (await call(owner, `/appointments/calendar${range}`)).json())
+      .appointments.find(({ id }) => id === appointmentId);
+  const expectedPartial = {
+    externalBalance,
+    serviceBadges: [{ invoiced: true, paid: false, billingSource: "booksy" }],
+  };
+  const webPartial = await calendar();
+  expect(webPartial).toMatchObject(expectedPartial);
+  expect(webPartial?.billingReviewReasons).toBeUndefined();
+  const review = await readSync(initial.nextCursor);
+  const synced = review.changes.find(({ id }) => id === appointmentId)?.data;
+  expect(synced).toMatchObject(expectedPartial);
+  expect(synced).not.toHaveProperty("billingReviewReasons");
+  expect(JSON.stringify(review)).not.toContain(input.reference);
+  const annotations = await call(owner, `/appointments/${appointmentId}/context`);
+  expect(await annotations.json()).toMatchObject({ rows: [{ paid: true, invoiced: true }] });
+
+  const backfill = await Bun.file(
+    new URL(
+      "../../../../../packages/db/drizzle/0076_sync_calendar_annotation_badges.sql",
+      import.meta.url,
+    ),
+  ).text();
+  await t.db.transaction(async (tx) => {
+    for (const statement of backfill.split("--> statement-breakpoint")) {
+      await tx.execute(sql.raw(statement.trim()));
+    }
+  });
+  const replayed = await readSync(review.nextCursor);
+  expect(replayed.changes.find(({ id }) => id === appointmentId)?.data).toEqual(synced);
+  expect(await t.db.select().from(checkoutPayment)).toHaveLength(0);
+  const discounted = await call(owner, "/admin/commerce/checkouts", "POST", {
+    appointmentId,
+    discountCents: 100,
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(discounted.status).toBe(400);
+  const sale = await checkout();
+  expect(sale).toMatchObject({
+    externalBalance,
+    lines: [{ kind: "external_balance", unitAmountCents: 6500 }],
+    totalCents: 6500,
+    balanceCents: 6500,
+    paidCents: 0,
+  });
+  expect((await pay(sale.id, "external_card", 10000)).status).toBe(409);
+  expect((await pay(sale.id, "external_card", 6500)).status).toBe(201);
+  const final = checkoutSchema.parse(
+    await (await call(owner, `/admin/commerce/checkouts/${sale.id}`)).json(),
+  );
+  expect(final).toMatchObject({ status: "paid", paidCents: 6500, balanceCents: 0 });
+  const recorded = {
+    externalBalance,
+    serviceBadges: [{ invoiced: true, paid: true, billingSource: "citame" }],
+  };
+  expect(await calendar()).toMatchObject(recorded);
+  const collected = (await readSync(replayed.nextCursor)).changes.find(
+    ({ id }) => id === appointmentId,
+  );
+  expect(collected?.data).toMatchObject(recorded);
+  expect(collected?.data).not.toHaveProperty("billingReviewReasons");
+  expect(await t.db.select().from(checkoutPayment)).toMatchObject([{ amountCents: 6500 }]);
+  expect(await (await call(owner, `/admin/commerce/unpaid${range}`)).json()).toEqual({
+    appointments: [],
+  });
+});
+
+test("a native imported service with no quoted amount is never checked out as free", async () => {
+  await t.db
+    .update(appointmentService)
+    .set({ sourceUnpriced: true, priceCents: 0 })
+    .where(eq(appointmentService.appointmentId, appointmentId));
+  const view = await call(
+    owner,
+    "/appointments/calendar?from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z",
+  );
+  expect(await view.json()).toMatchObject({
+    appointments: [
+      {
+        services: [{ sourceUnpriced: true }],
+        billingReviewReasons: ["unknown_amount"],
+      },
+    ],
+  });
+  const blocked = await call(owner, "/admin/commerce/checkouts", "POST", {
+    appointmentId,
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(blocked.status).toBe(409);
+  const review = await call(
+    owner,
+    "/admin/commerce/unpaid?from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z",
+  );
+  expect(await review.json()).toMatchObject({
+    appointments: [],
+    billingReview: [{ id: appointmentId, reasons: ["unknown_amount"] }],
+  });
+});
+
+test("an owner can verify an unknown price once without changing the original or creating a sale", async () => {
+  const [line] = await t.db
+    .update(appointmentService)
+    .set({ sourceUnpriced: true, priceCents: 0 })
+    .where(eq(appointmentService.appointmentId, appointmentId))
+    .returning();
+  const path = `/admin/commerce/appointments/${appointmentId}/imported-price`;
+  const input = {
+    appointmentVersion: 1,
+    reference: "Reviewed quote fixture",
+    lines: [{ id: line!.id, amountCents: 3650 }],
+  };
+  expect((await call(staff, path, "PUT", input)).status).toBe(403);
+  expect((await call(staff, path)).status).toBe(403);
+  const preview = await call(owner, path);
+  expect(preview.headers.get("cache-control")).toBe("private, no-store");
+  expect(await preview.json()).toMatchObject({ appointmentVersion: 1, lines: [{ id: line!.id }] });
+  expect((await call(owner, path, "PUT", { ...input, appointmentVersion: 2 })).status).toBe(409);
+  expect(
+    (
+      await call(owner, path, "PUT", {
+        ...input,
+        lines: [{ id: crypto.randomUUID(), amountCents: 3650 }],
+      })
+    ).status,
+  ).toBe(400);
+  const [first, retry] = await Promise.all([
+    call(owner, path, "PUT", input),
+    call(owner, path, "PUT", input),
+  ]);
+  expect(first.status, await first.clone().text()).toBe(200);
+  expect(retry.status, await retry.clone().text()).toBe(200);
+  expect((await call(owner, path)).status).toBe(409);
+  const changed = await call(owner, path, "PUT", {
+    ...input,
+    lines: [{ id: line!.id, amountCents: 5500 }],
+  });
+  expect(changed.status).toBe(409);
+  expect(await t.db.select().from(appointmentService)).toMatchObject([
+    { id: line!.id, priceCents: 0, sourceUnpriced: true, reviewedPriceCents: 3650 },
+  ]);
+  const audits = await t.db
+    .select()
+    .from(auditLog)
+    .where(eq(auditLog.action, "commerce.imported_price_reviewed"));
+  expect(audits).toHaveLength(1);
+  expect(audits[0]?.metadata.reference).toBe(input.reference);
+  expect(await t.db.select().from(checkoutTable)).toHaveLength(0);
+  const due = await call(
+    owner,
+    "/admin/commerce/unpaid?from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z",
+  );
+  expect(await due.json()).toMatchObject({
+    appointments: [{ id: appointmentId, version: 2, services: [{ priceCents: 3650 }] }],
+  });
+  expect(await checkout()).toMatchObject({ subtotalCents: 3650, paidCents: 0, status: "open" });
+});
+
+test("price verification cannot remove a Booksy billing hold or reprice a draft receipt", async () => {
+  const existing = await checkout();
+  const [line] = await t.db
+    .update(appointmentService)
+    .set({ sourceUnpriced: true, priceCents: 0 })
+    .where(eq(appointmentService.appointmentId, appointmentId))
+    .returning();
+  const path = `/admin/commerce/appointments/${appointmentId}/imported-price`;
+  const input = {
+    appointmentVersion: 1,
+    reference: "Reviewed quote fixture",
+    lines: [{ id: line!.id, amountCents: 3650 }],
+  };
+  expect((await call(owner, path)).status).toBe(409);
+  expect((await call(owner, path, "PUT", input)).status).toBe(409);
+  expect((await call(owner, `/admin/commerce/checkouts/${existing.id}/void`, "POST")).status).toBe(
+    200,
+  );
+  await t.db.insert(appointmentContext).values({
+    appointmentId,
+    servicePosition: 0,
+    source: "booksy",
+    sourceRef: "synthetic-invoice",
+    invoiced: true,
+  });
+  expect((await call(owner, path)).status).toBe(409);
+  expect((await call(owner, path, "PUT", input)).status).toBe(409);
+  expect(await t.db.select().from(appointmentService)).toMatchObject([
+    { reviewedPriceCents: null },
+  ]);
 });
 
 test("builds totals from immutable appointment snapshots, not a browser total", async () => {
@@ -254,6 +658,42 @@ test("cash sessions reconcile partial payments, movements, tips and refunds exac
     expectedCents: 9000,
     countedCents: 8900,
     differenceCents: -100,
+  });
+});
+
+test("reviewed cash commands replay against their original register and reject stale counts", async () => {
+  const base = "/admin/commerce/cash-sessions";
+  const open = { sessionId: crypto.randomUUID(), openingCents: 5000 };
+  const write = (path: string, input: object) => call(owner, path, "POST", input);
+  expect(await (await write(base, open)).json()).toMatchObject({ id: open.sessionId });
+  expect((await write(base, { ...open, openingCents: 50 })).status).toBe(409);
+  const deposit = {
+    sessionId: open.sessionId,
+    kind: "deposit",
+    amountCents: 1000,
+    reason: "Verified receipt",
+    idempotencyKey: crypto.randomUUID(),
+  };
+  const adjust = (input: object) => write(`${base}/adjust`, input);
+  expect(await (await adjust(deposit)).json()).toMatchObject({ expectedCents: 6000 });
+  const close = (reviewedExpectedCents: number) =>
+    write(`${base}/${open.sessionId}/close`, { reviewedExpectedCents, countedCents: 5900 });
+  expect((await close(5000)).status).toBe(409);
+  expect(await (await close(6000)).json()).toMatchObject({ differenceCents: -100 });
+  const next = { sessionId: crypto.randomUUID(), openingCents: 200 };
+  expect((await write(base, next)).status).toBe(201);
+  expect(await (await write(base, open)).json()).toMatchObject({
+    id: open.sessionId,
+    countedCents: 5900,
+  });
+  expect(await (await adjust(deposit)).json()).toMatchObject({
+    id: open.sessionId,
+    expectedCents: 6000,
+    movements: [{ amountCents: 1000 }],
+  });
+  expect((await adjust({ ...deposit, idempotencyKey: crypto.randomUUID() })).status).toBe(409);
+  expect(await (await call(owner, `${base}/current`)).json()).toMatchObject({
+    session: { id: next.sessionId, expectedCents: 200, movements: [] },
   });
 });
 
@@ -457,4 +897,200 @@ test("discount tax allocation stays within each line and uses exact integer rati
   });
   expect(pennies.status).toBe(201);
   expect(await pennies.json()).toMatchObject({ totalCents: 1, taxCents: 1 });
+});
+
+test("walk-in catalog services use canonical prices and do not create appointments", async () => {
+  await t.db
+    .update(service)
+    .set({ currency: "EUR", priceCents: 2500 })
+    .where(eq(service.id, f.haircutId));
+  const response = await call(owner, "/admin/commerce/checkouts", "POST", {
+    lines: [{ kind: "service", serviceId: f.haircutId, quantity: 2 }],
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(response.status, await response.clone().text()).toBe(201);
+  const order = checkoutSchema.parse(await response.json());
+  expect(order.appointmentId).toBeNull();
+  expect(order.totalCents).toBe(5000);
+  expect(order.lines[0]).toMatchObject({
+    kind: "service",
+    serviceId: f.haircutId,
+    description: "Haircut",
+    quantity: 2,
+    unitAmountCents: 2500,
+  });
+  const tampered = await call(owner, "/admin/commerce/checkouts", "POST", {
+    lines: [{ kind: "service", serviceId: f.haircutId, quantity: 1, unitAmountCents: 1 }],
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(tampered.status).toBe(400);
+});
+
+test("walk-in catalog services reject inactive, foreign-currency and incompatible extras", async () => {
+  const request = (serviceId: string) =>
+    call(owner, "/admin/commerce/checkouts", "POST", {
+      lines: [{ kind: "service", serviceId, quantity: 1 }],
+      idempotencyKey: crypto.randomUUID(),
+    });
+  expect((await request(f.haircutId)).status).toBe(400);
+  await t.db
+    .update(service)
+    .set({ currency: "EUR", active: false })
+    .where(eq(service.id, f.haircutId));
+  expect((await request(f.haircutId)).status).toBe(400);
+  await t.db.update(service).set({ active: true }).where(eq(service.id, f.haircutId));
+  const [extra] = await t.db
+    .insert(service)
+    .values({
+      name: "Extra",
+      catalogKind: "addon",
+      durationMinutes: 0,
+      priceCents: 500,
+      currency: "EUR",
+    })
+    .returning();
+  if (!extra) throw Error("Missing extra");
+  await t.db.insert(serviceAddon).values({ addonId: extra.id, serviceId: f.haircutId });
+  expect((await request(extra.id)).status).toBe(400);
+  const valid = await call(owner, "/admin/commerce/checkouts", "POST", {
+    lines: [
+      { kind: "service", serviceId: f.haircutId, quantity: 1 },
+      { kind: "service", serviceId: extra.id, quantity: 1 },
+    ],
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(valid.status, await valid.clone().text()).toBe(201);
+  expect(
+    (
+      await call(client, "/me/checkouts", "POST", {
+        lines: [{ kind: "service", serviceId: f.haircutId, quantity: 1 }],
+        idempotencyKey: crypto.randomUUID(),
+      })
+    ).status,
+  ).toBe(403);
+});
+
+test("transactions paginate, filter statuses and search receipt lines within the authorized scope", async () => {
+  const first = await checkout(owner);
+  await pay(first.id, "external_card", 10000);
+  await call(owner, "/admin/commerce/checkouts", "POST", {
+    lines: [{ kind: "custom", description: "Retail other", quantity: 1, unitAmountCents: 2000 }],
+    idempotencyKey: crypto.randomUUID(),
+  });
+  const page = await call(owner, "/admin/commerce/checkouts?page=2&pageSize=1");
+  const data = (await page.json()) as { total: number; checkouts: { id: string }[] };
+  expect(data.total).toBe(2);
+  expect(data.checkouts).toHaveLength(1);
+  const filtered = (await (
+    await call(owner, "/admin/commerce/checkouts?status=paid&method=external_card&search=Haircut")
+  ).json()) as { total: number; checkouts: { id: string }[] };
+  expect(filtered.total).toBe(1);
+  expect(filtered.checkouts[0]?.id).toBe(first.id);
+  expect(
+    (
+      await call(
+        owner,
+        "/admin/commerce/checkouts?from=2026-12-01T00:00:00Z&to=2026-11-01T00:00:00Z",
+      )
+    ).status,
+  ).toBe(400);
+});
+
+test("unpaid appointments stay settled beyond the latest hundred sales and respect staff scope", async () => {
+  const range = "/admin/commerce/unpaid?from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z";
+  const otherAppointment = await t.db
+    .insert(appointment)
+    .values({
+      staffId: f.beaId,
+      clientId: client.clientId!,
+      startsAt: new Date("2026-03-09T14:00:00Z"),
+      endsAt: new Date("2026-03-09T15:00:00Z"),
+    })
+    .returning();
+  expect((await call(client, range)).status).toBe(403);
+  const response = await call(staff, range);
+  expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+  const before = (await response.json()) as { appointments: { id: string }[] };
+  expect(before.appointments.map((row: { id: string }) => row.id)).toEqual([appointmentId]);
+  const sale = await checkout();
+  expect((await pay(sale.id, "external_card", 10000)).status).toBe(201);
+  await t.db.execute(
+    sql`update checkout set created_at=now()-interval '1 year' where id=${sale.id}`,
+  );
+  for (let index = 0; index < 101; index++) {
+    const res = await call(owner, "/admin/commerce/checkouts", "POST", {
+      lines: [
+        { kind: "custom", description: `Later sale ${index}`, quantity: 1, unitAmountCents: 100 },
+      ],
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(res.status).toBe(201);
+  }
+  const after = (await (await call(owner, range)).json()) as { appointments: { id: string }[] };
+  expect(after.appointments.map((row: { id: string }) => row.id)).toEqual([
+    otherAppointment[0]!.id,
+  ]);
+  expect(await (await call(staff, range)).json()).toMatchObject({ appointments: [] });
+});
+
+test("cashiers can collect an inactive professional's historic appointments without exposing other sales to staff", async () => {
+  const range = "?from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z";
+  await t.db.update(staffProfile).set({ active: false }).where(eq(staffProfile.id, f.anaId));
+
+  const calendar = calendarResponseSchema.parse(
+    await (await call(owner, `/appointments/calendar${range}`)).json(),
+  );
+  expect(calendar.staff.map((member) => member.id)).not.toContain(f.anaId);
+  expect(calendar.appointments).toEqual([]);
+  const archived = calendarResponseSchema.parse(
+    await (await call(owner, `/appointments/calendar${range}&staffIds=${f.anaId}`)).json(),
+  );
+  expect(archived.appointments.map((item) => item.id)).toEqual([appointmentId]);
+
+  const colleague = await actor(t, "staff", "colleague@commerce.test", { staffProfileId: f.beaId });
+  const unpaid = `/admin/commerce/unpaid${range}`;
+  const due = async (who: Actor) => {
+    const response = await call(who, unpaid);
+    expect(response.status).toBe(200);
+    return unpaidAppointmentsSchema.parse(await response.json());
+  };
+  expect((await due(owner)).appointments.map((item) => item.id)).toEqual([appointmentId]);
+  expect((await due(colleague)).appointments).toEqual([]);
+
+  await t.db
+    .update(appointmentService)
+    .set({ sourceUnpriced: true, priceCents: 0 })
+    .where(eq(appointmentService.appointmentId, appointmentId));
+  expect(await due(owner)).toMatchObject({
+    appointments: [],
+    billingReview: [{ id: appointmentId, staffId: f.anaId, reasons: ["unknown_amount"] }],
+  });
+  expect((await due(colleague)).billingReview ?? []).toEqual([]);
+  await t.db
+    .update(appointmentService)
+    .set({ reviewedPriceCents: 10000 })
+    .where(eq(appointmentService.appointmentId, appointmentId));
+
+  const sale = await checkout();
+  expect(sale.staffId).toBe(f.anaId);
+  expect((await pay(sale.id, "external_card", 10000)).status).toBe(201);
+  expect((await due(owner)).appointments).toEqual([]);
+});
+
+test("the selected profile discount is calculated by the server and clients cannot opt into operator pricing", async () => {
+  await t.db
+    .update(clientProfile)
+    .set({ contactDetails: { discountBasisPoints: 1250 } })
+    .where(eq(clientProfile.id, client.clientId!));
+  const receipt = await checkout(owner, { useClientDiscount: true });
+  expect(receipt).toMatchObject({ subtotalCents: 10000, discountCents: 1250, totalCents: 8750 });
+  expect(
+    (
+      await call(client, "/me/checkouts", "POST", {
+        appointmentId,
+        useClientDiscount: true,
+        idempotencyKey: crypto.randomUUID(),
+      })
+    ).status,
+  ).toBe(403);
 });

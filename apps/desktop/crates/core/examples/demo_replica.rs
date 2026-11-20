@@ -8,7 +8,10 @@
 use std::sync::{Arc, RwLock};
 
 use chrono::{Datelike, Duration, NaiveTime, TimeZone, Utc};
-use sob_core::auth::{AuthProvider, BetterAuthSession, Credentials, FileTokenStore, TokenStore};
+use sob_core::auth::{
+    AuthProvider, BetterAuthSession, Credentials, FileTokenStore, TokenStore, replica_path,
+    server_data_dir,
+};
 use sob_core::calendar::salon_tz;
 use sob_core::http::HttpTransport;
 use sob_core::ops::{self, NewAppointment};
@@ -29,12 +32,13 @@ fn main() {
             password: password.clone(),
         })
         .expect("sign in");
-    FileTokenStore::new(dir.join("session.json"))
+    FileTokenStore::new(server_data_dir(&dir, api).join("session.json"))
         .save(&session)
         .expect("save session");
+    let path = replica_path(&dir, api, &session);
     let handle = Arc::new(RwLock::new(Some(session)));
     let transport = HttpTransport::new(api, handle, auth);
-    let mut store = Store::open(&dir.join("replica.db")).expect("open replica");
+    let mut store = Store::open(&path).expect("open replica");
     sync::sync_cycle(&mut store, &transport).expect("first sync");
 
     let tz = salon_tz(&store).unwrap();

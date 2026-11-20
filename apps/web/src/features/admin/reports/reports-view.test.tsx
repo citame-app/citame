@@ -1,12 +1,23 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { ReportSummary } from "@sob/contracts";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderApp } from "../../../../test/render";
+import { clientGroupReportCsv, clientReportCsv } from "./client-report";
 import { ReportsView } from "./reports-view";
 
 const ANA = "0198f5a0-7b1c-7000-8000-000000000201";
 const realFetch = globalThis.fetch;
 const NOW = new Date("2026-03-18T15:00:00.000Z");
+const clientReport = {
+  from: "2026-02-17",
+  to: "2026-03-18",
+  totals: { newClients: 3, returningClients: 2 },
+  rows: [{ date: "2026-03-09", newClients: 3, returningClients: 2 }],
+  groups: [
+    { name: "vip", clients: 2 },
+    { name: "=group", clients: 1 },
+  ],
+};
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const slice = (completed: number, noShow: number, revenueCents: number) => ({
@@ -31,11 +42,35 @@ beforeEach(() => {
     ],
     topServices: [{ serviceId: null, name: "Haircut", count: 2, revenueCents: 2_500_000 }],
     perStaff: [{ staffId: ANA, displayName: "Ana", ...slice(2, 1, 2_500_000), noShowRate: 1 / 3 }],
+    appointmentBreakdown: {
+      hour: [{ key: "09:00", label: "09:00", ...slice(2, 1, 0) }],
+      service: [{ key: "haircut", label: "Haircut", ...slice(2, 1, 0) }],
+      category: [{ key: "hair", label: "Hair", ...slice(2, 1, 0) }],
+      addon: [],
+    },
   };
   globalThis.fetch = mock(async (input: string | URL | Request) => {
     const url = new URL(String(input), "http://localhost");
     urls.push(url.pathname + url.search);
     if (url.pathname === "/api/admin/reports/summary") return json(report);
+    if (url.pathname === "/api/admin/reports/clients") return json(clientReport);
+    if (url.pathname === "/api/admin/reports/outcomes")
+      return json({
+        timezone: report.timezone,
+        total: 1,
+        page: 1,
+        pageSize: 25,
+        rows: [
+          {
+            id: ANA,
+            startsAt: "2026-03-09T13:00:00.000000Z",
+            endsAt: "2026-03-09T14:00:00.000000Z",
+            client: "Example client",
+            staff: "Ana",
+            services: ["Haircut"],
+          },
+        ],
+      });
     if (url.pathname === "/api/admin/staff")
       return json({
         staff: [{ id: ANA, displayName: "Ana", active: true, userId: null, serviceIds: [] }],
@@ -55,6 +90,58 @@ const open = (
   renderApp(<ReportsView search={search} onSearchChange={onSearchChange} role={role} now={NOW} />);
 
 describe("ReportsView", () => {
+  test("distinguishes an unknown imported price from a free service", async () => {
+    report.totals.unpricedServices = 1;
+    report.topServices = [
+      { serviceId: null, name: "Imported care", count: 1, revenueCents: 0, unpricedServices: 1 },
+      { serviceId: ANA, name: "Free care", count: 1, revenueCents: 0 },
+    ];
+    open();
+    expect(
+      await screen.findByText(
+        "Service prices awaiting confirmation (1). Amounts exclude these services.",
+      ),
+    ).toBeVisible();
+    const table = screen.getByRole("table", { name: "Top services" });
+    const imported = within(table).getByRole("row", { name: /Imported care/ });
+    const free = within(table).getByRole("row", { name: /Free care/ });
+    expect(within(imported).getByText("Price pending")).toBeVisible();
+    expect(within(free).getByRole("cell", { name: /^ARS\s+0$/ })).toBeVisible();
+  });
+
+  test("shows and exports unique client counts for the selected period and team member", async () => {
+    renderApp(
+      <ReportsView
+        search={{ preset: "last30", staff: ANA, currency: "EUR" }}
+        onSearchChange={() => {}}
+        role="owner"
+        now={NOW}
+        showClients
+      />,
+    );
+    const table = await screen.findByRole("table", { name: "New and returning clients by day" });
+    const rows = within(table).getAllByRole("row");
+    expect(rows).toHaveLength(2);
+    expect(
+      within(rows[1]!)
+        .getAllByRole("cell")
+        .map((cell) => cell.textContent),
+    ).toEqual(["3", "2"]);
+    expect(urls.filter((url) => url.startsWith("/api/admin/reports/"))).toEqual([
+      `/api/admin/reports/clients?from=2026-02-17&to=2026-03-18&staffId=${ANA}`,
+    ]);
+    expect(screen.getByRole("button", { name: "Export CSV" })).toBeEnabled();
+    const groupTable = screen.getByRole("table", { name: "Clients by group" });
+    expect(within(groupTable).getByRole("row", { name: "vip 2" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Export groups CSV" })).toBeEnabled();
+    expect(clientGroupReportCsv(clientReport.groups)).toBe(
+      "group,clients\r\nvip,2\r\n'=group,1\r\n",
+    );
+    expect(clientReportCsv(clientReport)).toBe(
+      "date,new_clients,returning_clients\r\n2026-03-09,3,2\r\n",
+    );
+  });
+
   test("asks for the preset range in salon-local dates", async () => {
     open();
     await screen.findByRole("group", { name: "Summary" });
@@ -91,6 +178,39 @@ describe("ReportsView", () => {
     const staff = screen.getByRole("table", { name: "By team member" });
     expect(within(staff).getByText("Ana")).toBeInTheDocument();
     expect(within(staff).getByText("33%")).toBeInTheDocument();
+  });
+
+  test("switches appointment breakdowns and shows an empty add-on group", async () => {
+    open();
+    const table = await screen.findByRole("table", { name: "Appointment breakdown" });
+    expect(within(table).getByText("09:00")).toBeInTheDocument();
+    const group = screen.getByRole("combobox", { name: "Group by" });
+    fireEvent.change(group, { target: { value: "service" } });
+    expect(within(table).getByText("Haircut")).toBeInTheDocument();
+    fireEvent.change(group, { target: { value: "category" } });
+    expect(within(table).getByText("Hair")).toBeInTheDocument();
+    fireEvent.change(group, { target: { value: "addon" } });
+    expect(screen.getByText("No appointments in this breakdown.")).toBeInTheDocument();
+  });
+
+  test("loads a detailed outcome only when expanded and downloads the selected status", async () => {
+    open({ preset: "last30", staff: ANA });
+    const heading = await screen.findByText("Cancellations and no-shows");
+    expect(urls.some((url) => url.includes("/reports/outcomes"))).toBe(false);
+    const panel = heading.closest("details");
+    if (!panel) throw Error("Missing outcomes panel");
+    await act(async () => {
+      panel.open = true;
+      fireEvent(panel, new Event("toggle"));
+    });
+    await screen.findByRole("table", { name: "Cancellations" });
+    fireEvent.change(screen.getByLabelText("Appointment outcome"), {
+      target: { value: "no_show" },
+    });
+    await screen.findByRole("table", { name: "No-shows" });
+    const link = screen.getByRole("link", { name: "Export no-shows CSV" });
+    expect(new URL((link as HTMLAnchorElement).href).searchParams.get("staffId")).toBe(ANA);
+    expect(new URL((link as HTMLAnchorElement).href).searchParams.get("status")).toBe("no_show");
   });
 
   test("presets and custom ranges go through the URL state", async () => {
@@ -137,6 +257,9 @@ describe("ReportsView", () => {
     await waitFor(() => expect(created).toHaveLength(1));
     expect(await created[0]?.text()).toStartWith(
       "date,appointments,booked,completed,cancelled,no_show,revenue\r\n2026-03-09,2,0,1,0,1,15000.00",
+    );
+    expect(await created[0]?.text()).toContain(
+      "group,label,appointments,booked,completed,cancelled,no_show\r\nhour,09:00,3,0,2,0,1",
     );
     URL.createObjectURL = realCreate;
   });

@@ -11,6 +11,16 @@ const uuid2 = "0198f5a0-7b1c-7000-8000-000000000002";
 const range = { from: "2026-03-09T03:00:00Z", to: "2026-03-16T03:00:00Z" };
 
 describe("calendar query", () => {
+  test("accepts six local weeks with the extra DST hour but rejects a seventh day", () => {
+    expect(
+      calendarQuerySchema.safeParse({ from: "2028-09-24T22:00:00Z", to: "2028-11-05T23:00:00Z" })
+        .success,
+    ).toBe(true);
+    expect(
+      calendarQuerySchema.safeParse({ from: "2028-09-24T22:00:00Z", to: "2028-11-06T23:00:00Z" })
+        .success,
+    ).toBe(false);
+  });
   test("accepts a range with no staff filter", () => {
     const parsed = calendarQuerySchema.parse(range);
     expect(parsed.staffIds).toBeUndefined();

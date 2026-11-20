@@ -3,6 +3,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { PageHeading } from "~/components/pages";
 import { ClientTransfer } from "~/features/admin/clients/client-transfer";
 import { ClientsView } from "~/features/admin/clients/clients-view";
+import { NewClient } from "~/features/admin/clients/new-client";
 import { validateClientsSearch } from "~/features/admin/clients/search";
 import { adminHead } from "~/features/admin/route-head";
 import { useI18n } from "~/i18n/react";
@@ -21,6 +22,15 @@ function ClientsPage() {
   return (
     <div className="view-clients">
       <PageHeading title={t("clients.title")} lead={t("clients.lead")} />
+      {session && permissionsFor(session.user.role, session.accessPreset).editClients && (
+        <div className="mb-4 flex justify-end">
+          <NewClient
+            onCreated={(client) =>
+              void navigate({ to: "/admin/clients/$id", params: { id: client.id } })
+            }
+          />
+        </div>
+      )}
       {session && permissionsFor(session.user.role, session.accessPreset).deleteClients && (
         <ClientTransfer search={search.q} />
       )}

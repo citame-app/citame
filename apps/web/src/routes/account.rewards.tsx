@@ -8,7 +8,7 @@ export const Route = createFileRoute("/account/rewards")({
       context.session.user.role !== "client" &&
       !permissionsFor(context.session.user.role, context.session.accessPreset).commerce
     )
-      throw redirect({ to: "/admin" });
+      throw redirect({ to: "/admin/calendar" });
   },
   component: RewardsPage,
 });

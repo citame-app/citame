@@ -57,7 +57,17 @@ test("changing a selection never displays a QR from an older asynchronous render
     "src",
     "data:image/png;base64,bmV3",
   );
-  expect((screen.getByLabelText("Booking link") as HTMLInputElement).value).toContain(id);
+  fireEvent.change(screen.getByLabelText("Professional (optional)"), { target: { value: id } });
+  const bookingUrl = `https://booking.example/book?services=${id}&staff=${id}`;
+  expect(screen.getByLabelText("Booking link")).toHaveValue(bookingUrl);
+  expect(screen.getByRole("link", { name: "Share on WhatsApp" })).toHaveAttribute(
+    "href",
+    `https://wa.me/?text=${encodeURIComponent(bookingUrl)}`,
+  );
+  expect(screen.getByRole("link", { name: "Share on Facebook" })).toHaveAttribute(
+    "href",
+    `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(bookingUrl)}`,
+  );
 });
 
 test("a professional removed meanwhile cannot be shared and the choices can be explicitly cleared", async () => {
@@ -109,6 +119,8 @@ test("a professional removed meanwhile cannot be shared and the choices can be e
     "Some selected treatments or the professional are no longer available. Review the current choices before sharing.",
   );
   expect(screen.getByRole("button", { name: "Copy booking link" })).toBeDisabled();
+  expect(screen.queryByRole("link", { name: "Share on WhatsApp" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "Share on Facebook" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Clear selections" }));
   expect(screen.getByRole("button", { name: "Copy booking link" })).toBeEnabled();
   expect(screen.getByLabelText("Booking link")).toHaveValue("https://booking.example/book");

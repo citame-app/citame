@@ -1,14 +1,24 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { publicReviewsSchema, reviewPrivateSchema } from "@sob/contracts";
+import {
+  campaignListSchema,
+  ownReviewsSchema,
+  publicReviewsSchema,
+  reviewEmailRequestSchema,
+  reviewPrivateSchema,
+  reviewRequestsSchema,
+} from "@sob/contracts";
 import {
   appointment,
   appointmentService,
   auditLog,
+  clientProfile,
+  marketingDelivery,
   pgErrorCode,
   review,
   service,
   staffProfile,
+  user,
 } from "@sob/db";
 import { eq, sql } from "drizzle-orm";
 import {
@@ -21,7 +31,9 @@ import {
   setupApiTest,
 } from "../../../test/helpers";
 import { loadPrincipal } from "../../auth/principal";
+import { FakeEmailProvider } from "../../notifications/providers/fake";
 import type { Tx } from "../../tx";
+import { createMarketingWorker } from "../marketing/worker";
 import { changeReview } from "./reviews";
 
 let t: Awaited<ReturnType<typeof setupApiTest>>;
@@ -30,7 +42,16 @@ let customer: Actor;
 let owner: Actor;
 let day = 0;
 beforeAll(async () => {
-  t = await setupApiTest({ dbSuffix: "reputation_reviews" });
+  t = await setupApiTest({
+    dbSuffix: "reputation_reviews",
+    env: {
+      NOTIFY_WORKER_ENABLED: "false",
+      NOTIFY_EXTERNAL_WORKER_ENABLED: "true",
+      NOTIFY_EMAIL_PROVIDER: "smtp",
+      SMTP_URL: "smtp://127.0.0.1:1",
+    },
+    deps: { emailProvider: new FakeEmailProvider() },
+  });
 });
 afterAll(async () => {
   await t.close();
@@ -98,6 +119,62 @@ async function created(appointmentId: string, changes: Record<string, unknown> =
     },
   };
 }
+
+test("review requests link only eligible unreviewed visits and preserve account ownership", async () => {
+  const stranger = await actor(t, "client", "another@test.invalid");
+  const staff = await actor(t, "staff", "staff@test.invalid", { staffProfileId: f.anaId });
+  const first = await visit();
+  const reviewed = await visit();
+  await created(reviewed.id);
+  const otherEligible = await visit(stranger.clientId);
+  await visit(customer.clientId, "completed", true);
+  await visit(customer.clientId, "no_show");
+  await visit(f.clientId);
+  const url = "/admin/reviews/requests?search=reviewer";
+  expect((await call(url)).status).toBe(403);
+  expect((await call(url, "GET", undefined, staff)).status).toBe(403);
+  const result = await call(url, "GET", undefined, owner);
+  expect(result.status).toBe(200);
+  expect(result.headers.get("cache-control")).toBe("private, no-store");
+  const requests = reviewRequestsSchema.parse(await result.json());
+  expect(requests.visits.map((row) => row.appointmentId)).toEqual([first.id]);
+  const unfiltered = await call("/admin/reviews/requests", "GET", undefined, owner);
+  expect(
+    reviewRequestsSchema.parse(await unfiltered.json()).visits.map((row) => row.appointmentId),
+  ).toEqual([first.id, otherEligible.id]);
+  const link = new URL(requests.visits[0]!.link!);
+  expect(link.origin).toBe(new URL(t.config.notifications.publicUrl).origin);
+  expect(link.pathname).toBe("/account/reviews");
+  expect(link.searchParams.get("appointmentId")).toBe(first.id);
+  const query = `/me/reviews${link.search}`;
+  const own = ownReviewsSchema.parse(await (await call(query)).json());
+  expect(own.visits.map((row) => row.appointmentId)).toEqual([first.id]);
+  const other = ownReviewsSchema.parse(
+    await (await call(query, "GET", undefined, stranger)).json(),
+  );
+  expect(other.visits).toEqual([]);
+
+  await t.db
+    .update(staffProfile)
+    .set({ accessPreset: "manager" })
+    .where(eq(staffProfile.id, f.anaId));
+  expect((await call(url, "GET", undefined, staff)).status).toBe(200);
+
+  const original = t.config.auth.requireEmailVerification;
+  try {
+    t.config.auth.requireEmailVerification = true;
+    await t.db.update(user).set({ emailVerified: false }).where(eq(user.id, customer.userId));
+    const unverified = await call(url, "GET", undefined, owner);
+    expect(reviewRequestsSchema.parse(await unverified.json()).visits).toEqual([]);
+    await t.db.update(user).set({ emailVerified: true }).where(eq(user.id, customer.userId));
+    const verified = await call(url, "GET", undefined, owner);
+    expect(
+      reviewRequestsSchema.parse(await verified.json()).visits.map((row) => row.appointmentId),
+    ).toEqual([first.id]);
+  } finally {
+    t.config.auth.requireEmailVerification = original;
+  }
+});
 async function publish(review: { id: string; version: number }) {
   const response = await call(
     `/admin/reviews/${review.id}/moderation`,
@@ -108,6 +185,135 @@ async function publish(review: { id: string; version: number }) {
   expect(response.status, await response.clone().text()).toBe(200);
   return response.json() as Promise<{ id: string; version: number; status: string }>;
 }
+
+const emailPath = (id: string) => `/admin/reviews/requests/${id}/email`;
+async function consentEmail(enabled: boolean, version: number) {
+  expect(
+    (
+      await call(
+        `/admin/clients/${customer.clientId}/marketing-consent`,
+        "PATCH",
+        { channel: "email", enabled, version, source: "Explicit permission in test" },
+        owner,
+      )
+    ).status,
+  ).toBe(200);
+}
+const verifyCustomerEmail = () =>
+  t.db.update(user).set({ emailVerified: true }).where(eq(user.id, customer.userId));
+const reviewWorker = (email: FakeEmailProvider) =>
+  createMarketingWorker({
+    db: t.db,
+    config: t.config.notifications,
+    providers: { email, sms: null },
+    now: () => NOW,
+  });
+
+test("a verified opted-in visit queues once and sends a private link with an opt-out", async () => {
+  const target = await visit();
+  const path = emailPath(target.id);
+  const staff = await actor(t, "staff", "email-staff@test.invalid", { staffProfileId: f.anaId });
+  expect((await call(path, "POST")).status).toBe(403);
+  expect((await call(path, "POST", {}, staff)).status).toBe(403);
+  expect((await call(path, "POST", {}, owner)).status).toBe(400);
+  await t.db.update(user).set({ emailVerified: false }).where(eq(user.id, customer.userId));
+  await consentEmail(true, 0);
+  expect((await call(path, "POST", {}, owner)).status).toBe(400);
+  await verifyCustomerEmail();
+
+  const profile = eq(clientProfile.id, customer.clientId!);
+  await t.db.update(clientProfile).set({ email: "alternate@test.invalid" }).where(profile);
+  expect((await call(path, "POST", {}, owner)).status).toBe(400);
+  await t.db.update(clientProfile).set({ email: "reviewer@test.invalid" }).where(profile);
+  const listed = reviewRequestsSchema.parse(
+    await (await call("/admin/reviews/requests", "GET", undefined, owner)).json(),
+  );
+  expect(listed).toMatchObject({
+    emailEnabled: true,
+    visits: [{ appointmentId: target.id, canEmail: true, emailStatus: null }],
+  });
+  expect(JSON.stringify(listed)).not.toContain("reviewer@test.invalid");
+
+  for (const response of await Promise.all([
+    call(path, "POST", {}, owner),
+    call(path, "POST", {}, owner),
+  ])) {
+    expect(response.status, await response.clone().text()).toBe(200);
+    expect(reviewEmailRequestSchema.parse(await response.json()).status).toBe("pending");
+  }
+  const email = new FakeEmailProvider();
+  await Promise.all([reviewWorker(email).runOnce(), reviewWorker(email).runOnce()]);
+  expect(email.calls).toHaveLength(1);
+  const message = email.calls[0]!;
+  const link = `${t.config.notifications.publicUrl}/account/reviews?appointmentId=${target.id}`;
+  expect(message.to).toBe("reviewer@test.invalid");
+  expect(message.text).toContain(link);
+  expect(listed.visits[0]?.link).toBe(link);
+  expect(message.html).toContain(`href="${link}"`);
+  expect(message.headers?.["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
+  expect(
+    reviewEmailRequestSchema.parse(await (await call(path, "POST", {}, owner)).json()).status,
+  ).toBe("sent");
+  const [delivery] = await t.db.select().from(marketingDelivery);
+  expect(delivery?.reviewAppointmentId).toBe(target.id);
+  expect(
+    campaignListSchema.parse(
+      await (await call("/admin/marketing/campaigns", "GET", undefined, owner)).json(),
+    ).campaigns,
+  ).toEqual([]);
+  expect(
+    (await call(`/admin/marketing/campaigns/${delivery?.campaignId}`, "GET", undefined, owner))
+      .status,
+  ).toBe(404);
+});
+
+test("a queued invitation is skipped after opt-out, email changes or a submitted review", async () => {
+  await verifyCustomerEmail();
+  await consentEmail(true, 0);
+  const revoked = await visit();
+  expect((await call(emailPath(revoked.id), "POST", {}, owner)).status).toBe(200);
+  await consentEmail(false, 1);
+  const email = new FakeEmailProvider();
+  const worker = reviewWorker(email);
+  await worker.runOnce();
+
+  await consentEmail(true, 2);
+  const changed = await visit();
+  expect((await call(emailPath(changed.id), "POST", {}, owner)).status).toBe(200);
+  await t.db
+    .update(clientProfile)
+    .set({ email: "alternate@test.invalid" })
+    .where(eq(clientProfile.id, customer.clientId!));
+  await worker.runOnce();
+
+  await t.db
+    .update(clientProfile)
+    .set({ email: "reviewer@test.invalid" })
+    .where(eq(clientProfile.id, customer.clientId!));
+  const reviewed = await visit();
+  expect((await call(emailPath(reviewed.id), "POST", {}, owner)).status).toBe(200);
+  await created(reviewed.id);
+  await worker.runOnce();
+
+  expect(email.calls).toHaveLength(0);
+  const rows = await t.db.select().from(marketingDelivery);
+  expect(new Map(rows.map((row) => [row.reviewAppointmentId, row.status]))).toEqual(
+    new Map([
+      [revoked.id, "skipped"],
+      [changed.id, "skipped"],
+      [reviewed.id, "skipped"],
+    ]),
+  );
+  const after = reviewRequestsSchema.parse(
+    await (await call("/admin/reviews/requests", "GET", undefined, owner)).json(),
+  );
+  expect(after.visits.find(({ appointmentId }) => appointmentId === reviewed.id)).toMatchObject({
+    link: null,
+    emailStatus: "skipped",
+    canEmail: false,
+  });
+});
+
 test("only the customer can review their own completed, elapsed appointment", async () => {
   for (const status of ["booked", "cancelled", "no_show"] as const) {
     const a = await visit(customer.clientId, status);

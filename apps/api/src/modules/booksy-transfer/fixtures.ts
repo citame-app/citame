@@ -1,0 +1,103 @@
+import type { BooksyTransfer } from "@sob/contracts";
+export function transferFixture(): BooksyTransfer {
+  const coverage = Object.fromEntries(
+    [
+      "appointments",
+      "services",
+      "staff",
+      "clients",
+      "hours",
+      "timeOff",
+      "resources",
+      "inventory",
+      "waitlist",
+      "passes",
+      "giftCards",
+      "consents",
+      "attachments",
+      "finance",
+    ].map((k) => [k, { state: "not_captured", expected: null, evidence: ["synthetic fixture"] }]),
+  ) as BooksyTransfer["coverage"];
+  return {
+    version: 1,
+    businessId: "synthetic-salon",
+    capturedAt: "2026-11-17T12:00:00Z",
+    timezone: "Europe/Madrid",
+    fromDate: "2026-11-18",
+    horizon: {
+      lastAppointmentAt: "2026-11-17T23:00:00Z",
+      lastAppointmentProven: false,
+      evidence: ["synthetic only"],
+    },
+    coverage,
+    artifacts: [],
+    staff: [
+      {
+        sourceId: "staff-1",
+        name: "Synthetic professional",
+        active: true,
+        maxConcurrent: 1,
+        raw: { unknownSourceField: "preserved" },
+      },
+    ],
+    services: [
+      {
+        sourceId: "service-1",
+        name: "Synthetic service",
+        description: null,
+        category: null,
+        color: null,
+        durationMinutes: 60,
+        bufferMinutes: 0,
+        priceCents: 5500,
+        currency: "EUR",
+        active: true,
+        raw: {},
+      },
+    ],
+    clients: [
+      {
+        sourceId: "client-1",
+        name: "Same display name",
+        phone: null,
+        email: null,
+        notes: null,
+        raw: {},
+      },
+    ],
+    appointments: [
+      {
+        sourceId: "booking-1",
+        clientRef: "client-1",
+        staffRef: "staff-1",
+        startsAt: "2026-11-17T23:00:00Z",
+        endsAt: "2026-11-18T00:00:00Z",
+        status: "booked",
+        customerComment: "Client comment",
+        internalNote: "PRIVATE",
+        services: [
+          {
+            sourceId: "booked-service-1",
+            serviceRef: "service-1",
+            name: "Frozen service name",
+            durationMinutes: 60,
+            bufferMinutes: 0,
+            priceCents: 5000,
+            currency: "EUR",
+            requestedStaffRef: "staff-1",
+            invoiced: true,
+            paid: false,
+            customerComment: null,
+            internalNote: null,
+            raw: {},
+          },
+        ],
+        raw: {},
+      },
+    ],
+    assignments: [{ staffRef: "staff-1", serviceRef: "service-1" }],
+    hours: [],
+    timeOff: [],
+    unprojected: [],
+  };
+}

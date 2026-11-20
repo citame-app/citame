@@ -1,6 +1,15 @@
 /* biome-ignore-all lint/style/noDescendingSpecificity: independent route families intentionally use separate descendant compositions */
 /* Sisters of Beauty: warm editorial public pages and a quiet, functional workspace. */
 :root {
+  /* Bind the shared motion layer to Citame's light/dark color roles. */
+  --action: var(--accent);
+  --action-ink: var(--accent-fg);
+  --card: var(--surface);
+  --ink: var(--fg);
+  --line-strong: var(--border-strong);
+  --r-btn: 0.75rem;
+  --s-2: 0.5rem;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --p-bg: #fbf8f5;
   --p-surface: #ffffff;
   --p-ink: #2c2325;
@@ -165,28 +174,6 @@
 }
 .admin-workspace > :where(section, div) {
   scroll-margin-top: 6rem;
-}
-.today-dashboard > [role="group"] > dl {
-  gap: 0;
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
-  overflow: hidden;
-  background: var(--surface);
-}
-.today-dashboard > [role="group"] > dl > div {
-  border: 0;
-  border-right: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  border-radius: 0;
-  padding: 1.25rem;
-}
-.today-dashboard dt {
-  font-size: 0.8rem;
-}
-.today-dashboard dd {
-  font-family: var(--font-text);
-  font-weight: 600;
-  font-size: 1.75rem;
 }
 .salon-calendar {
   box-shadow: 0 4px 20px rgb(44 35 37 / 0.025);
@@ -542,12 +529,6 @@
     border-top: 3px solid var(--accent);
     box-shadow: none;
   }
-  .today-dashboard > [role="group"] > dl > div {
-    border-bottom: 0;
-  }
-  .today-dashboard > [role="group"] > dl > div:last-child {
-    border-right: 0;
-  }
 }
 @media (max-width: 767px) {
   .auth-frame {
@@ -879,4 +860,42 @@
   .salon-hero {
     padding-bottom: 24px;
   }
+}
+
+/* Appointment indicators occupy the same first line as the time, without covering client names. */
+.appointment-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+.appointment-badges > span {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--fg);
+}
+.appointment-badges [data-badge="billing"] {
+  background: #128455;
+  color: white;
+}
+.appointment-badges [data-badge="requested"] {
+  color: #bc3868;
+}
+.appointment-badges [data-badge="internal"] {
+  color: var(--muted);
+}
+.calendar-card-time > .appointment-badges {
+  margin-left: auto;
+}
+.calendar-card-time > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

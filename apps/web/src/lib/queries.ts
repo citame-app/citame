@@ -16,8 +16,14 @@ export const servicesQuery = queryOptions({
 
 export const staffQuery = queryOptions({
   queryKey: ["staff"],
-  queryFn: async () => (await api().staff()).staff,
+  queryFn: async ({ signal }) => (await api().staff(false, signal)).staff,
   staleTime: 60_000,
+});
+
+export const publicCombinationsQuery = queryOptions({
+  queryKey: ["combinations", "public"],
+  queryFn: () => api().combinations.list(),
+  staleTime: 30_000,
 });
 
 export const availabilityQuery = (params: AvailabilityParams) =>

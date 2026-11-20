@@ -7,6 +7,7 @@ import {
   actor,
   type Fixtures,
   json,
+  MONDAY_0900,
   seedFixtures,
   setupApiTest,
 } from "../../../test/helpers";
@@ -51,6 +52,50 @@ describe("access control", () => {
 });
 
 describe("PATCH /admin/settings", () => {
+  test("pausing online booking preserves committed requests and staff can still book", async () => {
+    const request = {
+      id: crypto.randomUUID(),
+      staffId: f.anaId,
+      serviceIds: [f.haircutId],
+      startsAt: MONDAY_0900,
+    };
+    const book = (who: Actor, body: unknown) =>
+      json(t.app, "/appointments", "POST", body, who.cookie);
+    const created = await book(client, request);
+    expect(created.status).toBe(201);
+    const pause = await call(owner, "PATCH", { onlineBookingEnabled: false });
+    expect(pause.status).toBe(200);
+    const salon = await json(t.app, "/salon", "GET");
+    expect(await salon.json()).toMatchObject({ onlineBookingEnabled: false });
+    const replay = await book(client, request);
+    expect(replay.status).toBe(201);
+    expect(replay.headers.get("x-idempotent-replay")).toBe("true");
+    const existing = await json(
+      t.app,
+      "/appointments?from=2026-03-09T00:00:00.000Z&to=2026-03-10T00:00:00.000Z",
+      "GET",
+      undefined,
+      client.cookie,
+    );
+    expect(await existing.json()).toMatchObject({ appointments: [{ id: request.id }] });
+
+    const next = { ...request, id: crypto.randomUUID(), startsAt: "2026-03-09T14:00:00.000Z" };
+    const blocked = await book(client, next);
+    expect(blocked.status).toBe(409);
+    expect(await code(blocked)).toBe("online_booking_paused");
+    expect((await book(owner, { ...next, clientId: f.clientId })).status).toBe(201);
+    expect((await call(owner, "PATCH", { onlineBookingEnabled: true })).status).toBe(200);
+    expect(
+      (
+        await book(client, {
+          ...next,
+          id: crypto.randomUUID(),
+          startsAt: "2026-03-09T16:00:00.000Z",
+        })
+      ).status,
+    ).toBe(201);
+  });
+
   test("the owner edits settings; the public salon endpoint reflects it at once", async () => {
     const res = await call(owner, "PATCH", {
       name: "Studio Rosa",

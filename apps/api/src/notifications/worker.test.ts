@@ -1,5 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { appointment, clientProfile, notificationPreference, reminder } from "@sob/db";
+import {
+  appointment,
+  clientProfile,
+  notificationPreference,
+  reminder,
+  whatsappConnection,
+} from "@sob/db";
 import { asc, eq } from "drizzle-orm";
 import {
   type Actor,
@@ -13,9 +19,12 @@ import {
 import type { NotificationConfig } from "../config";
 import { createAppointment, updateAppointment } from "../modules/appointments/service";
 import { createMetrics } from "./metrics";
+import { phoneHash } from "./preferences";
 import { FakeEmailProvider, FakeSmsProvider } from "./providers/fake";
 import { PermanentProviderError, TransientProviderError } from "./providers/types";
 import { claimDue } from "./queue";
+import { tokenCipher } from "./whatsapp/meta";
+import { disableWhatsApp, mapRules } from "./whatsapp/service";
 import { createNotificationWorker } from "./worker";
 
 let t: Awaited<ReturnType<typeof setupApiTest>>;
@@ -467,8 +476,9 @@ describe("concurrency", () => {
 });
 
 describe("lifecycle", () => {
-  test("start polls for work and stop waits for the in-flight send", async () => {
+  test("stop finishes the active reminder and releases the remaining jobs", async () => {
     await book();
+    await book("2026-03-16T12:00:00.000Z");
     let release: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -492,10 +502,191 @@ describe("lifecycle", () => {
     expect(stopped).toBe(false); // still sending
     release();
     await stopping;
-    expect((await byKind("confirmation"))?.status).toBe("sent");
-    await book("2026-03-16T12:00:00.000Z").catch(() => {});
-    const before = email.calls.length;
-    await Bun.sleep(100);
-    expect(email.calls.length).toBe(before); // stopped workers no longer poll
+    const confirmations = (await rows()).filter(
+      (r) => r.kind === "confirmation" && r.channel === "email",
+    );
+    expect(confirmations).toHaveLength(2);
+    expect(confirmations).toContainEqual(expect.objectContaining({ status: "sent", attempts: 1 }));
+    expect(confirmations).toContainEqual(
+      expect.objectContaining({
+        status: "pending",
+        attempts: 0,
+        lockedUntil: null,
+        lockedBy: null,
+      }),
+    );
+    expect(email.calls).toHaveLength(1);
+    expect(await w.runOnce()).toBe(0);
+    await worker("replacement", { sms: null }).runOnce();
+    expect(email.calls).toHaveLength(2);
+  });
+});
+
+describe("WhatsApp appointment automations", () => {
+  const meta = {
+    appId: "123456",
+    configId: "234567",
+    appSecret: "meta-app-test-secret",
+    verifyToken: "meta-webhook-test-verification",
+    version: "v27.0",
+  };
+  const phoneId = "345678";
+  async function fixture(optIn: boolean) {
+    await t.db.insert(whatsappConnection).values({
+      phoneId,
+      wabaId: "456789",
+      phone: "+34600000001",
+      coexistence: true,
+      encryptedToken: tokenCipher(t.config.notifications.signingSecret, phoneId).seal(
+        "test-provider-token",
+      ),
+      rules: mapRules(
+        [{ kind: "reminder_24h", templateId: "567890", variables: ["time", "staff"] }],
+        [
+          {
+            id: "567890",
+            name: "appointment_reminder",
+            language: "es_ES",
+            body: "Tu cita es a las {{1}} con {{2}}.",
+            parameters: ["1", "2"],
+            named: false,
+          },
+        ],
+      ),
+    });
+    if (optIn)
+      await t.db.insert(notificationPreference).values({
+        clientId: f.clientId,
+        channel: "whatsapp",
+        category: "reminder",
+        enabled: true,
+        destinationHash: phoneHash("+5491100000000"),
+      });
+    await book();
+    const row = (await rows()).find((item) => item.channel === "whatsapp")!;
+    expect(row.kind).toBe("reminder_24h");
+    clock = row.scheduledFor;
+    return row;
+  }
+
+  function whatsappWorker(
+    request: (input: Parameters<typeof fetch>[0], init?: RequestInit) => Promise<Response>,
+  ) {
+    return createNotificationWorker({
+      db: t.db,
+      config: config({ whatsapp: meta }),
+      providers: { email: null, sms: null },
+      now: () => clock,
+      log: () => {},
+      metrics: createMetrics(),
+      whatsappFetch: request as typeof fetch,
+    });
+  }
+
+  test("sends the approved reminder once with the salon's local appointment time", async () => {
+    const scheduled = await fixture(true);
+    let count = 0;
+    const sender = whatsappWorker(async (url, options) => {
+      count++;
+      expect(String(url)).toBe("https://graph.facebook.com/v27.0/345678/messages");
+      expect(new Headers(options?.headers).get("authorization")).toBe("Bearer test-provider-token");
+      expect(JSON.parse(options?.body as string)).toMatchObject({
+        to: "5491100000000",
+        biz_opaque_callback_data: scheduled.id,
+        template: {
+          name: "appointment_reminder",
+          components: [{ parameters: [{ text: "09:00" }, { text: "Ana" }] }],
+        },
+      });
+      return Response.json({ messages: [{ id: "wamid.fixture" }] });
+    });
+    await sender.runOnce();
+    expect((await rows()).find(({ id }) => id === scheduled.id)).toMatchObject({
+      status: "sent",
+      providerMessageId: "wamid.fixture",
+      whatsappDispatchWabaId: "456789",
+      whatsappDispatchPhoneId: phoneId,
+    });
+    await sender.runOnce();
+    expect(count).toBe(1);
+  });
+
+  test("does not deliver to a replacement phone or retry a send with unknown outcome", async () => {
+    const scheduled = await fixture(true);
+    let sends = 0;
+    const sender = whatsappWorker(async () => {
+      sends++;
+      throw new Error("simulated connection loss");
+    });
+    await t.db
+      .update(clientProfile)
+      .set({ phone: "+34600000002" })
+      .where(eq(clientProfile.id, f.clientId));
+    await sender.runOnce();
+    expect(sends).toBe(0);
+    expect((await rows()).find(({ id }) => id === scheduled.id)?.lastError).toBe("opted_out");
+    await t.db
+      .update(clientProfile)
+      .set({ phone: "+5491100000000" })
+      .where(eq(clientProfile.id, f.clientId));
+    await t.db
+      .update(reminder)
+      .set({ status: "pending", attempts: 0 })
+      .where(eq(reminder.id, scheduled.id));
+    await sender.runOnce();
+    expect((await rows()).find(({ id }) => id === scheduled.id)).toMatchObject({
+      status: "failed",
+      lastError: "whatsapp_delivery_unknown",
+    });
+    await sender.runOnce();
+    expect(sends).toBe(1);
+  });
+
+  test("disconnect cancels queued WhatsApp reminders and keeps the outcome of a send already started", async () => {
+    const sending = await fixture(true);
+    const later = await book("2026-03-16T12:00:00.000Z");
+    const queued = (await rows()).find(
+      (row) => row.channel === "whatsapp" && row.appointmentId === later.id,
+    );
+    expect(queued?.status).toBe("pending");
+    const started = Promise.withResolvers<void>();
+    const response = Promise.withResolvers<Response>();
+    let sends = 0;
+    const worker = whatsappWorker(async () => {
+      sends++;
+      started.resolve();
+      return response.promise;
+    });
+    clock = NOW;
+    await worker.runOnce(); // Clear the due email/SMS confirmations from the batch.
+    clock = sending.scheduledFor;
+    const running = worker.runOnce();
+    await Promise.race([
+      started.promise,
+      running.then(() => {
+        throw new Error("Expected a WhatsApp send to be in flight");
+      }),
+    ]);
+    try {
+      await t.db.transaction((tx) => disableWhatsApp(tx));
+      const after = await rows();
+      expect(after.find(({ id }) => id === queued?.id)).toMatchObject({
+        status: "cancelled",
+        lastError: "whatsapp_disconnected",
+      });
+      expect(after.find(({ id }) => id === sending.id)).toMatchObject({
+        status: "processing",
+        whatsappDispatchAt: clock,
+      });
+    } finally {
+      response.resolve(Response.json({ messages: [{ id: "wamid.accepted" }] }));
+      await running;
+    }
+    expect((await rows()).find(({ id }) => id === sending.id)).toMatchObject({
+      status: "sent",
+      providerMessageId: "wamid.accepted",
+    });
+    await worker.runOnce();
+    expect(sends).toBe(1);
   });
 });

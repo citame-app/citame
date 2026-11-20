@@ -1,0 +1,73 @@
+export const emailDeliveryEn = {
+  "emailDelivery.title": "Email delivery",
+  "emailDelivery.lead":
+    "Choose the sender for appointment confirmations, changes, cancellations and reminders.",
+  "emailDelivery.provider": "Email provider",
+  "emailDelivery.inherit": "Use server configuration",
+  "emailDelivery.disabled": "Disable appointment email",
+  "emailDelivery.sender": "Sender email",
+  "emailDelivery.senderName": "Sender name",
+  "emailDelivery.host": "SMTP hostname",
+  "emailDelivery.port": "SMTP port",
+  "emailDelivery.encryption": "Encryption",
+  "emailDelivery.username": "SMTP username",
+  "emailDelivery.smtpPassword": "SMTP password",
+  "emailDelivery.gmailPassword": "Google app password",
+  "emailDelivery.resendKey": "Resend API key",
+  "emailDelivery.gmailHint": "Use the Gmail or Google Workspace address and a Google app password.",
+  "emailDelivery.resendHint": "Use a sender address on a domain verified in Resend.",
+  "emailDelivery.keepSecret":
+    "Leave blank to keep the saved credential. Enter a new one if you change the connection.",
+  "emailDelivery.serverReady": "The server has an email provider configured.",
+  "emailDelivery.serverMissing": "The server has no email provider configured.",
+  "emailDelivery.saving": "Saving…",
+  "emailDelivery.save": "Save email settings",
+  "emailDelivery.saved": "Email settings saved.",
+  "emailDelivery.test": "Send test email",
+  "emailDelivery.testTo": "The test goes to your account address, {email}.",
+  "emailDelivery.testSent": "The provider accepted the test email for {email}.",
+  "emailDelivery.testFailed":
+    "The test could not be sent. Check the credentials and sender, then try again.",
+  "emailDelivery.invalid": "Check the provider fields and credential.",
+  "emailDelivery.conflict": "Another session updated these settings. Reload them before saving.",
+  "emailDelivery.reload": "Reload email settings",
+  "emailDelivery.failed": "Could not save the email settings.",
+} as const;
+
+export const emailDeliveryEs: Record<keyof typeof emailDeliveryEn, string> = {
+  "emailDelivery.title": "Envío de correo",
+  "emailDelivery.lead":
+    "Elige el remitente de las confirmaciones, cambios, cancelaciones y recordatorios de citas.",
+  "emailDelivery.provider": "Proveedor de correo",
+  "emailDelivery.inherit": "Usar la configuración del servidor",
+  "emailDelivery.disabled": "Desactivar el correo de citas",
+  "emailDelivery.sender": "Correo del remitente",
+  "emailDelivery.senderName": "Nombre del remitente",
+  "emailDelivery.host": "Servidor SMTP",
+  "emailDelivery.port": "Puerto SMTP",
+  "emailDelivery.encryption": "Cifrado",
+  "emailDelivery.username": "Usuario SMTP",
+  "emailDelivery.smtpPassword": "Contraseña SMTP",
+  "emailDelivery.gmailPassword": "Contraseña de aplicación de Google",
+  "emailDelivery.resendKey": "Clave API de Resend",
+  "emailDelivery.gmailHint":
+    "Usa la dirección de Gmail o Google Workspace y una contraseña de aplicación de Google.",
+  "emailDelivery.resendHint": "Usa una dirección de un dominio verificado en Resend.",
+  "emailDelivery.keepSecret":
+    "Deja este campo vacío para conservar la credencial guardada. Si cambias la conexión, introduce una nueva.",
+  "emailDelivery.serverReady": "El servidor tiene configurado un proveedor de correo.",
+  "emailDelivery.serverMissing": "El servidor no tiene configurado un proveedor de correo.",
+  "emailDelivery.saving": "Guardando…",
+  "emailDelivery.save": "Guardar ajustes de correo",
+  "emailDelivery.saved": "Ajustes de correo guardados.",
+  "emailDelivery.test": "Enviar correo de prueba",
+  "emailDelivery.testTo": "La prueba se envía al correo de tu cuenta, {email}.",
+  "emailDelivery.testSent": "El proveedor ha aceptado el correo de prueba para {email}.",
+  "emailDelivery.testFailed":
+    "No se pudo enviar la prueba. Revisa la credencial y el remitente y vuelve a intentarlo.",
+  "emailDelivery.invalid": "Revisa los datos y la credencial del proveedor.",
+  "emailDelivery.conflict":
+    "Otra sesión ha actualizado estos ajustes. Vuelve a cargarlos antes de guardar.",
+  "emailDelivery.reload": "Recargar ajustes de correo",
+  "emailDelivery.failed": "No se pudieron guardar los ajustes de correo.",
+};

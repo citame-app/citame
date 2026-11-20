@@ -12,6 +12,12 @@ export const serviceSchema = z
     id: idSchema,
     name: z.string().min(1),
     description: z.string().nullable(),
+    category: z.string().nullable().optional(),
+    color: z
+      .string()
+      .regex(/^#[0-9a-fA-F]{6}$/)
+      .nullable()
+      .optional(),
     durationMinutes: z.number().int().nonnegative(),
     bufferMinutes: z.number().int().min(0),
     processing: processingTimeSchema.optional(),
@@ -54,6 +60,11 @@ const MAX_DURATION_MINUTES = 24 * 60;
 const serviceFields = {
   name: z.string().trim().min(1).max(LIMITS.name),
   description: z.string().max(LIMITS.description).nullable(),
+  category: z.string().trim().min(1).max(100).nullable(),
+  color: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/)
+    .nullable(),
   durationMinutes: z.number().int().nonnegative().max(MAX_DURATION_MINUTES),
   bufferMinutes: z.number().int().min(0).max(MAX_DURATION_MINUTES),
   priceCents: z.number().int().min(0),
@@ -65,6 +76,8 @@ export const createServiceRequestSchema = z
   .object({
     name: serviceFields.name,
     description: serviceFields.description.optional(),
+    category: serviceFields.category.optional(),
+    color: serviceFields.color.optional(),
     durationMinutes: serviceFields.durationMinutes,
     bufferMinutes: serviceFields.bufferMinutes.optional(),
     priceCents: serviceFields.priceCents,
@@ -86,6 +99,8 @@ export const updateServiceRequestSchema = z
   .object({
     name: serviceFields.name,
     description: serviceFields.description,
+    category: serviceFields.category,
+    color: serviceFields.color,
     durationMinutes: serviceFields.durationMinutes,
     bufferMinutes: serviceFields.bufferMinutes,
     priceCents: serviceFields.priceCents,

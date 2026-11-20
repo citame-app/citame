@@ -78,7 +78,9 @@ export function passRoutes(deps: AppDeps) {
     })
     .get("/", async (c) => {
       const q = parseOrThrow(passQuerySchema, c.req.query());
-      return c.json(await listPasses(deps.db, c.get("principal"), q.page, q.search, q.clientId));
+      return c.json(
+        await listPasses(deps.db, c.get("principal"), q.page, q.search, q.clientId, q.kind),
+      );
     })
     .post("/", async (c) =>
       c.json(

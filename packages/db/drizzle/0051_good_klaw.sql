@@ -1,0 +1,1 @@
+ALTER TABLE "appointment" ADD COLUMN "source_business_message" text;

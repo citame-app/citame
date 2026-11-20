@@ -15,6 +15,8 @@ export interface SheetProps {
   footer?: ReactNode;
   /** Wider panel for forms with a side-by-side layout. */
   size?: "md" | "lg";
+  /** Keep the schedule readable for contextual inboxes. Focus remains inside the dialog. */
+  dimBackground?: boolean;
 }
 
 /**
@@ -29,6 +31,7 @@ export function Sheet({
   children,
   footer,
   size = "md",
+  dimBackground = true,
 }: SheetProps) {
   const { t } = useI18n();
   const [footerNode, setFooterNode] = useState<HTMLElement | null>(null);
@@ -36,7 +39,12 @@ export function Sheet({
   return (
     <Dialog.Root open={open} onOpenChange={(next) => onOpenChange(next)}>
       <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 z-50 bg-scrim transition-opacity duration-200 data-ending-style:opacity-0 data-starting-style:opacity-0" />
+        <Dialog.Backdrop
+          className={cn(
+            "fixed inset-0 z-50 transition-opacity duration-200 data-ending-style:opacity-0 data-starting-style:opacity-0",
+            dimBackground && "bg-scrim",
+          )}
+        />
         <Dialog.Viewport className="fixed inset-0 z-50 grid place-items-end sm:place-items-stretch sm:justify-items-end">
           <Dialog.Popup
             className={cn(

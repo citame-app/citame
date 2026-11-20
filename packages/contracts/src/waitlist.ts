@@ -43,7 +43,19 @@ export const waitlistInputSchema = z
     { path: ["toDate"], message: "Choose at most 30 calendar dates in order" },
   );
 export type WaitlistInput = z.infer<typeof waitlistInputSchema>;
-export const waitlistAdminInputSchema = waitlistInputSchema.safeExtend({ clientId: idSchema });
+export const waitlistAdminInputSchema = waitlistInputSchema.safeExtend({
+  clientId: idSchema,
+  importedEntryId: idSchema.optional(),
+});
+export const waitlistSourceEntrySchema = z.object({
+  id: idSchema,
+  clientId: idSchema,
+  clientName: z.string(),
+  requestedDate: localDateSchema,
+  durationMinutes: z.number().int().positive(),
+  flexible: z.boolean(),
+});
+export type WaitlistSourceEntry = z.infer<typeof waitlistSourceEntrySchema>;
 export const waitlistStateSchema = z.enum([
   "waiting",
   "offered",
@@ -102,11 +114,15 @@ export type WaitlistEntry = z.infer<typeof waitlistEntrySchema>;
 export const waitlistListSchema = pageInfoSchema.extend({
   entries: z.array(waitlistEntrySchema),
   policy: waitlistPolicySchema,
+  imported: z.array(waitlistSourceEntrySchema).optional(),
 });
 export const waitlistQuerySchema = z.object({
   page: pageSchema.max(100000).optional(),
   pageSize: pageSizeSchema(50).optional(),
   state: waitlistStateSchema.optional(),
+  active: z.enum(["true", "false"]).optional(),
+  fromDate: localDateSchema.optional(),
+  toDate: localDateSchema.optional(),
 });
 export type WaitlistQuery = z.infer<typeof waitlistQuerySchema>;
 export const waitlistCancelSchema = z.object({ version: z.number().int().positive() }).strict();

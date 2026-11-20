@@ -6,10 +6,17 @@ import { useI18n } from "~/i18n/react";
  * Put it next to a form: while `dirty`, leaving the page (links, back button, closing the tab)
  * asks first. The in-app part is a real dialog; the browser handles the tab-close prompt.
  */
-export function UnsavedGuard({ dirty }: { dirty: boolean }) {
+export function UnsavedGuard({
+  dirty,
+  preserveOnSearchChange = false,
+}: {
+  dirty: boolean;
+  preserveOnSearchChange?: boolean;
+}) {
   const { t } = useI18n();
   const blocker = useBlocker({
-    shouldBlockFn: () => dirty,
+    shouldBlockFn: ({ current, next }) =>
+      dirty && !(preserveOnSearchChange && current.pathname === next.pathname),
     enableBeforeUnload: () => dirty,
     withResolver: true,
   });

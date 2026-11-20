@@ -13,7 +13,8 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U sob -d sob"]
+      # Wait for the TCP listener used by API and migration containers.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "sob", "-d", "sob"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -63,6 +64,7 @@ services:
       METRICS_TOKEN: ${METRICS_TOKEN:-}
       # OAuth 2.1 / MCP (ADR 0009). The MCP resource defaults to ${BETTER_AUTH_URL}/mcp.
       MCP_RESOURCE_URL: ${MCP_RESOURCE_URL:-}
+      MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-}
       OAUTH_ACCESS_TOKEN_TTL_SECONDS: ${OAUTH_ACCESS_TOKEN_TTL_SECONDS:-900}
       OAUTH_REFRESH_TOKEN_TTL_SECONDS: ${OAUTH_REFRESH_TOKEN_TTL_SECONDS:-1209600}
       RATE_LIMIT_OAUTH_MAX: ${RATE_LIMIT_OAUTH_MAX:-60}
@@ -71,6 +73,7 @@ services:
       # Notifications (ADR 0010, docs/notifications.md). Off by default: nothing is ever sent
       # until you enable the worker and configure a provider.
       NOTIFY_WORKER_ENABLED: ${NOTIFY_WORKER_ENABLED:-false}
+      NOTIFY_EXTERNAL_WORKER_ENABLED: ${NOTIFY_EXTERNAL_WORKER_ENABLED:-false}
       PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-none}
       REDSYS_ENVIRONMENT: ${REDSYS_ENVIRONMENT:-test}
       REDSYS_MERCHANT_CODE: ${REDSYS_MERCHANT_CODE:-}
@@ -79,6 +82,11 @@ services:
       REDSYS_BIZUM_ENABLED: ${REDSYS_BIZUM_ENABLED:-false}
       REDSYS_RECURRING_ENABLED: ${REDSYS_RECURRING_ENABLED:-false}
       PAYMENT_TOKEN_ENCRYPTION_KEY: ${PAYMENT_TOKEN_ENCRYPTION_KEY:-}
+      META_WHATSAPP_APP_ID: ${META_WHATSAPP_APP_ID:-}
+      META_WHATSAPP_CONFIG_ID: ${META_WHATSAPP_CONFIG_ID:-}
+      META_WHATSAPP_APP_SECRET: ${META_WHATSAPP_APP_SECRET:-}
+      META_WHATSAPP_VERIFY_TOKEN: ${META_WHATSAPP_VERIFY_TOKEN:-}
+      META_WHATSAPP_GRAPH_VERSION: ${META_WHATSAPP_GRAPH_VERSION:-v27.0}
       NOTIFY_EMAIL_PROVIDER: ${NOTIFY_EMAIL_PROVIDER:-none}
       SMTP_URL: ${SMTP_URL:-}
       NOTIFY_EMAIL_FROM: ${NOTIFY_EMAIL_FROM:-Sisters of Beauty <no-reply@localhost>}
@@ -124,6 +132,11 @@ services:
       VALKEY_URL: redis://valkey:6379
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
       BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:4173}
+      META_WHATSAPP_APP_ID: ${META_WHATSAPP_APP_ID:-}
+      META_WHATSAPP_CONFIG_ID: ${META_WHATSAPP_CONFIG_ID:-}
+      META_WHATSAPP_APP_SECRET: ${META_WHATSAPP_APP_SECRET:-}
+      META_WHATSAPP_VERIFY_TOKEN: ${META_WHATSAPP_VERIFY_TOKEN:-}
+      META_WHATSAPP_GRAPH_VERSION: ${META_WHATSAPP_GRAPH_VERSION:-v27.0}
       NOTIFY_EMAIL_PROVIDER: ${NOTIFY_EMAIL_PROVIDER:-none}
       SMTP_URL: ${SMTP_URL:-}
       NOTIFY_EMAIL_FROM: ${NOTIFY_EMAIL_FROM:-Sisters of Beauty <no-reply@localhost>}

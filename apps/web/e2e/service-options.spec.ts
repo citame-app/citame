@@ -6,6 +6,7 @@ import {
   pickFirstTime,
   pickProfessional,
   signInThroughUi,
+  switchLocale,
 } from "./helpers";
 
 for (const scheme of ["light", "dark"] as const) {
@@ -33,10 +34,23 @@ for (const scheme of ["light", "dark"] as const) {
         const label = `Long ${crypto.randomUUID().slice(0, 8)}`;
         const name = `Haircut · ${label}`;
         const addonName = `Conditioning ${crypto.randomUUID().slice(0, 8)}`;
-        await page.getByRole("button", { name: "New service", exact: true }).click();
+        await page.goto(`/admin/services?service=${fixture.haircut}`);
+        const parent = page.getByRole("dialog", { name: "Edit service", exact: true });
+        await parent.getByRole("button", { name: "Service photos", exact: true }).click();
+        await parent.getByRole("button", { name: "Add portfolio photo", exact: true }).click();
+        const photo = page.getByRole("dialog", { name: "Add portfolio photo", exact: true });
+        await expect(photo.getByLabel("Treatment (optional)", { exact: true })).toHaveValue(
+          fixture.haircut,
+        );
+        await expect(photo.getByLabel("Treatment (optional)", { exact: true })).toBeDisabled();
+        await photo.getByRole("button", { name: "Close", exact: true }).click();
+        await parent.getByRole("button", { name: "General", exact: true }).click();
+        await parent.getByRole("button", { name: "Add service variant", exact: true }).click();
         let form = page.getByRole("dialog", { name: "New service", exact: true });
-        await form.getByLabel("Catalog type", { exact: true }).selectOption("variant");
-        await form.getByLabel("Parent service", { exact: true }).selectOption(fixture.haircut);
+        await expect(form.getByLabel("Catalog type", { exact: true })).toHaveValue("variant");
+        await expect(form.getByLabel("Parent service", { exact: true })).toHaveValue(
+          fixture.haircut,
+        );
         await form.getByLabel("Variant label", { exact: true }).fill(label);
         await expect(form.getByLabel("Name", { exact: true })).toHaveValue(name);
         await form.getByLabel("Duration (minutes)", { exact: true }).fill("60");
@@ -83,7 +97,7 @@ for (const scheme of ["light", "dark"] as const) {
         await page.getByRole("checkbox", { name: addonName, exact: true }).check();
         await expectNoHorizontalScroll(page);
         await expectNoSeriousA11yViolations(page, `options selection ${scheme}`);
-        await page.getByRole("radio", { name: "Español", exact: true }).check({ force: true });
+        await switchLocale(page, "Español");
         await expect(
           page.getByRole("group", { name: `Complementos de ${name}`, exact: true }),
         ).toBeVisible();
@@ -93,7 +107,7 @@ for (const scheme of ["light", "dark"] as const) {
           fullPage: true,
           animations: "disabled",
         });
-        await page.getByRole("radio", { name: "English", exact: true }).check({ force: true });
+        await switchLocale(page, "English");
         await page.getByRole("button", { name: "Continue", exact: true }).click();
         await pickProfessional(page, "Stylist A");
         await pickFirstTime(page);

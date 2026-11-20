@@ -1,38 +1,74 @@
 import {
   type CreateProductInput,
+  inventoryFacetsSchema,
+  inventoryReportSchema,
+  type ProductQuery,
+  type ProductPhotoInput,
   productListSchema,
+  productPhotoVersionSchema,
   productSchema,
+  reviewedInventoryProductSchema,
+  reviewedInventoryMovementsSchema,
+  type StockLedgerFilters,
+  type StockLedgerQuery,
   type StockMovementInput,
   type StockReturnInput,
-  stockMovementListSchema,
+  stockLedgerSchema,
   type UpdateProductInput,
 } from "@sob/contracts";
 import type { ApiClient } from "./client";
+
+const inventoryParams = ({ resellable, lowStock, ...query }: Partial<ProductQuery>) => ({
+  ...query,
+  resellable: resellable === undefined ? undefined : String(resellable),
+  lowStock: lowStock === undefined ? undefined : String(lowStock),
+});
+
+function inventoryDownloadHref(
+  path: "products" | "movements",
+  filters: Record<string, string | number | undefined>,
+) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters))
+    if (value !== undefined) query.set(key, String(value));
+  return `/api/admin/inventory/${path}/export${query.size ? `?${query}` : ""}`;
+}
+
+export const inventoryExportHref = (filters: Partial<ProductQuery>) =>
+  inventoryDownloadHref("products", inventoryParams(filters));
+
+export const stockLedgerExportHref = (filters: Partial<StockLedgerFilters>) =>
+  inventoryDownloadHref("movements", filters);
+
 export function inventoryEndpoints(client: ApiClient) {
   return {
-    list: (
-      query: {
-        search?: string;
-        active?: "active" | "inactive" | "all";
-        lowStock?: boolean;
-        page?: number;
-        pageSize?: number;
-      } = {},
-    ) =>
-      client.get("/admin/inventory/products", productListSchema, {
-        query: {
-          ...query,
-          lowStock: query.lowStock === undefined ? undefined : String(query.lowStock),
-        },
+    facets: () => client.get("/admin/inventory/facets", inventoryFacetsSchema),
+    ledger: (query: Partial<StockLedgerQuery> = {}, signal?: AbortSignal) =>
+      client.get("/admin/inventory/movements", stockLedgerSchema, { query, signal }),
+    report: (filters: Partial<ProductQuery>) =>
+      client.get("/admin/inventory/products/report", inventoryReportSchema, {
+        query: inventoryParams(filters),
       }),
+    list: (query: Partial<ProductQuery> = {}) =>
+      client.get("/admin/inventory/products", productListSchema, {
+        query: inventoryParams(query),
+      }),
+    get: (id: string) =>
+      client.get(`/admin/inventory/products/${id}`, reviewedInventoryProductSchema),
+    savePhoto: (id: string, body: ProductPhotoInput) =>
+      client.put(`/admin/inventory/products/${id}/photo`, body, productPhotoVersionSchema),
     create: (body: CreateProductInput) =>
-      client.post("/admin/inventory/products", body, productSchema),
+      client.post("/admin/inventory/products", body, reviewedInventoryProductSchema),
     update: (id: string, body: UpdateProductInput) =>
-      client.patch(`/admin/inventory/products/${id}`, body, productSchema),
+      client.patch(`/admin/inventory/products/${id}`, body, reviewedInventoryProductSchema),
     move: (id: string, body: StockMovementInput) =>
-      client.post(`/admin/inventory/products/${id}/movements`, body, productSchema),
+      client.post(
+        `/admin/inventory/products/${id}/movements`,
+        body,
+        reviewedInventoryProductSchema,
+      ),
     movements: (id: string, page = 1) =>
-      client.get(`/admin/inventory/products/${id}/movements`, stockMovementListSchema, {
+      client.get(`/admin/inventory/products/${id}/movements`, reviewedInventoryMovementsSchema, {
         query: { page },
       }),
     returnStock: (body: StockReturnInput) =>

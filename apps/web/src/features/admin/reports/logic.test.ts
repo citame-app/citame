@@ -93,4 +93,22 @@ describe("reportToCsv", () => {
   test("starts with a UTF-8 friendly plain text and ends with a newline", () => {
     expect(csv.endsWith("\r\n")).toBe(true);
   });
+
+  test("exports counts for pending prices separately from numeric amounts", () => {
+    const withPending = reportToCsv({
+      ...summary,
+      totals: { ...summary.totals, unpricedServices: 1 },
+      series: [{ ...summary.series[0]!, unpricedServices: 1 }],
+      topServices: [
+        { serviceId: null, name: "Pending care", count: 1, revenueCents: 0, unpricedServices: 1 },
+        { serviceId: null, name: "Free care", count: 1, revenueCents: 0 },
+      ],
+      perStaff: [{ ...summary.perStaff[0]!, unpricedServices: 1 }],
+    });
+    expect(withPending).toContain("2026-03-09,2,0,1,0,1,15000.00,1");
+    expect(withPending).toContain(
+      "service,completed,revenue,unpriced_services\r\nPending care,1,0.00,1\r\nFree care,1,0.00,0",
+    );
+    expect(withPending).toContain("Ana,3,2,1,0.3333,25000.00,1");
+  });
 });

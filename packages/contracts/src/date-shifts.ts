@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { idSchema, localDateSchema } from "./common";
+import { idSchema, instantSchema, localDateSchema } from "./common";
 import { scheduleConflictSchema, timeOfDaySchema } from "./staff";
 
 export const dateShiftRangeSchema = z
@@ -93,11 +93,12 @@ export const dateShiftInputSchema = z
   });
 export type DateShiftInput = z.infer<typeof dateShiftInputSchema>;
 export type DateShiftRange = z.infer<typeof dateShiftRangeSchema>;
+const effectiveShiftRangesSchema = z.array(dateShiftRangeSchema).max(56);
 export const dateShiftDaySchema = z.object({
   date: localDateSchema,
   version: z.number().int().nonnegative(),
   ranges: dateShiftRangesSchema.nullable(),
-  effectiveRanges: z.array(dateShiftRangeSchema).max(56),
+  effectiveRanges: effectiveShiftRangesSchema,
 });
 export const dateShiftsQuerySchema = z
   .object({ from: localDateSchema, to: localDateSchema })
@@ -114,6 +115,47 @@ export const dateShiftsResponseSchema = z.object({
   days: z.array(dateShiftDaySchema).max(366),
   conflicts: z.array(scheduleConflictSchema),
 });
+
+export function shiftWeekStart(date: string): string {
+  return shiftDate(date, -((new Date(`${date}T12:00Z`).getUTCDay() + 6) % 7));
+}
+
+export const teamShiftWeekStartSchema = localDateSchema.refine(
+  (date) =>
+    date >= "0001-01-01" &&
+    localDateSchema.safeParse(shiftDate(date, 7)).success &&
+    shiftWeekStart(date) === date,
+  "Choose a Monday with a full week in range",
+);
+export const teamShiftWeekQuerySchema = z.object({ week: teamShiftWeekStartSchema }).strict();
+
+export const teamShiftWeekSchema = z.object({
+  timezone: z.string(),
+  members: z.array(
+    z.object({
+      id: idSchema,
+      name: z.string(),
+      days: z
+        .array(
+          z.object({
+            date: localDateSchema,
+            custom: z.boolean(),
+            ranges: effectiveShiftRangesSchema,
+            absences: z.array(
+              z.object({
+                id: idSchema,
+                startsAt: instantSchema,
+                endsAt: instantSchema,
+                fullDay: z.boolean(),
+              }),
+            ),
+          }),
+        )
+        .length(7),
+    }),
+  ),
+});
+export type TeamShiftWeek = z.infer<typeof teamShiftWeekSchema>;
 export const dateShiftPreviewSchema = z.object({
   staffId: idSchema,
   timezone: z.string(),

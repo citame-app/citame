@@ -73,22 +73,31 @@ describe("authorization code + PKCE (S256 only)", () => {
     expect(url.searchParams.get("sig")).toBeString();
   });
 
-  test("PKCE is mandatory: a request without a challenge never yields a code", async () => {
-    const { user, clientId, scope } = await setup();
-    const params = new URLSearchParams({
-      response_type: "code",
-      client_id: clientId,
-      redirect_uri: REDIRECT_URI,
-      scope,
-      resource: MCP_URL,
-    });
-    const res = await t.app.request(`/api/auth/oauth2/authorize?${params}`, {
-      headers: { cookie: user.cookie },
-    });
-    const location = res.headers.get("location") ?? "";
-    expect(location).not.toContain("code=");
-    expect(location).toContain("error=");
-  });
+  test.each(["none", "client_secret_basic"])(
+    "a dynamically registered %s client needs PKCE even without offline access",
+    async (tokenEndpointAuthMethod) => {
+      const user = await actor(t, "client", "lucia@example.com");
+      const scope = "mcp:read";
+      const { res: registration, client } = await registerClient(t.app, {
+        scope,
+        token_endpoint_auth_method: tokenEndpointAuthMethod,
+      });
+      expect(registration.status).toBe(201);
+      const params = new URLSearchParams({
+        response_type: "code",
+        client_id: client.client_id,
+        redirect_uri: REDIRECT_URI,
+        scope,
+        resource: MCP_URL,
+      });
+      const res = await t.app.request(`/api/auth/oauth2/authorize?${params}`, {
+        headers: { cookie: user.cookie },
+      });
+      const location = res.headers.get("location") ?? "";
+      expect(location).not.toContain("code=");
+      expect(location).toContain("error=");
+    },
+  );
 
   test("the plain challenge method is rejected", async () => {
     const { user, clientId, scope } = await setup();

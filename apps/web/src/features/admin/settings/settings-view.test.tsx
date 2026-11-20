@@ -69,6 +69,16 @@ describe("SettingsView reminders", () => {
 });
 
 describe("SettingsView", () => {
+  test("pauses online bookings independently of the other settings", async () => {
+    renderApp(<SettingsView section="booking" />);
+    const toggle = await screen.findByRole("switch", { name: "Accept new online bookings" });
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
+    await waitFor(() => expect(patches).toEqual([{ onlineBookingEnabled: false }]));
+    expect(toggle).not.toBeChecked();
+  });
+
   test("loads the current values", async () => {
     renderApp(<SettingsView />);
     expect(await screen.findByLabelText("Salon name")).toHaveValue("Sisters of Beauty");

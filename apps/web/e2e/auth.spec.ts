@@ -131,8 +131,8 @@ test.describe("authentication", () => {
     await page.getByLabel("Email").fill(ownerEmail as string);
     await page.getByLabel("Password", { exact: true }).fill(ownerPassword as string);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
-    await expect(page).toHaveURL(/\/admin$/);
-    await expect(page.getByRole("heading", { level: 1, name: "Today" })).toBeVisible();
-    await expectNoSeriousA11yViolations(page, "admin today");
+    await expect(page).toHaveURL(/\/admin\/calendar$/);
+    await expect(page.getByRole("heading", { level: 1, name: "Calendar" })).toBeVisible();
+    await expectNoSeriousA11yViolations(page, "admin calendar");
   });
 });

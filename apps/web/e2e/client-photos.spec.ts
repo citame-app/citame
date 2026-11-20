@@ -2,7 +2,7 @@ import { expect, request, test } from "@playwright/test";
 import { clientPhotoFixture } from "../../api/test/client-photo-fixture";
 import { RECURRING_FIXTURE as fixture } from "../../api/test/recurring-values";
 import { expectNoHorizontalScroll } from "./admin-helpers";
-import { expectNoSeriousA11yViolations, signInThroughUi } from "./helpers";
+import { expectNoSeriousA11yViolations, signInThroughUi, switchLocale } from "./helpers";
 
 for (const scheme of ["light", "dark"] as const) {
   test.describe(`private client photos — ${scheme}`, () => {
@@ -116,7 +116,7 @@ for (const scheme of ["light", "dark"] as const) {
         await details.getByLabel("Photo description", { exact: true }).fill("After colour");
         await details.getByRole("button", { name: "Save photo", exact: true }).click();
         await expect(details).toHaveCount(0);
-        await page.getByRole("radio", { name: "Español", exact: true }).check({ force: true });
+        await switchLocale(page, "Español");
         await page.getByRole("button", { name: "Abrir foto: After colour", exact: true }).click();
         const spanish = page.getByRole("dialog", { name: "Detalles de la foto", exact: true });
         await expect(

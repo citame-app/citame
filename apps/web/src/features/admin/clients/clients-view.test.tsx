@@ -31,6 +31,8 @@ beforeEach(() => {
   globalThis.fetch = mock(async (input: string | URL | Request) => {
     const url = new URL(String(input), "http://localhost");
     urls.push(url.pathname + url.search);
+    if (url.pathname === "/api/admin/clients/groups")
+      return json({ groups: [{ name: "vip", count: 3 }] });
     if (failing) return json({}, 500);
     if (url.pathname === "/api/admin/clients") {
       const q = (url.searchParams.get("search") ?? "").toLowerCase();
@@ -137,5 +139,16 @@ describe("ClientsView", () => {
     open();
     expect(await screen.findByRole("alert")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
+  test("groups open independently and selecting a group clears the previous name search", async () => {
+    failing = true;
+    const onSearchChange = mock();
+    open({ ...base, q: "bea" }, onSearchChange);
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "Client groups" }));
+    fireEvent.click(await screen.findByRole("button", { name: "vip 3" }));
+    expect(onSearchChange).toHaveBeenCalledWith({ ...base, group: "vip", page: 1 });
+    expect(screen.getByRole("searchbox", { name: "Search clients" })).toHaveValue("");
   });
 });

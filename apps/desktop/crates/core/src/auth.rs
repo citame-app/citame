@@ -1,27 +1,78 @@
-//! Authentication behind a trait, so Phase 6 can swap the mechanism (ADR 0008).
-//!
-//! Today the API only has Better Auth email + password with cookie sessions (ADR 0003): the
-//! desktop signs in at `POST /api/auth/sign-in/email`, keeps the signed `session_token` cookie
-//! and sends it as a `Cookie` header on every sync request. The OAuth 2.1 Authorization Code +
-//! PKCE flow with a loopback redirect (`pkce`) is meant to replace `BetterAuthSession`. The API
-//! has had its OAuth provider since Phase 6 (ADR 0009) but the swap is a follow-up: `/sync/*`
-//! must first accept bearer access tokens (it only reads the session cookie today).
+//! Desktop sign-in and private, origin-scoped session storage.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
+
+mod browser_calendar;
+mod device;
+pub use browser_calendar::BrowserCalendar;
+use device::DeviceLink;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
     /// `name=value` exactly as the server set it (the value is signed; never modify it).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub cookie: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth: Option<OAuthCredentials>,
     pub user_id: String,
     pub name: String,
     pub email: String,
     pub role: String,
+}
+
+impl Session {
+    pub fn has_device_link(&self) -> bool {
+        self.oauth
+            .as_ref()
+            .is_some_and(|credentials| credentials.device.is_some())
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct OAuthCredentials {
+    access_token: String,
+    refresh_token: String,
+    expires_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device: Option<DeviceLink>,
+}
+
+impl std::fmt::Debug for OAuthCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OAuthCredentials { [redacted] }")
+    }
+}
+
+#[derive(Deserialize)]
+struct TokenResponse {
+    access_token: String,
+    #[serde(default)]
+    refresh_token: String,
+    expires_in: i64,
+}
+
+/// Session and replica files are scoped to the server and the account's permissions.
+pub fn server_data_dir(root: &Path, api: &str) -> PathBuf {
+    let digest = Sha256::digest(api.trim().trim_end_matches('/').as_bytes());
+    root.join("servers").join(URL_SAFE_NO_PAD.encode(digest))
+}
+
+pub fn replica_path(root: &Path, api: &str, session: &Session) -> PathBuf {
+    let mut hash = Sha256::new();
+    hash.update((session.user_id.len() as u64).to_le_bytes());
+    hash.update(session.user_id.as_bytes());
+    hash.update(session.role.as_bytes());
+    server_data_dir(root, api)
+        .join(URL_SAFE_NO_PAD.encode(hash.finalize()))
+        .join("replica.db")
 }
 
 #[derive(Debug, Clone)]
@@ -48,7 +99,7 @@ pub trait AuthProvider: Send + Sync {
     fn id(&self) -> &'static str;
     fn sign_in(&self, credentials: &Credentials) -> Result<Session, AuthError>;
     /// Headers to attach to API requests.
-    fn authorize(&self, session: &Session) -> Vec<(String, String)>;
+    fn authorize(&self, session: &mut Session) -> Result<Vec<(String, String)>, AuthError>;
     /// `Ok(false)` when the server no longer accepts the session.
     fn validate(&self, session: &Session) -> Result<bool, AuthError>;
     fn sign_out(&self, session: &Session);
@@ -152,12 +203,182 @@ impl BetterAuthSession {
     pub fn new(base_url: &str) -> Self {
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .http_status_as_error(false)
+            .max_redirects(0)
             .timeout_global(Some(TIMEOUT))
             .build()
             .into();
         Self {
             base_url: base_url.trim_end_matches('/').to_owned(),
             agent,
+        }
+    }
+}
+
+const DESKTOP_CLIENT_ID: &str = "sob-desktop";
+const DESKTOP_SCOPE: &str = "desktop:sign-in";
+
+pub struct BrowserSignIn {
+    listener: crate::pkce::LoopbackReceiver,
+    verifier: String,
+    state: String,
+    redirect: String,
+    resource: String,
+    pub url: String,
+}
+
+impl BetterAuthSession {
+    pub fn begin_browser_sign_in(&self) -> Result<BrowserSignIn, AuthError> {
+        use crate::pkce::{
+            LoopbackReceiver, authorization_url, challenge_s256, new_verifier, pct_encode,
+        };
+        let listener =
+            LoopbackReceiver::bind().map_err(|error| AuthError::Network(error.to_string()))?;
+        let redirect = listener.redirect_uri();
+        let verifier = new_verifier();
+        let state = new_verifier();
+        let resource = format!("{}/api/auth/desktop", self.base_url);
+        let endpoint = format!("{}/api/auth/oauth2/authorize", self.base_url);
+        let url = format!(
+            "{}&scope={}&resource={}&prompt=login",
+            authorization_url(
+                &endpoint,
+                DESKTOP_CLIENT_ID,
+                &redirect,
+                &state,
+                &challenge_s256(&verifier)
+            ),
+            pct_encode(DESKTOP_SCOPE),
+            pct_encode(&resource),
+        );
+        Ok(BrowserSignIn {
+            listener,
+            verifier,
+            state,
+            redirect,
+            resource,
+            url,
+        })
+    }
+
+    pub fn complete_browser_sign_in(
+        &self,
+        flow: BrowserSignIn,
+        cancelled: &AtomicBool,
+    ) -> Result<Session, AuthError> {
+        let callback = flow
+            .listener
+            .wait_cancellable(&flow.state, Duration::from_secs(180), cancelled)
+            .map_err(AuthError::Unexpected)?;
+        let issuer = format!("{}/api/auth", self.base_url);
+        if callback.issuer.as_deref() != Some(&issuer) {
+            return Err(AuthError::Unexpected("OAuth issuer mismatch".into()));
+        }
+        let credentials = self.request_token([
+            ("grant_type", "authorization_code"),
+            ("client_id", DESKTOP_CLIENT_ID),
+            ("code", &callback.code),
+            ("redirect_uri", &flow.redirect),
+            ("code_verifier", &flow.verifier),
+            ("resource", &flow.resource),
+        ])?;
+        if cancelled.load(Ordering::Relaxed) {
+            self.revoke(&credentials);
+            return Err(AuthError::Unexpected("Authorization cancelled".into()));
+        }
+        let mut linked = self.link_device(&credentials)?;
+        let result = (|| {
+            let device = linked.device.as_ref().expect("enrolled device");
+            (linked.access_token, linked.expires_at) = self.renew_device(device)?;
+            let user = self.viewer("Authorization", &format!("Bearer {}", linked.access_token))?;
+            if cancelled.load(Ordering::Relaxed) {
+                return Err(AuthError::Unexpected("Authorization cancelled".into()));
+            }
+            Ok(user)
+        })();
+        match result {
+            Ok(user) => Ok(Session {
+                cookie: String::new(),
+                oauth: Some(linked),
+                user_id: user.id,
+                name: user.name,
+                email: user.email,
+                role: user.role,
+            }),
+            Err(error) => {
+                if let Some(device) = &linked.device {
+                    let _ = self.revoke_device(device);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn request_token<const N: usize>(
+        &self,
+        form: [(&str, &str); N],
+    ) -> Result<OAuthCredentials, AuthError> {
+        let refresh = form.contains(&("grant_type", "refresh_token"));
+        let mut response = self
+            .agent
+            .post(&format!("{}/api/auth/oauth2/token", self.base_url))
+            .send_form(form)
+            .map_err(|e| AuthError::Network(e.to_string()))?;
+        match response.status().as_u16() {
+            200 => {
+                let token: TokenResponse = read_response(&mut response)?;
+                if token.access_token.is_empty()
+                    || (refresh && token.refresh_token.is_empty())
+                    || token.expires_in <= 0
+                {
+                    return Err(AuthError::Unexpected("Invalid OAuth token response".into()));
+                }
+                Ok(OAuthCredentials {
+                    access_token: token.access_token,
+                    refresh_token: token.refresh_token,
+                    device: None,
+                    expires_at: chrono::Utc::now()
+                        .timestamp()
+                        .saturating_add(token.expires_in),
+                })
+            }
+            400 | 401 | 403 => Err(AuthError::InvalidCredentials),
+            status => Err(AuthError::Network(format!(
+                "OAuth server returned HTTP {status}"
+            ))),
+        }
+    }
+
+    fn viewer(&self, header: &str, value: &str) -> Result<SignInUser, AuthError> {
+        let mut response = self
+            .agent
+            .get(&format!("{}/me", self.base_url))
+            .header(header, value)
+            .call()
+            .map_err(|e| AuthError::Network(e.to_string()))?;
+        match response.status().as_u16() {
+            200 => Ok(read_response::<SignInBody>(&mut response)?.user),
+            401 => Err(AuthError::InvalidCredentials),
+            403 => Err(AuthError::WrongRole("client".into())),
+            status => Err(AuthError::Unexpected(format!("HTTP {status}"))),
+        }
+    }
+
+    fn revoke(&self, credentials: &OAuthCredentials) {
+        for (token, kind) in [
+            (&credentials.refresh_token, "refresh_token"),
+            (&credentials.access_token, "access_token"),
+        ] {
+            if token.is_empty() {
+                continue;
+            }
+            let _ = self
+                .agent
+                .post(&format!("{}/api/auth/oauth2/revoke", self.base_url))
+                .send_form([
+                    ("client_id", DESKTOP_CLIENT_ID),
+                    ("token", token.as_str()),
+                    ("token_type_hint", kind),
+                ]);
         }
     }
 }
@@ -176,6 +397,42 @@ struct SignInBody {
     user: SignInUser,
 }
 
+fn read_response<T: serde::de::DeserializeOwned>(
+    response: &mut ureq::http::Response<ureq::Body>,
+) -> Result<T, AuthError> {
+    let body = response
+        .body_mut()
+        .with_config()
+        .limit(64 * 1024)
+        .read_to_string()
+        .map_err(|error| AuthError::Network(error.to_string()))?;
+    serde_json::from_str(&body)
+        .map_err(|_| AuthError::Unexpected("Invalid authorization response".into()))
+}
+
+fn read_sign_in(response: &mut ureq::http::Response<ureq::Body>) -> Result<Session, AuthError> {
+    let cookies: Vec<String> = response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|value| value.to_str().ok().map(str::to_owned))
+        .collect();
+    let parsed: SignInBody = read_response(response)?;
+    if !matches!(parsed.user.role.as_str(), "owner" | "staff") {
+        return Err(AuthError::WrongRole(parsed.user.role));
+    }
+    let cookie = session_cookie_from_set_cookie(&cookies)
+        .ok_or_else(|| AuthError::Unexpected("no session cookie in the response".into()))?;
+    Ok(Session {
+        cookie,
+        oauth: None,
+        user_id: parsed.user.id,
+        name: parsed.user.name,
+        email: parsed.user.email,
+        role: parsed.user.role,
+    })
+}
+
 impl AuthProvider for BetterAuthSession {
     fn id(&self) -> &'static str {
         "better-auth-session"
@@ -190,16 +447,6 @@ impl AuthProvider for BetterAuthSession {
             .send(body.to_string())
             .map_err(|e| AuthError::Network(e.to_string()))?;
         let status = resp.status().as_u16();
-        let cookies: Vec<String> = resp
-            .headers()
-            .get_all("set-cookie")
-            .iter()
-            .filter_map(|v| v.to_str().ok().map(str::to_owned))
-            .collect();
-        let text = resp
-            .body_mut()
-            .read_to_string()
-            .map_err(|e| AuthError::Network(e.to_string()))?;
         match status {
             200 => {}
             401 | 400 | 403 => return Err(AuthError::InvalidCredentials),
@@ -210,39 +457,56 @@ impl AuthProvider for BetterAuthSession {
             }
             other => return Err(AuthError::Unexpected(format!("HTTP {other}"))),
         }
-        let parsed: SignInBody =
-            serde_json::from_str(&text).map_err(|e| AuthError::Unexpected(e.to_string()))?;
-        if parsed.user.role == "client" {
-            return Err(AuthError::WrongRole(parsed.user.role));
+        read_sign_in(&mut resp)
+    }
+    fn authorize(&self, session: &mut Session) -> Result<Vec<(String, String)>, AuthError> {
+        if let Some(tokens) = session.oauth.as_mut() {
+            if chrono::Utc::now().timestamp() + 30 >= tokens.expires_at {
+                if let Some(device) = &tokens.device {
+                    (tokens.access_token, tokens.expires_at) = self.renew_device(device)?;
+                } else {
+                    *tokens = self.request_token([
+                        ("grant_type", "refresh_token"),
+                        ("client_id", DESKTOP_CLIENT_ID),
+                        ("refresh_token", &tokens.refresh_token),
+                        ("resource", &format!("{}/api/auth/desktop", self.base_url)),
+                    ])?;
+                }
+            }
+            Ok(vec![(
+                "Authorization".to_owned(),
+                format!("Bearer {}", tokens.access_token),
+            )])
+        } else {
+            Ok(vec![("Cookie".to_owned(), session.cookie.clone())])
         }
-        let cookie = session_cookie_from_set_cookie(&cookies)
-            .ok_or_else(|| AuthError::Unexpected("no session cookie in the response".into()))?;
-        Ok(Session {
-            cookie,
-            user_id: parsed.user.id,
-            name: parsed.user.name,
-            email: parsed.user.email,
-            role: parsed.user.role,
-        })
     }
-    fn authorize(&self, session: &Session) -> Vec<(String, String)> {
-        vec![("Cookie".to_owned(), session.cookie.clone())]
-    }
+
     fn validate(&self, session: &Session) -> Result<bool, AuthError> {
-        let resp = self
-            .agent
-            .get(&format!("{}/me", self.base_url))
-            .header("Cookie", &session.cookie)
-            .call()
-            .map_err(|e| AuthError::Network(e.to_string()))?;
-        match resp.status().as_u16() {
-            200 => Ok(true),
-            401 => Ok(false),
-            other => Err(AuthError::Unexpected(format!("HTTP {other}"))),
+        if session.oauth.is_some() {
+            // The transport validates and rotates OAuth using the shared live session.
+            return Ok(true);
+        }
+        match self.viewer("Cookie", &session.cookie) {
+            Ok(user) => Ok(user.id == session.user_id && user.role == session.role),
+            Err(AuthError::InvalidCredentials | AuthError::WrongRole(_)) => Ok(false),
+            Err(error) => Err(error),
         }
     }
     fn sign_out(&self, session: &Session) {
-        let _ = session;
+        if let Some(tokens) = &session.oauth {
+            if tokens.device.is_none() {
+                self.revoke(tokens);
+            }
+            return;
+        }
+        let _ = self
+            .agent
+            .post(&format!("{}/api/auth/sign-out", self.base_url))
+            .header("Cookie", &session.cookie)
+            .header("Origin", &self.base_url)
+            .content_type("application/json")
+            .send("{}");
     }
 }
 

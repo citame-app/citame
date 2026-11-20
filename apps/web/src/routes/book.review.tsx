@@ -120,6 +120,7 @@ function ReviewStep() {
         ...intake.payload,
         ...(promotion.payload ? { promotion: promotion.payload } : {}),
         staffId: search.slotStaff,
+        professionalPreference: search.staff === "any" ? ("any" as const) : ("specific" as const),
         serviceIds: search.services,
         serviceQuotes: acceptedServiceQuotes(selectedServices),
         startsAt: search.slot,
@@ -157,6 +158,11 @@ function ReviewStep() {
       if (unknown) return;
       packet.current = null;
       recoveryPending.current = false;
+      if (error instanceof ApiError && error.code === "online_booking_paused") {
+        void queryClient.invalidateQueries({ queryKey: ["salon"] });
+        toast.error(t("booking.paused.title"));
+        return;
+      }
       if (error instanceof ApiError && error.code === "booking_promotion_changed") {
         promotion.resetReview();
         setAcceptedVersion(null);
@@ -311,7 +317,10 @@ function ReviewStep() {
           >
             <p className="font-display text-lg font-semibold">{t("booking.review.staff.title")}</p>
             <p className="mt-1">{t("booking.review.staff.body")}</p>
-            <Link to="/admin" className={`${buttonClasses({ variant: "secondary" })} mt-4`}>
+            <Link
+              to="/admin/calendar"
+              className={`${buttonClasses({ variant: "secondary" })} mt-4`}
+            >
               {t("booking.review.staff.link")}
             </Link>
           </div>

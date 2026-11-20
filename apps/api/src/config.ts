@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { initialSyncGeneration, syncGenerationSchema } from "@sob/contracts";
 import { z } from "zod";
 import { paymentEncryptionKey } from "./payments/mandate-vault";
 import { type RedsysConfig, RedsysGateway } from "./payments/redsys";
@@ -11,6 +12,7 @@ const envSchema = z.object({
   /** Prefix for every Valkey key, so several environments (or test runs) can share a server. */
   VALKEY_KEY_PREFIX: z.string().default("sob:"),
   PORT: positiveInt.default(3000),
+  WORKER_HEALTH_PORT: positiveInt.max(65535).optional(),
   /**
    * Seconds a connection may idle before the listener closes it (Bun's own default is 10, below the
    * 15 s SSE heartbeat; `/sync/stream` is exempt either way). 0 disables, 255 is Bun's maximum.
@@ -55,13 +57,16 @@ const envSchema = z.object({
   /** New SSE connections per caller and window: reconnect storms must not exhaust the server. */
   SYNC_STREAM_RATE_LIMIT_MAX: positiveInt.default(30),
   SYNC_STREAM_RATE_LIMIT_WINDOW_SECONDS: positiveInt.default(60),
+  /** Every API replica must change this together when activating restored data. */
+  SYNC_REPLICA_GENERATION: syncGenerationSchema.default(initialSyncGeneration),
 
   /**
    * Public URL of the MCP endpoint, which is also the OAuth resource (RFC 8707) and the token
    * audience. Defaults to `<BETTER_AUTH_URL>/mcp`: the web app's origin, forwarded to the API.
    */
   MCP_RESOURCE_URL: z.union([z.url(), z.literal("").transform(() => undefined)]).optional(),
-  /** Lifetime of OAuth access tokens. Short on purpose: JWTs cannot be revoked before expiry. */
+  MCP_ALLOWED_ORIGINS: z.string().default(""),
+  /** Lifetime of OAuth access tokens. Short on purpose to limit exposure of a stolen bearer. */
   OAUTH_ACCESS_TOKEN_TTL_SECONDS: positiveInt.default(900),
   /** Lifetime of OAuth refresh tokens (rotated on every use). */
   OAUTH_REFRESH_TOKEN_TTL_SECONDS: positiveInt.default(14 * 24 * 60 * 60),
@@ -86,6 +91,34 @@ const envSchema = z.object({
 
   /** Runs the notification worker inside the API process (see also `bun run worker`). */
   NOTIFY_WORKER_ENABLED: z.stringbool().default(false),
+  NOTIFY_EXTERNAL_WORKER_ENABLED: z.stringbool().default(false),
+  META_WHATSAPP_APP_ID: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z
+      .string()
+      .regex(/^\d{5,32}$/)
+      .optional(),
+  ),
+  META_WHATSAPP_CONFIG_ID: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z
+      .string()
+      .regex(/^\d{5,32}$/)
+      .optional(),
+  ),
+  META_WHATSAPP_APP_SECRET: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.string().min(16).optional(),
+  ),
+  META_WHATSAPP_VERIFY_TOKEN: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.string().min(24).optional(),
+  ),
+  META_WHATSAPP_GRAPH_VERSION: z
+    .string()
+    .regex(/^v\d{2}\.0$/)
+    .default("v27.0"),
+
   /** `smtp` sends through SMTP_URL; `none` skips every email (rows are marked skipped). */
   NOTIFY_EMAIL_PROVIDER: z.enum(["none", "smtp"]).default("none"),
   /** `smtp://user:pass@host:587` or `smtps://...`. Never logged. */
@@ -123,8 +156,18 @@ export interface RateLimitRule {
   windowSeconds: number;
 }
 
+export interface WhatsAppConfig {
+  appId: string;
+  configId: string;
+  appSecret: string;
+  verifyToken: string;
+  version: string;
+}
+
 export interface NotificationConfig {
+  whatsapp?: WhatsAppConfig;
   workerEnabled: boolean;
+  externalWorkerEnabled?: boolean;
   email: { provider: "none" | "smtp"; smtpUrl?: string; from: string };
   sms: { provider: "none" | "twilio"; accountSid?: string; authToken?: string; from?: string };
   pollIntervalMs: number;
@@ -153,6 +196,7 @@ export interface MaintenanceConfig {
 }
 
 export interface AppConfig {
+  syncReplicaGeneration: string;
   payments: {
     provider: "none" | "redsys";
     redsys: RedsysConfig | null;
@@ -164,8 +208,11 @@ export interface AppConfig {
   valkeyUrl: string;
   valkeyKeyPrefix: string;
   port: number;
+  workerHealthPort?: number;
   http: { idleTimeoutSeconds: number; maxRequestBodyBytes: number };
   auth: {
+    /** Optional isolated cookie namespace for private consultation servers on the same host. */
+    cookiePrefix?: string;
     secret: string;
     baseURL: string;
     trustedOrigins: string[];
@@ -176,6 +223,7 @@ export interface AppConfig {
   oauth: {
     /** Resource identifier and audience of every access token this API accepts at `/mcp`. */
     mcpResource: string;
+    mcpAllowedOrigins: string[];
     accessTokenTtlSeconds: number;
     refreshTokenTtlSeconds: number;
   };
@@ -203,6 +251,8 @@ const FILE_BACKED = [
   "METRICS_TOKEN",
   "REDSYS_SECRET_KEY",
   "PAYMENT_TOKEN_ENCRYPTION_KEY",
+  "META_WHATSAPP_APP_SECRET",
+  "META_WHATSAPP_VERIFY_TOKEN",
 ] as const;
 
 /** A plain variable wins; otherwise the file's content (minus the trailing newline) is used. */
@@ -231,6 +281,37 @@ export function loadConfig(input: Record<string, string | undefined> = process.e
     throw new Error(`Invalid environment configuration:\n${problems}`);
   }
   const e = parsed.data;
+  const mcpResource = e.MCP_RESOURCE_URL ?? `${e.BETTER_AUTH_URL.replace(/\/+$/, "")}/mcp`;
+  for (const [name, value] of [
+    ["BETTER_AUTH_URL", e.BETTER_AUTH_URL],
+    ["MCP_RESOURCE_URL", mcpResource],
+  ] as const) {
+    const url = new URL(value);
+    const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+    if (
+      !["http:", "https:"].includes(url.protocol) ||
+      url.username ||
+      url.password ||
+      value.includes("?") ||
+      value.includes("#") ||
+      (e.NODE_ENV === "production" && url.protocol !== "https:" && !loopback)
+    ) {
+      throw new Error(
+        `Invalid environment configuration:\n  - ${name}: use a public HTTPS URL without credentials, query or fragment (HTTP is available on loopback)`,
+      );
+    }
+  }
+  const metaFields = [
+    e.META_WHATSAPP_APP_ID,
+    e.META_WHATSAPP_CONFIG_ID,
+    e.META_WHATSAPP_APP_SECRET,
+    e.META_WHATSAPP_VERIFY_TOKEN,
+  ];
+  if (metaFields.some(Boolean) && !metaFields.every(Boolean)) {
+    throw new Error(
+      "Set all four META_WHATSAPP_APP_ID, META_WHATSAPP_CONFIG_ID, META_WHATSAPP_APP_SECRET and META_WHATSAPP_VERIFY_TOKEN or leave all unset",
+    );
+  }
   if (e.NOTIFY_EMAIL_PROVIDER === "smtp" && !e.SMTP_URL) {
     throw new Error(
       "Invalid environment configuration:\n  - SMTP_URL: required when NOTIFY_EMAIL_PROVIDER=smtp",
@@ -279,6 +360,7 @@ export function loadConfig(input: Record<string, string | undefined> = process.e
     new RedsysGateway(redsys); // Validate before accepting traffic; never performs a bank request.
   }
   return {
+    syncReplicaGeneration: e.SYNC_REPLICA_GENERATION,
     payments: {
       provider: e.PAYMENT_PROVIDER,
       redsys,
@@ -290,6 +372,7 @@ export function loadConfig(input: Record<string, string | undefined> = process.e
     valkeyUrl: e.VALKEY_URL,
     valkeyKeyPrefix: e.VALKEY_KEY_PREFIX,
     port: e.PORT,
+    workerHealthPort: e.WORKER_HEALTH_PORT,
     http: {
       idleTimeoutSeconds: e.HTTP_IDLE_TIMEOUT_SECONDS,
       maxRequestBodyBytes: e.HTTP_MAX_BODY_BYTES,
@@ -304,12 +387,29 @@ export function loadConfig(input: Record<string, string | undefined> = process.e
       requireEmailVerification: e.AUTH_REQUIRE_EMAIL_VERIFICATION,
     },
     oauth: {
-      mcpResource: e.MCP_RESOURCE_URL ?? `${e.BETTER_AUTH_URL.replace(/\/+$/, "")}/mcp`,
+      mcpResource,
+      mcpAllowedOrigins: e.MCP_ALLOWED_ORIGINS.split(",")
+        .map((origin) => origin.trim().replace(/\/+$/, ""))
+        .filter(Boolean),
       accessTokenTtlSeconds: e.OAUTH_ACCESS_TOKEN_TTL_SECONDS,
       refreshTokenTtlSeconds: e.OAUTH_REFRESH_TOKEN_TTL_SECONDS,
     },
     notifications: {
+      whatsapp:
+        e.META_WHATSAPP_APP_ID &&
+        e.META_WHATSAPP_CONFIG_ID &&
+        e.META_WHATSAPP_APP_SECRET &&
+        e.META_WHATSAPP_VERIFY_TOKEN
+          ? {
+              appId: e.META_WHATSAPP_APP_ID,
+              configId: e.META_WHATSAPP_CONFIG_ID,
+              appSecret: e.META_WHATSAPP_APP_SECRET,
+              verifyToken: e.META_WHATSAPP_VERIFY_TOKEN,
+              version: e.META_WHATSAPP_GRAPH_VERSION,
+            }
+          : undefined,
       workerEnabled: e.NOTIFY_WORKER_ENABLED,
+      externalWorkerEnabled: e.NOTIFY_EXTERNAL_WORKER_ENABLED,
       email: { provider: e.NOTIFY_EMAIL_PROVIDER, smtpUrl: e.SMTP_URL, from: e.NOTIFY_EMAIL_FROM },
       sms: {
         provider: e.NOTIFY_SMS_PROVIDER,

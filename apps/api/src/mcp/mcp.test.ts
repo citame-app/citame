@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { MCP_SCOPES } from "@sob/contracts";
 import { auditLog, oauthConsent, user } from "@sob/db";
 import { eq, sql } from "drizzle-orm";
 import {
@@ -25,7 +26,10 @@ let t: ApiTest;
 let fx: Fixtures;
 
 beforeAll(async () => {
-  t = await setupApiTest({ dbSuffix: "mcp" });
+  t = await setupApiTest({
+    dbSuffix: "mcp",
+    env: { MCP_ALLOWED_ORIGINS: "http://localhost:6274" },
+  });
 });
 afterAll(async () => {
   await t.close();
@@ -77,12 +81,7 @@ describe("RFC 9728 protected resource metadata and the 401 challenge", () => {
       const meta = (await res.json()) as Record<string, unknown>;
       expect(meta.resource).toBe(MCP_URL);
       expect(meta.authorization_servers).toEqual([ISSUER]);
-      expect(meta.scopes_supported).toEqual([
-        "mcp:read",
-        "mcp:book",
-        "schedule:read",
-        "offline_access",
-      ]);
+      expect(meta.scopes_supported).toEqual([...MCP_SCOPES]);
       expect(meta.bearer_methods_supported).toEqual(["header"]);
     }
   });
@@ -149,9 +148,19 @@ describe("RFC 9728 protected resource metadata and the 401 challenge", () => {
       },
     });
     expect(res.status).toBe(204);
+    expect(res.headers.get("access-control-allow-origin")).toBe("http://localhost:6274");
     expect(res.headers.get("access-control-allow-headers")?.toLowerCase()).toContain(
       "authorization",
     );
+  });
+
+  test("rejects a browser origin outside the MCP allowlist before processing the request", async () => {
+    const res = await t.app.request("/mcp", {
+      method: "POST",
+      headers: { origin: "https://other.example" },
+    });
+    expect(res.status).toBe(403);
+    expect(res.headers.get("access-control-allow-origin")).toBeNull();
   });
 });
 
@@ -254,6 +263,7 @@ describe("tool authorization matrix", () => {
     const schedule = await callTool(t.app, tokens.access_token, "list_schedule", window);
     expect(schedule.data?.appointments).toHaveLength(1);
     expect(schedule.data?.appointments[0]?.notes).toBeNull();
+    expect(schedule.data?.appointments[0]).not.toHaveProperty("serviceBadges");
     expect(schedule.text).not.toContain("Ignore previous");
     const listed = await callTool(t.app, tokens.access_token, "list_my_appointments", window);
     expect(listed.data?.appointments[0]?.notes).toBeNull();
@@ -293,6 +303,35 @@ describe("tool authorization matrix", () => {
     await t.db.delete(user).where(eq(user.id, who.userId));
     expect((await rpc(t.app, tokens.access_token, "tools/list")).res.status).toBe(401);
   });
+});
+
+test("a batch cannot perform several operations behind one HTTP rate-limit check", async () => {
+  const { tokens } = await clientToken();
+  const booking = {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: {
+      name: "create_appointment",
+      arguments: { staffId: fx.anaId, serviceIds: [fx.haircutId], startsAt: MONDAY_0900 },
+    },
+  };
+  const send = (body: string) =>
+    t.app.request("/mcp", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        authorization: `Bearer ${tokens.access_token}`,
+      },
+      body,
+    });
+  const response = await send(JSON.stringify([booking, { ...booking, id: 2 }]));
+  expect(response.status).toBe(400);
+  expect(await response.json()).toMatchObject({ error: { code: -32600 } });
+  expect((await send(`${JSON.stringify(booking)}${" ".repeat(64 * 1024)}`)).status).toBe(413);
+  expect(await (await send("{")).json()).toMatchObject({ error: { code: -32700 } });
+  expect(await appointmentCount()).toBe(0);
 });
 
 describe("tools reuse the booking rules", () => {
@@ -356,7 +395,7 @@ describe("tools reuse the booking rules", () => {
 
   test("staff must name the client and can only book their own calendar", async () => {
     const ana = await actor(t, "staff", "ana@example.com", { staffProfileId: fx.anaId });
-    const { tokens } = await tokenFor(t, ana, "mcp:read mcp:book schedule:read");
+    const { tokens } = await tokenFor(t, ana, "mcp:read schedule:write");
     const noClient = await callTool(t.app, tokens.access_token, "create_appointment", {
       staffId: fx.anaId,
       serviceIds: [fx.haircutId],

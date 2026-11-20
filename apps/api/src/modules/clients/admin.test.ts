@@ -314,3 +314,99 @@ describe("a deleted client who still has a login", () => {
     expect(rows[0]?.deletedAt).toBeNull();
   });
 });
+
+test("standalone contact creation is replay-safe, grouped by tags and never links a login", async () => {
+  const input = {
+    id: crypto.randomUUID(),
+    name: "Walk-in contact",
+    email: "nina@example.com",
+    phone: "+34 600 123 123",
+    tags: ["VIP", "Hair"],
+    notes: "Private salon note",
+  };
+  const created = await call(owner, "POST", "/admin/clients", input);
+  expect(created.status, await created.clone().text()).toBe(201);
+  expect(await created.json()).toMatchObject({
+    id: input.id,
+    name: input.name,
+    tags: ["vip", "hair"],
+    appointmentCount: 0,
+  });
+  const repeated = await call(owner, "POST", "/admin/clients", input);
+  expect(repeated.status).toBe(201);
+  const changed = await call(owner, "POST", "/admin/clients", {
+    ...input,
+    name: "Changed request",
+  });
+  expect(changed.status).toBe(409);
+  expect(
+    (await call(client, "POST", "/admin/clients", { ...input, id: crypto.randomUUID() })).status,
+  ).toBe(403);
+  const [saved] = await t.db.select().from(clientProfile).where(eq(clientProfile.id, input.id));
+  expect(saved?.userId).toBeNull();
+  const groups = await call(ana, "GET", "/admin/clients/groups");
+  expect(await groups.json()).toEqual({
+    groups: [
+      { name: "hair", count: 1 },
+      { name: "vip", count: 1 },
+    ],
+  });
+  const filtered = await call(owner, "GET", "/admin/clients?tag=VIP");
+  expect(await filtered.json()).toMatchObject({ total: 1, clients: [{ id: input.id }] });
+});
+
+test("imported tag spellings count and filter the same clients", async () => {
+  await t.db
+    .update(clientProfile)
+    .set({ tags: ["  ＶＩＰ  ", "VIP"] })
+    .where(eq(clientProfile.id, marta));
+  await t.db
+    .update(clientProfile)
+    .set({ tags: ["vip"] })
+    .where(eq(clientProfile.id, zoe));
+
+  const groups = await call(owner, "GET", "/admin/clients/groups");
+  expect(await groups.json()).toEqual({ groups: [{ name: "vip", count: 2 }] });
+  const filtered = await call(owner, "GET", "/admin/clients?tag=VIP");
+  expect(await filtered.json()).toMatchObject({
+    total: 2,
+    clients: [{ id: marta, tags: ["  ＶＩＰ  ", "VIP"] }, { id: zoe }],
+  });
+});
+
+test("extended client details validate birthdays and reject a stale reviewed version", async () => {
+  const input = {
+    contactDetails: {
+      firstName: "Ada",
+      lastName: "Lovelace",
+      taxId: "DOC-TEST",
+      address: "Test district",
+      birthday: { month: 2, day: 29, year: 2000 },
+      discountBasisPoints: 1250,
+    },
+    detailsVersion: 1,
+  };
+  const saved = await call(owner, "PATCH", `/admin/clients/${marta}`, input);
+  expect(saved.status, await saved.clone().text()).toBe(200);
+  expect(await saved.json()).toMatchObject({ ...input, detailsVersion: 2 });
+  expect((await call(owner, "PATCH", `/admin/clients/${marta}`, input)).status).toBe(409);
+  expect(
+    (
+      await call(owner, "PATCH", `/admin/clients/${marta}`, {
+        ...input,
+        detailsVersion: 2,
+        contactDetails: { birthday: { month: 2, day: 29, year: 2001 } },
+      })
+    ).status,
+  ).toBe(400);
+  expect(
+    (
+      await call(owner, "PATCH", `/admin/clients/${marta}`, {
+        contactDetails: input.contactDetails,
+      })
+    ).status,
+  ).toBe(400);
+  expect(
+    (await call(owner, "PATCH", `/admin/clients/${marta}`, { detailsVersion: 2 })).status,
+  ).toBe(400);
+});

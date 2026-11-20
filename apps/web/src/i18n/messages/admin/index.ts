@@ -8,7 +8,6 @@ import { resourcesEn, resourcesEsAR } from "./resources";
 import { servicesEn, servicesEsAR } from "./services";
 import { settingsEn, settingsEsAR } from "./settings";
 import { staffEn, staffEsAR } from "./staff";
-import { todayEn, todayEsAR } from "./today";
 import { walkinEn, walkinEsAR } from "./walkin";
 // @@imports
 
@@ -17,7 +16,6 @@ export const adminEn = {
   ...commonEn,
   ...calendarEn,
   ...calendarUiEn,
-  ...todayEn,
   ...walkinEn,
   ...drawerEn,
   ...clientsEn,
@@ -32,7 +30,6 @@ export const adminEsAR: Record<keyof typeof adminEn, string> = {
   ...commonEsAR,
   ...calendarEsAR,
   ...calendarUiEsAR,
-  ...todayEsAR,
   ...walkinEsAR,
   ...drawerEsAR,
   ...clientsEsAR,

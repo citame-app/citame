@@ -6,7 +6,7 @@ For people who run Sisters of Beauty in production. Everything here matches `com
 
 ```bash
 # 1. Environment (keep this file out of git; it is already ignored)
-export POSTGRES_PASSWORD="$(openssl rand -base64 24)"
+export POSTGRES_PASSWORD="$(openssl rand -hex 24)"
 export BETTER_AUTH_SECRET="$(openssl rand -base64 32)"
 export PUBLIC_URL="https://salon.example"          # the public origin, no trailing slash
 export SMTP_URL="smtps://user:pass@smtp.example:465"
@@ -26,7 +26,15 @@ WEB_TRUST_PROXY=true SITE_ADDRESS=salon.example \
 
 The web service trusts no forwarded address by default (`WEB_TRUST_PROXY=false`), because anyone who can reach its port directly could spoof the address the rate limiter uses. Enable it (`WEB_TRUST_PROXY=true`) together with the `tls` profile or your own proxy. Without the `tls` profile the web service listens on `127.0.0.1:4173`; put nginx, Traefik or a cloud load balancer in front, and keep `WEB_TRUST_PROXY=true` only when that proxy appends the visitor's address to `X-Forwarded-For` (Caddy and nginx `$proxy_add_x_forwarded_for` do). `docker/Caddyfile` is a working example; its comments explain each line.
 
-`scripts/smoke-prod.sh` runs this whole procedure against a throwaway stack (build, migrate, owner, readiness, sign-in, public availability, a client booking and a 409 on the same slot, headers, non-root/read-only checks) and tears it down; run it before trusting a change to `compose.prod.yaml`.
+The bundled Caddy proxy probes the web process every two seconds with a one-second timeout. A single web instance can return temporary errors during a restart. The production smoke test verifies that the proxy routes requests within five seconds of the restarted process responding directly, then opens a new staff event stream.
+
+The web proxy returns HTTP 504 after 20 seconds without upload progress or the start of an API response. A slow upload can continue while its data is flowing. The deadline ends when the API responds, so an established sync stream continues with its normal heartbeat. The proxy never retries a write. A write can finish after the gateway times out, so consult its result or recover it using the same request identity before submitting it again.
+
+The PostgreSQL readiness probe uses TCP. On first initialization, the image starts a temporary Unix-socket server for setup and then shuts it down. Migrations wait for the final TCP listener.
+
+`scripts/smoke-prod.sh` builds and migrates a throwaway stack, verifies readiness and owner sign-in, makes a synthetic client booking and confirms a second booking for that slot returns 409. It also checks the public proxy, including OAuth discovery, PKCE registration and consent, a calendar read through MCP, and legacy desktop token rotation. It links three desktop devices and renews their short-lived credentials. A synthetic appointment edit triggers SSE and an incremental pull while keeping the note private. The smoke revokes one device from the web and one from the desktop endpoint, verifies that the web revocation closes the existing stream, and checks that another device keeps access. It also restarts the web gateway with an authenticated sync stream open and checks that it exits cleanly and accepts a new stream through the proxy. The script checks response headers and container permissions and tears down its own stack. Run it before deploying changes to `compose.prod.yaml`.
+
+The smoke also uploads a synthetic product photo and checks the owner's read, private JPEG response, customer and anonymous access restrictions, and invalidation of the old URL after removal. It compares the client report returned to a linked owner device with the web session and checks that the customer and revoked device cannot access that report.
 
 ### Environment reference (production)
 
@@ -79,16 +87,69 @@ Logical backup (consistent snapshot, custom format, compressed, with a checksum)
 
 ```bash
 DATABASE_URL=postgres://sob:...@host:5432/sob scripts/backup.sh /backups/sob-$(date -u +%F).dump
-# inside the compose stack, from the host:  PG_MODE=docker scripts/backup.sh   (runs pg_dump in the postgres container)
+# From the host, select the production container with the same Compose project options.
+pg_container="$(docker compose -f compose.prod.yaml ps -q postgres)" &&
+  test -n "$pg_container" &&
+  PG_MODE=docker PG_CONTAINER="$pg_container" \
+  DATABASE_URL="postgres://sob@localhost:5432/${SOB_DATABASE_NAME:-sob}" \
+  scripts/backup.sh /backups/sob-$(date -u +%F).dump
 ```
 
-Restore always goes into an **empty** database; the script refuses a non-empty target and a checksum mismatch:
+Each run stages the archive and checksum privately on the destination filesystem. The final archive appears after the checksum. Existing names are preserved and a concurrent run using the same output path fails. Use a fresh timestamped name when repeating a backup, and transfer the completed archive and checksum together.
+
+For a remote server, install matching native PostgreSQL client tools and use `PG_MODE=native`. The scripts pass URL connection options such as `sslmode=verify-full` and `sslrootcert` to libpq, including when opening the administrative database during restore. Specify the database in the URL path. Use a libpq service file if the client certificate key needs `sslpassword`.
+
+Docker mode connects to the selected container's local PostgreSQL socket. It accepts only a loopback URL with the default port and no query options. If a native client is missing, a remote or customized URL fails before the script contacts a Docker database.
+
+The standard restore targets an empty database. It requires the matching SHA-256 file and applies the archive in a single transaction. The catalog check detects existing objects even when the restore account cannot read their data. Keep other writers disconnected from the recovery database until validation is complete.
 
 ```bash
 scripts/restore.sh /backups/sob-2026-11-14.dump postgres://sob:...@host:5432/sob_restored
 ```
 
-To recover production: stop `api` and `worker`, restore into a new database, check it (`psql` row counts, sign in), point `DATABASE_URL` at it (or rename databases), start the services. The procedure is exercised by `bun run test:scripts`, which backs up a seeded database, restores it into a fresh one and compares the row count of every table.
+### Switch a Compose deployment to the restored database
+
+Use the same production Compose project options in all commands. Keep the previous database available during validation. Hold public traffic at the load balancer or stop the bundled gateway. Pause any API and worker replicas outside this project. Restore the archive into a new database in the production Postgres container, using a name with letters, digits and underscores.
+
+```bash
+compose_options=() # Add the project's --project-name, --env-file and overlay flags here.
+compose=(docker compose -f compose.prod.yaml "${compose_options[@]}")
+"${compose[@]}" --profile tls stop caddy &&
+  "${compose[@]}" stop web api worker &&
+  pg_container="$("${compose[@]}" ps -q postgres)" &&
+  test -n "$pg_container" &&
+  PG_MODE=docker PG_CONTAINER="$pg_container" scripts/restore.sh \
+    /backups/sob-2026-11-18.dump postgres://sob@localhost:5432/sob_recovered
+```
+
+After verifying the restore, persist the database name, a fresh cache namespace and a fresh sync generation in the deployment environment. The migrator, API, worker and owner setup share the database choice. The previous Valkey keys remain in their original namespace. Generate unique values for each recovery and keep them stable on normal restarts and upgrades.
+
+```dotenv
+SOB_DATABASE_NAME=sob_recovered
+VALKEY_KEY_PREFIX=sob:recovery-20261118:
+SYNC_REPLICA_GENERATION=recovery-20261118-77af035c
+```
+
+```bash
+"${compose[@]}" run --rm --no-deps --pull never -T migrate &&
+  "${compose[@]}" up -d --no-build --no-deps --pull never --wait api
+```
+
+Verify the restored appointments and allocations in Postgres while the gateway and worker are stopped. Restore the previous database, cache and generation settings to reverse the validation at this point. Once the recovered database is approved, start the worker and web. Start Caddy only on deployments that use the bundled proxy.
+
+```bash
+# Bundled proxy deployments. Pass the same Compose options used above.
+"${compose[@]}" up -d --no-build --no-deps --pull never --wait worker web &&
+  bun --no-env-file scripts/reopen-recovery-ingress.ts https://citame.example "${compose_options[@]}"
+```
+
+The bundled-proxy command requires Python 3 and expects one stopped Caddy container. It compares the database, cache namespace and sync generation of the running API and worker with the selected Compose settings. It checks that the supplied origin matches the web container's `PUBLIC_URL`, that web can reach the API and that the notification worker is ready. It opens that Caddy container, verifies a successful public `/api/ready` request against its access log and checks storage and worker readiness again. A failed check or interruption by SIGINT or SIGTERM after trying to open Caddy triggers a stop of the same container. If Docker cannot confirm the stop, the command reports that ingress needs immediate attention. Run recovery commands from one Docker administration host and coordinate them with any other deployment automation. If a forced termination leaves a lock, confirm the attempt has ended and check whether Caddy is running before removing the reported lock directory. When using an external proxy, hold ingress before stopping writers. Start worker and web, reopen the proxy through its own deployment procedure and check `/api/ready` publicly.
+
+Use `--no-env-file` on the Bun invocation so Compose resolves its own environment files. Exported shell values still take precedence over a Compose `--env-file`. Put the host, database name and any nondefault port in the PostgreSQL URL. The check refuses destination overrides through query parameters or environment settings. The bundled web gateway must route to the Compose `api` service on its configured HTTP port.
+
+Sign in again. The restored API rejects sync pushes from previous generations. Updated desktop clients rebuild their mirrors and retain queued changes in Conflicts for manual review. Review the restored appointment and its payment status before applying an equivalent change. Upgrade older desktop clients before reconnecting them. After reopening, reconcile any new writes before switching again.
+
+`bun run test:scripts` compares row counts and content hashes in every application and migration-journal table after a backup and restore. It verifies that a truncated archive with a matching checksum leaves the target empty and that an occupied target is refused even when the restoring role cannot see the table in `information_schema`. `SMOKE_RESTORE=1 scripts/smoke-prod.sh` rehearses switching the actual production Compose services and reading the recovered appointment through the API.
 
 Schedule it (cron example, daily 03:15, keep 14 days):
 
@@ -98,15 +159,81 @@ Schedule it (cron example, daily 03:15, keep 14 days):
 
 Copy dumps off the machine and test a restore regularly: an untested backup is a hope, not a backup. For point-in-time recovery use your provider's WAL archiving (managed Postgres) or `pgBackRest`; the logical dump above is the simple baseline.
 
+### Verify Booksy recovery evidence before cutover
+
+Review calendar capture coverage for the agreed local date range and minimum observation time.
+
+```sh
+cd apps/api
+bun src/scripts/booksy-audit-calendar-window.ts \
+  /private/source-snapshot-SHA256.json FIRST_LOCAL_DATE LAST_LOCAL_DATE MIN_CAPTURE_INSTANT
+```
+
+Use inclusive ISO dates in the salon's time zone and an ISO timestamp with an offset for the cutoff. The audit verifies the snapshot and original archive bytes. Its private receipt records the timezone and the last full observation for each day within the snapshot, as well as observed dates outside it. Refresh dates that lack an observation covering all snapshot professionals and resources at or after the cutoff. Dates outside the snapshot also need to be added to the projection. Obtain separate source evidence for the last appointment and reconcile all outstanding records. The audit keeps `canCutOver` false.
+
+The locally archived candidate covered 371 dates from 2026-11-18 to 2027-11-23. Every date had a full observation predating the benchmark booking report on 2026-11-18 at 13:13 in Madrid. The latest appointment observed began at 12:10 Madrid time on 2027-04-15. Its position as the last appointment still requires evidence from Booksy.
+
+The offline audit for 2026-11-19 through 2027-11-23 verified all 1,053 archived originals. As of 20:02:25 Madrid time on 2026-11-18, all 370 dates had an archived full observation before the cutoff and zero had a full observation at or after it. The receipt also records `lastAppointmentProven: false` and `canCutOver: false`. The final coverage check needs a fresh source capture when the centre resumes the migration.
+
+Rehearse recovery from the externally held copy of the final Booksy candidate. Save the output of `booksy-portable-backup.ts rehearse-schedule` as a private file with mode 0600. Use the [Booksy import protocol](booksy-import-protocol.md#reservas-de-prueba-en-la-agenda-recuperada) to select the rehearsal date and recover the candidate.
+
+From the source checkout for the intended release, compare the receipt with the final snapshot SHA-256, the independently recorded encrypted archive SHA-256 and the agreed rehearsal date.
+
+```sh
+cd apps/api
+bun src/scripts/booksy-portable-backup.ts verify-rehearsal \
+  /private/rehearsal.json FINAL_SNAPSHOT_SHA256 RECORDED_CIPHER_SHA256 YYYY-MM-DD
+```
+
+The command checks the receipt for the capacity, booking, rescheduling, checkout, inventory, waitlist, replica and rollback results. For each archived waitlist request it requires evidence that the active policy refused a new import, an omitted staff preference was refused, an explicit preference for any qualified professional was accepted and an identical replay returned the same entry after offers were enabled. The paused engine must record zero scans, offers and reminders. Rerun older receipts that lack this evidence. The verifier checks the migration count and the hash of the entire ordered ledger against the checkout. A successful result confirms that this trusted receipt matches the selected inputs. Verify the application build and external custody separately and obtain the centre operator's approval for the cutover.
+
+Use [the operational-copy rehearsal](booksy-import-protocol.md#ensayar-la-separación-de-la-base-operativa) to verify a separate native database from the same archive. It checks the copied tables and migration ledger, excludes the private source schema, verifies that no accounts or delivery configuration are carried and pauses public booking. The pinned Valkey image must be present locally. The rehearsal uses disposable PostgreSQL and Valkey instances to exercise the normal signed-in calendar and verify that customer booking is blocked.
+
+The local rehearsal `release-evidence-recovery.*` verified the 69 migrations up to `0068`. The command accepted that receipt for 2026-11-18 and rejected it for 2026-11-19. It also rejected a previous receipt that lacked the full ledger hash.
+
+The local rehearsals `review-email-ledger-recovery.*` and `next-day-0070-recovery.*` verified all 71 migrations through `0070` against the encrypted candidate backup for 2026-11-18 and 2026-11-19. The disposable databases restored the 94 original tables and verified the 1,053 archived source files. Rollback preserved the contents of all 98 migrated tables after the scheduling rehearsals. Each receipt covers its archived snapshot and date.
+
 ## 4. Upgrades, migrations and rollback
 
-1. Back up (section 3). Note the current image tag.
-2. `git pull` (or fetch the new release), then `SOB_TAG=<new> docker compose -f compose.prod.yaml up -d --build --wait`. Compose runs `migrate` first; the API and worker only start after it succeeds, and a failed migration leaves the old containers running.
-3. Check `/ready`, the logs for `level":"error"`, and sign in.
+The upgrade command requires Python 3 on the deployment host. It compares the rendered Compose database and cache settings with the existing API and worker containers before building or migrating. Use the environment of the current installation, including its cache namespace and sync generation. To change databases, use the recovery procedure.
+
+1. Back up using section 3 and record the running image tag.
+2. Check out the release and run `scripts/upgrade-prod.sh` with the deployment's Compose project options. When building on the host, set `SOB_TAG` to a distinct version. For published images, set `SOB_API_IMAGE` and `SOB_WEB_IMAGE` to the release digests, pull them, and pass `--prebuilt` before the Compose options.
+3. Check `/api/ready` through the public origin, inspect the logs and sign in.
+
+The upgrade builds or verifies the requested images and runs the migration against the existing database. It validates the candidate Caddy configuration when the project has a running Caddy service. After migration it recreates that proxy from the current checkout before replacing API, worker and web. The brief reconnection applies to the bundled proxy and includes open SSE streams. Manage equivalent changes on an external proxy through its deployment procedure. A failed online migration preserves the existing containers. The script is for an existing installation with healthy Postgres and Valkey. Use the installation procedure for a new stack.
+
+Migrators targeting the same database wait for a PostgreSQL advisory lock before reading the migration journal. They validate the applied entries before running any pending SQL and check the resulting journal before reporting success. They hold the lock on the migration connection until it closes. Coordinate release activation separately when more than one deployment can target the same installation.
+
+The production API and worker verify the release's ordered migration timestamps and SQL hashes before opening the listener or starting background jobs. If the database is behind, apply the release migrations before restarting the services. A forward-compatible code rollback can use a strictly newer ledger suffix when all entries required by the older release still match. The recovery rehearsal continues to require an exact match.
+
+If the API and worker use separate PostgreSQL roles from the migrator, grant both runtime roles `USAGE` on schema `drizzle` and `SELECT` on `drizzle.__drizzle_migrations` after the initial migration and before starting the services.
+
+The deployment migrator and sample seed reject reserved Booksy review database names and any database with the `booksy_rehearsal` schema. The check uses the connected database name as well as the URL, so an environment override such as `PGDATABASE` cannot direct these commands to a review database. Renaming or restoring a full candidate dump under an ordinary name leaves the schema guard in place. The portable recovery command can still migrate its disposable PostgreSQL copy for the rehearsal.
+
+On a normal worker stop, each notification queue finishes its current delivery and releases reserved jobs it has not started. Released appointment and account emails keep their original delivery-attempt counts. A campaign cancellation still withdraws its reserved deliveries. The standalone worker has a 75-second Compose stop grace period to allow for the SMTP exchange and the final database update.
+
+Compose waits for worker readiness during startup and upgrades. The worker checks PostgreSQL and its read and update grants on notification queue tables through a private loopback listener after starting its queues. It closes the listener when shutdown begins. Monitor delivery failures through the notification logs and queue metrics.
 
 Migrations are forward-only SQL files in `packages/db/drizzle`, applied inside a transaction by Drizzle; applied files are never edited. **Rolling back code is safe when the new release added no migration** (`SOB_TAG=<old> ... up -d`). If it did, the older code usually still works with the newer schema because releases only add columns/tables; when a release says otherwise (a destructive migration), restore the pre-upgrade backup into a new database and point the old tag at it. Plan destructive changes as expand, deploy, contract over two releases.
 
-The web and API containers are stateless, so a rolling restart is: scale `api` to two replicas, `up -d --no-deps api`, and let `/ready` take the old one out (the grace period is `SHUTDOWN_GRACE_MS`, stop timeout 20 s).
+Migration `0061_live_view_changes` appends online-view notifications to the sync log. The default upgrade refuses a database that has yet to apply it. Drain any API and worker replicas outside the Compose project first, then run `scripts/upgrade-prod.sh --maintenance` with the deployment’s Compose options. The API is unavailable while its writers are stopped. If migration fails, the script starts the same API and worker containers. It checks that the running web gateway reaches the previous API and keeps that gateway running when the check passes. If it fails, the script restarts the gateway and checks it again. After the migration succeeds, only deploy API versions that understand live-view notifications. To return to an older API, restore the pre-upgrade backup first.
+
+Migration `0076_sync_calendar_annotation_badges` also requires `scripts/upgrade-prod.sh --maintenance`. Stop every old API replica before applying it. An old API could otherwise serve the backfill and advance a desktop cursor without returning the new indicators. The migration appends sync events for imported Booksy appointments and appointments with scheduling indicators. On the next sync, restricted staff receive preference and note-presence indicators for their own appointments. Full annotation text still goes through the authorized appointment endpoint. For a rollback to an API release predating `0076`, follow the restore procedure with the pre-upgrade backup and reconcile writes made since the backup before reopening.
+
+Migration `0071_review_request_live_view` adds review invitation notices to the same log. When rolling out across several hosts, replace all API readers before relying on the new topic and reconnect open clients after the rollout. Older readers that already support live-view notifications skip the topic and advance the cursor. Reconnecting reloads any open review list.
+
+A failed migration still exits with a failure status after recovery. If recovery restarts the gateway, verify readiness at the public origin as well. The bundled Caddy proxy checks its upstream every two seconds and can still be waiting for its next check when the gateway's local probe passes. The disposable smoke requires the original API, worker, gateway and Caddy containers to remain in place and checks the preserved booking. It requires immediate public readiness when the gateway reconnects on its own and allows up to six seconds after a reported gateway restart.
+
+With `SMOKE_UPGRADE=1`, the smoke also builds distinct local prebuilt images for a successful maintenance upgrade. The API image embeds a synthetic migration that checks for database connections from other containers before applying its schema change. The smoke then checks the image ID of each replacement service, preserved booking data and public readiness. The release workflow separately verifies published image digests and provenance.
+
+Migration `0062_damp_wiccan` adds the desktop device registry. Apply it before publishing the new API. Update the web and API before distributing the desktop client so it can register its key on first sign-in. Keep the same authorization origin and secret on every API replica.
+
+Migration `0063_sync_service_colors` re-announces catalog rows through desktop sync. Upgraded desktop clients also fetch configured colors once, including when an older release already advanced past those log entries.
+
+Migration `0064_whatsapp_dispatch_sender` adds nullable sender identifiers to existing reminders. Deploy the API and worker after migrating. Unattributed historical sends retain their delivery state and can receive updates when the existing provider message ID matches the connected sender.
+
+On a single-replica installation, the gateway can return a brief error while Compose replaces a service. An API replica reports itself unready during `SHUTDOWN_GRACE_MS`. For rolling upgrades, an external load balancer or orchestrator must honor readiness and keep a healthy replica available.
 
 ## 5. Scaling notes
 
@@ -148,3 +275,37 @@ The worker runs `runMaintenance` 60 s after start and then every `MAINTENANCE_IN
 - **`/ready` is 503**: the response names `database` or `valkey`; check that service's health and `docker compose logs`.
 - **Everybody gets 429**: the client address is wrong behind your proxy (all visitors share one). Check `WEB_TRUST_PROXY` and that the proxy appends to `X-Forwarded-For`. A rendered page that hits the limit answers `429` with `Retry-After` (never a `500`); one server-rendered page costs a few API calls (3 on `/book`, more when signed in), so size `RATE_LIMIT_GLOBAL_MAX` per visitor accordingly.
 - **Cookie not kept on http**: production sets `Secure` cookies; use https (or `localhost`).
+
+## Appointment email
+
+The owner can choose the sender under **Settings → Email delivery**. The initial
+mode inherits `NOTIFY_EMAIL_PROVIDER`, `SMTP_URL` and `NOTIFY_EMAIL_FROM`.
+The selected override applies to new deliveries from the appointment queue
+without a worker restart. The reminder schedule and customer preferences still
+apply. Sign-in, recovery and marketing email use the server configuration.
+
+- **SMTP** accepts a public SMTP hostname, a port, a username and password, and
+  either STARTTLS (typically port 587) or implicit TLS (typically port 465).
+  Configure private or IPv6-only relays through the deployment environment.
+- **Gmail / Google Workspace** uses the sender mailbox and its Google app
+  password over TLS. The Google account must support app passwords. The Gmail
+  preset does not start a Google account authorization flow.
+- **Resend** uses a sending API key and an address on a verified domain. Citame
+  passes the reminder ID as the provider's idempotency key on retries.
+
+After saving, use **Send test email** to check provider acceptance using the
+current owner's address. Saving alone does not send a test. Returning to server
+settings or disabling appointment email removes the saved provider credential.
+
+Run `SMOKE_EMAIL=1 bash scripts/smoke-prod.sh` to verify the test message, booking
+confirmation, reminders and review invitation through the production API and
+worker with a private Mailpit sink. The suite checks that pausing and restoring
+appointment email takes effect without a worker restart. It also replays a
+review invitation request and verifies the link to the visit, the opt-out link
+and the delivery status through the proxy. At the end of the run it checks that
+the private sink still contains a single invitation.
+
+Credentials are encrypted using the deployment's `BETTER_AUTH_SECRET`. After
+rotating that secret, re-enter the override credential before restarting
+appointment deliveries. SMTP delivery is at least once if a worker loses its
+connection after the provider accepts a message.

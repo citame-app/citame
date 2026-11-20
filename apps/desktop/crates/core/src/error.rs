@@ -12,6 +12,10 @@ pub enum CoreError {
     Protocol(String),
     #[error("{0}")]
     Invalid(String),
+    #[error("this time overlaps a schedule block")]
+    TimeOffOverlap,
+    #[error("this time exceeds the professional's capacity")]
+    StaffCapacityExceeded,
     #[error("not found: {0}")]
     NotFound(String),
     #[error("io error: {0}")]

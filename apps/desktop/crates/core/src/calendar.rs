@@ -3,12 +3,41 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
-use chrono_tz::Tz;
+use chrono_tz::{GapInfo, Tz};
 use serde_json::Value;
 
 use crate::error::Result;
 use crate::model::*;
 use crate::store::Store;
+
+pub(crate) fn service_work_windows(services: &[AppointmentService]) -> Vec<WorkWindow> {
+    let mut offset = 0;
+    let mut intervals = Vec::new();
+    for service in services {
+        let duration = service.duration_minutes;
+        let next = offset + duration + service.buffer_minutes;
+        if let Some(gap) = &service.processing
+            && gap.starts_after_minutes > 0
+            && gap.minutes > 0
+            && gap.starts_after_minutes + gap.minutes < duration
+        {
+            let gap_start = offset + gap.starts_after_minutes;
+            intervals.push(WorkWindow {
+                offset_minutes: offset,
+                end_offset_minutes: gap_start,
+            });
+            offset = gap_start + gap.minutes;
+        }
+        if offset < next {
+            intervals.push(WorkWindow {
+                offset_minutes: offset,
+                end_offset_minutes: next,
+            });
+        }
+        offset = next;
+    }
+    intervals
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CalendarItem {
@@ -24,6 +53,13 @@ pub struct CalendarItem {
 pub struct StaffColumn {
     pub staff: Staff,
     pub items: Vec<CalendarItem>,
+    pub blocks: Vec<CalendarBlock>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CalendarBlock {
+    pub time_off: TimeOff,
+    pub pending: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -49,14 +85,11 @@ pub fn salon_tz(store: &Store) -> Result<Tz> {
 }
 
 fn local_midnight(tz: Tz, date: NaiveDate) -> DateTime<Utc> {
-    // A DST gap at midnight exists in a few zones; fall back to the first valid instant.
-    for hour in 0..4 {
-        let naive = date.and_hms_opt(hour, 0, 0).expect("valid time");
-        if let Some(dt) = tz.from_local_datetime(&naive).earliest() {
-            return dt.with_timezone(&Utc);
-        }
-    }
-    Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).expect("valid time"))
+    let midnight = date.and_hms_opt(0, 0, 0).expect("valid time");
+    tz.from_local_datetime(&midnight)
+        .earliest()
+        .or_else(|| GapInfo::new(&midnight, &tz).and_then(|gap| gap.end))
+        .map_or_else(|| midnight.and_utc(), |instant| instant.with_timezone(&Utc))
 }
 
 /// `[start, end)` of a local calendar day in UTC.
@@ -125,6 +158,7 @@ fn overlay(
                         duration_minutes: s.duration_minutes,
                         buffer_minutes: s.buffer_minutes,
                         price_cents: s.price_cents,
+                        source_unpriced: false,
                         currency: s.currency.clone(),
                         processing: s.processing.clone(),
                     })
@@ -141,14 +175,22 @@ fn overlay(
                     e.entity_id.clone(),
                     Appointment {
                         id: e.entity_id.clone(),
+                        visit_group_id: None,
                         staff_id,
                         client_id: str_of(p, "clientId").unwrap_or_default(),
+                        client_name: None,
                         starts_at,
                         ends_at: starts_at + Duration::minutes(block),
                         status: AppointmentStatus::Booked,
+                        work_windows: Some(service_work_windows(&picked)),
                         notes: str_of(p, "notes"),
                         version: 1,
                         services: picked,
+                        service_badges: Vec::new(),
+                        billing_review_reasons: Vec::new(),
+                        externally_settled: false,
+                        external_balance: None,
+                        imported_from_booksy: false,
                         created_at: stamp,
                         updated_at: stamp,
                     },
@@ -232,6 +274,58 @@ pub fn known_clients(store: &Store) -> Result<Vec<(String, String)>> {
     Ok(v)
 }
 
+/// The directory uses the same replica as booking and displays unsynced contact edits.
+pub fn directory_clients(store: &Store) -> Result<Vec<Client>> {
+    if !store.client_directory_enabled()? {
+        return Ok(vec![]);
+    }
+    let mut clients: HashMap<_, _> = store
+        .clients()?
+        .into_iter()
+        .filter(|client| client.merged_into_id.is_none())
+        .map(|client| (client.id.clone(), client))
+        .collect();
+    for entry in store.outbox(usize::MAX)? {
+        let payload = &entry.payload;
+        match entry.kind.as_str() {
+            "client.create" => {
+                if let (Some(name), Some(at)) = (
+                    str_of(payload, "name"),
+                    DateTime::parse_from_rfc3339(&entry.created_at).ok(),
+                ) {
+                    clients.entry(entry.entity_id.clone()).or_insert(Client {
+                        id: entry.entity_id,
+                        merged_into_id: None,
+                        name,
+                        phone: str_of(payload, "phone"),
+                        email: str_of(payload, "email"),
+                        notes: str_of(payload, "notes"),
+                        created_at: at.with_timezone(&Utc),
+                        updated_at: at.with_timezone(&Utc),
+                    });
+                }
+            }
+            "client.update" => {
+                if let Some(client) = clients.get_mut(&entry.entity_id) {
+                    if let Some(name) = str_of(payload, "name") {
+                        client.name = name;
+                    }
+                    if payload.get("phone").is_some() {
+                        client.phone = str_of(payload, "phone");
+                    }
+                    if payload.get("notes").is_some() {
+                        client.notes = str_of(payload, "notes");
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut clients: Vec<_> = clients.into_values().collect();
+    clients.sort_by_cached_key(|client| (client.name.to_lowercase(), client.id.clone()));
+    Ok(clients)
+}
+
 /// An appointment as the user should see it now: mirror state with pending edits applied.
 pub fn effective_appointment(store: &Store, id: &str) -> Result<Option<Appointment>> {
     let mut map = HashMap::new();
@@ -240,6 +334,90 @@ pub fn effective_appointment(store: &Store, id: &str) -> Result<Option<Appointme
     }
     overlay(store, &mut map, &mut HashMap::new())?;
     Ok(map.remove(id))
+}
+
+pub(crate) fn effective_appointments_between(
+    store: &Store,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> Result<Vec<Appointment>> {
+    let mut map = store
+        .appointments_between(from.timestamp_millis(), to.timestamp_millis())?
+        .into_iter()
+        .map(|a| (a.id.clone(), a))
+        .collect();
+    overlay(store, &mut map, &mut HashMap::new())?;
+    Ok(map
+        .into_values()
+        .filter(|a| {
+            a.status != AppointmentStatus::Cancelled && a.starts_at < to && a.ends_at > from
+        })
+        .collect())
+}
+
+/// Pending edits remain local until their result is acknowledged. Rejected edits are shown
+/// in the conflict inbox and the mirror remains the authoritative fallback.
+pub fn effective_time_off(
+    store: &Store,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> Result<Vec<CalendarBlock>> {
+    let mut blocks: HashMap<_, _> = store
+        .time_off_between(from.timestamp_millis(), to.timestamp_millis())?
+        .into_iter()
+        .map(|row| {
+            (
+                row.id.clone(),
+                CalendarBlock {
+                    time_off: row,
+                    pending: false,
+                },
+            )
+        })
+        .collect();
+    for entry in store.outbox(usize::MAX)? {
+        let p = &entry.payload;
+        match entry.kind.as_str() {
+            "time_off.create" | "time_off.update" => {
+                if let (Some(staff_id), Some(starts_at), Some(ends_at), Ok(updated_at)) = (
+                    str_of(p, "staffId"),
+                    p.get("startsAt").and_then(parse_instant),
+                    p.get("endsAt").and_then(parse_instant),
+                    entry.created_at.parse::<DateTime<Utc>>(),
+                ) {
+                    blocks.insert(
+                        entry.entity_id.clone(),
+                        CalendarBlock {
+                            time_off: TimeOff {
+                                id: entry.entity_id,
+                                staff_id,
+                                starts_at,
+                                ends_at,
+                                reason: str_of(p, "reason"),
+                                updated_at,
+                            },
+                            pending: true,
+                        },
+                    );
+                }
+            }
+            "time_off.delete" => {
+                blocks.remove(&entry.entity_id);
+            }
+            _ => {}
+        }
+    }
+    let mut rows: Vec<_> = blocks
+        .into_values()
+        .filter(|b| b.time_off.starts_at < to && b.time_off.ends_at > from)
+        .collect();
+    rows.sort_by(|a, b| {
+        a.time_off
+            .starts_at
+            .cmp(&b.time_off.starts_at)
+            .then(a.time_off.id.cmp(&b.time_off.id))
+    });
+    Ok(rows)
 }
 
 pub fn day_view(store: &Store, date: NaiveDate) -> Result<DayView> {
@@ -264,6 +442,7 @@ pub fn day_view(store: &Store, date: NaiveDate) -> Result<DayView> {
         .map(|staff| StaffColumn {
             staff,
             items: vec![],
+            blocks: vec![],
         })
         .collect();
     let mut appts: Vec<Appointment> = map
@@ -279,11 +458,20 @@ pub fn day_view(store: &Store, date: NaiveDate) -> Result<DayView> {
                 client_name: names
                     .get(&a.client_id)
                     .cloned()
+                    .or_else(|| a.client_name.clone())
                     .unwrap_or_else(|| "Unknown client".into()),
                 pending: pending.contains(&a.id),
                 conflict: conflicts.contains(&a.id),
                 appointment: a,
             });
+        }
+    }
+    for block in effective_time_off(store, from, to)? {
+        if let Some(col) = columns
+            .iter_mut()
+            .find(|c| c.staff.id == block.time_off.staff_id)
+        {
+            col.blocks.push(block);
         }
     }
     Ok(DayView {

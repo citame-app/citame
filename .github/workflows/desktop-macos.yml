@@ -1,0 +1,70 @@
+name: macOS desktop verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      verify_gui:
+        description: Require a first GPUI frame from the extracted bundle (requires Metal in the runner)
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - "apps/desktop/**"
+      - "apps/web/public/icon-512.png"
+      - "scripts/*desktop-macos*.sh"
+      - "scripts/release.ts"
+      - ".github/workflows/desktop-macos.yml"
+      - ".github/workflows/release.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: macOS package (${{ matrix.architecture }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            architecture: x86_64
+          - runner: macos-15
+            architecture: arm64
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Check native tools
+        env:
+          EXPECTED_ARCH: ${{ matrix.architecture }}
+        run: |
+          test "$(uname -m)" = "$EXPECTED_ARCH"
+          xcrun --find metal
+      - name: Test desktop
+        working-directory: apps/desktop
+        run: cargo test --workspace --locked
+      - name: Build release executable
+        working-directory: apps/desktop
+        run: cargo build --release --locked -p sob-desktop
+      - name: Package and verify the local signature and executable
+        env:
+          RELEASE_REVISION: ${{ github.sha }}
+          CITAME_MAC_VERIFY_GUI: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_gui && '1' || '0' }}
+        run: |
+          export RELEASE_TAG="$(bun -e 'console.log("v" + (await Bun.file("package.json").json()).version)')"
+          bash scripts/package-desktop-macos.sh
+          cd .release/desktop
+          shasum -a 256 -c ./*.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-macos-test-${{ matrix.architecture }}
+          path: .release/desktop/*
+          include-hidden-files: true
+          overwrite: true
+          if-no-files-found: error

@@ -4,326 +4,141 @@ import { useState } from "react";
 import { Button } from "~/components/ui/button";
 import { TextField } from "~/components/ui/field";
 import { SelectField } from "~/components/ui/select-field";
-import { EmptyState, ErrorState, Skeleton, useOnline } from "~/components/ui/states";
+import { Sheet } from "~/components/ui/sheet";
+import { ErrorState, Skeleton, useOnline } from "~/components/ui/states";
 import { useI18n } from "~/i18n/react";
-import { adminStaffQuery } from "~/lib/admin-queries";
+import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { formatMoney } from "~/lib/format";
-import { useDebounced } from "../use-debounced";
 import { AccountingView } from "./accounting-view";
 import { CheckoutPanel } from "./checkout-panel";
 import { invalidateCommerce } from "./invalidate";
 import { InventoryView } from "./inventory-view";
 import { inputCents } from "./money";
-import { type CartProduct, ProductCart } from "./product-cart";
+import { PointOfSale } from "./point-of-sale";
 import { RewardsView } from "./rewards-view";
+import { Transactions } from "./transactions";
+
+export const COMMERCE_VIEWS = [
+  "sale",
+  "transactions",
+  "cash",
+  "inventory",
+  "accounting",
+  "rewards",
+] as const;
+export type CommerceViewName = (typeof COMMERCE_VIEWS)[number];
 
 export function CommerceView({
   role,
   accessPreset,
+  userId,
+  view,
+  onViewChange,
+  checkoutId,
+  onCheckoutChange,
 }: {
   role: UserRole;
+  userId?: string;
   accessPreset?: StaffAccessPreset | null;
+  view?: CommerceViewName;
+  onViewChange?: (view: CommerceViewName) => void;
+  checkoutId?: string;
+  onCheckoutChange?: (id: string | null) => void;
 }) {
-  const permissions = permissionsFor(role, accessPreset);
-  const { t, locale } = useI18n();
-  const sales = useQuery({ queryKey: ["commerce", "sales"], queryFn: () => api().commerce.list() });
-  const [selected, setSelected] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
-  const [rewards, setRewards] = useState(false);
-  const [accounting, setAccounting] = useState(false);
-  const [inventory, setInventory] = useState(false);
-  if (rewards)
-    return (
-      <div className="space-y-4">
-        <Button variant="ghost" onClick={() => setRewards(false)}>
-          {t("commerce.back")}
-        </Button>
-        <RewardsView mode="admin" role={role} accessPreset={accessPreset} />
-      </div>
-    );
-  if (accounting)
-    return (
-      <div className="space-y-4">
-        <Button variant="ghost" onClick={() => setAccounting(false)}>
-          {t("commerce.back")}
-        </Button>
-        <AccountingView role={permissions.financialReports ? "owner" : role} />
-      </div>
-    );
-  if (inventory)
-    return (
-      <div className="space-y-4">
-        <Button variant="ghost" onClick={() => setInventory(false)}>
-          {t("commerce.back")}
-        </Button>
-        <InventoryView role={permissions.writeInventory ? "owner" : role} />
-      </div>
-    );
-  return (
-    <div className="space-y-6">
-      <div className="commerce-destinations flex flex-wrap gap-3">
-        <Button variant="secondary" onClick={() => setInventory(true)}>
-          {t("inventory.title")}
-        </Button>
-        <Button variant="secondary" onClick={() => setAccounting(true)}>
-          {t(permissions.financialReports ? "accounting.title" : "accounting.own")}
-        </Button>
-        <Button variant="secondary" onClick={() => setRewards(true)}>
-          {t("rewards.title")}
-        </Button>
-      </div>
-      {permissions.manageCash && <CashRegister role="owner" />}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-heading">{t("commerce.history")}</h2>
-        <Button
-          onClick={() => {
-            setCreating(true);
-            setSelected(null);
-          }}
-        >
-          {t("commerce.newSale")}
-        </Button>
-      </div>
-      {creating && (
-        <NewSale
-          role={permissions.allSales ? "owner" : role}
-          onCreated={(id) => {
-            setCreating(false);
-            setSelected(id);
-          }}
-        />
-      )}
-      {selected && (
-        <div className="space-y-3">
-          <Button variant="ghost" onClick={() => setSelected(null)}>
-            {t("commerce.back")}
-          </Button>
-          <CheckoutPanel id={selected} mode="admin" role={role} />
-        </div>
-      )}
-      {sales.isPending ? (
-        <Skeleton className="h-48" />
-      ) : sales.isError ? (
-        <ErrorState error={sales.error} onRetry={() => void sales.refetch()} />
-      ) : sales.data.checkouts.length === 0 ? (
-        <EmptyState title={t("commerce.noSales")} description={t("commerce.noSalesHelp")} />
-      ) : (
-        <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {sales.data.checkouts.map((sale) => (
-            <li key={sale.id} className="min-w-0 rounded-xl border border-line bg-surface p-4">
-              <p className="break-words font-semibold [overflow-wrap:anywhere]">
-                {sale.lines.map((line) => line.description).join(", ")}
-              </p>
-              <p className="mt-1 text-sm text-muted">
-                {new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(
-                  new Date(sale.createdAt),
-                )}
-              </p>
-              <p className="my-3 flex justify-between gap-3">
-                <span>{formatMoney(sale.totalCents, sale.currency, locale)}</span>
-                <span className="text-sm">{t(`commerce.status.${sale.status}`)}</span>
-              </p>
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setSelected(sale.id);
-                  setCreating(false);
-                }}
-              >
-                {t("commerce.details")}
-              </Button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-function NewSale({ onCreated, role }: { onCreated: (id: string) => void; role: UserRole }) {
   const { t } = useI18n();
-  const queries = useQueryClient();
-  const online = useOnline();
-  const staff = useQuery({ ...adminStaffQuery, enabled: role === "owner" });
-  const [seller, setSeller] = useState("");
-  const [customerSearch, setCustomerSearch] = useState("");
-  const [customer, setCustomer] = useState("");
-  const customerTerm = useDebounced(customerSearch.trim());
-  const customers = useQuery({
-    queryKey: ["rewards", "sale-customers", customerTerm],
-    queryFn: () =>
-      api().admin.clients.list({ search: customerTerm, pageSize: 8, sort: "name", order: "asc" }),
-    enabled: customerTerm.length > 0,
-  });
-  const [items, setItems] = useState<CartProduct[]>([]);
-  const [description, setDescription] = useState("");
-  const [price, setPrice] = useState("");
-  const [discount, setDiscount] = useState("0");
-  const [tip, setTip] = useState("0");
-  const [key, setKey] = useState(() => crypto.randomUUID());
-  const create = useMutation({
-    mutationFn: async () => {
-      const unitAmountCents = description.trim() ? inputCents(price) : 0;
-      const discountCents = inputCents(discount);
-      const tipCents = inputCents(tip);
-      if (
-        (!description.trim() && !items.length) ||
-        unitAmountCents === null ||
-        discountCents === null ||
-        tipCents === null ||
-        items.some(
-          (item) =>
-            !item.quantity.trim() ||
-            !Number.isInteger(Number(item.quantity)) ||
-            Number(item.quantity) < 1 ||
-            Number(item.quantity) > item.product.available ||
-            Number(item.quantity) > 1000,
-        )
-      )
-        throw new Error("Invalid sale");
-      const subtotal =
-        unitAmountCents +
-        items.reduce((sum, item) => sum + item.product.priceCents * Number(item.quantity), 0);
-      if (discountCents > subtotal) throw new Error("Invalid discount");
-      return api().commerce.create({
-        currency: "EUR",
-        ...(seller ? { staffId: seller } : {}),
-        ...(customer ? { clientId: customer } : {}),
-        lines: [
-          ...items.map((item) => ({
-            kind: "product" as const,
-            productId: item.product.id,
-            quantity: Number(item.quantity),
-            taxBasisPoints: 0,
-          })),
-          ...(description.trim()
-            ? [
-                {
-                  kind: "custom" as const,
-                  description: description.trim(),
-                  quantity: 1,
-                  unitAmountCents,
-                  taxBasisPoints: 0,
-                },
-              ]
-            : []),
-        ],
-        discountCents,
-        tipCents,
-        idempotencyKey: key,
-      });
-    },
-    onSuccess: (sale) => {
-      void invalidateCommerce(queries);
-      onCreated(sale.id);
-    },
-  });
-  const change = (set: (value: string) => void, value: string) => {
-    set(value);
-    create.reset();
-    setKey(crypto.randomUUID());
+  const permissions = permissionsFor(role, accessPreset);
+  const [localView, setLocalView] = useState<CommerceViewName>("sale");
+  const [localSelected, setLocalSelected] = useState<string | null>(null);
+  const [benefitsTab, setBenefitsTab] = useState<"gift" | "packages" | "memberships" | "loyalty">(
+    "gift",
+  );
+  const active = view ?? localView;
+  const selected = checkoutId ?? localSelected;
+  const navigate = (next: CommerceViewName) => {
+    if (onViewChange) onViewChange(next);
+    else setLocalView(next);
   };
+  const open = (id: string | null) => {
+    if (onCheckoutChange) onCheckoutChange(id);
+    else setLocalSelected(id);
+  };
+  const sales = useQuery({
+    queryKey: ["commerce", "sales"],
+    queryFn: () => api().commerce.list({ pageSize: 100 }),
+  });
+  const entries: { value: CommerceViewName; label: string }[] = [
+    { value: "sale", label: t("pos.sale") },
+    { value: "transactions", label: t("pos.transactions") },
+    ...(permissions.manageCash ? [{ value: "cash" as const, label: t("pos.registers") }] : []),
+    ...(permissions.readInventory
+      ? [{ value: "inventory" as const, label: t("inventory.title") }]
+      : []),
+    {
+      value: "accounting",
+      label: t(permissions.financialReports ? "accounting.title" : "accounting.own"),
+    },
+    { value: "rewards", label: t("rewards.title") },
+  ];
   return (
-    <form
-      className="grid gap-4 rounded-xl border border-line bg-surface p-4 sm:grid-cols-2"
-      onSubmit={(event) => {
-        event.preventDefault();
-        create.mutate();
-      }}
-    >
-      <h3 className="font-semibold sm:col-span-2">{t("commerce.newSale")}</h3>
-      <p className="text-sm text-muted sm:col-span-2">{t("commerce.customHelp")}</p>
-      <div className="space-y-3 sm:col-span-2">
-        <TextField
-          label={t("loyalty.searchClient")}
-          type="search"
-          value={customerSearch}
-          hint={t("loyalty.saleClientHelp")}
-          onChange={(e) => {
-            change(setCustomerSearch, e.target.value);
-            setCustomer("");
+    <div className="commerce-workbench">
+      <nav className="commerce-section-nav" aria-label={t("commerce.title")}>
+        {entries.map((entry) => (
+          <button
+            type="button"
+            key={entry.value}
+            aria-pressed={active === entry.value}
+            onClick={() => navigate(entry.value)}
+          >
+            {entry.label}
+          </button>
+        ))}
+      </nav>
+      {active !== "sale" && (
+        <Button variant="ghost" className="mb-4" onClick={() => navigate("sale")}>
+          {t("commerce.back")}
+        </Button>
+      )}
+      <div hidden={active !== "sale"}>
+        <PointOfSale
+          role={role}
+          accessPreset={accessPreset}
+          sales={sales.data?.checkouts ?? []}
+          onCreated={(id) => open(id)}
+          onBenefits={(tab) => {
+            setBenefitsTab(tab);
+            navigate("rewards");
           }}
         />
-        {customers.isFetching && <Skeleton className="h-8" />}
-        {customers.isError && (
-          <ErrorState error={customers.error} onRetry={() => void customers.refetch()} />
-        )}
-        <SelectField
-          label={t("loyalty.client")}
-          value={customer}
-          options={[
-            { value: "", label: t("loyalty.chooseClient") },
-            ...(customers.data?.clients ?? []).map((c) => ({
-              value: c.id,
-              label: `${c.name}${c.email ? ` · ${c.email}` : ""}`,
-            })),
-          ]}
-          onChange={(value) => change(setCustomer, value)}
-        />
       </div>
-      {role === "owner" &&
-        (staff.isPending ? (
-          <Skeleton className="h-14" />
-        ) : staff.isError ? (
-          <ErrorState error={staff.error} onRetry={() => void staff.refetch()} />
-        ) : (
-          <SelectField
-            label={t("accounting.staff")}
-            value={seller}
-            options={[
-              { value: "", label: t("accounting.unassigned") },
-              ...staff.data
-                .filter((member) => member.active)
-                .map((member) => ({ value: member.id, label: member.displayName })),
-            ]}
-            onChange={(value) => {
-              setSeller(value);
-              create.reset();
-              setKey(crypto.randomUUID());
-            }}
-          />
-        ))}
-      <ProductCart
-        items={items}
-        onChange={(next) => {
-          setItems(next);
-          create.reset();
-          setKey(crypto.randomUUID());
-        }}
-      />
-      <TextField
-        label={t("commerce.description")}
-        value={description}
-        onChange={(event) => change(setDescription, event.target.value)}
-        maxLength={200}
-      />
-      <TextField
-        label={`${t("commerce.price")} (EUR)`}
-        value={price}
-        inputMode="decimal"
-        onChange={(event) => change(setPrice, event.target.value)}
-      />
-      <TextField
-        label={t("commerce.discount")}
-        value={discount}
-        inputMode="decimal"
-        onChange={(event) => change(setDiscount, event.target.value)}
-      />
-      <TextField
-        label={t("commerce.tip")}
-        value={tip}
-        inputMode="decimal"
-        onChange={(event) => change(setTip, event.target.value)}
-      />
-      {create.isError && (
-        <p role="alert" className="text-danger-fg sm:col-span-2">
-          {t("commerce.paymentError")}
-        </p>
+      {active === "transactions" && <Transactions onOpen={(id) => open(id)} />}
+      {active === "cash" && permissions.manageCash && <CashRegister role="owner" />}
+      {active === "inventory" && permissions.readInventory && (
+        <InventoryView role={role} accessPreset={accessPreset} userId={userId} />
       )}
-      <Button type="submit" disabled={create.isPending || !online}>
-        {t("commerce.create")}
-      </Button>
-    </form>
+      {active === "accounting" && (
+        <AccountingView role={permissions.financialReports ? "owner" : role} />
+      )}
+      {active === "rewards" && (
+        <RewardsView
+          key={benefitsTab}
+          initialTab={benefitsTab}
+          mode="admin"
+          role={role}
+          accessPreset={accessPreset}
+        />
+      )}
+      <Sheet
+        open={Boolean(selected)}
+        onOpenChange={(value) => {
+          if (!value) open(null);
+        }}
+        title={t("commerce.receipt")}
+        size="lg"
+      >
+        {selected && <CheckoutPanel id={selected} mode="admin" role={role} />}
+      </Sheet>
+    </div>
   );
 }
 function CashRegister({ role }: { role: UserRole }) {
@@ -335,24 +150,46 @@ function CashRegister({ role }: { role: UserRole }) {
     queryFn: () => api().commerce.cash(),
   });
   const [opening, setOpening] = useState("0");
+  const [openingId, setOpeningId] = useState(() => crypto.randomUUID());
   const [counted, setCounted] = useState("");
+  const [review, setReview] = useState<{ id: string; expectedCents: number } | null>(null);
+  const [cashChanged, setCashChanged] = useState(false);
   const changed = () => void invalidateCommerce(queries);
   const open = useMutation({
     mutationFn: () => {
       const value = inputCents(opening);
       if (value === null) throw new Error("Invalid count");
-      return api().commerce.openCash(value);
+      return api().commerce.openCash(value, openingId);
     },
-    onSuccess: changed,
+    onSuccess: () => {
+      setOpeningId(crypto.randomUUID());
+      setOpening("0");
+      setCashChanged(false);
+      changed();
+    },
   });
   const close = useMutation({
     mutationFn: () => {
       const value = inputCents(counted);
-      if (value === null || !current.data?.session) throw new Error("Invalid count");
-      return api().commerce.closeCash(current.data.session.id, value);
+      if (value === null || !review) throw new Error("Invalid count");
+      return api().commerce.closeCash(review.id, value, review.expectedCents);
     },
-    onSuccess: changed,
+    onError: (error) => {
+      if (error instanceof ApiError && error.code === "version_conflict") reviewAgain();
+    },
+    onSuccess: () => {
+      setReview(null);
+      setCounted("");
+      setCashChanged(false);
+      changed();
+    },
   });
+  function reviewAgain() {
+    setReview(null);
+    setCounted("");
+    setCashChanged(true);
+    void current.refetch();
+  }
   if (current.isPending) return <Skeleton className="h-40" />;
   if (current.isError)
     return <ErrorState error={current.error} onRetry={() => void current.refetch()} />;
@@ -409,8 +246,10 @@ function CashRegister({ role }: { role: UserRole }) {
               label={t("commerce.opening")}
               value={opening}
               inputMode="decimal"
+              disabled={open.isPending}
               onChange={(event) => {
                 setOpening(event.target.value);
+                setOpeningId(crypto.randomUUID());
                 open.reset();
               }}
             />
@@ -423,6 +262,13 @@ function CashRegister({ role }: { role: UserRole }) {
             className="flex flex-wrap items-end gap-3"
             onSubmit={(event) => {
               event.preventDefault();
+              if (
+                review &&
+                (review.id !== session.id || review.expectedCents !== session.expectedCents)
+              ) {
+                reviewAgain();
+                return;
+              }
               close.mutate();
             }}
           >
@@ -430,8 +276,13 @@ function CashRegister({ role }: { role: UserRole }) {
               label={t("commerce.counted")}
               value={counted}
               inputMode="decimal"
+              disabled={close.isPending || (cashChanged && current.isFetching)}
               onChange={(event) => {
                 setCounted(event.target.value);
+                setReview(
+                  (prior) => prior ?? { id: session.id, expectedCents: session.expectedCents },
+                );
+                setCashChanged(false);
                 close.reset();
               }}
             />
@@ -440,12 +291,12 @@ function CashRegister({ role }: { role: UserRole }) {
             </Button>
           </form>
         ))}
-      {(open.isError || close.isError) && (
+      {(cashChanged || open.isError || close.isError) && (
         <p role="alert" className="text-danger-fg">
-          {t("commerce.registerError")}
+          {t(cashChanged ? "commerce.cashChanged" : "commerce.registerError")}
         </p>
       )}
-      {active && role === "owner" && <CashAdjustment />}
+      {active && role === "owner" && <CashAdjustment key={session.id} sessionId={session.id} />}
       {session && session.movements.length > 0 && (
         <details>
           <summary className="cursor-pointer py-2 font-medium">{t("commerce.movements")}</summary>
@@ -462,9 +313,10 @@ function CashRegister({ role }: { role: UserRole }) {
     </section>
   );
 }
-function CashAdjustment() {
+function CashAdjustment({ sessionId }: { sessionId: string }) {
   const { t } = useI18n();
   const queries = useQueryClient();
+  const online = useOnline();
   const [kind, setKind] = useState<"deposit" | "withdrawal">("deposit");
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
@@ -476,6 +328,7 @@ function CashAdjustment() {
       if (value === null || value <= 0 || reason.trim().length < 3)
         throw new Error("Invalid adjustment");
       return api().commerce.adjustCash({
+        sessionId,
         kind,
         amountCents: value,
         reason: reason.trim(),
@@ -531,7 +384,7 @@ function CashAdjustment() {
           }}
         />
         {save.isError && <p role="alert">{t("commerce.registerError")}</p>}
-        <Button type="submit" disabled={save.isPending}>
+        <Button type="submit" disabled={save.isPending || !online}>
           {t("commerce.adjust")}
         </Button>
       </form>

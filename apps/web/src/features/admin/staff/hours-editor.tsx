@@ -1,13 +1,13 @@
 import { Popover } from "@base-ui/react/popover";
-import type { ScheduleConflict } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { PlusIcon, TrashIcon } from "~/components/ui/icons";
 import { ErrorState, Skeleton } from "~/components/ui/states";
 import { useToast } from "~/components/ui/toast";
 import { useI18n } from "~/i18n/react";
-import { workingHoursQuery } from "~/lib/admin-queries";
+import { teamShiftWeekKey, workingHoursQuery } from "~/lib/admin-queries";
+import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { cn } from "~/lib/cn";
 import { describeProblem } from "../problems";
@@ -26,6 +26,12 @@ import {
   weekIsValid,
 } from "./hours";
 
+interface HoursDraft {
+  week: WeekHours;
+  baseline: WeekHours;
+  revision?: string;
+}
+
 const timeInput =
   "min-h-11 rounded-md border border-line-strong bg-surface px-3 text-base tabular-nums hover:border-fg/60 focus:border-ring disabled:opacity-60";
 
@@ -35,40 +41,68 @@ export function HoursEditor({ staffId, editable }: { staffId: string; editable: 
   const queryClient = useQueryClient();
   const query = useQuery(workingHoursQuery(staffId));
   const saved = useMemo(() => (query.data ? fromRanges(query.data.hours) : null), [query.data]);
-  const [week, setWeek] = useState<WeekHours | null>(null);
-  const [conflicts, setConflicts] = useState<ScheduleConflict[] | null>(null);
-
-  useEffect(() => {
-    if (saved) setWeek((current) => current ?? saved);
-  }, [saved]);
-
+  const [draft, setDraft] = useState<HoursDraft | null>(null);
   const save = useMutation({
-    mutationFn: (next: WeekHours) =>
-      api().admin.staff.setWorkingHours(staffId, { hours: toRanges(next) }),
+    mutationFn: (next: HoursDraft) =>
+      api().admin.staff.setWorkingHours(staffId, {
+        hours: toRanges(next.week),
+        expectedRevision: next.revision,
+      }),
     onSuccess: (result) => {
       toast.success(t("hours.saved"));
-      setConflicts(result.conflicts);
       queryClient.setQueryData(workingHoursQuery(staffId).queryKey, result);
-      setWeek(fromRanges(result.hours));
+      void queryClient.invalidateQueries({ queryKey: teamShiftWeekKey });
+      setDraft(null);
       void queryClient.invalidateQueries({ queryKey: ["admin", "calendar"] });
       void queryClient.invalidateQueries({ queryKey: ["availability"] });
     },
-    onError: (error) =>
-      toast.error(`${t("hours.saveFailed")}. ${t(describeProblem(error).messageKey)}`),
+    onError: (error) => {
+      if (error instanceof ApiError && error.code === "version_conflict") return;
+      toast.error(`${t("hours.saveFailed")}. ${t(describeProblem(error).messageKey)}`);
+    },
   });
 
-  if (query.isPending || !week || !saved) return <Skeleton className="h-96" />;
-  if (query.isError) return <ErrorState error={query.error} onRetry={() => void query.refetch()} />;
+  if (!saved || !query.data) {
+    return query.isError ? (
+      <ErrorState error={query.error} onRetry={() => void query.refetch()} />
+    ) : (
+      <Skeleton className="h-96" />
+    );
+  }
 
-  const dirty = !hoursEqual(week, saved);
+  const week = draft?.week ?? saved;
+  const revision = query.data.revision;
+  const stale =
+    draft !== null &&
+    (draft.revision !== revision ||
+      (save.error instanceof ApiError && save.error.code === "version_conflict"));
   const valid = weekIsValid(week);
-  const shownConflicts = conflicts ?? query.data?.conflicts ?? [];
+  const locked = save.isPending || stale;
+  const shownConflicts = query.data.conflicts;
 
+  function setWeek(next: WeekHours) {
+    if (locked) return;
+    const baseline = draft?.baseline ?? saved;
+    if (!baseline) return;
+    setDraft(
+      hoursEqual(next, baseline)
+        ? null
+        : {
+            week: next,
+            baseline,
+            revision: draft?.revision ?? revision,
+          },
+    );
+  }
   const setDay = (weekday: number, ranges: TimeRange[]) => setWeek({ ...week, [weekday]: ranges });
+  const discard = () => {
+    save.reset();
+    setDraft(null);
+  };
 
   return (
     <div className="space-y-5">
-      <UnsavedGuard dirty={dirty} />
+      <UnsavedGuard dirty={draft !== null} />
       <div>
         <h3 className="text-heading">{t("hours.title")}</h3>
         <p className="text-muted">{t("hours.lead")}</p>
@@ -107,7 +141,7 @@ export function HoursEditor({ staffId, editable }: { staffId: string; editable: 
                             step={300}
                             aria-label={t("hours.start", { day: name, n })}
                             value={range.start}
-                            disabled={!editable}
+                            disabled={!editable || locked}
                             onChange={(e) => update({ start: e.target.value })}
                             className={cn(timeInput, issue && "border-danger-fg")}
                           />
@@ -117,13 +151,14 @@ export function HoursEditor({ staffId, editable }: { staffId: string; editable: 
                             step={300}
                             aria-label={t("hours.end", { day: name, n })}
                             value={range.end}
-                            disabled={!editable}
+                            disabled={!editable || locked}
                             onChange={(e) => update({ end: e.target.value })}
                             className={cn(timeInput, issue && "border-danger-fg")}
                           />
                           {editable && (
                             <button
                               type="button"
+                              disabled={locked}
                               aria-label={t("hours.removeRange", { day: name, n })}
                               onClick={() =>
                                 setDay(
@@ -150,7 +185,11 @@ export function HoursEditor({ staffId, editable }: { staffId: string; editable: 
                 </div>
                 {editable && (
                   <div className="flex flex-wrap gap-2">
-                    <Button variant="secondary" onClick={() => setDay(weekday, addRange(day))}>
+                    <Button
+                      variant="secondary"
+                      disabled={locked}
+                      onClick={() => setDay(weekday, addRange(day))}
+                    >
                       <PlusIcon />
                       {t("hours.addRange")}
                     </Button>
@@ -158,6 +197,7 @@ export function HoursEditor({ staffId, editable }: { staffId: string; editable: 
                       <CopyMenu
                         sourceName={name}
                         source={weekday}
+                        disabled={locked}
                         onApply={(targets) => setWeek(copyDay(week, weekday, targets))}
                       />
                     )}
@@ -171,16 +211,37 @@ export function HoursEditor({ staffId, editable }: { staffId: string; editable: 
 
       {editable && (
         <div className="flex flex-wrap items-center gap-3">
+          {stale && (
+            <>
+              <p role="alert" className="basis-full text-sm text-warning-fg">
+                {t("hours.stale")}
+              </p>
+              <Button
+                variant="secondary"
+                loading={query.isFetching}
+                onClick={() =>
+                  void query.refetch().then((result) => {
+                    if (result.isSuccess) discard();
+                    else toast.error(t("hours.reloadFailed"));
+                  })
+                }
+              >
+                {t("hours.discardReload")}
+              </Button>
+            </>
+          )}
           <Button
             loading={save.isPending}
-            disabled={!dirty || !valid}
-            onClick={() => save.mutate(week)}
+            disabled={!draft || !valid || stale}
+            onClick={() => {
+              if (draft && !stale && !save.isPending) save.mutate(draft);
+            }}
           >
             {t("hours.save")}
           </Button>
-          {dirty && <span className="text-sm text-warning-fg">{t("admin.unsaved.badge")}</span>}
-          {dirty && (
-            <Button variant="ghost" onClick={() => setWeek(saved)}>
+          {draft && <span className="text-sm text-warning-fg">{t("admin.unsaved.badge")}</span>}
+          {draft && !stale && (
+            <Button variant="ghost" disabled={save.isPending} onClick={discard}>
               {t("admin.cancel")}
             </Button>
           )}
@@ -193,18 +254,22 @@ export function HoursEditor({ staffId, editable }: { staffId: string; editable: 
 function CopyMenu({
   source,
   sourceName,
+  disabled,
   onApply,
 }: {
   source: number;
   sourceName: string;
+  disabled: boolean;
   onApply: (targets: number[]) => void;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [targets, setTargets] = useState<number[]>([]);
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger render={<Button variant="secondary" />}>{t("hours.copy")}</Popover.Trigger>
+    <Popover.Root open={open && !disabled} onOpenChange={setOpen}>
+      <Popover.Trigger render={<Button variant="secondary" disabled={disabled} />}>
+        {t("hours.copy")}
+      </Popover.Trigger>
       <Popover.Portal>
         <Popover.Positioner sideOffset={8} align="end" className="z-50">
           <Popover.Popup className="min-w-56 rounded-lg border border-line bg-surface p-2 shadow-lg">

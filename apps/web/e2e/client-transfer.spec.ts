@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import { RECURRING_FIXTURE as fixture } from "../../api/test/recurring-values";
 import { expectNoHorizontalScroll } from "./admin-helpers";
-import { expectNoSeriousA11yViolations, signInThroughUi } from "./helpers";
+import { expectNoSeriousA11yViolations, signInThroughUi, switchLocale } from "./helpers";
 
 for (const scheme of ["light", "dark"] as const) {
   test.describe(`client transfer — ${scheme}`, () => {
@@ -19,7 +19,7 @@ for (const scheme of ["light", "dark"] as const) {
       let receipt: { clientIds: string[]; [key: string]: unknown } | undefined;
       try {
         await signInThroughUi(page, fixture.ownerEmail, "/admin/clients");
-        await page.getByRole("radio", { name: "Español", exact: true }).check({ force: true });
+        await switchLocale(page, "Español");
         await page.getByRole("button", { name: "Importar clientes", exact: true }).click();
         const dialog = page.getByRole("dialog", { name: "Importar clientes", exact: true });
         await dialog

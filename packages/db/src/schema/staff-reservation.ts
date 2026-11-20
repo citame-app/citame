@@ -26,7 +26,7 @@ export const staffReservation = pgTable(
   (t) => [
     check(
       "staff_reservation_valid",
-      sql`num_nonnulls(${t.appointmentId},${t.offerId})=1 and ${t.position}>=0 and ${t.unitIndex} between 0 and 5 and ${t.offsetMinutes}>=0 and (${t.endOffsetMinutes} is null or ${t.endOffsetMinutes}>${t.offsetMinutes}) and ${t.endsAt}>${t.startsAt} and (not ${t.released} or ${t.offerId} is not null)`,
+      sql`num_nonnulls(${t.appointmentId},${t.offerId})=1 and ${t.position}>=0 and ${t.unitIndex} between 0 and 11 and ${t.offsetMinutes}>=0 and (${t.endOffsetMinutes} is null or ${t.endOffsetMinutes}>${t.offsetMinutes}) and ${t.endsAt}>${t.startsAt} and (not ${t.released} or ${t.offerId} is not null)`,
     ),
     uniqueIndex("staff_reservation_appointment_position")
       .on(t.appointmentId, t.position)

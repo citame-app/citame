@@ -6,11 +6,13 @@ import {
   listAdminStaffResponseSchema,
   listStaffResponseSchema,
   listTimeOffResponseSchema,
+  staffPortraitResultSchema,
   timeOffResponseSchema,
   workingHoursResponseSchema,
 } from "@sob/contracts";
 import { appointment, auditLog, timeOff, user, workingHours } from "@sob/db";
 import { and, asc, eq, isNull } from "drizzle-orm";
+import sharp from "sharp";
 import {
   type Actor,
   actor,
@@ -64,6 +66,135 @@ async function bookAna(startsAt = MONDAY_0900, staffId = f.anaId) {
 
 const hours = (...ranges: [number, string, string][]) => ({
   hours: ranges.map(([weekday, startTime, endTime]) => ({ weekday, startTime, endTime })),
+});
+
+test("manages one private portrait per member with revision and access checks", async () => {
+  const source = await sharp({
+    create: { width: 256, height: 192, channels: 3, background: "#87556a" },
+  })
+    .png()
+    .withMetadata({ orientation: 6 })
+    .toBuffer();
+  const path = `/admin/staff/${f.anaId}/portrait`;
+  const input = { version: null, imageBase64: source.toString("base64") };
+  expect((await call(ana, "PUT", path, input)).status).toBe(403);
+  const result = await call(owner, "PUT", path, input);
+  expect(result.status).toBe(200);
+  const { version } = staffPortraitResultSchema.parse(await result.json());
+  if (!version) throw new Error("Portrait creation returned no version");
+  expect((await call(owner, "PUT", path, input)).status).toBe(409);
+
+  expect((await call(null, "GET", path)).status).toBe(401);
+  expect((await call(client, "GET", path)).status).toBe(403);
+  expect((await call(bea, "GET", path)).status).toBe(403);
+  expect((await call(ana, "GET", `${path}?v=${crypto.randomUUID()}`)).status).toBe(404);
+  expect((await call(ana, "GET", `${path}?v=${version}`)).status).toBe(200);
+  const portrait = await call(ana, "GET", path);
+  expect(portrait.headers.get("cache-control")).toBe("private, no-store");
+  expect(portrait.headers.get("content-type")).toBe("image/jpeg");
+  const metadata = await sharp(Buffer.from(await portrait.arrayBuffer())).metadata();
+  expect(metadata).toMatchObject({ format: "jpeg", width: 192, height: 256 });
+  expect(metadata.exif).toBeUndefined();
+  const { staff, canEditPortraits } = listAdminStaffResponseSchema.parse(
+    await (await call(owner, "GET", "/admin/staff")).json(),
+  );
+  expect(canEditPortraits).toBe(true);
+  expect(
+    listAdminStaffResponseSchema.parse(await (await call(ana, "GET", "/admin/staff")).json())
+      .canEditPortraits,
+  ).toBe(false);
+  expect(staff.find((member) => member.id === f.anaId)?.portraitVersion).toBe(version);
+
+  const remove = await call(owner, "PUT", path, { version, imageBase64: null });
+  expect(await remove.json()).toEqual({ version: null });
+  expect((await call(owner, "GET", path)).status).toBe(404);
+  expect((await call(owner, "PUT", path, input)).status).toBe(409);
+  const absence = listAdminStaffResponseSchema
+    .parse(await (await call(owner, "GET", "/admin/staff")).json())
+    .staff.find((member) => member.id === f.anaId);
+  expect(absence?.portraitVersion).toBeUndefined();
+  const absenceVersion = absence?.portraitAbsenceVersion;
+  if (!absenceVersion) throw new Error("Removal returned no absence fence in the directory");
+  expect(absenceVersion).not.toBe(version);
+  const publicList = await (await call(null, "GET", "/staff")).text();
+  expect(publicList).not.toContain(absenceVersion);
+  expect(
+    (await call(owner, "PUT", `${path}/publication`, { version: absenceVersion, published: true }))
+      .status,
+  ).toBe(404);
+  const uploaded = await call(owner, "PUT", path, { ...input, version: absenceVersion });
+  expect(uploaded.status).toBe(200);
+  const newVersion = staffPortraitResultSchema.parse(await uploaded.json()).version;
+  expect(newVersion).toBeTruthy();
+  expect((await call(owner, "PUT", path, { version: newVersion, imageBase64: null })).status).toBe(
+    200,
+  );
+  expect((await call(owner, "PUT", path, { ...input, version: absenceVersion })).status).toBe(409);
+});
+
+test("public portrait access requires a current publication on an active member", async () => {
+  const imageBase64 = (
+    await sharp({ create: { width: 40, height: 40, channels: 3, background: "#87556a" } })
+      .jpeg()
+      .toBuffer()
+  ).toString("base64");
+  const route = `/admin/staff/${f.anaId}/portrait`;
+  const publicImage = (version: string) =>
+    call(null, "GET", `/staff/${f.anaId}/portrait/${version}`);
+  const publicMember = async () => {
+    const response = await call(null, "GET", "/staff");
+    return listStaffResponseSchema
+      .parse(await response.json())
+      .staff.find(({ id }) => id === f.anaId);
+  };
+  const savedVersion = async (response: Response) => {
+    expect(response.status).toBe(200);
+    const { version } = staffPortraitResultSchema.parse(await response.json());
+    if (!version) throw new Error("Missing portrait version");
+    return version;
+  };
+  const publish = (version: string, published: boolean) =>
+    call(owner, "PUT", `${route}/publication`, { version, published });
+
+  const internal = await savedVersion(
+    await call(owner, "PUT", route, { imageBase64, version: null }),
+  );
+  expect((await publicMember())?.portraitVersion).toBeUndefined();
+  expect((await publicImage(internal)).status).toBe(404);
+  expect(
+    (await call(ana, "PUT", `${route}/publication`, { version: internal, published: true })).status,
+  ).toBe(403);
+  const published = await savedVersion(await publish(internal, true));
+  expect(await publicMember()).toMatchObject({ portraitVersion: published });
+  const image = await publicImage(published);
+  expect(image.status).toBe(200);
+  expect(image.headers.get("cache-control")).toContain("no-store");
+  expect(image.headers.get("content-type")).toBe("image/jpeg");
+  expect((await publicImage(internal)).status).toBe(404);
+  expect((await publish(internal, false)).status).toBe(409);
+
+  expect((await call(owner, "PATCH", `/admin/staff/${f.anaId}`, { active: false })).status).toBe(
+    200,
+  );
+  expect((await publicImage(published)).status).toBe(404);
+  expect(await publicMember()).toBeUndefined();
+  expect((await call(owner, "PATCH", `/admin/staff/${f.anaId}`, { active: true })).status).toBe(
+    200,
+  );
+
+  const nextInternal = await savedVersion(
+    await call(owner, "PUT", route, {
+      imageBase64,
+      version: published,
+    }),
+  );
+  expect((await publicImage(published)).status).toBe(404);
+  expect((await publicImage(nextInternal)).status).toBe(404);
+  const nextPublic = await savedVersion(await publish(nextInternal, true));
+  const withdrawn = await savedVersion(await publish(nextPublic, false));
+  expect((await publicImage(nextPublic)).status).toBe(404);
+  expect((await publicImage(withdrawn)).status).toBe(404);
+  expect((await call(owner, "GET", route)).status).toBe(200);
 });
 
 describe("access control", () => {
@@ -260,6 +391,28 @@ describe("working hours", () => {
     const [row] = await audit("working_hours.replace");
     expect(row).toMatchObject({ actorUserId: owner.userId, entity: "staff", entityId: f.anaId });
     expect(row?.metadata).toMatchObject({ ranges: 3 });
+  });
+
+  test("weekly revisions reject stale edits even when their hours were restored", async () => {
+    const path = `/admin/staff/${f.anaId}/working-hours`;
+    const baseline = workingHoursResponseSchema.parse(
+      await (await call(owner, "GET", path)).json(),
+    );
+    expect(baseline.revision).toBeDefined();
+    const first = { ...hours([1, "10:00", "18:00"]), expectedRevision: baseline.revision };
+    const changed = workingHoursResponseSchema.parse(
+      await (await call(owner, "PUT", path, first)).json(),
+    );
+    expect(changed.revision).not.toBe(baseline.revision);
+    const replay = await call(owner, "PUT", path, first);
+    expect(workingHoursResponseSchema.parse(await replay.json())).toEqual(changed);
+    expect(await audit("working_hours.replace")).toHaveLength(1);
+    const restored = { hours: baseline.hours, expectedRevision: changed.revision };
+    expect((await call(owner, "PUT", path, restored)).status).toBe(200);
+    const rejected = await call(owner, "PUT", path, first);
+    expect(rejected.status).toBe(409);
+    expect(await errorCode(rejected)).toBe("version_conflict");
+    expect(await audit("working_hours.replace")).toHaveLength(2);
   });
 
   test("an empty schedule makes every day a day off", async () => {

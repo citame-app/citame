@@ -288,6 +288,258 @@
       "when": 1794847484430,
       "tag": "0040_dark_wither",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1794906060725,
+      "tag": "0041_fast_quicksilver",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1794918279777,
+      "tag": "0042_outgoing_raider",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1794920439915,
+      "tag": "0043_nosy_cerise",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1794920945760,
+      "tag": "0044_good_hedge_knight",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1794921213750,
+      "tag": "0045_flat_diamondback",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1794927087058,
+      "tag": "0046_wandering_wild_pack",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1794952499559,
+      "tag": "0047_chilly_meteorite",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1794954302943,
+      "tag": "0048_gray_sunspot",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1794954478236,
+      "tag": "0049_massive_baron_strucker",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1794955572176,
+      "tag": "0050_third_tigra",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1794955691035,
+      "tag": "0051_good_klaw",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1794955982697,
+      "tag": "0052_woozy_hobgoblin",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1794956138294,
+      "tag": "0053_nasty_madrox",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1794956704654,
+      "tag": "0054_square_stepford_cuckoos",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1794957309431,
+      "tag": "0055_open_ares",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1794968583083,
+      "tag": "0056_appointment_price_review",
+      "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1794969333854,
+      "tag": "0057_sync_import_billing_holds",
+      "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1794974159905,
+      "tag": "0058_sync_booksy_appointment_origin",
+      "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1794974355371,
+      "tag": "0059_sync_calendar_indicators",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1794980706237,
+      "tag": "0060_bright_wendell_vaughn",
+      "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1794981628695,
+      "tag": "0061_live_view_changes",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1794988516849,
+      "tag": "0062_damp_wiccan",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1794996000000,
+      "tag": "0063_sync_service_colors",
+      "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1794999839756,
+      "tag": "0064_whatsapp_dispatch_sender",
+      "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1795006202472,
+      "tag": "0065_staff_portrait",
+      "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1795006844046,
+      "tag": "0066_pause_online_booking",
+      "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1795008109000,
+      "tag": "0067_staff_portrait_publication",
+      "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1795020736146,
+      "tag": "0068_inventory_product_photo",
+      "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1795025272439,
+      "tag": "0069_review_email_delivery",
+      "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "7",
+      "when": 1795025718802,
+      "tag": "0070_isolate_review_campaigns",
+      "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1795027291714,
+      "tag": "0071_review_request_live_view",
+      "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1795027788011,
+      "tag": "0072_review_moderation_live_view",
+      "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1795030347634,
+      "tag": "0073_inventory_package_content",
+      "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1795047456957,
+      "tag": "0074_inventory_ledger_position",
+      "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1795051490512,
+      "tag": "0075_staff_portrait_absence_version",
+      "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1795057784682,
+      "tag": "0076_sync_calendar_annotation_badges",
+      "breakpoints": true
     }
   ]
 }

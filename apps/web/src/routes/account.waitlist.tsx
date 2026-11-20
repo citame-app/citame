@@ -1,11 +1,14 @@
 import { idSchema, localDateSchema } from "@sob/contracts";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { WaitlistView } from "~/features/waitlist/waitlist-view";
 import { createTranslator } from "~/i18n";
+import { salonQuery } from "~/lib/queries";
 import { pageMeta } from "~/lib/seo";
 export const Route = createFileRoute("/account/waitlist")({
   beforeLoad: ({ context }): void => {
-    if (context.session && context.session.user.role !== "client") throw redirect({ to: "/admin" });
+    if (context.session && context.session.user.role !== "client")
+      throw redirect({ to: "/admin/calendar" });
   },
   validateSearch: (
     raw: Record<string, unknown>,
@@ -42,11 +45,13 @@ export const Route = createFileRoute("/account/waitlist")({
 function WaitlistPage() {
   const { session } = Route.useRouteContext();
   const search = Route.useSearch();
+  const { data: salon } = useQuery({ ...salonQuery, refetchOnMount: "always" });
   if (!session) return null;
   return (
     <WaitlistView
       mode="client"
       role="client"
+      onlineBookingEnabled={salon?.onlineBookingEnabled}
       clientId={session.clientId}
       initialServices={search.services?.split(",")}
       initialStaff={search.staff}

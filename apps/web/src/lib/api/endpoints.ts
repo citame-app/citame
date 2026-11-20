@@ -1,10 +1,14 @@
 import {
+  type AppointmentContextUpdate,
   type AppointmentListQuery,
   adminClientSchema,
   adminServiceSchema,
   adminStaffSchema,
+  appointmentContextSchema,
   appointmentSchema,
   availabilityResponseSchema,
+  type BooksyContextImport,
+  booksyContextReviewSchema,
   type CalendarQuery,
   type ClientControlsInput,
   type ClientImportInput,
@@ -14,6 +18,7 @@ import {
   type ClientPhotoUpdate,
   type ClientPhotoUpload,
   type CreateAppointmentRequest,
+  type CreateClientRequest,
   type CreateServiceRequest,
   type CreateStaffAccountRequest,
   type CreateTimeOffRequest,
@@ -22,12 +27,16 @@ import {
   clientDetailResponseSchema,
   clientDuplicatesSchema,
   clientExportSchema,
+  clientGroupsSchema,
   clientImportPreviewSchema,
   clientImportResultSchema,
   clientMergePreviewSchema,
   clientMergeSchema,
   clientPhotoSchema,
   clientPhotosSchema,
+  desktopDevicesSchema,
+  type EmailDeliveryInput,
+  emailDeliverySettingsSchema,
   listAdminServicesResponseSchema,
   listAdminStaffResponseSchema,
   listAppointmentsResponseSchema,
@@ -37,16 +46,24 @@ import {
   listTimeOffResponseSchema,
   meResponseSchema,
   notificationPreferencesSchema,
+  oauthConnectionsSchema,
   optOutPreviewSchema,
   ownerSalonSettingsSchema,
+  type ReportOutcomesQuery,
+  reportClientsSchema,
+  reportOutcomesPageSchema,
   reportSummarySchema,
   type ServiceConfiguration,
   type SetServiceStaffRequest,
   type SetWorkingHoursRequest,
   type StaffAccessPreset,
+  type StaffPortraitInput,
+  type StaffPortraitPublication,
   salonResponseSchema,
   staffAccessSchema,
   staffAccountResponseSchema,
+  staffPortraitResultSchema,
+  syncPullResponseSchema,
   timeOffResponseSchema,
   type UpdateAppointmentRequest,
   type UpdateClientRequest,
@@ -56,11 +73,16 @@ import {
   type UpdateServiceRequest,
   type UpdateStaffRequest,
   type UpdateTimeOffRequest,
+  type WhatsAppRule,
+  whatsappDeliveriesSchema,
+  whatsappSettingsSchema,
+  whatsappTemplateSchema,
   workingHoursResponseSchema,
 } from "@sob/contracts";
 import { z } from "zod";
 import { accountingEndpoints } from "./accounting-endpoints";
 import { bookingPolicyEndpoints } from "./booking-policy-endpoints";
+import { calendarInboxEndpoints } from "./calendar-inbox-endpoints";
 import type { ApiClient } from "./client";
 import { combinationEndpoints } from "./combination-endpoints";
 import { commerceEndpoints } from "./commerce-endpoints";
@@ -68,6 +90,7 @@ import { dateShiftEndpoints } from "./date-shift-endpoints";
 import { giftCardEndpoints } from "./gift-card-endpoints";
 import { intakeEndpoints } from "./intake-endpoints";
 import { inventoryEndpoints } from "./inventory-endpoints";
+import { marketingEndpoints } from "./marketing-endpoints";
 import { passEndpoints } from "./pass-endpoints";
 import { portfolioEndpoints } from "./portfolio-endpoints";
 import { resourceEndpoints } from "./resource-endpoints";
@@ -122,6 +145,7 @@ export function createEndpoints(client: ApiClient) {
     schedulingPolicy: schedulingPolicyEndpoints(client),
     combinations: combinationEndpoints(client),
     inventory: inventoryEndpoints(client),
+    marketing: marketingEndpoints(client),
     accounting: accountingEndpoints(client),
     giftCards: giftCardEndpoints(client),
     passes: passEndpoints(client),
@@ -129,13 +153,17 @@ export function createEndpoints(client: ApiClient) {
     resources: resourceEndpoints(client),
     appointmentSeries: seriesEndpoints(client),
     waitlist: waitlistEndpoints(client),
+    calendarInbox: calendarInboxEndpoints(client),
     salon: () => client.get("/salon", salonResponseSchema),
     services: (fresh = false) =>
       client.get("/services", listServicesResponseSchema, {
         cache: fresh ? "no-store" : undefined,
       }),
-    staff: (fresh = false) =>
-      client.get("/staff", listStaffResponseSchema, { cache: fresh ? "no-store" : undefined }),
+    staff: (fresh = false, signal?: AbortSignal) =>
+      client.get("/staff", listStaffResponseSchema, {
+        cache: fresh ? "no-store" : undefined,
+        signal,
+      }),
     availability: (
       { serviceIds, staffId, date, appointmentId }: AvailabilityParams,
       signal?: AbortSignal,
@@ -149,6 +177,17 @@ export function createEndpoints(client: ApiClient) {
         },
       ),
     me: () => client.get("/me", meResponseSchema),
+    oauthConnections: {
+      list: () => client.get("/me/connections", oauthConnectionsSchema),
+      revoke: (clientId: string) =>
+        client.delete(`/me/connections/${encodeURIComponent(clientId)}`, z.null()),
+    },
+    desktopDevices: {
+      list: (signal?: AbortSignal) =>
+        client.get("/me/desktop-devices", desktopDevicesSchema, { signal }),
+      revoke: (id: string) =>
+        client.delete(`/me/desktop-devices/${encodeURIComponent(id)}`, z.null()),
+    },
     updateProfile: (request: UpdateProfileRequest) =>
       client.patch("/me", request, meResponseSchema),
     notificationPreferences: {
@@ -163,7 +202,26 @@ export function createEndpoints(client: ApiClient) {
       confirm: (token: string) =>
         client.post("/notifications/opt-out", { token }, optOutPreviewSchema),
     },
+    sync: {
+      pull: (since: number, signal?: AbortSignal) =>
+        client.get("/sync/pull", syncPullResponseSchema, {
+          query: { since, limit: 200, reviewRequests: "1" },
+          signal,
+          cache: "no-store",
+        }),
+    },
     appointments: {
+      context: (id: string) => client.get(`/appointments/${id}/context`, appointmentContextSchema),
+      updateContext: (id: string, request: AppointmentContextUpdate) =>
+        client.patch(`/appointments/${id}/context`, request, appointmentContextSchema),
+      previewBooksyContext: (input: BooksyContextImport) =>
+        client.post("/appointments/booksy-context/preview", input, booksyContextReviewSchema),
+      importBooksyContext: (input: BooksyContextImport, reviewHash: string) =>
+        client.post(
+          "/appointments/booksy-context/import",
+          { input, reviewHash },
+          booksyContextReviewSchema,
+        ),
       list: (query: Pick<AppointmentListQuery, "from" | "to" | "status" | "page" | "pageSize">) =>
         client.get("/appointments", listAppointmentsResponseSchema, {
           query: {
@@ -183,11 +241,31 @@ export function createEndpoints(client: ApiClient) {
         client.patch(`/appointments/${id}`, { version, startsAt, staffId }, appointmentSchema),
     },
     admin: {
+      emailDelivery: {
+        get: () => client.get("/admin/email-delivery", emailDeliverySettingsSchema),
+        save: (input: EmailDeliveryInput) =>
+          client.put("/admin/email-delivery", input, emailDeliverySettingsSchema),
+        test: () =>
+          client.post("/admin/email-delivery/test", {}, z.object({ ok: z.literal(true) })),
+      },
+      whatsapp: {
+        get: () => client.get("/admin/whatsapp", whatsappSettingsSchema),
+        connect: (request: { code: string; wabaId: string; phoneId?: string; pin?: string }) =>
+          client.post("/admin/whatsapp/connect", request, whatsappSettingsSchema),
+        templates: () => client.get("/admin/whatsapp/templates", z.array(whatsappTemplateSchema)),
+        deliveries: () => client.get("/admin/whatsapp/deliveries", whatsappDeliveriesSchema),
+        save: (rules: WhatsAppRule[]) =>
+          client.patch("/admin/whatsapp/rules", rules, whatsappSettingsSchema),
+        disconnect: () => client.delete("/admin/whatsapp", whatsappSettingsSchema),
+      },
       calendar: (query: Omit<CalendarQuery, "staffIds"> & { staffIds?: string[] }) =>
         client.get("/appointments/calendar", calendarResponseSchema, {
           query: { from: query.from, to: query.to, staffIds: query.staffIds?.join(",") },
         }),
       clients: {
+        groups: () => client.get("/admin/clients/groups", clientGroupsSchema),
+        create: (input: CreateClientRequest) =>
+          client.post("/admin/clients", input, adminClientSchema),
         duplicates: (id: string) =>
           client.get(`/admin/clients/${id}/duplicates`, clientDuplicatesSchema),
         previewMerge: (input: ClientMergePair) =>
@@ -232,10 +310,15 @@ export function createEndpoints(client: ApiClient) {
           client.put(`/admin/services/${id}/staff`, request, adminServiceSchema),
       },
       staff: {
+        savePortrait: (id: string, request: StaffPortraitInput) =>
+          client.put(`/admin/staff/${id}/portrait`, request, staffPortraitResultSchema),
+        publishPortrait: (id: string, request: StaffPortraitPublication) =>
+          client.put(`/admin/staff/${id}/portrait/publication`, request, staffPortraitResultSchema),
         access: (id: string) => client.get(`/admin/staff/${id}/access`, staffAccessSchema),
         setAccess: (id: string, body: { preset: StaffAccessPreset; version: number }) =>
           client.put(`/admin/staff/${id}/access`, body, staffAccessSchema),
-        list: () => client.get("/admin/staff", listAdminStaffResponseSchema),
+        list: (signal?: AbortSignal) =>
+          client.get("/admin/staff", listAdminStaffResponseSchema, { signal }),
         create: (request: CreateStaffAccountRequest) =>
           client.post("/admin/staff-accounts", request, staffAccountResponseSchema),
         update: (id: string, request: UpdateStaffRequest) =>
@@ -253,8 +336,12 @@ export function createEndpoints(client: ApiClient) {
         deleteTimeOff: (id: string, entryId: string) =>
           client.delete(`/admin/staff/${id}/time-off/${entryId}`, timeOffResponseSchema),
       },
-      reports: (query: { from: string; to: string; staffId?: string }) =>
+      reports: (query: { from: string; to: string; staffId?: string; currency?: string }) =>
         client.get("/admin/reports/summary", reportSummarySchema, { query }),
+      clientReport: (query: { from: string; to: string; staffId?: string }) =>
+        client.get("/admin/reports/clients", reportClientsSchema, { query }),
+      reportOutcomes: (query: ReportOutcomesQuery) =>
+        client.get("/admin/reports/outcomes", reportOutcomesPageSchema, { query }),
       settings: {
         get: () => client.get("/admin/settings", ownerSalonSettingsSchema),
         update: (request: UpdateSalonSettingsRequest) =>

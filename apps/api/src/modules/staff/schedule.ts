@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   CreateTimeOffRequest,
   ListTimeOffQuery,
@@ -9,24 +10,28 @@ import type {
   WorkingHoursResponse,
   WorkingRange,
 } from "@sob/contracts";
-import { appointment, type Database, timeOff, workingHours } from "@sob/db";
-import { and, asc, eq, gt, isNull, lt, ne } from "drizzle-orm";
+import {
+  appointment,
+  auditLog,
+  type Database,
+  staffProfile,
+  timeOff,
+  user,
+  workingHours,
+} from "@sob/db";
+import { and, asc, eq, gt, isNull, lt, ne, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
+import { authorizeStaffAdmin } from "../../auth/policy";
+import { loadPrincipal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { lockCalendars } from "../../tx";
 import { findConflicts } from "../availability/rules";
 import { getSalonSettings } from "../settings/service";
 import { type AdminActor, requireStaff } from "./admin";
-import { asDatedHours, loadShiftRows } from "./date-hours";
+import { asDatedHours, loadShiftRows, toWorkingRange } from "./date-hours";
 
 type Executor = Pick<Database, "select">;
 type TimeOffRow = typeof timeOff.$inferSelect;
-
-const hhmm = (time: string) => time.slice(0, 5);
-
-function toWorkingRange(row: typeof workingHours.$inferSelect): WorkingRange {
-  return { weekday: row.weekday, startTime: hhmm(row.startTime), endTime: hhmm(row.endTime) };
-}
 
 function toTimeOff(row: TimeOffRow): TimeOff {
   return {
@@ -38,14 +43,31 @@ function toTimeOff(row: TimeOffRow): TimeOff {
   };
 }
 
+const orderHours = (a: WorkingRange, b: WorkingRange) =>
+  a.weekday - b.weekday ||
+  a.startTime.localeCompare(b.startTime) ||
+  a.endTime.localeCompare(b.endTime);
+
+function sameHours(current: WorkingRange[], proposed: WorkingRange[]) {
+  return (
+    current.length === proposed.length &&
+    [...proposed].sort(orderHours).every((range, index) => {
+      const stored = current[index];
+      return (
+        stored?.weekday === range.weekday &&
+        stored.startTime === range.startTime &&
+        stored.endTime === range.endTime
+      );
+    })
+  );
+}
+
 async function loadHours(db: Executor, staffId: string): Promise<WorkingRange[]> {
   const rows = await db
     .select()
     .from(workingHours)
     .where(and(eq(workingHours.staffId, staffId), isNull(workingHours.deletedAt)));
-  return rows
-    .map(toWorkingRange)
-    .sort((a, b) => a.weekday - b.weekday || a.startTime.localeCompare(b.startTime));
+  return rows.map(toWorkingRange).sort(orderHours);
 }
 
 /**
@@ -108,16 +130,51 @@ async function scheduleConflicts(
   });
 }
 
-export async function getWorkingHours(
-  db: Database,
+async function hoursRevision(
+  db: Executor,
+  staffId: string,
+  generation: string,
+  hours: WorkingRange[],
+): Promise<string> {
+  // Audit entries are append-only. Include them all so returning to an earlier schedule
+  // (including a fully closed week) still invalidates a draft made before the change.
+  const [history] = await db
+    .select({
+      entries: sql<string>`coalesce(string_agg(${auditLog.id}::text, ',' order by ${auditLog.id}), '')`,
+    })
+    .from(auditLog)
+    .where(
+      and(
+        eq(auditLog.entity, "staff"),
+        eq(auditLog.entityId, staffId),
+        eq(auditLog.action, "working_hours.replace"),
+      ),
+    );
+  return createHash("sha256")
+    .update(JSON.stringify([staffId, generation, history?.entries ?? "", hours]))
+    .digest("hex");
+}
+
+async function weeklyHoursSnapshot(
+  db: Executor,
   staffId: string,
   now: Date,
+  generation: string,
 ): Promise<WorkingHoursResponse> {
   await requireStaff(db, staffId);
+  const hours = await loadHours(db, staffId);
+  const revision = await hoursRevision(db, staffId, generation, hours);
   const conflicts = (await scheduleConflicts(db, staffId, now)).filter((c) =>
     c.reasons.includes("outside_working_hours"),
   );
-  return { staffId, hours: await loadHours(db, staffId), conflicts };
+  return { staffId, revision, hours, conflicts };
+}
+
+export function getWorkingHours(db: Database, staffId: string, now: Date, generation: string) {
+  return db.transaction((tx) => weeklyHoursSnapshot(tx, staffId, now, generation), {
+    isolationLevel: "repeatable read",
+    accessMode: "read only",
+  });
 }
 
 /**
@@ -130,10 +187,36 @@ export async function replaceWorkingHours(
   request: SetWorkingHoursRequest,
   actor: AdminActor,
   now: Date,
+  { generation, requireRevision }: { generation: string; requireRevision: boolean },
 ): Promise<WorkingHoursResponse> {
+  if (requireRevision && request.expectedRevision === undefined)
+    throw new DomainError("validation_error", "Load the current weekly hours before saving");
   return db.transaction(async (tx) => {
     await lockCalendars(tx, [staffId]);
+    const [account] = await tx
+      .select({ role: user.role })
+      .from(user)
+      .where(eq(user.id, actor.userId))
+      .for("share");
+    if (account?.role === "staff")
+      await tx
+        .select({ id: staffProfile.id })
+        .from(staffProfile)
+        .where(and(eq(staffProfile.userId, actor.userId), isNull(staffProfile.deletedAt)))
+        .for("share");
+    const current = await loadPrincipal(tx, actor.userId);
+    if (!current) throw new DomainError("forbidden", "This account is no longer available");
+    authorizeStaffAdmin(current);
     await requireStaff(tx, staffId);
+    if (request.expectedRevision !== undefined) {
+      const saved = await loadHours(tx, staffId);
+      if (sameHours(saved, request.hours)) return weeklyHoursSnapshot(tx, staffId, now, generation);
+      if ((await hoursRevision(tx, staffId, generation, saved)) !== request.expectedRevision)
+        throw new DomainError(
+          "version_conflict",
+          "The weekly schedule changed. Load the current hours before saving.",
+        );
+    }
     const replaced = await tx
       .update(workingHours)
       .set({ deletedAt: now })
@@ -156,10 +239,7 @@ export async function replaceWorkingHours(
       entityId: staffId,
       metadata: { ranges: request.hours.length, replacedRanges: replaced.length },
     });
-    const conflicts = (await scheduleConflicts(tx, staffId, now)).filter((c) =>
-      c.reasons.includes("outside_working_hours"),
-    );
-    return { staffId, hours: await loadHours(tx, staffId), conflicts };
+    return weeklyHoursSnapshot(tx, staffId, now, generation);
   });
 }
 

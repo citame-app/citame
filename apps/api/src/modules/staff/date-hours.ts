@@ -1,9 +1,17 @@
 import { type DateShiftDay, dateShiftRangeSchema, type WorkingRange } from "@sob/contracts";
-import { type Database, dateShift } from "@sob/db";
+import { type Database, dateShift, type workingHours } from "@sob/db";
 import { and, asc, gte, inArray, lte } from "drizzle-orm";
 import type { DatedWorkingHours } from "../availability/dated-hours";
 
 type Reader = Pick<Database, "select">;
+
+export function toWorkingRange(row: typeof workingHours.$inferSelect): WorkingRange {
+  return {
+    weekday: row.weekday,
+    startTime: row.startTime.slice(0, 5),
+    endTime: row.endTime.slice(0, 5),
+  };
+}
 export async function loadShiftRows(db: Reader, staffIds: string[], from?: string, to?: string) {
   if (!staffIds.length) return [];
   return db

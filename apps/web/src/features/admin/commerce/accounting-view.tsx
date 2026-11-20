@@ -11,14 +11,23 @@ import { api } from "~/lib/api/instance";
 import { formatMoney } from "~/lib/format";
 import { downloadCsv } from "./csv";
 import { centsInput, inputCents } from "./money";
-export function AccountingView({ role }: { role: UserRole }) {
+export function AccountingView({
+  role,
+  section = "all",
+}: {
+  role: UserRole;
+  section?: "all" | "reports" | "commissions";
+}) {
   const { t } = useI18n();
   const [selected, setSelected] = useState("");
-  const staff = useQuery({ ...adminStaffQuery, enabled: role === "owner" });
+  const staff = useQuery({
+    ...adminStaffQuery,
+    enabled: role === "owner" && section !== "reports",
+  });
   const me = useQuery({
     queryKey: ["accounting", "me"],
     queryFn: () => api().me(),
-    enabled: role === "staff",
+    enabled: role === "staff" && section !== "reports",
   });
   const staffId = role === "staff" ? me.data?.staffId : selected;
   return (
@@ -26,8 +35,9 @@ export function AccountingView({ role }: { role: UserRole }) {
       <h2 className="text-heading">
         {t(role === "owner" ? "accounting.title" : "accounting.own")}
       </h2>
-      {role === "owner" && <SalesReport />}
+      {role === "owner" && section !== "commissions" && <SalesReport />}
       {role === "owner" &&
+        section !== "reports" &&
         (staff.isPending ? (
           <Skeleton className="h-14" />
         ) : staff.isError ? (
@@ -44,6 +54,7 @@ export function AccountingView({ role }: { role: UserRole }) {
           />
         ))}
       {role === "staff" &&
+        section !== "reports" &&
         (me.isPending ? (
           <Skeleton className="h-14" />
         ) : me.isError ? (
@@ -51,7 +62,9 @@ export function AccountingView({ role }: { role: UserRole }) {
         ) : !me.data.staffId ? (
           <p>{t("accounting.noStaff")}</p>
         ) : null)}
-      {staffId && <CommissionPanel key={staffId} staffId={staffId} role={role} />}
+      {section !== "reports" && staffId && (
+        <CommissionPanel key={staffId} staffId={staffId} role={role} />
+      )}
     </section>
   );
 }

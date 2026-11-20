@@ -6,27 +6,408 @@
 //! ```text
 //! SOB_TEST_API_URL=http://127.0.0.1:3055 \
 //! SOB_TEST_EMAIL=owner@desktop.test SOB_TEST_PASSWORD=... \
-//!   cargo test -p sob-core --test headless_sync -- --ignored --test-threads=1
+//!   cargo test -p sob-core --test headless_sync -- --ignored --test-threads=1 --skip through_the_proxy
 //! ```
+//!
+//! The proxy-specific tests require fixtures prepared by scripts/smoke-prod.sh.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Datelike, Duration as Span, NaiveTime, TimeZone, Utc};
 use serde_json::json;
 use sob_core::auth::{AuthProvider, BetterAuthSession, Credentials, SessionHandle};
+use sob_core::billing::{
+    CashAdjustment, CashCommand, ImportedPartialPaymentPreview, ImportedSettlement, ManualTender,
+    PaymentAttempt,
+};
 use sob_core::calendar::{self, salon_tz};
-use sob_core::http::{HttpTransport, spawn_stream_listener};
+use sob_core::http::{
+    DatedShiftCopy, DatedShiftEdit, DatedShiftSelection, HttpTransport, spawn_stream_listener,
+};
+use sob_core::inventory::{
+    ContentWriteError, LIVE_TOPIC as INVENTORY_TOPIC, LedgerQuery, PackageContent, PendingStock,
+    ProductQuery, StockKind, StockWriteError,
+};
 use sob_core::model::*;
 use sob_core::ops::{self, NewAppointment, Resolution};
+use sob_core::reviews::{EmailStatus, ModerationCommand, ReviewStatus};
 use sob_core::runner::{Connectivity, RunnerCore, SharedStatus, SyncRunner};
 use sob_core::store::Store;
-use sob_core::sync::{self, Transport};
+use sob_core::sync::{self, Transport, TransportError};
+use sob_core::waitlist::{
+    AcceptOffer, WaitlistPage, WaitlistPolicy, WaitlistRequest, WaitlistState,
+};
+
+#[path = "support/proxy_device.rs"]
+mod proxy_device;
+use proxy_device::ProxyDevice;
 
 fn env(name: &str) -> String {
     std::env::var(name)
-        .unwrap_or_else(|_| panic!("{name} must be set to run the headless sync tests"))
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| panic!("{name} must be set to run the headless sync tests"))
+}
+
+fn proxy_device() -> ProxyDevice {
+    ProxyDevice::link(
+        &env("SOB_TEST_API_URL"),
+        &env("SOB_TEST_EMAIL"),
+        &env("SOB_TEST_PASSWORD"),
+    )
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_dated_shift_commits_and_replays_through_the_proxy() {
+    let mut observer = Device::sign_in();
+    observer.sync();
+    let staff = catalog(&observer).staff;
+    let date = free_slot(&observer, &staff)
+        .with_timezone(&salon_tz(&observer.store).unwrap())
+        .date_naive();
+    let device = proxy_device();
+    let before = device.transport.dated_shift(&staff, date).unwrap();
+    assert!(before.ranges.is_none());
+    let review = |ranges| {
+        device
+            .transport
+            .review_dated_shifts(
+                &staff,
+                DatedShiftSelection::Edit {
+                    changes: [DatedShiftEdit { date, ranges }],
+                },
+            )
+            .unwrap()
+    };
+    let close = review(Some(Vec::new()));
+    assert_eq!(close.review.changes[0].previous, before);
+    let closed = device
+        .transport
+        .commit_dated_shifts(&close)
+        .unwrap()
+        .unwrap()
+        .remove(0);
+    assert_eq!(closed.ranges, Some(Vec::new()));
+    assert_eq!(closed.version, before.version + 1);
+    assert_eq!(
+        device.transport.commit_dated_shifts(&close).unwrap(),
+        Some(vec![closed.clone()])
+    );
+    observer.sync();
+    assert!(observer.store.date_shifts().unwrap().iter().any(|shift| {
+        shift.staff_id == staff
+            && shift.date == date.to_string()
+            && shift.ranges == Some(Vec::new())
+    }));
+
+    let restore = review(None);
+    let stale = review(Some(vec![DateShiftRange {
+        start_time: "09:00".into(),
+        end_time: "18:00".into(),
+    }]));
+    let restored = device
+        .transport
+        .commit_dated_shifts(&restore)
+        .unwrap()
+        .unwrap()
+        .remove(0);
+    assert!(restored.ranges.is_none());
+    assert_eq!(restored.effective_ranges, before.effective_ranges);
+    assert_eq!(restored.version, closed.version + 1);
+    assert!(
+        device
+            .transport
+            .commit_dated_shifts(&stale)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        device.transport.dated_shift(&staff, date).unwrap(),
+        restored
+    );
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_dated_shift_copy_reviews_and_syncs_all_target_dates_through_the_proxy() {
+    let mut observer = Device::sign_in();
+    observer.sync();
+    let catalog = catalog(&observer);
+    let staff = &catalog.staff;
+    let timezone = salon_tz(&observer.store).unwrap();
+    let source_slot = free_slot(&observer, staff).with_timezone(&timezone);
+    let source = source_slot.date_naive();
+    let target = source + chrono::Days::new(7);
+    let target_slot = timezone
+        .from_local_datetime(&target.and_time(source_slot.time()))
+        .single()
+        .unwrap()
+        .with_timezone(&Utc);
+    let client = ops::create_client(&mut observer.store, "Synthetic shift review", None).unwrap();
+    let appointment = ops::create_appointment(
+        &mut observer.store,
+        booking(&catalog, staff, &client, target_slot),
+    )
+    .unwrap();
+    observer.sync();
+    let original_appointment = observer.store.appointment(&appointment).unwrap().unwrap();
+    let device = proxy_device();
+    let copy = || DatedShiftSelection::Copy(DatedShiftCopy::new(source, 2, target, 2).unwrap());
+    let dates = [0, 1, 7, 8].map(|offset| target + chrono::Days::new(offset));
+    let base = device.transport.dated_shift(staff, source).unwrap();
+    assert!(!base.effective_ranges.is_empty());
+    let draft = device.transport.review_dated_shifts(staff, copy()).unwrap();
+    assert!(
+        draft
+            .review
+            .changes
+            .iter()
+            .map(|change| change.date)
+            .eq(dates)
+    );
+    assert_eq!(
+        draft.review.changes[0].next.ranges,
+        Some(base.effective_ranges.clone())
+    );
+
+    let edit_source = |ranges| {
+        device
+            .transport
+            .review_dated_shifts(
+                staff,
+                DatedShiftSelection::Edit {
+                    changes: [DatedShiftEdit {
+                        date: source,
+                        ranges,
+                    }],
+                },
+            )
+            .unwrap()
+    };
+    assert!(
+        device
+            .transport
+            .commit_dated_shifts(&edit_source(Some(vec![])))
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(device.transport.commit_dated_shifts(&draft).unwrap(), None);
+    let closed_review = device.transport.review_dated_shifts(staff, copy()).unwrap();
+    assert!(closed_review.review.conflicts.iter().any(|conflict| {
+        conflict.appointment_id.to_string() == appointment
+            && conflict.client_id.to_string() == client
+            && conflict.starts_at == target_slot
+    }));
+    for change in &draft.review.changes {
+        assert_eq!(
+            device.transport.dated_shift(staff, change.date).unwrap(),
+            change.previous
+        );
+    }
+    assert!(
+        device
+            .transport
+            .commit_dated_shifts(&edit_source(base.ranges))
+            .unwrap()
+            .is_some()
+    );
+
+    let review = device.transport.review_dated_shifts(staff, copy()).unwrap();
+    let saved = device
+        .transport
+        .commit_dated_shifts(&review)
+        .unwrap()
+        .unwrap();
+    assert!(saved.iter().map(|day| day.date).eq(dates));
+    assert_eq!(
+        device.transport.commit_dated_shifts(&review).unwrap(),
+        Some(saved.clone())
+    );
+    observer.sync();
+    let current_appointment = observer.store.appointment(&appointment).unwrap().unwrap();
+    assert_eq!(current_appointment.status, original_appointment.status);
+    assert_eq!(
+        current_appointment.starts_at,
+        original_appointment.starts_at
+    );
+    assert_eq!(current_appointment.ends_at, original_appointment.ends_at);
+    let local = observer.store.date_shifts().unwrap();
+    for day in saved {
+        assert_eq!(day.ranges.as_ref(), Some(&day.effective_ranges));
+        assert!(local.iter().any(|shift| &shift.staff_id == staff
+            && shift.date == day.date.to_string()
+            && shift.ranges == day.ranges));
+    }
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_weekly_hours_save_sync_and_reject_stale_replay_through_the_proxy() {
+    let mut observer = Device::sign_in();
+    observer.sync();
+    let catalog = catalog(&observer);
+    let staff = &catalog.staff;
+    let starts_at = free_slot(&observer, staff);
+    let date = starts_at
+        .with_timezone(&salon_tz(&observer.store).unwrap())
+        .date_naive();
+    let weekday = date.weekday().num_days_from_sunday() as u8;
+    let client =
+        ops::create_client(&mut observer.store, "Synthetic schedule conflict", None).unwrap();
+    let appointment = ops::create_appointment(
+        &mut observer.store,
+        booking(&catalog, staff, &client, starts_at),
+    )
+    .unwrap();
+    observer.sync();
+
+    let owner = proxy_device();
+    assert!(
+        owner
+            .transport
+            .dated_shift(staff, date)
+            .unwrap()
+            .ranges
+            .is_none()
+    );
+    let initial = owner.transport.weekly_hours(staff).unwrap();
+    let changed: Vec<_> = initial
+        .hours
+        .iter()
+        .filter(|range| range.weekday != weekday)
+        .cloned()
+        .collect();
+    let saved = owner
+        .transport
+        .save_weekly_hours(&initial, &changed)
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.hours, changed);
+    assert!(
+        saved
+            .conflicts
+            .iter()
+            .any(|row| row.appointment_id.to_string() == appointment)
+    );
+    assert!(
+        owner
+            .transport
+            .save_weekly_hours(&initial, &changed)
+            .unwrap()
+            .is_some()
+    );
+    observer.sync();
+    assert!(
+        observer
+            .store
+            .working_hours()
+            .unwrap()
+            .iter()
+            .all(|range| &range.staff_id != staff || range.weekday != i64::from(weekday))
+    );
+    ops::cancel_appointment(&mut observer.store, &appointment).unwrap();
+    assert_eq!(
+        observer.store.appointment_edit_sync(&appointment).unwrap(),
+        AppointmentEditSync::Pending
+    );
+    observer.sync();
+    assert_eq!(
+        observer.store.appointment_edit_sync(&appointment).unwrap(),
+        AppointmentEditSync::Settled
+    );
+    assert!(
+        owner
+            .transport
+            .weekly_hours(staff)
+            .unwrap()
+            .conflicts
+            .iter()
+            .all(|row| row.appointment_id.to_string() != appointment)
+    );
+
+    let restored = owner
+        .transport
+        .save_weekly_hours(&saved, &initial.hours)
+        .unwrap()
+        .unwrap();
+    assert_eq!(restored.hours, initial.hours);
+    assert!(
+        owner
+            .transport
+            .save_weekly_hours(&initial, &changed)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+#[ignore = "needs the private SMTP fixture from the production smoke test"]
+fn native_review_requests_queue_and_replay_a_real_invitation_through_the_proxy() {
+    let id = env("SOB_TEST_REVIEW_APPOINTMENT");
+    let device = proxy_device();
+    let page = device
+        .transport
+        .review_requests(1, " Smoke Client ")
+        .unwrap();
+    let visit = page
+        .visits
+        .iter()
+        .find(|visit| visit.appointment_id == id)
+        .unwrap();
+    assert!(visit.can_email);
+    assert_eq!(visit.email_status, None);
+    assert!(page.email_enabled);
+    assert_eq!(
+        visit.link.as_deref(),
+        Some(
+            device
+                .base
+                .join(&format!("/account/reviews?appointmentId={id}"))
+                .unwrap()
+                .as_str()
+        ),
+    );
+    assert_eq!(
+        device.transport.request_review_email(&id).unwrap(),
+        EmailStatus::Pending
+    );
+    let replay = device.transport.request_review_email(&id).unwrap();
+    assert!(replay.is_pending() || replay == EmailStatus::Sent);
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let page = device.transport.review_requests(1, "Smoke Client").unwrap();
+        let visit = page
+            .visits
+            .iter()
+            .find(|visit| visit.appointment_id == id)
+            .unwrap();
+        let status = visit.email_status.unwrap();
+        if status == EmailStatus::Sent {
+            break;
+        }
+        assert!(
+            status.is_pending(),
+            "review invitation failed with {status:?}"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "SMTP did not deliver the review invitation"
+        );
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    assert_eq!(
+        device.transport.request_review_email(&id).unwrap(),
+        EmailStatus::Sent
+    );
+    device.disconnect_and_check("/api/admin/reviews/requests");
+    assert!(matches!(
+        device.transport.review_requests(1, "Smoke Client"),
+        Err(TransportError::Unauthorized)
+    ));
 }
 
 struct Device {
@@ -38,16 +419,293 @@ struct Device {
     path: std::path::PathBuf,
 }
 
+#[test]
+#[ignore = "needs the synthetic review from the production smoke test"]
+fn native_moderation_publishes_replies_and_hides_through_the_proxy() {
+    let id = env("SOB_TEST_MANAGED_REVIEW");
+    let device = proxy_device();
+    let page = device
+        .transport
+        .managed_reviews(Some(ReviewStatus::Pending), None)
+        .unwrap();
+    let review = page.reviews.iter().find(|review| review.id == id).unwrap();
+    assert_eq!(review.body.as_deref(), Some("Synthetic desktop review"));
+    let published = device
+        .transport
+        .update_managed_review(&id, review.version, ModerationCommand::Publish)
+        .unwrap();
+    assert_eq!(published.status, ReviewStatus::Published);
+    let stale_reply = "Old draft";
+    let rejected = device.transport.update_managed_review(
+        &id,
+        review.version,
+        ModerationCommand::Reply(Some(stale_reply)),
+    );
+    assert!(matches!(rejected, Err(TransportError::BadRequest(_))));
+
+    device.assert_stale_reply(&id, review.version, stale_reply);
+    let reply = "Thanks for visiting.\nWe hope to see you soon.";
+    let answered = device
+        .transport
+        .update_managed_review(
+            &id,
+            published.version,
+            ModerationCommand::Reply(Some(reply)),
+        )
+        .unwrap();
+    assert_eq!(answered.reply.as_deref(), Some(reply));
+    let current = device.public_reviews();
+    assert!(
+        current["reviews"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|review| review["id"] == id && review["reply"] == reply)
+    );
+    let cleared = device
+        .transport
+        .update_managed_review(&id, answered.version, ModerationCommand::Reply(None))
+        .unwrap();
+    assert!(cleared.reply.is_none());
+    let reason = "Synthetic moderation control";
+    let hidden = device
+        .transport
+        .update_managed_review(&id, cleared.version, ModerationCommand::Hide(reason))
+        .unwrap();
+    assert_eq!(hidden.status, ReviewStatus::Hidden);
+    assert_eq!(hidden.moderation_reason.as_deref(), Some(reason));
+    assert!(
+        device.public_reviews()["reviews"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|review| review["id"] != id)
+    );
+    device.disconnect_and_check("/api/admin/reviews");
+    assert!(matches!(
+        device.transport.managed_reviews(None, None),
+        Err(TransportError::Unauthorized)
+    ));
+}
+
+#[test]
+#[ignore = "needs the synthetic product from the production smoke test"]
+fn native_inventory_round_trips_pack_and_stock_through_the_proxy() {
+    let id = env("SOB_TEST_INVENTORY_PRODUCT").parse().unwrap();
+    let device = proxy_device();
+    let browser = Device::sign_in();
+    let query = ProductQuery::new(" SMOKE-PHOTO ", false).unwrap();
+    let page = device.transport.inventory_products(&query, 1).unwrap();
+    assert_eq!(page.products.len(), 1);
+    assert_eq!(page.products[0].id, id);
+    let product = device.transport.inventory_product(id).unwrap();
+    assert!(product.can_manage);
+    assert!(product.package_content.is_none());
+    let mut replica = Store::open_in_memory().unwrap();
+    sync::pull_all(&mut replica, &device.transport).unwrap();
+    let previous = replica.live_view_revision(INVENTORY_TOPIC).unwrap();
+
+    let pack = PackageContent::parse("12,50", "ml").unwrap().unwrap();
+    let saved = device
+        .transport
+        .update_inventory_content(id, product.version, Some(&pack))
+        .unwrap();
+    assert_eq!(saved.stock_on_hand, product.stock_on_hand);
+    assert_eq!(saved.stock_reserved, product.stock_reserved);
+    let path = format!("/admin/inventory/products/{id}");
+    assert_eq!(
+        browser.rest_get(&path)["packageContent"],
+        json!({"quantity": "12.5", "unit": "ml"})
+    );
+    sync::pull_all(&mut replica, &device.transport).unwrap();
+    assert!(replica.live_view_revision(INVENTORY_TOPIC).unwrap() > previous);
+    assert!(matches!(
+        device
+            .transport
+            .update_inventory_content(id, product.version, None),
+        Err(ContentWriteError::Conflict)
+    ));
+
+    let mut change = ureq::patch(&format!("{}/api{path}", browser.base))
+        .header("Cookie", &browser.cookie)
+        .header("Origin", &browser.base)
+        .content_type("application/json")
+        .send(
+            json!({"version": saved.version, "packageContent": {"quantity":"3","unit":"pzs."}})
+                .to_string(),
+        )
+        .unwrap();
+    assert_eq!(change.status().as_u16(), 200);
+    let _ = change.body_mut().read_to_string().unwrap();
+    let refreshed = device.transport.inventory_product(id).unwrap();
+    assert_eq!(
+        refreshed.package_content,
+        PackageContent::parse("3", "pzs.").unwrap()
+    );
+    assert_eq!(refreshed.stock_on_hand, product.stock_on_hand);
+    assert_eq!(refreshed.stock_reserved, product.stock_reserved);
+    let cleared = device
+        .transport
+        .update_inventory_content(id, refreshed.version, None)
+        .unwrap();
+    assert!(cleared.package_content.is_none());
+    assert!(browser.rest_get(&path)["packageContent"].is_null());
+    device.assert_inventory_patch_scope(&path, cleared.version);
+
+    let delivery =
+        PendingStock::prepare(&cleared, StockKind::Receive, "3", "Desktop delivery").unwrap();
+    let stale_count =
+        PendingStock::prepare(&cleared, StockKind::Count, "1", "Stale stock count").unwrap();
+    let pending_dir = tempfile::tempdir().unwrap();
+    let pending_path = pending_dir.path().join("inventory.sqlite");
+    let local = Store::open(&pending_path).unwrap();
+    assert!(local.reserve_pending_stock(&delivery).unwrap());
+    assert!(!local.reserve_pending_stock(&stale_count).unwrap());
+    let first = device.transport.move_inventory_stock(&delivery).unwrap();
+    assert_eq!(first.stock_on_hand, cleared.stock_on_hand + 3);
+    drop(local); // The server may have committed, but the app has not acknowledged its response.
+
+    let local = Store::open(&pending_path).unwrap();
+    let recovered = local.pending_stock(id).unwrap().unwrap();
+    assert_eq!(recovered, delivery);
+    assert_eq!(
+        device
+            .transport
+            .move_inventory_stock(&recovered)
+            .unwrap()
+            .version,
+        first.version
+    );
+    assert!(local.clear_pending_stock(&recovered).unwrap());
+
+    assert!(matches!(
+        device.transport.move_inventory_stock(&stale_count),
+        Err(StockWriteError::Conflict)
+    ));
+    let mut obsolete =
+        PendingStock::prepare(&first, StockKind::Count, "1", "Previous history count").unwrap();
+    obsolete.command.generation = format!("old-{}", uuid::Uuid::now_v7());
+    assert!(matches!(
+        device.transport.move_inventory_stock(&obsolete),
+        Err(StockWriteError::Transport(
+            TransportError::ReplicaGenerationChanged
+        ))
+    ));
+
+    let usage = PendingStock::prepare(&first, StockKind::Consume, "1", "Desktop usage").unwrap();
+    let used = device.transport.move_inventory_stock(&usage).unwrap();
+    let count =
+        PendingStock::prepare(&used, StockKind::Count, "1", "Confirmed physical count").unwrap();
+    assert_eq!(
+        device
+            .transport
+            .move_inventory_stock(&count)
+            .unwrap()
+            .stock_on_hand,
+        1
+    );
+    assert_eq!(browser.rest_get(&path)["stockOnHand"], 1);
+    let movements = device.transport.inventory_movements(id, 1).unwrap();
+    assert_eq!(
+        movements
+            .movements
+            .iter()
+            .filter(|entry| entry.reason == "Desktop delivery")
+            .count(),
+        1
+    );
+    assert_eq!(
+        movements
+            .movements
+            .iter()
+            .filter(|entry| matches!(
+                entry.kind,
+                StockKind::Receive | StockKind::Consume | StockKind::Count
+            ))
+            .count(),
+        3
+    );
+    assert!(local.reserve_pending_stock(&count).unwrap());
+    assert!(!local.clear_pending_stock(&recovered).unwrap());
+    assert_eq!(local.pending_stock(id).unwrap(), Some(count));
+    let ledger_path = "/admin/inventory/movements";
+    let query = LedgerQuery::new(" Desktop ", Some(StockKind::Receive)).unwrap();
+    let ledger = device.transport.inventory_ledger(&query, 1).unwrap();
+    let web_ledger = browser.rest_get(&format!("{ledger_path}?search=Desktop&kind=receive"));
+    assert_eq!(ledger.pagination.total, 1);
+    assert_eq!(
+        ledger.pagination.total,
+        web_ledger["pagination"]["total"].as_u64().unwrap()
+    );
+    let [delivery] = ledger.movements.as_slice() else {
+        panic!("expected one delivery after replay");
+    };
+    assert_eq!(
+        delivery.movement.id.to_string(),
+        web_ledger["movements"][0]["id"].as_str().unwrap()
+    );
+    assert_eq!(delivery.movement.product_id, id);
+    assert_eq!(delivery.sku, "SMOKE-PHOTO");
+    let mut anchored_query = query.clone();
+    let anchor = ledger
+        .anchor
+        .expect("the ledger should anchor the filtered page");
+    assert_eq!(web_ledger["anchor"].as_str().unwrap(), anchor);
+    anchored_query.anchor = Some(anchor);
+    let current = device.transport.inventory_product(id).unwrap();
+    let newer =
+        PendingStock::prepare(&current, StockKind::Receive, "1", "Newer desktop delivery").unwrap();
+    device.transport.move_inventory_stock(&newer).unwrap();
+    let pinned = device
+        .transport
+        .inventory_ledger(&anchored_query, 1)
+        .unwrap();
+    assert_eq!(pinned.pagination.total, 1);
+    assert!(pinned.has_newer);
+    assert_eq!(pinned.movements[0].movement.id, delivery.movement.id);
+    assert_eq!(
+        device
+            .transport
+            .inventory_ledger(&query, 1)
+            .unwrap()
+            .pagination
+            .total,
+        2
+    );
+    let mut csv = Vec::new();
+    device
+        .transport
+        .write_inventory_ledger_csv(&anchored_query, &mut csv)
+        .unwrap();
+    let csv = String::from_utf8(csv).unwrap();
+    assert_eq!(csv.lines().count(), 2);
+    assert!(csv.contains("Desktop delivery") && csv.contains("unit_cost_cents"));
+    assert!(!csv.contains("Desktop usage"));
+    assert!(!csv.contains("Newer desktop delivery"));
+    device.assert_inventory_ledger_is_read_only();
+    device.disconnect_and_check(&format!("/api{ledger_path}"));
+    assert!(matches!(
+        device.transport.inventory_ledger(&query, 1),
+        Err(TransportError::Unauthorized),
+    ));
+}
+
 impl Device {
     fn sign_in() -> Self {
         let base = env("SOB_TEST_API_URL");
         let auth = Arc::new(BetterAuthSession::new(&base));
-        let session = auth
-            .sign_in(&Credentials {
-                email: env("SOB_TEST_EMAIL"),
-                password: env("SOB_TEST_PASSWORD"),
+        // Each replica still has its own SQLite file, device ID and transport. Reuse the
+        // owner's session so adding scenarios does not exhaust the production login limit.
+        static SESSION: OnceLock<sob_core::auth::Session> = OnceLock::new();
+        let session = SESSION
+            .get_or_init(|| {
+                auth.sign_in(&Credentials {
+                    email: env("SOB_TEST_EMAIL"),
+                    password: env("SOB_TEST_PASSWORD"),
+                })
+                .expect("sign in against the real API")
             })
-            .expect("sign in against the real API");
+            .clone();
         let cookie = session.cookie.clone();
         let handle: SessionHandle = Arc::new(RwLock::new(Some(session)));
         let dir = tempfile::tempdir().unwrap();
@@ -68,12 +726,66 @@ impl Device {
     }
 
     fn rest_get(&self, path: &str) -> serde_json::Value {
-        let mut resp = ureq::get(&format!("{}{path}", self.base))
+        let prefix = std::env::var("SOB_TEST_REST_PREFIX").unwrap_or_default();
+        let mut resp = ureq::get(&format!("{}{prefix}{path}", self.base))
             .header("Cookie", &self.cookie)
             .call()
             .unwrap();
         serde_json::from_str(&resp.body_mut().read_to_string().unwrap()).unwrap()
     }
+
+    fn rest_post(&self, path: &str, body: serde_json::Value) -> serde_json::Value {
+        let prefix = std::env::var("SOB_TEST_REST_PREFIX").unwrap_or_default();
+        let mut resp = ureq::post(&format!("{}{prefix}{path}", self.base))
+            .header("Cookie", &self.cookie)
+            .header("Content-Type", "application/json")
+            .send(body.to_string())
+            .unwrap();
+        serde_json::from_str(&resp.body_mut().read_to_string().unwrap()).unwrap()
+    }
+}
+
+#[test]
+#[ignore = "needs the real API, Postgres and Valkey (see README)"]
+fn the_native_team_week_matches_the_server_after_sync_and_reopens_offline() {
+    let mut desktop = Device::sign_in();
+    desktop.sync();
+    let staff = desktop.store.staff().unwrap()[0].id.clone();
+    let timezone = salon_tz(&desktop.store).unwrap();
+    let date = Utc::now().with_timezone(&timezone).date_naive() + Span::days(19);
+    let path = format!("/admin/staff/{staff}/date-shifts");
+    let selection = json!({"mode":"edit", "changes":[{"date":date.to_string(), "ranges":[{"startTime":"11:00", "endTime":"16:00"}]}]});
+    let review = desktop.rest_post(&format!("{path}/preview"), selection.clone());
+    desktop.rest_post(&path, json!({"selection":selection, "reviewHash":review["reviewHash"], "idempotencyKey":uuid::Uuid::now_v7().to_string()}));
+    let (start, end) = calendar::local_day_range(timezone, date);
+    desktop.rest_post(&format!("/admin/staff/{staff}/time-off"), json!({"startsAt":start.to_rfc3339(), "endsAt":end.to_rfc3339(), "reason":"Synthetic private reason"}));
+    desktop.sync();
+
+    let reopened = Store::open(&desktop.path).unwrap();
+    let offline = sob_core::team_shifts::team_week(&reopened, date).unwrap();
+    let published = desktop.rest_get(&format!("/admin/staff/team-shifts?week={}", offline.week));
+    let column = date.weekday().num_days_from_monday() as usize;
+    let native = offline
+        .members
+        .iter()
+        .find(|member| member.id == staff)
+        .unwrap();
+    let web = published["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|member| member["id"] == staff)
+        .unwrap();
+    assert_eq!(native.days[column].ranges[0].start_time, "11:00");
+    assert_eq!(
+        native.days[column].ranges[0].start_time,
+        web["days"][column]["ranges"][0]["startTime"]
+            .as_str()
+            .unwrap()
+    );
+    assert!(native.days[column].custom && native.days[column].absences[0].full_day);
+    assert!(!native.days[column].absences[0].pending);
+    assert_eq!(web["days"][column]["absences"][0]["fullDay"], true);
 }
 
 struct Catalog {
@@ -109,10 +821,22 @@ fn jitter(modulo: u64) -> u64 {
 fn free_slot(d: &Device, staff_id: &str) -> DateTime<Utc> {
     let tz = salon_tz(&d.store).unwrap();
     let hours = d.store.working_hours().unwrap();
+    // Earlier scenarios leave real date overrides behind. This helper picks weekly hours only.
+    let overrides: std::collections::HashSet<_> = d
+        .store
+        .date_shifts()
+        .unwrap()
+        .into_iter()
+        .filter(|shift| shift.staff_id == staff_id && shift.ranges.is_some())
+        .map(|shift| shift.date)
+        .collect();
     for _ in 0..200 {
         let day = (Utc::now() + Span::days(4 + jitter(40) as i64))
             .with_timezone(&tz)
             .date_naive();
+        if overrides.contains(&day.to_string()) {
+            continue;
+        }
         let weekday = day.weekday().num_days_from_sunday() as i64;
         let Some(h) = hours
             .iter()
@@ -167,6 +891,497 @@ fn day_items(d: &Device, at: DateTime<Utc>, staff: &str) -> Vec<calendar::Calend
         .find(|c| c.staff.id == staff)
         .map(|c| c.items)
         .unwrap_or_default()
+}
+
+fn eur_booking(desk: &mut Device, price: u32, discount: Option<u32>) -> Appointment {
+    desk.sync();
+    let catalog = catalog(desk);
+    let starts_at = free_slot(desk, &catalog.staff);
+    let client = if let Some(discount) = discount {
+        let id = uuid::Uuid::now_v7().to_string();
+        let saved = desk.rest_post(
+            "/admin/clients",
+            json!({
+                "id": id, "name": "Synthetic cash client",
+                "contactDetails": { "discountBasisPoints": discount },
+            }),
+        );
+        assert_eq!(saved["id"], id);
+        id
+    } else {
+        ops::create_client(&mut desk.store, "Synthetic settlement", None).unwrap()
+    };
+    let service = desk.rest_post(
+        "/admin/services",
+        json!({
+            "name": "Settlement fixture",
+            "durationMinutes": 45,
+            "bufferMinutes": 15,
+            "priceCents": price,
+            "currency": "EUR",
+            "staffIds": [catalog.staff],
+        }),
+    );
+    let mut input = booking(&catalog, &catalog.staff, &client, starts_at);
+    input.service_ids = vec![service["id"].as_str().unwrap().to_owned()];
+    desk.sync();
+    let id = ops::create_appointment(&mut desk.store, input).unwrap();
+    desk.sync();
+    desk.store.appointment(&id).unwrap().unwrap()
+}
+
+fn imported_eur_booking(desk: &mut Device, price: u32) -> Appointment {
+    let appointment = eur_booking(desk, price, None);
+    let id = appointment.id;
+    let annotations = json!({
+        "rows": [{
+            "appointmentId": id,
+            "appointmentVersion": appointment.version,
+            "contextVersion": 0,
+            "servicePosition": 0,
+            "requestedStaffId": appointment.staff_id,
+            "internalNote": "Synthetic private internal note",
+            "customerComment": "Synthetic private customer comment",
+            "invoiced": true,
+            "paid": true,
+            "sourceRef": format!("synthetic-{id}"),
+        }],
+    });
+    let review = desk.rest_post("/appointments/booksy-context/preview", annotations.clone());
+    desk.rest_post(
+        "/appointments/booksy-context/import",
+        json!({ "input": annotations, "reviewHash": review["reviewHash"] }),
+    );
+    desk.sync();
+    desk.store.appointment(&id).unwrap().unwrap()
+}
+
+#[test]
+#[ignore = "needs the real API, Postgres and Valkey (see README)"]
+fn native_appointment_receipt_applies_the_profile_discount_and_records_split_tenders() {
+    let mut desk = Device::sign_in();
+    let booking = eur_booking(&mut desk, 10000, Some(1250));
+    let receipt = desk
+        .transport
+        .open_appointment_checkout(&booking.id, None)
+        .unwrap();
+    assert_eq!(receipt.discount_cents, 1250);
+    assert_eq!(receipt.total_cents, 8750);
+    assert_eq!(receipt.collectible_cents(), 8750);
+    let open = CashCommand::open(5000);
+    let register = desk.transport.update_cash_session(&open).unwrap();
+    assert_eq!(
+        desk.transport.update_cash_session(&open).unwrap().id,
+        register.id
+    );
+    let cash = PaymentAttempt::new(ManualTender::Cash, 3000);
+    let adjusted = desk
+        .transport
+        .record_appointment_payment(&receipt, cash)
+        .unwrap();
+    assert_eq!(adjusted.paid_cents, 3000);
+    assert_eq!(adjusted.collectible_cents(), 5750);
+    assert_eq!(
+        desk.transport
+            .record_appointment_payment(&receipt, cash)
+            .unwrap()
+            .paid_cents,
+        3000
+    );
+    let card = PaymentAttempt::new(ManualTender::ExternalCard, 5750);
+    let paid = desk
+        .transport
+        .record_appointment_payment(&adjusted, card)
+        .unwrap();
+    assert_eq!(paid.status, "paid");
+    assert_eq!(paid.paid_cents, 8750);
+    assert!(
+        desk.transport
+            .update_cash_session(&CashCommand::close(&register, 5000))
+            .is_err()
+    );
+    let current = desk.transport.current_cash_session().unwrap().unwrap();
+    assert_eq!(current.expected_cents, 8000);
+    let deposit = CashCommand::adjust(
+        &current,
+        CashAdjustment::Deposit,
+        1000,
+        "Synthetic float".into(),
+    );
+    let deposited = desk.transport.update_cash_session(&deposit).unwrap();
+    assert_eq!(deposited.expected_cents, 9000);
+    assert_eq!(
+        desk.transport
+            .update_cash_session(&deposit)
+            .unwrap()
+            .expected_cents,
+        9000
+    );
+    let withdrawal = CashCommand::adjust(
+        &deposited,
+        CashAdjustment::Withdrawal,
+        300,
+        "Synthetic withdrawal".into(),
+    );
+    let remaining = desk.transport.update_cash_session(&withdrawal).unwrap();
+    assert_eq!(remaining.expected_cents, 8700);
+    let counted = desk
+        .transport
+        .update_cash_session(&CashCommand::close(&remaining, 8600))
+        .unwrap();
+    assert_eq!(counted.expected_cents, 8700);
+    assert_eq!(counted.difference_cents, Some(-100));
+    let from_web = desk.rest_get("/admin/commerce/cash-sessions/current");
+    assert_eq!(from_web["session"]["id"], counted.id.to_string());
+    assert_eq!(from_web["session"]["differenceCents"], -100);
+    assert_eq!(
+        from_web["session"]["movements"].as_array().unwrap().len(),
+        3
+    );
+    assert_eq!(desk.store.outbox_len().unwrap(), 0);
+}
+
+#[test]
+#[ignore = "needs the real API, Postgres and Valkey (see README)"]
+fn imported_settlement_replays_safely_and_reopens_offline() {
+    let mut desk = Device::sign_in();
+    let price = 3650;
+    let before = imported_eur_booking(&mut desk, price);
+    let id = before.id.clone();
+    assert!(!before.externally_settled);
+    assert!(
+        before
+            .billing_review_reasons
+            .contains(&BillingReviewReason::PaidInBooksy)
+    );
+    let status = desk.transport.imported_settlement_status(&id).unwrap();
+    assert_eq!(status.appointment_version, before.version);
+    assert!(status.settlement.is_none());
+    let payload = ImportedSettlement {
+        appointment_version: status.appointment_version,
+        amount_cents: price,
+        reference: "Synthetic verified external receipt".to_owned(),
+    };
+    assert_eq!(
+        desk.transport
+            .confirm_imported_settlement(&id, &payload)
+            .unwrap(),
+        price
+    );
+    assert_eq!(
+        desk.transport
+            .confirm_imported_settlement(&id, &payload)
+            .unwrap(),
+        price
+    );
+    assert_eq!(desk.store.outbox_len().unwrap(), 0);
+    desk.sync();
+    let wire = desk.rest_get("/sync/pull?since=0&limit=500");
+    assert!(!wire.to_string().contains(&payload.reference));
+
+    let offline = Store::open(&desk.path).unwrap();
+    let settled = offline.appointment(&id).unwrap().unwrap();
+    assert!(settled.externally_settled);
+    assert_eq!(settled.version, before.version + 1);
+    assert!(
+        !serde_json::to_string(&settled)
+            .unwrap()
+            .contains(&payload.reference)
+    );
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_unpaid_appointments_are_available_to_a_linked_device() {
+    let mut owner = Device::sign_in();
+    let appointment = imported_eur_booking(&mut owner, 10000);
+    let zone = salon_tz(&owner.store).unwrap();
+    let date = appointment.starts_at.with_timezone(&zone).date_naive();
+    let device = proxy_device();
+    let rows = device.transport.unpaid_appointments(date, zone).unwrap();
+    assert!(rows.billing_review.iter().any(|item| {
+        item.row.id.to_string() == appointment.id
+            && item.reasons.contains(&BillingReviewReason::PaidInBooksy)
+    }));
+}
+
+#[test]
+#[ignore = "needs the real API, Postgres and Valkey (see README)"]
+fn imported_partial_payment_preserves_the_original_total_and_opens_only_the_balance() {
+    let mut desk = Device::sign_in();
+    let before = imported_eur_booking(&mut desk, 10000);
+    let id = &before.id;
+    let zone = salon_tz(&desk.store).unwrap();
+    let date = before.starts_at.with_timezone(&zone).date_naive();
+    let queue = || desk.transport.unpaid_appointments(date, zone).unwrap();
+    let belongs_to_appointment = |row_id: uuid::Uuid| row_id.to_string() == *id;
+    assert!(
+        queue()
+            .billing_review
+            .iter()
+            .any(|item| belongs_to_appointment(item.row.id))
+    );
+    assert!(before.imported_from_booksy);
+    let annotations = desk.transport.appointment_annotations(id).unwrap();
+    assert_eq!(annotations.rows.len(), 1);
+    assert_eq!(annotations.rows[0].service_position, 0);
+    assert_eq!(
+        annotations.rows[0].internal_note.as_deref(),
+        Some("Synthetic private internal note")
+    );
+    assert_eq!(
+        annotations.rows[0].customer_comment.as_deref(),
+        Some("Synthetic private customer comment")
+    );
+    let ImportedPartialPaymentPreview::Ready(terms) =
+        desk.transport.imported_partial_payment_preview(id).unwrap()
+    else {
+        panic!("expected unreviewed Booksy terms");
+    };
+    assert_eq!(terms.appointment_version, before.version);
+    assert_eq!(terms.original_total_cents, 10000);
+    let payload = ImportedSettlement {
+        appointment_version: terms.appointment_version,
+        amount_cents: 3500,
+        reference: "Synthetic partial payment proof".to_owned(),
+    };
+    let record = || {
+        desk.transport
+            .confirm_imported_partial_payment(id, &payload, 10000)
+            .unwrap()
+    };
+    let balance = record();
+    assert_eq!(record(), balance);
+    assert_eq!(balance.paid_in_booksy_cents, 3500);
+    assert_eq!(balance.due_in_citame_cents, 6500);
+    let pending = queue();
+    assert!(
+        !pending
+            .billing_review
+            .iter()
+            .any(|item| belongs_to_appointment(item.row.id))
+    );
+    assert_eq!(
+        pending
+            .appointments
+            .iter()
+            .find(|item| belongs_to_appointment(item.row.id))
+            .and_then(|item| item.external_balance),
+        Some(balance)
+    );
+    assert_eq!(desk.store.outbox_len().unwrap(), 0);
+    desk.sync();
+    let saved = Store::open(&desk.path)
+        .unwrap()
+        .appointment(id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.external_balance, Some(balance));
+    assert_eq!(saved.version, before.version + 1);
+    assert_eq!(saved.services[0].price_cents, 10000);
+    assert!(
+        !serde_json::to_string(&saved)
+            .unwrap()
+            .contains("Synthetic private")
+    );
+    assert_eq!(
+        saved.service_badges,
+        [CalendarServiceBadge {
+            service_position: 0,
+            requested: true,
+            invoiced: true,
+            paid: false,
+            billing_source: Some(CalendarBillingSource::Booksy),
+            internal_note: true,
+            customer_comment: true,
+        }]
+    );
+    let wire = desk.rest_get("/sync/pull?since=0&limit=500");
+    assert!(!wire.to_string().contains(&payload.reference));
+    assert!(!wire.to_string().contains("Synthetic private"));
+
+    let checkout = desk
+        .transport
+        .open_appointment_checkout(id, Some(balance))
+        .unwrap();
+    assert_eq!(checkout.total_cents, 6500);
+    assert_eq!(checkout.balance_cents, 6500);
+    assert_eq!(checkout.paid_cents, 0);
+    assert_eq!(checkout.collectible_cents(), 6500);
+    let request = PaymentAttempt::new(ManualTender::ExternalCard, 6500);
+    let record = || {
+        desk.transport
+            .record_appointment_payment(&checkout, request)
+            .unwrap()
+    };
+    let receipt = record();
+    assert_eq!(receipt.status, "paid");
+    assert_eq!(receipt.paid_cents, 6500);
+    assert_eq!(receipt.balance_cents, 0);
+    assert_eq!(receipt.collectible_cents(), 0);
+    assert_eq!(record().paid_cents, 6500);
+    assert!(
+        !desk
+            .transport
+            .unpaid_appointments(date, zone)
+            .unwrap()
+            .appointments
+            .iter()
+            .any(|item| belongs_to_appointment(item.row.id))
+    );
+    assert_eq!(
+        desk.transport
+            .open_appointment_checkout(id, Some(balance))
+            .unwrap()
+            .id,
+        checkout.id
+    );
+    assert_eq!(desk.store.outbox_len().unwrap(), 0);
+    desk.sync();
+    let paid = desk.store.appointment(id).unwrap().unwrap();
+    assert_eq!(paid.version, saved.version);
+    assert!(paid.service_badges[0].paid);
+    assert_eq!(
+        paid.service_badges[0].billing_source,
+        Some(CalendarBillingSource::Citame)
+    );
+
+    let current = desk.transport.appointment_annotations(id).unwrap();
+    assert_eq!(current.appointment_version, Some(paid.version));
+    let updated_note = UpdateServiceAnnotations {
+        appointment_version: current.appointment_version.unwrap(),
+        service_position: 0,
+        version: current.rows[0].version,
+        requested: None,
+        internal_note: "New private note\nSecond line".to_owned(),
+    };
+    let confirmed = desk
+        .transport
+        .update_service_annotations(id, &updated_note)
+        .unwrap()
+        .unwrap();
+    assert_eq!(confirmed.appointment_version, Some(paid.version + 1));
+    assert_eq!(
+        confirmed.rows[0].internal_note.as_deref(),
+        Some(updated_note.internal_note.as_str())
+    );
+    assert_eq!(
+        confirmed.rows[0].customer_comment,
+        annotations.rows[0].customer_comment
+    );
+    assert!(
+        desk.transport
+            .update_service_annotations(id, &updated_note)
+            .unwrap()
+            .is_none()
+    );
+    desk.sync();
+    let replicated = desk.store.appointment(id).unwrap().unwrap();
+    assert!(replicated.service_badges[0].requested);
+    assert!(replicated.service_badges[0].internal_note);
+    assert!(
+        !serde_json::to_string(&replicated)
+            .unwrap()
+            .contains("New private note")
+    );
+    let cleared = desk
+        .transport
+        .update_service_annotations(
+            id,
+            &UpdateServiceAnnotations {
+                appointment_version: confirmed.appointment_version.unwrap(),
+                version: confirmed.rows[0].version,
+                requested: Some(false),
+                ..updated_note
+            },
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(cleared.rows[0].requested_staff_id, None);
+    assert_eq!(
+        cleared.rows[0].internal_note,
+        confirmed.rows[0].internal_note
+    );
+    assert_eq!(
+        cleared.rows[0].customer_comment,
+        confirmed.rows[0].customer_comment
+    );
+    desk.sync();
+    let replica = desk.store.appointment(id).unwrap().unwrap();
+    assert!(!replica.service_badges[0].requested);
+    assert!(replica.service_badges[0].internal_note);
+    let requested = desk
+        .transport
+        .update_service_annotations(
+            id,
+            &UpdateServiceAnnotations {
+                appointment_version: cleared.appointment_version.unwrap(),
+                service_position: 0,
+                version: cleared.rows[0].version,
+                requested: Some(true),
+                internal_note: cleared.rows[0].internal_note.clone().unwrap(),
+            },
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        requested.rows[0].requested_staff_id.as_deref(),
+        Some(replica.staff_id.as_str())
+    );
+    desk.sync();
+    assert!(desk.store.appointment(id).unwrap().unwrap().service_badges[0].requested);
+}
+
+#[test]
+#[ignore = "needs the real API, Postgres and Valkey (see README)"]
+fn offline_time_off_syncs_and_rejects_a_stale_delete_without_touching_the_booking() {
+    let mut a = Device::sign_in();
+    let mut b = Device::sign_in();
+    a.sync();
+    assert_eq!(
+        a.store.get_meta("time_off_scope").unwrap().as_deref(),
+        Some("all")
+    );
+    let c = catalog(&a);
+    let at = free_slot(&a, &c.staff);
+    let end = at + Span::hours(1);
+    let client = ops::create_client(&mut a.store, "Block sync fixture", None).unwrap();
+    let appt = ops::create_appointment(&mut a.store, booking(&c, &c.staff, &client, at)).unwrap();
+    assert_eq!(a.sync().push.applied, 2);
+
+    let id = ops::create_time_off(&mut a.store, &c.staff, at, end, "First").unwrap();
+    let read = |device: &Device| {
+        calendar::effective_time_off(&device.store, at, end)
+            .unwrap()
+            .into_iter()
+            .find(|block| block.time_off.id == id)
+    };
+    let created = read(&a).unwrap();
+    assert!(created.pending);
+    assert!(ops::create_appointment(&mut a.store, booking(&c, &c.staff, &client, at)).is_err());
+    ops::update_time_off(&mut a.store, &created.time_off, at, end, "Reviewed").unwrap();
+    assert_eq!(a.sync().push.applied, 2);
+    b.sync();
+    let old = read(&b).unwrap();
+    assert!(!old.pending);
+    assert_eq!(old.time_off.reason.as_deref(), Some("Reviewed"));
+    let current = read(&a).unwrap().time_off;
+    ops::update_time_off(&mut a.store, &current, at, end, "Remote edit").unwrap();
+    assert_eq!(a.sync().push.applied, 1);
+
+    ops::delete_time_off(&mut b.store, &old.time_off).unwrap();
+    assert!(read(&b).is_none());
+    let report = b.sync();
+    assert_eq!(report.push.rejected, 1, "{report:?}");
+    let fresh = read(&b).unwrap();
+    assert_eq!(fresh.time_off.reason.as_deref(), Some("Remote edit"));
+    ops::delete_time_off(&mut b.store, &fresh.time_off).unwrap();
+    assert_eq!(b.sync().push.applied, 1);
+    a.sync();
+    assert!(read(&a).is_none());
+    assert!(day_items(&a, at, &c.staff).iter().any(|item| {
+        item.appointment.id == appt && item.appointment.status == AppointmentStatus::Booked
+    }));
 }
 
 #[test]
@@ -319,6 +1534,7 @@ fn resending_a_mutation_is_idempotent_and_deletes_arrive_as_tombstones() {
     // Idempotent replay of the exact same wire mutation.
     let id = uuid::Uuid::now_v7().to_string();
     let req = PushRequest {
+        generation: None,
         device_id: a.store.device_id().unwrap(),
         mutations: vec![WireMutation {
             mutation_id: uuid::Uuid::now_v7().to_string(),
@@ -385,6 +1601,8 @@ fn resending_a_mutation_is_idempotent_and_deletes_arrive_as_tombstones() {
 #[ignore = "needs the real API, Postgres and Valkey (see README)"]
 fn the_stream_nudge_makes_the_runner_pull_without_polling() {
     let mut a = Device::sign_in();
+    a.sync();
+    let catalogue = catalog(&a);
     let b = Device::sign_in();
     let status: SharedStatus = Default::default();
     let core = RunnerCore::new(
@@ -410,24 +1628,192 @@ fn the_stream_nudge_makes_the_runner_pull_without_polling() {
                 && live.load(Ordering::SeqCst)
         },
     );
-    let before = status.lock().unwrap().cursor;
+    let reader = Store::open(&b.path).unwrap();
+    assert!(reader.booking_notices_after(0).unwrap().is_empty());
 
     // A writes; B's runner is only woken by the stream (the poll interval is 60 s).
     let name = format!("Nudge {}", uuid::Uuid::now_v7());
-    ops::create_client(&mut a.store, &name, None).unwrap();
+    let client_id = ops::create_client(&mut a.store, &name, None).unwrap();
+    let starts_at = free_slot(&a, &catalogue.staff);
+    let appointment_id = ops::create_appointment(
+        &mut a.store,
+        booking(&catalogue, &catalogue.staff, &client_id, starts_at),
+    )
+    .unwrap();
     a.sync();
+    assert!(a.store.booking_notices_after(0).unwrap().is_empty());
     wait(Duration::from_secs(10), "the nudged pull", || {
-        status.lock().unwrap().cursor > before
+        reader.appointment(&appointment_id).unwrap().is_some()
     });
-    let reader = Store::open(&b.path).unwrap();
     assert!(reader.clients().unwrap().iter().any(|c| c.name == name));
+    let notices = reader.booking_notices_after(0).unwrap();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].1.id, appointment_id);
+    assert_eq!(notices[0].1.client_name.as_deref(), Some(name.as_str()));
+
+    let initial = b
+        .transport
+        .appointment_annotations(&appointment_id)
+        .unwrap();
+    let appointment_version = initial.appointment_version.unwrap();
+    let note = "Synthetic private note sent during the live stream";
+    let original_edit = UpdateServiceAnnotations {
+        appointment_version,
+        service_position: 0,
+        version: 0,
+        requested: None,
+        internal_note: note.into(),
+    };
+    let published = a
+        .transport
+        .update_service_annotations(&appointment_id, &original_edit)
+        .unwrap()
+        .unwrap();
+    let published_version = published.appointment_version.unwrap();
+    wait(
+        Duration::from_secs(3),
+        "the new note revision to reach native",
+        || {
+            reader
+                .appointment(&appointment_id)
+                .unwrap()
+                .is_some_and(|appointment| appointment.version == published_version)
+        },
+    );
+    let latest = b
+        .transport
+        .appointment_annotations(&appointment_id)
+        .unwrap();
+    assert_eq!(latest.rows[0].internal_note.as_deref(), Some(note));
+    let path = format!("/appointments/{appointment_id}/context");
+    assert_eq!(a.rest_get(&path)["rows"][0]["internalNote"], note);
+    let prefix = std::env::var("SOB_TEST_REST_PREFIX").unwrap_or_default();
+    let web_note = "Synthetic private note edited through the web API";
+    let mut response = ureq::patch(&format!("{}{prefix}{path}", a.base))
+        .header("Cookie", &a.cookie)
+        .content_type("application/json")
+        .send(
+            json!({
+                "appointmentVersion": published_version,
+                "servicePosition": 0,
+                "version": latest.rows[0].version,
+                "internalNote": web_note,
+            })
+            .to_string(),
+        )
+        .unwrap();
+    let web_edit: AppointmentAnnotations =
+        serde_json::from_str(&response.body_mut().read_to_string().unwrap()).unwrap();
+    let web_version = web_edit.appointment_version.unwrap();
+    wait(
+        Duration::from_secs(3),
+        "web note revision to reach native",
+        || {
+            reader
+                .appointment(&appointment_id)
+                .unwrap()
+                .is_some_and(|appointment| {
+                    appointment.version == web_version
+                        && appointment.service_badges[0].internal_note
+                })
+        },
+    );
+    let latest = b
+        .transport
+        .appointment_annotations(&appointment_id)
+        .unwrap();
+    assert_eq!(latest.rows[0].internal_note.as_deref(), Some(web_note));
+    let replica = reader.appointment(&appointment_id).unwrap().unwrap();
+    assert!(!serde_json::to_string(&replica).unwrap().contains(web_note));
+    assert_eq!(reader.booking_notices_after(0).unwrap().len(), 1);
+    assert!(
+        b.transport
+            .update_service_annotations(&appointment_id, &original_edit)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(a.rest_get(&path)["rows"][0]["internalNote"], web_note);
 
     stop.store(true, Ordering::SeqCst);
     runner.stop();
     drop(listener); // the thread exits at the next ping or reconnect; not joined on purpose
 }
 
-fn wait(max: Duration, what: &str, f: impl Fn() -> bool) {
+#[test]
+#[ignore = "needs the real API, Postgres and Valkey (see README)"]
+fn cash_updates_are_visible_to_the_connected_native_replica_and_web_api() {
+    let mut browser = Device::sign_in();
+    browser.sync();
+    let native = Device::sign_in();
+    let status: SharedStatus = Default::default();
+    let runner = SyncRunner::spawn(RunnerCore::new(
+        Store::open(&native.path).unwrap(),
+        native.transport.clone(),
+        status.clone(),
+    ));
+    let live = Arc::new(AtomicBool::new(false));
+    let stop = Arc::new(AtomicBool::new(false));
+    let listener = spawn_stream_listener(
+        native.transport.clone(),
+        runner.sender(),
+        live.clone(),
+        stop.clone(),
+    );
+    wait(Duration::from_secs(5), "native startup", || {
+        status.lock().unwrap().connectivity == Connectivity::Online && live.load(Ordering::SeqCst)
+    });
+    let replica = Store::open(&native.path).unwrap();
+    let before = replica.live_view_revision("commerce").unwrap();
+    let start = Instant::now();
+    let opened = browser.rest_post(
+        "/admin/commerce/cash-sessions",
+        json!({"openingCents": 2300}),
+    );
+    wait(
+        Duration::from_secs(3),
+        "web cash opening to reach native",
+        || replica.live_view_revision("commerce").unwrap() > before,
+    );
+    let native_session = native.transport.current_cash_session().unwrap().unwrap();
+    assert_eq!(
+        native_session.id.to_string(),
+        opened["id"].as_str().unwrap()
+    );
+    eprintln!(
+        "Web to native cash state: {} ms",
+        start.elapsed().as_millis()
+    );
+
+    let start = Instant::now();
+    let movement = CashCommand::adjust(
+        &native_session,
+        CashAdjustment::Deposit,
+        125,
+        "Realtime synthetic deposit".into(),
+    );
+    eprintln!(
+        "Native cash request at {} ms since epoch",
+        Utc::now().timestamp_millis()
+    );
+    let adjusted = native.transport.update_cash_session(&movement).unwrap();
+    assert_eq!(adjusted.expected_cents, 2425);
+    let web = browser.rest_get("/admin/commerce/cash-sessions/current");
+    assert_eq!(web["session"]["expectedCents"], 2425);
+    eprintln!(
+        "Native to web API cash state: {} ms",
+        start.elapsed().as_millis()
+    );
+    native
+        .transport
+        .update_cash_session(&CashCommand::close(&adjusted, 2425))
+        .unwrap();
+
+    stop.store(true, Ordering::SeqCst);
+    runner.stop();
+    drop(listener);
+}
+
+fn wait(max: Duration, what: &str, mut f: impl FnMut() -> bool) {
     let start = Instant::now();
     while start.elapsed() < max {
         if f() {
@@ -436,4 +1822,428 @@ fn wait(max: Duration, what: &str, f: impl Fn() -> bool) {
         std::thread::sleep(Duration::from_millis(50));
     }
     panic!("timed out waiting for {what}");
+}
+
+#[test]
+#[ignore = "needs the real API, Postgres and Valkey (see README)"]
+fn native_calendar_inbox_reads_lifecycle_and_archives_a_notice() {
+    let mut device = Device::sign_in();
+    device.sync();
+    let catalogue = catalog(&device);
+    let starts_at = free_slot(&device, &catalogue.staff);
+    let client = ops::create_client(&mut device.store, "Native inbox test", None).unwrap();
+    let id = ops::create_appointment(
+        &mut device.store,
+        booking(&catalogue, &catalogue.staff, &client, starts_at),
+    )
+    .unwrap();
+    device.sync();
+    ops::reschedule_appointment(
+        &mut device.store,
+        &id,
+        Some(starts_at + Span::hours(1)),
+        None,
+    )
+    .unwrap();
+    device.sync();
+    ops::cancel_appointment(&mut device.store, &id).unwrap();
+    device.sync();
+
+    let inbox = device.transport.calendar_inbox(false, 1).unwrap();
+    let notices = inbox
+        .entries
+        .iter()
+        .filter(|notice| notice.appointment_id == id)
+        .collect::<Vec<_>>();
+    assert_eq!(notices.len(), 3);
+    assert_eq!(notices[0].kind, CalendarNoticeKind::Cancelled);
+    assert_eq!(notices[1].kind, CalendarNoticeKind::Rescheduled);
+    assert_eq!(notices[2].kind, CalendarNoticeKind::New);
+    assert_eq!(notices[2].starts_at, starts_at);
+    assert_eq!(notices[2].appointment_starts_at, starts_at + Span::hours(1));
+
+    let notice_id = &notices[0].id;
+    device
+        .transport
+        .set_calendar_notice_archived(notice_id, true)
+        .unwrap();
+    assert!(
+        !device
+            .transport
+            .calendar_inbox(false, 1)
+            .unwrap()
+            .entries
+            .iter()
+            .any(|n| n.id == *notice_id)
+    );
+    assert!(
+        device
+            .transport
+            .calendar_inbox(true, 1)
+            .unwrap()
+            .entries
+            .iter()
+            .any(|n| n.id == *notice_id)
+    );
+    device
+        .transport
+        .set_calendar_notice_archived(notice_id, false)
+        .unwrap();
+    assert!(
+        device
+            .transport
+            .calendar_inbox(false, 1)
+            .unwrap()
+            .entries
+            .iter()
+            .any(|n| n.id == *notice_id)
+    );
+}
+
+#[test]
+#[ignore = "needs the real API, Postgres and Valkey (see README)"]
+fn native_waitlist_uses_the_same_request_and_cancellation_rules_as_web() {
+    let mut desk = Device::sign_in();
+    desk.sync();
+    let catalog = catalog(&desk);
+    let date = free_slot(&desk, &catalog.staff)
+        .with_timezone(&salon_tz(&desk.store).unwrap())
+        .date_naive();
+    let policy = desk.transport.waitlist(1, true).unwrap().policy;
+    if !policy.enabled {
+        let updated = desk
+            .transport
+            .update_waitlist_policy(&WaitlistPolicy {
+                enabled: true,
+                ..policy.clone()
+            })
+            .unwrap();
+        assert!(updated.enabled);
+        assert_eq!(updated.version, policy.version + 1);
+        assert!(desk.transport.update_waitlist_policy(&policy).is_err());
+    }
+    let client = ops::create_client(&mut desk.store, "Native waitlist test", None).unwrap();
+    desk.sync();
+    let draft = WaitlistRequest {
+        client_id: client,
+        staff_id: Some(catalog.staff),
+        service_ids: vec![catalog.haircut],
+        from_date: date,
+        to_date: date,
+        from_time: "00:01".into(),
+        to_time: "00:02".into(),
+        imported_entry_id: None,
+        idempotency_key: WaitlistRequest::new_key(),
+    };
+    let created = desk.transport.join_waitlist(&draft).unwrap();
+    assert_eq!(created.state, WaitlistState::Waiting);
+    assert_eq!(desk.transport.join_waitlist(&draft).unwrap().id, created.id);
+    assert!(
+        desk.transport
+            .waitlist(1, true)
+            .unwrap()
+            .entries
+            .iter()
+            .any(|row| row.id == created.id)
+    );
+    assert_eq!(
+        desk.transport
+            .cancel_waitlist(&created.id, created.version)
+            .unwrap()
+            .state,
+        WaitlistState::Cancelled
+    );
+    assert!(
+        !desk
+            .transport
+            .waitlist(1, true)
+            .unwrap()
+            .entries
+            .iter()
+            .any(|row| row.id == created.id)
+    );
+    assert!(
+        desk.transport
+            .waitlist(1, false)
+            .unwrap()
+            .entries
+            .iter()
+            .any(|row| row.id == created.id && row.state == WaitlistState::Cancelled)
+    );
+}
+
+#[test]
+#[ignore = "needs the synthetic imported request from the production smoke test"]
+fn native_imported_waitlist_follows_the_web_policy_through_the_proxy() {
+    let import_id = env("SOB_TEST_IMPORTED_WAITLIST");
+    let device = proxy_device();
+    let mut browser = Device::sign_in();
+    browser.sync();
+    let haircut = catalog(&browser).haircut;
+    let list = device.transport.waitlist(1, true).unwrap();
+    let source = list
+        .imported
+        .iter()
+        .find(|row| row.id == import_id)
+        .expect("the fixture request is available to the linked client");
+    let web_list = || -> WaitlistPage {
+        serde_json::from_value(browser.rest_get("/admin/waitlist?active=true")).unwrap()
+    };
+    assert!(web_list().imported.contains(source));
+    let set_offers = |policy: &WaitlistPolicy, enabled| {
+        let update = WaitlistPolicy {
+            enabled,
+            ..policy.clone()
+        };
+        let mut reply = ureq::put(&format!("{}/api/admin/waitlist/policy", browser.base))
+            .header("Cookie", &browser.cookie)
+            .header("Origin", &browser.base)
+            .content_type("application/json")
+            .send(serde_json::to_string(&update).unwrap())
+            .unwrap();
+        serde_json::from_str::<WaitlistPolicy>(&reply.body_mut().read_to_string().unwrap()).unwrap()
+    };
+    let enabled = set_offers(&list.policy, true);
+    let draft = WaitlistRequest {
+        client_id: source.client_id.clone(),
+        staff_id: None,
+        service_ids: vec![haircut],
+        from_date: source.requested_date,
+        to_date: source.requested_date,
+        // The fixture must never match an offer even after the policy is enabled.
+        from_time: "00:01".into(),
+        to_time: "00:02".into(),
+        imported_entry_id: Some(import_id.clone()),
+        idempotency_key: WaitlistRequest::new_key(),
+    };
+    assert!(matches!(
+        device.transport.join_waitlist(&draft),
+        Err(TransportError::BadRequest(message)) if message.contains("Pause automatic offers")
+    ));
+    let refresh = device.transport.waitlist(1, true).unwrap();
+    assert_eq!(refresh.policy.version, enabled.version);
+    assert!(refresh.imported.iter().any(|row| row == source));
+
+    let paused = set_offers(&enabled, false);
+    assert!(!device.transport.waitlist(1, true).unwrap().policy.enabled);
+    device.assert_import_requires_staff_preference(&draft);
+    let saved = device.transport.join_waitlist(&draft).unwrap();
+    assert_eq!(saved.state, WaitlistState::Waiting);
+    assert_eq!(saved.staff_id, None);
+    assert_eq!(saved.client_id, source.client_id);
+    assert_eq!(saved.from_date, source.requested_date);
+    assert_eq!(saved.to_date, source.requested_date);
+    assert_eq!(saved.service_ids, draft.service_ids);
+    assert!(saved.offer.is_none());
+
+    let assert_linked_entry = || {
+        for refreshed in [device.transport.waitlist(1, true).unwrap(), web_list()] {
+            assert!(!refreshed.imported.iter().any(|row| row.id == import_id));
+            let client_entries = refreshed
+                .entries
+                .iter()
+                .filter(|row| row.client_id == source.client_id)
+                .collect::<Vec<_>>();
+            assert_eq!(client_entries, vec![&saved]);
+        }
+    };
+    assert_linked_entry();
+    let reenabled = set_offers(&paused, true);
+    assert!(reenabled.enabled);
+    let replay = device.transport.join_waitlist(&draft).unwrap();
+    assert_eq!(replay.id, saved.id);
+    assert!(replay.offer.is_none());
+    assert_linked_entry();
+    assert_eq!(
+        device
+            .transport
+            .cancel_waitlist(&saved.id, replay.version)
+            .unwrap()
+            .state,
+        WaitlistState::Cancelled
+    );
+    if !list.policy.enabled {
+        assert!(!set_offers(&reenabled, false).enabled);
+    }
+    device.disconnect_and_check("/api/admin/waitlist/desk");
+}
+
+#[test]
+#[ignore = "needs the real waitlist worker (see README)"]
+fn native_waitlist_reviews_accepts_and_requeues_real_offers() {
+    let mut desk = Device::sign_in();
+    desk.sync();
+    let catalog = catalog(&desk);
+    let starts_at = free_slot(&desk, &catalog.staff);
+    let tz = salon_tz(&desk.store).unwrap();
+    let policy = desk.transport.waitlist(1, true).unwrap().policy;
+    if !policy.enabled {
+        desk.transport
+            .update_waitlist_policy(&WaitlistPolicy {
+                enabled: true,
+                ..policy
+            })
+            .unwrap();
+    }
+    let clients = ["Offer accept test", "Offer requeue test"]
+        .map(|name| ops::create_client(&mut desk.store, name, None).unwrap());
+    desk.sync();
+    let entries = clients
+        .into_iter()
+        .enumerate()
+        .map(|(i, client_id)| {
+            let start = (starts_at + Span::hours(i as i64)).with_timezone(&tz);
+            desk.transport
+                .join_waitlist(&WaitlistRequest {
+                    client_id,
+                    staff_id: Some(catalog.staff.clone()),
+                    service_ids: vec![catalog.haircut.clone()],
+                    from_date: start.date_naive(),
+                    to_date: start.date_naive(),
+                    from_time: start.format("%H:%M").to_string(),
+                    to_time: (start + Span::hours(1)).format("%H:%M").to_string(),
+                    imported_entry_id: None,
+                    idempotency_key: WaitlistRequest::new_key(),
+                })
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let mut offers = vec![];
+    let mut next_probe = Instant::now();
+    wait(
+        Duration::from_secs(70),
+        "the waitlist worker offering both slots",
+        || {
+            if Instant::now() < next_probe {
+                return false;
+            }
+            next_probe = Instant::now() + Duration::from_secs(1);
+            offers = desk
+                .transport
+                .waitlist(1, true)
+                .unwrap()
+                .entries
+                .into_iter()
+                .filter(|row| entries.iter().any(|entry| row.id == entry.id) && row.offer.is_some())
+                .collect();
+            offers.len() == 2
+        },
+    );
+    let accepted = offers
+        .iter()
+        .find(|offer| offer.id == entries[0].id)
+        .unwrap();
+    let requeued = offers
+        .iter()
+        .find(|offer| offer.id == entries[1].id)
+        .unwrap();
+    let (requirements, can_waive) = desk
+        .transport
+        .waitlist_offer_requirements(accepted)
+        .unwrap();
+    assert!(requirements.forms.is_empty() && can_waive);
+    let offer = accepted.offer.as_ref().unwrap();
+    let input = AcceptOffer {
+        version: accepted.version,
+        offer_id: offer.id.clone(),
+        expected_total_cents: offer.price_cents,
+        idempotency_key: WaitlistRequest::new_key(),
+        intake_review_hash: requirements.review_hash,
+        intake_submission_ids: Vec::new(),
+        protection_waiver_reason: None,
+    };
+    assert!(
+        desk.transport
+            .accept_waitlist_offer(
+                &accepted.id,
+                &AcceptOffer {
+                    expected_total_cents: input.expected_total_cents + 1,
+                    ..input.clone()
+                }
+            )
+            .is_err()
+    );
+    let booked = desk
+        .transport
+        .accept_waitlist_offer(&accepted.id, &input)
+        .unwrap()
+        .appointment;
+    assert_eq!(booked.starts_at, offer.starts_at);
+    assert_eq!(
+        desk.transport
+            .accept_waitlist_offer(&accepted.id, &input)
+            .unwrap()
+            .appointment
+            .id,
+        booked.id
+    );
+    let requeue = desk
+        .transport
+        .requeue_waitlist_offer(
+            &requeued.id,
+            requeued.version,
+            &requeued.offer.as_ref().unwrap().id,
+        )
+        .unwrap();
+    assert_eq!(requeue.state, WaitlistState::Waiting);
+    assert!(requeue.offer.is_none());
+    desk.sync();
+    assert!(desk.store.appointment(&booked.id).unwrap().is_some());
+}
+
+#[test]
+#[ignore = "requires a running, seeded stack"]
+fn native_directory_replays_contacts_and_preserves_newer_edits() {
+    let mut first = Device::sign_in();
+    let mut second = Device::sign_in();
+    first.sync();
+    assert!(first.store.client_directory_enabled().unwrap());
+    let email = format!("native-{}@example.test", uuid::Uuid::now_v7());
+    let id = ops::create_directory_client(
+        &mut first.store,
+        "Native Directory",
+        "+34 600 100 200",
+        &email,
+        "First notes",
+    )
+    .unwrap();
+    let read = |device: &Device| {
+        calendar::directory_clients(&device.store)
+            .unwrap()
+            .into_iter()
+            .find(|client| client.id == id)
+            .unwrap()
+    };
+    assert_eq!(read(&first).email.as_deref(), Some(email.as_str()));
+    first.sync();
+    second.sync();
+    let original = read(&second);
+    let first_snapshot = read(&first);
+    ops::update_directory_client(
+        &mut first.store,
+        &first_snapshot,
+        "Reviewed name",
+        "",
+        "Saved by first device",
+    )
+    .unwrap();
+    assert_eq!(read(&first).name, "Reviewed name");
+    assert!(read(&first).phone.is_none());
+    first.sync();
+    ops::update_directory_client(
+        &mut second.store,
+        &original,
+        "Stale name",
+        "12345",
+        "Saved by second device",
+    )
+    .unwrap();
+    second.sync();
+    assert_eq!(read(&second).name, "Reviewed name");
+    assert!(read(&second).phone.is_none());
+    assert!(second.store.conflicts().unwrap().iter().any(|conflict| {
+        conflict.entity_id == id
+            && conflict.kind == "client.update"
+            && conflict.reason == "conflict"
+    }));
 }

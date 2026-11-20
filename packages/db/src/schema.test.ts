@@ -42,7 +42,6 @@ describe("appointment exclusion constraint", () => {
       .insert(appointment)
       .values({ staffId: staff.id, clientId: client.id, ...slot("2026-03-09T12:30:00Z", 60) });
 
-    expect(attempt).rejects.toBeDefined();
     const error = await attempt.catch((e: unknown) => e);
     expect(pgErrorCode(error)).toBe("23P01");
   });

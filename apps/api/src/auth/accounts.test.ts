@@ -99,7 +99,7 @@ describe("createAccount", () => {
       password: PASSWORD,
       role: "staff",
     });
-    expect(attempt).rejects.toBeInstanceOf(DomainError);
+    await expect(attempt).rejects.toBeInstanceOf(DomainError);
     expect((await attempt.catch((e: unknown) => e)) as DomainError).toMatchObject({
       code: "invalid_state",
     });

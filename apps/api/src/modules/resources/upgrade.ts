@@ -1,7 +1,12 @@
 import { appointment, appointmentService, resourceReservation, waitlistOffer } from "@sob/db";
 import { and, asc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 import type { Tx } from "../../tx";
-import { repackFutureResources, reserveResources, type TimedService } from "./reservations";
+import {
+  IMPORTED_RESOURCE_UNIT_START,
+  repackFutureResources,
+  reserveResources,
+  type TimedService,
+} from "./reservations";
 /** The scheduling lock is held. Lock every affected parent before touching its child rows, including before new FK checks. */
 export async function reconfigureScheduledResources(tx: Tx, serviceId: string, now: Date) {
   const appointments = await tx
@@ -11,6 +16,7 @@ export async function reconfigureScheduledResources(tx: Tx, serviceId: string, n
       and(
         eq(appointment.status, "booked"),
         isNull(appointment.deletedAt),
+        sql`not exists (select 1 from resource_reservation r where r.appointment_id=${appointment.id} and r.active and r.unit_index>=${IMPORTED_RESOURCE_UNIT_START})`,
         gt(appointment.startsAt, now),
         sql`exists (select 1 from appointment_service s where s.appointment_id=${appointment.id} and s.service_id=${serviceId})`,
       ),

@@ -23,7 +23,7 @@ import {
 } from "../../../test/helpers";
 import { updateAppointment } from "../appointments/service";
 import { settleVerifiedBankPayment } from "../commerce/service";
-import { expireBookingHolds } from "./value";
+import { calendarProtections, expireBookingHolds, protectionView } from "./value";
 
 let t: Awaited<ReturnType<typeof setupApiTest>>;
 let f: Fixtures;
@@ -192,6 +192,11 @@ test("early cancellation releases the slot and shows the whole signal due back w
   ).toBe(409);
   const [row] = await t.db.select().from(appointment).where(eq(appointment.id, a.id));
   expect(row?.status).toBe("cancelled");
+  const projections = await calendarProtections(t.db, [a.id, crypto.randomUUID()]);
+  expect(projections.get(a.id)).toEqual((await protectionView(t.db, a.id)) ?? undefined);
+  expect(projections.get(a.id)?.refundDueCents).toBe(2500);
+  expect(projections.size).toBe(1);
+  expect((await calendarProtections(t.db, [])).size).toBe(0);
 });
 
 async function funded(extra = {}, plan = {}) {

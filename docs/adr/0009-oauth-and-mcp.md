@@ -41,25 +41,27 @@ Tables (`oauth_client`, `oauth_resource`, `oauth_client_resource`, `oauth_access
 | Scope            | Allows                                                       | Notes                                                    |
 | ---------------- | ------------------------------------------------------------ | -------------------------------------------------------- |
 | `mcp:read`       | `list_services`, `find_availability`, `list_my_appointments` | Always on in the consent screen.                         |
-| `mcp:book`       | `create_appointment`, `cancel_appointment`                   | Can be unchecked at consent.                             |
+| `mcp:book`       | `create_appointment`, `cancel_appointment`                   | Personal bookings for customer accounts. Centre bookings require `schedule:write`. |
 | `schedule:read`  | `list_schedule`, `find_client`                               | Only offered to staff and owner accounts.                |
 | `offline_access` | refresh tokens                                               | Without it the client has to ask again after 15 minutes. |
 
 Effective permission is the intersection of scope and role, evaluated on every call. The role is read from the database (like `requireAuth`), so a demotion applies at once to tokens that are already out. A client-role token that carries `schedule:read` can do nothing extra: the policy functions refuse.
+
+Staff and owners can grant additional, separately selectable centre management scopes. Each tool uses the current access preset and the permissions of its underlying operation. See [the MCP guide](../mcp.md#centre-management) for the scope catalogue.
 
 ### Token lifetimes and revocation
 
 - Access token: 900 s (`OAUTH_ACCESS_TOKEN_TTL_SECONDS`). A JWT cannot be revoked, so it is short.
 - Refresh token: 14 days (`OAUTH_REFRESH_TOKEN_TTL_SECONDS`), rotated on every use, stored hashed. Reusing a rotated token is refused and the family is revoked (tested).
 - Authorization code: 600 s (plugin default), single use, PKCE `S256` mandatory (`plain` is rejected, tested).
-- Beyond expiry, the MCP server checks on each call that the OAuth client exists and is enabled and that a consent row for (user, client) still exists, so deleting a grant or disabling a client cuts access immediately; deleting the user does too.
+- The MCP server checks on each call that the OAuth client is enabled and that the token's grant ID matches the current consent for that user and client. Revoking and reconnecting cannot reactivate an older access token. The owner of the grant can revoke it from Connected apps.
 - A token issued without a `resource` is opaque and is not accepted by `/mcp` (hosts must send `resource`, as the MCP spec requires). `typ: at+jwt`, issuer, audience, ES256 only, zero clock tolerance. A plain session JWT (`/api/auth/token`) has the wrong audience and type and is refused (tested). No token passthrough: the API never forwards the bearer token anywhere.
 
 ### Dynamic client registration
 
 MCP hosts cannot be provisioned beforehand, so `POST /oauth2/register` is open (`allowUnauthenticatedClientRegistration`) but constrained:
 
-- Public clients only (`token_endpoint_auth_method: none`), PKCE required, grant types `authorization_code` and `refresh_token`; `client_credentials` is turned off for the whole server (every token belongs to a signed-in user).
+- Anonymous dynamic registration supports public and confidential clients. Both require PKCE. Grant types are `authorization_code` and `refresh_token`; every MCP token belongs to a signed-in user.
 - Scope capability limited to the catalogue; redirect URIs must be https, loopback http (any port) or a native custom scheme (`application_type` inferred); `http` to other hosts is rejected (tested).
 - 10 registrations per caller and minute (`RATE_LIMIT_OAUTH_REGISTER_*`), Valkey counter, fails closed.
 - The client name is self-asserted. The consent screen therefore shows the app name, the host the user will be sent back to, and an "unverified app" notice for every client except the first-party desktop one.
@@ -67,27 +69,28 @@ MCP hosts cannot be provisioned beforehand, so `POST /oauth2/register` is open (
 
 ### First-party desktop client
 
-`sob-desktop` is seeded idempotently at API start (`ensureOAuthSeeds`): native public client, PKCE, redirect `http://127.0.0.1/callback` (Better Auth lets the port vary for registered loopback URIs, RFC 8252 section 7.3, tested), consent still required. **The desktop app has not been switched to it.** `/sync/*` authenticates by session cookie only, so the swap needs (a) a bearer branch in `requireAuth` for a second resource and a `sync` scope, (b) token storage, refresh and expiry handling in `sob-core`, (c) a browser step in the GPUI login screen. That complete authentication change remains outside the Linux v1 session-based release. The current native session flow is exercised against the real API; the PKCE helpers are tested separately.
+`sob-desktop` is seeded at API start as a native public client with PKCE S256, a loopback redirect on an ephemeral port and explicit consent. It requests `desktop:sign-in offline_access` for the separate `/api/auth/desktop` audience. The system browser prompts for the account credentials. The native client uses a bearer token for the routes it needs, renews it with a first-party rotating refresh token and keeps the current owner or staff permissions. The web app and older desktop sessions still use session cookies. Existing MCP tokens cannot authorize sync and desktop tokens cannot call MCP.
 
 ### MCP server
 
 `apps/api/src/mcp`, mounted at `/mcp`:
 
 - Streamable HTTP (spec 2025-06-18), stateless: each POST gets a fresh `McpServer` and `WebStandardStreamableHTTPServerTransport` (`enableJsonResponse`, 64 KiB body cap) and is answered as JSON. GET (the SSE channel) and DELETE (sessions) answer 405, which the spec allows for servers that never push. No session to hijack, any replica can serve any call.
-- Bearer only; cookies are ignored. 401 carries `WWW-Authenticate: Bearer resource_metadata="...", error="invalid_token", scope="..."`; a token with no MCP scope is 403 `insufficient_scope`.
+- Bearer only. A 401 challenge carries `resource_metadata` and includes `invalid_token` when a supplied token was rejected. A token without an effective MCP scope gets 403 `insufficient_scope` with a suggested read scope.
 - Tools call the same service functions and the same pure policy functions as REST. No business rule is duplicated. Tool arguments are Zod schemas composed from `@sob/contracts` field schemas (`packages/contracts/src/mcp.ts`) with descriptions written for a model; unknown keys are dropped (an `override` or inline `client` never reaches the service).
 - Client-role principals do not see `list_schedule` / `find_client` in `tools/list` and are refused by the policy if they call them anyway. `find_client` omits internal notes.
 - Errors are tool results with `isError` and a next step ("call find_availability again..."); the code is in `_meta.error` rather than `structuredContent`, because clients validate structured content against the output schema.
 - `create_appointment` takes an optional `requestId` (UUID) that becomes the appointment id. Repeating the call returns the existing appointment (`replayed: true`) when it matches the same professional, start and client; a collision with someone else's id is an error that reveals nothing. Concurrent bookings of one slot are decided by the exclusion constraint: one wins, the other gets `slot_taken` (tested with two real SDK clients).
 - Annotations: `readOnlyHint` on reads, `destructiveHint: true` on `cancel_appointment`.
+- For staff and owners, `create_appointment` and `cancel_appointment` require `schedule:write`. Staff and owner cancellations use the operator's reviewed appointment version.
 - `cancel_appointment` answers "not found" both for unknown ids and for another client's appointment.
 - Prompt injection: appointment notes are free text written by clients. For staff and owner tokens the notes are redacted (`null`) in every MCP output, so a front-desk agent never ingests client-authored instructions. The REST API and the dashboard are unchanged.
 
 ### Rate limits, CORS, audit
 
-- Valkey fixed windows (`rate-limit.ts`): `oauth` (authorize, token, consent, revoke, introspect; 60 per minute), `oauth-register` (10), `mcp` (120, fails open like the global limiter). Better Auth's own limiter stays off.
-- CORS `*` without credentials on metadata, JWKS, token, register, revoke and `/mcp` (browser-based hosts such as the MCP Inspector); none on cookie-bound endpoints (authorize, consent, public-client), which also keep Better Auth's origin check (a foreign `Origin` with cookies is a 403, tested).
-- Audit log (`audit_log`): `oauth.client_register`, `oauth.consent_grant`, `oauth.consent_deny`, `oauth.token_issue` (user, client, grant type, scopes, audience), `oauth.token_revoke`; appointment writes made through MCP carry `via: { channel: "mcp", clientId }`. No code or token is ever written (tested).
+- Valkey fixed windows (`rate-limit.ts`): `oauth` (authorize, token, consent, revoke, introspect; 60 per minute), `oauth-register` (10), and `mcp` (120, fails closed). Better Auth's own limiter stays off.
+- Metadata, JWKS, token, registration and revocation support public CORS without credentials. Better Auth checks the origin of cookie-bound requests. `/mcp` validates every supplied `Origin` against the authorization and resource origins plus the exact origins in `MCP_ALLOWED_ORIGINS`.
+- OAuth audit events record registration, grants and token issuance or revocation. Appointment writes carry the verified MCP client ID and management write attempts record `mcp.write_requested`. Audit records exclude codes and tokens.
 
 ## Threat model
 
@@ -96,7 +99,7 @@ MCP hosts cannot be provisioned beforehand, so `POST /oauth2/register` is open (
 | Stolen access token                                  | 15 minute JWT, audience-bound, consent and client re-checked per call; refresh rotation with reuse detection. Sender-constrained tokens (DPoP, supported by the plugin) are not enabled: follow-up. |
 | Token minted for another resource or by another flow | `aud`, `iss`, `typ`, `alg` checks; session JWTs and opaque tokens refused.                                                                                                                          |
 | Confused deputy / token passthrough                  | The API never forwards the caller's token; downstream calls are in-process with the resolved principal.                                                                                             |
-| Malicious or look-alike registered client            | Public + PKCE only, scope and redirect restrictions, rate limit, consent with host and unverified notice, per-scope opt-out, audit of grants. Residual: phishing with a convincing name.            |
+| Malicious or look-alike registered client            | Mandatory PKCE, scope and redirect restrictions, rate limit, consent with host and unverified notice, per-scope opt-out, audit of grants. Residual: phishing with a convincing name.            |
 | Authorization code interception                      | PKCE S256 mandatory, single-use code, exact redirect matching (loopback port exempt per RFC 8252), `state` echoed.                                                                                  |
 | CSRF / forged consent                                | Signed authorization query (`sig`, `exp`) verified by the server; session cookie is `SameSite=Lax` and Better Auth's origin check applies to the consent POST.                                      |
 | Over-broad delegation                                | Scope ∩ role on every call; client-role tokens cannot reach staff data even with `schedule:read`.                                                                                                   |
@@ -104,11 +107,11 @@ MCP hosts cannot be provisioned beforehand, so `POST /oauth2/register` is open (
 | Prompt injection through tool results                | Staff output redacts client-written notes; tool results are structured data; writes are annotated for host confirmation.                                                                            |
 | Argument tampering                                   | Zod validation, dropped unknown keys, UUID-only ids, length caps, policy checks after parsing.                                                                                                      |
 | Abuse and DoS                                        | Per-endpoint Valkey limits, 64 KiB body cap, stateless server.                                                                                                                                      |
-| DNS rebinding / cross-site calls to `/mcp`           | Bearer only, no ambient credentials, so there is nothing for a rebound page to ride on. `Origin` is therefore not allow-listed.                                                                     |
+| DNS rebinding / cross-site calls to `/mcp`           | Every browser origin must be explicitly allowed. Requests require a bearer token.                                                                                                                   |
 
 ## Consequences and follow-ups
 
 - Verified: OAuth flow tests, 34 MCP tests (authorization matrix, booking rules, concurrency), an end-to-end test with the official TypeScript SDK client (discovery, registration, PKCE, tools, refresh, concurrency) and a Playwright suite for sign-in and consent (both viewports, axe, es-AR).
 - Not verified: behaviour against real Claude Desktop or other hosts; the consent screen on a browser other than Chromium; TLS and a real public hostname (tests use `http://localhost`).
-- Follow-ups: desktop swap (above); an account screen to list and revoke grants (the plugin exposes `/oauth2/get-consents` and `/oauth2/delete-consent`, and the MCP server already honours a deletion); pruning of expired tokens, consents of deleted clients and idle dynamically registered clients (no sweeper job exists, Better Auth leaves it to the deployment); DPoP; CIMD for verified clients; per-user (not per-IP) MCP limits.
-- New environment keys (documented here and in the README because `.env.example` is not edited by this phase): `MCP_RESOURCE_URL`, `OAUTH_ACCESS_TOKEN_TTL_SECONDS`, `OAUTH_REFRESH_TOKEN_TTL_SECONDS`, `RATE_LIMIT_OAUTH_MAX`, `RATE_LIMIT_OAUTH_WINDOW_SECONDS`, `RATE_LIMIT_OAUTH_REGISTER_MAX`, `RATE_LIMIT_OAUTH_REGISTER_WINDOW_SECONDS`, `RATE_LIMIT_MCP_MAX`, `RATE_LIMIT_MCP_WINDOW_SECONDS`.
+- Follow-ups: desktop swap (above), DPoP, CIMD for verified clients and per-user MCP limits.
+- Environment keys are listed in [the environment reference](../env-reference.md).

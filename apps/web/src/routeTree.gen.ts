@@ -31,16 +31,19 @@ import { Route as AccountWaitlistRouteImport } from './routes/account.waitlist'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as AdminCalendarRouteImport } from './routes/admin.calendar'
 import { Route as AdminCommerceRouteImport } from './routes/admin.commerce'
+import { Route as AdminMarketingRouteImport } from './routes/admin.marketing'
 import { Route as AdminReportsRouteImport } from './routes/admin.reports'
 import { Route as AdminReputationRouteImport } from './routes/admin.reputation'
 import { Route as AdminServicesRouteImport } from './routes/admin.services'
 import { Route as AdminSettingsRouteImport } from './routes/admin.settings'
 import { Route as AdminStaffRouteImport } from './routes/admin.staff'
 import { Route as AdminWaitlistRouteImport } from './routes/admin.waitlist'
+import { Route as AdminWhatsappRouteImport } from './routes/admin.whatsapp'
 import { Route as BookIndexRouteImport } from './routes/book.index'
 import { Route as BookProfessionalRouteImport } from './routes/book.professional'
 import { Route as BookReviewRouteImport } from './routes/book.review'
 import { Route as BookTimeRouteImport } from './routes/book.time'
+import { Route as MarketingOptOutRouteImport } from './routes/marketing.opt-out'
 import { Route as NotificationsOptOutRouteImport } from './routes/notifications.opt-out'
 import { Route as PaymentsOrderRouteImport } from './routes/payments.$order'
 import { Route as AdminClientsIndexRouteImport } from './routes/admin.clients.index'
@@ -158,6 +161,11 @@ const AdminCommerceRoute = AdminCommerceRouteImport.update({
   path: '/commerce',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminMarketingRoute = AdminMarketingRouteImport.update({
+  id: '/marketing',
+  path: '/marketing',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AdminReportsRoute = AdminReportsRouteImport.update({
   id: '/reports',
   path: '/reports',
@@ -188,6 +196,11 @@ const AdminWaitlistRoute = AdminWaitlistRouteImport.update({
   path: '/waitlist',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminWhatsappRoute = AdminWhatsappRouteImport.update({
+  id: '/whatsapp',
+  path: '/whatsapp',
+  getParentRoute: () => AdminRoute,
+} as any)
 const BookIndexRoute = BookIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -207,6 +220,11 @@ const BookTimeRoute = BookTimeRouteImport.update({
   id: '/time',
   path: '/time',
   getParentRoute: () => BookRoute,
+} as any)
+const MarketingOptOutRoute = MarketingOptOutRouteImport.update({
+  id: '/marketing/opt-out',
+  path: '/marketing/opt-out',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const NotificationsOptOutRoute = NotificationsOptOutRouteImport.update({
   id: '/notifications/opt-out',
@@ -262,15 +280,18 @@ export interface FileRoutesByFullPath {
   '/account/waitlist': typeof AccountWaitlistRoute
   '/admin/calendar': typeof AdminCalendarRoute
   '/admin/commerce': typeof AdminCommerceRoute
+  '/admin/marketing': typeof AdminMarketingRoute
   '/admin/reports': typeof AdminReportsRoute
   '/admin/reputation': typeof AdminReputationRoute
   '/admin/services': typeof AdminServicesRoute
   '/admin/settings': typeof AdminSettingsRoute
   '/admin/staff': typeof AdminStaffRoute
   '/admin/waitlist': typeof AdminWaitlistRoute
+  '/admin/whatsapp': typeof AdminWhatsappRoute
   '/book/professional': typeof BookProfessionalRoute
   '/book/review': typeof BookReviewRoute
   '/book/time': typeof BookTimeRoute
+  '/marketing/opt-out': typeof MarketingOptOutRoute
   '/notifications/opt-out': typeof NotificationsOptOutRoute
   '/payments/$order': typeof PaymentsOrderRoute
   '/account/': typeof AccountIndexRoute
@@ -299,15 +320,18 @@ export interface FileRoutesByTo {
   '/account/waitlist': typeof AccountWaitlistRoute
   '/admin/calendar': typeof AdminCalendarRoute
   '/admin/commerce': typeof AdminCommerceRoute
+  '/admin/marketing': typeof AdminMarketingRoute
   '/admin/reports': typeof AdminReportsRoute
   '/admin/reputation': typeof AdminReputationRoute
   '/admin/services': typeof AdminServicesRoute
   '/admin/settings': typeof AdminSettingsRoute
   '/admin/staff': typeof AdminStaffRoute
   '/admin/waitlist': typeof AdminWaitlistRoute
+  '/admin/whatsapp': typeof AdminWhatsappRoute
   '/book/professional': typeof BookProfessionalRoute
   '/book/review': typeof BookReviewRoute
   '/book/time': typeof BookTimeRoute
+  '/marketing/opt-out': typeof MarketingOptOutRoute
   '/notifications/opt-out': typeof NotificationsOptOutRoute
   '/payments/$order': typeof PaymentsOrderRoute
   '/account': typeof AccountIndexRoute
@@ -340,15 +364,18 @@ export interface FileRoutesById {
   '/account/waitlist': typeof AccountWaitlistRoute
   '/admin/calendar': typeof AdminCalendarRoute
   '/admin/commerce': typeof AdminCommerceRoute
+  '/admin/marketing': typeof AdminMarketingRoute
   '/admin/reports': typeof AdminReportsRoute
   '/admin/reputation': typeof AdminReputationRoute
   '/admin/services': typeof AdminServicesRoute
   '/admin/settings': typeof AdminSettingsRoute
   '/admin/staff': typeof AdminStaffRoute
   '/admin/waitlist': typeof AdminWaitlistRoute
+  '/admin/whatsapp': typeof AdminWhatsappRoute
   '/book/professional': typeof BookProfessionalRoute
   '/book/review': typeof BookReviewRoute
   '/book/time': typeof BookTimeRoute
+  '/marketing/opt-out': typeof MarketingOptOutRoute
   '/notifications/opt-out': typeof NotificationsOptOutRoute
   '/payments/$order': typeof PaymentsOrderRoute
   '/account/': typeof AccountIndexRoute
@@ -382,15 +409,18 @@ export interface FileRouteTypes {
     | '/account/waitlist'
     | '/admin/calendar'
     | '/admin/commerce'
+    | '/admin/marketing'
     | '/admin/reports'
     | '/admin/reputation'
     | '/admin/services'
     | '/admin/settings'
     | '/admin/staff'
     | '/admin/waitlist'
+    | '/admin/whatsapp'
     | '/book/professional'
     | '/book/review'
     | '/book/time'
+    | '/marketing/opt-out'
     | '/notifications/opt-out'
     | '/payments/$order'
     | '/account/'
@@ -419,15 +449,18 @@ export interface FileRouteTypes {
     | '/account/waitlist'
     | '/admin/calendar'
     | '/admin/commerce'
+    | '/admin/marketing'
     | '/admin/reports'
     | '/admin/reputation'
     | '/admin/services'
     | '/admin/settings'
     | '/admin/staff'
     | '/admin/waitlist'
+    | '/admin/whatsapp'
     | '/book/professional'
     | '/book/review'
     | '/book/time'
+    | '/marketing/opt-out'
     | '/notifications/opt-out'
     | '/payments/$order'
     | '/account'
@@ -459,15 +492,18 @@ export interface FileRouteTypes {
     | '/account/waitlist'
     | '/admin/calendar'
     | '/admin/commerce'
+    | '/admin/marketing'
     | '/admin/reports'
     | '/admin/reputation'
     | '/admin/services'
     | '/admin/settings'
     | '/admin/staff'
     | '/admin/waitlist'
+    | '/admin/whatsapp'
     | '/book/professional'
     | '/book/review'
     | '/book/time'
+    | '/marketing/opt-out'
     | '/notifications/opt-out'
     | '/payments/$order'
     | '/account/'
@@ -493,6 +529,7 @@ export interface RootRouteChildren {
   SignUpRoute: typeof SignUpRoute
   VerifyEmailRoute: typeof VerifyEmailRoute
   WidgetRoute: typeof WidgetRoute
+  MarketingOptOutRoute: typeof MarketingOptOutRoute
   NotificationsOptOutRoute: typeof NotificationsOptOutRoute
   PaymentsOrderRoute: typeof PaymentsOrderRoute
 }
@@ -653,6 +690,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminCommerceRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/marketing': {
+      id: '/admin/marketing'
+      path: '/marketing'
+      fullPath: '/admin/marketing'
+      preLoaderRoute: typeof AdminMarketingRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/admin/reports': {
       id: '/admin/reports'
       path: '/reports'
@@ -695,6 +739,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminWaitlistRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/whatsapp': {
+      id: '/admin/whatsapp'
+      path: '/whatsapp'
+      fullPath: '/admin/whatsapp'
+      preLoaderRoute: typeof AdminWhatsappRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/book/': {
       id: '/book/'
       path: '/'
@@ -722,6 +773,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/book/time'
       preLoaderRoute: typeof BookTimeRouteImport
       parentRoute: typeof BookRoute
+    }
+    '/marketing/opt-out': {
+      id: '/marketing/opt-out'
+      path: '/marketing/opt-out'
+      fullPath: '/marketing/opt-out'
+      preLoaderRoute: typeof MarketingOptOutRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/notifications/opt-out': {
       id: '/notifications/opt-out'
@@ -794,12 +852,14 @@ const AccountRouteWithChildren =
 interface AdminRouteChildren {
   AdminCalendarRoute: typeof AdminCalendarRoute
   AdminCommerceRoute: typeof AdminCommerceRoute
+  AdminMarketingRoute: typeof AdminMarketingRoute
   AdminReportsRoute: typeof AdminReportsRoute
   AdminReputationRoute: typeof AdminReputationRoute
   AdminServicesRoute: typeof AdminServicesRoute
   AdminSettingsRoute: typeof AdminSettingsRoute
   AdminStaffRoute: typeof AdminStaffRoute
   AdminWaitlistRoute: typeof AdminWaitlistRoute
+  AdminWhatsappRoute: typeof AdminWhatsappRoute
   AdminIndexRoute: typeof AdminIndexRoute
   AdminClientsIdRoute: typeof AdminClientsIdRoute
   AdminClientsIndexRoute: typeof AdminClientsIndexRoute
@@ -808,12 +868,14 @@ interface AdminRouteChildren {
 const AdminRouteChildren: AdminRouteChildren = {
   AdminCalendarRoute: AdminCalendarRoute,
   AdminCommerceRoute: AdminCommerceRoute,
+  AdminMarketingRoute: AdminMarketingRoute,
   AdminReportsRoute: AdminReportsRoute,
   AdminReputationRoute: AdminReputationRoute,
   AdminServicesRoute: AdminServicesRoute,
   AdminSettingsRoute: AdminSettingsRoute,
   AdminStaffRoute: AdminStaffRoute,
   AdminWaitlistRoute: AdminWaitlistRoute,
+  AdminWhatsappRoute: AdminWhatsappRoute,
   AdminIndexRoute: AdminIndexRoute,
   AdminClientsIdRoute: AdminClientsIdRoute,
   AdminClientsIndexRoute: AdminClientsIndexRoute,
@@ -853,6 +915,7 @@ const rootRouteChildren: RootRouteChildren = {
   SignUpRoute: SignUpRoute,
   VerifyEmailRoute: VerifyEmailRoute,
   WidgetRoute: WidgetRoute,
+  MarketingOptOutRoute: MarketingOptOutRoute,
   NotificationsOptOutRoute: NotificationsOptOutRoute,
   PaymentsOrderRoute: PaymentsOrderRoute,
 }

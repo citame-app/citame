@@ -69,6 +69,31 @@ test("two workers never claim the same message", async () => {
   expect(mail.calls).toHaveLength(1);
 });
 
+test("shutdown returns reserved account emails intact for the replacement worker", async () => {
+  await enqueue();
+  await enqueue("second-link", "second@example.com");
+  const entered = Promise.withResolvers<void>();
+  const send = Promise.withResolvers<void>();
+  const mail = new FakeEmailProvider();
+  mail.beforeDeliver = async () => {
+    entered.resolve();
+    await send.promise;
+  };
+  const current = worker(mail);
+  current.start();
+  await entered.promise;
+  const stopping = current.stop();
+  send.resolve();
+  await stopping;
+  const queued = (await rows()).find((row) => row.status === "pending");
+  expect(queued).toMatchObject({ attempts: 0, lockedUntil: null, lockedBy: null });
+  expect(queued?.payload).toBeTruthy();
+  expect(mail.calls).toHaveLength(1);
+  expect(await worker(mail, "replacement").runOnce()).toBe(1);
+  expect(mail.calls).toHaveLength(2);
+  expect((await rows()).every((row) => row.status === "sent" && row.attempts === 1)).toBe(true);
+});
+
 test("temporary delivery failure persists a retry that another process delivers with the same key", async () => {
   await enqueue();
   const mail = new FakeEmailProvider();

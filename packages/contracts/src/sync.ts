@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { appointmentSchema, createAppointmentBaseSchema } from "./appointments";
+import { calendarAppointmentSchema } from "./calendar";
 import { idSchema, instantSchema, LIMITS, localDateSchema } from "./common";
 import { dateShiftRangesSchema } from "./date-shifts";
 import { salonResponseSchema, updateSalonSettingsRequestSchema } from "./salon";
@@ -116,11 +117,15 @@ const clientUpdate = z.object({
   payload: z
     .object({
       id: idSchema,
+      expectedUpdatedAt: instantSchema.optional(),
       name: z.string().trim().min(1).max(LIMITS.name).optional(),
       phone: z.string().trim().min(3).max(LIMITS.phone).nullable().optional(),
       notes: z.string().max(LIMITS.notes).nullable().optional(),
     })
-    .refine(oneChange, { message: "Provide at least one change", path: ["name"] }),
+    .refine(({ expectedUpdatedAt: _, ...changes }) => oneChange(changes), {
+      message: "Provide at least one change",
+      path: ["name"],
+    }),
 });
 
 const timeOffCreate = z.object({
@@ -147,17 +152,26 @@ const timeOffUpdate = z.object({
     .object({
       id: idSchema,
       staffId: idSchema,
+      expectedUpdatedAt: instantSchema.optional(),
       startsAt: instantSchema.optional(),
       endsAt: instantSchema.optional(),
       reason: z.string().trim().min(1).max(LIMITS.reason).nullable().optional(),
     })
-    .refine(oneChange, { message: "Provide at least one change", path: ["startsAt"] }),
+    .refine(
+      ({ startsAt, endsAt, reason }) =>
+        startsAt !== undefined || endsAt !== undefined || reason !== undefined,
+      { message: "Provide at least one change", path: ["startsAt"] },
+    ),
 });
 
 const timeOffDelete = z.object({
   ...envelope,
   kind: z.literal("time_off.delete"),
-  payload: z.object({ id: idSchema, staffId: idSchema }),
+  payload: z.object({
+    id: idSchema,
+    staffId: idSchema,
+    expectedUpdatedAt: instantSchema.optional(),
+  }),
 });
 
 const serviceUpdate = z.object({
@@ -203,6 +217,9 @@ export const syncMutationSchema = z.discriminatedUnion("kind", [
 export type SyncMutation = z.infer<typeof syncMutationSchema>;
 export type SyncMutationKind = SyncMutation["kind"];
 
+export const initialSyncGeneration = "initial";
+export const syncGenerationSchema = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
+
 /**
  * What the server validates first: the envelope only. Each mutation body is then validated on
  * its own, so one malformed mutation is rejected as `invalid` without failing the whole batch.
@@ -210,6 +227,7 @@ export type SyncMutationKind = SyncMutation["kind"];
 export const syncPushRequestSchema = z.object({
   /** Stable per-installation identifier; informational (audit and diagnostics). */
   deviceId: z.string().trim().min(1).max(100),
+  generation: syncGenerationSchema.optional(),
   mutations: z
     .array(z.object({ mutationId: mutationIdSchema }).loose())
     .min(1)
@@ -220,6 +238,7 @@ export type SyncPushRequest = z.infer<typeof syncPushRequestSchema>;
 /** The fully typed batch a client builds before sending it. */
 export const syncPushBatchSchema = z.object({
   deviceId: syncPushRequestSchema.shape.deviceId,
+  generation: syncPushRequestSchema.shape.generation,
   mutations: z.array(syncMutationSchema).min(1).max(SYNC_PUSH_MAX_MUTATIONS),
 });
 export type SyncPushBatch = z.infer<typeof syncPushBatchSchema>;
@@ -283,6 +302,8 @@ export type SyncPushResponse = z.infer<typeof syncPushResponseSchema>;
 export const syncPullQuerySchema = z.object({
   since: z.coerce.number().int().min(0).default(0),
   limit: z.coerce.number().int().min(1).max(SYNC_PULL_LIMIT_MAX).default(SYNC_PULL_LIMIT_DEFAULT),
+  catalogColors: z.literal("1").optional(),
+  reviewRequests: z.literal("1").optional(),
 });
 export type SyncPullQuery = z.infer<typeof syncPullQuerySchema>;
 
@@ -356,7 +377,20 @@ const upsert = <E extends string, S extends z.ZodType>(entity: E, data: S) =>
   });
 
 const upsertChangeSchema = z.discriminatedUnion("entity", [
-  upsert("appointment", appointmentSchema),
+  // Optional enrichment for web live notifications; existing clients keep the same fields.
+  upsert(
+    "appointment",
+    appointmentSchema.extend({
+      clientName: z.string().optional(),
+      ...calendarAppointmentSchema.pick({
+        billingReviewReasons: true,
+        externallySettled: true,
+        externalBalance: true,
+        importedFromBooksy: true,
+        serviceBadges: true,
+      }).shape,
+    }),
+  ),
   upsert("client", syncClientSchema),
   upsert("service", syncServiceSchema),
   upsert("staff", syncStaffSchema),
@@ -382,7 +416,15 @@ const tombstoneSchema = z.object({
 export const syncChangeSchema = z.union([upsertChangeSchema, tombstoneSchema]);
 export type SyncChange = z.infer<typeof syncChangeSchema>;
 
+export const syncLiveViewSchema = z.enum(["commerce", "waitlist", "inbox", "review_requests"]);
+export type SyncLiveView = z.infer<typeof syncLiveViewSchema>;
+
 export const syncPullResponseSchema = z.object({
+  generation: syncGenerationSchema.optional(),
+  /** Online views to reload from their permission-scoped endpoints. No row data is included. */
+  refresh: z.array(syncLiveViewSchema).optional(),
+  /** Configured service colors for upgrading replicas that lacked the color field. */
+  catalogColors: z.record(idSchema, z.string().regex(/^#[0-9a-fA-F]{6}$/)).optional(),
   changes: z.array(syncChangeSchema),
   /** Store this and send it as `since` next time. Never decreases. */
   nextCursor: z.number().int().min(0),
@@ -390,6 +432,11 @@ export const syncPullResponseSchema = z.object({
   hasMore: z.boolean(),
   /** Highest committed seq the server could see when it answered. */
   headSeq: z.number().int().min(0),
+  /** Time off the current caller can manage: none, every calendar, or their own staff ID. */
+  timeOffScope: z.union([z.literal("none"), z.literal("all"), idSchema]).optional(),
+  clientDirectory: z.boolean().optional(),
+  viewerRole: z.enum(["owner", "staff"]).optional(),
+  calendarScope: z.union([z.literal("none"), z.literal("all"), idSchema]).optional(),
 });
 export type SyncPullResponse = z.infer<typeof syncPullResponseSchema>;
 

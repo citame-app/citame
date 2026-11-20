@@ -38,6 +38,8 @@ function toAdminService(
     id: row.id,
     name: row.name,
     description: row.description,
+    category: row.category,
+    color: row.color,
     durationMinutes: row.durationMinutes,
     bufferMinutes: row.bufferMinutes,
     ...(row.processingStartMinutes !== null && row.processingMinutes !== null
@@ -135,6 +137,8 @@ export async function createService(
       .values({
         name: input.name,
         description: input.description ?? null,
+        category: input.category ?? parent?.category ?? null,
+        color: input.color ?? parent?.color ?? null,
         durationMinutes: input.durationMinutes,
         bufferMinutes: input.bufferMinutes ?? parent?.bufferMinutes ?? 0,
         priceCents: input.priceCents,
@@ -174,6 +178,7 @@ export async function createService(
             serviceId: row.id,
             resourceId: r.resourceId,
             quantity: r.quantity,
+            alternative: r.alternative,
           })),
         );
     }
@@ -191,6 +196,8 @@ export async function createService(
 const EDITABLE = [
   "name",
   "description",
+  "category",
+  "color",
   "durationMinutes",
   "bufferMinutes",
   "priceCents",

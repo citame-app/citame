@@ -28,12 +28,92 @@ function proxyWith(
 const headersOf = (seen: Seen | undefined) => new Headers(seen?.init.headers);
 
 describe("route mapping", () => {
-  test("only /api paths are handled", () => {
+  test("browser API paths are matched without swallowing application routes", () => {
     const { proxy } = proxyWith();
     expect(proxy.matches(new URL("http://web/api/services"))).toBe(true);
     expect(proxy.matches(new URL("http://web/api/auth/sign-in/email"))).toBe(true);
     expect(proxy.matches(new URL("http://web/apiary"))).toBe(false);
     expect(proxy.matches(new URL("http://web/book"))).toBe(false);
+  });
+
+  test("the native desktop routes reach the guarded API and other root paths stay private", async () => {
+    const { proxy, seen } = proxyWith();
+    const paths = [
+      "/me",
+      "/sync/pull?since=0",
+      "/sync/push",
+      "/sync/stream",
+      "/appointments/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/context",
+      "/admin/staff/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/date-shifts?from=2026-11-20&to=2026-11-20",
+      "/admin/staff/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/date-shifts/preview",
+      "/admin/staff/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/working-hours",
+      "/admin/notifications/inbox?page=2",
+      "/admin/notifications/inbox/archive",
+      "/admin/waitlist/desk?page=2",
+      "/admin/waitlist/desk/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/cancel",
+      "/admin/waitlist/desk/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/accept",
+      "/admin/waitlist/desk/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/decline",
+      "/admin/waitlist/desk/policy",
+      "/admin/commerce/appointments/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/imported-price",
+      "/admin/commerce/appointments/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/imported-settlement",
+      "/admin/commerce/appointments/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/imported-partial-payment",
+      "/admin/commerce/unpaid?from=2026-11-20T00%3A00%3A00Z&to=2026-11-21T00%3A00%3A00Z",
+      "/admin/commerce/checkouts",
+      "/admin/commerce/checkouts/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "/admin/commerce/checkouts/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/payments",
+      "/admin/commerce/cash-sessions",
+      "/admin/commerce/cash-sessions/current",
+      "/admin/commerce/cash-sessions/adjust",
+      "/admin/commerce/cash-sessions/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/close",
+      "/admin/reports/summary?from=2026-11-18&to=2026-11-20",
+      "/admin/reports/clients?from=2026-11-18&to=2026-11-20",
+      "/admin/reports/outcomes?from=2026-11-18&to=2026-11-20&status=cancelled",
+      "/admin/reports/outcomes/export?from=2026-11-18&to=2026-11-20&status=no_show",
+      "/admin/reviews/requests?page=2&search=A%26B",
+      "/admin/reviews/requests/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/email",
+      "/admin/reviews?status=pending",
+      "/admin/reviews/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/moderation",
+      "/admin/reviews/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/reply",
+      "/admin/inventory/products?search=repair",
+      "/admin/inventory/movements?kind=receive&search=A%26B&page=2",
+      "/admin/inventory/movements/export?kind=receive&search=A%26B",
+      "/admin/inventory/products/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "/admin/inventory/products/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/package-content",
+      "/intake/requirements?serviceIds=example",
+    ];
+    for (const path of paths) {
+      const request = new Request(`http://web${path}`);
+      expect(proxy.matches(new URL(request.url))).toBe(true);
+      await proxy.handle(request, "203.0.113.9");
+    }
+    expect(seen.map((entry) => entry.url)).toEqual(paths.map((path) => `http://api:3000${path}`));
+    expect(proxy.matches(new URL("http://web/sync/private"))).toBe(false);
+    expect(proxy.matches(new URL("http://web/appointments/booksy-context/import"))).toBe(false);
+    expect(
+      proxy.matches(
+        new URL("http://web/admin/staff/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/date-shifts/private"),
+      ),
+    ).toBe(false);
+    expect(proxy.matches(new URL("http://web/admin/notifications"))).toBe(false);
+    expect(proxy.matches(new URL("http://web/admin/notifications/inbox/private"))).toBe(false);
+    expect(proxy.matches(new URL("http://web/admin/waitlist"))).toBe(false);
+    expect(proxy.matches(new URL("http://web/admin/commerce"))).toBe(false);
+    expect(proxy.matches(new URL("http://web/admin/commerce/payments"))).toBe(false);
+    expect(proxy.matches(new URL("http://web/admin/reports"))).toBe(false);
+    expect(proxy.matches(new URL("http://web/admin/reports/summary/private"))).toBe(false);
+    expect(proxy.matches(new URL("http://web/admin/reports/clients/private"))).toBe(false);
+    expect(proxy.matches(new URL("http://web/admin/reports/outcomes/private"))).toBe(false);
+    expect(proxy.matches(new URL("http://web/admin/inventory/products/export"))).toBe(false);
+    expect(proxy.matches(new URL("http://web/admin/inventory/movements/export/private"))).toBe(
+      false,
+    );
+    expect(
+      proxy.matches(
+        new URL("http://web/admin/reviews/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/social"),
+      ),
+    ).toBe(false);
+    expect(proxy.matches(new URL("http://web/intake/submissions/example"))).toBe(false);
+    expect(proxy.matches(new URL("http://web/metrics"))).toBe(false);
   });
 
   test("REST paths lose the /api prefix, auth paths keep it", async () => {

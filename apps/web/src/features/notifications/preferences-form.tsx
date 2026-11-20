@@ -10,7 +10,7 @@ import { api } from "~/lib/api/instance";
 
 export const preferencesQueryKey = ["notification-preferences"] as const;
 
-type Channel = "email" | "sms";
+type Channel = "email" | "sms" | "whatsapp";
 type Category = "transactional" | "reminder";
 
 /** The request that turns `saved` into `draft`: only fields that differ. */
@@ -20,10 +20,11 @@ export function diffPreferences(
 ): UpdateNotificationPreferencesRequest {
   const request: UpdateNotificationPreferencesRequest = {};
   if (draft.locale !== saved.locale) request.locale = draft.locale;
-  for (const channel of ["email", "sms"] as const) {
+  for (const channel of ["email", "sms", "whatsapp"] as const) {
     for (const category of ["transactional", "reminder"] as const) {
-      if (draft[channel][category] !== saved[channel][category]) {
-        request[channel] = { ...request[channel], [category]: draft[channel][category] };
+      const value = draft[channel]?.[category];
+      if (value !== undefined && value !== saved[channel]?.[category]) {
+        request[channel] = { ...request[channel], [category]: value };
       }
     }
   }
@@ -147,6 +148,16 @@ export function PreferencesForm() {
         values={draft.sms}
         onChange={toggle("sms")}
       />
+      {draft.whatsapp && (
+        <Group
+          legend="WhatsApp"
+          lead={t("notify.whatsapp.lead")}
+          missing={draft.hasWhatsAppPhone ? undefined : t("notify.whatsapp.missing")}
+          disabled={!draft.hasWhatsAppPhone}
+          values={draft.whatsapp}
+          onChange={toggle("whatsapp")}
+        />
+      )}
       <Button type="submit" size="lg" disabled={!dirty} loading={save.isPending}>
         {t("notify.save")}
       </Button>

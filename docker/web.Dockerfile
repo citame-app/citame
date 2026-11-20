@@ -13,7 +13,8 @@ RUN bun install --frozen-lockfile
 COPY --from=pruner /app/out/full/ .
 RUN bun run --cwd apps/web build
 
-# Runtime: production dependencies only, plus the built client and server bundles.
+# Runtime: production dependencies only. Vite bundles the TanStack Start runtime into
+# the client and server output, so its build plugin stays in the builder.
 FROM base AS installer
 COPY --from=pruner /app/out/json/ .
 RUN bun install --frozen-lockfile --production

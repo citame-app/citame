@@ -87,7 +87,10 @@ State is in Postgres. Schedule the logical dump from [operations.md](operations.
 
 ```bash
 cd /srv/sob
-PG_MODE=docker PG_CONTAINER="$(docker compose -f compose.prod.yaml ps -q postgres)" \
+pg_container="$(docker compose -f compose.prod.yaml ps -q postgres)" &&
+  test -n "$pg_container" &&
+  PG_MODE=docker PG_CONTAINER="$pg_container" \
+  DATABASE_URL="postgres://sob@localhost:5432/${SOB_DATABASE_NAME:-sob}" \
   scripts/backup.sh /srv/backups/sob-$(date -u +%F).dump
 ```
 
@@ -100,12 +103,12 @@ cd /srv/sob
 scripts/backup.sh ...                      # always first
 git fetch --tags && git checkout v0.1.1    # read the CHANGELOG entry
 sed -i 's/^SOB_TAG=.*/SOB_TAG=0.1.1/' .env
-docker compose -f compose.prod.yaml up -d --build --wait
+scripts/upgrade-prod.sh
 ```
 
-Migrations run first and are forward-only; if one fails the old containers keep running. Rollback and destructive-migration guidance: [operations.md](operations.md#4-upgrades-migrations-and-rollback).
+The script runs the migration before replacing services, so a failed migration leaves the old containers running. Follow the rollback procedure for earlier releases. [Operations guide](operations.md#4-upgrades-migrations-and-rollback).
 
-Pre-built images (published by the release workflow, not yet exercised by the project maintainers): pull `ghcr.io/<owner>/<repo>-api:<version>` and `-web`, retag them as `sob-api:<version>` and `sob-web:<version>`, and start with `docker compose -f compose.prod.yaml up -d --no-build --wait`.
+For prebuilt releases, set `SOB_API_IMAGE` and `SOB_WEB_IMAGE` in `.env` to the two `ghcr.io/...@sha256:...` references in the release notes. Pull both references, then run `scripts/upgrade-prod.sh --prebuilt`. Compose uses the API digest for migration, the API service and the worker.
 
 ## 8. The desktop client
 

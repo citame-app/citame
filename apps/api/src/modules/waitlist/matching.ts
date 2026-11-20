@@ -2,17 +2,18 @@ import {
   clientProfile,
   type Database,
   pgErrorCode,
-  salonSettings,
   service,
   staffProfile,
   waitlistEntry,
   waitlistOffer,
+  waitlistSourceEntry,
 } from "@sob/db";
 import { and, asc, count, eq, gte, inArray, lte, or, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { DomainError } from "../../errors";
 import { lockCalendars, lockScheduling, type Tx } from "../../tx";
 import { assertBookable } from "../appointments/service";
+import { totalBlockMinutes } from "../availability/compute";
 import { findAvailability } from "../availability/service";
 import { repackStaff } from "../availability/staff-reservations";
 import { serviceWorkWindows } from "../availability/work-windows";
@@ -23,6 +24,8 @@ import { getBookableServices, type ServiceRow } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { staffQualifiedFor } from "../staff/service";
 import { type EntryRow, getWaitlistPolicy, localToday, selectionHash } from "./service";
+
+type Connection = Database | Tx;
 
 export function offerServices(services: ServiceRow[]) {
   return services.map((s) => ({
@@ -48,7 +51,7 @@ async function finishEntry(tx: Tx, entry: EntryRow, state: "expired" | "unavaila
     metadata: {},
   });
 }
-export async function expireWaitlistOffers(db: Database, now: Date, limit = 100) {
+export async function expireWaitlistOffers(db: Connection, now: Date, limit = 100) {
   // Use normalized selections, not the JSON driver encoding, to find changed option rules.
   const invalidOptions = sql`exists (
     select 1 from unnest(${waitlistEntry.serviceIds}) with ordinality requested(id,pos)
@@ -169,11 +172,12 @@ export async function expireWaitlistOffers(db: Database, now: Date, limit = 100)
   }
   return { expired, withdrawn };
 }
-async function matchEntry(db: Database, id: string, now: Date): Promise<boolean> {
+async function matchEntry(db: Connection, id: string, now: Date): Promise<boolean> {
   return db.transaction(async (tx) => {
-    const [entry] = await tx
-      .select()
+    const [candidate] = await tx
+      .select({ entry: waitlistEntry, importedDuration: waitlistSourceEntry.durationMinutes })
       .from(waitlistEntry)
+      .leftJoin(waitlistSourceEntry, eq(waitlistSourceEntry.linkedEntryId, waitlistEntry.id))
       .where(
         and(
           eq(waitlistEntry.id, id),
@@ -181,16 +185,17 @@ async function matchEntry(db: Database, id: string, now: Date): Promise<boolean>
           lte(waitlistEntry.notBefore, now),
         ),
       )
-      .for("update", { skipLocked: true });
-    if (!entry) return false;
+      .for("update", { of: waitlistEntry, skipLocked: true });
+    if (!candidate) return false;
+    const { entry, importedDuration } = candidate;
     await lockScheduling(tx);
-    await tx.select().from(salonSettings).for("share");
-    const settings = await getSalonSettings(tx);
+    const settings = await getSalonSettings(tx, "share");
     const today = localToday(now, settings.timezone);
     if (entry.toDate < today) {
       await finishEntry(tx, entry, "expired", now);
       return false;
     }
+    if (!settings.onlineBookingEnabled) return false;
     const [client] = await tx
       .select()
       .from(clientProfile)
@@ -205,10 +210,10 @@ async function matchEntry(db: Database, id: string, now: Date): Promise<boolean>
       await finishEntry(tx, entry, "unavailable", now);
       return false;
     }
-    await tx.update(waitlistEntry).set({ lastScannedAt: now }).where(eq(waitlistEntry.id, id));
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('waitlist-policy',0))`);
     const policy = await getWaitlistPolicy(tx);
     if (!policy.enabled) return false;
+    await tx.update(waitlistEntry).set({ lastScannedAt: now }).where(eq(waitlistEntry.id, id));
     await tx
       .select()
       .from(service)
@@ -231,7 +236,8 @@ async function matchEntry(db: Database, id: string, now: Date): Promise<boolean>
     if (
       !qualified.length ||
       (entry.staffId && !qualified.includes(entry.staffId)) ||
-      new Set(services.map((s) => s.currency)).size !== 1
+      new Set(services.map((s) => s.currency)).size !== 1 ||
+      (importedDuration !== null && totalBlockMinutes(services) !== importedDuration)
     ) {
       await finishEntry(tx, entry, "unavailable", now);
       return false;
@@ -377,17 +383,27 @@ async function matchEntry(db: Database, id: string, now: Date): Promise<boolean>
   });
 }
 /** Bounded round-robin batches; expiry continues while new offers are paused. */
-export async function runWaitlist(db: Database, options: { now?: Date; limit?: number } = {}) {
+export async function runWaitlist(db: Connection, options: { now?: Date; limit?: number } = {}) {
   const now = options.now ?? new Date();
   const limit = Math.min(20, Math.max(1, Math.trunc(options.limit ?? 20)));
   const released = await expireWaitlistOffers(db, now);
+  if (!(await getWaitlistPolicy(db)).enabled) {
+    return {
+      offersExpired: released.expired,
+      offersWithdrawn: released.withdrawn,
+      offersCreated: 0,
+      entriesScanned: 0,
+    };
+  }
   const rows = await db
     .select({ id: waitlistEntry.id })
     .from(waitlistEntry)
+    .leftJoin(waitlistSourceEntry, eq(waitlistSourceEntry.linkedEntryId, waitlistEntry.id))
     .where(and(eq(waitlistEntry.state, "waiting"), lte(waitlistEntry.notBefore, now)))
     .orderBy(
       sql`${waitlistEntry.lastScannedAt} asc nulls first`,
-      asc(waitlistEntry.createdAt),
+      sql`coalesce(${waitlistSourceEntry.capturedAt}, ${waitlistEntry.createdAt}) asc`,
+      sql`${waitlistSourceEntry.sourceOrder} asc nulls last`,
       asc(waitlistEntry.id),
     )
     .limit(limit);

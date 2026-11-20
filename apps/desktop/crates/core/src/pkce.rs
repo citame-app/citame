@@ -1,17 +1,14 @@
-//! OAuth 2.1 Authorization Code + PKCE building blocks with a loopback redirect (RFC 7636,
-//! RFC 8252). Not wired yet. The API now has the authorization server (ADR 0009, public client
-//! `sob-desktop`, loopback redirect `http://127.0.0.1/callback` on any port, scopes in
-//! `docs/mcp.md`), but `/sync/*` still authenticates by session cookie only, so the swap needs a
-//! bearer branch in the API first (listed as a follow-up in ADR 0009).
+//! OAuth Authorization Code with PKCE and a loopback callback for the native app.
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use sha2::{Digest, Sha256};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-fn pct_encode(s: &str) -> String {
+pub(crate) fn pct_encode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
@@ -68,32 +65,61 @@ pub fn new_verifier() -> String {
 pub struct AuthorizationResponse {
     pub code: String,
     pub state: String,
+    pub issuer: Option<String>,
 }
 
 /// Parses the request line of the loopback redirect (`GET /callback?code=..&state=.. HTTP/1.1`).
 pub fn parse_redirect_request_line(line: &str) -> Result<AuthorizationResponse, String> {
-    let target = line
-        .split_whitespace()
-        .nth(1)
-        .ok_or("malformed request line")?;
-    let query = target.split_once('?').map(|(_, q)| q).unwrap_or("");
-    let (mut code, mut state, mut error) = (None, None, None);
+    parse_callback(line)?.authorization()
+}
+
+struct Callback {
+    state: String,
+    code: Result<String, String>,
+    issuer: Option<String>,
+}
+
+impl Callback {
+    fn authorization(self) -> Result<AuthorizationResponse, String> {
+        Ok(AuthorizationResponse {
+            code: self.code?,
+            state: self.state,
+            issuer: self.issuer,
+        })
+    }
+}
+
+fn parse_callback(line: &str) -> Result<Callback, String> {
+    let mut parts = line.split_whitespace();
+    if parts.next() != Some("GET") {
+        return Err("invalid callback method".into());
+    }
+    let query = parts
+        .next()
+        .and_then(|target| target.strip_prefix("/callback?"))
+        .ok_or("invalid callback path")?;
+
+    let (mut code, mut state, mut error, mut issuer) = (None, None, None, None);
     for pair in query.split('&') {
         let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
         match k {
             "code" => code = Some(pct_decode(v)),
             "state" => state = Some(pct_decode(v)),
             "error" => error = Some(pct_decode(v)),
+            "iss" => issuer = Some(pct_decode(v)),
             _ => {}
         }
     }
-    if let Some(e) = error {
-        return Err(format!("authorization failed: {e}"));
-    }
-    match (code, state) {
-        (Some(code), Some(state)) => Ok(AuthorizationResponse { code, state }),
-        _ => Err("redirect without code or state".into()),
-    }
+    let state = state.ok_or("redirect without code or state")?;
+    let code = match error {
+        Some(error) => Err(format!("authorization failed: {error}")),
+        None => Ok(code.ok_or("redirect without code or state")?),
+    };
+    Ok(Callback {
+        state,
+        code,
+        issuer,
+    })
 }
 
 /// Builds the authorization URL to open in the system browser.
@@ -135,44 +161,67 @@ impl LoopbackReceiver {
         expected_state: &str,
         timeout: Duration,
     ) -> Result<AuthorizationResponse, String> {
+        self.wait_cancellable(expected_state, timeout, &AtomicBool::new(false))
+    }
+
+    pub fn wait_cancellable(
+        self,
+        expected_state: &str,
+        timeout: Duration,
+        cancelled: &AtomicBool,
+    ) -> Result<AuthorizationResponse, String> {
         let deadline = Instant::now() + timeout;
-        let stream = loop {
-            match self.listener.accept() {
-                Ok((stream, _)) => break stream,
+        loop {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err("authorization cancelled".into());
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err("timed out waiting for the browser".into());
+            }
+            let mut stream = match self.listener.accept() {
+                Ok((stream, _)) => stream,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    if Instant::now() >= deadline {
-                        return Err("timed out waiting for the browser".into());
-                    }
-                    std::thread::sleep(Duration::from_millis(25));
+                    std::thread::sleep(remaining.min(Duration::from_millis(25)));
+                    continue;
                 }
                 Err(e) => return Err(e.to_string()),
+            };
+            stream.set_nonblocking(false).map_err(|e| e.to_string())?;
+            stream
+                .set_read_timeout(Some(remaining.min(Duration::from_millis(500))))
+                .map_err(|e| e.to_string())?;
+            let mut line = String::new();
+            let result = BufReader::new(Read::take(&stream, 8192))
+                .read_line(&mut line)
+                .ok()
+                .filter(|_| line.ends_with('\n'))
+                .and_then(|_| parse_callback(&line).ok())
+                .filter(|callback| callback.state == expected_state)
+                .map(Callback::authorization);
+            let (status, body) = match &result {
+                Some(Ok(_)) => (
+                    "200 OK",
+                    "<html><body>Return to Citame to finish signing in. You can close this tab.</body></html>",
+                ),
+                Some(Err(_)) => (
+                    "200 OK",
+                    "<html><body>Sign-in failed. You can close this tab.</body></html>",
+                ),
+                None => (
+                    "400 Bad Request",
+                    "<html><body>This request did not complete sign-in.</body></html>",
+                ),
+            };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Type: text/html\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            if let Some(result) = result {
+                return result;
             }
-        };
-        stream.set_nonblocking(false).map_err(|e| e.to_string())?;
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .map_err(|e| e.to_string())?;
-        let mut line = String::new();
-        BufReader::new(&stream)
-            .read_line(&mut line)
-            .map_err(|e| e.to_string())?;
-        let parsed = parse_redirect_request_line(&line);
-        let body = if parsed.is_ok() {
-            "<html><body>Signed in. You can close this tab.</body></html>"
-        } else {
-            "<html><body>Sign-in failed. You can close this tab.</body></html>"
-        };
-        let mut stream = stream;
-        let _ = write!(
-            stream,
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        let resp = parsed?;
-        if resp.state != expected_state {
-            return Err("state mismatch: possible CSRF, discarding the response".into());
         }
-        Ok(resp)
     }
 }
 
@@ -209,7 +258,8 @@ mod tests {
             r,
             AuthorizationResponse {
                 code: "abc d".into(),
-                state: "xyz".into()
+                state: "xyz".into(),
+                issuer: None,
             }
         );
     }
@@ -236,7 +286,7 @@ mod tests {
         assert!(url.contains("code_challenge=ch&code_challenge_method=S256"));
     }
 
-    fn browser_hit(uri: &str, query: &str) {
+    fn browser_hit(uri: &str, query: &str) -> String {
         let port = uri
             .rsplit(':')
             .next()
@@ -249,7 +299,7 @@ mod tests {
         write!(s, "GET /callback?{query} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
         let mut out = String::new();
         s.read_to_string(&mut out).unwrap();
-        assert!(out.starts_with("HTTP/1.1 200"));
+        out
     }
 
     #[test]
@@ -259,18 +309,37 @@ mod tests {
         assert!(uri.starts_with("http://127.0.0.1:") && uri.ends_with("/callback"));
         let t = std::thread::spawn(move || browser_hit(&uri, "code=C1&state=S1"));
         let got = rx.wait("S1", Duration::from_secs(5)).unwrap();
+        assert!(t.join().unwrap().starts_with("HTTP/1.1 200"));
+        assert_eq!(got.code, "C1");
+    }
+
+    #[test]
+    fn loopback_discards_unrelated_requests_and_keeps_waiting_for_the_browser() {
+        let rx = LoopbackReceiver::bind().unwrap();
+        let uri = rx.redirect_uri();
+        let t = std::thread::spawn(move || {
+            for query in [
+                "state=S1",
+                "code=C0&state=OTHER",
+                "error=access_denied&state=OTHER",
+            ] {
+                assert!(browser_hit(&uri, query).starts_with("HTTP/1.1 400"));
+            }
+            assert!(browser_hit(&uri, "code=C1&state=S1").starts_with("HTTP/1.1 200"));
+        });
+        let got = rx.wait("S1", Duration::from_secs(5)).unwrap();
         t.join().unwrap();
         assert_eq!(got.code, "C1");
     }
 
     #[test]
-    fn loopback_rejects_a_state_mismatch() {
+    fn loopback_reports_refusal_from_the_active_sign_in() {
         let rx = LoopbackReceiver::bind().unwrap();
         let uri = rx.redirect_uri();
-        let t = std::thread::spawn(move || browser_hit(&uri, "code=C1&state=EVIL"));
+        let t = std::thread::spawn(move || browser_hit(&uri, "error=access_denied&state=S1"));
         let err = rx.wait("S1", Duration::from_secs(5)).unwrap_err();
-        t.join().unwrap();
-        assert!(err.contains("state"));
+        assert!(t.join().unwrap().contains("Sign-in failed"));
+        assert_eq!(err, "authorization failed: access_denied");
     }
 
     #[test]

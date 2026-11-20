@@ -1,6 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { errorResponseSchema, reportSummarySchema } from "@sob/contracts";
-import { appointment, appointmentService } from "@sob/db";
+import {
+  errorResponseSchema,
+  reportClientsSchema,
+  reportOutcomesPageSchema,
+  reportSummarySchema,
+} from "@sob/contracts";
+import { appointment, appointmentService, clientProfile, service, staffProfile } from "@sob/db";
+import { eq, inArray } from "drizzle-orm";
 import {
   type Actor,
   actor,
@@ -75,6 +81,7 @@ async function insert(
       currency: "ARS",
     })),
   );
+  return row.id;
 }
 
 /**
@@ -110,6 +117,198 @@ async function seedReportFixture() {
 
 const RANGE = "from=2026-03-09&to=2026-03-11";
 
+test("completed imported services contribute their reviewed price to every report breakdown", async () => {
+  const appointmentId = await insert("ana", "2026-03-15T12:00:00Z", "completed", [
+    "haircut",
+    "color",
+  ]);
+  const services = await t.db
+    .update(appointmentService)
+    .set({ currency: "EUR" })
+    .where(eq(appointmentService.appointmentId, appointmentId))
+    .returning();
+  const unknownLine = services.find((line) => line.serviceId === f.haircutId);
+  if (!unknownLine) throw new Error("Missing fixture service");
+  await t.db
+    .update(appointmentService)
+    .set({ sourceUnpriced: true, priceCents: 0 })
+    .where(eq(appointmentService.id, unknownLine.id));
+
+  const range = `from=2026-03-15&to=2026-03-15&currency=EUR&staffId=${f.anaId}`;
+  const before = await summary(owner, range);
+  expect(before).toMatchObject({
+    totals: { revenueCents: PRICE.color, byStatus: { completed: 1 }, unpricedServices: 1 },
+    series: [{ unpricedServices: 1 }],
+    perStaff: [{ unpricedServices: 1 }],
+    topServices: expect.arrayContaining([
+      expect.objectContaining({
+        serviceId: f.haircutId,
+        count: 1,
+        revenueCents: 0,
+        unpricedServices: 1,
+      }),
+    ]),
+  });
+  const reviewedPrice = 3650;
+  const review = await json(
+    t.app,
+    `/admin/commerce/appointments/${appointmentId}/imported-price`,
+    "PUT",
+    {
+      appointmentVersion: 1,
+      reference: "Reviewed source quote fixture",
+      lines: [{ id: unknownLine.id, amountCents: reviewedPrice }],
+    },
+    owner.cookie,
+  );
+  expect(review.status, await review.clone().text()).toBe(200);
+
+  const expectedRevenue = PRICE.color + reviewedPrice;
+  const after = await summary(owner, range);
+  expect(after.totals.unpricedServices).toBeUndefined();
+  expect(after).toMatchObject({
+    totals: { revenueCents: expectedRevenue, byStatus: { completed: 1 } },
+    series: [{ date: "2026-03-15", revenueCents: expectedRevenue }],
+    perStaff: [{ staffId: f.anaId, revenueCents: expectedRevenue }],
+    topServices: expect.arrayContaining([
+      expect.objectContaining({ serviceId: f.haircutId, count: 1, revenueCents: reviewedPrice }),
+      expect.objectContaining({ serviceId: f.colorId, count: 1, revenueCents: PRICE.color }),
+    ]),
+  });
+  expect(
+    await t.db
+      .select({
+        sourcePrice: appointmentService.priceCents,
+        reviewedPrice: appointmentService.reviewedPriceCents,
+      })
+      .from(appointmentService)
+      .where(eq(appointmentService.id, unknownLine.id)),
+  ).toEqual([{ sourcePrice: 0, reviewedPrice }]);
+});
+
+test("customer reports count each merged profile once and use completed salon history", async () => {
+  const [newClient] = await t.db
+    .insert(clientProfile)
+    .values({ name: "New profile", tags: ["VIP", " ｖｉｐ ", "Other"] })
+    .returning();
+  const [alias] = await t.db.insert(clientProfile).values({ name: "Merged record" }).returning();
+  await t.db
+    .update(clientProfile)
+    .set({ tags: ["vip"] })
+    .where(eq(clientProfile.id, f.clientId));
+  await t.db.insert(appointment).values([
+    {
+      clientId: alias!.id,
+      staffId: f.anaId,
+      status: "completed",
+      startsAt: new Date("2026-03-10T23:00:00Z"),
+      endsAt: new Date("2026-03-11T00:00:00Z"),
+    },
+    {
+      clientId: newClient!.id,
+      staffId: f.beaId,
+      status: "completed",
+      startsAt: new Date("2026-03-11T15:00:00Z"),
+      endsAt: new Date("2026-03-11T16:00:00Z"),
+    },
+    {
+      clientId: newClient!.id,
+      staffId: f.anaId,
+      status: "no_show",
+      startsAt: new Date("2026-03-08T15:00:00Z"),
+      endsAt: new Date("2026-03-08T16:00:00Z"),
+    },
+  ]);
+  const pair = { sourceId: alias!.id, targetId: newClient!.id };
+  const preview = await json(t.app, "/admin/clients/merge/preview", "POST", pair, owner.cookie);
+  expect(preview.status).toBe(200);
+  const review = (await preview.json()) as { reviewHash: string };
+  const merged = await json(
+    t.app,
+    "/admin/clients/merge",
+    "POST",
+    {
+      ...pair,
+      reviewHash: review.reviewHash,
+      confirmedSamePerson: true,
+      idempotencyKey: crypto.randomUUID(),
+    },
+    owner.cookie,
+  );
+  expect(merged.ok, await merged.text()).toBe(true);
+  const path = `/admin/reports/clients?${RANGE}`;
+  const response = await call(owner, path);
+  expect(response.status).toBe(200);
+  expect(response.headers.get("cache-control")).toBe("private, no-store");
+  const result = reportClientsSchema.parse(await response.json());
+  expect(result).toMatchObject({
+    totals: { newClients: 1, returningClients: 1 },
+    groups: [
+      { name: "vip", clients: 2 },
+      { name: "other", clients: 1 },
+    ],
+    rows: [
+      { date: "2026-03-09", newClients: 0, returningClients: 1 },
+      { date: "2026-03-10", newClients: 1, returningClients: 0 },
+    ],
+  });
+  const bea = await call(owner, `${path}&staffId=${f.beaId}`);
+  expect(reportClientsSchema.parse(await bea.json()).totals).toEqual(result.totals);
+  expect((await call(ana, path)).status).toBe(403);
+  expect((await call(client, path)).status).toBe(403);
+  expect((await call(null, path)).status).toBe(401);
+  await t.db
+    .update(staffProfile)
+    .set({ accessPreset: "receptionist" })
+    .where(eq(staffProfile.id, f.anaId));
+  expect((await summary(ana, RANGE)).canReportClients).toBe(false);
+  expect((await call(ana, path)).status).toBe(403);
+  await t.db
+    .update(staffProfile)
+    .set({ accessPreset: "manager" })
+    .where(eq(staffProfile.id, f.anaId));
+  const manager = await call(ana, path);
+  expect(reportClientsSchema.parse(await manager.json())).toEqual(result);
+  expect((await summary(ana, RANGE)).canReportClients).toBe(true);
+});
+
+test("outcomes and CSV share the selected status, local date, professional and access rules", async () => {
+  await t.db
+    .update(clientProfile)
+    .set({ name: '=HYPERLINK("a,b")' })
+    .where(eq(clientProfile.id, f.clientId));
+  const listUrl = "/admin/reports/outcomes";
+  const exportUrl = `${listUrl}/export`;
+  const query = `${RANGE}&status=cancelled&currency=ARS`;
+  const response = await call(ana, `${listUrl}?${query}`);
+  expect(response.status).toBe(200);
+  expect(response.headers.get("cache-control")).toBe("private, no-store");
+  const list = reportOutcomesPageSchema.parse(await response.json());
+  expect(list.total).toBe(1);
+  expect(list.rows).toMatchObject([
+    {
+      client: '=HYPERLINK("a,b")',
+      staff: "Ana",
+      services: ["Color"],
+      startsAt: "2026-03-10T17:00:00.000000Z",
+    },
+  ]);
+  const exportResponse = await call(ana, `${exportUrl}?${query}&page=9`);
+  expect(exportResponse.status).toBe(200);
+  expect(exportResponse.headers.get("content-disposition")).toContain("appointments-cancelled");
+  const csv = await exportResponse.text();
+  expect(csv).toContain('"2026-03-10T14:00-03:00"');
+  expect(csv).toContain(`"'=HYPERLINK(""a,b"")","Ana","Color"`);
+  expect(csv).not.toContain('"no_show"');
+  const noShows = await call(owner, `${exportUrl}?${RANGE}&status=no_show`);
+  expect(noShows.headers.get("content-disposition")).toContain("appointments-no_show");
+  expect(await noShows.text()).toContain('"no_show","2026-03-10T12:00-03:00"');
+  expect((await call(ana, `${exportUrl}?${query}&staffId=${f.beaId}`)).status).toBe(403);
+  expect((await call(client, `${listUrl}?${query}`)).status).toBe(403);
+  expect((await call(null, `${exportUrl}?${query}`)).status).toBe(401);
+  expect((await call(owner, `${exportUrl}?${RANGE}&status=completed`)).status).toBe(400);
+});
+
 describe("access control", () => {
   test("anonymous callers get 401, clients get 403", async () => {
     expect((await call(null, `/admin/reports/summary?${RANGE}`)).status).toBe(401);
@@ -125,6 +324,76 @@ describe("access control", () => {
 });
 
 describe("GET /admin/reports/summary as the owner", () => {
+  test("breaks down local start hours, service, category and add-ons without double-counting visits", async () => {
+    await t.db
+      .update(service)
+      .set({ category: "Hair" })
+      .where(inArray(service.id, [f.haircutId, f.colorId]));
+    const [extra] = await t.db
+      .insert(service)
+      .values({
+        name: "Finish",
+        catalogKind: "addon",
+        category: "Extras",
+        durationMinutes: 0,
+        priceCents: 500,
+      })
+      .returning({ id: service.id });
+    if (!extra) throw Error("Missing add-on");
+    const [visit] = await t.db
+      .insert(appointment)
+      .values({
+        staffId: f.anaId,
+        clientId: f.clientId,
+        startsAt: new Date("2026-03-11T23:00:00Z"),
+        endsAt: new Date("2026-03-12T00:00:00Z"),
+        status: "booked",
+      })
+      .returning({ id: appointment.id });
+    if (!visit) throw Error("Missing visit");
+    await t.db.insert(appointmentService).values(
+      [
+        { serviceId: f.haircutId, name: "Haircut" },
+        { serviceId: extra.id, name: "Finish" },
+        { serviceId: null, name: "Archived one" },
+        { serviceId: null, name: "Archived two" },
+      ].map((item, position) => ({
+        ...item,
+        position,
+        appointmentId: visit.id,
+        durationMinutes: 15,
+        bufferMinutes: 0,
+        priceCents: 500,
+        currency: "ARS",
+      })),
+    );
+
+    const breakdown = (await summary(owner, RANGE)).appointmentBreakdown;
+    expect(breakdown?.hour.map(({ label, appointments }) => [label, appointments])).toEqual([
+      ["00:00", 1],
+      ["09:00", 2],
+      ["12:00", 1],
+      ["14:00", 1],
+      ["20:00", 1],
+      ["23:00", 2],
+    ]);
+    expect(breakdown?.category).toMatchObject([
+      {
+        label: "Hair",
+        appointments: 8,
+        byStatus: { completed: 4, cancelled: 1, no_show: 1, booked: 2 },
+      },
+      { label: null, appointments: 1 },
+    ]);
+    expect(breakdown?.service.map(({ label, appointments }) => [label, appointments])).toEqual([
+      ["Haircut", 7],
+      ["Color", 2],
+      ["Archived one", 1],
+      ["Archived two", 1],
+    ]);
+    expect(breakdown?.addon).toMatchObject([{ label: "Finish", appointments: 1 }]);
+  });
+
   test("salon-wide numbers match the hand-computed fixture, bucketed in salon time", async () => {
     const s = await summary(owner, RANGE);
     expect(s).toMatchObject({
@@ -252,10 +521,49 @@ describe("GET /admin/reports/summary as staff", () => {
       { serviceId: f.colorId, name: "Color", count: 1, revenueCents: 25000 },
     ]);
     expect(s.perStaff.map((p) => p.displayName)).toEqual(["Ana"]);
+    expect(s.appointmentBreakdown?.hour.map((row) => row.label)).toEqual([
+      "09:00",
+      "12:00",
+      "14:00",
+      "23:00",
+    ]);
   });
 
   test("naming themselves explicitly is fine", async () => {
     const s = await summary(ana, `${RANGE}&staffId=${f.anaId}`);
     expect(s.totals.appointments).toBe(4);
   });
+});
+
+test("report revenue separates currencies and advertises the available choices", async () => {
+  const [visit] = await t.db
+    .insert(appointment)
+    .values({
+      staffId: f.anaId,
+      clientId: f.clientId,
+      startsAt: new Date("2026-03-10T18:00:00Z"),
+      endsAt: new Date("2026-03-10T19:00:00Z"),
+      status: "completed",
+    })
+    .returning();
+  if (!visit) throw Error("Missing fixture visit");
+  await t.db.insert(appointmentService).values({
+    appointmentId: visit.id,
+    serviceId: f.haircutId,
+    position: 0,
+    name: "Haircut",
+    durationMinutes: 45,
+    bufferMinutes: 15,
+    priceCents: 2500,
+    currency: "EUR",
+  });
+  const eur = await summary(owner, `${RANGE}&currency=EUR`);
+  expect(eur.currency).toBe("EUR");
+  expect(eur.currencies).toEqual(["ARS", "EUR"]);
+  expect(eur.totals).toMatchObject({ appointments: 1, revenueCents: 2500 });
+  expect(eur.appointmentBreakdown?.hour).toMatchObject([{ label: "15:00", appointments: 1 }]);
+  const ars = await summary(owner, `${RANGE}&currency=ARS`);
+  expect(ars.totals.revenueCents).toBeGreaterThan(2500);
+  expect(ars.currency).toBe("ARS");
+  expect((await summary(owner, RANGE)).currency).toBe("EUR");
 });

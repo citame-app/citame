@@ -1,11 +1,18 @@
 import {
+  type CheckoutListQuery,
   type CreateCheckoutInput,
   cashSessionSchema,
+  checkoutListSchema,
   checkoutRefundSchema,
   checkoutSchema,
+  type ImportedPriceReview,
+  type ImportedSettlement,
+  importedPartialPaymentResponseSchema,
+  importedSettlementResponseSchema,
   paymentCapabilitiesSchema,
   type StartPaymentInput,
   startedPaymentSchema,
+  unpaidAppointmentsSchema,
 } from "@sob/contracts";
 import { z } from "zod";
 import type { ApiClient } from "./client";
@@ -13,13 +20,33 @@ export type CommerceMode = "admin" | "client";
 const base = (mode: CommerceMode) => (mode === "admin" ? "/admin/commerce" : "/me");
 export function commerceEndpoints(client: ApiClient) {
   return {
+    unpaid: (query: { from: string; to: string }) =>
+      client.get("/admin/commerce/unpaid", unpaidAppointmentsSchema, { query }),
+    reviewImportedPrice: (id: string, input: ImportedPriceReview) =>
+      client.put(
+        `/admin/commerce/appointments/${id}/imported-price`,
+        input,
+        z.object({ ok: z.literal(true) }),
+      ),
+    confirmImportedSettlement: (id: string, input: ImportedSettlement) =>
+      client.put(
+        `/admin/commerce/appointments/${id}/imported-settlement`,
+        input,
+        importedSettlementResponseSchema,
+      ),
+    confirmImportedPartialPayment: (id: string, input: ImportedSettlement) =>
+      client.put(
+        `/admin/commerce/appointments/${id}/imported-partial-payment`,
+        input,
+        importedPartialPaymentResponseSchema,
+      ),
     capabilities: (mode: CommerceMode) =>
       client.get(
         mode === "admin" ? "/admin/commerce/capabilities" : "/me/commerce/capabilities",
         paymentCapabilitiesSchema,
       ),
-    list: () =>
-      client.get("/admin/commerce/checkouts", z.object({ checkouts: z.array(checkoutSchema) })),
+    list: (query: Partial<CheckoutListQuery> = {}) =>
+      client.get("/admin/commerce/checkouts", checkoutListSchema, { query }),
     create: (input: CreateCheckoutInput, mode: CommerceMode = "admin") =>
       client.post(`${base(mode)}/checkouts`, input, checkoutSchema),
     get: (id: string, mode: CommerceMode) =>
@@ -35,11 +62,16 @@ export function commerceEndpoints(client: ApiClient) {
         "/admin/commerce/cash-sessions/current",
         z.object({ session: cashSessionSchema.nullable() }),
       ),
-    openCash: (openingCents: number) =>
-      client.post("/admin/commerce/cash-sessions", { openingCents }, cashSessionSchema),
-    closeCash: (id: string, countedCents: number) =>
-      client.post(`/admin/commerce/cash-sessions/${id}/close`, { countedCents }, cashSessionSchema),
+    openCash: (openingCents: number, sessionId: string) =>
+      client.post("/admin/commerce/cash-sessions", { openingCents, sessionId }, cashSessionSchema),
+    closeCash: (id: string, countedCents: number, reviewedExpectedCents: number) =>
+      client.post(
+        `/admin/commerce/cash-sessions/${id}/close`,
+        { countedCents, reviewedExpectedCents },
+        cashSessionSchema,
+      ),
     adjustCash: (input: {
+      sessionId: string;
       kind: "deposit" | "withdrawal";
       amountCents: number;
       reason: string;

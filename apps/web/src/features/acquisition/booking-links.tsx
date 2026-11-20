@@ -145,14 +145,32 @@ export function BookingLinks({
               {t("acquisition.copy")}
             </Button>
             {ready && url && (
-              <a
-                href={url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={buttonClasses({ variant: "secondary" })}
-              >
-                {t("acquisition.preview")}
-              </a>
+              <>
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={buttonClasses({ variant: "secondary" })}
+                >
+                  {t("acquisition.preview")}
+                </a>
+                <a
+                  href={`https://wa.me/?text=${encodeURIComponent(url)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={buttonClasses({ variant: "secondary" })}
+                >
+                  {t("acquisition.shareWhatsapp")}
+                </a>
+                <a
+                  href={`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={buttonClasses({ variant: "secondary" })}
+                >
+                  {t("acquisition.shareFacebook")}
+                </a>
+              </>
             )}
             {shareSupported && (
               <Button

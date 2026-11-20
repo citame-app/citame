@@ -1,9 +1,14 @@
 import {
+  calendarQuerySchema,
   cashAdjustmentSchema,
   cashCloseSchema,
   cashOpenSchema,
+  checkoutListQuerySchema,
   createCheckoutSchema,
   idSchema,
+  importedPartialPaymentSchema,
+  importedPriceReviewSchema,
+  importedSettlementSchema,
   permissionsFor,
   reconcileRefundSchema,
   refundRequestSchema,
@@ -21,6 +26,14 @@ import { recurringSettings } from "../../payments/recurring-settings";
 import { InvalidBankNotificationError, RedsysGateway } from "../../payments/redsys";
 import { checkoutRewardRoutes } from "../rewards/routes";
 import {
+  confirmImportedPartialPayment,
+  confirmImportedSettlement,
+  getImportedSettlement,
+  previewImportedAppointmentPrice,
+  previewImportedPartialPayment,
+  reviewImportedAppointmentPrice,
+} from "./appointment-billing";
+import {
   adjustCash,
   closeCashSession,
   createCheckout,
@@ -37,6 +50,7 @@ import {
   startPayment,
   voidCheckout,
 } from "./service";
+import { unpaidAppointments } from "./unpaid";
 
 const operator = createMiddleware<AppEnv>(async (c, next) => {
   requireOperator(c.get("principal"));
@@ -53,6 +67,83 @@ export function commerceAdminRoutes(deps: AppDeps) {
   return new Hono<AppEnv>()
     .use("*", operator)
     .route("/checkouts", checkoutRewardRoutes(deps))
+    .get("/unpaid", async (c) =>
+      c.json(
+        await unpaidAppointments(
+          deps.db,
+          parseOrThrow(calendarQuerySchema, c.req.query()),
+          c.get("principal"),
+        ),
+        200,
+        { "Cache-Control": "private, no-store" },
+      ),
+    )
+    .get("/appointments/:id/imported-price", async (c) =>
+      c.json(
+        await previewImportedAppointmentPrice(
+          deps.db,
+          checkoutId(c.req.param("id")),
+          c.get("principal"),
+        ),
+        200,
+        { "Cache-Control": "private, no-store" },
+      ),
+    )
+    .put("/appointments/:id/imported-price", async (c) =>
+      c.json(
+        await reviewImportedAppointmentPrice(
+          deps.db,
+          checkoutId(c.req.param("id")),
+          parseOrThrow(importedPriceReviewSchema, await readJson(c)),
+          c.get("principal"),
+          deps.now?.() ?? new Date(),
+        ),
+      ),
+    )
+    .get("/appointments/:id/imported-settlement", async (c) =>
+      c.json(
+        await getImportedSettlement(deps.db, checkoutId(c.req.param("id")), c.get("principal")),
+        200,
+        { "Cache-Control": "private, no-store" },
+      ),
+    )
+    .put("/appointments/:id/imported-settlement", async (c) =>
+      c.json(
+        await confirmImportedSettlement(
+          deps.db,
+          checkoutId(c.req.param("id")),
+          parseOrThrow(importedSettlementSchema, await readJson(c)),
+          c.get("principal"),
+          deps.now?.() ?? new Date(),
+        ),
+        200,
+        { "Cache-Control": "private, no-store" },
+      ),
+    )
+    .get("/appointments/:id/imported-partial-payment", async (c) =>
+      c.json(
+        await previewImportedPartialPayment(
+          deps.db,
+          checkoutId(c.req.param("id")),
+          c.get("principal"),
+        ),
+        200,
+        { "Cache-Control": "private, no-store" },
+      ),
+    )
+    .put("/appointments/:id/imported-partial-payment", async (c) =>
+      c.json(
+        await confirmImportedPartialPayment(
+          deps.db,
+          checkoutId(c.req.param("id")),
+          parseOrThrow(importedPartialPaymentSchema, await readJson(c)),
+          c.get("principal"),
+          deps.now?.() ?? new Date(),
+        ),
+        200,
+        { "Cache-Control": "private, no-store" },
+      ),
+    )
     .get("/capabilities", (c) =>
       c.json({
         permissions: permissionsFor(c.get("principal").role, c.get("principal").accessPreset),
@@ -66,7 +157,13 @@ export function commerceAdminRoutes(deps: AppDeps) {
       }),
     )
     .get("/checkouts", async (c) =>
-      c.json({ checkouts: await listCheckouts(deps.db, c.get("principal")) }),
+      c.json(
+        await listCheckouts(
+          deps.db,
+          c.get("principal"),
+          parseOrThrow(checkoutListQuerySchema, c.req.query()),
+        ),
+      ),
     )
     .post("/checkouts", async (c) =>
       c.json(
@@ -146,26 +243,28 @@ export function commerceAdminRoutes(deps: AppDeps) {
     .get("/cash-sessions/current", async (c) =>
       c.json({ session: await currentCashSession(deps.db, c.get("principal")) }),
     )
-    .post("/cash-sessions", async (c) =>
-      c.json(
-        await openCashSession(
-          deps.db,
-          parseOrThrow(cashOpenSchema, await readJson(c)).openingCents,
-          c.get("principal"),
-        ),
+    .post("/cash-sessions", async (c) => {
+      const { openingCents, sessionId } = parseOrThrow(cashOpenSchema, await readJson(c));
+      return c.json(
+        await openCashSession(deps.db, openingCents, c.get("principal"), sessionId),
         201,
-      ),
-    )
-    .post("/cash-sessions/:id/close", async (c) =>
-      c.json(
+      );
+    })
+    .post("/cash-sessions/:id/close", async (c) => {
+      const { countedCents, reviewedExpectedCents } = parseOrThrow(
+        cashCloseSchema,
+        await readJson(c),
+      );
+      return c.json(
         await closeCashSession(
           deps.db,
           checkoutId(c.req.param("id")),
-          parseOrThrow(cashCloseSchema, await readJson(c)).countedCents,
+          countedCents,
           c.get("principal"),
+          reviewedExpectedCents,
         ),
-      ),
-    )
+      );
+    })
     .post("/cash-sessions/adjust", async (c) =>
       c.json(
         await adjustCash(

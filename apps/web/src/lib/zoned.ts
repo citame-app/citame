@@ -1,7 +1,7 @@
-import { addDaysLocal } from "./format";
+import { addDaysLocal, dateFormatter } from "./format";
 
 function offsetMs(utcMs: number, timeZone: string): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
+  const parts = dateFormatter("en-US", {
     timeZone,
     hourCycle: "h23",
     year: "numeric",
@@ -43,7 +43,7 @@ export function localDayBounds(localDate: string, timeZone: string) {
 }
 
 export function minutesIntoLocalDay(instant: string, timeZone: string): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
+  const parts = dateFormatter("en-US", {
     timeZone,
     hourCycle: "h23",
     hour: "2-digit",

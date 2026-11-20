@@ -54,7 +54,9 @@ export function OptOutView({ token }: { token: string | undefined }) {
     <div>
       <h1 className="text-title">{t("optout.title")}</h1>
       <p className="mt-3 text-muted">
-        {preview.data.optedOut ? t("optout.already") : t("optout.lead.email")}
+        {preview.data.optedOut
+          ? t("optout.already")
+          : t(preview.data.channel === "whatsapp" ? "optout.lead.whatsapp" : "optout.lead.email")}
       </p>
       {confirm.isError && (
         <p role="alert" className="mt-3 font-medium text-danger-fg">

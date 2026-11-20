@@ -7,12 +7,14 @@ import {
   reviewPrivateQuerySchema,
   reviewPublicQuerySchema,
   reviewReplySchema,
+  reviewRequestQuerySchema,
   reviewVersionSchema,
 } from "@sob/contracts";
 import { Hono } from "hono";
 import type { AppDeps } from "../../app";
 import type { AppEnv } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
+import { queueReviewEmail, reviewEmailEnabled } from "./review-email";
 import {
   adminReviews,
   changeReview,
@@ -20,6 +22,7 @@ import {
   ownReviews,
   publicReviews,
   reviewForSocial,
+  reviewRequests,
 } from "./reviews";
 
 const router = () =>
@@ -89,8 +92,34 @@ export function reviewSelfRoutes({ db, now = () => new Date() }: AppDeps) {
       ),
     );
 }
-export function reviewAdminRoutes({ db, now = () => new Date() }: AppDeps) {
+export function reviewAdminRoutes({ db, config, now = () => new Date() }: AppDeps) {
   return router()
+    .get("/requests", async (c) =>
+      c.json(
+        await reviewRequests(
+          db,
+          c.get("principal"),
+          parseOrThrow(reviewRequestQuerySchema, c.req.query()),
+          now(),
+          {
+            publicUrl: config.notifications.publicUrl,
+            requireEmailVerification: config.auth.requireEmailVerification,
+          },
+          reviewEmailEnabled(config.notifications),
+        ),
+      ),
+    )
+    .post("/requests/:id/email", async (c) =>
+      c.json(
+        await queueReviewEmail(
+          db,
+          c.get("principal"),
+          parseOrThrow(idSchema, c.req.param("id")),
+          now(),
+          config.notifications,
+        ),
+      ),
+    )
     .get("/:id/social", async (c) =>
       c.json(
         await reviewForSocial(

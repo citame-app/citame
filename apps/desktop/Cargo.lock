@@ -5151,6 +5151,8 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "getrandom 0.4.3",
+ "image",
+ "ring",
  "rusqlite",
  "serde",
  "serde_json",
@@ -5158,6 +5160,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "ureq",
+ "url",
  "uuid",
 ]
 
@@ -5172,6 +5175,7 @@ dependencies = [
  "sob-core",
  "tempfile",
  "unicode-segmentation",
+ "url",
 ]
 
 [[package]]

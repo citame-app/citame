@@ -4,6 +4,12 @@ export const waitlistEn = {
   "waitlist.lead":
     "Choose the services and times that suit you. Review a temporary offer before booking it.",
   "waitlist.paused": "The salon has paused new waitlist requests.",
+  "waitlist.importedPaused":
+    "You can complete imported requests while automatic offers are paused.",
+  "waitlist.importedRequiresPause":
+    "An owner must pause automatic offers before you can save this imported request.",
+  "waitlist.importedPast": "The requested date has passed.",
+  "waitlist.importedChooseStaff": "Confirm the staff preference",
   "waitlist.help":
     "Offers appear in your account and expire if you do not accept them. Joining the waitlist does not sign you up for marketing.",
   "waitlist.empty": "No waitlist requests yet",
@@ -11,6 +17,15 @@ export const waitlistEn = {
   "waitlist.new": "New waitlist request",
   "waitlist.save": "Save waitlist request",
   "waitlist.saved": "Waitlist request saved",
+  "waitlist.importedTitle": "Booksy requests to review",
+  "waitlist.importedHistory": "Past Booksy requests",
+  "waitlist.importedHelp":
+    "Confirm the service and time window with the customer before adding a request to the active waitlist.",
+  "waitlist.importedWindow": "{date} · {minutes} min requested",
+  "waitlist.importedFlexible": "Flexible",
+  "waitlist.importedReview": "Complete request",
+  "waitlist.importedRequest":
+    "{client} requested {minutes} minutes. Choose the confirmed service and time window.",
   "waitlist.services": "Services to wait for",
   "waitlist.staff": "Preferred team member",
   "waitlist.anyStaff": "Any qualified team member",
@@ -78,6 +93,12 @@ export const waitlistEsAR: Record<keyof typeof waitlistEn, string> = {
   "waitlist.lead":
     "Elige los servicios y horarios que te vienen bien. Revisa una oferta temporal antes de reservarla.",
   "waitlist.paused": "El salón ha pausado las nuevas solicitudes de lista de espera.",
+  "waitlist.importedPaused":
+    "Puedes completar las solicitudes importadas mientras las ofertas automáticas están pausadas.",
+  "waitlist.importedRequiresPause":
+    "La persona propietaria debe pausar las ofertas automáticas para poder guardar esta solicitud importada.",
+  "waitlist.importedPast": "La fecha solicitada ya ha pasado.",
+  "waitlist.importedChooseStaff": "Confirma la preferencia de profesional",
   "waitlist.help":
     "Las ofertas aparecen en tu cuenta y caducan si no las aceptas. Apuntarte no te suscribe a comunicaciones comerciales.",
   "waitlist.empty": "Todavía no hay solicitudes de lista de espera",
@@ -85,6 +106,15 @@ export const waitlistEsAR: Record<keyof typeof waitlistEn, string> = {
   "waitlist.new": "Nueva solicitud de lista de espera",
   "waitlist.save": "Guardar solicitud de lista de espera",
   "waitlist.saved": "Solicitud de lista de espera guardada",
+  "waitlist.importedTitle": "Solicitudes de Booksy por revisar",
+  "waitlist.importedHistory": "Solicitudes anteriores de Booksy",
+  "waitlist.importedHelp":
+    "Confirma con el cliente el servicio y la franja horaria antes de añadir la solicitud a la lista activa.",
+  "waitlist.importedWindow": "{date} · {minutes} min solicitados",
+  "waitlist.importedFlexible": "Flexible",
+  "waitlist.importedReview": "Completar solicitud",
+  "waitlist.importedRequest":
+    "{client} solicitó {minutes} minutos. Elige el servicio y la franja horaria confirmados.",
   "waitlist.services": "Servicios para la lista de espera",
   "waitlist.staff": "Profesional de preferencia",
   "waitlist.anyStaff": "Cualquier profesional cualificado",

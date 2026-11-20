@@ -1,4 +1,4 @@
-import type { ReportSummary } from "@sob/contracts";
+import { type ReportSummary, reportBreakdownKinds } from "@sob/contracts";
 import { addDaysLocal } from "~/lib/format";
 
 export type ReportPreset = "today" | "last7" | "last30" | "thisMonth" | "lastMonth";
@@ -55,8 +55,21 @@ const row = (cells: (string | number)[]) => cells.map(csvCell).join(",");
 
 /** The visible report as CSV: machine-readable numbers (dot decimals, major currency units). */
 export function reportToCsv(summary: ReportSummary): string {
+  const includeUnpriced = Boolean(summary.totals.unpricedServices);
+  const unpricedHeader = includeUnpriced ? ["unpriced_services"] : [];
+  const unpricedCell = (count?: number) => (includeUnpriced ? [count ?? 0] : []);
   const lines: string[] = [
-    row(["date", "appointments", "booked", "completed", "cancelled", "no_show", "revenue"]),
+    row([
+      "date",
+      "appointments",
+      "booked",
+      "completed",
+      "cancelled",
+      "no_show",
+      "revenue",
+      ...(summary.currency ? ["currency"] : []),
+      ...unpricedHeader,
+    ]),
     ...summary.series.map((d) =>
       row([
         d.date,
@@ -66,13 +79,38 @@ export function reportToCsv(summary: ReportSummary): string {
         d.byStatus.cancelled,
         d.byStatus.no_show,
         money(d.revenueCents),
+        ...(summary.currency ? [summary.currency] : []),
+        ...unpricedCell(d.unpricedServices),
       ]),
     ),
     "",
-    row(["service", "completed", "revenue"]),
-    ...summary.topServices.map((s) => row([s.name, s.count, money(s.revenueCents)])),
+    row([
+      "service",
+      "completed",
+      "revenue",
+      ...(summary.currency ? ["currency"] : []),
+      ...unpricedHeader,
+    ]),
+    ...summary.topServices.map((s) =>
+      row([
+        s.name,
+        s.count,
+        money(s.revenueCents),
+        ...(summary.currency ? [summary.currency] : []),
+        ...unpricedCell(s.unpricedServices),
+      ]),
+    ),
     "",
-    row(["staff", "appointments", "completed", "no_show", "no_show_rate", "revenue"]),
+    row([
+      "staff",
+      "appointments",
+      "completed",
+      "no_show",
+      "no_show_rate",
+      "revenue",
+      ...(summary.currency ? ["currency"] : []),
+      ...unpricedHeader,
+    ]),
     ...summary.perStaff.map((s) =>
       row([
         s.displayName,
@@ -81,8 +119,32 @@ export function reportToCsv(summary: ReportSummary): string {
         s.byStatus.no_show,
         s.noShowRate === null ? "" : s.noShowRate.toFixed(4),
         money(s.revenueCents),
+        ...(summary.currency ? [summary.currency] : []),
+        ...unpricedCell(s.unpricedServices),
       ]),
     ),
   ];
+  const breakdown = summary.appointmentBreakdown;
+  if (breakdown) {
+    lines.push(
+      "",
+      row(["group", "label", "appointments", "booked", "completed", "cancelled", "no_show"]),
+    );
+    for (const kind of reportBreakdownKinds) {
+      for (const entry of breakdown[kind]) {
+        lines.push(
+          row([
+            kind,
+            entry.label ?? "",
+            entry.appointments,
+            entry.byStatus.booked,
+            entry.byStatus.completed,
+            entry.byStatus.cancelled,
+            entry.byStatus.no_show,
+          ]),
+        );
+      }
+    }
+  }
   return `${lines.join("\r\n")}\r\n`;
 }

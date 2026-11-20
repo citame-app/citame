@@ -78,6 +78,37 @@ export function createDb(
   return { db, client, close: () => client.close() };
 }
 
+/** Bind isolated tools to the explicitly selected database before handing out a connection. */
+export async function connectToNamedDatabase(url: string, options?: DbOptions) {
+  const target = new URL(url);
+  const expected = decodeURIComponent(target.pathname.slice(1));
+  if (!expected) throw new Error("An explicit PostgreSQL database name is required");
+  if (!target.hostname || !["postgres:", "postgresql:"].includes(target.protocol))
+    throw new Error("An explicit PostgreSQL TCP endpoint is required");
+  const connection = createDb(url, options);
+  try {
+    const selected = connection.client.options;
+    const expectedHost = target.hostname.replace(/^\[|\]$/g, "");
+    if (
+      selected.path ||
+      selected.hostname?.replace(/^\[|\]$/g, "") !== expectedHost ||
+      Number(selected.port) !== Number(target.port || 5432)
+    )
+      throw new Error("The selected PostgreSQL endpoint differs from the connection URL");
+    if (selected.database !== expected)
+      throw new Error("The selected PostgreSQL database differs from the connection URL");
+    const [row] = await connection.client<{ name: string }[]>`
+      select pg_catalog.current_database() as name
+    `;
+    if (row?.name !== expected)
+      throw new Error("The connected PostgreSQL database differs from the connection URL");
+    return connection;
+  } catch (error) {
+    await connection.close();
+    throw error;
+  }
+}
+
 /** For migrations and long one-off jobs: no statement, lock or idle-transaction limits. */
 export const NO_DB_TIMEOUTS: DbOptions = {
   ...DEFAULT_DB_OPTIONS,

@@ -8,18 +8,42 @@ import {
   type reviewAdminQuerySchema,
   type reviewPrivateQuerySchema,
   type reviewPublicQuerySchema,
+  type reviewRequestQuerySchema,
   reviewPublicSchema,
   reviewServicesSchema,
   reviewSocialSchema,
 } from "@sob/contracts";
-import { appointment, appointmentService, clientProfile, type Database, review } from "@sob/db";
-import { and, asc, avg, count, desc, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
+import {
+  appointment,
+  appointmentService,
+  clientProfile,
+  type Database,
+  marketingDelivery,
+  review,
+} from "@sob/db";
+import {
+  and,
+  asc,
+  avg,
+  count,
+  desc,
+  eq,
+  ilike,
+  inArray,
+  isNull,
+  lt,
+  lte,
+  or,
+  sql,
+} from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import type { z } from "zod";
 import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
 import { loadPrincipal, ownedClientIds, ownsClient, type Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
+import { commercialPermissionSql } from "../marketing/consent";
 
 const PERMISSION = "public-appointment-review-v1";
 type Connection = Database | Tx;
@@ -320,6 +344,7 @@ export async function ownReviews(
     .where(
       and(
         inArray(appointment.clientId, ownedClientIds(p)),
+        query.appointmentId ? eq(appointment.id, query.appointmentId) : undefined,
         query.before ? lt(appointment.id, query.before) : undefined,
         or(
           and(
@@ -346,6 +371,95 @@ export async function ownReviews(
       review: r ? privateView(r, a, now) : null,
     })),
     nextBefore: rows.length > query.limit ? (page.at(-1)?.a.id ?? null) : null,
+  };
+}
+
+const requestClient = alias(clientProfile, "review_request_client");
+
+function reviewAccount(requireVerification: boolean, matchEmail = false) {
+  return sql<boolean>`exists (
+    select 1 from client_profile candidate
+    join "user" account on account.id = candidate.user_id and account.role = 'client'
+    where candidate.deleted_at is null
+      and (${!requireVerification} or account.email_verified)
+      and candidate.id in (select client_identity_ids(${requestClient.id}))
+      ${matchEmail ? sql`and lower(trim(account.email)) = lower(trim(${requestClient.email}))` : sql``}
+  )`;
+}
+
+const canEmailReview = () =>
+  sql<boolean>`${reviewAccount(true, true)} and ${commercialPermissionSql(requestClient.id, "email")}`;
+
+function reviewRequestVisits(db: Connection, canShare = sql<boolean>`false`) {
+  return db
+    .select({
+      appointmentId: appointment.id,
+      startsAt: appointment.startsAt,
+      clientId: requestClient.id,
+      clientName: requestClient.name,
+      email: requestClient.email,
+      locale: requestClient.locale,
+      canShare,
+      canEmail: canEmailReview(),
+      emailStatus: marketingDelivery.status,
+    })
+    .from(appointment)
+    .innerJoin(clientProfile, eq(clientProfile.id, appointment.clientId))
+    .innerJoin(requestClient, eq(requestClient.id, sql`client_root_id(${clientProfile.id})`))
+    .leftJoin(review, eq(review.appointmentId, appointment.id))
+    .leftJoin(marketingDelivery, eq(marketingDelivery.reviewAppointmentId, appointment.id));
+}
+
+export async function reviewEmailTarget(db: Connection, appointmentId: string, now: Date) {
+  const [row] = await reviewRequestVisits(db).where(
+    and(eq(appointment.id, appointmentId), eligibleSql(now), isNull(review.id), canEmailReview()),
+  );
+  return row;
+}
+
+export function reviewRequestLink(origin: string, appointmentId: string) {
+  const link = new URL("/account/reviews", origin);
+  link.searchParams.set("appointmentId", appointmentId);
+  return link.href;
+}
+
+export async function reviewRequests(
+  db: Database,
+  p: Principal,
+  query: z.infer<typeof reviewRequestQuerySchema>,
+  now: Date,
+  auth: { publicUrl: string; requireEmailVerification: boolean },
+  emailEnabled: boolean,
+) {
+  requirePermission(p, "editCatalog");
+  const limit = 20;
+  const search = query.search.replace(/[\\%_]/g, (char) => `\\${char}`);
+  const canShare = sql<boolean>`(${eligibleSql(now)} and ${isNull(review.id)} and ${reviewAccount(auth.requireEmailVerification)})`;
+  const rows = await reviewRequestVisits(db, canShare)
+    .where(
+      and(
+        isNull(clientProfile.deletedAt),
+        isNull(requestClient.deletedAt),
+        search ? ilike(requestClient.name, `%${search}%`) : undefined,
+        or(canShare, sql`${marketingDelivery.id} is not null`),
+      ),
+    )
+    .orderBy(desc(appointment.startsAt), desc(appointment.id))
+    .limit(limit + 1)
+    .offset((query.page - 1) * limit);
+  return {
+    visits: rows
+      .slice(0, limit)
+      .map(({ appointmentId, startsAt, clientName, canShare, canEmail, emailStatus }) => ({
+        appointmentId,
+        startsAt: startsAt.toISOString(),
+        clientName,
+        link: canShare ? reviewRequestLink(auth.publicUrl, appointmentId) : null,
+        canEmail: canShare && emailEnabled && canEmail,
+        emailStatus,
+      })),
+    hasMore: rows.length > limit,
+    emailEnabled,
   };
 }
 export async function adminReviews(

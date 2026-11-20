@@ -2,6 +2,8 @@
 
 Open **Sales & register → Financial reports & commissions**. The owner or a manager sees the salon's financial summary and can choose a professional. A staff member opens **My commissions** to see only their own earnings and payout history. Clients cannot access these records.
 
+Use **Sales & register → Unpaid appointments** in the web or desktop app to collect by appointment date. Authorized cashiers can still collect or reconcile an appointment assigned to an inactive professional. The appointment and receipt retain that professional's attribution.
+
 ## Commission rules
 
 The owner or a manager configures separate service and retail percentages for each professional. The rates apply at full settlement, after allocating discounts and excluding included tax. Tips and custom items do not earn commission. Missing rules mean no commission; historical settled receipts do not retroactively acquire earnings when a rule is later created. Each accrual stores its original base, rate and integer amount, so later rule or catalog edits do not rewrite earnings.

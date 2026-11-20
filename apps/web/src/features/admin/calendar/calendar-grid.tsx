@@ -1,11 +1,21 @@
 import type { CalendarAppointment, TimeOff, WorkingWindow } from "@sob/contracts";
-import { type KeyboardEvent, type PointerEvent, useMemo, useRef, useState } from "react";
-import { AlertIcon, CheckIcon, ClockIcon, GripIcon, SlashIcon } from "~/components/ui/icons";
+import {
+  type CSSProperties,
+  type KeyboardEvent,
+  memo,
+  type PointerEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { AlertIcon, CheckIcon, ClockIcon, SlashIcon } from "~/components/ui/icons";
 import { useI18n } from "~/i18n/react";
 import { cn } from "~/lib/cn";
 import { formatTime, localDateOf } from "~/lib/format";
 import { processingRanges } from "~/lib/processing";
-import { localDayBounds, zonedInstant } from "~/lib/zoned";
+import { zonedInstant } from "~/lib/zoned";
+import { AppointmentBadges } from "./appointment-badges";
 import { type ColumnRect, dropTarget, exceedsDragThreshold } from "./drag";
 import { keyboardMove } from "./keys";
 import {
@@ -15,11 +25,18 @@ import {
   offsetToSnappedMinutes,
   statusAppearance,
 } from "./logic";
-import { STATUS_CLASSES } from "./status-badge";
+import {
+  type CalendarEntry,
+  indexCalendar,
+  localMinuteRange,
+  personInitials,
+  serviceHue,
+  staffByDay,
+} from "./presentation";
 
 /** Pixels per minute: 30 minutes is ~48px, tall enough to read and to tap. */
 export const PX_PER_MINUTE = 1.6;
-const MIN_BLOCK_PX = 44;
+const MIN_BLOCK_PX = 24;
 const ICONS = { clock: ClockIcon, check: CheckIcon, slash: SlashIcon, alert: AlertIcon };
 
 export interface GridColumn {
@@ -68,7 +85,7 @@ interface DragState {
   active: boolean;
 }
 
-export function CalendarGrid(props: CalendarGridProps) {
+export const CalendarGrid = memo(function CalendarGrid(props: CalendarGridProps) {
   const {
     columns,
     appointments,
@@ -84,12 +101,45 @@ export function CalendarGrid(props: CalendarGridProps) {
     () => appointments.filter((a) => showCancelled || a.status !== "cancelled"),
     [appointments, showCancelled],
   );
-  const { startHour, endHour } = gridHours(workingWindows, visible, timeZone);
+  const { startHour, endHour } = useMemo(
+    () => gridHours(workingWindows, visible, timeZone),
+    [workingWindows, visible, timeZone],
+  );
   const gridStart = startHour * 60;
   const height = (endHour - startHour) * 60 * PX_PER_MINUTE;
+  const viewport = useRef<HTMLElement | null>(null);
+  const positionedFor = useRef("");
   const surfaces = useRef(new Map<string, HTMLElement>());
+  useEffect(() => {
+    const identity = columns.map((column) => `${column.staffId}:${column.date}`).join(",");
+    if (!viewport.current || positionedFor.current === identity) return;
+    positionedFor.current = identity;
+    const starts = columns.flatMap((column) =>
+      [
+        ...workingWindows.filter((w) => w.staffId === column.staffId),
+        ...visible.filter((a) => a.staffId === column.staffId),
+      ].flatMap((item) => {
+        const range = localMinuteRange(item, column.date, timeZone);
+        return range ? [range.start] : [];
+      }),
+    );
+    if (starts.length)
+      viewport.current.scrollTop = Math.max(
+        0,
+        (Math.floor(Math.min(...starts) / 60) * 60 - gridStart) * PX_PER_MINUTE - 12,
+      );
+  }, [columns, workingWindows, visible, gridStart, timeZone]);
   const [drag, setDrag] = useState<DragState | null>(null);
   const suppressClick = useRef(false);
+  const dragRef = useRef<DragState | null>(null);
+  const dragNode = useRef<HTMLElement | null>(null);
+  const dragFrame = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (dragFrame.current !== null) cancelAnimationFrame(dragFrame.current);
+    },
+    [],
+  );
   const hours = Array.from({ length: endHour - startHour }, (_, i) => startHour + i);
   const staffOrder = useMemo(() => [...new Set(columns.map((c) => c.staffId))], [columns]);
   const today = localDateOf(now.toISOString(), timeZone);
@@ -112,36 +162,61 @@ export function CalendarGrid(props: CalendarGridProps) {
       ];
     });
 
-  function onPointerDown(event: PointerEvent<HTMLButtonElement>, appointment: CalendarAppointment) {
+  function onPointerDown(event: PointerEvent<HTMLButtonElement>, entry: CalendarEntry) {
+    const appointment = entry.appointment;
     if (event.pointerType === "touch" || event.button !== 0 || !props.canMove(appointment)) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     const rect = event.currentTarget.closest<HTMLElement>("[data-block]")?.getBoundingClientRect();
-    setDrag({
-      id: appointment.id,
+    dragNode.current = event.currentTarget.closest<HTMLElement>("[data-block]");
+    const next: DragState = {
+      id: entry.id,
       pointerId: event.pointerId,
       start: { x: event.clientX, y: event.clientY },
-      grabOffsetY: rect ? event.clientY - rect.top : 0,
+      grabOffsetY: (rect ? event.clientY - rect.top : 0) + entry.offsetMinutes * PX_PER_MINUTE,
       dx: 0,
       dy: 0,
       active: false,
-    });
+    };
+    dragRef.current = next;
+    setDrag(next);
   }
 
   function onPointerMove(event: PointerEvent<HTMLButtonElement>) {
-    if (!drag || drag.pointerId !== event.pointerId) return;
+    const current = dragRef.current;
+    if (!current || current.pointerId !== event.pointerId) return;
     const next = { x: event.clientX, y: event.clientY };
-    setDrag({
-      ...drag,
-      dx: next.x - drag.start.x,
-      dy: next.y - drag.start.y,
-      active: drag.active || exceedsDragThreshold(drag.start, next),
-    });
+    const active = current.active || exceedsDragThreshold(current.start, next);
+    const updated = {
+      ...current,
+      dx: next.x - current.start.x,
+      dy: next.y - current.start.y,
+      active,
+    };
+    dragRef.current = updated;
+    if (active && !current.active) setDrag(updated);
+    // Animate only the dragged element; don't reconcile the entire calendar per pointer event.
+    if (active && dragFrame.current === null)
+      dragFrame.current = requestAnimationFrame(() => {
+        dragFrame.current = null;
+        const latest = dragRef.current;
+        if (dragNode.current && latest?.active)
+          dragNode.current.style.transform = `translate(${latest.dx}px, ${latest.dy}px)`;
+      });
+  }
+
+  function resetDrag() {
+    if (dragFrame.current !== null) cancelAnimationFrame(dragFrame.current);
+    dragFrame.current = null;
+    if (dragNode.current) dragNode.current.style.transform = "";
+    dragNode.current = null;
+    dragRef.current = null;
+    setDrag(null);
   }
 
   function onPointerUp(event: PointerEvent<HTMLButtonElement>, appointment: CalendarAppointment) {
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    const finished = drag;
-    setDrag(null);
+    const finished = dragRef.current;
+    if (!finished || finished.pointerId !== event.pointerId) return;
+    resetDrag();
     if (!finished.active) return;
     suppressClick.current = true;
     const target = dropTarget(
@@ -182,32 +257,82 @@ export function CalendarGrid(props: CalendarGridProps) {
     }
   }
 
+  const indexed = useMemo(() => indexCalendar(visible, timeZone), [visible, timeZone]);
+  const groupedWindows = useMemo(() => staffByDay(workingWindows), [workingWindows]);
+  const groupedOffs = useMemo(() => staffByDay(timeOff), [timeOff]);
+  const prepared = useMemo(
+    () =>
+      columns.map((column) => {
+        const entries = indexed.byColumn.get(`${column.staffId}:${column.date}`) ?? [];
+        const live = layoutBlocks(
+          entries.filter((e) => e.appointment.status !== "cancelled"),
+          timeZone,
+          gridStart,
+          column.date,
+          MIN_BLOCK_PX / PX_PER_MINUTE,
+        );
+        const cancelled = layoutBlocks(
+          entries.filter((e) => e.appointment.status === "cancelled"),
+          timeZone,
+          gridStart,
+          column.date,
+          MIN_BLOCK_PX / PX_PER_MINUTE,
+        ).map((block) => ({ ...block, lane: 0, lanes: 1 }));
+        return {
+          column,
+          entries: new Map(entries.map((entry) => [entry.id, entry])),
+          blocks: [...cancelled, ...live],
+          windows: groupedWindows.get(column.staffId) ?? [],
+          offs: groupedOffs.get(column.staffId) ?? [],
+        };
+      }),
+    [columns, indexed, groupedWindows, groupedOffs, timeZone, gridStart],
+  );
+
   return (
     <section
+      ref={viewport}
       aria-label={t("calendar.title")}
       // biome-ignore lint/a11y/noNoninteractiveTabindex: a horizontally scrollable region must be keyboard reachable
       tabIndex={0}
-      className="salon-calendar overflow-x-auto rounded-xl border border-line bg-surface"
+      className="salon-calendar overflow-auto rounded-xl border border-line bg-surface"
     >
       <div className="min-w-fit">
         <div
-          className="grid border-b border-line bg-surface"
-          style={{ gridTemplateColumns: `4.5rem repeat(${columns.length}, minmax(9.5rem, 1fr))` }}
+          className="calendar-grid-head grid border-b border-line bg-surface"
+          style={{ gridTemplateColumns: `4rem repeat(${columns.length}, minmax(10.5rem, 1fr))` }}
         >
           <div className="sticky left-0 z-10 bg-surface" />
           {columns.map((column) => (
-            <div key={column.key} className="border-l border-line px-2 py-2 text-center">
-              <p className="truncate font-medium">{column.title}</p>
-              {column.subtitle && <p className="text-xs text-muted">{column.subtitle}</p>}
+            <div key={column.key} className="calendar-column-heading border-l border-line">
+              <span
+                className="calendar-avatar"
+                aria-hidden="true"
+                style={{ "--person-hue": serviceHue(column.title) } as CSSProperties}
+              >
+                {personInitials(column.title)}
+              </span>
+              <div className="min-w-0">
+                <p className="truncate text-xs font-semibold">{column.title}</p>
+                {column.subtitle && (
+                  <p className="mt-1 truncate text-[0.65rem] text-muted" title={column.subtitle}>
+                    {column.subtitle}
+                  </p>
+                )}
+              </div>
             </div>
           ))}
         </div>
 
         <div
           className="grid"
-          style={{ gridTemplateColumns: `4.5rem repeat(${columns.length}, minmax(9.5rem, 1fr))` }}
+          style={{ gridTemplateColumns: `4rem repeat(${columns.length}, minmax(10.5rem, 1fr))` }}
         >
-          <div className="sticky left-0 z-10 bg-surface" style={{ height }} aria-hidden="true">
+          <div
+            className="calendar-time-axis sticky left-0 z-10 bg-surface"
+            style={{ height }}
+            aria-hidden="true"
+          >
             {hours.map((hour) => (
               <div key={hour} className="relative" style={{ height: 60 * PX_PER_MINUTE }}>
                 <span className="absolute -top-2.5 right-2 text-xs tabular-nums whitespace-nowrap text-muted">
@@ -227,35 +352,16 @@ export function CalendarGrid(props: CalendarGridProps) {
             ))}
           </div>
 
-          {columns.map((column) => {
-            const dayBounds = localDayBounds(column.date, timeZone);
-            const dayStart = Date.parse(dayBounds.from);
-            const minuteOf = (instant: string) => (Date.parse(instant) - dayStart) / 60_000;
+          {prepared.map(({ column, entries, blocks, windows, offs }) => {
             const clip = (startsAt: string, endsAt: string) => {
-              const top = Math.max(0, minuteOf(startsAt) - gridStart);
-              const bottom = Math.min((endHour - startHour) * 60, minuteOf(endsAt) - gridStart);
+              const range = localMinuteRange({ startsAt, endsAt }, column.date, timeZone);
+              if (!range) return null;
+              const top = Math.max(gridStart, range.start);
+              const bottom = Math.min(endHour * 60, range.end);
               return bottom > top
-                ? { top: top * PX_PER_MINUTE, height: (bottom - top) * PX_PER_MINUTE }
+                ? { top: (top - gridStart) * PX_PER_MINUTE, height: (bottom - top) * PX_PER_MINUTE }
                 : null;
             };
-            const colAppointments = visible.filter(
-              (a) =>
-                a.staffId === column.staffId && localDateOf(a.startsAt, timeZone) === column.date,
-            );
-            // Cancelled appointments sit behind the live ones at full width, so a pile of them in one
-            // slot never squeezes the real bookings into thin lanes.
-            const live = layoutBlocks(
-              colAppointments.filter((a) => a.status !== "cancelled"),
-              timeZone,
-              gridStart,
-            );
-            const cancelled = layoutBlocks(
-              colAppointments.filter((a) => a.status === "cancelled"),
-              timeZone,
-              gridStart,
-            ).map((b) => ({ ...b, lane: 0, lanes: 1 }));
-            const blocks = [...cancelled, ...live];
-            const windows = workingWindows.filter((w) => w.staffId === column.staffId);
             const nowMin = nowMarkerMinutes(now, column.date, timeZone);
 
             return (
@@ -277,7 +383,7 @@ export function CalendarGrid(props: CalendarGridProps) {
                     if (el) surfaces.current.set(column.key, el);
                     else surfaces.current.delete(column.key);
                   }}
-                  className="absolute inset-0 cursor-cell bg-sunken"
+                  className="calendar-closed absolute inset-0 cursor-cell"
                   onClick={(event) => {
                     if (
                       event.target !== event.currentTarget &&
@@ -322,33 +428,47 @@ export function CalendarGrid(props: CalendarGridProps) {
                   ))}
                 </div>
 
-                {timeOff
-                  .filter((o) => o.staffId === column.staffId)
-                  .map((o) => {
-                    const box = clip(o.startsAt, o.endsAt);
-                    return (
-                      box && (
-                        <div
-                          key={o.id}
-                          data-kind="time-off"
-                          className="pointer-events-none absolute inset-x-0 overflow-hidden border-y border-line-strong bg-[repeating-linear-gradient(135deg,var(--surface-sunken)_0_8px,var(--border)_8px_10px)] px-2 py-1 text-xs font-medium text-fg"
-                          style={{ top: box.top, height: box.height }}
-                        >
+                {offs.map((o) => {
+                  const box = clip(o.startsAt, o.endsAt);
+                  return (
+                    box && (
+                      <div
+                        key={o.id}
+                        data-kind="time-off"
+                        className="pointer-events-none absolute inset-x-0 overflow-hidden border-y border-line-strong bg-[repeating-linear-gradient(135deg,var(--surface-sunken)_0_8px,var(--border)_8px_10px)] px-2 py-1 text-xs font-medium text-fg"
+                        style={{ top: box.top, height: box.height }}
+                      >
+                        <span className="calendar-time-off-label">
                           {t("calendar.grid.timeOff", { reason: o.reason ? `: ${o.reason}` : "" })}
-                        </div>
-                      )
-                    );
-                  })}
+                        </span>
+                      </div>
+                    )
+                  );
+                })}
 
                 {blocks.map((block) => {
-                  const appointment = colAppointments.find(
-                    (a) => a.id === block.id,
-                  ) as CalendarAppointment;
+                  const entry = entries.get(block.id);
+                  if (!entry) return null;
+                  const appointment = entry.appointment;
                   const look = statusAppearance(appointment.status);
                   const Icon = ICONS[look.icon];
                   const status = t(look.labelKey);
-                  const dragging = drag?.id === appointment.id && drag.active;
-                  const processing = processingRanges(appointment);
+                  const dragging = drag?.id === entry.id && drag.active;
+                  const processing = processingRanges(appointment).flatMap((range) => {
+                    const start = Math.max(Date.parse(range.startsAt), Date.parse(entry.startsAt));
+                    const end = Math.min(Date.parse(range.endsAt), Date.parse(entry.endsAt));
+                    return end > start
+                      ? [
+                          {
+                            ...range,
+                            startsAt: new Date(start).toISOString(),
+                            endsAt: new Date(end).toISOString(),
+                            offsetMinutes: (start - Date.parse(entry.startsAt)) / 60000,
+                            minutes: (end - start) / 60000,
+                          },
+                        ]
+                      : [];
+                  });
                   const processingLabels = processing.map((range) =>
                     t("timing.processingRange", {
                       from: formatTime(range.startsAt, timeZone, locale),
@@ -375,16 +495,19 @@ export function CalendarGrid(props: CalendarGridProps) {
                     >
                       <button
                         type="button"
-                        aria-label={t("calendar.block.label", {
-                          time: formatTime(appointment.startsAt, timeZone, locale),
-                          client: appointment.clientName,
-                          services: appointment.serviceNames.join(", "),
-                          status: [...processingLabels, status].join(" · "),
-                        })}
                         aria-description={
                           props.canMove(appointment) ? t("calendar.grid.moveHint") : undefined
                         }
                         data-status={appointment.status}
+                        data-compact={px < 42 || undefined}
+                        data-dragging={dragging || undefined}
+                        style={
+                          {
+                            "--service-hue": serviceHue(entry.services[0] ?? ""),
+                            ...(entry.color ? { "--service-color": entry.color } : {}),
+                          } as CSSProperties
+                        }
+                        title={`${formatTime(entry.startsAt, timeZone, locale)}–${formatTime(entry.endsAt, timeZone, locale)} · ${appointment.clientName} · ${entry.services.join(", ")} · ${status}`}
                         onClick={() => {
                           if (suppressClick.current) {
                             suppressClick.current = false;
@@ -393,14 +516,17 @@ export function CalendarGrid(props: CalendarGridProps) {
                           props.onOpenAppointment(appointment);
                         }}
                         onKeyDown={(event) => onBlockKeyDown(event, appointment)}
-                        onPointerDown={(event) => onPointerDown(event, appointment)}
+                        onPointerDown={(event) => onPointerDown(event, entry)}
                         onPointerMove={onPointerMove}
                         onPointerUp={(event) => onPointerUp(event, appointment)}
-                        onPointerCancel={() => setDrag(null)}
+                        onPointerCancel={resetDrag}
+                        onLostPointerCapture={() => {
+                          if (dragRef.current) resetDrag();
+                        }}
                         className={cn(
-                          "relative isolate flex size-full flex-col overflow-hidden rounded-md border px-2 py-1 text-left text-xs leading-tight shadow-sm transition-shadow hover:shadow-md",
+                          "calendar-card isolate",
                           props.canMove(appointment) && "md:cursor-grab md:active:cursor-grabbing",
-                          STATUS_CLASSES[appointment.status],
+
                           props.highlightId === appointment.id && "ring-2 ring-ring",
                         )}
                       >
@@ -416,25 +542,43 @@ export function CalendarGrid(props: CalendarGridProps) {
                             }}
                           />
                         ))}
-                        <span className="flex items-center gap-1 font-semibold">
-                          <Icon width={13} height={13} className="shrink-0" />
-                          <span className="shrink-0 tabular-nums">
-                            {formatTime(appointment.startsAt, timeZone, locale)}
-                          </span>{" "}
-                          <span className="truncate">{appointment.clientName}</span>
-                          {props.canMove(appointment) && (
-                            <GripIcon
-                              width={12}
-                              height={12}
-                              className="ml-auto hidden shrink-0 opacity-50 md:block"
-                            />
+                        <span className="flex shrink-0 items-center gap-1 font-semibold tabular-nums calendar-card-time">
+                          <span>
+                            {formatTime(entry.startsAt, timeZone, locale)} –{" "}
+                            {formatTime(entry.endsAt, timeZone, locale)}
+                          </span>
+                          {appointment.status !== "booked" && (
+                            <Icon width={11} height={11} aria-label={status} />
                           )}
+                          <AppointmentBadges
+                            badges={appointment.serviceBadges?.filter((b) =>
+                              entry.servicePositions.includes(b.servicePosition),
+                            )}
+                          />
                         </span>{" "}
-                        <span className="truncate">{appointment.serviceNames.join(", ")}</span>{" "}
+                        <span className="min-w-0 truncate font-semibold">
+                          {appointment.clientName}
+                        </span>{" "}
+                        <span className="calendar-card-services line-clamp-2">
+                          {entry.services.join(", ")}
+                        </span>{" "}
                         {processingLabels.length > 0 && (
                           <span className="truncate">{processingLabels.join(" · ")}</span>
-                        )}{" "}
-                        <span className="mt-auto truncate font-medium">{status}</span>
+                        )}
+                        <span className="sr-only"> {status}</span>
+                        {appointment.notes &&
+                          !appointment.serviceBadges?.some(
+                            (b) => b.customerComment || b.internalNote,
+                          ) && (
+                            <span
+                              className="calendar-card-status absolute top-1 right-1"
+                              role="img"
+                              aria-label={t("calendar.hasNotes")}
+                              title={t("calendar.hasNotes")}
+                            >
+                              ◦
+                            </span>
+                          )}
                       </button>
                     </div>
                   );
@@ -447,7 +591,7 @@ export function CalendarGrid(props: CalendarGridProps) {
                     style={{ top: (nowMin - gridStart) * PX_PER_MINUTE }}
                   >
                     {column.key === firstTodayColumn && (
-                      <span className="absolute -top-3 left-0 rounded-r bg-danger-fg px-1.5 py-0.5 text-[0.65rem] font-semibold tabular-nums text-canvas">
+                      <span className="calendar-now-label absolute -top-3 left-0 rounded-r bg-danger-fg px-1.5 py-0.5 text-[0.65rem] font-semibold tabular-nums text-canvas">
                         {formatTime(now.toISOString(), timeZone, locale)}
                       </span>
                     )}
@@ -460,4 +604,4 @@ export function CalendarGrid(props: CalendarGridProps) {
       </div>
     </section>
   );
-}
+});

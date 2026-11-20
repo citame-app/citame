@@ -92,6 +92,7 @@ export const benefitPurchaseSchema = z
     "Automatic renewal requires explicit recurring-payment consent",
   );
 export const passQuerySchema = z.object({
+  kind: z.enum(["package", "membership"]).optional(),
   clientId: idSchema.optional(),
   page: z.coerce.number().int().min(1).max(100000).default(1),
   search: z.string().trim().max(100).default(""),

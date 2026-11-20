@@ -139,9 +139,11 @@ export async function listPasses(
   page = 1,
   search = "",
   clientId?: string,
+  kind?: "package" | "membership",
 ) {
   const where = and(
     scope(p),
+    kind ? eq(passContract.kind, kind) : undefined,
     clientId
       ? sql`${passContract.clientId} in(select client_identity_ids(${clientId}::uuid))`
       : undefined,

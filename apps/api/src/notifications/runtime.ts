@@ -1,12 +1,14 @@
 import type { Database } from "@sob/db";
 import { createAccountEmailWorker } from "../auth/outbox";
 import type { NotificationConfig } from "../config";
+import { createMarketingWorker } from "../modules/marketing/worker";
 import { createProviders } from "./providers";
 import { createNotificationWorker, type NotificationWorker } from "./worker";
 
 export interface NotificationRuntime {
   worker: NotificationWorker;
   accountEmails: NotificationWorker;
+  marketing: NotificationWorker;
   /** Stops polling, waits for the job in flight and closes provider connections. */
   stop(): Promise<void>;
 }
@@ -38,11 +40,19 @@ export function startNotificationRuntime(options: {
     provider: providers.email,
   });
   accountEmails.start();
+  const marketing = createMarketingWorker({
+    db: options.db,
+    config: notifications,
+    providers,
+    log: options.log,
+  });
+  marketing.start();
   return {
     worker,
     accountEmails,
+    marketing,
     async stop() {
-      await Promise.all([worker.stop(), accountEmails.stop()]);
+      await Promise.all([worker.stop(), accountEmails.stop(), marketing.stop()]);
       await providers.email?.close?.();
       await providers.sms?.close?.();
     },

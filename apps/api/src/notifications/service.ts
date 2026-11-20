@@ -8,7 +8,7 @@ import { and, count, eq, sql } from "drizzle-orm";
 import { recordAudit } from "../audit";
 import { clientRoot, lockClientRoot } from "../client-identity";
 import { DomainError } from "../errors";
-import { effectivePreference } from "./preferences";
+import { type Channel, effectivePreference, phoneHash } from "./preferences";
 import { type OptOutClaims, verifyOptOutToken } from "./tokens";
 
 async function loadClient(db: Pick<Database, "select">, clientId: string) {
@@ -26,15 +26,17 @@ export async function getPreferences(
     .where(
       sql`${notificationPreference.clientId} in(select client_identity_ids(${client.id}::uuid))`,
     );
-  const pick = (channel: "email" | "sms") => ({
-    transactional: effectivePreference(rows, client.id, channel, "transactional"),
-    reminder: effectivePreference(rows, client.id, channel, "reminder"),
+  const pick = (channel: Channel) => ({
+    transactional: effectivePreference(rows, client.id, channel, "transactional", client.phone),
+    reminder: effectivePreference(rows, client.id, channel, "reminder", client.phone),
   });
   const locale = client.locale === "en" || client.locale === "es-AR" ? client.locale : null;
   return {
     locale,
     email: pick("email"),
     sms: pick("sms"),
+    whatsapp: pick("whatsapp"),
+    hasWhatsAppPhone: Boolean(phoneHash(client.phone)),
     hasEmail: Boolean(client.email),
     hasPhone: Boolean(client.phone),
   };
@@ -43,20 +45,21 @@ export async function getPreferences(
 async function setPreference(
   db: Pick<Database, "insert">,
   clientId: string,
-  channel: "email" | "sms",
+  channel: Channel,
   category: "transactional" | "reminder",
   enabled: boolean,
+  destinationHash: string | null = null,
 ) {
   await db
     .insert(notificationPreference)
-    .values({ clientId, channel, category, enabled })
+    .values({ clientId, channel, category, enabled, destinationHash })
     .onConflictDoUpdate({
       target: [
         notificationPreference.clientId,
         notificationPreference.channel,
         notificationPreference.category,
       ],
-      set: { enabled, updatedAt: new Date() },
+      set: { enabled, destinationHash, updatedAt: new Date() },
     });
 }
 
@@ -79,7 +82,7 @@ export async function updatePreferences(
         .set({ locale: request.locale })
         .where(eq(clientProfile.id, clientId));
     }
-    for (const channel of ["email", "sms"] as const) {
+    for (const channel of ["email", "sms", "whatsapp"] as const) {
       for (const category of ["transactional", "reminder"] as const) {
         const value = request[channel]?.[category];
         if (value !== undefined) {
@@ -94,7 +97,13 @@ export async function updatePreferences(
                 eq(notificationPreference.category, category),
               ),
             );
-          await setPreference(tx, clientId, channel, category, value);
+          const destination = channel === "whatsapp" && value ? phoneHash(client.phone) : null;
+          if (channel === "whatsapp" && value && !destination)
+            throw new DomainError(
+              "validation_error",
+              "A phone number with country code is required for WhatsApp",
+            );
+          await setPreference(tx, clientId, channel, category, value, destination);
         }
       }
     }
@@ -129,7 +138,7 @@ export async function previewOptOut(
   return {
     channel: claims.channel,
     category: "reminder",
-    optedOut: !prefs[claims.channel].reminder,
+    optedOut: !prefs[claims.channel]?.reminder,
   };
 }
 

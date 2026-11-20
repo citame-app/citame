@@ -10,7 +10,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { user } from "./auth";
-import { createdAt, deletedAt, primaryId, updatedAt } from "./helpers";
+import { bunJsonb, createdAt, deletedAt, primaryId, updatedAt } from "./helpers";
 
 export const clientProfile = pgTable(
   "client_profile",
@@ -20,6 +20,17 @@ export const clientProfile = pgTable(
     phone: text(),
     email: text(),
     notes: text(),
+    contactDetails: bunJsonb<{
+      firstName?: string;
+      lastName?: string;
+      taxId?: string;
+      address?: string;
+      birthday?: { month: number; day: number; year?: number | null } | null;
+      discountBasisPoints?: number;
+    }>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    detailsVersion: integer().notNull().default(1),
     tags: text().array().notNull().default(sql`'{}'::text[]`),
     bookingAccess: text().notNull().default("normal"),
     bookingAccessReason: text(),

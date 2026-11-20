@@ -32,7 +32,11 @@ export async function loadCheckoutProducts(
     : [];
   if (rows.length !== ids.length) throw new DomainError("not_found", "Product not found");
   for (const row of rows)
-    if (!row.active || row.stockOnHand - row.stockReserved < (quantities.get(row.id) ?? 0))
+    if (
+      !row.active ||
+      !row.resellable ||
+      row.stockOnHand - row.stockReserved < (quantities.get(row.id) ?? 0)
+    )
       throw new DomainError(
         "invalid_state",
         "Product is inactive or has insufficient available stock",

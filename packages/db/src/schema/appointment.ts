@@ -1,5 +1,16 @@
 import { sql } from "drizzle-orm";
-import { check, index, integer, jsonb, pgEnum, pgTable, text, uuid } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  check,
+  index,
+  integer,
+  jsonb,
+  pgEnum,
+  pgTable,
+  text,
+  unique,
+  uuid,
+} from "drizzle-orm/pg-core";
 import { clientProfile } from "./client";
 import { createdAt, deletedAt, primaryId, timestamptz, updatedAt } from "./helpers";
 import { service } from "./service";
@@ -26,10 +37,19 @@ export const appointment = pgTable(
     clientId: uuid()
       .notNull()
       .references(() => clientProfile.id),
+    /** Stable identity shared by the native lines of an imported visit. */
+    visitGroupId: uuid(),
+    /** Original capacity exception, populated only by the verified Booksy importer. */
+    sourceStaffWindow: jsonb().$type<{ staffId: string; startsAt: string; endsAt: string }>(),
+    /** Frozen equipment assignment eligible for a historical capacity exception. */
+    sourceResourceWindow: jsonb().$type<{ resourceId: string; startsAt: string; endsAt: string }>(),
     startsAt: timestamptz().notNull(),
     endsAt: timestamptz().notNull(),
     status: appointmentStatus().notNull().default("booked"),
     notes: text(),
+    requestedStaffId: uuid().references(() => staffProfile.id),
+    customerComment: text(),
+    sourceBusinessMessage: text(),
     workWindows: jsonb().$type<{ offsetMinutes: number; endOffsetMinutes: number }[]>(),
     /** Optimistic-concurrency counter, incremented on every update. */
     version: integer().notNull().default(1),
@@ -41,6 +61,9 @@ export const appointment = pgTable(
     check("appointment_ends_after_starts", sql`${t.endsAt} > ${t.startsAt}`),
     index("appointment_staff_starts_idx").on(t.staffId, t.startsAt),
     index("appointment_client_idx").on(t.clientId),
+    index("appointment_visit_group_idx")
+      .on(t.visitGroupId)
+      .where(sql`${t.visitGroupId} is not null`),
   ],
 );
 
@@ -60,13 +83,46 @@ export const appointmentService = pgTable(
     processingStartMinutes: integer(),
     processingMinutes: integer(),
     priceCents: integer().notNull(),
+    sourceUnpriced: boolean().notNull().default(false),
+    reviewedPriceCents: integer(),
     currency: text().notNull(),
   },
   (t) => [
     index("appointment_service_appointment_idx").on(t.appointmentId),
     check(
+      "appointment_service_reviewed_price_valid",
+      sql`${t.reviewedPriceCents} is null or (${t.sourceUnpriced} and ${t.currency} = 'EUR' and ${t.reviewedPriceCents} between 0 and 999999999)`,
+    ),
+    check(
       "appointment_service_processing_valid",
       sql`(${t.processingStartMinutes} is null and ${t.processingMinutes} is null) or (${t.processingStartMinutes} is not null and ${t.processingMinutes} is not null and ${t.processingStartMinutes}>0 and ${t.processingMinutes}>0 and ${t.processingStartMinutes}+${t.processingMinutes}<${t.durationMinutes})`,
     ),
+  ],
+);
+
+/** Staff-only annotations. Never serialize into public appointments, sync or SSE payloads. */
+export const appointmentContext = pgTable(
+  "appointment_context",
+  {
+    id: primaryId(),
+    appointmentId: uuid()
+      .notNull()
+      .references(() => appointment.id, { onDelete: "cascade" }),
+    servicePosition: integer().notNull(),
+    requestedStaffId: uuid().references(() => staffProfile.id),
+    internalNote: text(),
+    customerComment: text(),
+    invoiced: boolean(),
+    paid: boolean(),
+    source: text().notNull().default("citame"),
+    sourceRef: text(),
+    version: integer().notNull().default(1),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    unique("appointment_context_position_unique").on(t.appointmentId, t.servicePosition),
+    unique("appointment_context_source_unique").on(t.source, t.sourceRef),
+    check("appointment_context_position_valid", sql`${t.servicePosition} between 0 and 23`),
+    check("appointment_context_source_valid", sql`${t.source} in ('citame','booksy')`),
   ],
 );

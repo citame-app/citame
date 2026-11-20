@@ -3,7 +3,7 @@ import { createRouter } from "@tanstack/react-router";
 import { setupRouterSsrQueryIntegration } from "@tanstack/react-router-ssr-query";
 import { createIsomorphicFn } from "@tanstack/react-start";
 import { ErrorPage, NotFoundPage } from "./components/pages";
-import { createNonce } from "./lib/csp";
+import { createNonce, isWhatsAppSettingsPath } from "./lib/csp";
 import { routeTree } from "./routeTree.gen";
 
 /** A fresh CSP nonce per server render. The browser rebuilds the router from the dehydrated state. */
@@ -26,11 +26,33 @@ export function getRouter() {
 
   const router = createRouter({
     routeTree,
-    context: { queryClient },
+    context: {
+      queryClient,
+      documentAllowsMetaPopup:
+        typeof document === "undefined"
+          ? undefined
+          : isWhatsAppSettingsPath(window.location.pathname),
+    },
     defaultPreload: "intent",
     defaultPreloadStaleTime: 0,
     defaultPendingMs: 250,
     defaultPendingMinMs: 300,
+    // Older engines navigate normally. Typed transitions let us skip URL-only UI changes.
+    defaultViewTransition:
+      typeof document !== "undefined" &&
+      typeof document.startViewTransition === "function" &&
+      window.CSS?.supports?.("selector(:active-view-transition-type(page-navigation))")
+        ? {
+            types: ({ fromLocation, toLocation, pathChanged }) =>
+              fromLocation &&
+              pathChanged &&
+              fromLocation.pathname !== "/widget" &&
+              toLocation.pathname !== "/widget" &&
+              !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+                ? ["page-navigation"]
+                : false,
+          }
+        : false,
     scrollRestoration: true,
     defaultErrorComponent: ErrorPage,
     defaultNotFoundComponent: NotFoundPage,

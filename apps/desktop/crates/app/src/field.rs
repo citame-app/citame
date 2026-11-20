@@ -12,6 +12,8 @@ use unicode_segmentation::UnicodeSegmentation;
 pub enum FieldEvent {
     Submit,
     Changed,
+    PasteLines(Vec<String>),
+    PasteTooLong,
 }
 pub struct TextField {
     text: String,
@@ -25,6 +27,7 @@ pub struct TextField {
     bounds: Option<Bounds<Pixels>>,
     scroll: Pixels,
     selecting: bool,
+    line_paste_limit: Option<usize>,
 }
 impl EventEmitter<FieldEvent> for TextField {}
 impl Focusable for TextField {
@@ -46,17 +49,22 @@ impl TextField {
             bounds: None,
             scroll: px(0.),
             selecting: false,
+            line_paste_limit: None,
         }
     }
     pub fn text(&self) -> &str {
         &self.text
     }
-    #[cfg(test)]
+    pub fn with_line_paste(mut self, limit: usize) -> Self {
+        self.line_paste_limit = Some(limit);
+        self
+    }
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
         self.text = text.to_owned();
         self.cursor = self.text.len();
         self.anchor = self.cursor;
         self.marked = None;
+        self.scroll = px(0.);
         cx.notify();
     }
     pub fn clear(&mut self, cx: &mut Context<Self>) {
@@ -136,7 +144,7 @@ impl TextField {
             .next()
             .unwrap_or("")
             .chars()
-            .filter(|c| !c.is_control())
+            .filter(|c| !c.is_control() || (*c == '\t' && self.line_paste_limit.is_some()))
             .collect();
         self.text.replace_range(range.clone(), &text);
         self.marked = (mark && !text.is_empty()).then_some(range.start..range.start + text.len());
@@ -151,6 +159,32 @@ impl TextField {
         cx.emit(FieldEvent::Changed);
         cx.notify();
     }
+
+    fn paste(&mut self, text: &str, cx: &mut Context<Self>) {
+        let Some(limit) = self.line_paste_limit else {
+            self.replace(None, text, false, None, cx);
+            return;
+        };
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        if text.encode_utf16().count() > limit {
+            cx.emit(FieldEvent::PasteTooLong);
+            return;
+        }
+        let Some((first, rest)) = text.split_once('\n') else {
+            self.replace(None, &text, false, None, cx);
+            return;
+        };
+        let selection = self.selection();
+        let suffix = &self.text[selection.end..];
+        let tail = format!("{rest}{suffix}")
+            .split('\n')
+            .map(str::to_owned)
+            .collect();
+        let range = self.utf16_range(selection.start..self.text.len());
+        self.replace(Some(range), first, false, None, cx);
+        cx.emit(FieldEvent::PasteLines(tail));
+    }
+
     fn key_down(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let k = &ev.keystroke;
         let shortcut = k.modifiers.control || k.modifiers.platform;
@@ -173,7 +207,7 @@ impl TextField {
             }
             "v" if shortcut => {
                 if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
-                    self.replace(None, &text, false, None, cx);
+                    self.paste(&text, cx);
                 }
             }
             "left" => {
@@ -481,6 +515,21 @@ impl Render for TextField {
 mod tests {
     use super::*;
     use gpui::{EntityInputHandler, Keystroke, TestAppContext};
+    #[gpui::test]
+    async fn a_multiline_paste_keeps_the_first_line_and_rejects_overlarge_input(
+        cx: &mut TestAppContext,
+    ) {
+        let window = cx.add_window(|_, cx| TextField::new("", false, cx).with_line_paste(20));
+        window
+            .update(cx, |field, _, cx| {
+                field.set_text("Start", cx);
+                field.paste("\tFirst\r\nSecond", cx);
+                assert_eq!(field.text(), "Start\tFirst");
+                field.paste(&"x".repeat(21), cx);
+                assert_eq!(field.text(), "Start\tFirst");
+            })
+            .unwrap();
+    }
     fn key(field: &mut TextField, key: &str, window: &mut Window, cx: &mut Context<TextField>) {
         field.key_down(
             &KeyDownEvent {

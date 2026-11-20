@@ -1,5 +1,5 @@
 import type { AdminStaff, UpdateStaffRequest } from "@sob/contracts";
-import { type Database, serviceStaff, staffProfile } from "@sob/db";
+import { type Database, serviceStaff, staffPortrait, staffProfile } from "@sob/db";
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { DomainError } from "../../errors";
@@ -54,8 +54,13 @@ export async function listAdminStaff(
   only: { staffId?: string } = {},
 ): Promise<AdminStaff[]> {
   const rows = await db
-    .select()
+    .select({
+      member: staffProfile,
+      portraitVersion: staffPortrait.version,
+      portraitPublished: staffPortrait.published,
+    })
     .from(staffProfile)
+    .leftJoin(staffPortrait, eq(staffPortrait.staffId, staffProfile.id))
     .where(
       and(
         isNull(staffProfile.deletedAt),
@@ -65,9 +70,15 @@ export async function listAdminStaff(
     .orderBy(asc(staffProfile.displayName), asc(staffProfile.id));
   const services = await loadServiceIds(
     db,
-    rows.map((r) => r.id),
+    rows.map(({ member }) => member.id),
   );
-  return rows.map((row) => toAdminStaff(row, services.get(row.id) ?? []));
+  return rows.map(({ member, portraitVersion, portraitPublished }) => ({
+    ...toAdminStaff(member, services.get(member.id) ?? []),
+    ...(portraitVersion ? { portraitVersion, portraitPublished: portraitPublished === true } : {}),
+    ...(!portraitVersion && member.portraitAbsenceVersion
+      ? { portraitAbsenceVersion: member.portraitAbsenceVersion }
+      : {}),
+  }));
 }
 
 /**

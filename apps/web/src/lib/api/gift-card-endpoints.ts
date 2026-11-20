@@ -1,4 +1,5 @@
 import {
+  type GiftCard,
   type GiftCardPurchaseInput,
   giftCardBalanceSchema,
   giftCardListSchema,
@@ -13,8 +14,8 @@ import type { CommerceMode } from "./commerce-endpoints";
 const base = (mode: CommerceMode) => `${mode === "admin" ? "/admin" : "/me"}/gift-cards`;
 export function giftCardEndpoints(client: ApiClient) {
   return {
-    list: (mode: CommerceMode, page = 1, search = "") =>
-      client.get(base(mode), giftCardListSchema, { query: { page, search } }),
+    list: (mode: CommerceMode, page = 1, search = "", status?: GiftCard["status"]) =>
+      client.get(base(mode), giftCardListSchema, { query: { page, search, status } }),
     get: (id: string, mode: CommerceMode) => client.get(`${base(mode)}/${id}`, giftCardSchema),
     purchase: (input: GiftCardPurchaseInput, mode: CommerceMode) =>
       client.post(base(mode), input, giftCardPurchaseResponseSchema),

@@ -142,3 +142,26 @@ test("a conflict keeps the whole edit draft and offers explicit reload of the cu
   fireEvent.click(reload);
   await waitFor(() => expect(screen.getByLabelText("Variant label")).toHaveValue("Current label"));
 });
+
+test("a variant starts from its saved parent and unsaved parent edits cannot be discarded by adding another option", async () => {
+  renderApp(<ServicesView />);
+  fireEvent.click((await screen.findAllByRole("button", { name: "Haircut" }))[0]!);
+  let form = within(screen.getByRole("dialog", { name: "Edit service" }));
+  fireEvent.change(form.getByLabelText("Name"), { target: { value: "Draft haircut" } });
+  expect(form.getByRole("button", { name: "Add service variant" })).toBeDisabled();
+  fireEvent.change(form.getByLabelText("Name"), { target: { value: "Haircut" } });
+  fireEvent.click(form.getByRole("button", { name: "Add service variant" }));
+  form = within(await screen.findByRole("dialog", { name: "New service" }));
+  expect(form.getByLabelText("Catalog type")).toHaveValue("variant");
+  expect(form.getByLabelText("Parent service")).toHaveValue(CUT);
+  fireEvent.change(form.getByLabelText("Variant label"), { target: { value: "Long hair" } });
+  fireEvent.click(form.getByRole("button", { name: "Create" }));
+  await screen.findByText("Service created");
+  expect(writes[0]?.body).toMatchObject({
+    name: "Haircut · Long hair",
+    durationMinutes: 45,
+    priceCents: 2000,
+    staffIds: [ANA],
+    catalog: { kind: "variant", parentServiceId: CUT, optionLabel: "Long hair" },
+  });
+});

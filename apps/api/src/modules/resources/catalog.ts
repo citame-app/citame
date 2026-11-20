@@ -181,6 +181,7 @@ async function requirementsView(db: Connection, id: string, version: number) {
   return {
     serviceId: id,
     version,
+    ...(rows.some((r) => r.link.alternative) ? { selectionMode: "one_of" as const } : {}),
     requirements: rows.map((r) => ({
       resourceId: r.pool.id,
       name: r.pool.name,
@@ -218,12 +219,17 @@ export async function setServiceResources(
         "A zero-time add-on cannot reserve a room or equipment",
       );
     const ids = input.requirements.map((r) => r.resourceId);
+    const alternative =
+      (input.selectionMode ??
+        (await requirementsView(tx, id, row.resourceVersion)).selectionMode) === "one_of";
     const pools = ids.length
       ? await tx.select().from(resourcePool).where(inArray(resourcePool.id, ids))
       : [];
     for (const requirement of input.requirements) {
       const pool = pools.find((r) => r.id === requirement.resourceId);
       if (!pool) throw new DomainError("not_found", "Required resource not found");
+      if (alternative && requirement.quantity !== 1)
+        throw new DomainError("validation_error", "Each alternative must represent one resource");
       if (requirement.quantity > pool.capacity)
         throw new DomainError(
           "validation_error",
@@ -234,7 +240,7 @@ export async function setServiceResources(
     if (input.requirements.length)
       await tx
         .insert(serviceResource)
-        .values(input.requirements.map((r) => ({ ...r, serviceId: id })));
+        .values(input.requirements.map((r) => ({ ...r, serviceId: id, alternative })));
     await tx
       .update(service)
       .set({ resourceVersion: row.resourceVersion + 1 })
@@ -245,7 +251,12 @@ export async function setServiceResources(
       action: "service.resources_updated",
       entity: "service",
       entityId: id,
-      metadata: { version: row.resourceVersion + 1, requirements: input.requirements, affected },
+      metadata: {
+        version: row.resourceVersion + 1,
+        requirements: input.requirements,
+        alternative,
+        affected,
+      },
     });
     return requirementsView(tx, id, row.resourceVersion + 1);
   });

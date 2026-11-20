@@ -173,6 +173,7 @@ describe("ServicesView", () => {
     open();
     fireEvent.click(await screen.findByRole("button", { name: "New service" }));
     const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "How clients see it" }));
     const preview = within(dialog).getByRole("region", { name: "How clients see it" });
     expect(within(preview).getByText("Service name")).toBeInTheDocument();
     fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Gel manicure" } });
@@ -197,6 +198,7 @@ describe("ServicesView", () => {
       target: { value: "10" },
     });
     fireEvent.change(within(dialog).getByLabelText("Price"), { target: { value: "12000" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Employees" }));
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Ana" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
     await waitFor(() => expect(writes()).toHaveLength(1));

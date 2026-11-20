@@ -70,7 +70,9 @@ export function CheckoutPanel({
     ...(capabilities.data?.bizum
       ? [{ value: "redsys_bizum", label: t("commerce.redsys_bizum") }]
       : []),
-    ...(capabilities.data?.giftCards && !sale.data?.lines.some((line) => line.kind === "gift_card")
+    ...(capabilities.data?.giftCards &&
+    !sale.data?.externalBalance &&
+    !sale.data?.lines.some((line) => line.kind === "gift_card")
       ? [{ value: "gift_card", label: t("commerce.gift_card") }]
       : []),
   ];
@@ -194,6 +196,14 @@ export function CheckoutPanel({
         ))}
       </ul>
       <dl className="space-y-2 border-t border-line pt-4">
+        {order.externalBalance && (
+          <div className="flex justify-between gap-4">
+            <dt className="text-muted">{t("pos.billingReview.previousPayment")}</dt>
+            <dd className="font-semibold tabular-nums">
+              {money(order.externalBalance.paidInBooksyCents)}
+            </dd>
+          </div>
+        )}
         {[
           ["commerce.discount", -order.discountCents],
           ["commerce.tip", order.tipCents],
@@ -260,6 +270,7 @@ export function CheckoutPanel({
         !form &&
         !order.reward &&
         order.appointmentId &&
+        !order.externalBalance &&
         order.clientId && <PassTender checkoutId={order.id} mode={mode} />}
       {order.status === "open" && payableCents > 0 && !pending && !review && !form && (
         <div>

@@ -21,7 +21,7 @@ export const Route = createFileRoute("/admin")({
       throw redirect(
         guard.to === "/account"
           ? { to: "/account" }
-          : { to: "/admin", search: { notice: guard.notice } },
+          : { to: "/admin/calendar", search: { notice: guard.notice } },
       );
     }
   },
@@ -35,6 +35,7 @@ function AdminLayout() {
   if (!session) return null;
   return (
     <AdminShell
+      key={session.user.id}
       role={session.user.role}
       accessPreset={session.accessPreset}
       active={sectionOfPath(pathname)}

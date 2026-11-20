@@ -57,7 +57,7 @@ test("a late publication from a closed panel leaves the newly opened review inta
     }),
   );
   await waitFor(() =>
-    expect(screen.queryByRole("dialog", { name: "Review and moderate" })).toBeNull(),
+    expect(Boolean(screen.queryByRole("dialog", { name: "Review and moderate" }))).toBe(false),
   );
   const secondCard = screen.getByText("Second client feedback").closest("li");
   if (!secondCard) throw new Error("Missing second card");

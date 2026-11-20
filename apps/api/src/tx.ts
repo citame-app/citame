@@ -19,7 +19,7 @@ export async function lockScheduling(tx: Tx) {
  * final say. Schedule edits (hours, time off, deactivation) take the same lock so a booking can
  * never race the rule it is validated against.
  */
-export async function lockCalendars(tx: Tx, staffIds: string[]) {
+export async function lockCalendars(tx: Pick<Tx, "execute">, staffIds: string[]) {
   for (const id of [...new Set(staffIds)].sort()) {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${id}, 0))`);
   }

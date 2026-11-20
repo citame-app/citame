@@ -15,19 +15,20 @@ import {
   service,
   serviceStaff,
 } from "@sob/db";
-import { and, asc, eq, gt, inArray, isNull, lt, ne, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { authorizeAppointmentList } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { lockCalendars, lockScheduling, type Tx } from "../../tx";
 import { totalBlockMinutes } from "../availability/compute";
+import { serviceWorkWindows } from "../availability/work-windows";
 import { getBookingPolicy } from "../booking-protection/policy";
 import { protectionView } from "../booking-protection/value";
 import { applicableIntakeForms } from "../clients/intake";
 import { filterResourceAvailability } from "../resources/reservations";
 import { getBookableServices } from "../services/service";
-import { getSalonSettings } from "../settings/service";
+import { assertOnlineBookingEnabled, getSalonSettings } from "../settings/service";
 import { staffQualifiedFor } from "../staff/service";
 import { seriesStartsAt } from "./series-dates";
 import { assertBookable, createAppointment, loadSnapshots, toAppointment } from "./service";
@@ -52,9 +53,11 @@ function hash(value: unknown): string {
 async function previewInTransaction(
   tx: Tx,
   input: AppointmentSeriesInput,
+  role: Principal["role"],
   now: Date,
 ): Promise<AppointmentSeriesPreview> {
   const settings = await getSalonSettings(tx);
+  assertOnlineBookingEnabled(settings, role);
   const services = await getBookableServices(tx, input.serviceIds, input.serviceQuotes);
   if (!(await staffQualifiedFor(tx, input.serviceIds)).includes(input.staffId))
     throw new DomainError(
@@ -69,6 +72,7 @@ async function previewInTransaction(
     );
   const starts = seriesStartsAt(input, settings.timezone);
   const blockMs = totalBlockMinutes(services) * 60000;
+  const workWindows = serviceWorkWindows(services);
   const occurrences: AppointmentSeriesPreview["occurrences"] = [];
   for (const value of starts) {
     const startsAt = new Date(value);
@@ -82,23 +86,15 @@ async function previewInTransaction(
         now,
         override: input.override === true,
         settings,
+        workWindows,
+        preview: true,
       });
-      const [busy] = await tx
-        .select({ id: appointment.id })
-        .from(appointment)
-        .where(
-          and(
-            eq(appointment.staffId, input.staffId),
-            ne(appointment.status, "cancelled"),
-            isNull(appointment.deletedAt),
-            lt(appointment.startsAt, endsAt),
-            gt(appointment.endsAt, startsAt),
-          ),
-        )
-        .limit(1);
-      available = !busy;
     } catch (error) {
-      if (!(error instanceof DomainError) || error.code !== "slot_unavailable") throw error;
+      if (
+        !(error instanceof DomainError) ||
+        (error.code !== "slot_unavailable" && error.code !== "slot_taken")
+      )
+        throw error;
       available = false;
     }
     occurrences.push({ startsAt: value, endsAt: endsAt.toISOString(), available });
@@ -133,8 +129,16 @@ async function previewInTransaction(
     currency: services[0]?.currency ?? "EUR",
   };
 }
-export function previewAppointmentSeries(db: Database, input: AppointmentSeriesInput, now: Date) {
-  return db.transaction((tx) => previewInTransaction(tx, input, now));
+export function previewAppointmentSeries(
+  db: Database,
+  input: AppointmentSeriesInput,
+  role: Principal["role"],
+  now: Date,
+) {
+  return db.transaction((tx) => previewInTransaction(tx, input, role, now), {
+    isolationLevel: "repeatable read",
+    accessMode: "read only",
+  });
 }
 async function seriesView(db: Database | Tx, id: string): Promise<AppointmentSeries> {
   const [series] = await db.select().from(appointmentSeries).where(eq(appointmentSeries.id, id));
@@ -235,7 +239,7 @@ export async function createAppointmentSeries(
       .for("share");
     await tx.select().from(salonSettings).for("share");
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('booking-policy',0))`);
-    const preview = await previewInTransaction(tx, input, now);
+    const preview = await previewInTransaction(tx, input, principal.role, now);
     if (preview.reviewHash !== reviewHash)
       throw new DomainError(
         "version_conflict",
@@ -252,7 +256,7 @@ export async function createAppointmentSeries(
       const next = await createAppointment(
         tx,
         { ...booking, startsAt: occurrence.startsAt },
-        { userId: principal.userId },
+        { userId: principal.userId, role: principal.role },
         { now },
       );
       appointments.push(next);

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
-import { appointment, pgErrorCode, service } from "@sob/db";
+import { appointment, pgErrorCode, resourceReservation, service, staffReservation } from "@sob/db";
 import { eq } from "drizzle-orm";
 import {
   type Actor,
@@ -16,7 +16,7 @@ let t: Awaited<ReturnType<typeof setupApiTest>>;
 let f: Fixtures;
 let owner: Actor;
 beforeAll(async () => {
-  t = await setupApiTest({ dbSuffix: "processing_capacity" });
+  t = await setupApiTest({ dbSuffix: "processing_capacity_import" });
 });
 afterAll(async () => {
   await t.close();
@@ -131,6 +131,72 @@ test("the database backstop protects capacity even when raw SQL skips the appoin
     error = caught;
   }
   expect(pgErrorCode(error)).toBe("23P01");
+});
+
+test("frozen Booksy overlaps consume capacity and moving a legacy visit uses regular capacity", async () => {
+  const sameTime = {
+    staffId: f.anaId,
+    clientId: f.clientId,
+    startsAt: new Date(MONDAY_0900),
+    endsAt: new Date("2026-03-09T13:00:00Z"),
+  };
+  const visitIds = await t.db.transaction(async (tx) => {
+    const imported = await tx
+      .insert(appointment)
+      .values(
+        [1, 2].map(() => ({
+          ...sameTime,
+          visitGroupId: Bun.randomUUIDv7(),
+          sourceStaffWindow: {
+            staffId: sameTime.staffId,
+            startsAt: sameTime.startsAt.toISOString(),
+            endsAt: sameTime.endsAt.toISOString(),
+          },
+        })),
+      )
+      .returning({ id: appointment.id });
+    for (const [index, row] of imported.entries())
+      await tx
+        .update(staffReservation)
+        .set({ unitIndex: 6 + index })
+        .where(eq(staffReservation.appointmentId, row.id));
+    return imported.map(({ id }) => id);
+  });
+  expect(await (await call(`/admin/staff/${f.anaId}/capacity`)).json()).toMatchObject({
+    maxConcurrent: 1,
+  });
+  expect((await book(f.haircutId)).status).toBe(409);
+  let directViolation: unknown;
+  try {
+    await t.db.insert(appointment).values(sameTime);
+  } catch (error) {
+    directViolation = error;
+  }
+  expect(pgErrorCode(directViolation)).toBe("23P01");
+  const regular = await book(f.haircutId, "2026-03-09T13:00:00Z");
+  expect(regular.status, await regular.clone().text()).toBe(201);
+  const { id: regularId } = (await regular.json()) as { id: string };
+  let invalidSource: unknown;
+  try {
+    await t.db
+      .update(staffReservation)
+      .set({ unitIndex: 8 })
+      .where(eq(staffReservation.appointmentId, regularId));
+  } catch (error) {
+    invalidSource = error;
+  }
+  expect(pgErrorCode(invalidSource)).toBe("23514");
+  const moved = await call(`/appointments/${visitIds[0]}`, "PATCH", {
+    version: 1,
+    startsAt: "2026-03-09T15:00:00Z",
+  });
+  expect(moved.status, await moved.clone().text()).toBe(200);
+  const [slot] = await t.db
+    .select()
+    .from(staffReservation)
+    .where(eq(staffReservation.appointmentId, visitIds[0]!));
+  expect(slot?.unitIndex).toBe(0);
+  expect((await book(f.haircutId)).status).toBe(409);
 });
 test("processing and capacity are versioned manager choices with strict bounds and explicit confirmation", async () => {
   const staff = await actor(t, "staff", "staff@processing.test", { staffProfileId: f.anaId });
@@ -272,6 +338,95 @@ test("a shared room remains occupied during exposure even though the professiona
     ).toBe(200);
   expect((await book(f.colorId)).status).toBe(201);
   expect((await book(f.haircutId, "2026-03-09T12:30:00.000Z")).status).toBe(409);
+});
+test("frozen equipment overlaps block new bookings but leave adjacent capacity available", async () => {
+  const pool = await call("/admin/resources", "POST", {
+    name: "Original room",
+    kind: "room",
+    capacity: 1,
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(pool.status).toBe(201);
+  const { id: resourceId } = (await pool.json()) as { id: string };
+  expect(
+    (
+      await call(`/admin/services/${f.haircutId}/resources`, "PUT", {
+        version: 1,
+        requirements: [{ resourceId, quantity: 1 }],
+      })
+    ).status,
+  ).toBe(200);
+  const startsAt = new Date(MONDAY_0900);
+  const endsAt = new Date("2026-03-09T13:00:00Z");
+  const existing = await t.db.transaction(async (tx) => {
+    const visits = await tx
+      .insert(appointment)
+      .values(
+        [f.anaId, f.beaId].map((staffId) => ({
+          staffId,
+          clientId: f.clientId,
+          startsAt,
+          endsAt,
+          visitGroupId: Bun.randomUUIDv7(),
+          sourceResourceWindow: {
+            resourceId,
+            startsAt: startsAt.toISOString(),
+            endsAt: endsAt.toISOString(),
+          },
+        })),
+      )
+      .returning({ id: appointment.id });
+    await tx.insert(resourceReservation).values(
+      visits.map(({ id }, index) => ({
+        resourceId,
+        appointmentId: id,
+        servicePosition: 0,
+        offsetMinutes: 0,
+        endOffsetMinutes: 60,
+        startsAt,
+        endsAt,
+        name: "Original room",
+        unitIndex: 20 + index,
+      })),
+    );
+    return visits;
+  });
+  const moved = await call(`/appointments/${existing[0]!.id}`, "PATCH", {
+    version: 1,
+    startsAt: "2026-03-09T14:00:00Z",
+  });
+  expect(moved.status, await moved.clone().text()).toBe(200);
+  const [slot] = await t.db
+    .select()
+    .from(resourceReservation)
+    .where(eq(resourceReservation.appointmentId, existing[0]!.id));
+  expect(slot?.unitIndex).toBe(0);
+  expect((await book(f.haircutId)).status).toBe(409);
+  let rawError: unknown;
+  try {
+    await t.db.transaction(async (tx) => {
+      const [visit] = await tx
+        .insert(appointment)
+        .values({ staffId: f.anaId, clientId: f.clientId, startsAt, endsAt })
+        .returning({ id: appointment.id });
+      await tx.insert(resourceReservation).values({
+        resourceId,
+        appointmentId: visit!.id,
+        servicePosition: 0,
+        offsetMinutes: 0,
+        endOffsetMinutes: 60,
+        startsAt,
+        endsAt,
+        name: "Original room",
+        unitIndex: 0,
+      });
+    });
+  } catch (error) {
+    rawError = error;
+  }
+  expect(pgErrorCode(rawError)).toBe("23P01");
+  const adjacent = await book(f.haircutId, "2026-03-09T13:00:00Z");
+  expect(adjacent.status, await adjacent.clone().text()).toBe(201);
 });
 test("waitlist offers can use a processing gap, reserve it and transfer the same capacity on acceptance", async () => {
   await configure();

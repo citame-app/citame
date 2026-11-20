@@ -37,9 +37,9 @@ beforeEach(async () => {
     actor(t, "staff", "resources-professional@test.local", { staffProfileId: f.anaId }),
   ]);
 });
-async function pool(capacity = 1) {
+async function pool(capacity = 1, name = "Treatment rooms") {
   const r = await call(owner, "/admin/resources", "POST", {
-    name: "Treatment rooms",
+    name,
     kind: "room",
     capacity,
     idempotencyKey: crypto.randomUUID(),
@@ -99,6 +99,46 @@ test("a shared resource with capacity one serializes simultaneous bookings on di
     ).status,
   ).toBe(200);
   expect((await book(other)).status).toBe(201);
+});
+test("alternative rooms produce one frozen allocation and a second room keeps a slot available", async () => {
+  const first = await pool();
+  const second = await pool(1, "Alternative room");
+  const choices = [
+    { resourceId: first.id, quantity: 1 },
+    { resourceId: second.id, quantity: 1 },
+  ];
+  const url = `/admin/services/${f.haircutId}/resources`;
+  const configured = await call(owner, url, "PUT", {
+    version: 1,
+    selectionMode: "one_of",
+    requirements: choices,
+  });
+  expect(configured.status).toBe(200);
+  expect(await configured.json()).toMatchObject({ selectionMode: "one_of" });
+  const startsAt = "2026-03-09T12:00:00.000Z";
+  expect((await book(f.anaId, startsAt)).status).toBe(201);
+  const slotsUrl = `/availability?date=2026-03-09&staffId=${f.beaId}&serviceIds=${f.haircutId}`;
+  const avail = await call(owner, slotsUrl);
+  expect(((await avail.json()) as { slots: { startsAt: string }[] }).slots).toEqual(
+    expect.arrayContaining([expect.objectContaining({ startsAt })]),
+  );
+  expect((await book(f.beaId, startsAt)).status).toBe(201);
+  const allocated = await t.db.select().from(resourceReservation);
+  expect(allocated).toHaveLength(2);
+  expect(new Set(allocated.map((row) => row.resourceId))).toEqual(new Set([first.id, second.id]));
+  const saved = await call(owner, url, "PUT", { version: 2, requirements: choices });
+  expect(saved.status).toBe(200);
+  expect(await saved.json()).toMatchObject({ selectionMode: "one_of" });
+  expect(
+    (
+      await call(owner, `/admin/staff/${f.anaId}/capacity`, "PUT", {
+        version: 1,
+        maxConcurrent: 2,
+        confirmed: true,
+      })
+    ).status,
+  ).toBe(200);
+  expect((await book(f.anaId, startsAt)).status).toBe(409);
 });
 test("pool edits and service requirements require current revisions and cannot claim more capacity than exists", async () => {
   const resource = await pool(2);
@@ -255,6 +295,52 @@ test("rescheduling availability excludes only the authorized visit and preserves
     ).status,
   ).toBe(200);
   expect((await book(f.anaId)).status).toBe(409);
+});
+
+test("moving a visit does not offer the other pool when its reserved resource is busy", async () => {
+  const a = await pool();
+  const b = await pool(1, "Alternative cabin");
+  expect(
+    (
+      await call(owner, `/admin/services/${f.haircutId}/resources`, "PUT", {
+        version: 1,
+        selectionMode: "one_of",
+        requirements: [a.id, b.id].map((resourceId) => ({ resourceId, quantity: 1 })),
+      })
+    ).status,
+  ).toBe(200);
+  const created = await book(f.anaId);
+  expect(created.status).toBe(201);
+  const { id } = (await created.json()) as { id: string };
+  const [frozen] = await t.db
+    .select()
+    .from(resourceReservation)
+    .where(eq(resourceReservation.appointmentId, id));
+  expect(
+    (
+      await call(owner, `/admin/services/${f.colorId}/resources`, "PUT", {
+        version: 1,
+        requirements: [{ resourceId: frozen!.resourceId, quantity: 1 }],
+      })
+    ).status,
+  ).toBe(200);
+  const startsAt = "2026-03-09T14:00:00.000Z";
+  const blocker = await call(owner, "/appointments", "POST", {
+    staffId: f.anaId,
+    clientId: f.clientId,
+    serviceIds: [f.colorId],
+    startsAt,
+  });
+  expect(blocker.status, await blocker.clone().text()).toBe(201);
+  const query = `date=2026-03-09&staffId=${f.beaId}&serviceIds=${f.haircutId}`;
+  const regular = (await (await call(owner, `/availability?${query}`)).json()) as {
+    slots: { startsAt: string }[];
+  };
+  const moving = (await (
+    await call(owner, `/appointments/${id}/availability?${query}`)
+  ).json()) as { slots: { startsAt: string }[] };
+  expect(regular.slots.some((slot) => slot.startsAt === startsAt)).toBe(true);
+  expect(moving.slots.some((slot) => slot.startsAt === startsAt)).toBe(false);
 });
 
 test("calendar resource summaries retain the allocated quantities", async () => {

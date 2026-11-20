@@ -1,9 +1,16 @@
-import type { StaffAccessPreset, UserRole } from "@sob/contracts";
+import {
+  DESKTOP_CLIENT_ID,
+  DESKTOP_PROXY_ROUTE,
+  DESKTOP_SIGN_IN_SCOPE,
+  type StaffAccessPreset,
+  type UserRole,
+} from "@sob/contracts";
 import { clientProfile, type Database, staffProfile, user } from "@sob/db";
 import { and, eq, isNull } from "drizzle-orm";
 import type { MiddlewareHandler } from "hono";
 import { clientIdentityIds } from "../client-identity";
 import { DomainError } from "../errors";
+import { BearerError, type TokenVerifier } from "../mcp/verify";
 import type { Tx } from "../tx";
 import type { Auth } from "./auth";
 
@@ -25,7 +32,7 @@ export const ownsClient = (principal: Pick<Principal, "clientId" | "clientIds">,
 export const ownedClientIds = (principal: Pick<Principal, "clientId" | "clientIds">) =>
   principal.clientIds ?? (principal.clientId ? [principal.clientId] : []);
 
-export type AppEnv = { Variables: { principal: Principal } };
+export type AppEnv = { Variables: { principal: Principal; desktopRequest?: boolean } };
 
 /**
  * Resolves a principal from the database. The role is read here on every request instead of
@@ -81,8 +88,52 @@ export async function loadPrincipal(db: Database | Tx, userId: string): Promise<
 }
 
 /** Requires a valid session cookie and exposes the principal as `c.get("principal")`. */
-export function requireAuth(auth: Auth, db: Database): MiddlewareHandler<AppEnv> {
+export function requireAuth(
+  auth: Auth,
+  db: Database,
+  desktop?: TokenVerifier,
+): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
+    const authorization = c.req.header("authorization");
+    if (desktop && authorization) {
+      const { path, method } = c.req;
+      const inventoryAllowed = path.endsWith("/package-content")
+        ? method === "PATCH"
+        : method === "GET" ||
+          (method === "POST" &&
+            path.startsWith("/admin/inventory/products/") &&
+            path.endsWith("/movements"));
+      const dateShiftAllowed = path.endsWith("/preview")
+        ? method === "POST"
+        : method === "GET" || method === "POST";
+      if (
+        !DESKTOP_PROXY_ROUTE.test(path) ||
+        ((path === "/me" || path === "/admin/commerce/unpaid") && method !== "GET") ||
+        (path.startsWith("/admin/inventory/") && !inventoryAllowed) ||
+        (path.startsWith("/admin/staff/") && path.includes("/date-shifts") && !dateShiftAllowed) ||
+        (path.startsWith("/admin/staff/") &&
+          path.endsWith("/working-hours") &&
+          method !== "GET" &&
+          method !== "PUT")
+      )
+        throw new DomainError("forbidden", "This route is outside desktop access");
+      try {
+        const identity = await desktop.verify(authorization);
+        if (
+          identity.clientId !== DESKTOP_CLIENT_ID ||
+          !identity.scopes.includes(DESKTOP_SIGN_IN_SCOPE) ||
+          identity.principal.role === "client"
+        )
+          throw new DomainError("forbidden", "A centre account is required");
+        c.set("principal", identity.principal);
+        c.set("desktopRequest", true);
+      } catch (error) {
+        if (!(error instanceof BearerError)) throw error;
+        throw new DomainError("unauthorized", "Invalid desktop authorization");
+      }
+      await next();
+      return;
+    }
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
     const principal = session ? await loadPrincipal(db, session.user.id) : null;
     if (!principal) throw new DomainError("unauthorized", "Authentication required");

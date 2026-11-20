@@ -3,6 +3,23 @@
  * through here so the salon timezone and currency are applied in one place.
  */
 
+const dateFormatters = new Map<string, Intl.DateTimeFormat>();
+
+/** Share formatters, never formatted user data. Bound the process-wide cache for SSR. */
+export function dateFormatter(locale: string, options: Intl.DateTimeFormatOptions) {
+  const key = JSON.stringify([locale, options]);
+  let formatter = dateFormatters.get(key);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(locale, options);
+    if (dateFormatters.size >= 80) {
+      const oldest = dateFormatters.keys().next().value;
+      if (oldest !== undefined) dateFormatters.delete(oldest);
+    }
+    dateFormatters.set(key, formatter);
+  }
+  return formatter;
+}
+
 export function formatMoney(cents: number, currency: string, locale: string): string {
   const amount = cents / 100;
   const whole = Number.isInteger(amount);
@@ -34,8 +51,8 @@ export function formatDuration(totalMinutes: number, locale: string): string {
 export function formatTime(instant: string, timeZone: string, locale: string): string {
   // Browsers separate the day period with U+202F, Bun with a plain space: normalize so server
   // and client render identical text (a mismatch breaks hydration).
-  return new Intl.DateTimeFormat(locale, {
-    hour: "numeric",
+  return dateFormatter(locale, {
+    hour: locale.startsWith("es") ? "2-digit" : "numeric",
     minute: "2-digit",
     // Explicit: the default clock for a locale differs between ICU versions (es-AR is 24h in one
     // and "a. m./p. m." in another), which would make server and browser render different text.
@@ -49,7 +66,7 @@ export function formatTime(instant: string, timeZone: string, locale: string): s
 /** Calendar date (`YYYY-MM-DD`) of an instant as seen in `timeZone`. */
 export function localDateOf(instant: string, timeZone: string): string {
   // The "en-CA" locale formats as YYYY-MM-DD, which is what we need as a stable key.
-  return new Intl.DateTimeFormat("en-CA", {
+  return dateFormatter("en-CA", {
     timeZone,
     year: "numeric",
     month: "2-digit",
@@ -63,7 +80,7 @@ function localDateAsDate(localDate: string): Date {
 }
 
 export function formatDateLong(localDate: string, locale: string): string {
-  return new Intl.DateTimeFormat(locale, {
+  return dateFormatter(locale, {
     weekday: "long",
     month: "long",
     day: "numeric",
@@ -72,7 +89,7 @@ export function formatDateLong(localDate: string, locale: string): string {
 }
 
 export function formatDateWithYear(localDate: string, locale: string): string {
-  return new Intl.DateTimeFormat(locale, {
+  return dateFormatter(locale, {
     weekday: "short",
     year: "numeric",
     month: "short",
@@ -82,7 +99,7 @@ export function formatDateWithYear(localDate: string, locale: string): string {
 }
 
 export function weekdayShort(localDate: string, locale: string): string {
-  return new Intl.DateTimeFormat(locale, { weekday: "short", timeZone: "UTC" })
+  return dateFormatter(locale, { weekday: "short", timeZone: "UTC" })
     .format(localDateAsDate(localDate))
     .replace(".", "");
 }
@@ -92,7 +109,7 @@ export function dayOfMonth(localDate: string): number {
 }
 
 export function monthShort(localDate: string, locale: string): string {
-  return new Intl.DateTimeFormat(locale, { month: "short", timeZone: "UTC" })
+  return dateFormatter(locale, { month: "short", timeZone: "UTC" })
     .format(localDateAsDate(localDate))
     .replace(".", "");
 }
@@ -106,7 +123,7 @@ export function addDaysLocal(localDate: string, days: number): string {
 
 /** Hour (0-23) of an instant in `timeZone`. */
 export function hourOf(instant: string, timeZone: string): number {
-  const hour = new Intl.DateTimeFormat("en-US", {
+  const hour = dateFormatter("en-US", {
     hour: "numeric",
     hourCycle: "h23",
     timeZone,
