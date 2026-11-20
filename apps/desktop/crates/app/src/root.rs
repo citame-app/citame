@@ -42,6 +42,7 @@ mod directory;
 mod form_admin;
 mod inbox;
 mod intake_editor;
+mod intake_record;
 mod inventory;
 mod notices;
 mod reports;
@@ -675,6 +676,7 @@ impl Root {
         if reconnected {
             self.refresh_weekly_conflicts_if_ready(cx);
             self.refresh_open_annotations(true, cx);
+            self.refresh_private_record(cx);
         }
     }
 
@@ -2346,6 +2348,7 @@ impl Root {
                 return;
             }
             Overlay::IntakeForms(_) => self.close_intake_forms(cx),
+            Overlay::Directory(desk) if desk.intake.is_some() => self.back_record(cx),
             Overlay::ReviewModeration(desk) => {
                 if !desk.dismiss_editor(cx) {
                     self.overlay = Overlay::None;
@@ -3555,7 +3558,9 @@ impl Render for Root {
                             Some(self.render_review_moderation(desk, window.viewport_size(), cx))
                         }
                         Overlay::Waitlist(desk) => Some(self.render_waitlist(desk, cx)),
-                        Overlay::Directory(directory) => Some(self.render_directory(directory, cx)),
+                        Overlay::Directory(directory) => {
+                            Some(self.render_directory(directory, window.viewport_size(), cx))
+                        }
                         Overlay::Conflicts { editing, error } => {
                             Some(self.render_conflicts(editing, error, cx))
                         }
@@ -3594,7 +3599,10 @@ impl Render for Root {
             .flex_col()
             .text_color(theme::text())
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                if event.keystroke.key == "tab" && this.checkout_review_mut().is_some() {
+                if event.keystroke.key == "tab"
+                    && (matches!(this.overlay, Overlay::Directory(_))
+                        || this.checkout_review_mut().is_some())
+                {
                     if event.keystroke.modifiers.shift {
                         window.focus_prev();
                     } else {

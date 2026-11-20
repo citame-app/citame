@@ -11,11 +11,14 @@ import {
   intakeAdminFormSchema,
   intakeFormSummariesSchema,
   intakeFormsSchema,
+  intakeSubmissionSchema,
+  intakeSubmissionsSchema,
+  listServicesResponseSchema,
   reviewPrivateSchema,
   startedPaymentSchema,
   syncPullResponseSchema,
 } from "@sob/contracts";
-import { appointment, checkoutPayment, staffProfile } from "@sob/db";
+import { appointment, checkoutPayment, clientProfile, staffProfile } from "@sob/db";
 import { eq } from "drizzle-orm";
 import { actor, cookieFrom, json, NOW, seedFixtures, setupApiTest } from "../../test/helpers";
 import { authorizeFlow, ORIGIN, obtainTokens, tokenFor, tokenRequest } from "../../test/oauth";
@@ -334,6 +337,146 @@ test("desktop form administration uses live permissions and versioned, immutable
     intakeFormsSchema.parse(await cloud.json()).forms.find((form) => form.id === draft.id),
   ).toEqual(archived);
   expect((await desktop("/intake/submissions/" + draft.id, "GET")).status).toBe(403);
+});
+
+test("desktop private response history stays bound to the reviewed client and immutable revision", async () => {
+  const owner = await tokens("owner", "intake-records-owner");
+  const staff = await tokens("staff", "intake-records-professional");
+  const post = (path: string, data: object, access = staff.access, method = "POST") =>
+    t.app.request(path, {
+      method,
+      headers: { authorization: `Bearer ${access}`, "content-type": "application/json" },
+      body: JSON.stringify(data),
+    });
+  const [source, survivor, foreign] = await t.db
+    .insert(clientProfile)
+    .values([
+      { name: "Synthetic same subject" },
+      { name: "Synthetic same subject" },
+      { name: "Synthetic different subject" },
+    ])
+    .returning({ id: clientProfile.id });
+  if (!source || !survivor || !foreign) throw new Error("Missing fixture subjects");
+  const record = (id: string) => `/admin/clients/${id}/intake`;
+  const internal = await json(
+    t.app,
+    "/admin/services",
+    "POST",
+    {
+      name: "Synthetic team-only intake service",
+      durationMinutes: 30,
+      priceCents: 1500,
+      currency: "EUR",
+      onlineBooking: false,
+    },
+    owner.who.cookie,
+  );
+  expect(internal.status).toBe(201);
+  const internalId = ((await internal.json()) as { id: string }).id;
+  const catalog = await request(`${record(source.id)}/catalog`, staff.access);
+  expect(catalog.status).toBe(200);
+  expect(catalog.headers.get("cache-control")).toBe("private, no-store");
+  expect(listServicesResponseSchema.parse(await catalog.json()).services).toEqual(
+    expect.arrayContaining([expect.objectContaining({ id: internalId, onlineBooking: false })]),
+  );
+  expect((await request(`${record(source.id)}/catalog`, staff.access)).status).toBe(200);
+  const directory = "/admin/intake-forms";
+  const field = crypto.randomUUID();
+  const definition = {
+    title: "Synthetic original wording",
+    allowTeamResponses: true,
+    fields: [{ id: field, label: "Original numeric question", kind: "number", required: true }],
+  };
+  const form = intakeAdminFormSchema.parse(
+    await (
+      await post(directory, { definition, idempotencyKey: crypto.randomUUID() }, owner.access)
+    ).json(),
+  );
+  const published = intakeAdminFormSchema.parse(
+    await (
+      await post(`${directory}/${form.id}/publish`, { version: form.version }, owner.access)
+    ).json(),
+  );
+  if (!published.published) throw new Error("Missing synthetic publication");
+  const packet = {
+    idempotencyKey: crypto.randomUUID(),
+    revisionId: published.published.id,
+    confirmation: true,
+    answers: { [field]: 0 },
+  };
+  const first = await post(record(source.id), packet);
+  expect(first.status).toBe(201);
+  expect(first.headers.get("cache-control")).toBe("private, no-store");
+  const saved = intakeSubmissionSchema.parse(await first.json());
+  expect(saved).toMatchObject({ source: "team", answers: { [field]: 0 } });
+  expect(
+    intakeSubmissionSchema.parse(await (await post(record(source.id), packet)).json()).id,
+  ).toBe(saved.id);
+  for (let index = 0; index < 20; index++) {
+    expect(
+      (await post(record(source.id), { ...packet, idempotencyKey: crypto.randomUUID() })).status,
+    ).toBe(201);
+  }
+  const beforeMerge = await request(record(source.id), staff.access);
+  expect(beforeMerge.headers.get("cache-control")).toBe("private, no-store");
+  const newest = intakeSubmissionsSchema.parse(await beforeMerge.json());
+  expect(newest.submissions).toHaveLength(20);
+  expect(newest.nextCursor).not.toBeNull();
+  expect(newest.submissions.every((entry) => !Object.hasOwn(entry, "answers"))).toBe(true);
+  const older = intakeSubmissionsSchema.parse(
+    await (await request(`${record(source.id)}?before=${newest.nextCursor}`, staff.access)).json(),
+  );
+  expect(older.submissions).toHaveLength(1);
+  expect(older.nextCursor).toBeNull();
+
+  const merge = { sourceId: source.id, targetId: survivor.id };
+  const preview = await json(
+    t.app,
+    "/admin/clients/merge/preview",
+    "POST",
+    merge,
+    owner.who.cookie,
+  );
+  expect(preview.status).toBe(200);
+  const { reviewHash } = (await preview.json()) as { reviewHash: string };
+  expect(
+    (
+      await json(
+        t.app,
+        "/admin/clients/merge",
+        "POST",
+        {
+          ...merge,
+          reviewHash,
+          confirmedSamePerson: true,
+          idempotencyKey: crypto.randomUUID(),
+        },
+        owner.who.cookie,
+      )
+    ).status,
+  ).toBe(201);
+  expect(
+    (await post(record(source.id), { ...packet, idempotencyKey: crypto.randomUUID() })).status,
+  ).toBe(409);
+  expect((await request(`${record(foreign.id)}/${saved.id}`, staff.access)).status).toBe(404);
+  expect(
+    (await post(`${record(survivor.id)}/${saved.id}`, {}, staff.access, "DELETE")).status,
+  ).toBe(403);
+  expect((await request(`/intake/submissions/${saved.id}`, staff.access)).status).toBe(403);
+  expect(
+    (await post(`${directory}/${form.id}/archive`, { version: published.version }, owner.access))
+      .status,
+  ).toBe(200);
+  const detail = `${record(survivor.id)}/${saved.id}`;
+  const response = await request(detail, staff.access);
+  expect(response.headers.get("cache-control")).toBe("private, no-store");
+  expect(intakeSubmissionSchema.parse(await response.json())).toEqual(saved);
+  await t.db
+    .update(staffProfile)
+    .set({ accessPreset: "restricted" })
+    .where(eq(staffProfile.userId, staff.who.userId));
+  expect((await request(detail, staff.access)).status).toBe(403);
+  expect((await request(record(survivor.id), staff.access)).status).toBe(403);
 });
 
 test("owner PKCE tokens authorize sync, refresh and stop working after revocation", async () => {

@@ -56,6 +56,7 @@ pub use staff_portraits::{PortraitDirectory, PortraitStaff, PortraitUpdate};
 mod weekly_hours;
 pub use weekly_hours::{WeeklyHours, WeeklyRange, parse_weekly_hours};
 mod date_shifts;
+mod intake_records;
 pub use date_shifts::{
     DatedShiftConflict, DatedShiftConflictReason, DatedShiftCopy, DatedShiftDay, DatedShiftEdit,
     DatedShiftReview, DatedShiftSelection, ReviewedDatedShift,

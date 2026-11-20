@@ -528,7 +528,13 @@ export async function linkIntakeToAppointment(
     .values({ appointmentId, submissionId, createdBy: actorId, createdAt: now })
     .onConflictDoNothing();
 }
-export async function getIntakeSubmission(db: Database, id: string, p: Principal) {
+export async function getIntakeSubmission(
+  db: Database,
+  id: string,
+  p: Principal,
+  subjectId?: string,
+) {
+  if (subjectId) authorizeSubject(p, subjectId);
   if (p.role !== "client") requirePermission(p, "clients");
   const [row] = await db
     .select()
@@ -537,6 +543,9 @@ export async function getIntakeSubmission(db: Database, id: string, p: Principal
       and(
         eq(intakeSubmission.id, id),
         p.role === "client" ? inArray(intakeSubmission.clientId, ownedClientIds(p)) : undefined,
+        subjectId
+          ? inArray(intakeSubmission.clientId, await clientIdentityIds(db, subjectId))
+          : undefined,
       ),
     );
   if (!row) throw new DomainError("not_found", "Form response not found");

@@ -11,6 +11,7 @@ pub(super) struct IntakeDraft {
     use_saved: bool,
     included: bool,
     confirmed: bool,
+    standalone: bool,
     fields: Vec<QuestionDraft>,
 }
 
@@ -82,8 +83,26 @@ impl IntakeDraft {
             use_saved: false,
             included: false,
             confirmed: false,
+            standalone: false,
             fields,
         }
+    }
+
+    pub(super) fn standalone(mut self) -> Self {
+        self.included = true;
+        self.standalone = true;
+        self
+    }
+
+    pub(super) fn dirty(&self, cx: &App) -> bool {
+        self.confirmed
+            || self.fields.iter().any(|field| {
+                field.answer.is_some()
+                    || field
+                        .lines
+                        .iter()
+                        .any(|line| !line.text.read(cx).text().is_empty())
+            })
     }
 
     pub(super) fn revision_id(&self) -> &str {
@@ -112,7 +131,7 @@ impl IntakeDraft {
         Some(answers)
     }
 
-    fn response(&self, cx: &App) -> Option<IntakeResponse> {
+    pub(super) fn response(&self, cx: &App) -> Option<IntakeResponse> {
         if !self.confirmed {
             return None;
         }
@@ -354,7 +373,7 @@ impl Root {
             .when(!definition.description.is_empty(), |row| {
                 row.child(div().text_sm().child(definition.description.clone()))
             });
-        if !definition.required_at_booking {
+        if !form.standalone && !definition.required_at_booking {
             let revision = rev.clone();
             row = row.child(div().flex().child(self.intake_toggle(
                 format!("intake-include-{rev}"),

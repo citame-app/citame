@@ -95,6 +95,9 @@ describe("route mapping", () => {
       "/intake/requirements?serviceIds=example",
       "/admin/intake-forms",
       "/admin/intake-forms?view=summary",
+      "/admin/clients/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/intake?before=aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "/admin/clients/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/intake/catalog",
+      "/admin/clients/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/intake/bbbbbbbb-1111-4111-8111-bbbbbbbbbbbb",
       "/admin/intake-forms/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
       "/admin/intake-forms/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/publish",
       "/admin/intake-forms/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/archive",
@@ -132,6 +135,14 @@ describe("route mapping", () => {
       ),
     ).toBe(false);
     expect(proxy.matches(new URL("http://web/intake/submissions/example"))).toBe(false);
+    expect(
+      proxy.matches(new URL("http://web/admin/clients/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa")),
+    ).toBe(false);
+    expect(
+      proxy.matches(
+        new URL("http://web/admin/clients/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/intake/invalid"),
+      ),
+    ).toBe(false);
     expect(proxy.matches(new URL("http://web/admin/intake-forms/invalid"))).toBe(false);
     expect(
       proxy.matches(

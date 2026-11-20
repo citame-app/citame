@@ -11,8 +11,10 @@ import { Hono } from "hono";
 import type { AppDeps } from "../../app";
 import { requirePermission } from "../../auth/policy";
 import type { AppEnv, Principal } from "../../auth/principal";
+import { clientRoot } from "../../client-identity";
 import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
+import { listServices } from "../services/service";
 import {
   archiveIntakeForm,
   createIntakeForm,
@@ -176,6 +178,21 @@ export function intakeClientRoutes({ db, now = () => new Date() }: AppDeps) {
         ),
       );
     })
+    .get("/:id/intake/catalog", async (c) => {
+      requirePermission(c.get("principal"), "clients");
+      await clientRoot(db, parseOrThrow(idSchema, c.req.param("id")));
+      return c.json({ services: await listServices(db, true) });
+    })
+    .get("/:id/intake/:submissionId", async (c) =>
+      c.json(
+        await getIntakeSubmission(
+          db,
+          parseOrThrow(idSchema, c.req.param("submissionId")),
+          c.get("principal"),
+          parseOrThrow(idSchema, c.req.param("id")),
+        ),
+      ),
+    )
     .post("/:id/intake", async (c) => {
       const principal = c.get("principal");
       requirePermission(principal, "editClients");

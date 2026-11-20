@@ -1,3 +1,9 @@
+mod record_catalog;
+mod records;
+
+pub use record_catalog::*;
+pub use records::*;
+
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -196,7 +202,7 @@ pub struct Choice {
     pub label: String,
 }
 
-#[derive(Clone, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Answer {
     Text(String),

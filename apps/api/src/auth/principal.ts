@@ -115,7 +115,10 @@ export function requireAuth(
           : path.endsWith("/publish") || path.endsWith("/archive")
             ? method === "POST"
             : method === "GET" || method === "PUT";
+      const clientIntakeAllowed =
+        method === "GET" || (path.endsWith("/intake") && method === "POST");
       if (
+        (path.startsWith("/admin/clients/") && !clientIntakeAllowed) ||
         (path.startsWith("/admin/intake-forms") && !intakeAllowed) ||
         (path === "/admin/intake-forms" && method === "GET" && c.req.query("view") !== "summary") ||
         !DESKTOP_PROXY_ROUTE.test(path) ||

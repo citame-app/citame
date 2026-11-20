@@ -31,6 +31,7 @@ impl Root {
     pub(super) fn editable_intake_forms(&mut self) -> Option<&mut Vec<IntakeDraft>> {
         match &mut self.overlay {
             Overlay::Waitlist(desk) => desk.editable_intake(),
+            Overlay::Directory(desk) => desk.intake.as_mut()?.editable(),
             Overlay::New(form) => {
                 let review = form.intake.as_mut()?;
                 (!review.busy && review.submitted.is_none() && review.review_hash.is_some())
@@ -43,6 +44,11 @@ impl Root {
     pub(super) fn set_intake_editor_error(&mut self, key: Key) {
         match &mut self.overlay {
             Overlay::Waitlist(desk) => desk.set_intake_error(key),
+            Overlay::Directory(desk) => {
+                if let Some(record) = &mut desk.intake {
+                    record.error = Some(key);
+                }
+            }
             Overlay::New(form) => form.error = Some(key),
             _ => {}
         }

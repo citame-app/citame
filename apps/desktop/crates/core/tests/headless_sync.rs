@@ -156,6 +156,115 @@ fn native_administers_a_form_through_the_proxy() {
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_records_and_reads_private_intake_through_the_proxy() {
+    use sob_core::intake::{
+        FormDefinition, FormWrite, RecordError, RecordResponse, ResponseSource,
+    };
+    let mut browser = Device::sign_in();
+    browser.sync();
+    let catalog = catalog(&browser);
+    let client =
+        ops::create_client(&mut browser.store, "Synthetic response subject", None).unwrap();
+    let other = ops::create_client(&mut browser.store, "Synthetic other subject", None).unwrap();
+    browser.sync();
+    let device = proxy_device();
+    let transport = &device.transport;
+    let question = uuid::Uuid::now_v7().to_string();
+    let definition: FormDefinition = serde_json::from_value(json!({
+        "title": "Synthetic frozen response history",
+        "description": "",
+        "allServices": false,
+        "serviceIds": [catalog.haircut.clone()],
+        "requiredAtBooking": false,
+        "allowTeamResponses": true,
+        "fields": [{
+            "id": question,
+            "label": "Applicable?",
+            "help": "",
+            "required": true,
+            "kind": "boolean"
+        }]
+    }))
+    .unwrap();
+    let form = transport
+        .write_intake_form(
+            &FormWrite::Create {
+                key: uuid::Uuid::now_v7().to_string(),
+                definition,
+            },
+            None,
+        )
+        .unwrap();
+    let published = transport
+        .write_intake_form(
+            &FormWrite::Publish {
+                id: form.id.clone(),
+                version: form.version,
+            },
+            None,
+        )
+        .unwrap();
+    assert!(
+        transport
+            .client_recording_catalog(&client)
+            .unwrap()
+            .get(&catalog.haircut)
+            .is_some()
+    );
+    let terms = transport
+        .client_recording_forms(&client, &[catalog.haircut])
+        .unwrap();
+    let required = terms
+        .forms
+        .iter()
+        .find(|form| form.definition.title == "Synthetic frozen response history")
+        .unwrap();
+    let response = required
+        .definition
+        .team_response(
+            &required.id,
+            true,
+            [(question.clone(), Answer::Boolean(false))]
+                .into_iter()
+                .collect(),
+        )
+        .unwrap();
+    let packet = RecordResponse::new(&client, response).unwrap();
+    transport.record_client_response(&packet).unwrap();
+    transport.record_client_response(&packet).unwrap();
+    transport
+        .write_intake_form(
+            &FormWrite::Archive {
+                id: published.id,
+                version: published.version,
+            },
+            None,
+        )
+        .unwrap();
+    let history = transport.client_response_history(&client, None).unwrap();
+    assert_eq!(history.submissions.len(), 1);
+    let summary = &history.submissions[0];
+    let record = transport
+        .client_recorded_response(&client, &summary.id)
+        .unwrap();
+    assert_eq!(record.revision.id, required.id);
+    assert!(record.source == ResponseSource::Team);
+    assert!(matches!(
+        record.answers.get(&question),
+        Some(Answer::Boolean(false))
+    ));
+    assert!(matches!(
+        transport.client_recorded_response(&other, &summary.id),
+        Err(RecordError::Missing)
+    ));
+    let cloud = browser.rest_get(&format!("/intake/submissions/{}", summary.id));
+    assert_eq!(cloud["answers"][&question], false);
+    browser.sync();
+    assert!(browser.store.outbox(20).unwrap().is_empty());
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
 fn desktop_opens_the_exact_receipt_and_observes_its_browser_payment_through_the_proxy() {
     let device = proxy_device();
     let receipt = device

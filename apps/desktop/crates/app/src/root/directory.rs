@@ -9,6 +9,7 @@ pub(super) struct Directory {
     clients: Vec<Client>,
     form: Option<Form>,
     history: Vec<Appointment>,
+    pub(super) intake: Option<intake_record::Desk>,
     error: Option<String>,
 }
 
@@ -60,6 +61,7 @@ impl Root {
             clients: vec![],
             form: None,
             history: vec![],
+            intake: None,
             error: None,
         }));
         self.reload_directory();
@@ -76,6 +78,9 @@ impl Root {
         }
         if let Overlay::Directory(desk) = &mut self.overlay {
             desk.clients = calendar::directory_clients(&self.svc.store).unwrap_or_default();
+            if let Some(intake) = &mut desk.intake {
+                intake.subject_visibility(&desk.clients);
+            }
             if let Some(previous) = desk.form.as_ref().and_then(|form| form.previous.as_ref()) {
                 if desk.clients.iter().all(|client| client.id != previous.id) {
                     desk.form = None;
@@ -169,6 +174,18 @@ impl Root {
         }
     }
 
+    fn directory_button(
+        &self,
+        id: impl Into<ElementId>,
+        label: impl Into<SharedString>,
+        kind: Kind,
+        action: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Stateful<gpui::Div> {
+        self.button(id, label, kind, action)
+            .tab_index(0)
+            .focus(|style| style.border_color(theme::text()))
+    }
+
     fn directory_field(&self, label: Key, field: Entity<TextField>) -> gpui::Div {
         div()
             .flex()
@@ -179,7 +196,15 @@ impl Root {
             .child(field)
     }
 
-    pub(super) fn render_directory(&self, desk: &Directory, cx: &mut Context<Self>) -> gpui::Div {
+    pub(super) fn render_directory(
+        &self,
+        desk: &Directory,
+        viewport: gpui::Size<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        if let Some(record) = &desk.intake {
+            return self.render_intake_record(record, viewport, cx);
+        }
         let title = |key| {
             div()
                 .text_lg()
@@ -212,6 +237,17 @@ impl Root {
                             },
                         )
                         .child(self.directory_field(Key::DirectoryNotes, form.notes.clone()))
+                        .when_some(form.previous.as_ref(), |body, client| {
+                            let subject = (client.id.clone(), client.name.clone());
+                            body.child(self.directory_button(
+                                "directory-intake",
+                                self.t(Key::RecordHistory),
+                                Kind::Ghost,
+                                cx.listener(move |root, _, _, cx| {
+                                    root.open_intake_record(subject.clone(), cx);
+                                }),
+                            ))
+                        })
                         .when_some(desk.error.as_ref(), |d, error| {
                             d.child(
                                 div()
@@ -225,7 +261,7 @@ impl Root {
                                 .flex()
                                 .gap_2()
                                 .justify_end()
-                                .child(self.button(
+                                .child(self.directory_button(
                                     "directory-back",
                                     self.t(Key::Back),
                                     Kind::Ghost,
@@ -237,7 +273,7 @@ impl Root {
                                         cx.notify();
                                     }),
                                 ))
-                                .child(self.button(
+                                .child(self.directory_button(
                                     "directory-save",
                                     self.t(Key::DirectorySave),
                                     Kind::Primary,
@@ -267,7 +303,7 @@ impl Root {
                                         self.date_time_label(start),
                                         names.join(", ")
                                     );
-                                    self.button(
+                                    self.directory_button(
                                         SharedString::from(format!("directory-visit-{id}")),
                                         SharedString::from(caption),
                                         Kind::Ghost,
@@ -355,7 +391,7 @@ impl Root {
                                                     )
                                                 }),
                                         )
-                                        .child(self.button(
+                                        .child(self.directory_button(
                                             SharedString::from(format!("directory-edit-{id}")),
                                             self.t(Key::DirectoryEdit),
                                             Kind::Ghost,
@@ -377,7 +413,7 @@ impl Root {
                                 .flex()
                                 .gap_2()
                                 .when(page > 0, |d| {
-                                    d.child(self.button(
+                                    d.child(self.directory_button(
                                         "directory-prev",
                                         self.t(Key::InboxPrevious),
                                         Kind::Ghost,
@@ -387,7 +423,7 @@ impl Root {
                                     ))
                                 })
                                 .when(page + 1 < pages, |d| {
-                                    d.child(self.button(
+                                    d.child(self.directory_button(
                                         "directory-next",
                                         self.t(Key::InboxNext),
                                         Kind::Ghost,
@@ -401,7 +437,7 @@ impl Root {
                             div()
                                 .flex()
                                 .gap_2()
-                                .child(self.button(
+                                .child(self.directory_button(
                                     "directory-close",
                                     self.t(Key::Close),
                                     Kind::Ghost,
@@ -410,7 +446,7 @@ impl Root {
                                         cx.notify();
                                     }),
                                 ))
-                                .child(self.button(
+                                .child(self.directory_button(
                                     "directory-create",
                                     self.t(Key::DirectoryCreate),
                                     Kind::Primary,
