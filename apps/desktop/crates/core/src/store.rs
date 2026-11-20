@@ -11,9 +11,14 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+use crate::billing::SavedBankRefund;
 use crate::error::{CoreError, Result};
 use crate::model::*;
 use crate::sync::{CATALOG_COLORS_CACHED, CatalogColors};
+
+fn pending_bank_refund_key(checkout_id: uuid::Uuid, actor_user_id: &str) -> String {
+    format!("bank_refund_pending:{checkout_id}:{actor_user_id}")
+}
 
 pub(crate) const INITIAL_GENERATION: &str = "initial";
 const GENERATION_KEY: &str = "sync_generation";
@@ -403,6 +408,64 @@ impl Store {
                 Ok(attempt)
             })
             .transpose()
+    }
+
+    pub fn pending_bank_refund(
+        &self,
+        checkout_id: uuid::Uuid,
+        actor_user_id: &str,
+    ) -> Result<Option<SavedBankRefund>> {
+        self.get_meta(&pending_bank_refund_key(checkout_id, actor_user_id))?
+            .map(|value| {
+                let saved: SavedBankRefund = serde_json::from_str(&value)?;
+                if saved.request.review.checkout_id != checkout_id
+                    || saved.request.review.actor_user_id != actor_user_id
+                {
+                    return Err(CoreError::Protocol(
+                        "Pending bank refund identity mismatch".into(),
+                    ));
+                }
+                Ok(saved)
+            })
+            .transpose()
+    }
+
+    pub fn reserve_bank_refund(&self, saved: &SavedBankRefund) -> Result<bool> {
+        let review = &saved.request.review;
+        let key = pending_bank_refund_key(review.checkout_id, &review.actor_user_id);
+        Ok(self.conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO NOTHING",
+            params![key, serde_json::to_string(saved)?],
+        )? == 1)
+    }
+
+    pub fn clear_bank_refund(&self, saved: &SavedBankRefund) -> Result<()> {
+        let review = &saved.request.review;
+        let key = pending_bank_refund_key(review.checkout_id, &review.actor_user_id);
+        self.conn.execute(
+            "DELETE FROM meta WHERE key = ?1 AND value = ?2",
+            params![key, serde_json::to_string(saved)?],
+        )?;
+        Ok(())
+    }
+
+    pub fn settle_bank_refund(
+        &self,
+        saved: &SavedBankRefund,
+        result: &std::result::Result<
+            crate::billing::AppointmentCheckout,
+            crate::sync::TransportError,
+        >,
+    ) -> Result<()> {
+        // The transport reports failures after a successful POST as unverified outcomes.
+        // Keep the key until the refreshed receipt is confirmed or the POST definitively failed.
+        if matches!(
+            result,
+            Ok(_) | Err(crate::sync::TransportError::BadRequest(_))
+        ) {
+            self.clear_bank_refund(saved)?;
+        }
+        Ok(())
     }
 
     pub fn reserve_stock_return(

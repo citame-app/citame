@@ -1,6 +1,8 @@
 use super::*;
 use sob_core::billing::{RefundAttempt, RefundTender, RefundablePayment};
 
+mod bank_refund_recovery;
+
 fn refund_tender_label(tender: RefundTender) -> Key {
     match tender {
         RefundTender::Manual(method) => tender_label(method),
@@ -15,9 +17,16 @@ pub(super) struct RefundEditor {
     _changes: [Subscription; 2],
     attempt: Option<RefundAttempt>,
     reviewed: bool,
+    bank_generation: Option<String>,
 }
 
 impl RefundEditor {
+    pub(super) fn receipt_changed(&mut self, generation: Option<&str>) {
+        if self.bank_generation.is_some() && self.bank_generation.as_deref() != generation {
+            self.reviewed = false;
+            self.bank_generation = None;
+        }
+    }
     pub(super) fn has_attempt(&self) -> bool {
         self.attempt.is_some()
     }
@@ -66,12 +75,19 @@ impl Root {
             _changes: changes,
             attempt: None,
             reviewed: false,
+            bank_generation: None,
         });
         form.error = None;
         cx.notify();
     }
 
     fn confirm_refund(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.checkout_review_mut(), Some(CheckoutReview::Receipt(form))
+            if form.refund.as_ref().is_some_and(|editor| matches!(editor.payment.tender, RefundTender::Bank(_))))
+        {
+            self.save_reviewed_bank_refund(cx);
+            return;
+        }
         let Some(transport) = self
             .svc
             .transport()
@@ -316,6 +332,9 @@ impl Root {
                     }));
         }
         let Some(editor) = &form.refund else {
+            let saved = self.render_saved_bank_refund(form, cx);
+            let has_saved = saved.is_some();
+            let body = body.when_some(saved, |view, saved| view.child(saved));
             return body.when(
                 online
                     && !form.busy
@@ -324,20 +343,28 @@ impl Root {
                     && form.stock_return.is_none()
                     && !form.confirming_void,
                 |view| {
-                    view.children(receipt.recordable_refunds_available().map(|payment| {
-                        let id = payment.id;
-                        self.checkout_keyboard_button(
-                            SharedString::from(format!("refund-{id}")),
-                            format!(
-                                "{} · {} · {}",
-                                self.t(Key::CheckoutRefund),
-                                self.t(refund_tender_label(payment.tender)),
-                                money(payment.available)
-                            ),
-                            Kind::Ghost,
-                            cx.listener(move |root, _, _, cx| root.select_refund(id, cx)),
-                        )
-                    }))
+                    view.children(
+                        receipt
+                            .recordable_refunds_available()
+                            .filter(|payment| {
+                                !matches!(payment.tender, RefundTender::Bank(_))
+                                    || (!has_saved && receipt.refund_review_generation.is_some())
+                            })
+                            .map(|payment| {
+                                let id = payment.id;
+                                self.checkout_keyboard_button(
+                                    SharedString::from(format!("refund-{id}")),
+                                    format!(
+                                        "{} · {} · {}",
+                                        self.t(Key::CheckoutRefund),
+                                        self.t(refund_tender_label(payment.tender)),
+                                        money(payment.available)
+                                    ),
+                                    Kind::Ghost,
+                                    cx.listener(move |root, _, _, cx| root.select_refund(id, cx)),
+                                )
+                            }),
+                    )
                 },
             );
         };
@@ -379,6 +406,7 @@ impl Root {
                                 && let Some(editor) = &mut form.refund
                             {
                                 editor.reviewed = false;
+                                editor.bank_generation = None;
                                 cx.notify();
                             }
                         }),
@@ -400,14 +428,21 @@ impl Root {
                     && editor.valid_reason(cx)
                     && !form.refreshing,
                 |view| {
+                    let generation = receipt.refund_review_generation.clone();
                     view.child(self.checkout_keyboard_button(
                         "review-checkout-refund",
                         self.t(Key::CheckoutRefundReview),
                         Kind::Ghost,
-                        cx.listener(|root, _, _, cx| {
+                        cx.listener(move |root, _, _, cx| {
                             if let Some(CheckoutReview::Receipt(form)) = root.checkout_review_mut()
                                 && let Some(editor) = &mut form.refund
                             {
+                                if matches!(editor.payment.tender, RefundTender::Bank(_)) {
+                                    if form.receipt.refund_review_generation != generation {
+                                        return;
+                                    }
+                                    editor.bank_generation = generation.clone();
+                                }
                                 editor.reviewed = true;
                                 cx.notify();
                             }

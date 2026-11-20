@@ -811,6 +811,9 @@ impl ReceiptForm {
     }
 
     fn replace_receipt(&mut self, receipt: AppointmentCheckout, cx: &mut Context<Root>) {
+        if let Some(editor) = &mut self.refund {
+            editor.receipt_changed(receipt.refund_review_generation.as_deref());
+        }
         if self.receipt.pricing_version != receipt.pricing_version {
             self.price_fields = Self::price_fields(&receipt, cx);
         }

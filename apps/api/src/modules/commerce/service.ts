@@ -7,6 +7,7 @@ import {
   checkoutListQuerySchema,
   needsFinalPrice,
   permissionsFor,
+  type RefundRequest,
   type StartPaymentInput,
 } from "@sob/contracts";
 import {
@@ -955,10 +956,23 @@ export async function settleVerifiedBankPayment(
 export async function manualRefund(
   db: Database,
   paymentId: string,
-  input: { amountCents: number; reason: string; idempotencyKey: string },
+  input: RefundRequest,
   principal: Principal,
+  currentGeneration: string,
 ) {
   requireOperator(principal, true);
+  if (input.review) {
+    if (input.review.actorUserId !== principal.userId)
+      throw new DomainError(
+        "forbidden",
+        "Only the operator who reviewed this refund can submit it",
+      );
+    if (input.review.generation !== currentGeneration)
+      throw new DomainError(
+        "sync_generation_changed",
+        "Review the refund against the restored receipt",
+      );
+  }
   return db.transaction(async (tx) => {
     const [initial] = await tx
       .select()
@@ -971,8 +985,13 @@ export async function manualRefund(
       .from(checkoutPayment)
       .where(eq(checkoutPayment.id, paymentId))
       .for("update");
-    if (!payment || !["succeeded", "reconciliation"].includes(payment.status))
-      throw new DomainError("invalid_state", "Only captured payments can be refunded");
+    if (!payment) throw new DomainError("not_found", "Payment not found");
+    const bank = payment.method === "redsys_card" || payment.method === "redsys_bizum";
+    if (input.review && (input.review.checkoutId !== payment.checkoutId || !bank))
+      throw new DomainError(
+        "invalid_state",
+        "The reviewed bank payment does not match this receipt",
+      );
     const requestHash = idemHash(input);
     const [previous] = await tx
       .select()
@@ -984,9 +1003,16 @@ export async function manualRefund(
         ),
       );
     if (previous) {
+      if (input.review && previous.createdBy !== principal.userId)
+        throw new DomainError(
+          "forbidden",
+          "Only the operator who reviewed this refund can submit it",
+        );
       checkReplay(previous, requestHash);
-      return previous;
+      return input.review ? refundView(previous) : previous;
     }
+    if (!["succeeded", "reconciliation"].includes(payment.status))
+      throw new DomainError("invalid_state", "Only captured payments can be refunded");
     const refunds = await tx
       .select()
       .from(checkoutRefund)
@@ -1003,7 +1029,6 @@ export async function manualRefund(
       );
     if (refunds.reduce((a, b) => a + b.amountCents, 0) + input.amountCents > payment.amountCents)
       throw new DomainError("invalid_state", "Refund exceeds the captured amount");
-    const bank = payment.method.startsWith("redsys_");
     const session = payment.method === "cash" ? await openSession(tx) : null;
     if (session && (await cashView(tx, session)).expectedCents < input.amountCents)
       throw new DomainError(
@@ -1043,7 +1068,7 @@ export async function manualRefund(
       entityId: refund.id,
       metadata: { status: refund.status, amountCents: refund.amountCents, paymentId },
     });
-    return refund;
+    return input.review ? refundView(refund) : refund;
   });
 }
 async function cashView(tx: Connection, row: typeof cashSession.$inferSelect) {

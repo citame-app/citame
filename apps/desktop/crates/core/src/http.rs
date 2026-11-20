@@ -14,7 +14,8 @@ use crate::billing::{
     CashCommand, CashSession, CheckoutFinalPrice, CheckoutHistoryFilters, CheckoutPage,
     CheckoutRefund, EligiblePassUse, ImportedPartialPayment, ImportedPartialPaymentPreview,
     ImportedPricePreview, ImportedPriceReview, ImportedSettlement, ImportedSettlementStatus,
-    PaymentAttempt, ReceiptTender, RefundAttempt, RefundTender, WalkInSale,
+    PaymentAttempt, ReceiptTender, RefundAttempt, RefundTender, SavedBankRefund,
+    SavedBankRefundStatus, WalkInSale,
 };
 use crate::inventory::{
     ContentWriteError, LedgerPage, LedgerQuery, MovementPage, PRODUCTS_PATH, PackageContent,
@@ -621,34 +622,83 @@ impl HttpTransport {
             &format!("/admin/commerce/payments/{payment_id}/refunds"),
             attempt,
         )?;
-        if refund.payment_id != payment_id
-            || refund.amount_cents != attempt.amount_cents
-            || match payment.tender {
-                RefundTender::Manual(_) => refund.status != "succeeded",
-                RefundTender::Bank(_) => !matches!(
-                    refund.status.as_str(),
-                    "requested" | "dispatched" | "reconciliation" | "succeeded" | "failed"
-                ),
+        self.confirm_refund(
+            checkout,
+            refund,
+            payment_id,
+            attempt,
+            matches!(payment.tender, RefundTender::Bank(_)),
+        )
+    }
+
+    pub fn record_reviewed_bank_refund(
+        &self,
+        checkout: &AppointmentCheckout,
+        saved: &SavedBankRefund,
+    ) -> Result<AppointmentCheckout, TransportError> {
+        match saved.status(checkout) {
+            SavedBankRefundStatus::Ready => {}
+            SavedBankRefundStatus::Obsolete => {
+                return Err(TransportError::ReplicaGenerationChanged);
             }
-            || refund.reason != attempt.reason
-        {
+            SavedBankRefundStatus::Unavailable => {
+                return Err(TransportError::Forbidden(
+                    "The saved refund cannot be submitted from this receipt".into(),
+                ));
+            }
+        }
+        // A reservation may already have consumed the available amount. The server
+        // matches the original key and payload before validating a new reservation.
+        let refund: CheckoutRefund = self.post_json(
+            &format!("/admin/commerce/payments/{}/refunds", saved.payment_id),
+            &saved.request,
+        )?;
+        self.confirm_refund(
+            checkout,
+            refund,
+            saved.payment_id,
+            &saved.request.attempt,
+            true,
+        )
+    }
+
+    fn confirm_refund(
+        &self,
+        checkout: &AppointmentCheckout,
+        refund: CheckoutRefund,
+        payment_id: uuid::Uuid,
+        attempt: &RefundAttempt,
+        bank: bool,
+    ) -> Result<AppointmentCheckout, TransportError> {
+        let matches = |confirmed: &CheckoutRefund| {
+            confirmed.payment_id == payment_id
+                && confirmed.amount_cents == attempt.amount_cents
+                && confirmed.reason == attempt.reason
+                && (confirmed.status == "succeeded"
+                    || bank
+                        && matches!(
+                            confirmed.status.as_str(),
+                            "requested" | "dispatched" | "reconciliation" | "failed"
+                        ))
+        };
+        if !matches(&refund) {
             return Err(TransportError::Server(
                 "Invalid refund acknowledgement".into(),
             ));
         }
-        let receipt = self.refresh_checkout(checkout).map_err(|_| {
+        let updated = self.refresh_checkout(checkout).map_err(|_| {
             TransportError::Server("Refund recorded, but the receipt could not be refreshed".into())
         })?;
-        if !receipt
+        if !updated
             .refunds
             .iter()
-            .any(|confirmed| confirmed.id == refund.id)
+            .any(|confirmed| confirmed.id == refund.id && matches(confirmed))
         {
             return Err(TransportError::Server(
                 "Refund missing from refreshed receipt".into(),
             ));
         }
-        Ok(receipt)
+        Ok(updated)
     }
 
     pub fn dispatch_bank_refund(

@@ -137,8 +137,16 @@ export const refundRequestSchema = z
     amountCents: moneyCentsSchema.refine((v) => v > 0),
     reason: z.string().trim().min(3).max(300),
     idempotencyKey: idempotencyKeySchema,
+    review: z
+      .strictObject({
+        checkoutId: idSchema,
+        actorUserId: z.string().min(1).max(256),
+        generation: syncGenerationSchema,
+      })
+      .optional(),
   })
   .strict();
+export type RefundRequest = z.infer<typeof refundRequestSchema>;
 export const reconcileRefundSchema = z
   .object({
     outcome: z.enum(["succeeded", "failed"]),
@@ -261,6 +269,7 @@ export const checkoutSchema = z.object({
   externalBalance: externalBalanceSchema.optional(),
   canRefund: z.boolean().optional(),
   canDispatchBankRefunds: z.boolean().optional(),
+  refundReviewGeneration: syncGenerationSchema.optional(),
   stockReturnGeneration: syncGenerationSchema.optional(),
   id: idSchema,
   pricingVersion: z.number().int().positive().optional(),

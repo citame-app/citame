@@ -280,6 +280,101 @@ fn an_unsent_refund_can_be_cancelled_without_a_gateway_and_releases_its_balance(
 }
 
 #[test]
+fn a_lost_bank_reservation_response_can_be_replayed_from_a_reopened_replica() {
+    use crate::billing::{BankPaymentMethod, BankRefundReviewContext, ReviewedBankRefund};
+    use crate::store::Store;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    let id = Uuid::now_v7();
+    let payment = Uuid::now_v7();
+    let reservation = Uuid::now_v7();
+    let saved = SavedBankRefund {
+        payment_id: payment,
+        method: BankPaymentMethod::Card,
+        request: ReviewedBankRefund {
+            attempt: RefundAttempt::new(1800, "Synthetic bank refund").unwrap(),
+            review: BankRefundReviewContext {
+                checkout_id: id,
+                actor_user_id: "u".into(),
+                generation: "live".into(),
+            },
+        },
+    };
+    let refund = json!({
+        "id": reservation, "paymentId": payment, "amountCents": 1800,
+        "reason": saved.request.attempt.reason(), "status":"requested",
+    });
+    let mut data = json!({
+        "id": id, "currency":"EUR", "status":"paid", "canRefund":true, "refundReviewGeneration":"live",
+        "totalCents":1800, "paidCents":1800, "discountCents":0, "balanceCents":0,
+        "payments":[{"id":payment, "method":"redsys_card", "status":"succeeded",
+            "amountCents":1800, "order":"123412345678"}],
+    });
+    let initial = serde_json::from_value(data.clone()).unwrap();
+    data["refunds"] = json!([refund.clone()]);
+    let fresh = serde_json::from_value::<AppointmentCheckout>(data.clone()).unwrap();
+    assert!(fresh.recordable_refunds_available().next().is_none());
+    let (base, log) = serve(vec![
+        http("503 Service Unavailable", &[], ""),
+        http("201 Created", &[], &refund.to_string()),
+        http("404 Not Found", &[], ""),
+        http("201 Created", &[], &refund.to_string()),
+        http("200 OK", &[], &data.to_string()),
+    ]);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("desk.db");
+    {
+        let store = Store::open(&path).unwrap();
+        assert!(store.reserve_bank_refund(&saved).unwrap());
+        assert!(
+            signed_in(&base)
+                .record_reviewed_bank_refund(&initial, &saved)
+                .is_err()
+        );
+    }
+    let store = Store::open(&path).unwrap();
+    assert!(
+        store
+            .pending_bank_refund(id, "another-user")
+            .unwrap()
+            .is_none()
+    );
+    assert!(!store.reserve_bank_refund(&saved).unwrap());
+    let recovered = store.pending_bank_refund(id, "u").unwrap().unwrap();
+    assert_eq!(recovered, saved);
+    let transport = signed_in(&base);
+    data["refundReviewGeneration"] = json!("restored");
+    let from_backup = serde_json::from_value(data).unwrap();
+    assert!(matches!(
+        transport.record_reviewed_bank_refund(&from_backup, &recovered),
+        Err(TransportError::ReplicaGenerationChanged)
+    ));
+    let unverified = transport.record_reviewed_bank_refund(&fresh, &recovered);
+    assert!(matches!(unverified, Err(TransportError::Server(_))));
+    store.settle_bank_refund(&recovered, &unverified).unwrap();
+    assert_eq!(
+        store.pending_bank_refund(id, "u").unwrap(),
+        Some(recovered.clone())
+    );
+    let confirmed = transport.record_reviewed_bank_refund(&fresh, &recovered);
+    let updated = confirmed.as_ref().unwrap();
+    assert_eq!(updated.refunds[0].id, reservation);
+    store.settle_bank_refund(&recovered, &confirmed).unwrap();
+    assert!(store.pending_bank_refund(id, "u").unwrap().is_none());
+    let log = log.lock().unwrap();
+    assert_eq!(log.len(), 5);
+    assert_eq!(
+        log[0].split_once("\r\n\r\n").unwrap().1,
+        log[1].split_once("\r\n\r\n").unwrap().1
+    );
+    assert_eq!(
+        log[1].split_once("\r\n\r\n").unwrap().1,
+        log[3].split_once("\r\n\r\n").unwrap().1
+    );
+}
+
+#[test]
 fn report_transport_reads_the_filtered_summary_and_exports_safe_csv() {
     let counts = serde_json::json!({"booked": 1, "completed": 0, "cancelled": 0, "no_show": 0});
     let slice = serde_json::json!({"appointments": 1, "revenueCents": 0, "byStatus": counts});

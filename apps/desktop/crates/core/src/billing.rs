@@ -157,6 +157,7 @@ pub struct AppointmentCheckout {
     pub can_refund: bool,
     #[serde(default)]
     can_dispatch_bank_refunds: bool,
+    pub refund_review_generation: Option<String>,
     #[serde(default)]
     pub refunds: Vec<CheckoutRefund>,
 }
@@ -531,7 +532,8 @@ struct CheckoutPayment {
     merchant_initiated: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BankPaymentMethod {
     Card,
     Bizum,
@@ -647,7 +649,7 @@ impl RefundablePayment {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RefundAttempt {
     pub(crate) idempotency_key: Uuid,
@@ -655,7 +657,58 @@ pub struct RefundAttempt {
     pub(crate) reason: String,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BankRefundReviewContext {
+    pub checkout_id: Uuid,
+    pub actor_user_id: String,
+    pub generation: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct ReviewedBankRefund {
+    #[serde(flatten)]
+    pub attempt: RefundAttempt,
+    pub review: BankRefundReviewContext,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct SavedBankRefund {
+    pub payment_id: Uuid,
+    pub method: BankPaymentMethod,
+    pub request: ReviewedBankRefund,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SavedBankRefundStatus {
+    Ready,
+    Obsolete,
+    Unavailable,
+}
+
+impl SavedBankRefund {
+    pub fn status(&self, receipt: &AppointmentCheckout) -> SavedBankRefundStatus {
+        if receipt.id.parse().ok() != Some(self.request.review.checkout_id) {
+            return SavedBankRefundStatus::Unavailable;
+        }
+        match receipt.refund_review_generation.as_deref() {
+            Some(generation) if generation == self.request.review.generation => {
+                SavedBankRefundStatus::Ready
+            }
+            Some(_) => SavedBankRefundStatus::Obsolete,
+            None => SavedBankRefundStatus::Unavailable,
+        }
+    }
+}
+
 impl RefundAttempt {
+    pub fn amount_cents(&self) -> u32 {
+        self.amount_cents
+    }
+
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
     pub fn new(amount_cents: u32, reason: &str) -> Option<Self> {
         let reason = reason.trim();
         ((1..=999_999_999).contains(&amount_cents)

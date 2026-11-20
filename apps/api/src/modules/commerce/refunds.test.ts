@@ -128,6 +128,45 @@ test("a competing cancellation and send cannot both succeed", async () => {
   expect([cancel.status, execute.status].sort()).toEqual([200, 409]);
   expect(dispatches).toBe(execute.status === 200 ? 1 : 0);
 });
+
+test("a persisted reviewed reservation replays even when it has used all refundable capacity", async () => {
+  const path = `/admin/commerce/payments/${paymentId}/refunds`;
+  const view = checkoutSchema.parse(
+    await (await call(`/admin/commerce/checkouts/${checkoutId}`)).json(),
+  );
+  const request = {
+    idempotencyKey: crypto.randomUUID(),
+    amountCents: 1000,
+    reason: "Reviewed synthetic refund",
+    review: { checkoutId, actorUserId: owner.userId, generation: view.refundReviewGeneration },
+  };
+  const anotherOwner = await actor(t, "owner", "other-refund-owner@example.test");
+  expect((await json(t.app, path, "POST", request, anotherOwner.cookie)).status).toBe(403);
+  const wrongReceipt = await call(path, {
+    ...request,
+    review: { ...request.review, checkoutId: crypto.randomUUID() },
+  });
+  expect(wrongReceipt.status).toBe(409);
+  const outdated = await call(path, {
+    ...request,
+    review: { ...request.review, generation: "before-backup-restore" },
+  });
+  expect(outdated.status).toBe(409);
+  expect(await outdated.json()).toMatchObject({ error: { code: "sync_generation_changed" } });
+  const [first, duplicate] = await Promise.all([call(path, request), call(path, request)]);
+  expect(first.status).toBe(201);
+  expect(duplicate.status).toBe(201);
+  const reserved = (await first.json()) as { id: string; status: string };
+  expect(reserved.status).toBe("requested");
+  expect(await duplicate.json()).toEqual(reserved);
+  expect((await call(path, { ...request, amountCents: 999 })).status).toBe(409);
+  const after = checkoutSchema.parse(
+    await (await call(`/admin/commerce/checkouts/${checkoutId}`)).json(),
+  );
+  expect(after.refunds).toHaveLength(1);
+  expect(after.refunds[0]?.id).toBe(reserved.id);
+  expect(dispatches).toBe(0);
+});
 test("a bank refund is reserved, dispatched once and then reflected in the receipt", async () => {
   const refund = await requestRefund(400);
   expect(refund.status).toBe("requested");

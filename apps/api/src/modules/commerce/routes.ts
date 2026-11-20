@@ -73,6 +73,7 @@ export function commerceAdminRoutes(deps: AppDeps) {
       ...receipt,
       canRefund: permissions.refunds,
       canDispatchBankRefunds: permissions.refunds && gateway !== null,
+      ...(permissions.refunds ? { refundReviewGeneration: deps.config.syncReplicaGeneration } : {}),
       ...(permissions.writeInventory && receipt.fulfilledAt
         ? { stockReturnGeneration: deps.config.syncReplicaGeneration }
         : {}),
@@ -227,17 +228,18 @@ export function commerceAdminRoutes(deps: AppDeps) {
         201,
       ),
     )
-    .post("/payments/:id/refunds", async (c) =>
-      c.json(
+    .post("/payments/:id/refunds", async (c) => {
+      return c.json(
         await manualRefund(
           deps.db,
           checkoutId(c.req.param("id")),
           parseOrThrow(refundRequestSchema, await readJson(c)),
           c.get("principal"),
+          deps.config.syncReplicaGeneration,
         ),
         201,
-      ),
-    )
+      );
+    })
     .post("/payments/:id/reconcile", async (c) =>
       c.json(
         await reconcilePayment(
