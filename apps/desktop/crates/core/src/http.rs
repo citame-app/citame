@@ -1256,13 +1256,13 @@ impl HttpTransport {
     }
 
     pub fn intake_form(&self, id: &str) -> Result<AdminForm, TransportError> {
-        let form: AdminForm = read_response(
+        let form: AdminForm = read_response_with(
             self.get(
                 &self.agent,
                 &format!("/admin/intake-forms/{}", parse_id(id)?),
                 Some("application/json"),
             )?,
-            false,
+            intake_read_error,
         )?;
         if form.id != id {
             return Err(TransportError::Server("Unexpected form detail".into()));
@@ -1310,21 +1310,7 @@ impl HttpTransport {
                 )
             }
         }?;
-        let form: AdminForm = read_response_with(response, |status, retry_after, body| {
-            let code = serde_json::from_str::<serde_json::Value>(body).ok();
-            match code
-                .as_ref()
-                .and_then(|value| value.pointer("/error/code"))
-                .and_then(serde_json::Value::as_str)
-            {
-                Some("version_conflict") => FormWriteError::Conflict,
-                Some("storage_limit") => FormWriteError::Capacity,
-                _ if (400..500).contains(&status) && !matches!(status, 401 | 403 | 408 | 429) => {
-                    FormWriteError::Invalid
-                }
-                _ => classify_status(status, retry_after, body, false).into(),
-            }
-        })?;
+        let form: AdminForm = read_response_with(response, intake_write_error)?;
         let expected = match action {
             FormWrite::Create { .. } => None,
             FormWrite::Save { id, .. }
@@ -1713,6 +1699,29 @@ pub fn classify_status(
         ),
         400..=499 => TransportError::BadRequest(error_message(body)),
         _ => TransportError::Server(format!("HTTP {status}: {}", error_message(body))),
+    }
+}
+
+fn intake_read_error(status: u16, retry_after: Option<&str>, body: &str) -> TransportError {
+    if status == 408 {
+        return TransportError::Offline("Timed out waiting for Cloud".into());
+    }
+    classify_status(status, retry_after, body, false)
+}
+
+fn intake_write_error(status: u16, retry_after: Option<&str>, body: &str) -> FormWriteError {
+    let code = serde_json::from_str::<serde_json::Value>(body).ok();
+    match code
+        .as_ref()
+        .and_then(|value| value.pointer("/error/code"))
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("version_conflict") => FormWriteError::Conflict,
+        Some("storage_limit") => FormWriteError::Capacity,
+        _ if (400..500).contains(&status) && !matches!(status, 401 | 403 | 408 | 429) => {
+            FormWriteError::Invalid
+        }
+        _ => intake_read_error(status, retry_after, body).into(),
     }
 }
 

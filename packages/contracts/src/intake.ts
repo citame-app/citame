@@ -230,6 +230,18 @@ export const intakeRequirementsSchema = z.object({
     .default([]),
 });
 export const intakeFormsSchema = z.object({ forms: z.array(intakeAdminFormSchema).max(100) });
+export const intakeFormSummariesSchema = z.object({
+  forms: z
+    .array(
+      z.object({
+        id: idSchema,
+        title: title.max(120),
+        active: z.boolean(),
+        publishedNumber: z.number().int().positive().nullable(),
+      }),
+    )
+    .max(100),
+});
 export const intakeSubmissionSchema = z.object({
   id: idSchema,
   clientId: idSchema,

@@ -7,6 +7,7 @@ import {
   type IntakeSubmissionInput,
   intakeAnswersSchema,
   intakeDefinitionSchema,
+  intakeFormSummariesSchema,
   type Service,
   validateIntakeAnswers,
 } from "@sob/contracts";
@@ -103,7 +104,7 @@ export async function listIntakeFormSummaries(db: Database, p: Principal) {
     .from(intakeForm)
     .leftJoin(intakeRevision, eq(intakeForm.currentRevisionId, intakeRevision.id))
     .orderBy(desc(intakeForm.updatedAt), desc(intakeForm.id));
-  return { forms };
+  return intakeFormSummariesSchema.parse({ forms });
 }
 
 export async function getIntakeForm(db: Database, id: string, p: Principal) {

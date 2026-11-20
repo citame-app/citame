@@ -1312,3 +1312,15 @@ fn staff_portrait_transport_loads_authorized_directory_and_fences_writes() {
         serde_json::json!({"version":absence,"imageBase64":"/9j/"})
     );
 }
+
+#[test]
+fn intake_timeouts_preserve_retry_but_retired_services_return_to_the_editor() {
+    assert!(matches!(
+        super::intake_write_error(408, None, ""),
+        super::FormWriteError::Transport(super::TransportError::Offline(_))
+    ));
+    assert!(matches!(
+        super::intake_write_error(404, None, r#"{"error":{"code":"not_found"}}"#),
+        super::FormWriteError::Invalid
+    ));
+}

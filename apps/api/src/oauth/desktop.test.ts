@@ -9,6 +9,7 @@ import {
   dateShiftResultSchema,
   dateShiftsResponseSchema,
   intakeAdminFormSchema,
+  intakeFormSummariesSchema,
   intakeFormsSchema,
   reviewPrivateSchema,
   startedPaymentSchema,
@@ -285,7 +286,7 @@ test("desktop form administration uses live permissions and versioned, immutable
   const summary = await desktop(summaryPath, "GET");
   expect(summary.status).toBe(200);
   expect(summary.headers.get("cache-control")).toBe("private, no-store");
-  expect(await summary.json()).toEqual({
+  expect(intakeFormSummariesSchema.parse(await summary.json())).toEqual({
     forms: [{ id: draft.id, title: definition.title, active: false, publishedNumber: null }],
   });
   expect((await desktop(summaryPath, "GET", undefined, staff.access)).status).toBe(403);
