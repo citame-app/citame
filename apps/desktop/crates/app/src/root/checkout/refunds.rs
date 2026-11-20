@@ -291,16 +291,28 @@ impl Root {
                     .children(receipt.refunds.iter().map(|refund| {
                         let status = match refund.status.as_str() {
                             "succeeded" => Key::CheckoutRefundRecorded,
+                            "failed" if refund.cancelled_at.is_some() => {
+                                Key::CheckoutBankRefundCancelled
+                            }
                             "failed" => Key::CheckoutRefundFailed,
                             "requested" => Key::CheckoutBankRefundReserved,
                             _ => Key::CheckoutRefundPending,
                         };
-                        div().text_sm().child(format!(
+                        let view = div().text_sm().child(format!(
                             "{} · {} · {}",
                             self.t(status),
                             money(refund.amount_cents),
                             refund.reason
-                        ))
+                        ));
+                        view.when_some(refund.cancelled_at, |view, cancelled_at| {
+                            let local = cancelled_at.with_timezone(&self.tz);
+                            view.child(div().child(format!(
+                                "{} · {} · #{:08x}",
+                                i18n::date_label(self.locale, local.date_naive()),
+                                local.format("%H:%M"),
+                                refund.id.as_u128() as u32,
+                            )))
+                        })
                     }));
         }
         let Some(editor) = &form.refund else {

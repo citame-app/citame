@@ -37,6 +37,7 @@ import {
 import { finalizeCheckoutPrices } from "./prices";
 import {
   adjustCash,
+  cancelRefund,
   closeCashSession,
   createCheckout,
   currentCashSession,
@@ -247,6 +248,9 @@ export function commerceAdminRoutes(deps: AppDeps) {
           deps.now?.() ?? new Date(),
         ),
       ),
+    )
+    .post("/refunds/:id/cancel", async (c) =>
+      c.json(await cancelRefund(deps.db, checkoutId(c.req.param("id")), c.get("principal"))),
     )
     .post("/refunds/:id/execute", async (c) =>
       c.json(

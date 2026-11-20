@@ -4,6 +4,13 @@ use sob_core::billing::{
     PendingBankPayment,
 };
 
+struct BankReviewPresentation {
+    title: Key,
+    instructions: Key,
+    requires_evidence: bool,
+    id: &'static str,
+}
+
 #[derive(Clone)]
 enum BankReviewTarget {
     Payment(PendingBankPayment),
@@ -17,18 +24,35 @@ impl BankReviewTarget {
             Self::Refund(refund) => refund.id,
         }
     }
-    fn title(&self) -> Key {
+    fn presentation(&self) -> BankReviewPresentation {
         match self {
-            Self::Payment(_) => Key::CheckoutBankReconcile,
+            Self::Payment(_) => BankReviewPresentation {
+                title: Key::CheckoutBankReconcile,
+                instructions: Key::CheckoutBankReviewHelp,
+                requires_evidence: true,
+                id: "payment-review",
+            },
             Self::Refund(refund) => match refund.action {
-                BankRefundAction::Dispatch => Key::CheckoutBankRefundSend,
-                BankRefundAction::Reconcile => Key::CheckoutBankRefundReconcile,
+                BankRefundAction::Dispatch => BankReviewPresentation {
+                    title: Key::CheckoutBankRefundSend,
+                    instructions: Key::CheckoutBankRefundSendHelp,
+                    requires_evidence: false,
+                    id: "refund-dispatch",
+                },
+                BankRefundAction::Cancel => BankReviewPresentation {
+                    title: Key::CheckoutBankRefundCancel,
+                    instructions: Key::CheckoutBankRefundCancelHelp,
+                    requires_evidence: false,
+                    id: "refund-cancel",
+                },
+                BankRefundAction::Reconcile => BankReviewPresentation {
+                    title: Key::CheckoutBankRefundReconcile,
+                    instructions: Key::CheckoutBankRefundReviewHelp,
+                    requires_evidence: true,
+                    id: "refund-review",
+                },
             },
         }
-    }
-
-    fn is_dispatch(&self) -> bool {
-        matches!(self, Self::Refund(refund) if refund.action == BankRefundAction::Dispatch)
     }
 
     fn remains_eligible(&self, receipt: &AppointmentCheckout) -> bool {
@@ -54,6 +78,7 @@ pub(super) struct BankTransactionReview {
 enum BankTransactionCommand {
     ReconcilePayment(Uuid, BankPaymentReconciliation),
     DispatchRefund(Uuid),
+    CancelRefund(Uuid),
     ReconcileRefund(Uuid, BankPaymentReconciliation),
 }
 
@@ -77,12 +102,13 @@ impl BankTransactionReview {
             BankReviewTarget::Payment(payment) => {
                 BankTransactionCommand::ReconcilePayment(payment.id, self.command(cx)?)
             }
-            BankReviewTarget::Refund(refund) if refund.action == BankRefundAction::Dispatch => {
-                BankTransactionCommand::DispatchRefund(refund.id)
-            }
-            BankReviewTarget::Refund(refund) => {
-                BankTransactionCommand::ReconcileRefund(refund.id, self.command(cx)?)
-            }
+            BankReviewTarget::Refund(refund) => match refund.action {
+                BankRefundAction::Dispatch => BankTransactionCommand::DispatchRefund(refund.id),
+                BankRefundAction::Cancel => BankTransactionCommand::CancelRefund(refund.id),
+                BankRefundAction::Reconcile => {
+                    BankTransactionCommand::ReconcileRefund(refund.id, self.command(cx)?)
+                }
+            },
         })
     }
 }
@@ -178,6 +204,9 @@ impl Root {
                         BankTransactionCommand::DispatchRefund(id) => transport
                             .dispatch_bank_refund(&receipt, id)
                             .map(|receipt| (receipt, false)),
+                        BankTransactionCommand::CancelRefund(id) => transport
+                            .cancel_bank_refund(&receipt, id)
+                            .map(|receipt| (receipt, false)),
                     }
                 })
                 .await;
@@ -239,7 +268,7 @@ impl Root {
                 BankReviewTarget::Refund(refund) => (
                     bank_method_label(refund.method),
                     refund.amount_cents,
-                    refund.bank_order.as_str(),
+                    refund.bank_order.as_deref().unwrap_or("—"),
                 ),
             };
             format!(
@@ -266,6 +295,7 @@ impl Root {
                         );
                     view.children(actions.map(|target| {
                         let id = target.id();
+                        let presentation = target.presentation();
                         let detail = match &target {
                             BankReviewTarget::Refund(refund) => format!(
                                 "{} · #{:08x}",
@@ -278,8 +308,8 @@ impl Root {
                             BankReviewTarget::Payment(_) => describe(&target),
                         };
                         self.checkout_keyboard_button(
-                            SharedString::from(format!("review-bank-transaction-{id}")),
-                            format!("{} · {detail}", self.t(target.title())),
+                            SharedString::from(format!("bank-action-{}-{id}", presentation.id)),
+                            format!("{} · {detail}", self.t(presentation.title)),
                             Kind::Ghost,
                             cx.listener(move |root, _, _, cx| {
                                 root.review_bank_transaction(
@@ -294,8 +324,9 @@ impl Root {
                 },
             );
         };
+        let presentation = review.target.presentation();
         let body = body
-            .child(self.label(review.target.title()))
+            .child(self.label(presentation.title))
             .child(describe(&review.target))
             .map(|view| match &review.target {
                 BankReviewTarget::Refund(refund) => view
@@ -307,17 +338,7 @@ impl Root {
                     .child(div().text_sm().child(refund.reason.clone())),
                 BankReviewTarget::Payment(_) => view,
             })
-            .child(
-                div()
-                    .text_sm()
-                    .child(self.t(if review.target.is_dispatch() {
-                        Key::CheckoutBankRefundSendHelp
-                    } else if matches!(review.target, BankReviewTarget::Refund(_)) {
-                        Key::CheckoutBankRefundReviewHelp
-                    } else {
-                        Key::CheckoutBankReviewHelp
-                    })),
-            );
+            .child(div().text_sm().child(self.t(presentation.instructions)));
         let is_refund = matches!(&review.target, BankReviewTarget::Refund(_));
         if form.busy {
             return body.child(self.t(Key::CheckoutRecording));
@@ -340,18 +361,24 @@ impl Root {
                 ))
             })
             .when(
-                online && !form.refreshing && !review.needs_refresh && review.target.is_dispatch(),
+                online
+                    && !form.refreshing
+                    && !review.needs_refresh
+                    && !presentation.requires_evidence,
                 |view| {
                     view.child(self.checkout_keyboard_button(
-                        "confirm-send-refund",
-                        self.t(Key::CheckoutBankRefundSend),
+                        "confirm-bank-refund-action",
+                        self.t(presentation.title),
                         Kind::Danger,
                         cx.listener(|root, _, _, cx| root.confirm_bank_transaction(cx)),
                     ))
                 },
             )
             .when(
-                online && !form.refreshing && !review.needs_refresh && !review.target.is_dispatch(),
+                online
+                    && !form.refreshing
+                    && !review.needs_refresh
+                    && presentation.requires_evidence,
                 |view| {
                     view.child(self.label(Key::CheckoutBankReference))
                         .child(review.reference.clone())
@@ -437,6 +464,46 @@ impl Root {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[gpui::test]
+    async fn keyboard_opens_an_exact_cancellation_review_without_dispatching(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_dir, config) = crate::root::tests::desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        let payment = Uuid::now_v7();
+        let refund = Uuid::now_v7();
+        root.update(cx, |root, cx| {
+            root.svc.stop_sync();
+            root.status.connectivity = Connectivity::Online;
+            let receipt = serde_json::from_value(json!({
+                "id": Uuid::now_v7(), "currency": "EUR", "status": "paid", "canRefund": true,
+                "totalCents": 2000, "discountCents": 0, "paidCents": 2000, "balanceCents": 0,
+                "payments": [{"id": payment, "method": "redsys_bizum", "status": "succeeded", "amountCents": 2000}],
+                "refunds": [{"id": refund, "paymentId": payment, "amountCents": 500,
+                    "reason": "Incorrect amount", "status":"requested"}]
+            })).unwrap();
+            root.overlay = Overlay::WalkInReceipt(CheckoutReview::from_receipt(receipt, 0, cx));
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("tab");
+        cx.simulate_event(gpui::KeyUpEvent {
+            keystroke: gpui::Keystroke::parse("enter").unwrap(),
+        });
+        root.update(cx, |root, cx| {
+            let Some(CheckoutReview::Receipt(form)) = root.checkout_review_mut() else {
+                panic!("expected receipt")
+            };
+            let review = form
+                .reconciliation
+                .as_ref()
+                .expect("cancellation review opened");
+            assert!(!form.busy);
+            assert!(matches!(review.submission(cx),
+                Some(BankTransactionCommand::CancelRefund(id)) if id == refund));
+        });
+    }
 
     #[gpui::test]
     async fn a_requested_refund_needs_its_own_review_and_an_uncertain_dispatch_cannot_be_resent(

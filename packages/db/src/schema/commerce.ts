@@ -187,6 +187,7 @@ export const checkoutRefund = pgTable(
       .references(() => checkoutPayment.id),
     amountCents: integer().notNull(),
     status: refundStatus().notNull().default("requested"),
+    cancelledAt: timestamptz(),
     reason: text().notNull(),
     idempotencyKey: text().notNull(),
     requestHash: text().notNull(),
@@ -198,6 +199,10 @@ export const checkoutRefund = pgTable(
     unique("checkout_refund_idempotency_unique").on(t.paymentId, t.idempotencyKey),
     index("checkout_refund_payment_idx").on(t.paymentId),
     check("checkout_refund_amount_positive", sql`${t.amountCents} between 1 and 999999999`),
+    check(
+      "checkout_refund_cancellation_state",
+      sql`${t.cancelledAt} is null or ${t.status} = 'failed'`,
+    ),
   ],
 );
 export const cashMovement = pgTable(

@@ -219,6 +219,67 @@ fn bank_refund_reservation_dispatch_and_reconciliation_load_the_server_state() {
 }
 
 #[test]
+fn an_unsent_refund_can_be_cancelled_without_a_gateway_and_releases_its_balance() {
+    use serde_json::json;
+    use uuid::Uuid;
+
+    let id = Uuid::now_v7();
+    let payment = Uuid::now_v7();
+    let refund = Uuid::now_v7();
+    let mut sale = json!({
+        "id": id, "currency": "EUR", "status": "paid", "canRefund": true,
+        "canDispatchBankRefunds": false, "totalCents": 2200, "discountCents": 0,
+        "paidCents": 2200, "balanceCents": 0, "payments": [{
+            "id": payment, "method": "redsys_card", "status": "succeeded",
+            "amountCents": 2200, "order": "123412345678"
+        }],
+        "refunds": [{
+            "id": refund, "paymentId": payment, "amountCents": 400,
+            "reason": "Incorrect amount", "status": "requested"
+        }]
+    });
+    let requested: AppointmentCheckout = serde_json::from_value(sale.clone()).unwrap();
+    assert_eq!(
+        requested
+            .recordable_refunds_available()
+            .next()
+            .unwrap()
+            .available,
+        1800
+    );
+    assert_eq!(
+        requested
+            .reviewable_bank_refunds(chrono::Utc::now())
+            .next()
+            .unwrap()
+            .action,
+        BankRefundAction::Cancel
+    );
+    sale["refunds"][0]["status"] = json!("failed");
+    sale["refunds"][0]["cancelledAt"] = json!("2026-11-20T16:00:00Z");
+    let (base, requests) = serve(vec![
+        http("200 OK", &[], &sale["refunds"][0].to_string()),
+        http("200 OK", &[], &sale.to_string()),
+    ]);
+    let transport = signed_in(&base);
+    assert!(transport.dispatch_bank_refund(&requested, refund).is_err());
+    let cancelled = transport.cancel_bank_refund(&requested, refund).unwrap();
+    assert!(cancelled.refunds[0].cancelled_at.is_some());
+    assert_eq!(
+        cancelled
+            .recordable_refunds_available()
+            .next()
+            .unwrap()
+            .available,
+        2200
+    );
+    let log = requests.lock().unwrap();
+    assert_eq!(log.len(), 2);
+    assert!(log[0].starts_with(&format!("POST /admin/commerce/refunds/{refund}/cancel ")));
+    assert!(log[1].starts_with(&format!("GET /admin/commerce/checkouts/{id} ")));
+}
+
+#[test]
 fn report_transport_reads_the_filtered_summary_and_exports_safe_csv() {
     let counts = serde_json::json!({"booked": 1, "completed": 0, "cancelled": 0, "no_show": 0});
     let slice = serde_json::json!({"appointments": 1, "revenueCents": 0, "byStatus": counts});

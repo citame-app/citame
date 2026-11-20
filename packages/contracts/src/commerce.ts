@@ -331,6 +331,7 @@ export const checkoutRefundSchema = z.object({
   paymentId: idSchema,
   amountCents: moneyCentsSchema,
   status: z.enum(["requested", "dispatched", "succeeded", "failed", "reconciliation"]),
+  cancelledAt: instantSchema.nullable().optional(),
   reason: z.string(),
   createdAt: instantSchema,
   updatedAt: instantSchema.optional(),

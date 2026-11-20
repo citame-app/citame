@@ -128,6 +128,20 @@ function bankRefundReconcileAfter(refund: typeof checkoutRefund.$inferSelect) {
   if (refund.status === "reconciliation") return refund.updatedAt;
   if (refund.status === "dispatched") return new Date(refund.updatedAt.getTime() + 60_000);
 }
+
+function refundView(refund: typeof checkoutRefund.$inferSelect): Checkout["refunds"][number] {
+  return {
+    id: refund.id,
+    paymentId: refund.paymentId,
+    amountCents: refund.amountCents,
+    status: refund.status,
+    ...(refund.cancelledAt ? { cancelledAt: refund.cancelledAt.toISOString() } : {}),
+    reason: refund.reason,
+    createdAt: refund.createdAt.toISOString(),
+    updatedAt: refund.updatedAt.toISOString(),
+    reconcileAfter: bankRefundReconcileAfter(refund)?.toISOString(),
+  };
+}
 async function lockReceipt(tx: Tx, id: string) {
   const [row] = await tx.select().from(checkout).where(eq(checkout.id, id)).for("update");
   if (row?.appointmentId) await lockScheduling(tx);
@@ -221,16 +235,7 @@ async function snapshot(
       updatedAt: payment.updatedAt.toISOString(),
       reconcileAfter: bankPaymentReconcileAfter(payment)?.toISOString(),
     })),
-    refunds: refunds.map((refund) => ({
-      id: refund.id,
-      paymentId: refund.paymentId,
-      amountCents: refund.amountCents,
-      status: refund.status,
-      reason: refund.reason,
-      createdAt: refund.createdAt.toISOString(),
-      updatedAt: refund.updatedAt.toISOString(),
-      reconcileAfter: bankRefundReconcileAfter(refund)?.toISOString(),
-    })),
+    refunds: refunds.map(refundView),
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -1205,6 +1210,54 @@ export async function adjustCash(
   });
 }
 
+async function lockAuthorizedRefund(tx: Tx, id: string, principal: Principal) {
+  const [initial] = await tx
+    .select({ paymentId: checkoutRefund.paymentId })
+    .from(checkoutRefund)
+    .where(eq(checkoutRefund.id, id));
+  if (!initial) throw new DomainError("not_found", "Refund not found");
+  const [payment] = await tx
+    .select()
+    .from(checkoutPayment)
+    .where(eq(checkoutPayment.id, initial.paymentId));
+  if (!payment) throw new DomainError("not_found", "Payment not found");
+  await saleRow(tx, payment.checkoutId, principal, true);
+  const [refund] = await tx
+    .select()
+    .from(checkoutRefund)
+    .where(eq(checkoutRefund.id, id))
+    .for("update");
+  if (!refund) throw new DomainError("not_found", "Refund not found");
+  return { payment, refund };
+}
+
+export async function cancelRefund(db: Database, id: string, principal: Principal) {
+  requireOperator(principal, true);
+  return db.transaction(async (tx) => {
+    const { payment, refund } = await lockAuthorizedRefund(tx, id, principal);
+    if (refund.cancelledAt) return refundView(refund);
+    if (refund.status !== "requested")
+      throw new DomainError("invalid_state", "Only an unsent refund reservation can be cancelled");
+    // Keep the existing released-state wire value for deployed clients. The timestamp
+    // distinguishes operator cancellation from a failed bank operation.
+    const [cancelled] = await tx
+      .update(checkoutRefund)
+      .set({ status: "failed", cancelledAt: new Date() })
+      .where(eq(checkoutRefund.id, id))
+      .returning();
+    if (!cancelled) throw new Error("Refund cancellation failed");
+    await refreshStatus(tx, payment.checkoutId);
+    await recordAudit(tx, {
+      actorUserId: principal.userId,
+      action: "commerce.refund_cancelled",
+      entity: "checkout_refund",
+      entityId: id,
+      metadata: { amountCents: refund.amountCents, paymentId: payment.id },
+    });
+    return refundView(cancelled);
+  });
+}
+
 /** Reserve before contacting the bank; a crashed or ambiguous dispatch is never retried blindly. */
 export async function executeRefund(
   db: Database,
@@ -1215,23 +1268,8 @@ export async function executeRefund(
   requireOperator(principal, true);
   if (!gateway) throw new DomainError("payment_unavailable", "Online refunds are not configured");
   const work = await db.transaction(async (tx) => {
-    const [initial] = await tx
-      .select({ paymentId: checkoutRefund.paymentId })
-      .from(checkoutRefund)
-      .where(eq(checkoutRefund.id, id));
-    if (!initial) throw new DomainError("not_found", "Refund not found");
-    const [payment] = await tx
-      .select()
-      .from(checkoutPayment)
-      .where(eq(checkoutPayment.id, initial.paymentId));
-    if (!payment) throw new DomainError("not_found", "Payment not found");
-    await saleRow(tx, payment.checkoutId, principal, true);
-    const [refund] = await tx
-      .select()
-      .from(checkoutRefund)
-      .where(eq(checkoutRefund.id, id))
-      .for("update");
-    if (!refund) throw new DomainError("not_found", "Refund not found");
+    const { payment, refund } = await lockAuthorizedRefund(tx, id, principal);
+    if (refund.cancelledAt) throw new DomainError("invalid_state", "The refund was cancelled");
     if (refund.status !== "requested") return { refund, payment, dispatch: false };
     if (!payment.bankOrder || !["succeeded", "reconciliation"].includes(payment.status))
       throw new DomainError("invalid_state", "Only bank captures can be dispatched for refund");
@@ -1296,20 +1334,7 @@ export async function reconcileRefund(
 ) {
   requireOperator(principal, true);
   return db.transaction(async (tx) => {
-    const [initial] = await tx.select().from(checkoutRefund).where(eq(checkoutRefund.id, id));
-    if (!initial) throw new DomainError("not_found", "Refund not found");
-    const [payment] = await tx
-      .select()
-      .from(checkoutPayment)
-      .where(eq(checkoutPayment.id, initial.paymentId));
-    if (!payment) throw new DomainError("not_found", "Payment not found");
-    await saleRow(tx, payment.checkoutId, principal, true);
-    const [refund] = await tx
-      .select()
-      .from(checkoutRefund)
-      .where(eq(checkoutRefund.id, id))
-      .for("update");
-    if (!refund) throw new DomainError("not_found", "Refund not found");
+    const { payment, refund } = await lockAuthorizedRefund(tx, id, principal);
     const reconcileAfter = bankRefundReconcileAfter(refund);
     if (!reconcileAfter)
       throw new DomainError("invalid_state", "Only ambiguous bank refunds can be reconciled");

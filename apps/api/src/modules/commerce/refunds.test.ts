@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import { checkoutSchema, DESKTOP_CLIENT_ID, DESKTOP_SIGN_IN_SCOPE } from "@sob/contracts";
-import { checkoutPayment, checkoutRefund } from "@sob/db";
+import { auditLog, checkoutPayment, checkoutRefund } from "@sob/db";
 import { eq } from "drizzle-orm";
 import { type Actor, actor, json, seedFixtures, setupApiTest } from "../../../test/helpers";
 import { obtainTokens } from "../../../test/oauth";
@@ -83,6 +83,51 @@ async function requestRefund(amountCents: number) {
   expect(response.status).toBe(201);
   return (await response.json()) as { id: string; status: string };
 }
+
+test("cancelling an undispatched reservation releases its amount and is idempotent", async () => {
+  const refund = await requestRefund(700);
+  const path = `/admin/commerce/refunds/${refund.id}/cancel`;
+  const employee = await actor(t, "staff", "cannot-cancel-refund@example.test");
+  expect((await json(t.app, path, "POST", {}, employee.cookie)).status).toBe(403);
+  const cancelled = await call(path, {});
+  expect(cancelled.status).toBe(200);
+  const view = (await cancelled.json()) as Record<string, unknown>;
+  expect(view.id).toBe(refund.id);
+  expect(view.status).toBe("failed");
+  expect(view.cancelledAt).toBeString();
+  expect(Object.keys(view).sort()).toEqual([
+    "amountCents",
+    "cancelledAt",
+    "createdAt",
+    "id",
+    "paymentId",
+    "reason",
+    "status",
+    "updatedAt",
+  ]);
+  expect(await (await call(path, {})).json()).toEqual(view);
+  expect((await call(`/admin/commerce/refunds/${refund.id}/execute`, {})).status).toBe(409);
+  expect(dispatches).toBe(0);
+  const receipt = checkoutSchema.parse(
+    await (await call(`/admin/commerce/checkouts/${checkoutId}`)).json(),
+  );
+  expect(receipt.refundedCents).toBe(0);
+  expect(receipt.refunds.find((row) => row.id === refund.id)?.cancelledAt).toBeString();
+  const audited = await t.db.select().from(auditLog).where(eq(auditLog.entityId, refund.id));
+  expect(audited.filter((entry) => entry.action === "commerce.refund_cancelled")).toHaveLength(1);
+  expect((await requestRefund(1000)).status).toBe("requested");
+});
+
+test("a competing cancellation and send cannot both succeed", async () => {
+  const refund = await requestRefund(400);
+  const path = `/admin/commerce/refunds/${refund.id}`;
+  const [cancel, execute] = await Promise.all([
+    call(`${path}/cancel`, {}),
+    call(`${path}/execute`, {}),
+  ]);
+  expect([cancel.status, execute.status].sort()).toEqual([200, 409]);
+  expect(dispatches).toBe(execute.status === 200 ? 1 : 0);
+});
 test("a bank refund is reserved, dispatched once and then reflected in the receipt", async () => {
   const refund = await requestRefund(400);
   expect(refund.status).toBe("requested");
@@ -203,5 +248,10 @@ test("desktop access can reserve, dispatch and reconcile an uncertain refund exa
   const confirmed = checkoutSchema.parse(await (await call(receiptPath)).json());
   expect(confirmed.refundedCents).toBe(500);
   expect(confirmed.refunds.find((refund) => refund.id === id)?.status).toBe("succeeded");
+  const pending = await desktop(requestPath, { ...request, idempotencyKey: crypto.randomUUID() });
+  const another = (await pending.json()) as { id: string };
+  const cancel = `/admin/commerce/refunds/${another.id}/cancel`;
+  expect((await desktop(cancel, {}, staffAccess)).status).toBe(403);
+  expect((await desktop(cancel, {})).status).toBe(200);
   expect(dispatches).toBe(1);
 });

@@ -1,0 +1,2 @@
+ALTER TABLE "checkout_refund" ADD COLUMN "cancelled_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "checkout_refund" ADD CONSTRAINT "checkout_refund_cancellation_state" CHECK ("checkout_refund"."cancelled_at" is null or "checkout_refund"."status" = 'failed');

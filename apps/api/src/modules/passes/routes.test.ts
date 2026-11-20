@@ -432,6 +432,24 @@ test("unknown bank refunds hold unused visits, dispatch once and release only af
     remainingAllocationCents: 1000,
   });
 });
+
+test("cancelling an unsent bank refund releases its held pass visits", async () => {
+  const bought = await paid();
+  await t.db.execute(
+    sql`update checkout_payment set method='redsys_card', bank_order='1234abcdefff' where id=${bought.payment.id}`,
+  );
+  const response = await refund(bought.payment.id, 334);
+  expect(response.status).toBe(201);
+  const { id } = (await response.json()) as { id: string };
+  expect((await get(bought.pass.id)).periods[0]?.heldUses).toBe(1);
+  expect((await call(owner, `/admin/commerce/refunds/${id}/cancel`, "POST", {})).status).toBe(200);
+  expect((await get(bought.pass.id)).periods[0]).toMatchObject({
+    availableUses: 3,
+    heldUses: 0,
+    returnedUses: 0,
+  });
+  expect(bankDispatches).toBe(0);
+});
 test("competing purchase returns and service use cannot spend the same visits", async () => {
   const bought = await paid({ includedUses: 1 });
   const saleData = await sale();

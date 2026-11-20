@@ -8,13 +8,14 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Button } from "~/components/ui/button";
+import { ConfirmDialog } from "~/components/ui/dialog";
 import { TextField } from "~/components/ui/field";
 import { SelectField } from "~/components/ui/select-field";
 import { ErrorState, Skeleton, useOnline } from "~/components/ui/states";
 import { useI18n } from "~/i18n/react";
 import type { CommerceMode } from "~/lib/api/commerce-endpoints";
 import { api } from "~/lib/api/instance";
-import { formatMoney } from "~/lib/format";
+import { dateFormatter, formatMoney } from "~/lib/format";
 import { CheckoutPricesForm } from "./checkout-prices";
 import { invalidateCommerce } from "./invalidate";
 import { centsInput, inputCents } from "./money";
@@ -522,8 +523,10 @@ function RefundForm({
   );
 }
 function RefundStatus({ refund, owner }: { refund: Checkout["refunds"][number]; owner: boolean }) {
-  const { t, locale } = useI18n();
+  const { t, locale, timeZone } = useI18n();
   const queries = useQueryClient();
+  const online = useOnline();
+  const [confirmCancellation, setConfirmCancellation] = useState(false);
   const [reference, setReference] = useState("");
   const [outcome, setOutcome] = useState("");
   const changed = () => void invalidateCommerce(queries);
@@ -539,7 +542,14 @@ function RefundStatus({ refund, owner }: { refund: Checkout["refunds"][number]; 
       }),
     onSuccess: changed,
   });
-  const current = reconcile.data ?? execute.data ?? refund;
+  const cancellation = useMutation({
+    networkMode: "always",
+    mutationFn: () => api().commerce.cancelRefund(refund.id),
+    onSuccess: () => setConfirmCancellation(false),
+    onSettled: () => invalidateCommerce(queries),
+  });
+  const current = cancellation.data ?? reconcile.data ?? execute.data ?? refund;
+  const canManageReservation = owner && current.status === "requested";
   const canReconcile =
     current.status === "reconciliation" ||
     (current.status === "dispatched" &&
@@ -547,23 +557,75 @@ function RefundStatus({ refund, owner }: { refund: Checkout["refunds"][number]; 
   return (
     <div className="space-y-3 rounded-lg border border-line p-4">
       <p className="font-semibold">
-        {t("commerce.refunded")} · {formatMoney(current.amountCents, "EUR", locale)}
+        {t(current.status === "succeeded" ? "commerce.refunded" : "commerce.refund")} ·{" "}
+        {formatMoney(current.amountCents, "EUR", locale)}
       </p>
+      {(current.status === "requested" || current.cancelledAt) && (
+        <p className="text-sm text-muted">
+          #{current.id.slice(-8)} · {current.reason}
+        </p>
+      )}
       <p role="status">
         {t(
-          current.status === "succeeded"
-            ? "commerce.refundDone"
-            : current.status === "requested"
-              ? "commerce.refundRequested"
-              : current.status === "failed"
-                ? "commerce.refundFailed"
-                : "commerce.refundReview",
+          current.cancelledAt
+            ? "commerce.refundCancelled"
+            : current.status === "succeeded"
+              ? "commerce.refundDone"
+              : current.status === "requested"
+                ? "commerce.refundRequested"
+                : current.status === "failed"
+                  ? "commerce.refundFailed"
+                  : "commerce.refundReview",
         )}
       </p>
-      {owner && current.status === "requested" && (
-        <Button disabled={execute.isPending} onClick={() => execute.mutate()}>
-          {t("commerce.sendRefund")}
-        </Button>
+      {current.cancelledAt && (
+        <time dateTime={current.cancelledAt} className="block text-sm text-muted">
+          {dateFormatter(locale, { dateStyle: "medium", timeStyle: "short", timeZone }).format(
+            new Date(current.cancelledAt),
+          )}
+        </time>
+      )}
+      {canManageReservation && (
+        <div className="flex flex-wrap gap-2">
+          <Button
+            disabled={!online || execute.isPending || cancellation.isPending || confirmCancellation}
+            onClick={() => execute.mutate()}
+          >
+            {t("commerce.sendRefund")}
+          </Button>
+          <Button
+            variant="secondary"
+            disabled={!online || execute.isPending || cancellation.isPending}
+            onClick={() => {
+              cancellation.reset();
+              setConfirmCancellation(true);
+            }}
+          >
+            {t("commerce.cancelRefund")}
+          </Button>
+        </div>
+      )}
+      {canManageReservation && confirmCancellation && (
+        <ConfirmDialog
+          open={confirmCancellation}
+          onOpenChange={setConfirmCancellation}
+          onConfirm={() => {
+            if (online && !execute.isPending && !cancellation.isPending) cancellation.mutate();
+          }}
+          title={t("commerce.cancelRefund")}
+          description={t("commerce.cancelRefundHelp", {
+            amount: formatMoney(current.amountCents, "EUR", locale),
+          })}
+          cancelLabel={t("admin.cancel")}
+          confirmLabel={t("commerce.cancelRefundConfirm")}
+          destructive
+          pending={cancellation.isPending}
+        >
+          <p className="mt-2 break-all text-sm">
+            {current.id} · {current.reason}
+          </p>
+          {cancellation.isError && <p role="alert">{t("commerce.paymentError")}</p>}
+        </ConfirmDialog>
       )}
       {owner && canReconcile && (
         <form

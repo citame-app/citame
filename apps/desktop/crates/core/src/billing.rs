@@ -266,37 +266,48 @@ impl AppointmentCheckout {
         &self,
         now: DateTime<Utc>,
     ) -> impl Iterator<Item = BankRefund> + '_ {
-        self.refunds.iter().filter_map(move |refund| {
-            if !self.can_refund {
-                return None;
-            }
-            let action = match refund.status.as_str() {
-                "requested" if self.can_dispatch_bank_refunds => BankRefundAction::Dispatch,
-                "dispatched" | "reconciliation"
-                    if refund.reconcile_after.is_some_and(|after| now >= after) =>
-                {
-                    BankRefundAction::Reconcile
+        self.refunds
+            .iter()
+            .filter_map(move |refund| {
+                if !self.can_refund {
+                    return None;
                 }
-                _ => return None,
-            };
-            let payment = self
-                .payments
-                .iter()
-                .find(|payment| payment.id == Some(refund.payment_id))?;
-            Some(BankRefund {
-                id: refund.id,
-                payment_id: refund.payment_id,
-                amount_cents: refund.amount_cents,
-                reason: refund.reason.clone(),
-                bank_order: payment
-                    .order
-                    .as_deref()
-                    .filter(|order| !order.is_empty())?
-                    .to_owned(),
-                method: BankPaymentMethod::from_api(payment.method.as_deref()?)?,
-                action,
+                let payment = self
+                    .payments
+                    .iter()
+                    .find(|payment| payment.id == Some(refund.payment_id))?;
+                let order = payment.order.as_deref().filter(|order| !order.is_empty());
+                let action = match refund.status.as_str() {
+                    "requested" if self.can_dispatch_bank_refunds && order.is_some() => {
+                        BankRefundAction::Dispatch
+                    }
+                    "requested" => BankRefundAction::Cancel,
+                    "dispatched" | "reconciliation"
+                        if order.is_some()
+                            && refund.reconcile_after.is_some_and(|after| now >= after) =>
+                    {
+                        BankRefundAction::Reconcile
+                    }
+                    _ => return None,
+                };
+                Some(BankRefund {
+                    id: refund.id,
+                    payment_id: refund.payment_id,
+                    amount_cents: refund.amount_cents,
+                    reason: refund.reason.clone(),
+                    bank_order: order.map(str::to_owned),
+                    method: BankPaymentMethod::from_api(payment.method.as_deref()?)?,
+                    action,
+                })
             })
-        })
+            .flat_map(|refund| {
+                let cancellation =
+                    (refund.action == BankRefundAction::Dispatch).then(|| BankRefund {
+                        action: BankRefundAction::Cancel,
+                        ..refund.clone()
+                    });
+                std::iter::once(refund).chain(cancellation)
+            })
     }
 
     pub fn allows_gift_card(&self) -> bool {
@@ -592,12 +603,14 @@ pub struct CheckoutRefund {
     pub amount_cents: u32,
     pub status: String,
     pub reason: String,
+    pub cancelled_at: Option<DateTime<Utc>>,
     reconcile_after: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BankRefundAction {
     Dispatch,
+    Cancel,
     Reconcile,
 }
 
@@ -607,7 +620,7 @@ pub struct BankRefund {
     pub payment_id: Uuid,
     pub amount_cents: u32,
     pub reason: String,
-    pub bank_order: String,
+    pub bank_order: Option<String>,
     pub method: BankPaymentMethod,
     pub action: BankRefundAction,
 }

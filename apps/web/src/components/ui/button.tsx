@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes } from "react";
+import type { ComponentPropsWithRef } from "react";
 import { cn } from "~/lib/cn";
 import { Spinner } from "./icons";
 
@@ -34,7 +34,7 @@ export function buttonClasses({
   return cn(base, `btn--${variant}`, variants[variant], sizes[size], fullWidth && "w-full");
 }
 
-export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+export interface ButtonProps extends ComponentPropsWithRef<"button"> {
   variant?: ButtonVariant;
   size?: ButtonSize;
   loading?: boolean;

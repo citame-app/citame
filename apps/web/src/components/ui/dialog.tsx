@@ -1,5 +1,5 @@
 import { Dialog } from "@base-ui/react/dialog";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 import { Button } from "./button";
 import { useSheetFooterInset } from "./sheet-footer-inset";
 
@@ -30,13 +30,17 @@ export function ConfirmDialog({
   children,
 }: ConfirmDialogProps) {
   const [actions, setActions] = useState<HTMLDivElement | null>(null);
+  const cancelButton = useRef<HTMLButtonElement | null>(null);
   useSheetFooterInset(open, actions, true);
   return (
     <Dialog.Root open={open} onOpenChange={(next) => !pending && onOpenChange(next)}>
       <Dialog.Portal>
         <Dialog.Backdrop className="fixed inset-0 z-50 bg-scrim transition-opacity duration-200 data-ending-style:opacity-0 data-starting-style:opacity-0" />
         <Dialog.Viewport className="fixed inset-0 z-50 grid place-items-end sm:place-items-center">
-          <Dialog.Popup className="sob-rise flex max-h-[92dvh] w-full max-w-md flex-col overflow-hidden rounded-t-xl border border-line bg-surface shadow-lg transition-[transform,opacity] duration-200 data-ending-style:translate-y-4 data-ending-style:opacity-0 data-starting-style:translate-y-4 sm:rounded-xl">
+          <Dialog.Popup
+            initialFocus={destructive ? cancelButton : undefined}
+            className="sob-rise flex max-h-[92dvh] w-full max-w-md flex-col overflow-hidden rounded-t-xl border border-line bg-surface shadow-lg transition-[transform,opacity] duration-200 data-ending-style:translate-y-4 data-ending-style:opacity-0 data-starting-style:translate-y-4 sm:rounded-xl"
+          >
             {/* biome-ignore lint/a11y/noNoninteractiveTabindex: a scroll region needs keyboard focus for Page Down and arrow navigation */}
             <section aria-label={title} tabIndex={0} className="min-h-0 overflow-y-auto p-6">
               <Dialog.Title className="font-display text-xl font-semibold">{title}</Dialog.Title>
@@ -48,7 +52,12 @@ export function ConfirmDialog({
               data-dialog-actions
               className="flex shrink-0 flex-col-reverse gap-3 px-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:flex-row sm:justify-end sm:pb-6"
             >
-              <Button variant="secondary" onClick={() => onOpenChange(false)} disabled={pending}>
+              <Button
+                ref={cancelButton}
+                variant="secondary"
+                onClick={() => onOpenChange(false)}
+                disabled={pending}
+              >
                 {cancelLabel}
               </Button>
               <Button

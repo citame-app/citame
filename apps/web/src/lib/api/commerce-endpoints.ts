@@ -94,6 +94,8 @@ export function commerceEndpoints(client: ApiClient) {
     ) => client.post(`/admin/commerce/payments/${paymentId}/refunds`, input, checkoutRefundSchema),
     executeRefund: (id: string) =>
       client.post(`/admin/commerce/refunds/${id}/execute`, {}, checkoutRefundSchema),
+    cancelRefund: (id: string) =>
+      client.post(`/admin/commerce/refunds/${id}/cancel`, {}, checkoutRefundSchema),
     reconcileRefund: (id: string, input: { outcome: "succeeded" | "failed"; reference: string }) =>
       client.post(`/admin/commerce/refunds/${id}/reconcile`, input, checkoutRefundSchema),
   };

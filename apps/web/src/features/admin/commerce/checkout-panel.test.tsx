@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderApp } from "../../../../test/render";
 import { CheckoutPanel } from "./checkout-panel";
 
@@ -74,6 +74,12 @@ beforeEach(() => {
         reconcileAfter: undefined,
       }));
       return reply({ id, checkoutId: id, status: "succeeded" });
+    }
+    if (path.endsWith("/cancel") && method === "POST") {
+      const refund = refunds[0];
+      if (!refund) throw new Error("Expected a reserved refund");
+      refunds = [{ ...refund, status: "failed", cancelledAt: "2026-03-09T12:01:00Z" }];
+      return reply(refunds[0]);
     }
     if (path.endsWith("/capabilities"))
       return reply({
@@ -245,6 +251,40 @@ test("an unresolved bank refund remains visible after reopening a receipt", asyn
     "The bank result is uncertain. Check the bank portal and reconcile it before retrying.",
   );
   expect(screen.getByLabelText("Bank confirmation reference")).toBeInTheDocument();
+});
+
+test("cancelling a reserved bank refund requires a separate confirmation", async () => {
+  paid = true;
+  refunds = [
+    {
+      id,
+      paymentId: id,
+      amountCents: 500,
+      status: "requested",
+      reason: "Wrong amount",
+      createdAt: "2026-03-09T12:00:00Z",
+    },
+  ];
+  renderApp(<CheckoutPanel id={id} mode="admin" role="owner" />);
+  const open = await screen.findByRole("button", { name: "Cancel refund reservation" });
+  fireEvent.click(open);
+  const modal = await screen.findByRole("dialog", { name: "Cancel refund reservation" });
+  expect(modal.textContent).toContain("Wrong amount");
+  fireEvent.click(within(modal).getByRole("button", { name: "Cancel" }));
+  expect(requests.some((request) => request.method === "POST")).toBe(false);
+  fireEvent.click(open);
+  fireEvent.click(
+    within(await screen.findByRole("dialog", { name: "Cancel refund reservation" })).getByRole(
+      "button",
+      { name: "Release reservation" },
+    ),
+  );
+  await screen.findByText("Refund reservation cancelled");
+  expect(document.querySelector('time[datetime="2026-03-09T12:01:00Z"]')).not.toBeNull();
+  expect(
+    requests.filter((request) => request.method === "POST").map((request) => request.path),
+  ).toEqual([`/api/admin/commerce/refunds/${id}/cancel`]);
+  expect(screen.queryByRole("button", { name: "Send refund to the bank" })).toBeNull();
 });
 
 test("clearing the amount does not silently charge the full balance", async () => {

@@ -59,6 +59,13 @@ pub use date_shifts::{
 /// so this doubles as dead-connection detection (the server pings every 15 s).
 const STREAM_BODY_BUDGET: Duration = Duration::from_secs(90);
 
+#[derive(Clone, Copy)]
+enum BankRefundOperation<'a> {
+    Dispatch,
+    Cancel,
+    Reconcile(&'a BankPaymentReconciliation),
+}
+
 impl HttpTransport {
     pub fn new(base_url: &str, session: SessionHandle, auth: Arc<dyn AuthProvider>) -> Self {
         let agent: ureq::Agent = ureq::Agent::config_builder()
@@ -649,7 +656,15 @@ impl HttpTransport {
         checkout: &AppointmentCheckout,
         refund_id: uuid::Uuid,
     ) -> Result<AppointmentCheckout, TransportError> {
-        self.update_bank_refund(checkout, refund_id, None)
+        self.update_bank_refund(checkout, refund_id, BankRefundOperation::Dispatch)
+    }
+
+    pub fn cancel_bank_refund(
+        &self,
+        checkout: &AppointmentCheckout,
+        refund_id: uuid::Uuid,
+    ) -> Result<AppointmentCheckout, TransportError> {
+        self.update_bank_refund(checkout, refund_id, BankRefundOperation::Cancel)
     }
 
     pub fn reconcile_bank_refund(
@@ -658,19 +673,19 @@ impl HttpTransport {
         refund_id: uuid::Uuid,
         command: &BankPaymentReconciliation,
     ) -> Result<AppointmentCheckout, TransportError> {
-        self.update_bank_refund(checkout, refund_id, Some(command))
+        self.update_bank_refund(checkout, refund_id, BankRefundOperation::Reconcile(command))
     }
 
     fn update_bank_refund(
         &self,
         checkout: &AppointmentCheckout,
         refund_id: uuid::Uuid,
-        command: Option<&BankPaymentReconciliation>,
+        operation: BankRefundOperation<'_>,
     ) -> Result<AppointmentCheckout, TransportError> {
-        let action = if command.is_some() {
-            BankRefundAction::Reconcile
-        } else {
-            BankRefundAction::Dispatch
+        let (action, endpoint) = match operation {
+            BankRefundOperation::Dispatch => (BankRefundAction::Dispatch, "execute"),
+            BankRefundOperation::Cancel => (BankRefundAction::Cancel, "cancel"),
+            BankRefundOperation::Reconcile(_) => (BankRefundAction::Reconcile, "reconcile"),
         };
         let Some(refund) = checkout
             .reviewable_bank_refunds(chrono::Utc::now())
@@ -680,29 +695,31 @@ impl HttpTransport {
                 "This bank refund is no longer eligible".into(),
             ));
         };
-        let confirmed: CheckoutRefund = match command {
-            Some(review) => self.post_json(
-                &format!("/admin/commerce/refunds/{refund_id}/reconcile"),
-                review,
-            )?,
-            None => self.post_json(
-                &format!("/admin/commerce/refunds/{refund_id}/execute"),
-                &serde_json::json!({}),
-            )?,
+        let path = format!("/admin/commerce/refunds/{refund_id}/{endpoint}");
+        let confirmed: CheckoutRefund = match operation {
+            BankRefundOperation::Reconcile(review) => self.post_json(&path, review)?,
+            _ => self.post_json(&path, &serde_json::json!({}))?,
         };
         let valid = |entry: &CheckoutRefund| {
             entry.id == refund_id
                 && entry.payment_id == refund.payment_id
                 && entry.amount_cents == refund.amount_cents
-                && match command {
-                    Some(review) => {
-                        matches!(entry.status.as_str(), "succeeded" | "failed")
+                && match operation {
+                    BankRefundOperation::Reconcile(review) => {
+                        entry.cancelled_at.is_none()
+                            && matches!(entry.status.as_str(), "succeeded" | "failed")
                             && review.outcome.matches_status(&entry.status)
                     }
-                    None => matches!(
-                        entry.status.as_str(),
-                        "dispatched" | "reconciliation" | "succeeded" | "failed"
-                    ),
+                    BankRefundOperation::Cancel => {
+                        entry.status == "failed" && entry.cancelled_at.is_some()
+                    }
+                    BankRefundOperation::Dispatch => {
+                        entry.cancelled_at.is_none()
+                            && matches!(
+                                entry.status.as_str(),
+                                "dispatched" | "reconciliation" | "succeeded" | "failed"
+                            )
+                    }
                 }
         };
         if !valid(&confirmed) {

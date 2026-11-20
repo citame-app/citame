@@ -77,6 +77,11 @@ export const commerceEn = {
   "commerce.refundReview":
     "The bank result is uncertain. Check the bank portal and reconcile it before retrying.",
   "commerce.refundFailed": "The bank rejected this refund.",
+  "commerce.refundCancelled": "Refund reservation cancelled",
+  "commerce.cancelRefund": "Cancel refund reservation",
+  "commerce.cancelRefundHelp":
+    "This releases the reserved {amount}. The cancellation will be recorded on the receipt.",
+  "commerce.cancelRefundConfirm": "Release reservation",
   "commerce.bankReference": "Bank confirmation reference",
   "commerce.bankOrder": "Bank order",
   "commerce.reconcilePayment": "Reconcile bank payment",
@@ -169,6 +174,11 @@ export const commerceEsAR: Record<keyof typeof commerceEn, string> = {
   "commerce.refundReview":
     "El resultado del banco es incierto. Compruébalo en el portal bancario y concílialo antes de reintentar.",
   "commerce.refundFailed": "El banco rechazó esta devolución.",
+  "commerce.refundCancelled": "Reserva de devolución cancelada",
+  "commerce.cancelRefund": "Cancelar reserva de devolución",
+  "commerce.cancelRefundHelp":
+    "Se liberará el importe reservado de {amount}. La cancelación quedará registrada en el recibo.",
+  "commerce.cancelRefundConfirm": "Liberar reserva",
   "commerce.bankReference": "Referencia de confirmación bancaria",
   "commerce.bankOrder": "N.º de operación bancaria",
   "commerce.reconcilePayment": "Conciliar pago bancario",
