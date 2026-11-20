@@ -117,7 +117,8 @@ test("the native rehearsal can optionally move a resource-backed imported appoin
       expect(moved?.startsAt).not.toEqual(visit.startsAt);
     } finally {
       await copy.close();
-      await admin.db.execute(sql`drop database if exists ${sql.identifier(name)}`);
+      // The test owns this randomly named database. Drain any session still closing after SSE.
+      await admin.db.execute(sql`drop database if exists ${sql.identifier(name)} with (force)`);
     }
   } finally {
     await Promise.all([admin.close(), cache.close()]);
