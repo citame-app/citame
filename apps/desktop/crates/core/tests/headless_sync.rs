@@ -1447,6 +1447,44 @@ fn native_redeems_and_restores_the_reviewed_pass_visit_once() {
     ));
     assert_eq!(pass["periods"][0]["availableUses"], 3);
     assert_eq!(pass["periods"][0]["usedUses"], 0);
+
+    let receipt = linked
+        .transport
+        .open_saved_checkout(purchase_id.parse().unwrap())
+        .unwrap();
+    let payment = receipt.recordable_refunds_available().next().unwrap();
+    let quote = linked
+        .transport
+        .quote_pass_refund(&receipt, payment.id, 2)
+        .unwrap();
+    assert_eq!(quote.amount_cents, 2000);
+    let attempt = sob_core::billing::RefundAttempt::from_pass_quote(
+        &quote,
+        "Return two unused visits",
+        payment.pass_period_id.unwrap(),
+        receipt.refund_review_generation.clone().unwrap(),
+    )
+    .unwrap();
+    let result = linked
+        .transport
+        .record_checkout_refund(&receipt, payment.id, &attempt)
+        .unwrap();
+    assert_eq!(result.refunded_cents, 2000);
+    assert_eq!(
+        linked
+            .transport
+            .record_checkout_refund(&receipt, payment.id, &attempt)
+            .unwrap()
+            .refunds
+            .len(),
+        1
+    );
+    let pass = browser.rest_get(&format!(
+        "/admin/passes/{}",
+        purchase["pass"]["id"].as_str().unwrap()
+    ));
+    assert_eq!(pass["periods"][0]["availableUses"], 1);
+    assert_eq!(pass["periods"][0]["returnedUses"], 2);
 }
 
 #[test]

@@ -1,3 +1,4 @@
+import type { RefundRequest } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Button } from "~/components/ui/button";
@@ -5,6 +6,7 @@ import { TextField } from "~/components/ui/field";
 import { SelectField } from "~/components/ui/select-field";
 import { ErrorState, Skeleton, useOnline } from "~/components/ui/states";
 import { useI18n } from "~/i18n/react";
+import { ApiError } from "~/lib/api/client";
 import type { CommerceMode } from "~/lib/api/commerce-endpoints";
 import { api } from "~/lib/api/instance";
 import { formatMoney } from "~/lib/format";
@@ -86,10 +88,12 @@ export function PassTender({ checkoutId, mode }: { checkoutId: string; mode: Com
 export function PassPurchaseRefund({
   periodId,
   paymentId,
+  generation,
   maximumCents,
 }: {
   periodId: string;
   paymentId: string;
+  generation: string;
   maximumCents: number;
 }) {
   const { t } = useI18n();
@@ -102,8 +106,10 @@ export function PassPurchaseRefund({
         </Button>
       ) : (
         <QuotedRefund
+          key={generation}
           periodId={periodId}
           paymentId={paymentId}
+          generation={generation}
           maximumCents={maximumCents}
           onSaved={() => setOpen(false)}
         />
@@ -111,14 +117,21 @@ export function PassPurchaseRefund({
     </div>
   );
 }
+function refundRejection(error: Error) {
+  if (!(error instanceof ApiError) || error.status !== 409) return null;
+  // A stale quote is rejected after the server checks the idempotency key.
+  return error.code === "invalid_state" || error.code === "sync_generation_changed" ? error : null;
+}
 function QuotedRefund({
   periodId,
   paymentId,
+  generation,
   maximumCents,
   onSaved,
 }: {
   periodId: string;
   paymentId: string;
+  generation: string;
   maximumCents: number;
   onSaved: () => void;
 }) {
@@ -130,40 +143,58 @@ function QuotedRefund({
   const [key, setKey] = useState(() => crypto.randomUUID());
   const valid = /^\d{1,4}$/.test(units) && Number(units) <= 1000;
   const quote = useQuery({
-    queryKey: ["passes", "refund-quote", periodId, paymentId, units],
+    queryKey: ["passes", "refund-quote", periodId, paymentId, generation, units],
     queryFn: () => api().passes.refundQuote(periodId, paymentId, Number(units)),
     enabled: valid,
     retry: false,
     staleTime: 0,
   });
   const refund = useMutation({
-    mutationFn: () => {
-      if (
-        !quote.data ||
-        !valid ||
-        quote.data.amountCents <= 0 ||
-        quote.data.amountCents > maximumCents ||
-        reason.trim().length < 3
-      )
-        throw new Error("Invalid refund quote");
-      return api().commerce.refund(paymentId, {
-        amountCents: quote.data.amountCents,
-        reason: reason.trim(),
-        idempotencyKey: key,
-      });
-    },
+    mutationFn: (request: RefundRequest) => api().commerce.refund(paymentId, request),
     onSuccess: () => {
       void invalidateCommerce(queries);
       onSaved();
     },
-    onError: () => void quote.refetch(),
+    onError: (error) => {
+      const rejection = refundRejection(error);
+      if (!rejection) return;
+      setKey(crypto.randomUUID());
+      if (rejection.code === "sync_generation_changed") void invalidateCommerce(queries);
+      else void quote.refetch();
+    },
   });
+  const retry = refund.isError && !refundRejection(refund.error) ? refund.variables : undefined;
+  const amount = retry?.amountCents ?? quote.data?.amountCents;
+  const canSubmit =
+    online &&
+    !refund.isPending &&
+    (retry?.passQuote?.generation === generation ||
+      (!retry &&
+        valid &&
+        quote.isSuccess &&
+        !quote.isFetching &&
+        quote.data.unitCount === Number(units) &&
+        quote.data.amountCents > 0 &&
+        quote.data.amountCents <= maximumCents &&
+        reason.trim().length >= 3));
   return (
     <form
+      method="post"
       className="grid gap-3 sm:grid-cols-2"
       onSubmit={(e) => {
         e.preventDefault();
-        refund.mutate();
+        if (!canSubmit) return;
+        if (retry) {
+          refund.mutate(retry);
+          return;
+        }
+        if (!quote.data) return;
+        refund.mutate({
+          amountCents: quote.data.amountCents,
+          reason: reason.trim(),
+          idempotencyKey: key,
+          passQuote: { periodId, generation, unitCount: quote.data.unitCount },
+        });
       }}
     >
       <p className="text-sm text-muted sm:col-span-2">{t("passes.refundHelp")}</p>
@@ -172,7 +203,9 @@ function QuotedRefund({
       )}
       <TextField
         label={t("passes.refundUnits")}
+        name="unitCount"
         type="number"
+        disabled={refund.isPending || !!retry}
         min={0}
         max={1000}
         value={units}
@@ -184,12 +217,15 @@ function QuotedRefund({
       />
       <TextField
         label={t("commerce.refundAmount")}
-        value={quote.data ? centsInput(quote.data.amountCents) : ""}
+        name="amount"
+        value={amount === undefined ? "" : centsInput(amount)}
         readOnly
       />
       <TextField
         label={t("commerce.refundReason")}
+        name="reason"
         value={reason}
+        disabled={refund.isPending || !!retry}
         maxLength={300}
         onChange={(e) => {
           setReason(e.target.value);
@@ -198,17 +234,7 @@ function QuotedRefund({
         }}
       />
       {(quote.isError || refund.isError) && <p role="alert">{t("passes.error")}</p>}
-      <Button
-        type="submit"
-        disabled={
-          !online ||
-          refund.isPending ||
-          quote.isFetching ||
-          !valid ||
-          !quote.data?.amountCents ||
-          reason.trim().length < 3
-        }
-      >
+      <Button type="submit" disabled={!canSubmit}>
         {t("commerce.requestRefund")}
       </Button>
     </form>

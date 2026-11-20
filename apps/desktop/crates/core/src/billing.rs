@@ -220,11 +220,10 @@ impl AppointmentCheckout {
                 ("package", "succeeded") => RefundTender::Manual(ReceiptTender::Package),
                 ("membership", "succeeded") => RefundTender::Manual(ReceiptTender::Membership),
                 (method, "succeeded" | "reconciliation")
-                    if !self.has_pass_purchase()
-                        && payment
-                            .order
-                            .as_deref()
-                            .is_some_and(|order| !order.is_empty()) =>
+                    if payment
+                        .order
+                        .as_deref()
+                        .is_some_and(|order| !order.is_empty()) =>
                 {
                     RefundTender::Bank(BankPaymentMethod::from_api(method)?)
                 }
@@ -242,25 +241,9 @@ impl AppointmentCheckout {
                 id,
                 tender,
                 available,
+                pass_period_id: self.lines.iter().find_map(|line| line.pass_period_id),
             })
         })
-    }
-
-    pub fn needs_bank_pass_refund_quote(&self) -> bool {
-        self.can_refund
-            && self.has_pass_purchase()
-            && self.payments.iter().any(|payment| {
-                matches!(payment.status.as_str(), "succeeded" | "reconciliation")
-                    && payment
-                        .method
-                        .as_deref()
-                        .and_then(BankPaymentMethod::from_api)
-                        .is_some()
-            })
-    }
-
-    fn has_pass_purchase(&self) -> bool {
-        self.lines.iter().any(|line| line.pass_period_id.is_some())
     }
 
     pub fn reviewable_bank_refunds(
@@ -638,6 +621,7 @@ pub struct RefundablePayment {
     pub id: Uuid,
     pub tender: RefundTender,
     pub available: u32,
+    pub pass_period_id: Option<Uuid>,
 }
 
 impl RefundablePayment {
@@ -647,6 +631,10 @@ impl RefundablePayment {
             RefundTender::Manual(ReceiptTender::Package | ReceiptTender::Membership)
         )
     }
+
+    pub fn covers_amount(self, cents: u32) -> bool {
+        (1..=self.available).contains(&cents) && (!self.is_full_visit() || cents == self.available)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -655,6 +643,38 @@ pub struct RefundAttempt {
     pub(crate) idempotency_key: Uuid,
     pub(crate) amount_cents: u32,
     pub(crate) reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pass_quote: Option<PassRefundSelection>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PassRefundSelection {
+    pub period_id: Uuid,
+    pub unit_count: u32,
+    pub generation: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PassRefundQuote {
+    pub amount_cents: u32,
+    pub unit_count: u32,
+    pub excess_cents: u32,
+    pub available_uses: u32,
+    #[serde(default)]
+    pub access_fee: bool,
+}
+
+impl PassRefundQuote {
+    pub(crate) const MAX_VISITS: u32 = 1000;
+
+    pub fn parse_visit_count(text: &str) -> Option<u32> {
+        if text.len() > 4 || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        text.parse().ok().filter(|count| *count <= Self::MAX_VISITS)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -709,6 +729,23 @@ impl RefundAttempt {
     pub fn reason(&self) -> &str {
         &self.reason
     }
+    pub fn pass_selection(&self) -> Option<&PassRefundSelection> {
+        self.pass_quote.as_ref()
+    }
+    pub fn from_pass_quote(
+        quote: &PassRefundQuote,
+        reason: &str,
+        period_id: Uuid,
+        generation: String,
+    ) -> Option<Self> {
+        let mut attempt = Self::new(quote.amount_cents, reason)?;
+        attempt.pass_quote = Some(PassRefundSelection {
+            period_id,
+            unit_count: quote.unit_count,
+            generation,
+        });
+        Some(attempt)
+    }
     pub fn new(amount_cents: u32, reason: &str) -> Option<Self> {
         let reason = reason.trim();
         ((1..=999_999_999).contains(&amount_cents)
@@ -717,6 +754,7 @@ impl RefundAttempt {
             idempotency_key: Uuid::now_v7(),
             amount_cents,
             reason: reason.to_owned(),
+            pass_quote: None,
         })
     }
 }

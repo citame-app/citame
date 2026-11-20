@@ -14,7 +14,7 @@ use crate::billing::{
     CashCommand, CashSession, CheckoutFinalPrice, CheckoutHistoryFilters, CheckoutPage,
     CheckoutRefund, EligiblePassUse, ImportedPartialPayment, ImportedPartialPaymentPreview,
     ImportedPricePreview, ImportedPriceReview, ImportedSettlement, ImportedSettlementStatus,
-    PaymentAttempt, ReceiptTender, RefundAttempt, RefundTender, SavedBankRefund,
+    PassRefundQuote, PaymentAttempt, ReceiptTender, RefundAttempt, RefundTender, SavedBankRefund,
     SavedBankRefundStatus, WalkInSale,
 };
 use crate::inventory::{
@@ -606,18 +606,22 @@ impl HttpTransport {
         attempt: &RefundAttempt,
     ) -> Result<AppointmentCheckout, TransportError> {
         let payment = checkout.recordable_refunds_available().find(|payment| {
-            payment.id == payment_id
-                && if payment.is_full_visit() {
-                    attempt.amount_cents == payment.available
-                } else {
-                    attempt.amount_cents <= payment.available
-                }
+            payment.id == payment_id && payment.covers_amount(attempt.amount_cents)
         });
         let Some(payment) = payment else {
             return Err(TransportError::BadRequest(
                 "This payment cannot be refunded for the requested amount".into(),
             ));
         };
+        match (&attempt.pass_quote, payment.pass_period_id) {
+            (Some(selection), Some(period_id)) if selection.period_id == period_id => {}
+            (None, None) => {}
+            _ => {
+                return Err(TransportError::BadRequest(
+                    "A current quote is required for the selected pass".into(),
+                ));
+            }
+        }
         let refund: CheckoutRefund = self.post_json(
             &format!("/admin/commerce/payments/{payment_id}/refunds"),
             attempt,
@@ -629,6 +633,40 @@ impl HttpTransport {
             attempt,
             matches!(payment.tender, RefundTender::Bank(_)),
         )
+    }
+
+    pub fn quote_pass_refund(
+        &self,
+        checkout: &AppointmentCheckout,
+        payment_id: uuid::Uuid,
+        unit_count: u32,
+    ) -> Result<PassRefundQuote, TransportError> {
+        let Some(period_id) = checkout
+            .recordable_refunds_available()
+            .find(|payment| payment.id == payment_id)
+            .and_then(|payment| payment.pass_period_id)
+            .filter(|_| unit_count <= PassRefundQuote::MAX_VISITS)
+        else {
+            return Err(TransportError::BadRequest(
+                "Review the payment and unused visit count".into(),
+            ));
+        };
+        let quote: PassRefundQuote = self.post_json(
+            "/admin/passes/refund-quote",
+            &serde_json::json!({
+                "periodId": period_id,
+                "paymentId": payment_id,
+                "unitCount": unit_count,
+            }),
+        )?;
+        if quote.unit_count != unit_count
+            || quote.available_uses < unit_count
+            || quote.excess_cents > quote.amount_cents
+            || (quote.access_fee && unit_count > 0)
+        {
+            return Err(TransportError::Server("Invalid pass refund quote".into()));
+        }
+        Ok(quote)
     }
 
     pub fn record_reviewed_bank_refund(

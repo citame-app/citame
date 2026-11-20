@@ -120,6 +120,7 @@ export function requireAuth(
         ].includes(path) &&
           method !== "GET") ||
         (path.startsWith("/admin/inventory/") && !inventoryAllowed) ||
+        (path === "/admin/passes/refund-quote" && method !== "POST") ||
         (path.startsWith("/admin/commerce/checkouts/") &&
           path.endsWith("/prices") &&
           method !== "PUT") ||

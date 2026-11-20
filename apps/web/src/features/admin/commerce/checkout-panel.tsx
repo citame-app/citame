@@ -405,11 +405,14 @@ export function CheckoutPanel({
                 ["succeeded", "reconciliation"].includes(payment.status) &&
                 refundableFor(payment.id, payment.amountCents) > 0 &&
                 (order.lines[0]?.passPeriodId ? (
-                  <PassPurchaseRefund
-                    periodId={order.lines[0].passPeriodId}
-                    paymentId={payment.id}
-                    maximumCents={refundableFor(payment.id, payment.amountCents)}
-                  />
+                  order.refundReviewGeneration && (
+                    <PassPurchaseRefund
+                      periodId={order.lines[0].passPeriodId}
+                      paymentId={payment.id}
+                      generation={order.refundReviewGeneration}
+                      maximumCents={refundableFor(payment.id, payment.amountCents)}
+                    />
+                  )
                 ) : (
                   <RefundForm
                     paymentId={payment.id}

@@ -2,6 +2,7 @@ use super::*;
 use sob_core::billing::{RefundAttempt, RefundTender, RefundablePayment};
 
 mod bank_refund_recovery;
+mod pass_quote;
 
 fn refund_tender_label(tender: RefundTender) -> Key {
     match tender {
@@ -12,12 +13,14 @@ fn refund_tender_label(tender: RefundTender) -> Key {
 
 pub(super) struct RefundEditor {
     payment: RefundablePayment,
-    amount: Entity<TextField>,
+    amount_or_visits: Entity<TextField>,
     reason: Entity<TextField>,
     _changes: [Subscription; 2],
     attempt: Option<RefundAttempt>,
     reviewed: bool,
     bank_generation: Option<String>,
+    pass_quote: Option<pass_quote::QuotedPassRefund>,
+    pass_quote_request: Option<Arc<()>>,
 }
 
 impl RefundEditor {
@@ -25,6 +28,15 @@ impl RefundEditor {
         if self.bank_generation.is_some() && self.bank_generation.as_deref() != generation {
             self.reviewed = false;
             self.bank_generation = None;
+        }
+        if self
+            .pass_quote
+            .as_ref()
+            .is_some_and(|quote| Some(quote.generation.as_str()) != generation)
+        {
+            self.pass_quote = None;
+            self.attempt = None;
+            self.reviewed = false;
         }
     }
     pub(super) fn has_attempt(&self) -> bool {
@@ -35,15 +47,37 @@ impl RefundEditor {
         let payment = receipt
             .recordable_refunds_available()
             .find(|payment| payment.id == self.payment.id)?;
+        if payment.pass_period_id.is_some() {
+            return self
+                .active_pass_quote(receipt, cx)
+                .map(|quote| quote.terms.amount_cents)
+                .filter(|amount| payment.covers_amount(*amount));
+        }
         if payment.is_full_visit() {
             return Some(payment.available);
         }
-        parse_reviewed_amount(self.amount.read(cx).text())
-            .filter(|amount| (1..=payment.available).contains(amount))
+        parse_reviewed_amount(self.amount_or_visits.read(cx).text())
+            .filter(|amount| payment.covers_amount(*amount))
     }
 
     fn valid_reason(&self, cx: &App) -> bool {
         (3..=300).contains(&self.reason.read(cx).text().trim().encode_utf16().count())
+    }
+
+    fn reviewed_attempt(&self, receipt: &AppointmentCheckout, cx: &App) -> Option<RefundAttempt> {
+        let amount = self.reviewed_amount(receipt, cx)?;
+        let reason = self.reason.read(cx).text();
+        if let Some(period_id) = self.payment.pass_period_id {
+            let quote = self.active_pass_quote(receipt, cx)?;
+            RefundAttempt::from_pass_quote(
+                &quote.terms,
+                reason,
+                period_id,
+                quote.generation.clone(),
+            )
+        } else {
+            RefundAttempt::new(amount, reason)
+        }
     }
 }
 
@@ -62,20 +96,36 @@ impl Root {
         else {
             return;
         };
-        let amount = cx.new(|cx| TextField::new("EUR", false, cx));
+        let amount_or_visits = cx.new(|cx| {
+            let mut field = TextField::new(
+                if payment.pass_period_id.is_some() {
+                    ""
+                } else {
+                    "EUR"
+                },
+                false,
+                cx,
+            );
+            if payment.pass_period_id.is_some() {
+                field.set_text("0", cx);
+            }
+            field
+        });
         let reason = cx.new(|cx| TextField::new("", false, cx));
         let changes = [
-            cx.observe(&amount, |_, _, cx| cx.notify()),
+            cx.observe(&amount_or_visits, |_, _, cx| cx.notify()),
             cx.observe(&reason, |_, _, cx| cx.notify()),
         ];
         form.refund = Some(RefundEditor {
             payment,
-            amount,
+            amount_or_visits,
             reason,
             _changes: changes,
             attempt: None,
             reviewed: false,
             bank_generation: None,
+            pass_quote: None,
+            pass_quote_request: None,
         });
         form.error = None;
         cx.notify();
@@ -108,10 +158,7 @@ impl Root {
         let attempt = if let Some(attempt) = &editor.attempt {
             attempt.clone()
         } else {
-            let Some(amount) = editor.reviewed_amount(&form.receipt, cx) else {
-                return;
-            };
-            let Some(attempt) = RefundAttempt::new(amount, editor.reason.read(cx).text()) else {
+            let Some(attempt) = editor.reviewed_attempt(&form.receipt, cx) else {
                 return;
             };
             editor.attempt = Some(attempt.clone());
@@ -137,6 +184,7 @@ impl Root {
                     root.svc.wake(Wake::Manual);
                 }
                 let message = root.t(Key::CheckoutRefundUnconfirmed);
+                let quote_failed = root.t(Key::CheckoutPassRefundQuoteFailed);
                 let Some(CheckoutReview::Receipt(form)) = root.checkout_review_mut() else {
                     return;
                 };
@@ -159,7 +207,19 @@ impl Root {
                     Err(TransportError::BadRequest(error) | TransportError::Forbidden(error)) => {
                         editor.reviewed = false;
                         editor.attempt = None;
-                        form.error = Some(error);
+                        editor.pass_quote = None;
+                        form.error = Some(if editor.payment.pass_period_id.is_some() {
+                            quote_failed.to_owned()
+                        } else {
+                            error
+                        });
+                        form.observed_revision = -1;
+                    }
+                    Err(TransportError::ReplicaGenerationChanged) => {
+                        editor.reviewed = false;
+                        editor.attempt = None;
+                        editor.pass_quote = None;
+                        form.error = Some(message.to_owned());
                         form.observed_revision = -1;
                     }
                     Err(_) => form.error = Some(message.to_owned()),
@@ -291,16 +351,7 @@ impl Root {
         let receipt = &form.receipt;
         let online = self.status.connectivity == Connectivity::Online;
         let money = |amount| self.amount_label(i64::from(amount), &receipt.currency);
-        let mut body = div().flex().flex_col().gap_2().when(
-            online && receipt.needs_bank_pass_refund_quote(),
-            |view| {
-                view.child(
-                    div()
-                        .text_sm()
-                        .child(self.t(Key::CheckoutBankRefundPassQuote)),
-                )
-            },
-        );
+        let mut body = div().flex().flex_col().gap_2();
         if !receipt.refunds.is_empty() {
             body =
                 body.child(self.label(Key::CheckoutRefunds))
@@ -347,8 +398,11 @@ impl Root {
                         receipt
                             .recordable_refunds_available()
                             .filter(|payment| {
-                                !matches!(payment.tender, RefundTender::Bank(_))
-                                    || (!has_saved && receipt.refund_review_generation.is_some())
+                                (payment.pass_period_id.is_none()
+                                    || receipt.refund_review_generation.is_some())
+                                    && (!matches!(payment.tender, RefundTender::Bank(_))
+                                        || (!has_saved
+                                            && receipt.refund_review_generation.is_some()))
                             })
                             .map(|payment| {
                                 let id = payment.id;
@@ -376,7 +430,11 @@ impl Root {
             return body.child(self.t(Key::CheckoutOffline));
         }
         if editor.reviewed {
-            let amount = editor.reviewed_amount(receipt, cx);
+            let amount = editor
+                .attempt
+                .as_ref()
+                .map(RefundAttempt::amount_cents)
+                .or_else(|| editor.reviewed_amount(receipt, cx));
             return body
                 .when_some(amount, |view, cents| {
                     view.child(format!(
@@ -386,16 +444,32 @@ impl Root {
                     ))
                     .child(editor.reason.read(cx).text().trim().to_owned())
                 })
-                .child(self.checkout_keyboard_button(
-                    "confirm-checkout-refund",
-                    self.t(match (editor.has_attempt(), editor.payment.tender) {
-                        (true, _) => Key::CheckoutRefundRetry,
-                        (false, RefundTender::Bank(_)) => Key::CheckoutBankRefundReserve,
-                        (false, RefundTender::Manual(_)) => Key::CheckoutRefundConfirm,
-                    }),
-                    Kind::Danger,
-                    cx.listener(|root, _, _, cx| root.confirm_refund(cx)),
-                ))
+                .when_some(editor.active_pass_quote(receipt, cx), |view, quote| {
+                    view.child(format!(
+                        "{} · {}",
+                        self.t(Key::CheckoutPassRefundVisits),
+                        quote.terms.unit_count
+                    ))
+                    .when(quote.terms.access_fee, |view| {
+                        view.child(self.t(Key::CheckoutPassRefundAccessFee))
+                    })
+                })
+                .when(
+                    amount.is_none() && editor.payment.pass_period_id.is_some(),
+                    |view| view.child(self.t(Key::CheckoutPassRefundQuoteFailed)),
+                )
+                .when(amount.is_some() && !form.refreshing, |view| {
+                    view.child(self.checkout_keyboard_button(
+                        "confirm-checkout-refund",
+                        self.t(match (editor.has_attempt(), editor.payment.tender) {
+                            (true, _) => Key::CheckoutRefundRetry,
+                            (false, RefundTender::Bank(_)) => Key::CheckoutBankRefundReserve,
+                            (false, RefundTender::Manual(_)) => Key::CheckoutRefundConfirm,
+                        }),
+                        Kind::Danger,
+                        cx.listener(|root, _, _, cx| root.confirm_refund(cx)),
+                    ))
+                })
                 .when(!editor.has_attempt(), |view| {
                     view.child(self.checkout_keyboard_button(
                         "edit-checkout-refund",
@@ -407,60 +481,64 @@ impl Root {
                             {
                                 editor.reviewed = false;
                                 editor.bank_generation = None;
+                                editor.pass_quote = None;
                                 cx.notify();
                             }
                         }),
                     ))
                 });
         }
-        body.child(self.label(Key::CheckoutAmount))
-            .map(|view| {
-                if editor.payment.is_full_visit() {
-                    view.child(money(editor.payment.available))
-                } else {
-                    view.child(editor.amount.clone())
-                }
-            })
-            .child(self.label(Key::CheckoutRefundReason))
-            .child(editor.reason.clone())
-            .when(
-                editor.reviewed_amount(receipt, cx).is_some()
-                    && editor.valid_reason(cx)
-                    && !form.refreshing,
-                |view| {
-                    let generation = receipt.refund_review_generation.clone();
-                    view.child(self.checkout_keyboard_button(
-                        "review-checkout-refund",
-                        self.t(Key::CheckoutRefundReview),
-                        Kind::Ghost,
-                        cx.listener(move |root, _, _, cx| {
-                            if let Some(CheckoutReview::Receipt(form)) = root.checkout_review_mut()
-                                && let Some(editor) = &mut form.refund
-                            {
-                                if matches!(editor.payment.tender, RefundTender::Bank(_)) {
-                                    if form.receipt.refund_review_generation != generation {
-                                        return;
-                                    }
-                                    editor.bank_generation = generation.clone();
+        body.map(|view| {
+            if editor.payment.pass_period_id.is_some() {
+                return view.child(self.render_pass_refund_quote(form, editor, cx));
+            }
+            let view = view.child(self.label(Key::CheckoutAmount));
+            if editor.payment.is_full_visit() {
+                view.child(money(editor.payment.available))
+            } else {
+                view.child(editor.amount_or_visits.clone())
+            }
+        })
+        .child(self.label(Key::CheckoutRefundReason))
+        .child(editor.reason.clone())
+        .when(
+            editor.reviewed_amount(receipt, cx).is_some()
+                && editor.valid_reason(cx)
+                && !form.refreshing,
+            |view| {
+                let generation = receipt.refund_review_generation.clone();
+                view.child(self.checkout_keyboard_button(
+                    "review-checkout-refund",
+                    self.t(Key::CheckoutRefundReview),
+                    Kind::Ghost,
+                    cx.listener(move |root, _, _, cx| {
+                        if let Some(CheckoutReview::Receipt(form)) = root.checkout_review_mut()
+                            && let Some(editor) = &mut form.refund
+                        {
+                            if matches!(editor.payment.tender, RefundTender::Bank(_)) {
+                                if form.receipt.refund_review_generation != generation {
+                                    return;
                                 }
-                                editor.reviewed = true;
-                                cx.notify();
+                                editor.bank_generation = generation.clone();
                             }
-                        }),
-                    ))
-                },
-            )
-            .child(self.checkout_keyboard_button(
-                "cancel-checkout-refund",
-                self.t(Key::Close),
-                Kind::Ghost,
-                cx.listener(|root, _, _, cx| {
-                    if let Some(CheckoutReview::Receipt(form)) = root.checkout_review_mut() {
-                        form.refund = None;
-                        form.error = None;
-                        cx.notify();
-                    }
-                }),
-            ))
+                            editor.reviewed = true;
+                            cx.notify();
+                        }
+                    }),
+                ))
+            },
+        )
+        .child(self.checkout_keyboard_button(
+            "cancel-checkout-refund",
+            self.t(Key::Close),
+            Kind::Ghost,
+            cx.listener(|root, _, _, cx| {
+                if let Some(CheckoutReview::Receipt(form)) = root.checkout_review_mut() {
+                    form.refund = None;
+                    form.error = None;
+                    cx.notify();
+                }
+            }),
+        ))
     }
 }

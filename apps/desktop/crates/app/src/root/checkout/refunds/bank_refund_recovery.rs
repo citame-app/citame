@@ -32,10 +32,7 @@ impl Root {
         if form.receipt.refund_review_generation.as_deref() != Some(generation.as_str()) {
             return;
         }
-        let Some(amount) = editor.reviewed_amount(&form.receipt, cx) else {
-            return;
-        };
-        let Some(attempt) = RefundAttempt::new(amount, editor.reason.read(cx).text()) else {
+        let Some(attempt) = editor.reviewed_attempt(&form.receipt, cx) else {
             return;
         };
         let saved = SavedBankRefund {
@@ -115,6 +112,7 @@ impl Root {
                 }
                 let unconfirmed = root.t(Key::CheckoutRefundUnconfirmed);
                 let store_error = root.t(Key::CheckoutBankRefundStoreError);
+                let quote_failed = root.t(Key::CheckoutPassRefundQuoteFailed);
                 let cleared = root.svc.store.settle_bank_refund(&saved, &result).is_ok();
                 if result.is_ok() {
                     root.svc.wake(Wake::Manual);
@@ -144,7 +142,11 @@ impl Root {
                         form.error = Some(unconfirmed.to_owned());
                     }
                     Err(TransportError::BadRequest(error) | TransportError::Forbidden(error)) => {
-                        form.error = Some(error);
+                        form.error = Some(if saved.request.attempt.pass_selection().is_some() {
+                            quote_failed.to_owned()
+                        } else {
+                            error
+                        });
                     }
                     Err(_) => form.error = Some(unconfirmed.to_owned()),
                 }
@@ -226,7 +228,14 @@ impl Root {
                 div()
                     .text_sm()
                     .child(saved.request.attempt.reason().to_owned()),
-            );
+            )
+            .when_some(saved.request.attempt.pass_selection(), |view, selection| {
+                view.child(format!(
+                    "{} · {}",
+                    self.t(Key::CheckoutPassRefundVisits),
+                    selection.unit_count
+                ))
+            });
         if form.busy || form.refreshing {
             return Some(body.child(self.t(Key::CheckoutLoading)));
         }

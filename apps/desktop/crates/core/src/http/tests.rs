@@ -280,6 +280,67 @@ fn an_unsent_refund_can_be_cancelled_without_a_gateway_and_releases_its_balance(
 }
 
 #[test]
+fn an_access_only_membership_refund_keeps_the_quoted_fee_and_generation() {
+    use serde_json::{Value, json};
+    use uuid::Uuid;
+
+    let id = Uuid::now_v7();
+    let payment = Uuid::now_v7();
+    let period = Uuid::now_v7();
+    let mut sale = json!({
+        "id": id, "currency": "EUR", "status": "paid", "canRefund": true,
+        "refundReviewGeneration": "current", "totalCents": 2200, "discountCents": 0,
+        "paidCents": 2200, "balanceCents": 0,
+        "lines": [{"id": Uuid::now_v7(), "passPeriodId": period, "description": "Membership",
+            "quantity": 1, "unitAmountCents": 2200}],
+        "payments": [{"id": payment, "method": "external_card", "status": "succeeded",
+            "amountCents": 2200}]
+    });
+    let paid: AppointmentCheckout = serde_json::from_value(sale.clone()).unwrap();
+    let quote = json!({"amountCents": 2200, "unitCount": 0, "excessCents": 0,
+        "availableUses": 0, "accessFee": true});
+    let refund = json!({"id": Uuid::now_v7(), "paymentId": payment, "amountCents": 2200,
+        "reason": "Access fee refund", "status": "succeeded"});
+    sale["refunds"] = json!([refund]);
+    sale["refundedCents"] = json!(2200);
+    sale["status"] = json!("refunded");
+    let (base, requests) = serve(vec![
+        http("200 OK", &[], &quote.to_string()),
+        http("201 Created", &[], &refund.to_string()),
+        http("200 OK", &[], &sale.to_string()),
+    ]);
+    let transport = signed_in(&base);
+    let quote = transport.quote_pass_refund(&paid, payment, 0).unwrap();
+    assert!(quote.access_fee);
+    let unquoted = RefundAttempt::new(2200, "Access fee refund").unwrap();
+    assert!(matches!(
+        transport.record_checkout_refund(&paid, payment, &unquoted),
+        Err(TransportError::BadRequest(_))
+    ));
+    let attempt =
+        RefundAttempt::from_pass_quote(&quote, "Access fee refund", period, "current".into())
+            .unwrap();
+    let refunded = transport
+        .record_checkout_refund(&paid, payment, &attempt)
+        .unwrap();
+    assert_eq!(refunded.refunded_cents, 2200);
+    let requests = requests.lock().unwrap();
+    let body = |index: usize| {
+        serde_json::from_str::<Value>(requests[index].split_once("\r\n\r\n").unwrap().1).unwrap()
+    };
+    assert!(requests[0].starts_with("POST /admin/passes/refund-quote "));
+    assert_eq!(
+        body(0),
+        json!({"periodId": period, "paymentId": payment, "unitCount": 0})
+    );
+    assert_eq!(
+        body(1)["passQuote"],
+        json!({"periodId": period, "unitCount": 0, "generation": "current"})
+    );
+    assert_eq!(body(1)["amountCents"], 2200);
+}
+
+#[test]
 fn a_lost_bank_reservation_response_can_be_replayed_from_a_reopened_replica() {
     use crate::billing::{BankPaymentMethod, BankRefundReviewContext, ReviewedBankRefund};
     use crate::store::Store;

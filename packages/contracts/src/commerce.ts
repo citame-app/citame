@@ -144,6 +144,13 @@ export const refundRequestSchema = z
         generation: syncGenerationSchema,
       })
       .optional(),
+    passQuote: z
+      .strictObject({
+        periodId: idSchema,
+        unitCount: z.number().int().min(0).max(1000),
+        generation: syncGenerationSchema,
+      })
+      .optional(),
   })
   .strict();
 export type RefundRequest = z.infer<typeof refundRequestSchema>;

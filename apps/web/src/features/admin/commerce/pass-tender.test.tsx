@@ -6,8 +6,12 @@ import { PassPurchaseRefund, PassTender } from "./pass-tender";
 const realFetch = globalThis.fetch;
 const id = "0198f5a0-7b1c-7000-8000-000000000100";
 let sent: Record<string, unknown>[];
+let loseRefundResponse: boolean;
+let rateLimitRefund: boolean;
 beforeEach(() => {
   sent = [];
+  loseRefundResponse = false;
+  rateLimitRefund = false;
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     const path = new URL(String(input), "http://localhost").pathname;
     const body = init?.body ? JSON.parse(String(init.body)) : {};
@@ -46,7 +50,18 @@ beforeEach(() => {
         excessCents: 0,
         availableUses: 2,
       });
-    if (path.endsWith("/refunds"))
+    if (path.endsWith("/refunds")) {
+      if (loseRefundResponse) {
+        loseRefundResponse = false;
+        throw new Error("Lost refund response");
+      }
+      if (rateLimitRefund) {
+        rateLimitRefund = false;
+        return Response.json(
+          { error: { code: "rate_limited", message: "Try again" } },
+          { status: 429 },
+        );
+      }
       return Response.json({
         id,
         paymentId: id,
@@ -56,6 +71,7 @@ beforeEach(() => {
         createdAt: "2026-11-01T00:00:00.000Z",
         updatedAt: "2026-11-01T00:00:00.000Z",
       });
+    }
     return Response.json({
       payment: {
         id,
@@ -82,7 +98,9 @@ test("a prepaid tender submits the selected service and immutable server amount"
   expect(request).toMatchObject({ amountCents: 2000, passPeriodId: id, checkoutLineId: id });
 });
 test("purchase returns use the server quote for whole visits rather than browser arithmetic", async () => {
-  renderApp(<PassPurchaseRefund periodId={id} paymentId={id} maximumCents={1000} />);
+  renderApp(
+    <PassPurchaseRefund periodId={id} paymentId={id} maximumCents={1000} generation="live" />,
+  );
   fireEvent.click(screen.getByRole("button", { name: "Refund payment" }));
   await screen.findByLabelText("Unused visits to return");
   fireEvent.change(screen.getByLabelText("Unused visits to return"), { target: { value: "2" } });
@@ -91,12 +109,24 @@ test("purchase returns use the server quote for whole visits rather than browser
   fireEvent.change(screen.getByLabelText("Refund reason"), {
     target: { value: "Two unused visits" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "Confirm refund request" }));
-  await waitFor(() =>
-    expect(
-      sent.some(
-        (r) => r.path === `/api/admin/commerce/payments/${id}/refunds` && r.amountCents === 666,
-      ),
-    ).toBe(true),
-  );
+  loseRefundResponse = true;
+  rateLimitRefund = true;
+  const confirm = screen.getByRole("button", { name: "Confirm refund request" });
+  fireEvent.click(confirm);
+  await screen.findByRole("alert");
+  expect(screen.getByLabelText("Refund reason")).toBeDisabled();
+  fireEvent.click(confirm);
+  const requests = () =>
+    sent.filter((r) => r.path === `/api/admin/commerce/payments/${id}/refunds`);
+  await waitFor(() => expect(requests()).toHaveLength(2));
+  await waitFor(() => expect(confirm).toBeEnabled());
+  expect(screen.getByLabelText("Refund reason")).toBeDisabled();
+  fireEvent.click(confirm);
+  await waitFor(() => expect(requests()).toHaveLength(3));
+  expect(requests()[0]).toMatchObject({
+    amountCents: 666,
+    passQuote: { periodId: id, generation: "live", unitCount: 2 },
+  });
+  expect(requests()[1]).toEqual(requests()[0]);
+  expect(requests()[2]).toEqual(requests()[0]);
 });

@@ -973,6 +973,8 @@ export async function manualRefund(
         "Review the refund against the restored receipt",
       );
   }
+  if (input.passQuote && input.passQuote.generation !== currentGeneration)
+    throw new DomainError("sync_generation_changed", "Quote the refund against the restored pass");
   return db.transaction(async (tx) => {
     const [initial] = await tx
       .select()
@@ -1048,7 +1050,7 @@ export async function manualRefund(
       })
       .returning();
     if (!refund) throw new Error("Refund insert failed");
-    await preparePassRefund(tx, refund, payment);
+    await preparePassRefund(tx, refund, payment, input.passQuote);
     if (session)
       await tx.insert(cashMovement).values({
         sessionId: session.id,

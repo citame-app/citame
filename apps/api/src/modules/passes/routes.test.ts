@@ -1,5 +1,12 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
-import { benefitPlanSchema, passContractSchema, passPurchaseResponseSchema } from "@sob/contracts";
+import {
+  benefitPlanSchema,
+  benefitRefundQuoteResponseSchema,
+  DESKTOP_CLIENT_ID,
+  DESKTOP_SIGN_IN_SCOPE,
+  passContractSchema,
+  passPurchaseResponseSchema,
+} from "@sob/contracts";
 import {
   appointment,
   appointmentService,
@@ -17,6 +24,8 @@ import {
   seedFixtures,
   setupApiTest,
 } from "../../../test/helpers";
+import { ORIGIN, obtainTokens } from "../../../test/oauth";
+import { desktopResource } from "../../oauth/desktop";
 import { RedsysGateway } from "../../payments/redsys";
 import type { PaymentGateway } from "../../payments/types";
 
@@ -332,6 +341,92 @@ test("purchase refunds reserve whole unused visits and cannot refund consumed al
     remainingAllocationCents: 0,
   });
   expect((await refund(bought.payment.id, 1)).status).toBe(409);
+});
+test("Desktop can quote and reserve the exact unused visits and cannot submit a stale quote", async () => {
+  const bought = await paid();
+  await t.db.execute(
+    sql`update checkout_payment set method='redsys_card', bank_order='1234abcdefff' where id=${bought.payment.id}`,
+  );
+  const { tokens } = await obtainTokens(t.app, {
+    clientId: DESKTOP_CLIENT_ID,
+    cookie: owner.cookie,
+    scope: `${DESKTOP_SIGN_IN_SCOPE} offline_access`,
+    resource: desktopResource(ORIGIN),
+    redirectUri: "http://127.0.0.1:63282/callback",
+  });
+  const desktop = (path: string, body?: unknown) =>
+    t.app.request(path, {
+      method: body ? "POST" : "GET",
+      headers: {
+        authorization: `Bearer ${tokens.access_token}`,
+        ...(body !== undefined ? { "content-type": "application/json" } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  const quotePath = "/admin/passes/refund-quote";
+  const quote = async (unitCount: number) => {
+    const response = await desktop(quotePath, {
+      periodId: bought.period.id,
+      paymentId: bought.payment.id,
+      unitCount,
+    });
+    expect(response.status).toBe(200);
+    return benefitRefundQuoteResponseSchema.parse(await response.json());
+  };
+  expect((await desktop(quotePath)).status).toBe(403);
+  expect((await quote(1)).amountCents).toBe(334);
+  const used = await sale();
+  expect(
+    (
+      await pay(used.id, 2000, {
+        method: "package",
+        passPeriodId: bought.period.id,
+        checkoutLineId: must(used.lines[0]).id,
+      })
+    ).status,
+  ).toBe(201);
+  const request = {
+    idempotencyKey: key(),
+    amountCents: 334,
+    reason: "Verified unused visits",
+    review: {
+      checkoutId: bought.checkout.id,
+      actorUserId: owner.userId,
+      generation: t.config.syncReplicaGeneration,
+    },
+    passQuote: {
+      periodId: bought.period.id,
+      unitCount: 1,
+      generation: t.config.syncReplicaGeneration,
+    },
+  };
+  const path = `/admin/commerce/payments/${bought.payment.id}/refunds`;
+  const staleGeneration = await desktop(path, {
+    ...request,
+    passQuote: { ...request.passQuote, generation: "obsolete" },
+  });
+  expect(await staleGeneration.json()).toMatchObject({
+    error: { code: "sync_generation_changed" },
+  });
+  expect((await desktop(path, request)).status).toBe(409);
+  const fresh = await quote(2);
+  expect(fresh).toMatchObject({ amountCents: 666, availableUses: 2, unitCount: 2 });
+  const reviewed = {
+    ...request,
+    amountCents: fresh.amountCents,
+    passQuote: { ...request.passQuote, unitCount: 2 },
+  };
+  const accepted = await desktop(path, reviewed);
+  expect(accepted.status, await accepted.clone().text()).toBe(201);
+  const reserved = await accepted.json();
+  expect(await (await desktop(path, reviewed)).json()).toEqual(reserved);
+  expect((await get(bought.pass.id)).periods[0]).toMatchObject({
+    heldUses: 2,
+    availableUses: 0,
+    usedUses: 1,
+    returnedUses: 0,
+  });
+  expect(bankDispatches).toBe(0);
 });
 test("membership periods follow the original billing anchor, manual renewal is unique and cancellation preserves paid visits", async () => {
   const bought = await paid({ kind: "membership", periodMonths: 1, includedUses: 2 });
@@ -713,7 +808,22 @@ test("access-fee return quotes allocate excess first without exceeding a split p
   });
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({ amountCents: 1000, excessCents: 500 });
-  expect((await refund(bought.payment.id, 1000)).status).toBe(201);
+  const returned = await call(
+    owner,
+    `/admin/commerce/payments/${bought.payment.id}/refunds`,
+    "POST",
+    {
+      idempotencyKey: key(),
+      reason: "Access fee and refundable excess",
+      amountCents: 1000,
+      passQuote: {
+        periodId: bought.period.id,
+        unitCount: 0,
+        generation: t.config.syncReplicaGeneration,
+      },
+    },
+  );
+  expect(returned.status, await returned.clone().text()).toBe(201);
   expect((await get(bought.pass.id)).periods[0]?.status).toBe("void");
 });
 test("salon pass records identify the buyer without exposing private client notes", async () => {

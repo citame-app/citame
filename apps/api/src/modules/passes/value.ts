@@ -222,7 +222,7 @@ async function refundable(tx: Tx, periodId: string, excludeRefundId?: string) {
     .select()
     .from(checkoutPayment)
     .where(eq(checkoutPayment.checkoutId, line.checkoutId));
-  const refunds = payments.length
+  const ledger = payments.length
     ? await tx
         .select()
         .from(checkoutRefund)
@@ -233,11 +233,12 @@ async function refundable(tx: Tx, periodId: string, excludeRefundId?: string) {
           ),
         )
     : [];
+  const refunds = ledger.filter((refund) => refund.id !== excludeRefundId);
   const captured = payments
     .filter((p) => p.status === "succeeded" || p.status === "reconciliation")
     .reduce((sum, p) => sum + p.amountCents, 0);
   const reserved = refunds
-    .filter((r) => r.status !== "failed" && r.id !== excludeRefundId)
+    .filter((r) => r.status !== "failed")
     .reduce((sum, r) => sum + r.amountCents, 0);
   const units = await tx
     .select()
@@ -278,8 +279,11 @@ async function refundable(tx: Tx, periodId: string, excludeRefundId?: string) {
     excess: Math.max(0, captured - reserved + heldAsset - funded),
   };
 }
-export async function refundQuote(tx: Tx, periodId: string, paymentId: string, unitCount: number) {
-  const data = await refundable(tx, periodId);
+function passRefundTerms(
+  data: Awaited<ReturnType<typeof refundable>>,
+  paymentId: string,
+  unitCount: number,
+) {
   const payment = data.payments.find((p) => p.id === paymentId);
   if (!payment || !["succeeded", "reconciliation"].includes(payment.status))
     throw new DomainError("not_found", "Captured purchase payment not found");
@@ -292,10 +296,11 @@ export async function refundQuote(tx: Tx, periodId: string, paymentId: string, u
       .filter((r) => r.paymentId === paymentId && r.status !== "failed")
       .reduce((sum, r) => sum + r.amountCents, 0);
   const excess = Math.min(data.excess, remaining);
+  const selected = available.slice(0, unitCount);
   const asset =
     data.contract.includedUses === 0 && data.period.status === "active"
       ? Math.min(data.period.priceCents, remaining - excess)
-      : available.slice(0, unitCount).reduce((sum, u) => sum + u.allocatedCents, 0);
+      : selected.reduce((sum, u) => sum + u.allocatedCents, 0);
   const amountCents = asset + excess;
   if (amountCents > remaining)
     throw new DomainError(
@@ -308,15 +313,27 @@ export async function refundQuote(tx: Tx, periodId: string, paymentId: string, u
     excessCents: excess,
     availableUses: available.length,
     accessFee: data.contract.kind === "membership" && data.contract.includedUses === 0,
+    selected,
   };
+}
+export async function refundQuote(tx: Tx, periodId: string, paymentId: string, unitCount: number) {
+  const { selected, ...quote } = passRefundTerms(
+    await refundable(tx, periodId),
+    paymentId,
+    unitCount,
+  );
+  return quote;
 }
 /** Reserve unused whole visits before any bank refund can leave this transaction. */
 export async function preparePassRefund(
   tx: Tx,
   refund: typeof checkoutRefund.$inferSelect,
   payment: typeof checkoutPayment.$inferSelect,
+  quoted?: { periodId: string; unitCount: number },
 ) {
   if (payment.method === "package" || payment.method === "membership") {
+    if (quoted)
+      throw new DomainError("invalid_state", "Purchase quotes cannot return a redemption");
     if (refund.amountCents !== payment.amountCents)
       throw new DomainError("invalid_state", "Pass redemptions must return the entire visit");
     return;
@@ -324,32 +341,43 @@ export async function preparePassRefund(
   const [line] = await tx
     .select()
     .from(checkoutLine)
-    .where(eq(checkoutLine.checkoutId, payment.checkoutId));
+    .where(
+      and(
+        eq(checkoutLine.checkoutId, payment.checkoutId),
+        quoted ? eq(checkoutLine.passPeriodId, quoted.periodId) : undefined,
+      ),
+    );
+  if (quoted && !line?.passPeriodId)
+    throw new DomainError("invalid_state", "The quoted pass does not match this receipt");
   if (!line?.passPeriodId) return;
   // The newly inserted refund is not yet a reservation until this allocation is created.
   const data = await refundable(tx, line.passPeriodId, refund.id);
-  const excess = Math.min(data.excess, refund.amountCents);
-  let needed = refund.amountCents - excess;
-  const selected: (typeof passUnit.$inferSelect)[] = [];
-  for (const unit of data.units) {
-    if (!needed) break;
-    if (unit.status !== "available") continue;
-    if (unit.allocatedCents > needed) break;
-    selected.push(unit);
-    needed -= unit.allocatedCents;
+  let excess = Math.min(data.excess, refund.amountCents);
+  let selected: (typeof passUnit.$inferSelect)[] = [];
+  if (quoted) {
+    const terms = passRefundTerms(data, payment.id, quoted.unitCount);
+    if (terms.amountCents !== refund.amountCents)
+      throw new DomainError("invalid_state", "The pass refund amount changed. Quote it again.");
+    ({ selected, excessCents: excess } = terms);
+  } else {
+    let needed = refund.amountCents - excess;
+    for (const unit of data.units) {
+      if (unit.status !== "available") continue;
+      if (!needed || unit.allocatedCents > needed) break;
+      selected.push(unit);
+      needed -= unit.allocatedCents;
+    }
+    const returnsAccessFee =
+      data.contract.includedUses === 0 &&
+      data.period.status === "active" &&
+      needed > 0 &&
+      needed <= data.period.priceCents;
+    if (needed !== 0 && !returnsAccessFee)
+      throw new DomainError(
+        "invalid_state",
+        "Purchase refunds must return unused whole visit allocations",
+      );
   }
-  if (
-    data.contract.includedUses === 0 &&
-    data.period.status === "active" &&
-    needed > 0 &&
-    needed <= data.period.priceCents
-  )
-    needed = 0;
-  if (needed !== 0)
-    throw new DomainError(
-      "invalid_state",
-      "Purchase refunds must return unused whole visit allocations",
-    );
   await tx.insert(passRefundAllocation).values({
     periodId: data.period.id,
     refundId: refund.id,
