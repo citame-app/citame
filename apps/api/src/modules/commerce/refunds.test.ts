@@ -1,7 +1,10 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
+import { checkoutSchema, DESKTOP_CLIENT_ID, DESKTOP_SIGN_IN_SCOPE } from "@sob/contracts";
 import { checkoutPayment, checkoutRefund } from "@sob/db";
 import { eq } from "drizzle-orm";
 import { type Actor, actor, json, seedFixtures, setupApiTest } from "../../../test/helpers";
+import { obtainTokens } from "../../../test/oauth";
+import { desktopResource } from "../../oauth/desktop";
 import { RedsysGateway } from "../../payments/redsys";
 
 const secret = "sq7HjrUOBfKmC576ILgskD5srU870gJ7";
@@ -140,4 +143,65 @@ test("a refund still in flight cannot be reconciled before its dispatch lease ha
     .set({ updatedAt: new Date(Date.now() - 120_000) })
     .where(eq(checkoutRefund.id, refund.id));
   expect((await call(`/admin/commerce/refunds/${refund.id}/reconcile`, body)).status).toBe(200);
+});
+
+test("desktop access can reserve, dispatch and reconcile an uncertain refund exactly once", async () => {
+  const authorize = async (user: Actor) => {
+    const result = await obtainTokens(t.app, {
+      clientId: DESKTOP_CLIENT_ID,
+      cookie: user.cookie,
+      scope: `${DESKTOP_SIGN_IN_SCOPE} offline_access`,
+      resource: desktopResource("http://localhost:3000"),
+      redirectUri: "http://127.0.0.1:63282/callback",
+    });
+    return String(result.tokens.access_token);
+  };
+  const access = await authorize(owner);
+  const staff = await actor(t, "staff", "refund-professional@example.test");
+  const staffAccess = await authorize(staff);
+  const desktop = (path: string, body?: unknown, token = access) =>
+    t.app.request(path, {
+      method: body === undefined ? "GET" : "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        ...(body !== undefined && { "content-type": "application/json" }),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  const requestPath = `/admin/commerce/payments/${paymentId}/refunds`;
+  const request = {
+    amountCents: 500,
+    reason: "Synthetic refund from desktop",
+    idempotencyKey: crypto.randomUUID(),
+  };
+  expect((await desktop(requestPath, request, staffAccess)).status).toBe(403);
+  const reserved = await desktop(requestPath, request);
+  expect(reserved.status).toBe(201);
+  const { id, status } = (await reserved.json()) as { id: string; status: string };
+  expect(status).toBe("requested");
+  expect(await (await desktop(requestPath, request)).json()).toMatchObject({ id });
+  expect(dispatches).toBe(0);
+
+  const dispatch = `/admin/commerce/refunds/${id}/execute`;
+  expect((await desktop(dispatch)).status).toBe(403);
+  expect((await desktop(dispatch, {}, staffAccess)).status).toBe(403);
+  mode = "unknown";
+  const attempted = await desktop(dispatch, {});
+  expect(attempted.status).toBe(200);
+  expect(await attempted.json()).toMatchObject({ status: "reconciliation" });
+  expect((await desktop(dispatch, {})).status).toBe(200);
+  expect(dispatches).toBe(1);
+  const receiptPath = `/admin/commerce/checkouts/${checkoutId}`;
+  const uncertain = checkoutSchema.parse(await (await desktop(receiptPath)).json());
+  expect(uncertain.canDispatchBankRefunds).toBe(true);
+  expect(uncertain.refunds.find((refund) => refund.id === id)?.reconcileAfter).toBeString();
+  const reconcile = `/admin/commerce/refunds/${id}/reconcile`;
+  const evidence = { outcome: "succeeded", reference: "Synthetic bank refund REF-500" };
+  expect((await desktop(reconcile, evidence, staffAccess)).status).toBe(403);
+  expect((await desktop(reconcile, evidence)).status).toBe(200);
+  expect((await desktop(reconcile, evidence)).status).toBe(409);
+  const confirmed = checkoutSchema.parse(await (await call(receiptPath)).json());
+  expect(confirmed.refundedCents).toBe(500);
+  expect(confirmed.refunds.find((refund) => refund.id === id)?.status).toBe("succeeded");
+  expect(dispatches).toBe(1);
 });

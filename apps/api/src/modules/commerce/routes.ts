@@ -71,6 +71,7 @@ export function commerceAdminRoutes(deps: AppDeps) {
     return {
       ...receipt,
       canRefund: permissions.refunds,
+      canDispatchBankRefunds: permissions.refunds && gateway !== null,
       ...(permissions.writeInventory && receipt.fulfilledAt
         ? { stockReturnGeneration: deps.config.syncReplicaGeneration }
         : {}),

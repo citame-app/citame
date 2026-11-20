@@ -260,6 +260,7 @@ export const checkoutPaymentSchema = z.object({
 export const checkoutSchema = z.object({
   externalBalance: externalBalanceSchema.optional(),
   canRefund: z.boolean().optional(),
+  canDispatchBankRefunds: z.boolean().optional(),
   stockReturnGeneration: syncGenerationSchema.optional(),
   id: idSchema,
   pricingVersion: z.number().int().positive().optional(),
@@ -333,6 +334,7 @@ export const checkoutRefundSchema = z.object({
   reason: z.string(),
   createdAt: instantSchema,
   updatedAt: instantSchema.optional(),
+  reconcileAfter: instantSchema.optional(),
 });
 export const cashSessionSchema = z.object({
   id: idSchema,

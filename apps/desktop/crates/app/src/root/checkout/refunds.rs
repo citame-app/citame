@@ -1,5 +1,12 @@
 use super::*;
-use sob_core::billing::{RefundAttempt, RefundablePayment};
+use sob_core::billing::{RefundAttempt, RefundTender, RefundablePayment};
+
+fn refund_tender_label(tender: RefundTender) -> Key {
+    match tender {
+        RefundTender::Manual(method) => tender_label(method),
+        RefundTender::Bank(method) => reconciliation::bank_method_label(method),
+    }
+}
 
 pub(super) struct RefundEditor {
     payment: RefundablePayment,
@@ -36,13 +43,7 @@ impl Root {
         let Some(CheckoutReview::Receipt(form)) = self.checkout_review_mut() else {
             return;
         };
-        if form.busy
-            || form.refreshing
-            || form.request.is_some()
-            || form.stock_return.is_some()
-            || form.refund.is_some()
-            || form.confirming_void
-        {
+        if !form.is_idle() || form.refreshing {
             return;
         }
         let Some(payment) = form
@@ -274,7 +275,16 @@ impl Root {
         let receipt = &form.receipt;
         let online = self.status.connectivity == Connectivity::Online;
         let money = |amount| self.amount_label(i64::from(amount), &receipt.currency);
-        let mut body = div().flex().flex_col().gap_2();
+        let mut body = div().flex().flex_col().gap_2().when(
+            online && receipt.needs_bank_pass_refund_quote(),
+            |view| {
+                view.child(
+                    div()
+                        .text_sm()
+                        .child(self.t(Key::CheckoutBankRefundPassQuote)),
+                )
+            },
+        );
         if !receipt.refunds.is_empty() {
             body =
                 body.child(self.label(Key::CheckoutRefunds))
@@ -282,6 +292,7 @@ impl Root {
                         let status = match refund.status.as_str() {
                             "succeeded" => Key::CheckoutRefundRecorded,
                             "failed" => Key::CheckoutRefundFailed,
+                            "requested" => Key::CheckoutBankRefundReserved,
                             _ => Key::CheckoutRefundPending,
                         };
                         div().text_sm().child(format!(
@@ -303,12 +314,12 @@ impl Root {
                 |view| {
                     view.children(receipt.recordable_refunds_available().map(|payment| {
                         let id = payment.id;
-                        self.button(
+                        self.checkout_keyboard_button(
                             SharedString::from(format!("refund-{id}")),
                             format!(
                                 "{} · {} · {}",
                                 self.t(Key::CheckoutRefund),
-                                self.t(tender_label(payment.tender)),
+                                self.t(refund_tender_label(payment.tender)),
                                 money(payment.available)
                             ),
                             Kind::Ghost,
@@ -331,23 +342,23 @@ impl Root {
                 .when_some(amount, |view, cents| {
                     view.child(format!(
                         "{} · {}",
-                        self.t(tender_label(editor.payment.tender)),
+                        self.t(refund_tender_label(editor.payment.tender)),
                         money(cents)
                     ))
                     .child(editor.reason.read(cx).text().trim().to_owned())
                 })
-                .child(self.button(
+                .child(self.checkout_keyboard_button(
                     "confirm-checkout-refund",
-                    self.t(if editor.has_attempt() {
-                        Key::CheckoutRefundRetry
-                    } else {
-                        Key::CheckoutRefundConfirm
+                    self.t(match (editor.has_attempt(), editor.payment.tender) {
+                        (true, _) => Key::CheckoutRefundRetry,
+                        (false, RefundTender::Bank(_)) => Key::CheckoutBankRefundReserve,
+                        (false, RefundTender::Manual(_)) => Key::CheckoutRefundConfirm,
                     }),
                     Kind::Danger,
                     cx.listener(|root, _, _, cx| root.confirm_refund(cx)),
                 ))
                 .when(!editor.has_attempt(), |view| {
-                    view.child(self.button(
+                    view.child(self.checkout_keyboard_button(
                         "edit-checkout-refund",
                         self.t(Key::Back),
                         Kind::Ghost,
@@ -377,7 +388,7 @@ impl Root {
                     && editor.valid_reason(cx)
                     && !form.refreshing,
                 |view| {
-                    view.child(self.button(
+                    view.child(self.checkout_keyboard_button(
                         "review-checkout-refund",
                         self.t(Key::CheckoutRefundReview),
                         Kind::Ghost,
@@ -392,7 +403,7 @@ impl Root {
                     ))
                 },
             )
-            .child(self.button(
+            .child(self.checkout_keyboard_button(
                 "cancel-checkout-refund",
                 self.t(Key::Close),
                 Kind::Ghost,

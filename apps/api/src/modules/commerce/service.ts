@@ -123,6 +123,11 @@ function bankPaymentReconcileAfter(payment: typeof checkoutPayment.$inferSelect)
   )
     return new Date(payment.updatedAt.getTime() + 60_000);
 }
+
+function bankRefundReconcileAfter(refund: typeof checkoutRefund.$inferSelect) {
+  if (refund.status === "reconciliation") return refund.updatedAt;
+  if (refund.status === "dispatched") return new Date(refund.updatedAt.getTime() + 60_000);
+}
 async function lockReceipt(tx: Tx, id: string) {
   const [row] = await tx.select().from(checkout).where(eq(checkout.id, id)).for("update");
   if (row?.appointmentId) await lockScheduling(tx);
@@ -224,6 +229,7 @@ async function snapshot(
       reason: refund.reason,
       createdAt: refund.createdAt.toISOString(),
       updatedAt: refund.updatedAt.toISOString(),
+      reconcileAfter: bankRefundReconcileAfter(refund)?.toISOString(),
     })),
     createdAt: row.createdAt.toISOString(),
   };
@@ -954,7 +960,7 @@ export async function manualRefund(
       .from(checkoutPayment)
       .where(eq(checkoutPayment.id, paymentId));
     if (!initial) throw new DomainError("not_found", "Payment not found");
-    await lockReceipt(tx, initial.checkoutId);
+    await saleRow(tx, initial.checkoutId, principal, true);
     const [payment] = await tx
       .select()
       .from(checkoutPayment)
@@ -1219,7 +1225,7 @@ export async function executeRefund(
       .from(checkoutPayment)
       .where(eq(checkoutPayment.id, initial.paymentId));
     if (!payment) throw new DomainError("not_found", "Payment not found");
-    await lockReceipt(tx, payment.checkoutId);
+    await saleRow(tx, payment.checkoutId, principal, true);
     const [refund] = await tx
       .select()
       .from(checkoutRefund)
@@ -1297,17 +1303,18 @@ export async function reconcileRefund(
       .from(checkoutPayment)
       .where(eq(checkoutPayment.id, initial.paymentId));
     if (!payment) throw new DomainError("not_found", "Payment not found");
-    await lockReceipt(tx, payment.checkoutId);
+    await saleRow(tx, payment.checkoutId, principal, true);
     const [refund] = await tx
       .select()
       .from(checkoutRefund)
       .where(eq(checkoutRefund.id, id))
       .for("update");
     if (!refund) throw new DomainError("not_found", "Refund not found");
-    if (refund.status === "dispatched" && Date.now() - refund.updatedAt.getTime() < 60000)
-      throw new DomainError("invalid_state", "The bank refund is still in flight");
-    if (!["dispatched", "reconciliation"].includes(refund.status))
+    const reconcileAfter = bankRefundReconcileAfter(refund);
+    if (!reconcileAfter)
       throw new DomainError("invalid_state", "Only ambiguous bank refunds can be reconciled");
+    if (Date.now() < reconcileAfter.getTime())
+      throw new DomainError("invalid_state", "The bank refund is still in flight");
     const [updated] = await tx
       .update(checkoutRefund)
       .set({ status: input.outcome })

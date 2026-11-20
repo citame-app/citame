@@ -141,6 +141,84 @@ fn bank_reconciliation_checks_eligibility_and_reloads_only_the_reviewed_receipt(
 }
 
 #[test]
+fn bank_refund_reservation_dispatch_and_reconciliation_load_the_server_state() {
+    use crate::billing::BankPaymentOutcome;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    let id = Uuid::now_v7();
+    let payment = Uuid::now_v7();
+    let refund = Uuid::now_v7();
+    let mut sale = json!({
+        "id": id, "currency": "EUR", "status": "paid", "canRefund": true,
+        "canDispatchBankRefunds": true, "totalCents": 2200, "discountCents": 0,
+        "paidCents": 2200, "balanceCents": 0, "payments": [{
+            "id": payment, "method": "redsys_bizum", "status": "succeeded",
+            "amountCents": 2200, "order": "123412345678"
+        }]
+    });
+    let paid: AppointmentCheckout = serde_json::from_value(sale.clone()).unwrap();
+    let mut entry = json!({
+        "id": refund, "paymentId": payment, "amountCents": 400,
+        "reason": "Synthetic treatment refund", "status": "requested"
+    });
+    sale["refunds"] = json!([entry.clone()]);
+    let reserved_receipt = sale.to_string();
+    let reserved = entry.to_string();
+    entry["status"] = json!("reconciliation");
+    entry["reconcileAfter"] = json!("2026-03-12T00:00:00Z");
+    sale["refunds"] = json!([entry.clone()]);
+    let review_receipt = sale.to_string();
+    let review = entry.to_string();
+    entry["status"] = json!("succeeded");
+    sale["refunds"] = json!([entry.clone()]);
+    sale["refundedCents"] = json!(400);
+    sale["status"] = json!("partially_refunded");
+    let (base, requests) = serve(vec![
+        http("201 Created", &[], &reserved),
+        http("200 OK", &[], &reserved_receipt),
+        http("200 OK", &[], &review),
+        http("200 OK", &[], &review_receipt),
+        http("200 OK", &[], &entry.to_string()),
+        http("200 OK", &[], &sale.to_string()),
+    ]);
+    let transport = signed_in(&base);
+    let attempt = RefundAttempt::new(400, "Synthetic treatment refund").unwrap();
+    let requested = transport
+        .record_checkout_refund(&paid, payment, &attempt)
+        .unwrap();
+    assert_eq!(requested.refunded_cents, 0);
+    assert_eq!(
+        requested
+            .recordable_refunds_available()
+            .next()
+            .unwrap()
+            .available,
+        1800
+    );
+    let uncertain = transport.dispatch_bank_refund(&requested, refund).unwrap();
+    assert!(
+        !uncertain
+            .reviewable_bank_refunds(chrono::Utc::now())
+            .any(|r| r.action == BankRefundAction::Dispatch)
+    );
+    assert!(transport.dispatch_bank_refund(&uncertain, refund).is_err());
+    let confirmed = transport
+        .reconcile_bank_refund(
+            &uncertain,
+            refund,
+            &BankPaymentReconciliation::new(BankPaymentOutcome::Succeeded, "BANK-REF-400").unwrap(),
+        )
+        .unwrap();
+    assert_eq!(confirmed.refunded_cents, 400);
+    let log = requests.lock().unwrap();
+    assert_eq!(log.len(), 6);
+    assert!(log[0].starts_with(&format!("POST /admin/commerce/payments/{payment}/refunds ")));
+    assert!(log[2].starts_with(&format!("POST /admin/commerce/refunds/{refund}/execute ")));
+    assert!(log[4].starts_with(&format!("POST /admin/commerce/refunds/{refund}/reconcile ")));
+}
+
+#[test]
 fn report_transport_reads_the_filtered_summary_and_exports_safe_csv() {
     let counts = serde_json::json!({"booked": 1, "completed": 0, "cancelled": 0, "no_show": 0});
     let slice = serde_json::json!({"appointments": 1, "revenueCents": 0, "byStatus": counts});

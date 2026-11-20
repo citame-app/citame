@@ -1,19 +1,65 @@
 use super::*;
 use sob_core::billing::{
-    BankPaymentMethod, BankPaymentOutcome, BankPaymentReconciliation, PendingBankPayment,
+    BankPaymentMethod, BankPaymentOutcome, BankPaymentReconciliation, BankRefund, BankRefundAction,
+    PendingBankPayment,
 };
 
-pub(super) struct BankPaymentReview {
-    payment: PendingBankPayment,
+#[derive(Clone)]
+enum BankReviewTarget {
+    Payment(PendingBankPayment),
+    Refund(BankRefund),
+}
+
+impl BankReviewTarget {
+    fn id(&self) -> Uuid {
+        match self {
+            Self::Payment(payment) => payment.id,
+            Self::Refund(refund) => refund.id,
+        }
+    }
+    fn title(&self) -> Key {
+        match self {
+            Self::Payment(_) => Key::CheckoutBankReconcile,
+            Self::Refund(refund) => match refund.action {
+                BankRefundAction::Dispatch => Key::CheckoutBankRefundSend,
+                BankRefundAction::Reconcile => Key::CheckoutBankRefundReconcile,
+            },
+        }
+    }
+
+    fn is_dispatch(&self) -> bool {
+        matches!(self, Self::Refund(refund) if refund.action == BankRefundAction::Dispatch)
+    }
+
+    fn remains_eligible(&self, receipt: &AppointmentCheckout) -> bool {
+        match self {
+            BankReviewTarget::Payment(payment) => receipt
+                .reconcilable_bank_payments(Utc::now())
+                .any(|candidate| candidate == *payment),
+            BankReviewTarget::Refund(refund) => receipt
+                .reviewable_bank_refunds(Utc::now())
+                .any(|candidate| candidate == *refund),
+        }
+    }
+}
+
+pub(super) struct BankTransactionReview {
+    target: BankReviewTarget,
     reference: Entity<TextField>,
     outcome: Option<BankPaymentOutcome>,
     pub(super) needs_refresh: bool,
     _changed: Subscription,
 }
 
-impl BankPaymentReview {
-    pub(super) fn payment_id(&self) -> Uuid {
-        self.payment.id
+enum BankTransactionCommand {
+    ReconcilePayment(Uuid, BankPaymentReconciliation),
+    DispatchRefund(Uuid),
+    ReconcileRefund(Uuid, BankPaymentReconciliation),
+}
+
+impl BankTransactionReview {
+    pub(super) fn remains_eligible(&self, receipt: &AppointmentCheckout) -> bool {
+        self.target.remains_eligible(receipt)
     }
 
     fn command(&self, cx: &App) -> Option<BankPaymentReconciliation> {
@@ -22,9 +68,26 @@ impl BankPaymentReview {
         }
         BankPaymentReconciliation::new(self.outcome?, self.reference.read(cx).text())
     }
+
+    fn submission(&self, cx: &App) -> Option<BankTransactionCommand> {
+        if self.needs_refresh {
+            return None;
+        }
+        Some(match &self.target {
+            BankReviewTarget::Payment(payment) => {
+                BankTransactionCommand::ReconcilePayment(payment.id, self.command(cx)?)
+            }
+            BankReviewTarget::Refund(refund) if refund.action == BankRefundAction::Dispatch => {
+                BankTransactionCommand::DispatchRefund(refund.id)
+            }
+            BankReviewTarget::Refund(refund) => {
+                BankTransactionCommand::ReconcileRefund(refund.id, self.command(cx)?)
+            }
+        })
+    }
 }
 
-fn bank_method_label(method: BankPaymentMethod) -> Key {
+pub(super) fn bank_method_label(method: BankPaymentMethod) -> Key {
     match method {
         BankPaymentMethod::Card => Key::SalesBankCard,
         BankPaymentMethod::Bizum => Key::SalesBizum,
@@ -44,7 +107,11 @@ impl Root {
             .focus(|style| style.border_color(theme::text()))
     }
 
-    fn review_bank_payment(&mut self, payment_id: Uuid, cx: &mut Context<Self>) {
+    fn review_bank_transaction(
+        &mut self,
+        select: impl FnOnce(&AppointmentCheckout) -> Option<BankReviewTarget>,
+        cx: &mut Context<Self>,
+    ) {
         if self.status.connectivity != Connectivity::Online {
             return;
         }
@@ -54,17 +121,13 @@ impl Root {
         if !form.is_idle() || form.refreshing || form.pass_picker.is_some() {
             return;
         }
-        let Some(payment) = form
-            .receipt
-            .reconcilable_bank_payments(Utc::now())
-            .find(|payment| payment.id == payment_id)
-        else {
+        let Some(target) = select(&form.receipt) else {
             return;
         };
         let reference = cx.new(|cx| TextField::new("", false, cx));
         let changed = cx.observe(&reference, |_, _, cx| cx.notify());
-        form.reconciliation = Some(BankPaymentReview {
-            payment,
+        form.reconciliation = Some(BankTransactionReview {
+            target,
             reference,
             outcome: None,
             needs_refresh: false,
@@ -75,7 +138,7 @@ impl Root {
         cx.notify();
     }
 
-    fn reconcile_bank_payment(&mut self, cx: &mut Context<Self>) {
+    fn confirm_bank_transaction(&mut self, cx: &mut Context<Self>) {
         let Some(transport) = self
             .svc
             .transport()
@@ -93,10 +156,9 @@ impl Root {
         let Some(review) = &form.reconciliation else {
             return;
         };
-        let Some(command) = review.command(cx) else {
+        let Some(command) = review.submission(cx) else {
             return;
         };
-        let payment_id = review.payment_id();
         let previous = form.receipt.clone();
         let receipt = previous.clone();
         form.busy = true;
@@ -105,9 +167,19 @@ impl Root {
         cx.spawn(async move |root, cx| {
             let result = cx
                 .background_executor()
-                .spawn(
-                    async move { transport.reconcile_bank_payment(&receipt, payment_id, &command) },
-                )
+                .spawn(async move {
+                    match command {
+                        BankTransactionCommand::ReconcilePayment(id, command) => transport
+                            .reconcile_bank_payment(&receipt, id, &command)
+                            .map(|result| (result.receipt, result.bank_outcome_changed)),
+                        BankTransactionCommand::ReconcileRefund(id, command) => transport
+                            .reconcile_bank_refund(&receipt, id, &command)
+                            .map(|receipt| (receipt, false)),
+                        BankTransactionCommand::DispatchRefund(id) => transport
+                            .dispatch_bank_refund(&receipt, id)
+                            .map(|receipt| (receipt, false)),
+                    }
+                })
                 .await;
             let _ = root.update(cx, |root, cx| {
                 if !Arc::ptr_eq(&session, &root.svc.session) {
@@ -123,9 +195,8 @@ impl Root {
                 }
                 form.busy = false;
                 match result {
-                    Ok(result) => {
-                        let receipt = result.receipt;
-                        form.bank_outcome_changed = result.bank_outcome_changed;
+                    Ok((receipt, bank_outcome_changed)) => {
+                        form.bank_outcome_changed = bank_outcome_changed;
                         form.amount.update(cx, |field, cx| {
                             field.set_text(&amount_entry(receipt.collectible_cents()), cx)
                         });
@@ -147,52 +218,107 @@ impl Root {
         .detach();
     }
 
-    pub(super) fn render_bank_payment_review(
+    pub(super) fn render_bank_transaction_review(
         &self,
         form: &ReceiptForm,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let body = div().flex().flex_col().gap_2();
         let online = self.status.connectivity == Connectivity::Online;
-        let describe = |payment: &PendingBankPayment| {
+        let describe = |target: &BankReviewTarget| {
+            let (label, amount, order) = match target {
+                BankReviewTarget::Payment(payment) => (
+                    if payment.merchant_initiated {
+                        Key::CheckoutAutomaticBankPayment
+                    } else {
+                        bank_method_label(payment.method)
+                    },
+                    payment.amount_cents,
+                    payment.bank_order.as_str(),
+                ),
+                BankReviewTarget::Refund(refund) => (
+                    bank_method_label(refund.method),
+                    refund.amount_cents,
+                    refund.bank_order.as_str(),
+                ),
+            };
             format!(
                 "{} · {} · {} {}",
-                self.t(if payment.merchant_initiated {
-                    Key::CheckoutAutomaticBankPayment
-                } else {
-                    bank_method_label(payment.method)
-                }),
-                self.amount_label(i64::from(payment.amount_cents), &form.receipt.currency),
+                self.t(label),
+                self.amount_label(i64::from(amount), &form.receipt.currency),
                 self.t(Key::CheckoutBankOrder),
-                payment.bank_order
+                order
             )
         };
         let Some(review) = &form.reconciliation else {
             return body.when(
                 online && form.is_idle() && !form.refreshing && form.pass_picker.is_none(),
                 |view| {
-                    view.children(form.receipt.reconcilable_bank_payments(Utc::now()).map(
-                        |payment| {
-                            let id = payment.id;
-                            self.checkout_keyboard_button(
-                                SharedString::from(format!("review-bank-payment-{id}")),
-                                format!(
-                                    "{} · {}",
-                                    self.t(Key::CheckoutBankReconcile),
-                                    describe(&payment)
+                    let now = Utc::now();
+                    let actions = form
+                        .receipt
+                        .reconcilable_bank_payments(now)
+                        .map(BankReviewTarget::Payment)
+                        .chain(
+                            form.receipt
+                                .reviewable_bank_refunds(now)
+                                .map(BankReviewTarget::Refund),
+                        );
+                    view.children(actions.map(|target| {
+                        let id = target.id();
+                        let detail = match &target {
+                            BankReviewTarget::Refund(refund) => format!(
+                                "{} · #{:08x}",
+                                self.amount_label(
+                                    i64::from(refund.amount_cents),
+                                    &form.receipt.currency
                                 ),
-                                Kind::Ghost,
-                                cx.listener(move |root, _, _, cx| root.review_bank_payment(id, cx)),
-                            )
-                        },
-                    ))
+                                refund.id.as_u128() as u32
+                            ),
+                            BankReviewTarget::Payment(_) => describe(&target),
+                        };
+                        self.checkout_keyboard_button(
+                            SharedString::from(format!("review-bank-transaction-{id}")),
+                            format!("{} · {detail}", self.t(target.title())),
+                            Kind::Ghost,
+                            cx.listener(move |root, _, _, cx| {
+                                root.review_bank_transaction(
+                                    |receipt| {
+                                        target.remains_eligible(receipt).then(|| target.clone())
+                                    },
+                                    cx,
+                                )
+                            }),
+                        )
+                    }))
                 },
             );
         };
         let body = body
-            .child(self.label(Key::CheckoutBankReconcile))
-            .child(describe(&review.payment))
-            .child(div().text_sm().child(self.t(Key::CheckoutBankReviewHelp)));
+            .child(self.label(review.target.title()))
+            .child(describe(&review.target))
+            .map(|view| match &review.target {
+                BankReviewTarget::Refund(refund) => view
+                    .child(div().text_sm().child(format!(
+                        "{} · {}",
+                        self.t(Key::CheckoutBankRefundId),
+                        refund.id
+                    )))
+                    .child(div().text_sm().child(refund.reason.clone())),
+                BankReviewTarget::Payment(_) => view,
+            })
+            .child(
+                div()
+                    .text_sm()
+                    .child(self.t(if review.target.is_dispatch() {
+                        Key::CheckoutBankRefundSendHelp
+                    } else if matches!(review.target, BankReviewTarget::Refund(_)) {
+                        Key::CheckoutBankRefundReviewHelp
+                    } else {
+                        Key::CheckoutBankReviewHelp
+                    })),
+            );
+        let is_refund = matches!(&review.target, BankReviewTarget::Refund(_));
         if form.busy {
             return body.child(self.t(Key::CheckoutRecording));
         }
@@ -214,7 +340,18 @@ impl Root {
                 ))
             })
             .when(
-                online && !form.refreshing && !review.needs_refresh,
+                online && !form.refreshing && !review.needs_refresh && review.target.is_dispatch(),
+                |view| {
+                    view.child(self.checkout_keyboard_button(
+                        "confirm-send-refund",
+                        self.t(Key::CheckoutBankRefundSend),
+                        Kind::Danger,
+                        cx.listener(|root, _, _, cx| root.confirm_bank_transaction(cx)),
+                    ))
+                },
+            )
+            .when(
+                online && !form.refreshing && !review.needs_refresh && !review.target.is_dispatch(),
                 |view| {
                     view.child(self.label(Key::CheckoutBankReference))
                         .child(review.reference.clone())
@@ -223,12 +360,20 @@ impl Root {
                                 [
                                     (
                                         BankPaymentOutcome::Succeeded,
-                                        Key::CheckoutBankPaid,
+                                        if is_refund {
+                                            Key::CheckoutBankRefundSucceeded
+                                        } else {
+                                            Key::CheckoutBankPaid
+                                        },
                                         "bank-paid",
                                     ),
                                     (
                                         BankPaymentOutcome::Failed,
-                                        Key::CheckoutBankUnpaid,
+                                        if is_refund {
+                                            Key::CheckoutBankRefundNotSent
+                                        } else {
+                                            Key::CheckoutBankUnpaid
+                                        },
                                         "bank-unpaid",
                                     ),
                                 ]
@@ -261,7 +406,7 @@ impl Root {
                                 "confirm-bank-payment",
                                 self.t(Key::CheckoutBankConfirm),
                                 Kind::Primary,
-                                cx.listener(|root, _, _, cx| root.reconcile_bank_payment(cx)),
+                                cx.listener(|root, _, _, cx| root.confirm_bank_transaction(cx)),
                             ))
                         })
                 },
@@ -294,6 +439,54 @@ mod tests {
     use serde_json::json;
 
     #[gpui::test]
+    async fn a_requested_refund_needs_its_own_review_and_an_uncertain_dispatch_cannot_be_resent(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_dir, config) = crate::root::tests::desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        let payment_id = Uuid::now_v7();
+        let refund_id = Uuid::now_v7();
+        let mut data = json!({
+            "id": Uuid::now_v7(), "currency": "EUR", "status": "paid",
+            "canRefund": true, "canDispatchBankRefunds": true,
+            "totalCents": 1800, "discountCents": 0, "paidCents": 1800, "balanceCents": 0,
+            "payments": [{"id": payment_id, "method": "redsys_card", "status": "succeeded",
+                "amountCents": 1800, "order": "123412345678"}],
+            "refunds": [{"id": refund_id, "paymentId": payment_id, "amountCents": 900,
+                "reason": "Treatment adjustment", "status": "requested"}]
+        });
+        root.update(cx, |root, cx| {
+            root.svc.stop_sync();
+            root.status.connectivity = Connectivity::Online;
+            let receipt = serde_json::from_value(data.clone()).unwrap();
+            root.overlay = Overlay::WalkInReceipt(CheckoutReview::from_receipt(receipt, 0, cx));
+            assert!(matches!(root.checkout_review_mut(),
+                Some(CheckoutReview::Receipt(form)) if form.reconciliation.is_none()));
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("tab");
+        cx.simulate_event(gpui::KeyUpEvent {
+            keystroke: gpui::Keystroke::parse("enter").unwrap(),
+        });
+        root.update(cx, |root, cx| {
+            let Some(CheckoutReview::Receipt(form)) = root.checkout_review_mut() else {
+                panic!("expected receipt");
+            };
+            let review = form.reconciliation.as_mut().expect("refund review opened");
+            assert!(matches!(review.submission(cx), Some(BankTransactionCommand::DispatchRefund(id)) if id == refund_id));
+            review.needs_refresh = true;
+            assert!(review.submission(cx).is_none());
+            data["refunds"][0]["status"] = json!("reconciliation");
+            data["refunds"][0]["reconcileAfter"] = json!((Utc::now() - Span::seconds(1)).to_rfc3339());
+            form.replace_receipt(serde_json::from_value(data).unwrap(), cx);
+            assert!(form.reconciliation.is_none());
+            assert!(form.receipt.reviewable_bank_refunds(Utc::now())
+                .any(|refund| refund.id == refund_id && refund.action == BankRefundAction::Reconcile));
+        });
+    }
+
+    #[gpui::test]
     async fn reconciliation_requires_review_and_closes_when_cloud_resolves_the_payment(
         cx: &mut gpui::TestAppContext,
     ) {
@@ -312,7 +505,15 @@ mod tests {
             let receipt = serde_json::from_value(data.clone()).unwrap();
             root.overlay = Overlay::WalkInReceipt(CheckoutReview::from_receipt(receipt, 0, cx));
             root.status.connectivity = Connectivity::Offline;
-            root.review_bank_payment(payment_id, cx);
+            root.review_bank_transaction(
+                |receipt| {
+                    receipt
+                        .reconcilable_bank_payments(Utc::now())
+                        .find(|payment| payment.id == payment_id)
+                        .map(BankReviewTarget::Payment)
+                },
+                cx,
+            );
             assert!(matches!(root.checkout_review_mut(),
                 Some(CheckoutReview::Receipt(form)) if form.reconciliation.is_none()));
             root.status.connectivity = Connectivity::Online;

@@ -156,6 +156,8 @@ pub struct AppointmentCheckout {
     #[serde(default)]
     pub can_refund: bool,
     #[serde(default)]
+    can_dispatch_bank_refunds: bool,
+    #[serde(default)]
     pub refunds: Vec<CheckoutRefund>,
 }
 
@@ -206,16 +208,25 @@ impl AppointmentCheckout {
 
     pub fn recordable_refunds_available(&self) -> impl Iterator<Item = RefundablePayment> + '_ {
         self.payments.iter().filter_map(|payment| {
-            if !self.can_refund || payment.status != "succeeded" {
+            if !self.can_refund {
                 return None;
             }
             let id = payment.id?;
-            let tender = match payment.method.as_deref()? {
-                "cash" => ReceiptTender::Cash,
-                "external_card" => ReceiptTender::ExternalCard,
-                "gift_card" => ReceiptTender::GiftCard,
-                "package" => ReceiptTender::Package,
-                "membership" => ReceiptTender::Membership,
+            let tender = match (payment.method.as_deref()?, payment.status.as_str()) {
+                ("cash", "succeeded") => RefundTender::Manual(ReceiptTender::Cash),
+                ("external_card", "succeeded") => RefundTender::Manual(ReceiptTender::ExternalCard),
+                ("gift_card", "succeeded") => RefundTender::Manual(ReceiptTender::GiftCard),
+                ("package", "succeeded") => RefundTender::Manual(ReceiptTender::Package),
+                ("membership", "succeeded") => RefundTender::Manual(ReceiptTender::Membership),
+                (method, "succeeded" | "reconciliation")
+                    if !self.has_pass_purchase()
+                        && payment
+                            .order
+                            .as_deref()
+                            .is_some_and(|order| !order.is_empty()) =>
+                {
+                    RefundTender::Bank(BankPaymentMethod::from_api(method)?)
+                }
                 _ => return None,
             };
             let already_committed: u64 = self
@@ -230,6 +241,60 @@ impl AppointmentCheckout {
                 id,
                 tender,
                 available,
+            })
+        })
+    }
+
+    pub fn needs_bank_pass_refund_quote(&self) -> bool {
+        self.can_refund
+            && self.has_pass_purchase()
+            && self.payments.iter().any(|payment| {
+                matches!(payment.status.as_str(), "succeeded" | "reconciliation")
+                    && payment
+                        .method
+                        .as_deref()
+                        .and_then(BankPaymentMethod::from_api)
+                        .is_some()
+            })
+    }
+
+    fn has_pass_purchase(&self) -> bool {
+        self.lines.iter().any(|line| line.pass_period_id.is_some())
+    }
+
+    pub fn reviewable_bank_refunds(
+        &self,
+        now: DateTime<Utc>,
+    ) -> impl Iterator<Item = BankRefund> + '_ {
+        self.refunds.iter().filter_map(move |refund| {
+            if !self.can_refund {
+                return None;
+            }
+            let action = match refund.status.as_str() {
+                "requested" if self.can_dispatch_bank_refunds => BankRefundAction::Dispatch,
+                "dispatched" | "reconciliation"
+                    if refund.reconcile_after.is_some_and(|after| now >= after) =>
+                {
+                    BankRefundAction::Reconcile
+                }
+                _ => return None,
+            };
+            let payment = self
+                .payments
+                .iter()
+                .find(|payment| payment.id == Some(refund.payment_id))?;
+            Some(BankRefund {
+                id: refund.id,
+                payment_id: refund.payment_id,
+                amount_cents: refund.amount_cents,
+                reason: refund.reason.clone(),
+                bank_order: payment
+                    .order
+                    .as_deref()
+                    .filter(|order| !order.is_empty())?
+                    .to_owned(),
+                method: BankPaymentMethod::from_api(payment.method.as_deref()?)?,
+                action,
             })
         })
     }
@@ -356,6 +421,7 @@ pub struct CheckoutPriceLine {
     #[serde(default)]
     kind: String,
     product_id: Option<Uuid>,
+    pass_period_id: Option<Uuid>,
     pub description: String,
     pub quantity: u32,
     pub unit_amount_cents: u32,
@@ -526,12 +592,36 @@ pub struct CheckoutRefund {
     pub amount_cents: u32,
     pub status: String,
     pub reason: String,
+    reconcile_after: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BankRefundAction {
+    Dispatch,
+    Reconcile,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BankRefund {
+    pub id: Uuid,
+    pub payment_id: Uuid,
+    pub amount_cents: u32,
+    pub reason: String,
+    pub bank_order: String,
+    pub method: BankPaymentMethod,
+    pub action: BankRefundAction,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefundTender {
+    Manual(ReceiptTender),
+    Bank(BankPaymentMethod),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RefundablePayment {
     pub id: Uuid,
-    pub tender: ReceiptTender,
+    pub tender: RefundTender,
     pub available: u32,
 }
 
@@ -539,7 +629,7 @@ impl RefundablePayment {
     pub fn is_full_visit(self) -> bool {
         matches!(
             self.tender,
-            ReceiptTender::Package | ReceiptTender::Membership
+            RefundTender::Manual(ReceiptTender::Package | ReceiptTender::Membership)
         )
     }
 }

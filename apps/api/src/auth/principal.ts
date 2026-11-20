@@ -124,6 +124,7 @@ export function requireAuth(
           path.endsWith("/prices") &&
           method !== "PUT") ||
         ((path.startsWith("/admin/commerce/payments/") ||
+          path.startsWith("/admin/commerce/refunds/") ||
           (path.startsWith("/admin/commerce/checkouts/") && path.endsWith("/void"))) &&
           method !== "POST") ||
         (path.startsWith("/admin/staff/") && path.includes("/date-shifts") && !dateShiftAllowed) ||

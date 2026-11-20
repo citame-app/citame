@@ -1308,7 +1308,9 @@ fn native_gift_card_redemption_and_refund_update_cloud_balance_once() {
     assert_eq!(cloud["paidCents"], 1800);
     let gift_payment = paid
         .recordable_refunds_available()
-        .find(|payment| payment.tender == ReceiptTender::GiftCard)
+        .find(|payment| {
+            payment.tender == sob_core::billing::RefundTender::Manual(ReceiptTender::GiftCard)
+        })
         .unwrap();
     let refund = sob_core::billing::RefundAttempt::new(300, "Synthetic gift card refund").unwrap();
     let returned = device

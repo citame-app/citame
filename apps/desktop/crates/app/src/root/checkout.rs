@@ -80,7 +80,7 @@ pub(super) struct ReceiptForm {
     _amount_changed: Subscription,
     price_fields: Vec<PriceField>,
     refund: Option<refunds::RefundEditor>,
-    reconciliation: Option<reconciliation::BankPaymentReview>,
+    reconciliation: Option<reconciliation::BankTransactionReview>,
     bank_outcome_changed: bool,
     stock_return: Option<stock_return::ReturnEditor>,
     stock_return_notice: Option<Key>,
@@ -568,7 +568,7 @@ impl Root {
                     )
                 });
                 let body = body
-                    .child(self.render_bank_payment_review(form, cx))
+                    .child(self.render_bank_transaction_review(form, cx))
                     .when(form.reconciliation.is_none(), |view| {
                         view.child(self.render_refunds(form, cx))
                             .child(self.render_void_receipt(form, cx))
@@ -817,10 +817,7 @@ impl ReceiptForm {
         self.receipt = Arc::new(receipt);
         self.pass_picker = None;
         if let Some(review) = &self.reconciliation
-            && !self
-                .receipt
-                .reconcilable_bank_payments(Utc::now())
-                .any(|payment| payment.id == review.payment_id())
+            && !review.remains_eligible(&self.receipt)
         {
             self.reconciliation = None;
         }

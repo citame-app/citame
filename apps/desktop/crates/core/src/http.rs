@@ -10,11 +10,11 @@ use std::time::Duration;
 use crate::auth::{AuthError, AuthProvider, BrowserWorkspace, SessionHandle, TokenStore};
 use crate::backoff::Backoff;
 use crate::billing::{
-    AppointmentCheckout, BankPaymentReconciliation, BankPaymentResolution, CashCommand,
-    CashSession, CheckoutFinalPrice, CheckoutHistoryFilters, CheckoutPage, CheckoutRefund,
-    EligiblePassUse, ImportedPartialPayment, ImportedPartialPaymentPreview, ImportedPricePreview,
-    ImportedPriceReview, ImportedSettlement, ImportedSettlementStatus, PaymentAttempt,
-    ReceiptTender, RefundAttempt, WalkInSale,
+    AppointmentCheckout, BankPaymentReconciliation, BankPaymentResolution, BankRefundAction,
+    CashCommand, CashSession, CheckoutFinalPrice, CheckoutHistoryFilters, CheckoutPage,
+    CheckoutRefund, EligiblePassUse, ImportedPartialPayment, ImportedPartialPaymentPreview,
+    ImportedPricePreview, ImportedPriceReview, ImportedSettlement, ImportedSettlementStatus,
+    PaymentAttempt, ReceiptTender, RefundAttempt, RefundTender, WalkInSale,
 };
 use crate::inventory::{
     ContentWriteError, LedgerPage, LedgerQuery, MovementPage, PRODUCTS_PATH, PackageContent,
@@ -597,25 +597,32 @@ impl HttpTransport {
         payment_id: uuid::Uuid,
         attempt: &RefundAttempt,
     ) -> Result<AppointmentCheckout, TransportError> {
-        if !checkout.recordable_refunds_available().any(|payment| {
+        let payment = checkout.recordable_refunds_available().find(|payment| {
             payment.id == payment_id
                 && if payment.is_full_visit() {
                     attempt.amount_cents == payment.available
                 } else {
                     attempt.amount_cents <= payment.available
                 }
-        }) {
+        });
+        let Some(payment) = payment else {
             return Err(TransportError::BadRequest(
                 "This payment cannot be refunded for the requested amount".into(),
             ));
-        }
+        };
         let refund: CheckoutRefund = self.post_json(
             &format!("/admin/commerce/payments/{payment_id}/refunds"),
             attempt,
         )?;
         if refund.payment_id != payment_id
             || refund.amount_cents != attempt.amount_cents
-            || refund.status != "succeeded"
+            || match payment.tender {
+                RefundTender::Manual(_) => refund.status != "succeeded",
+                RefundTender::Bank(_) => !matches!(
+                    refund.status.as_str(),
+                    "requested" | "dispatched" | "reconciliation" | "succeeded" | "failed"
+                ),
+            }
             || refund.reason != attempt.reason
         {
             return Err(TransportError::Server(
@@ -635,6 +642,81 @@ impl HttpTransport {
             ));
         }
         Ok(receipt)
+    }
+
+    pub fn dispatch_bank_refund(
+        &self,
+        checkout: &AppointmentCheckout,
+        refund_id: uuid::Uuid,
+    ) -> Result<AppointmentCheckout, TransportError> {
+        self.update_bank_refund(checkout, refund_id, None)
+    }
+
+    pub fn reconcile_bank_refund(
+        &self,
+        checkout: &AppointmentCheckout,
+        refund_id: uuid::Uuid,
+        command: &BankPaymentReconciliation,
+    ) -> Result<AppointmentCheckout, TransportError> {
+        self.update_bank_refund(checkout, refund_id, Some(command))
+    }
+
+    fn update_bank_refund(
+        &self,
+        checkout: &AppointmentCheckout,
+        refund_id: uuid::Uuid,
+        command: Option<&BankPaymentReconciliation>,
+    ) -> Result<AppointmentCheckout, TransportError> {
+        let action = if command.is_some() {
+            BankRefundAction::Reconcile
+        } else {
+            BankRefundAction::Dispatch
+        };
+        let Some(refund) = checkout
+            .reviewable_bank_refunds(chrono::Utc::now())
+            .find(|refund| refund.id == refund_id && refund.action == action)
+        else {
+            return Err(TransportError::BadRequest(
+                "This bank refund is no longer eligible".into(),
+            ));
+        };
+        let confirmed: CheckoutRefund = match command {
+            Some(review) => self.post_json(
+                &format!("/admin/commerce/refunds/{refund_id}/reconcile"),
+                review,
+            )?,
+            None => self.post_json(
+                &format!("/admin/commerce/refunds/{refund_id}/execute"),
+                &serde_json::json!({}),
+            )?,
+        };
+        let valid = |entry: &CheckoutRefund| {
+            entry.id == refund_id
+                && entry.payment_id == refund.payment_id
+                && entry.amount_cents == refund.amount_cents
+                && match command {
+                    Some(review) => {
+                        matches!(entry.status.as_str(), "succeeded" | "failed")
+                            && review.outcome.matches_status(&entry.status)
+                    }
+                    None => matches!(
+                        entry.status.as_str(),
+                        "dispatched" | "reconciliation" | "succeeded" | "failed"
+                    ),
+                }
+        };
+        if !valid(&confirmed) {
+            return Err(TransportError::Server(
+                "Invalid bank refund acknowledgement".into(),
+            ));
+        }
+        let updated = self.refresh_checkout(checkout)?;
+        if !updated.refunds.iter().any(valid) {
+            return Err(TransportError::Server(
+                "Bank refund missing from refreshed receipt".into(),
+            ));
+        }
+        Ok(updated)
     }
 
     pub fn refresh_checkout(
