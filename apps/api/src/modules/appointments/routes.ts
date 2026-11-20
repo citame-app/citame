@@ -9,6 +9,7 @@ import {
   createAppointmentRequestSchema,
   idSchema,
   updateAppointmentRequestSchema,
+  visitCreateSchema,
 } from "@sob/contracts";
 import { Hono } from "hono";
 import type { AppDeps } from "../../app";
@@ -17,6 +18,7 @@ import {
   authorizeAppointmentCreate,
   authorizeAppointmentList,
   authorizeCalendarQuery,
+  requirePermission,
 } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { DomainError } from "../../errors";
@@ -24,6 +26,7 @@ import { parseOrThrow, readJson } from "../../http";
 import { bookingOutcome } from "../../observability/booking";
 import { findAvailability } from "../availability/service";
 import { quoteBookingPromotion } from "../rewards/booking";
+import { listServices } from "../services/service";
 import { getCalendar } from "./calendar";
 import { findAppointmentReplay } from "./replay";
 import { createAppointmentSeries, getAppointmentSeries, previewAppointmentSeries } from "./series";
@@ -34,11 +37,30 @@ import {
   loadSnapshots,
   updateAppointment,
 } from "./service";
+import { createVisit, getVisit } from "./visits";
 
 /** Mounted behind `requireAuth`, so every handler can rely on `c.get("principal")`. */
 export function appointmentsRoutes({ db, now = () => new Date(), metrics }: AppDeps) {
   return (
     new Hono<AppEnv>()
+      .get("/catalog", async (c) => {
+        requirePermission(c.get("principal"), "editCalendar");
+        return c.json({ services: await listServices(db, true) });
+      })
+      .post("/visits", async (c) =>
+        c.json(
+          await createVisit(
+            db,
+            parseOrThrow(visitCreateSchema, await readJson(c)),
+            c.get("principal"),
+            now(),
+          ),
+          201,
+        ),
+      )
+      .get("/visits/:id", async (c) =>
+        c.json(await getVisit(db, parseOrThrow(idSchema, c.req.param("id")), c.get("principal"))),
+      )
       .post("/promotion-quote", async (c) =>
         c.json(
           await quoteBookingPromotion(

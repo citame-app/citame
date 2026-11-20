@@ -12,20 +12,23 @@ let giftAvailable = false;
 let payable: number | undefined;
 let refunds: Record<string, unknown>[] = [];
 let payments: Record<string, unknown>[] = [];
+let pricePending = false;
+let serviceAmount = 2500;
 const sale = () => ({
   id,
+  pricingVersion: pricePending ? 1 : 2,
   appointmentId: null,
   clientId: null,
   currency: "EUR",
   status: paid ? "paid" : "open",
-  subtotalCents: 2500,
+  subtotalCents: serviceAmount,
   discountCents: 0,
   tipCents: 0,
   taxCents: 0,
-  totalCents: 2500,
+  totalCents: serviceAmount,
   paidCents: paid ? 2500 : 0,
   refundedCents: 0,
-  balanceCents: paid ? 0 : 2500,
+  balanceCents: paid ? 0 : serviceAmount,
   payableCents: payable,
   lines: [
     {
@@ -33,7 +36,8 @@ const sale = () => ({
       kind: "custom",
       description: "Haircut",
       quantity: 1,
-      unitAmountCents: 2500,
+      unitAmountCents: serviceAmount,
+      pricePending,
       taxBasisPoints: 0,
     },
   ],
@@ -43,6 +47,8 @@ const sale = () => ({
 });
 const reply = (data: unknown) => Response.json(data);
 beforeEach(() => {
+  pricePending = false;
+  serviceAmount = 2500;
   requests = [];
   paid = false;
   online = false;
@@ -55,6 +61,11 @@ beforeEach(() => {
     const method = init?.method ?? "GET";
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     requests.push({ method, path, body });
+    if (path.endsWith("/prices") && method === "PUT") {
+      pricePending = false;
+      serviceAmount = body.lines[0].unitAmountCents;
+      return reply(sale());
+    }
     if (path.endsWith("/capabilities"))
       return reply({
         provider: online ? "redsys" : "none",
@@ -93,6 +104,24 @@ beforeEach(() => {
     if (path.endsWith(`/checkouts/${id}`)) return reply(sale());
     return reply({});
   }) as unknown as typeof fetch;
+});
+
+test("unresolved prices block payment until the operator reviews and saves the final amount", async () => {
+  pricePending = true;
+  renderApp(<CheckoutPanel id={id} mode="admin" role="owner" />);
+  const amount = await screen.findByLabelText("Haircut");
+  expect(amount).toHaveValue("");
+  expect(screen.queryByRole("button", { name: "Record payment" })).toBeNull();
+  fireEvent.change(amount, { target: { value: "75,50" } });
+  fireEvent.click(screen.getByRole("button", { name: "Set final prices" }));
+  await waitFor(() =>
+    expect(requests.some((r) => r.method === "PUT" && r.path.endsWith("/prices"))).toBe(true),
+  );
+  expect(requests.find((r) => r.path.endsWith("/prices"))?.body).toEqual({
+    version: 1,
+    lines: [{ id, unitAmountCents: 7550 }],
+  });
+  await waitFor(() => expect(screen.queryByLabelText("Haircut")).toBeNull());
 });
 
 test("a booking signal uses the payable deposit instead of charging the entire service balance", async () => {

@@ -1,11 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { EmptyState } from "~/components/ui/states";
-import { CatalogChoices } from "~/features/booking/catalog-choices";
+import { CatalogBrowser } from "~/features/booking/catalog-browser";
 import { toggleCatalogSelection } from "~/features/booking/catalog-selection";
 import { CombinationChoices } from "~/features/booking/combination-choices";
 import { BookingFrame } from "~/features/booking/frame";
 import { BookingSummary } from "~/features/booking/summary";
 import { useBooking } from "~/features/booking/use-booking";
+import { canPlanVisit } from "~/features/booking/visit-selection";
 import { useI18n } from "~/i18n/react";
 
 export const Route = createFileRoute("/book/")({ component: ServicesStep });
@@ -17,6 +18,7 @@ function ServicesStep() {
 
   return (
     <BookingFrame
+      teamAccount={booking.teamAccount}
       step="services"
       search={search}
       title={t("booking.services.title")}
@@ -27,7 +29,11 @@ function ServicesStep() {
           totals={totals}
           timeZone={salon.timezone}
           ctaLabel={t("booking.cta.continue")}
-          ctaDisabled={totals.count === 0}
+          ctaDisabled={
+            totals.count === 0 ||
+            (booking.eligible.length === 0 &&
+              !canPlanVisit(search.services, catalog, booking.staff))
+          }
           onCta={() => booking.go("professional", search)}
           onRemoveService={(id) =>
             booking.go(
@@ -46,14 +52,25 @@ function ServicesStep() {
         />
       ) : (
         <div className="space-y-6">
+          {totals.count > 0 && booking.eligible.length === 0 && (
+            <p role="alert" className="rounded-lg border border-line p-4 text-sm">
+              {t(
+                canPlanVisit(search.services, catalog, booking.staff)
+                  ? "services.multipleHelp"
+                  : "services.incompatible",
+              )}
+            </p>
+          )}
           <CombinationChoices
             catalog={catalog}
             staff={booking.staff}
             selected={search.services}
             onChange={(services) => booking.go("services", { services }, { replace: true })}
           />
-          <CatalogChoices
+          <CatalogBrowser
+            allowMultipleProfessionals
             catalog={catalog}
+            staff={booking.staff}
             selected={search.services}
             onChange={(services) => booking.go("services", { services }, { replace: true })}
           />

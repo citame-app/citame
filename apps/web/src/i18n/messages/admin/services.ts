@@ -1,4 +1,72 @@
 export const servicesEn = {
+  "services.currencyMismatch":
+    "These services use different currencies. Choose services in the same currency or contact the salon.",
+  "services.price.accept":
+    "I accept that the final price is set at the salon and any advertised minimum applies.",
+  "services.price.pendingShort": "Final price pending",
+  "services.bookingInterval": "Booking interval (minutes)",
+  "services.bookingIntervalHelp":
+    "Leave empty to use the salon interval. Applies to the first treatment of an online visit.",
+  "services.priceType": "Price type",
+  "services.price.fixed": "Fixed",
+  "services.price.variable": "Price varies",
+  "services.price.hidden": "Price on confirmation",
+  "services.price.free": "Free",
+  "services.price.from": "Starts at",
+  "services.price.fromAmount": "From {amount}",
+  "services.price.final": "Final price at the salon",
+  "services.price.help":
+    "Variable and starting prices are set by the team at checkout. A variable price is not a free service.",
+  "services.price.finalize": "Set final prices",
+  "services.price.reload": "Reload receipt",
+  "services.price.pending":
+    "The team must set the final service price before collecting the balance.",
+  "services.price.minimum": "Minimum: {amount}",
+  "services.price.fixedDeposit":
+    "A service without a fixed price needs a fixed deposit amount. The salon must configure it before this protected booking can be confirmed.",
+  "services.price.promotionLater":
+    "Promotions can be applied at checkout after the team has set the final price.",
+
+  "services.multiple": "Several professionals",
+  "services.multipleHelp":
+    "Your treatments will follow one another with qualified professionals. Choose the team on the next step.",
+  "services.visitDate": "Visit date",
+  "services.visitTimes": "Available visit times",
+  "services.visitNoTimes":
+    "No complete visit fits on this day. Choose another date or professional.",
+  "services.visitReview": "Review your visit",
+  "services.visitReviewLead":
+    "Check the times and terms for each treatment. The complete visit is reserved together.",
+  "services.visitPart": "Treatment {number}",
+  "services.visitConfirmed": "Your visit has been reserved",
+  "services.visitPayments":
+    "Each treatment has its own booking protection and payment. Complete every required deposit to keep the whole visit.",
+  "services.visitManage": "Manage your appointments",
+  "services.visitSeparate": "You can manage each treatment separately from your appointments.",
+
+  "services.category": "Category",
+  "services.allCategories": "All categories",
+  "services.uncategorized": "Other services",
+  "services.search": "Search services",
+  "services.noMatches": "No matching services",
+  "services.clearFilters": "Clear filters",
+  "services.sortOrder": "Display order",
+  "services.onlineBooking": "Clients can book this service online",
+  "services.internal": "Team bookings only",
+  "services.instructions": "Before your appointment",
+  "services.instructionsHelp": "Preparation instructions shown before the customer confirms.",
+  "services.incompatible":
+    "These services need the same professional. Remove a selected service or book a separate appointment.",
+  "services.unavailable":
+    "No professional currently offers this service online. Contact the salon.",
+  "services.related": "Variants and extras",
+  "services.addVariant": "Add variant",
+  "services.addExtra": "Add extra",
+  "services.details": "Service details",
+  "services.catalogTab": "Catalog",
+  "services.combinationsTab": "Combinations",
+  "services.processingTab": "Processing time",
+
   "services.title": "Services",
   "services.lead":
     "The catalog clients book from: prices, durations and who performs each service.",
@@ -52,6 +120,75 @@ export const servicesEn = {
 } as const;
 
 export const servicesEsAR: Record<keyof typeof servicesEn, string> = {
+  "services.currencyMismatch":
+    "Estos servicios usan monedas distintas. Elige servicios en la misma moneda o contacta con el salón.",
+  "services.price.accept":
+    "Acepto que el importe final se fije en el salón y que se respeten los mínimos anunciados, si los hay.",
+  "services.price.pendingShort": "Importe final pendiente",
+  "services.bookingInterval": "Intervalo de reserva (minutos)",
+  "services.bookingIntervalHelp":
+    "Déjalo vacío para usar el intervalo del salón. Se aplica al primer tratamiento de una visita online.",
+  "services.priceType": "Tipo de precio",
+  "services.price.fixed": "Fijo",
+  "services.price.variable": "Precio variable",
+  "services.price.hidden": "Precio al confirmar",
+  "services.price.free": "Gratuito",
+  "services.price.from": "A partir de",
+  "services.price.fromAmount": "Desde {amount}",
+  "services.price.final": "Importe final en el salón",
+  "services.price.help":
+    "El equipo fija los precios variables y los importes «desde» al cobrar. Un precio variable no significa que el servicio sea gratuito.",
+  "services.price.finalize": "Fijar precios finales",
+  "services.price.reload": "Recargar recibo",
+  "services.price.pending":
+    "El equipo debe fijar el importe final antes de cobrar el saldo del servicio.",
+  "services.price.minimum": "Mínimo: {amount}",
+  "services.price.fixedDeposit":
+    "Un servicio sin precio cerrado necesita una señal de importe fijo. El salón debe configurarla para confirmar esta reserva protegida.",
+  "services.price.promotionLater":
+    "Las promociones se pueden aplicar al cobrar, después de fijar el importe final.",
+
+  "services.multiple": "Varios profesionales",
+  "services.multipleHelp":
+    "Tus tratamientos se realizarán uno después de otro con profesionales cualificados. Elige el equipo en el siguiente paso.",
+  "services.visitDate": "Fecha de la visita",
+  "services.visitTimes": "Horarios de la visita",
+  "services.visitNoTimes":
+    "No hay hueco para la visita completa este día. Elige otra fecha o profesional.",
+  "services.visitReview": "Revisa tu visita",
+  "services.visitReviewLead":
+    "Revisa los horarios y las condiciones de cada tratamiento. La visita completa se reserva de una vez.",
+  "services.visitPart": "Tratamiento {number}",
+  "services.visitConfirmed": "Tu visita se ha reservado",
+  "services.visitPayments":
+    "Cada tratamiento tiene su propia protección de reserva y pago. Completa todas las señales requeridas para mantener la visita completa.",
+  "services.visitManage": "Gestionar tus citas",
+  "services.visitSeparate": "Puedes gestionar cada tratamiento por separado desde tus citas.",
+
+  "services.category": "Categoría",
+  "services.allCategories": "Todas las categorías",
+  "services.uncategorized": "Otros servicios",
+  "services.search": "Buscar servicios",
+  "services.noMatches": "No hay servicios que coincidan",
+  "services.clearFilters": "Quitar filtros",
+  "services.sortOrder": "Orden de presentación",
+  "services.onlineBooking": "Los clientes pueden reservar este servicio online",
+  "services.internal": "Solo reservas del equipo",
+  "services.instructions": "Antes de tu cita",
+  "services.instructionsHelp":
+    "Indicaciones de preparación que el cliente verá antes de confirmar.",
+  "services.incompatible":
+    "Estos servicios necesitan al mismo profesional. Quita un servicio seleccionado o reserva una cita por separado.",
+  "services.unavailable":
+    "Ningún profesional ofrece este servicio online ahora. Contacta con el salón.",
+  "services.related": "Variantes y complementos",
+  "services.addVariant": "Añadir variante",
+  "services.addExtra": "Añadir complemento",
+  "services.details": "Detalles del servicio",
+  "services.catalogTab": "Catálogo",
+  "services.combinationsTab": "Combinaciones",
+  "services.processingTab": "Tiempo de exposición",
+
   "services.title": "Servicios",
   "services.lead":
     "El catálogo desde el que reservan los clientes: precios, duraciones y quién realiza cada servicio.",

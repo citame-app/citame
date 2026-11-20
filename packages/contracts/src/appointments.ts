@@ -10,6 +10,7 @@ import {
   pageSizeSchema,
 } from "./common";
 import { intakeBookingShape } from "./intake";
+import { servicePriceTypeSchema } from "./service-pricing";
 import { processingTimeSchema, workWindowSchema } from "./staff-capacity";
 
 export const appointmentStatusSchema = z.enum(["booked", "completed", "cancelled", "no_show"]);
@@ -23,7 +24,12 @@ export const appointmentServiceSchema = z
     bufferMinutes: z.number().int().min(0),
     processing: processingTimeSchema.optional(),
     priceCents: z.number().int().min(0),
+    priceType: servicePriceTypeSchema.optional(),
     currency: z.string().length(3),
+  })
+  .refine((s) => !["variable", "free"].includes(s.priceType ?? "fixed") || s.priceCents === 0, {
+    message: "An unknown or free price has no fixed charge",
+    path: ["priceCents"],
   })
   .refine(
     (s) =>
@@ -91,6 +97,8 @@ export const createAppointmentBaseSchema = z.object({
   override: z.boolean().optional(),
   protectionAcceptedVersion: z.number().int().positive().optional(),
   protectionAcceptedTotalCents: z.number().int().min(0).max(999999999).optional(),
+  protectionAcceptedDepositCents: z.number().int().min(0).max(999999999).optional(),
+  priceTermsAccepted: z.boolean().optional(),
   protectionWaiverReason: z.string().trim().min(8).max(300).optional(),
   promotion: bookingPromotionReviewSchema.optional(),
 });

@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomInt } from "node:crypto";
 import type { Checkout, CreateCheckoutInput, StartPaymentInput } from "@sob/contracts";
-import { permissionsFor } from "@sob/contracts";
+import { needsFinalPrice, permissionsFor } from "@sob/contracts";
 import {
   appointment,
   appointmentService,
@@ -151,6 +151,7 @@ async function snapshot(
     staffId: row.staffId,
     currency: "EUR",
     status: row.status,
+    pricingVersion: row.pricingVersion,
     subtotalCents: row.subtotalCents,
     discountCents: row.discountCents,
     tipCents: row.tipCents,
@@ -171,6 +172,8 @@ async function snapshot(
       description: line.description,
       quantity: line.quantity,
       unitAmountCents: line.unitAmountCents,
+      pricePending: line.pricePending,
+      minimumUnitAmountCents: line.minimumUnitAmountCents,
       taxBasisPoints: line.taxBasisPoints,
       passPeriodId: line.passPeriodId,
       discountCents: line.discountCents,
@@ -236,6 +239,10 @@ export async function refreshStatus(tx: Tx, id: string, now = new Date()) {
   if (await syncCheckoutPassRefunds(tx, id)) return;
   if (await syncCheckoutGiftRefunds(tx, id)) return;
   const view = await snapshot(tx, row);
+  if (view.lines.some((line) => line.pricePending)) {
+    await tx.update(checkout).set({ status: "open" }).where(eq(checkout.id, id));
+    return;
+  }
   const status =
     view.refundedCents > 0
       ? view.paidCents - view.refundedCents >= view.totalCents
@@ -391,6 +398,8 @@ export async function createCheckoutInTransaction(
     description: string;
     quantity: number;
     unitAmountCents: number;
+    pricePending?: boolean;
+    minimumUnitAmountCents?: number;
     taxBasisPoints: number;
     discountCents?: number;
     taxCents?: number;
@@ -449,6 +458,8 @@ export async function createCheckoutInTransaction(
         description: s.name,
         quantity: 1,
         unitAmountCents: s.priceCents,
+        pricePending: needsFinalPrice(s.priceType),
+        minimumUnitAmountCents: s.priceType === "from" ? s.priceCents : 0,
         taxBasisPoints: 0,
       })),
     );
@@ -544,7 +555,7 @@ export async function createCheckoutInTransaction(
       tipCents: input.tipCents,
       taxCents,
       totalCents,
-      status: totalCents === 0 ? "paid" : "open",
+      status: totalCents === 0 && !lines.some((l) => l.pricePending) ? "paid" : "open",
       createdBy: principal.userId,
       idempotencyKey: input.idempotencyKey,
       requestHash,
@@ -556,7 +567,8 @@ export async function createCheckoutInTransaction(
     .values(lines.map((line) => ({ ...line, checkoutId: row.id })))
     .returning();
   await reserveCheckoutProducts(tx, row.id, insertedLines);
-  if (totalCents === 0) row.fulfilledAt = await fulfillCheckout(tx, row.id);
+  if (totalCents === 0 && !lines.some((l) => l.pricePending))
+    row.fulfilledAt = await fulfillCheckout(tx, row.id);
   await recordAudit(tx, {
     actorUserId: principal.userId,
     action: "commerce.checkout_created",
@@ -614,6 +626,11 @@ export async function startPayment(
     if (previous) checkReplay(previous, requestHash);
     else {
       const view = await snapshot(tx, sale);
+      if (view.lines.some((line) => line.pricePending) && view.protection?.state !== "pending")
+        throw new DomainError(
+          "invalid_state",
+          "The salon must set the final service price before payment",
+        );
       await assertRewardPayment(tx, sale, input.method);
       await assertProtectedPayment(
         tx,

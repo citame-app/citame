@@ -75,6 +75,7 @@ import { reviewEndpoints } from "./review-endpoints";
 import { rewardEndpoints } from "./reward-endpoints";
 import { schedulingPolicyEndpoints } from "./scheduling-policy-endpoints";
 import { seriesEndpoints } from "./series-endpoints";
+import { visitEndpoints } from "./visit-endpoints";
 import { waitlistEndpoints } from "./waitlist-endpoints";
 
 /** Better Auth answers with extra fields we do not depend on. */
@@ -128,6 +129,7 @@ export function createEndpoints(client: ApiClient) {
     rewards: rewardEndpoints(client),
     resources: resourceEndpoints(client),
     appointmentSeries: seriesEndpoints(client),
+    visits: visitEndpoints(client),
     waitlist: waitlistEndpoints(client),
     salon: () => client.get("/salon", salonResponseSchema),
     services: (fresh = false) =>
@@ -164,6 +166,7 @@ export function createEndpoints(client: ApiClient) {
         client.post("/notifications/opt-out", { token }, optOutPreviewSchema),
     },
     appointments: {
+      catalog: () => client.get("/appointments/catalog", listServicesResponseSchema),
       list: (query: Pick<AppointmentListQuery, "from" | "to" | "status" | "page" | "pageSize">) =>
         client.get("/appointments", listAppointmentsResponseSchema, {
           query: {

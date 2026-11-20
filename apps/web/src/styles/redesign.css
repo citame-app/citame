@@ -72,6 +72,8 @@
 }
 .site-footer {
   margin-top: 0;
+  /* Keep the final footer content above the measured mobile booking action. */
+  padding-bottom: var(--booking-summary-height, 0px);
 }
 .page-heading {
   padding-bottom: 1.5rem;
@@ -600,7 +602,7 @@
   .brand-wordmark {
     width: 100%;
     justify-content: center;
-    min-height: 36px;
+    min-height: 44px;
   }
   .header-bar > nav:last-child {
     justify-content: center;
@@ -825,7 +827,7 @@
 }
 @media (max-width: 359px) {
   .site-header[data-discovery] .brand-wordmark {
-    min-height: 36px;
+    min-height: 44px;
   }
   .site-header[data-discovery] ~ main .salon-hero {
     min-height: calc(100svh - 136px);

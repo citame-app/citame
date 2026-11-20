@@ -17,6 +17,8 @@
 
   --accent: #8f3c50;
   --accent-hover: #763043;
+  /* Motion kit hover/press states resolve against the current theme at use time. */
+  --action: var(--accent-hover);
   --accent-fg: #ffffff;
   --accent-text: #8f3c50;
   --accent-soft: #f6e8ea;

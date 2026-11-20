@@ -1,0 +1,655 @@
+{
+  "route": "http://localhost:4280/book",
+  "lastCompleteStatus": "GATE: FAIL 33 (round 2 of 3)",
+  "finalStatus": "GATE: ERROR (third invocation exited 2 before a final report)",
+  "note": "No gate rerun after the incomplete third invocation. No kit files edited and no new waivers added. Application functional checks are reported separately.",
+  "open": [
+    {
+      "check": "no-visual",
+      "where": "main#main > div.page-container.mx-auto \"Elige tus servicios\"",
+      "msg": "no picture, effect or mock in this section; a feature section needs a visual",
+      "fix": "give the section a visual: a UI fragment on a ground, real icons, or a photograph that fits",
+      "widths": [
+        1440,
+        390
+      ],
+      "from": "consistency",
+      "ids": [
+        "no-visual"
+      ],
+      "wheres": [
+        "main#main > div.page-container.mx-auto \"Elige tus servicios\""
+      ]
+    },
+    {
+      "check": "cta",
+      "where": "main#main > div.page-container.mx-auto",
+      "msg": "the hero has no button (the nav's does not count)",
+      "fix": "add the action: a button in the hero, one on every priced item, one in the closing section",
+      "widths": [
+        1440,
+        390
+      ],
+      "from": "consistency",
+      "ids": [
+        "cta"
+      ],
+      "wheres": [
+        "main#main > div.page-container.mx-auto"
+      ]
+    },
+    {
+      "check": "copy-headline",
+      "where": "h1#step-title \"Elige tus servicios\"",
+      "msg": "\"Elige tus servicios\" does not name what is sold (reservas de belleza, reservas, belleza, from flags)",
+      "fix": "put the category noun in the h1 (and who it is for, or where), in 2 to 8 words",
+      "widths": [
+        1440
+      ],
+      "from": "consistency",
+      "ids": [
+        "copy-headline"
+      ],
+      "wheres": [
+        "h1#step-title \"Elige tus servicios\""
+      ]
+    },
+    {
+      "check": "focus-visible",
+      "where": "div.space-y-4:nth-of-type(2) > section.space-y-3:nth-of-type(1) > div.relative > input.peer.absolute \"Coloración (demo)\"",
+      "msg": "Tab stop 9, input \"Coloración (demo)\": the focus lands on something you cannot see",
+      "fix": "keep the kit's ring (system.css :focus-visible, 2px in --action, there at once); a control that hides itself shows on focus",
+      "widths": [
+        1440
+      ],
+      "from": "consistency",
+      "ids": [
+        "focus-visible"
+      ],
+      "wheres": [
+        "div.space-y-4:nth-of-type(2) > section.space-y-3:nth-of-type(1) > div.relative > input.peer.absolute \"Coloración (demo)\""
+      ]
+    },
+    {
+      "check": "focus-visible",
+      "where": "div.space-y-4:nth-of-type(2) > section.space-y-3:nth-of-type(2) > div.relative > input.peer.absolute \"Corte y peinado (demo)\"",
+      "msg": "Tab stop 10, input \"Corte y peinado (demo)\": the focus lands on something you cannot see",
+      "fix": "keep the kit's ring (system.css :focus-visible, 2px in --action, there at once); a control that hides itself shows on focus",
+      "widths": [
+        1440
+      ],
+      "from": "consistency",
+      "ids": [
+        "focus-visible"
+      ],
+      "wheres": [
+        "div.space-y-4:nth-of-type(2) > section.space-y-3:nth-of-type(2) > div.relative > input.peer.absolute \"Corte y peinado (demo)\""
+      ]
+    },
+    {
+      "check": "focus-visible",
+      "where": "div.space-y-4:nth-of-type(2) > section.space-y-3:nth-of-type(3) > div.relative > input.peer.absolute \"Diseño de cejas (demo)\"",
+      "msg": "Tab stop 11, input \"Diseño de cejas (demo)\": the focus lands on something you cannot see",
+      "fix": "keep the kit's ring (system.css :focus-visible, 2px in --action, there at once); a control that hides itself shows on focus",
+      "widths": [
+        1440
+      ],
+      "from": "consistency",
+      "ids": [
+        "focus-visible"
+      ],
+      "wheres": [
+        "div.space-y-4:nth-of-type(2) > section.space-y-3:nth-of-type(3) > div.relative > input.peer.absolute \"Diseño de cejas (demo)\""
+      ]
+    },
+    {
+      "check": "moment-none",
+      "where": "(the page)",
+      "msg": "a place page (--type) deals no moment: every kind carries one, two on a long page (moments.md)",
+      "fix": "deal one (moments.mjs pick --page place --photo) and mount it in its own section",
+      "widths": [
+        1440
+      ],
+      "from": "consistency",
+      "ids": [
+        "moment-none"
+      ],
+      "wheres": [
+        "(the page)"
+      ]
+    },
+    {
+      "check": "hero-screen",
+      "where": "main#main > div.page-container.mx-auto \"1Servicios2Profesional3Horario4Confirmac\"",
+      "msg": "the hero ends at 1117px on a 900px screen, 217px below the fold: it ends at the fold, 1px either way (SR-1)",
+      "fix": "make the hero exactly one screen (height: 100svh, its content fitted inside), never taller or shorter",
+      "widths": [
+        1440
+      ],
+      "from": "consistency",
+      "ids": [
+        "hero-screen"
+      ],
+      "wheres": [
+        "main#main > div.page-container.mx-auto \"1Servicios2Profesional3Horario4Confirmac\""
+      ]
+    },
+    {
+      "check": "section-height",
+      "where": "main#main > div.page-container.mx-auto \"1Servicios2Profesional3Horario4Confirmac\"",
+      "msg": "the section starts at 65px, 65px below the screen grid (0 x 900px): sections start on whole screens (SR-2)",
+      "fix": "make every section above it exactly one or two screens tall, so this one starts on a whole screen",
+      "widths": [
+        1440
+      ],
+      "from": "consistency",
+      "ids": [
+        "section-height"
+      ],
+      "wheres": [
+        "main#main > div.page-container.mx-auto \"1Servicios2Profesional3Horario4Confirmac\""
+      ]
+    },
+    {
+      "check": "one-section",
+      "where": "main#main > div.page-container.mx-auto \"1Servicios2Profesional3Horario4Confirmac\"",
+      "msg": "a <div> sits directly in <main>: every part of <main> is a <section> (SR-4)",
+      "fix": "put every block of <main> in a <section>, and give a band its own section instead of a ground inside one",
+      "widths": [
+        1440
+      ],
+      "from": "consistency",
+      "ids": [
+        "one-section"
+      ],
+      "wheres": [
+        "main#main > div.page-container.mx-auto \"1Servicios2Profesional3Horario4Confirmac\""
+      ]
+    },
+    {
+      "check": "one-heading",
+      "where": "div.mt-6.grid > aside.booking-summary.fixed > div.mx-auto.max-w-3xl > h2.mb-4.hidden \"Tu reserva\"",
+      "msg": "the hero holds an h2 (1): its heading is the h1, and an h2 opens the next section (SR-5)",
+      "fix": "give each section one h2, first in its .wrap, and the hero only its h1",
+      "widths": [
+        1440
+      ],
+      "from": "consistency",
+      "ids": [
+        "one-heading"
+      ],
+      "wheres": [
+        "div.mt-6.grid > aside.booking-summary.fixed > div.mx-auto.max-w-3xl > h2.mb-4.hidden \"Tu reserva\""
+      ]
+    },
+    {
+      "check": "container-edges",
+      "where": "main#main > div.page-container.mx-auto \"1Servicios2Profesional3Horario4Confirmac\"",
+      "msg": "the content of section 1 runs 168px from the left and 168px from the right (read from its outermost blocks: no .wrap): the page's container starts at 120px; the margin is 64-120px at 1440px (one container, equal margins, 2px either way) (SR-6)",
+      "fix": "use one container on every section and the nav (.wrap): one margin left and right, 64-120px on a desktop, 16-24px on a phone",
+      "widths": [
+        1440
+      ],
+      "from": "consistency",
+      "ids": [
+        "container-edges"
+      ],
+      "wheres": [
+        "main#main > div.page-container.mx-auto \"1Servicios2Profesional3Horario4Confirmac\""
+      ]
+    },
+    {
+      "check": "container-edges",
+      "where": "div.relative > label.booking-choice.relative > span.min-w-0.flex-1 > span.block.font-medium \"Coloración (demo)\"",
+      "msg": "6 text blocks start on a left line at x 177, 57px from the container's left: text starts on the container's left, or on one split line (x 630, 732, 834) (also \"Corte y peinado (demo)\", \"Diseño de cejas (demo)\", \"Manicura (demo)\") (SR-6)",
+      "fix": "start the text on the container's left, or on the one split line every split shares",
+      "widths": [
+        1440
+      ],
+      "from": "consistency",
+      "ids": [
+        "container-edges"
+      ],
+      "wheres": [
+        "div.relative > label.booking-choice.relative > span.min-w-0.flex-1 > span.block.font-medium \"Coloración (demo)\""
+      ]
+    },
+    {
+      "check": "container-edges",
+      "where": "div.space-y-4 > section.space-y-3:nth-of-type(1) > div.relative > label.booking-choice.relative \"Coloración (demo)1h 30minEUR 65\"",
+      "msg": "6 text blocks start on a left line at x 141, 21px from the container's left: text starts on the container's left, or on one split line (x 630, 732, 834) (also \"Corte y peinado (demo)45minEUR 3\", \"Diseño de cejas (demo)20minEUR 1\", \"Manicura (demo)45minEUR 25\") (SR-6)",
+      "fix": "start the text on the container's left, or on the one split line every split shares",
+      "widths": [
+        1440
+      ],
+      "from": "consistency",
+      "ids": [
+        "container-edges"
+      ],
+      "wheres": [
+        "div.space-y-4 > section.space-y-3:nth-of-type(1) > div.relative > label.booking-choice.relative \"Coloración (demo)1h 30minEUR 65\""
+      ]
+    },
+    {
+      "check": "split-pair",
+      "where": "main#main > div.page-container.mx-auto > div.booking-frame.pt-6 > div.mt-6.grid \"Elige tus serviciosSelecciona uno o más.\"",
+      "msg": "the two columns of the split start 16px apart at the top: a split's columns are top-aligned, 8px either way (SR-8)",
+      "fix": "top-align both columns of the split (align-items: start)",
+      "widths": [
+        1440
+      ],
+      "from": "consistency",
+      "ids": [
+        "split-pair"
+      ],
+      "wheres": [
+        "main#main > div.page-container.mx-auto > div.booking-frame.pt-6 > div.mt-6.grid \"Elige tus serviciosSelecciona uno o más.\""
+      ]
+    },
+    {
+      "check": "edge-left",
+      "where": "div.page-container.mx-auto section.booking-content.min-w-0 \"Elige tus serviciosSelecciona un\"",
+      "msg": "starts at x 168; the lines are 120 and the column starts",
+      "fix": "start it on the .wrap left line",
+      "widths": [
+        1440
+      ],
+      "from": "layout",
+      "ids": [
+        "edge-left"
+      ],
+      "wheres": [
+        "div.page-container.mx-auto section.booking-content.min-w-0 \"Elige tus serviciosSelecciona un\""
+      ]
+    },
+    {
+      "check": "edge-right",
+      "where": "div.page-container.mx-auto section.booking-content.min-w-0 \"Elige tus serviciosSelecciona un\"",
+      "msg": "ends at x 888; the right line is 1320",
+      "fix": "end it on the .wrap right line",
+      "widths": [
+        1440
+      ],
+      "from": "layout",
+      "ids": [
+        "edge-right"
+      ],
+      "wheres": [
+        "div.page-container.mx-auto section.booking-content.min-w-0 \"Elige tus serviciosSelecciona un\""
+      ]
+    },
+    {
+      "check": "edge-left",
+      "where": "header.mb-6 h1.text-title \"Elige tus servicios\"",
+      "msg": "starts at x 168; the lines are 120 and the column starts",
+      "fix": "start it on the .wrap left line",
+      "widths": [
+        1440
+      ],
+      "from": "layout",
+      "ids": [
+        "edge-left"
+      ],
+      "wheres": [
+        "header.mb-6 h1.text-title \"Elige tus servicios\""
+      ]
+    },
+    {
+      "check": "edge-left",
+      "where": "header.mb-6 p.mt-2.max-w-prose \"Selecciona uno o más. Puedes com\"",
+      "msg": "starts at x 168; the lines are 120 and the column starts",
+      "fix": "start it on the .wrap left line",
+      "widths": [
+        1440
+      ],
+      "from": "layout",
+      "ids": [
+        "edge-left"
+      ],
+      "wheres": [
+        "header.mb-6 p.mt-2.max-w-prose \"Selecciona uno o más. Puedes com\""
+      ]
+    },
+    {
+      "check": "edge-left",
+      "where": "div.page-container.mx-auto div \"Buscar servicios\"",
+      "msg": "starts at x 168; the lines are 120 and the column starts",
+      "fix": "start it on the .wrap left line",
+      "widths": [
+        1440
+      ],
+      "from": "layout",
+      "ids": [
+        "edge-left"
+      ],
+      "wheres": [
+        "div.page-container.mx-auto div \"Buscar servicios\""
+      ]
+    },
+    {
+      "check": "edge-left",
+      "where": "div.page-container.mx-auto div \"CategoríaTodas las categorías\"",
+      "msg": "starts at x 534; the lines are 120 and the column starts",
+      "fix": "start it on the .wrap left line",
+      "widths": [
+        1440
+      ],
+      "from": "layout",
+      "ids": [
+        "edge-left"
+      ],
+      "wheres": [
+        "div.page-container.mx-auto div \"CategoríaTodas las categorías\""
+      ]
+    },
+    {
+      "check": "edge-left",
+      "where": "div.page-container.mx-auto aside.booking-summary.fixed \"Tu reservaElige al menos un serv\"",
+      "msg": "starts at x 920; the lines are 120 and the column starts",
+      "fix": "start it on the .wrap left line",
+      "widths": [
+        1440
+      ],
+      "from": "layout",
+      "ids": [
+        "edge-left"
+      ],
+      "wheres": [
+        "div.page-container.mx-auto aside.booking-summary.fixed \"Tu reservaElige al menos un serv\""
+      ]
+    },
+    {
+      "check": "edge-left",
+      "where": "div.page-container.mx-auto h2.mb-4.hidden \"Tu reserva\"",
+      "msg": "starts at x 945; the lines are 120 and the column starts",
+      "fix": "start it on the .wrap left line",
+      "widths": [
+        1440
+      ],
+      "from": "layout",
+      "ids": [
+        "edge-left"
+      ],
+      "wheres": [
+        "div.page-container.mx-auto h2.mb-4.hidden \"Tu reserva\""
+      ]
+    },
+    {
+      "check": "edge-left",
+      "where": "div.page-container.mx-auto p.pb-3.text-muted \"Elige al menos un servicio para \"",
+      "msg": "starts at x 945; the lines are 120 and the column starts",
+      "fix": "start it on the .wrap left line",
+      "widths": [
+        1440
+      ],
+      "from": "layout",
+      "ids": [
+        "edge-left"
+      ],
+      "wheres": [
+        "div.page-container.mx-auto p.pb-3.text-muted \"Elige al menos un servicio para \""
+      ]
+    },
+    {
+      "check": "edge-left",
+      "where": "div.page-container.mx-auto p.flex.items-center \"0 servicios\"",
+      "msg": "starts at x 945; the lines are 120 and the column starts",
+      "fix": "start it on the .wrap left line",
+      "widths": [
+        1440
+      ],
+      "from": "layout",
+      "ids": [
+        "edge-left"
+      ],
+      "wheres": [
+        "div.page-container.mx-auto p.flex.items-center \"0 servicios\""
+      ]
+    },
+    {
+      "check": "edge-left",
+      "where": "div.page-container.mx-auto p.mt-1.flex \"Total—\"",
+      "msg": "starts at x 945; the lines are 120 and the column starts",
+      "fix": "start it on the .wrap left line",
+      "widths": [
+        1440
+      ],
+      "from": "layout",
+      "ids": [
+        "edge-left"
+      ],
+      "wheres": [
+        "div.page-container.mx-auto p.mt-1.flex \"Total—\""
+      ]
+    },
+    {
+      "check": "lines",
+      "where": "page",
+      "msg": "headings and leads start on 2 lines (x 168, 945); the page has 120 and one split line",
+      "fix": "put the block on the .wrap lines or the grid columns",
+      "widths": [
+        1440
+      ],
+      "from": "layout",
+      "ids": [
+        "lines"
+      ],
+      "wheres": [
+        "page"
+      ]
+    },
+    {
+      "check": "spill",
+      "where": "div.page-container.mx-auto ol.flex.items-center \"1Servicios2Profesional3Horario4C\"",
+      "msg": "x 16 to 374, the page runs 24 to 366",
+      "fix": "keep it inside the .wrap; nothing past the right edge",
+      "widths": [
+        390
+      ],
+      "from": "layout",
+      "ids": [
+        "spill"
+      ],
+      "wheres": [
+        "div.page-container.mx-auto ol.flex.items-center \"1Servicios2Profesional3Horario4C\""
+      ]
+    },
+    {
+      "check": "spill",
+      "where": "div.page-container.mx-auto section.booking-content.min-w-0 \"Elige tus serviciosSelecciona un\"",
+      "msg": "x 16 to 374, the page runs 24 to 366",
+      "fix": "keep it inside the .wrap; nothing past the right edge",
+      "widths": [
+        390
+      ],
+      "from": "layout",
+      "ids": [
+        "spill"
+      ],
+      "wheres": [
+        "div.page-container.mx-auto section.booking-content.min-w-0 \"Elige tus serviciosSelecciona un\""
+      ]
+    },
+    {
+      "check": "spill",
+      "where": "header.mb-6 h1.text-title \"Elige tus servicios\"",
+      "msg": "x 16 to 374, the page runs 24 to 366",
+      "fix": "keep it inside the .wrap; nothing past the right edge",
+      "widths": [
+        390
+      ],
+      "from": "layout",
+      "ids": [
+        "spill"
+      ],
+      "wheres": [
+        "header.mb-6 h1.text-title \"Elige tus servicios\""
+      ]
+    },
+    {
+      "check": "spill",
+      "where": "header.mb-6 p.mt-2.max-w-prose \"Selecciona uno o más. Puedes com\"",
+      "msg": "x 16 to 374, the page runs 24 to 366",
+      "fix": "keep it inside the .wrap; nothing past the right edge",
+      "widths": [
+        390
+      ],
+      "from": "layout",
+      "ids": [
+        "spill"
+      ],
+      "wheres": [
+        "header.mb-6 p.mt-2.max-w-prose \"Selecciona uno o más. Puedes com\""
+      ]
+    },
+    {
+      "check": "spill",
+      "where": "div.page-container.mx-auto div \"Buscar servicios\"",
+      "msg": "x 16 to 374, the page runs 24 to 366",
+      "fix": "keep it inside the .wrap; nothing past the right edge",
+      "widths": [
+        390
+      ],
+      "from": "layout",
+      "ids": [
+        "spill"
+      ],
+      "wheres": [
+        "div.page-container.mx-auto div \"Buscar servicios\""
+      ]
+    },
+    {
+      "check": "spill",
+      "where": "div.page-container.mx-auto div \"CategoríaTodas las categorías\"",
+      "msg": "x 16 to 374, the page runs 24 to 366",
+      "fix": "keep it inside the .wrap; nothing past the right edge",
+      "widths": [
+        390
+      ],
+      "from": "layout",
+      "ids": [
+        "spill"
+      ],
+      "wheres": [
+        "div.page-container.mx-auto div \"CategoríaTodas las categorías\""
+      ]
+    }
+  ],
+  "waived": [
+    {
+      "check": "focus-visible",
+      "where": "input#locale-es-AR",
+      "msg": "Tab stop 3, input \"\": the focus lands on something you cannot see",
+      "fix": "keep the kit's ring (system.css :focus-visible, 2px in --action, there at once); a control that hides itself shows on focus",
+      "widths": [
+        1440
+      ],
+      "from": "consistency",
+      "ids": [
+        "focus-visible"
+      ],
+      "wheres": [
+        "input#locale-es-AR"
+      ],
+      "reason": "The native transparent radio is stretched over its visible label. Playwright verifies keyboard focus draws a solid 3px outline on both associated labels in light and dark themes; the checker evaluates the transparent input alone."
+    },
+    {
+      "check": "section-height",
+      "where": "footer.closing.site-footer \"Sisters of BeautyPeluquería, uñas y ceja\"",
+      "msg": "the section is 314px tall (0.3 screens), 586px short of one screen (900px): every section after the hero is one screen or two, 2px either way (SR-2)",
+      "fix": "set the section to one screen or two (height: calc(var(--h,1) * 100vh), --h 1 or 2) and cut or split its content to fit",
+      "widths": [
+        1440
+      ],
+      "from": "consistency",
+      "ids": [
+        "section-height"
+      ],
+      "wheres": [
+        "footer.closing.site-footer \"Sisters of BeautyPeluquería, uñas y ceja\""
+      ],
+      "reason": "This existing booking application shares a compact navigation and illustration-credit footer across public, booking and account routes. Stretching it to a full viewport adds empty space without helping salon customers."
+    },
+    {
+      "check": "one-section",
+      "where": "footer.closing.site-footer \"Sisters of BeautyPeluquería, uñas y ceja\"",
+      "msg": "the screen at scroll 531px (the top of section 2) shows 314px of section 2 and the content of 2 sections, over 24px each beside section 1: a screen shows one section (another may peek 8px, 24px WARN) (SR-4)",
+      "fix": "make each section exactly one screen or two, so a screen shows one section and no neighbour peeks",
+      "widths": [
+        1440
+      ],
+      "from": "consistency",
+      "ids": [
+        "one-section"
+      ],
+      "wheres": [
+        "footer.closing.site-footer \"Sisters of BeautyPeluquería, uñas y ceja\""
+      ],
+      "reason": "The shared application footer intentionally follows the closing brand section as a compact footer, rather than consuming another full marketing screen. Its links and provenance remain visible and accessible."
+    }
+  ],
+  "warnings": [
+    {
+      "check": "copy-buttons",
+      "where": "aside.booking-summary.fixed > div.mx-auto.max-w-3xl > div.flex.items-center > button.btn.inline-flex \"Continuar\"",
+      "msg": "\"Continuar\" does not start with a verb (book, buy, try, start, get, see...)",
+      "fix": "label buttons with a verb and what the visitor gets (\"Book a room\", \"Start free trial\")",
+      "widths": [
+        1440
+      ],
+      "from": "consistency"
+    },
+    {
+      "check": "nav-family",
+      "where": "header.nav.site-header",
+      "msg": "the nav's links come in 2 sizes (16, 14px)",
+      "fix": "keep one nav on every screen: the same bar, fill, links and type",
+      "widths": [
+        1440,
+        390
+      ],
+      "from": "consistency"
+    },
+    {
+      "check": "nav-labels",
+      "where": "header.nav.site-header > a.sr-only.rounded-md \"Saltar al contenido principal\"",
+      "msg": "\"Saltar al contenido principal\" opens a section headed \"Elige tus servicios\"",
+      "fix": "name each nav link after the heading of the section it opens",
+      "widths": [
+        1440
+      ],
+      "from": "consistency"
+    },
+    {
+      "check": "share-meta",
+      "where": "head",
+      "msg": "the head lacks og:image: a shared link shows no picture or title of its own",
+      "fix": "copy the head block of starter.html: og tags, twitter:card, the icon and theme-color (references/system.md, Head)",
+      "widths": [
+        1440
+      ],
+      "from": "consistency"
+    },
+    {
+      "check": "section-height",
+      "where": "main#main",
+      "msg": "the page is 1.6 screens long (1431px on a 900px screen): a place page runs 3 to 6 screens (over 7 FAIL) (SR-2)",
+      "fix": "keep a place page at 3 to 6 screens: merge a short block into the section above, or cut a section",
+      "widths": [
+        1440
+      ],
+      "from": "consistency"
+    },
+    {
+      "check": "container-edges",
+      "where": "div.mt-6.grid > aside.booking-summary.fixed > div.mx-auto.max-w-3xl > h2.mb-4.hidden \"Tu reserva\"",
+      "msg": "the h2 starts 777px right of the container's left: every h1 and h2 starts on it, 2px either way (it sits in a part held on screen as the page scrolls: told as a WARN) (SR-6)",
+      "fix": "start the text on the container's left, or on the one split line every split shares",
+      "widths": [
+        1440
+      ],
+      "from": "consistency"
+    }
+  ],
+  "notChecked": "Final third gate result; complete Booksy parity, production provider activation, physical-device and Safari/iOS validation."
+}

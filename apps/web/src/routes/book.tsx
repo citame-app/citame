@@ -12,6 +12,8 @@ type BookingUrlSearch = {
   date?: string;
   slot?: string;
   slotStaff?: string;
+  professionals?: string;
+  visitStaff?: string;
 };
 
 export const Route = createFileRoute("/book")({

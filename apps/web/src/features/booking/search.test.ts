@@ -12,6 +12,25 @@ const A = "0198f5a0-7b1c-7000-8000-000000000101";
 const B = "0198f5a0-7b1c-7000-8000-000000000102";
 const STAFF = "0198f5a0-7b1c-7000-8000-000000000201";
 
+test("multi-professional preferences and the resolved itinerary survive URL navigation", () => {
+  const raw = {
+    services: `${A},${B}`,
+    staff: "multiple",
+    professionals: `any,${STAFF}`,
+    visitStaff: `${STAFF},${STAFF}`,
+    date: "2026-03-09",
+    slot: "2026-03-09T12:00:00.000Z",
+    slotStaff: STAFF,
+  };
+  const parsed = parseBookingSearch(raw);
+  expect(parsed).toMatchObject({
+    staff: "multiple",
+    professionals: ["any", STAFF],
+    visitStaff: [STAFF, STAFF],
+  });
+  expect(serializeBookingSearch(parsed)).toEqual(raw);
+});
+
 describe("parseBookingSearch", () => {
   test("reads services, professional, date and slot from the URL", () => {
     expect(

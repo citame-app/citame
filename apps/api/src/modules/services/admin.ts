@@ -38,6 +38,11 @@ function toAdminService(
     id: row.id,
     name: row.name,
     description: row.description,
+    category: row.category,
+    sortOrder: row.sortOrder,
+    onlineBooking: row.onlineBooking,
+    clientInstructions: row.clientInstructions,
+    bookingIntervalMinutes: row.bookingIntervalMinutes,
     durationMinutes: row.durationMinutes,
     bufferMinutes: row.bufferMinutes,
     ...(row.processingStartMinutes !== null && row.processingMinutes !== null
@@ -49,6 +54,7 @@ function toAdminService(
         }
       : {}),
     priceCents: row.priceCents,
+    ...(row.priceType !== "fixed" ? { priceType: row.priceType } : {}),
     currency: row.currency,
     active: row.active,
     staffIds,
@@ -107,6 +113,11 @@ export async function createService(
 ): Promise<AdminService> {
   return db.transaction(async (tx) => {
     await lockScheduling(tx);
+    if (
+      input.processing &&
+      input.processing.startsAfterMinutes + input.processing.minutes >= input.durationMinutes
+    )
+      throw new DomainError("validation_error", "Processing requires final hands-on work");
     const targets = input.catalog ? await catalogTargets(tx, input.catalog) : [];
     if (input.staffIds?.length) {
       const selected = await tx
@@ -135,9 +146,23 @@ export async function createService(
       .values({
         name: input.name,
         description: input.description ?? null,
+        category: input.category === undefined ? (parent?.category ?? null) : input.category,
+        sortOrder: input.sortOrder ?? 0,
+        onlineBooking: input.onlineBooking ?? parent?.onlineBooking ?? true,
+        clientInstructions:
+          input.clientInstructions === undefined
+            ? (parent?.clientInstructions ?? null)
+            : input.clientInstructions,
+        bookingIntervalMinutes:
+          input.bookingIntervalMinutes === undefined
+            ? (parent?.bookingIntervalMinutes ?? null)
+            : input.bookingIntervalMinutes,
+        processingStartMinutes: input.processing?.startsAfterMinutes ?? null,
+        processingMinutes: input.processing?.minutes ?? null,
         durationMinutes: input.durationMinutes,
         bufferMinutes: input.bufferMinutes ?? parent?.bufferMinutes ?? 0,
-        priceCents: input.priceCents,
+        priceCents: input.priceCents ?? 0,
+        priceType: input.priceType ?? "fixed",
         currency,
         catalogKind: input.catalog?.kind ?? "service",
         parentServiceId: input.catalog?.kind === "variant" ? input.catalog.parentServiceId : null,
@@ -189,6 +214,12 @@ export async function createService(
 }
 
 const EDITABLE = [
+  "bookingIntervalMinutes",
+  "priceType",
+  "category",
+  "sortOrder",
+  "onlineBooking",
+  "clientInstructions",
   "name",
   "description",
   "durationMinutes",
@@ -211,10 +242,29 @@ export async function updateService(
   return db.transaction(async (tx) => {
     await lockScheduling(tx);
     const current = await requireService(tx, id);
+    if (input.priceType === "variable" || input.priceType === "free")
+      input = { ...input, priceCents: 0 };
+    const priceType = input.priceType ?? current.priceType;
     if (
-      current.processingStartMinutes !== null &&
-      current.processingMinutes !== null &&
-      current.processingStartMinutes + current.processingMinutes >=
+      (priceType === "variable" || priceType === "free") &&
+      (input.priceCents ?? current.priceCents) !== 0
+    )
+      throw new DomainError(
+        "validation_error",
+        "Variable and free services cannot have a fixed price",
+      );
+    const processing =
+      input.processing === undefined
+        ? current.processingStartMinutes !== null && current.processingMinutes !== null
+          ? {
+              startsAfterMinutes: current.processingStartMinutes,
+              minutes: current.processingMinutes,
+            }
+          : null
+        : input.processing;
+    if (
+      processing &&
+      processing.startsAfterMinutes + processing.minutes >=
         (input.durationMinutes ?? current.durationMinutes)
     )
       throw new DomainError(
@@ -239,22 +289,21 @@ export async function updateService(
           "Remove resource requirements before making an add-on zero-time",
         );
     }
-    if (
-      current.processingStartMinutes !== null &&
-      current.processingMinutes !== null &&
-      current.processingStartMinutes + current.processingMinutes >=
-        (input.durationMinutes ?? current.durationMinutes)
-    )
-      throw new DomainError(
-        "validation_error",
-        "Remove or adjust processing before shortening this treatment",
-      );
     const changes: Partial<Record<(typeof EDITABLE)[number], unknown>> = {};
     for (const key of EDITABLE) {
       const next = input[key];
       if (next !== undefined && next !== current[key]) changes[key] = next;
     }
-    const changed = Object.keys(changes).sort();
+    const processingChanges =
+      input.processing !== undefined &&
+      (current.processingStartMinutes !== (processing?.startsAfterMinutes ?? null) ||
+        current.processingMinutes !== (processing?.minutes ?? null))
+        ? {
+            processingStartMinutes: processing?.startsAfterMinutes ?? null,
+            processingMinutes: processing?.minutes ?? null,
+          }
+        : {};
+    const changed = [...Object.keys(changes), ...Object.keys(processingChanges)].sort();
     const staffIds = (await loadStaffIds(tx, [id])).get(id) ?? [];
     if (changed.length === 0)
       return toAdminService(
@@ -265,9 +314,11 @@ export async function updateService(
 
     const [updated] = await tx
       .update(service)
-      .set({ ...changes, catalogVersion: current.catalogVersion + 1 } as Partial<
-        typeof service.$inferInsert
-      >)
+      .set({
+        ...changes,
+        ...processingChanges,
+        catalogVersion: current.catalogVersion + 1,
+      } as Partial<typeof service.$inferInsert>)
       .where(eq(service.id, id))
       .returning();
     if (!updated) throw new Error("Service update returned no row");

@@ -1,3 +1,4 @@
+import { needsFinalPrice } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router";
 import { useStore } from "@tanstack/react-store";
@@ -8,6 +9,7 @@ import { useToast } from "~/components/ui/toast";
 import { InlineAuth } from "~/features/booking/auth-panel";
 import { BookingFrame } from "~/features/booking/frame";
 import { createBookingIntent } from "~/features/booking/intent";
+import { PriceTermsConsent, usePriceTerms } from "~/features/booking/price-terms";
 import { BookingPromotionReview, useBookingPromotion } from "~/features/booking/promotion";
 import { BookingPolicyConsent } from "~/features/booking/protection";
 import { acceptedServiceQuotes } from "~/features/booking/quotes";
@@ -20,6 +22,7 @@ import {
 import { bookingActions, bookingStore } from "~/features/booking/store";
 import { BookingSummary } from "~/features/booking/summary";
 import { useBooking } from "~/features/booking/use-booking";
+import { VisitReview } from "~/features/booking/visit-review";
 import { BookingForms, useBookingForms } from "~/features/intake/booking-forms";
 import { useI18n } from "~/i18n/react";
 import { ApiError, NetworkError, ResponseShapeError } from "~/lib/api/client";
@@ -46,6 +49,23 @@ export const Route = createFileRoute("/book/review")({
 });
 
 function ReviewStep() {
+  const booking = useBooking();
+  return booking.search.staff === "multiple" ? (
+    <VisitReview
+      key={JSON.stringify({
+        services: booking.search.services,
+        slot: booking.search.slot,
+        staff: booking.search.visitStaff,
+        quotes: booking.selectedServices.map((s) => s.quoteHash),
+      })}
+      booking={booking}
+    />
+  ) : (
+    <SingleReviewStep />
+  );
+}
+
+function SingleReviewStep() {
   const { t } = useI18n();
   const toast = useToast();
   const booking = useBooking();
@@ -72,9 +92,12 @@ function ReviewStep() {
   }, []);
   const isClient = session?.user.role === "client";
   const isStaff = session !== null && !isClient;
+  const variablePrice = selectedServices.some((s) => s.priceType === "variable");
+  const finalPricePending = selectedServices.some((s) => needsFinalPrice(s.priceType));
+  const priceTerms = usePriceTerms(selectedServices);
   const quotes = acceptedServiceQuotes(selectedServices);
   const promotion = useBookingPromotion(
-    isClient && quotes && search.slot && search.slotStaff
+    isClient && !finalPricePending && quotes && search.slot && search.slotStaff
       ? {
           staffId: search.slotStaff,
           serviceIds: search.services,
@@ -95,7 +118,8 @@ function ReviewStep() {
   const policyAccepted =
     policy.isSuccess &&
     (!policy.data.enabled ||
-      (acceptedVersion === policy.data.version &&
+      ((!variablePrice || policy.data.depositKind === "fixed") &&
+        acceptedVersion === policy.data.version &&
         acceptedTotal === reviewTotal &&
         acceptedPromotionHash === (promotion.payload?.reviewHash ?? null)));
 
@@ -112,12 +136,17 @@ function ReviewStep() {
   const confirm = useMutation({
     mutationFn: () => {
       if (packet.current) return api().appointments.create(packet.current);
+      if (!priceTerms.accepted) throw new Error("Accept the reviewed price terms");
       if (!promotion.ready) throw new Error("Review the current promotion");
       if (!policyAccepted) throw new Error("Review current booking policy");
       if (!intake.ready) throw new Error("Complete the current forms");
       if (!search.slot || !search.slotStaff) throw new Error("incomplete booking");
       const request = {
         ...intake.payload,
+        ...(priceTerms.required ? { priceTermsAccepted: true } : {}),
+        ...(variablePrice && policy.data?.enabled
+          ? { protectionAcceptedDepositCents: policy.data.depositValue }
+          : {}),
         ...(promotion.payload ? { promotion: promotion.payload } : {}),
         staffId: search.slotStaff,
         serviceIds: search.services,
@@ -225,11 +254,13 @@ function ReviewStep() {
       authRef.current?.focus();
       return;
     }
-    if (uncertain || (policyAccepted && intake.ready && promotion.ready)) confirm.mutate();
+    if (uncertain || (policyAccepted && intake.ready && promotion.ready && priceTerms.accepted))
+      confirm.mutate();
   }
 
   return (
     <BookingFrame
+      teamAccount={booking.teamAccount}
       step="review"
       search={search}
       title={t("booking.review.title")}
@@ -237,6 +268,7 @@ function ReviewStep() {
       summary={
         <BookingSummary
           services={selectedServices}
+          revealHiddenPrices
           totals={{ ...totals, priceCents: reviewTotal }}
           staffName={booking.staffName}
           slot={search.slot ? { startsAt: search.slot } : undefined}
@@ -244,7 +276,9 @@ function ReviewStep() {
           ctaLabel={session ? t("booking.cta.confirm") : t("booking.cta.signInToConfirm")}
           ctaLoading={confirm.isPending}
           ctaDisabled={
-            isStaff || (!uncertain && (!policyAccepted || !intake.ready || !promotion.ready))
+            isStaff ||
+            (!uncertain &&
+              (!policyAccepted || !intake.ready || !promotion.ready || !priceTerms.accepted))
           }
           onCta={onCta}
         />
@@ -252,6 +286,22 @@ function ReviewStep() {
     >
       <div className="space-y-6">
         <BookingRecoveryGuard pending={recoveryPending} />
+        {selectedServices.some((s) => s.clientInstructions) && (
+          <section
+            aria-label={t("services.instructions")}
+            className="space-y-3 rounded-lg border border-line p-4"
+          >
+            <h2 className="font-medium">{t("services.instructions")}</h2>
+            {selectedServices
+              .filter((s) => s.clientInstructions)
+              .map((s) => (
+                <div key={s.id}>
+                  <h3 className="text-sm font-semibold">{s.name}</h3>
+                  <p className="whitespace-pre-wrap text-sm text-muted">{s.clientInstructions}</p>
+                </div>
+              ))}
+          </section>
+        )}
         {uncertain && (
           <div className="space-y-3">
             <p role="alert">{t("bookingPromotion.uncertain")}</p>
@@ -272,7 +322,11 @@ function ReviewStep() {
         <fieldset disabled={confirm.isPending || uncertain} className="min-w-0">
           <BookingForms state={intake} />
         </fieldset>
-        {isClient && (
+        <PriceTermsConsent state={priceTerms} disabled={confirm.isPending || uncertain} />
+        {isClient && finalPricePending && (
+          <p className="text-sm text-muted">{t("services.price.promotionLater")}</p>
+        )}
+        {isClient && !finalPricePending && (
           <BookingPromotionReview state={promotion} disabled={confirm.isPending || uncertain} />
         )}
         {policy.isError && (
@@ -282,6 +336,7 @@ function ReviewStep() {
           <fieldset disabled={confirm.isPending || uncertain} className="min-w-0">
             <BookingPolicyConsent
               policy={policy.data}
+              variablePrice={variablePrice}
               totalCents={reviewTotal}
               acceptedVersion={
                 acceptedTotal === reviewTotal &&

@@ -6,6 +6,7 @@ import {
   type AppointmentTransition,
   type CreateAppointmentRequest,
   type ListAppointmentsResponse,
+  needsFinalPrice,
   type UpdateAppointmentRequest,
 } from "@sob/contracts";
 import {
@@ -33,6 +34,7 @@ import {
 import { lockCalendars, lockScheduling, type Tx } from "../../tx";
 import { totalBlockMinutes } from "../availability/compute";
 import { type BookingViolation, bookingViolations } from "../availability/rules";
+import { findAvailability } from "../availability/service";
 import {
   releaseExpiredStaffOffers,
   repackStaff,
@@ -56,7 +58,7 @@ import { reassignAppointmentResources, reserveResources } from "../resources/res
 import { applyBookingPromotion } from "../rewards/booking";
 import { assertPromotionReschedule } from "../rewards/timing";
 import { releaseUnfulfilledAppointmentRewards } from "../rewards/value";
-import { getBookableServices } from "../services/service";
+import { assertOnlineServices, getBookableServices } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { loadDatedHours } from "../staff/date-hours";
 import { assertStaffActive } from "../staff/guards";
@@ -111,6 +113,7 @@ export function toAppointment(
             }
           : {}),
         priceCents: s.priceCents,
+        ...(s.priceType !== "fixed" ? { priceType: s.priceType } : {}),
         currency: s.currency,
       })),
     createdAt: row.createdAt.toISOString(),
@@ -178,7 +181,7 @@ export async function createAppointment(
   db: Database | Tx,
   request: CreateAppointmentRequest,
   actor?: Actor,
-  options: { now?: Date } = {},
+  options: { now?: Date; sequentialContinuation?: boolean } = {},
 ): Promise<Appointment> {
   const now = options.now ?? new Date();
   await assertStaffExists(db, request.staffId);
@@ -195,8 +198,35 @@ export async function createAppointment(
     return await db.transaction(async (tx) => {
       await lockScheduling(tx);
       await lockCalendars(tx, [request.staffId]);
+      const onlineCustomer = await assertOnlineServices(tx, request.serviceIds, actor?.userId);
       const settings = await getSalonSettings(tx);
       const services = await getBookableServices(tx, request.serviceIds, request.serviceQuotes);
+      if (
+        onlineCustomer &&
+        services.some((s) => needsFinalPrice(s.priceType)) &&
+        request.priceTermsAccepted !== true
+      )
+        throw new DomainError(
+          "version_conflict",
+          "Review and accept the pending-price terms before booking",
+        );
+      if (
+        onlineCustomer &&
+        services[0]?.bookingIntervalMinutes &&
+        !options.sequentialContinuation
+      ) {
+        const date = Temporal.Instant.fromEpochMilliseconds(startsAt.getTime())
+          .toZonedDateTimeISO(settings.timezone)
+          .toPlainDate()
+          .toString();
+        const availability = await findAvailability(
+          tx,
+          { date, serviceIds: request.serviceIds, staffId: request.staffId },
+          now,
+        );
+        if (!availability.slots.some((slot) => Date.parse(slot.startsAt) === startsAt.getTime()))
+          throw new DomainError("validation_error", "Choose a start time offered for this service");
+      }
       const endsAt = new Date(startsAt.getTime() + totalBlockMinutes(services) * MS_PER_MINUTE);
       await assertStaffPerforms(
         tx,
@@ -254,6 +284,7 @@ export async function createAppointment(
             processingStartMinutes: s.processing?.startsAfterMinutes ?? null,
             processingMinutes: s.processing?.minutes ?? null,
             priceCents: s.priceCents,
+            priceType: s.priceType ?? "fixed",
             currency: s.currency,
           })),
         )
@@ -272,6 +303,14 @@ export async function createAppointment(
           entityId: row.id,
           metadata: {
             requestFingerprint: appointmentIntentFingerprint(request),
+            ...(request.priceTermsAccepted
+              ? {
+                  priceTermsConfirmed: true,
+                  ...(request.protectionAcceptedDepositCents !== undefined
+                    ? { acceptedDepositCents: request.protectionAcceptedDepositCents }
+                    : {}),
+                }
+              : {}),
             intakeConfirmed: Boolean(
               request.intakeResponses?.length || request.intakeSubmissionIds?.length,
             ),

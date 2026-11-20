@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { PageContainer } from "~/components/pages";
+import { buttonClasses } from "~/components/ui/button";
 import { useI18n } from "~/i18n/react";
 import { Stepper, type StepperStep } from "./components";
 import {
@@ -21,6 +22,7 @@ export function BookingFrame({
   lead,
   children,
   summary,
+  teamAccount = false,
 }: {
   step: BookingStep;
   search: BookingSearch;
@@ -28,6 +30,7 @@ export function BookingFrame({
   lead?: string;
   children: ReactNode;
   summary: ReactNode;
+  teamAccount?: boolean;
 }) {
   const { t } = useI18n();
   const current = ORDER.indexOf(step);
@@ -65,6 +68,17 @@ export function BookingFrame({
               </h1>
               {lead && <p className="mt-2 max-w-prose text-muted">{lead}</p>}
             </header>
+            {teamAccount && step !== "review" && (
+              <aside
+                role="note"
+                className="mb-5 space-y-3 rounded-lg border border-line bg-sunken p-4"
+              >
+                <p className="text-sm">{t("booking.review.staff.body")}</p>
+                <Link to="/admin" className={buttonClasses({ variant: "secondary" })}>
+                  {t("booking.review.staff.link")}
+                </Link>
+              </aside>
+            )}
             {children}
           </section>
           {summary}

@@ -50,6 +50,13 @@ export const mcpFindAvailabilityOutput = z.object({
 });
 
 export const mcpCreateAppointmentInput = z.object({
+  priceTermsAccepted: createAppointmentBaseSchema.shape.priceTermsAccepted.describe(
+    "Only true after the customer explicitly accepts that variable/starting prices are finalized at the salon and advertised minimums apply. Never infer acceptance.",
+  ),
+  protectionAcceptedDepositCents:
+    createAppointmentBaseSchema.shape.protectionAcceptedDepositCents.describe(
+      "Exact fixed deposit amount explicitly reviewed and accepted by the customer for a variable-price service. Never infer acceptance.",
+    ),
   staffId: idSchema.describe("Professional to book, from find_availability."),
   serviceIds: z.array(idSchema).min(1).max(10).describe("Ids of the services, from list_services."),
   startsAt: instantSchema.describe(

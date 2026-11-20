@@ -1,6 +1,6 @@
 import type { Service, Staff } from "@sob/contracts";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useNavigate, useRouteContext, useSearch } from "@tanstack/react-router";
 import { useI18n } from "~/i18n/react";
 import { salonQuery, servicesQuery, staffQuery } from "~/lib/queries";
 import { normalizeCatalogSelection } from "./catalog-selection";
@@ -21,6 +21,7 @@ export const STEP_PATH = {
 
 export interface BookingContext {
   search: BookingSearch;
+  teamAccount: boolean;
   catalog: Service[];
   staff: Staff[];
   selectedServices: Service[];
@@ -35,6 +36,7 @@ export interface BookingContext {
 /** Everything a booking step needs: the URL selection resolved against the catalog. */
 export function useBooking(): BookingContext {
   const { t } = useI18n();
+  const { session } = useRouteContext({ from: "/book" });
   const raw = useSearch({ from: "/book" });
   const search = parseBookingSearch(raw);
   const { data: catalog } = useSuspenseQuery(servicesQuery);
@@ -47,19 +49,26 @@ export function useBooking(): BookingContext {
     .map((id) => catalog.find((service) => service.id === id))
     .filter((service): service is Service => service !== undefined);
   const resolvedStaffId = search.slotStaff ?? (search.staff !== "any" ? search.staff : undefined);
-  const staffName = resolvedStaffId
-    ? staff.find((member) => member.id === resolvedStaffId)?.displayName
-    : search.staff === "any"
-      ? t("booking.professional.any")
-      : undefined;
+  const staffName =
+    search.staff === "multiple"
+      ? t("services.multiple")
+      : resolvedStaffId
+        ? staff.find((member) => member.id === resolvedStaffId)?.displayName
+        : search.staff === "any"
+          ? t("booking.professional.any")
+          : undefined;
 
   return {
+    teamAccount: Boolean(session && session.user.role !== "client"),
     search: { ...search, services: selectedServices.map((s) => s.id) },
     catalog,
     staff,
     selectedServices,
     totals: bookingTotals(catalog, serviceIds),
-    eligible: eligibleStaff(staff, serviceIds),
+    eligible:
+      new Set(selectedServices.map((s) => s.currency)).size > 1
+        ? []
+        : eligibleStaff(staff, serviceIds),
     staffName,
     salon,
     go(step, next, options) {

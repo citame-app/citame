@@ -26,6 +26,65 @@ let fail: { status: number; body: unknown } | null;
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
+test("service merchandising edits are included in the reviewed atomic submission", async () => {
+  open();
+  fireEvent.click(
+    within(await screen.findByRole("table", { name: "Services" })).getByRole("button", {
+      name: "Haircut",
+    }),
+  );
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.change(within(dialog).getByLabelText("Category"), { target: { value: "Hair" } });
+  fireEvent.change(within(dialog).getByLabelText("Display order"), { target: { value: "2" } });
+  fireEvent.click(
+    within(dialog).getByRole("checkbox", { name: "Clients can book this service online" }),
+  );
+  fireEvent.change(within(dialog).getByLabelText("Before your appointment"), {
+    target: { value: "Bring a photo" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(writes()).toHaveLength(1));
+  expect(writes()[0]?.body).toMatchObject({
+    service: {
+      category: "Hair",
+      sortOrder: 2,
+      onlineBooking: false,
+      clientInstructions: "Bring a photo",
+    },
+  });
+});
+
+test("variants can be added from their parent with inherited currency and performers", async () => {
+  open();
+  fireEvent.click(
+    within(await screen.findByRole("table", { name: "Services" })).getByRole("button", {
+      name: "Haircut",
+    }),
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Add variant" }));
+  const dialog = await screen.findByRole("dialog", { name: "New service" });
+  expect(within(dialog).getByLabelText("Catalog type")).toHaveValue("variant");
+  expect(within(dialog).getByLabelText("Parent service")).toHaveValue(CUT);
+  expect(within(dialog).getByLabelText("Currency (3 letters)")).toHaveValue("ARS");
+  expect(within(dialog).getByRole("checkbox", { name: "Ana" })).toBeChecked();
+});
+
+test("variable prices can be created without entering a fixed amount", async () => {
+  open();
+  fireEvent.click(await screen.findByRole("button", { name: "New service" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.change(within(dialog).getByLabelText("Name"), {
+    target: { value: "Bespoke treatment" },
+  });
+  fireEvent.change(within(dialog).getByLabelText("Duration (minutes)"), {
+    target: { value: "60" },
+  });
+  fireEvent.change(within(dialog).getByLabelText("Price type"), { target: { value: "variable" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+  await waitFor(() => expect(writes()).toHaveLength(1));
+  expect(writes()[0]?.body).toMatchObject({ priceType: "variable", priceCents: 0 });
+});
+
 beforeEach(() => {
   calls = [];
   fail = null;

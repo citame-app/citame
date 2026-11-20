@@ -15,6 +15,7 @@ import { useI18n } from "~/i18n/react";
 import type { CommerceMode } from "~/lib/api/commerce-endpoints";
 import { api } from "~/lib/api/instance";
 import { formatMoney } from "~/lib/format";
+import { CheckoutPricesForm } from "./checkout-prices";
 import { invalidateCommerce } from "./invalidate";
 import { centsInput, inputCents } from "./money";
 import { PassPurchaseRefund, PassTender } from "./pass-tender";
@@ -113,7 +114,11 @@ export function CheckoutPanel({
   if (sale.isPending) return <Skeleton className="h-72" />;
   if (sale.isError) return <ErrorState error={sale.error} onRetry={() => void sale.refetch()} />;
   const order = sale.data;
-  const payableCents = order.payableCents ?? order.balanceCents;
+  const unresolved = order.lines.some((line) => line.pricePending);
+  const payableCents =
+    unresolved && order.protection?.state !== "pending"
+      ? 0
+      : (order.payableCents ?? order.balanceCents);
   const money = (value: number) => formatMoney(value, order.currency, locale);
   const canRefund = capabilities.data?.permissions?.refunds ?? role === "owner";
   const clientPurchase =
@@ -188,7 +193,9 @@ export function CheckoutPanel({
               <span className="ml-2 text-muted">× {line.quantity}</span>
             </span>
             <span className="shrink-0 whitespace-nowrap font-medium">
-              {money(line.quantity * line.unitAmountCents)}
+              {line.pricePending
+                ? t("services.price.variable")
+                : money(line.quantity * line.unitAmountCents)}
             </span>
           </li>
         ))}
@@ -209,10 +216,27 @@ export function CheckoutPanel({
           </div>
         ))}
       </dl>
+      {unresolved &&
+        (mode === "admin" ? (
+          <CheckoutPricesForm
+            key={`${order.id}:${order.pricingVersion ?? 1}`}
+            order={order}
+            disabled={!online || pending || review}
+            onSaved={() => {
+              void invalidateCommerce(queries);
+            }}
+            onReload={() => {
+              void sale.refetch();
+            }}
+          />
+        ) : (
+          <p role="status">{t("services.price.pending")}</p>
+        ))}
       <RewardReceipt checkout={order} mode={mode} canRefund={canRefund} />
       {order.status === "open" &&
         order.clientId &&
         !order.reward &&
+        !unresolved &&
         !order.payments.length &&
         order.lines.some((line) => ["service", "product", "custom"].includes(line.kind)) && (
           <details className="space-y-3">
@@ -260,7 +284,8 @@ export function CheckoutPanel({
         !form &&
         !order.reward &&
         order.appointmentId &&
-        order.clientId && <PassTender checkoutId={order.id} mode={mode} />}
+        order.clientId &&
+        !unresolved && <PassTender checkoutId={order.id} mode={mode} />}
       {order.status === "open" && payableCents > 0 && !pending && !review && !form && (
         <div>
           {capabilities.isPending ? (

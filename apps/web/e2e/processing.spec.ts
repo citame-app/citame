@@ -82,7 +82,7 @@ for (const scheme of ["light", "dark"] as const)
         );
         const express = await create(`Fixture express ${scheme} ${info.project.name}`, 30, 0, 1500);
         await signInThroughUi(page, fixture.ownerEmail, "/admin/services");
-        await page.getByRole("link", { name: "Processing time", exact: true }).click();
+        await page.getByRole("tab", { name: "Processing time", exact: true }).click();
         await page
           .getByLabel("Choose a treatment to configure", { exact: true })
           .selectOption(colour.id);

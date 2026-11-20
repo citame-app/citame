@@ -10,6 +10,7 @@ import {
   pageSizeSchema,
 } from "./common";
 import { intakeBookingShape } from "./intake";
+import { servicePriceTypeSchema } from "./service-pricing";
 import { processingTimeSchema } from "./staff-capacity";
 
 const time = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
@@ -69,6 +70,9 @@ export const waitlistOfferSchema = z.object({
       processing: processingTimeSchema.optional(),
       bufferMinutes: z.number().int().nonnegative(),
       priceCents: z.number().int().nonnegative(),
+      priceType: servicePriceTypeSchema.optional(),
+      bookingIntervalMinutes: z.number().int().min(1).max(120).optional(),
+      clientInstructions: z.string().optional(),
       currency: z.string(),
     }),
   ),
@@ -122,6 +126,8 @@ export const waitlistAcceptSchema = z
     expectedTotalCents: z.number().int().nonnegative().max(999999999),
     protectionAcceptedVersion: z.number().int().positive().optional(),
     protectionAcceptedTotalCents: z.number().int().nonnegative().max(999999999).optional(),
+    protectionAcceptedDepositCents: z.number().int().nonnegative().max(999999999).optional(),
+    priceTermsAccepted: z.boolean().optional(),
     protectionWaiverReason: z.string().trim().min(8).max(300).optional(),
   })
   .strict();

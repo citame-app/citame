@@ -288,6 +288,34 @@
       "when": 1794847484430,
       "tag": "0040_dark_wither",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1794908738324,
+      "tag": "0041_bored_yellowjacket",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1794909400152,
+      "tag": "0042_eager_patch",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1794910775302,
+      "tag": "0043_flat_mongu",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1794911731276,
+      "tag": "0044_fancy_adam_warlock",
+      "breakpoints": true
     }
   ]
 }

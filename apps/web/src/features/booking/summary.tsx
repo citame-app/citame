@@ -4,8 +4,9 @@ import { Button } from "~/components/ui/button";
 import { CalendarIcon, ChevronUpIcon, ClockIcon, CloseIcon, UserIcon } from "~/components/ui/icons";
 import { useI18n } from "~/i18n/react";
 import { cn } from "~/lib/cn";
-import { formatDateLong, formatDuration, formatMoney, formatTime, localDateOf } from "~/lib/format";
+import { formatDateLong, formatDuration, formatTime, localDateOf } from "~/lib/format";
 import type { BookingTotals } from "./logic";
+import { priceLabel, totalPriceLabel } from "./service-price";
 
 export interface BookingSummaryProps {
   services: Service[];
@@ -17,6 +18,7 @@ export interface BookingSummaryProps {
   onCta: () => void;
   ctaDisabled?: boolean;
   ctaLoading?: boolean;
+  revealHiddenPrices?: boolean;
   onRemoveService?: (serviceId: string) => void;
 }
 
@@ -35,6 +37,7 @@ export function BookingSummary({
   ctaDisabled,
   ctaLoading,
   onRemoveService,
+  revealHiddenPrices = false,
 }: BookingSummaryProps) {
   const { t, locale } = useI18n();
   const [expanded, setExpanded] = useState(false);
@@ -65,7 +68,9 @@ export function BookingSummary({
       else root.style.removeProperty(property);
     };
   }, []);
-  const total = totals.currency ? formatMoney(totals.priceCents, totals.currency, locale) : null;
+  const total = totals.currency
+    ? totalPriceLabel(t, locale, services, totals.priceCents, totals.currency, revealHiddenPrices)
+    : null;
 
   return (
     <aside
@@ -108,7 +113,7 @@ export function BookingSummary({
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="text-[0.95rem]">
-                      {formatMoney(service.priceCents, service.currency, locale)}
+                      {priceLabel(t, locale, service, revealHiddenPrices)}
                     </span>
                     {onRemoveService && (
                       <button

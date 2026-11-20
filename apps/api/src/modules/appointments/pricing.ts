@@ -9,6 +9,7 @@ export async function loadBookingPrices(db: Pick<Database, "select">, ids: strin
     .select({
       appointmentId: checkout.appointmentId,
       currency: checkout.currency,
+      pricingVersion: checkout.pricingVersion,
       subtotalCents:
         sql<number>`sum(${checkoutLine.quantity}::bigint*${checkoutLine.unitAmountCents})`.mapWith(
           Number,
@@ -21,7 +22,7 @@ export async function loadBookingPrices(db: Pick<Database, "select">, ids: strin
       and(
         inArray(checkout.appointmentId, ids),
         eq(checkoutLine.kind, "service"),
-        sql`${checkout.idempotencyKey} = 'booking-promotion-' || ${checkout.appointmentId}::text`,
+        sql`(${checkout.idempotencyKey} = 'booking-promotion-' || ${checkout.appointmentId}::text or ${checkout.pricingVersion}>1)`,
       ),
     )
     .groupBy(checkout.id)
@@ -33,6 +34,7 @@ export async function loadBookingPrices(db: Pick<Database, "select">, ids: strin
         discountCents: row.discountCents,
         totalCents: row.subtotalCents - row.discountCents,
         currency: row.currency,
+        ...(row.pricingVersion > 1 ? { finalized: true } : {}),
       });
   return prices;
 }

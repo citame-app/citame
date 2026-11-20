@@ -8,6 +8,7 @@ import { CalendarIcon, CheckIcon, ClockIcon, DownloadIcon, UserIcon } from "~/co
 import { ErrorState, Skeleton } from "~/components/ui/states";
 import { buildIcs, icsFileName } from "~/features/booking/ics";
 import { BookingProtectionNotice } from "~/features/booking/protection";
+import { priceLabel, totalPriceLabel } from "~/features/booking/service-price";
 import { bookingStore } from "~/features/booking/store";
 import { createTranslator } from "~/i18n";
 import { useI18n } from "~/i18n/react";
@@ -186,9 +187,7 @@ function ConfirmedView({
                 className="flex justify-between gap-3 py-2.5"
               >
                 <span>{service.name}</span>
-                <span className="text-muted">
-                  {formatMoney(service.priceCents, service.currency, locale)}
-                </span>
+                <span className="text-muted">{priceLabel(t, locale, service, true)}</span>
               </li>
             ))}
           </ul>
@@ -207,7 +206,11 @@ function ConfirmedView({
           )}
           <p className="flex justify-between border-t border-line pt-3 font-display text-xl font-semibold">
             <span>{t("booking.review.total")}</span>
-            <span>{formatMoney(total, currency, locale)}</span>
+            <span>
+              {appointment.bookingPrice?.finalized
+                ? formatMoney(total, currency, locale)
+                : totalPriceLabel(t, locale, appointment.services, total, currency, true)}
+            </span>
           </p>
         </div>
 

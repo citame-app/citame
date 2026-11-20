@@ -1,6 +1,7 @@
 import type { AvailabilityQuery, AvailabilityResponse } from "@sob/contracts";
 import { type Database, staffProfile, timeOff, workingHours } from "@sob/db";
 import { and, gt, inArray, isNull, lt } from "drizzle-orm";
+import type { Tx } from "../../tx";
 import type { TimedService } from "../resources/reservations";
 import { filterResourceAvailability } from "../resources/reservations";
 import { getBookableServices } from "../services/service";
@@ -13,10 +14,14 @@ import { serviceWorkWindows } from "./work-windows";
 
 /** Finds bookable slots. Advisory only: the database exclusion constraint is authoritative. */
 export async function findAvailability(
-  db: Database,
+  db: Database | Tx,
   query: AvailabilityQuery,
   now: Date,
-  options: { excludeAppointmentId?: string; services?: TimedService[] } = {},
+  options: {
+    excludeAppointmentId?: string;
+    services?: TimedService[];
+    granularityMinutes?: number;
+  } = {},
 ): Promise<AvailabilityResponse> {
   const settings = await getSalonSettings(db);
   const services = options.services ?? (await getBookableServices(db, query.serviceIds));
@@ -62,7 +67,10 @@ export async function findAvailability(
   const computed = computeAvailability({
     date: query.date,
     timeZone: settings.timezone,
-    granularityMinutes: settings.slotGranularityMinutes,
+    granularityMinutes:
+      options.granularityMinutes ??
+      services[0]?.bookingIntervalMinutes ??
+      settings.slotGranularityMinutes,
     minNoticeMinutes: settings.minNoticeMinutes,
     maxDaysAhead: settings.maxDaysAhead,
     now,

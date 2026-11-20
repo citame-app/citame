@@ -47,6 +47,165 @@ const audit = (action: string) =>
 
 const newService = { name: "Blow dry", durationMinutes: 30, bufferMinutes: 5, priceCents: 8000 };
 
+describe("catalog organisation and online visibility", () => {
+  test("a visit cannot add amounts expressed in different currencies", async () => {
+    const other = adminServiceSchema.parse(
+      await (
+        await call(owner, "POST", "/admin/services", {
+          ...newService,
+          currency: "EUR",
+          staffIds: [f.anaId],
+        })
+      ).json(),
+    );
+    expect(
+      (
+        await call(client, "POST", "/appointments", {
+          staffId: f.anaId,
+          serviceIds: [f.haircutId, other.id],
+          startsAt: MONDAY_0900,
+        })
+      ).status,
+    ).toBe(400);
+  });
+  test("a service can control its public starting interval, enforced on direct customer submissions", async () => {
+    const created = adminServiceSchema.parse(
+      await (
+        await call(owner, "POST", "/admin/services", {
+          ...newService,
+          durationMinutes: 30,
+          bufferMinutes: 0,
+          bookingIntervalMinutes: 60,
+          staffIds: [f.anaId],
+        })
+      ).json(),
+    );
+    expect(created).toMatchObject({ bookingIntervalMinutes: 60 });
+    const slots = (await (
+      await call(
+        null,
+        "GET",
+        `/availability?date=2026-03-09&serviceIds=${created.id}&staffId=${f.anaId}`,
+      )
+    ).json()) as { slots: { startsAt: string }[] };
+    expect(slots.slots.some((s) => s.startsAt === "2026-03-09T12:30:00.000Z")).toBe(false);
+    expect(slots.slots.some((s) => s.startsAt === MONDAY_0900)).toBe(true);
+    expect(
+      (
+        await call(client, "POST", "/appointments", {
+          staffId: f.anaId,
+          serviceIds: [created.id],
+          startsAt: "2026-03-09T12:30:00.000Z",
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await call(client, "POST", "/appointments", {
+          staffId: f.anaId,
+          serviceIds: [created.id],
+          startsAt: MONDAY_0900,
+        })
+      ).status,
+    ).toBe(201);
+  });
+  test("processing and duration are reviewed and saved together without an intermediate invalid treatment", async () => {
+    const res = await call(owner, "POST", "/admin/services", {
+      ...newService,
+      durationMinutes: 90,
+      processing: { startsAfterMinutes: 30, minutes: 30 },
+    });
+    const created = adminServiceSchema.parse(await res.json());
+    expect(created.processing).toEqual({ startsAfterMinutes: 30, minutes: 30 });
+    const invalid = await call(owner, "PUT", `/admin/services/${created.id}/configuration`, {
+      version: created.version,
+      staffIds: [],
+      service: { durationMinutes: 45, category: "Invalid" },
+    });
+    expect(invalid.status).toBe(400);
+    const valid = await call(owner, "PUT", `/admin/services/${created.id}/configuration`, {
+      version: created.version,
+      staffIds: [],
+      service: { durationMinutes: 45, processing: null, category: "Hair" },
+    });
+    expect(valid.status).toBe(200);
+    expect(await valid.json()).toMatchObject({ durationMinutes: 45, category: "Hair" });
+  });
+  test("saves reviewed category, order and instructions; internal services stay bookable by the team", async () => {
+    const res = await call(owner, "POST", "/admin/services", {
+      ...newService,
+      category: "  Hair  ",
+      sortOrder: 2,
+      onlineBooking: false,
+      clientInstructions: "Arrive with dry hair",
+      staffIds: [f.anaId],
+    });
+    expect(res.status).toBe(201);
+    const created = adminServiceSchema.parse(await res.json());
+    expect(created).toMatchObject({
+      category: "Hair",
+      sortOrder: 2,
+      onlineBooking: false,
+      clientInstructions: "Arrive with dry hair",
+    });
+    const publicList = listServicesResponseSchema.parse(
+      await (await call(null, "GET", "/services")).json(),
+    );
+    expect(publicList.services.map((s: { id: string }) => s.id)).not.toContain(created.id);
+    const direct = await call(client, "POST", "/appointments", {
+      staffId: f.anaId,
+      serviceIds: [created.id],
+      startsAt: MONDAY_0900,
+    });
+    expect(direct.status).toBe(403);
+    const delegated = await call(owner, "POST", "/appointments", {
+      staffId: f.anaId,
+      serviceIds: [created.id],
+      startsAt: MONDAY_0900,
+      clientId: f.clientId,
+    });
+    expect(delegated.status).toBe(201);
+  });
+
+  test("category changes use the editor revision fence and preserve the unsaved newer record", async () => {
+    const current = listAdminServicesResponseSchema
+      .parse(await (await call(owner, "GET", "/admin/services")).json())
+      .services.find((s: { id: string }) => s.id === f.haircutId);
+    if (!current) throw new Error("Missing fixture service");
+    const body = {
+      version: current.version,
+      staffIds: current.staffIds,
+      service: { category: "Hair", sortOrder: 3, onlineBooking: true },
+    };
+    expect(
+      (await call(owner, "PUT", `/admin/services/${f.haircutId}/configuration`, body)).status,
+    ).toBe(200);
+    expect(
+      (
+        await call(owner, "PUT", `/admin/services/${f.haircutId}/configuration`, {
+          ...body,
+          service: { category: "Stale" },
+        })
+      ).status,
+    ).toBe(409);
+    const list = listServicesResponseSchema.parse(
+      await (await call(null, "GET", "/services")).json(),
+    );
+    expect(list.services.find((s: { id: string }) => s.id === f.haircutId)).toMatchObject({
+      category: "Hair",
+      sortOrder: 3,
+    });
+  });
+
+  test("rejects empty categories and negative display order", async () => {
+    for (const fields of [{ category: "   " }, { category: "x".repeat(81) }, { sortOrder: -1 }]) {
+      expect(
+        (await call(owner, "POST", "/admin/services", { ...newService, ...fields })).status,
+      ).toBe(400);
+    }
+  });
+});
+
 describe("access control", () => {
   const cases: [string, string, unknown][] = [
     ["GET", "/admin/services", undefined],

@@ -1,4 +1,5 @@
-import type { Promotion, ReviewSocial, Service } from "@sob/contracts";
+import { needsFinalPrice, type Promotion, type ReviewSocial, type Service } from "@sob/contracts";
+import { priceLabel } from "~/features/booking/service-price";
 import { createTranslator, type Locale } from "~/i18n";
 import { formatDuration, formatMoney } from "~/lib/format";
 import { promotionTimingConditions } from "~/lib/promotion-timing";
@@ -58,7 +59,7 @@ export function creativeModel(
   const service = source.service;
   if (service.catalog?.kind === "addon" || service.durationMinutes <= 0)
     throw new CreativeSourceError("Choose a standalone treatment or variant");
-  const price = formatMoney(service.priceCents, service.currency, locale);
+  const price = priceLabel(t, locale, service);
   if (source.kind === "service") {
     const details = t("social.serviceDetails", {
       price,
@@ -97,7 +98,7 @@ export function creativeModel(
       : formatMoney(
           Math.min(
             promotion.value,
-            service.priceCents,
+            service.priceType === "variable" ? Number.MAX_SAFE_INTEGER : service.priceCents,
             promotion.maximumDiscountCents ?? Number.MAX_SAFE_INTEGER,
           ),
           "EUR",
@@ -109,6 +110,7 @@ export function creativeModel(
   const conditions = [
     t("social.code", { code: promotion.code }),
     t("social.forService", { name: service.name }),
+    ...(needsFinalPrice(service.priceType) ? [t("services.price.promotionLater")] : []),
     ...(promotion.minimumSpendCents
       ? [t("social.minimum", { amount: money(promotion.minimumSpendCents) })]
       : []),

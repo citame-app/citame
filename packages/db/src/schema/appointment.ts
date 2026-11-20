@@ -60,10 +60,18 @@ export const appointmentService = pgTable(
     processingStartMinutes: integer(),
     processingMinutes: integer(),
     priceCents: integer().notNull(),
+    priceType: text()
+      .$type<"fixed" | "variable" | "hidden" | "free" | "from">()
+      .notNull()
+      .default("fixed"),
     currency: text().notNull(),
   },
   (t) => [
     index("appointment_service_appointment_idx").on(t.appointmentId),
+    check(
+      "appointment_service_price_type_valid",
+      sql`${t.priceType} in ('fixed','variable','hidden','free','from') and (${t.priceType} not in ('variable','free') or ${t.priceCents}=0)`,
+    ),
     check(
       "appointment_service_processing_valid",
       sql`(${t.processingStartMinutes} is null and ${t.processingMinutes} is null) or (${t.processingStartMinutes} is not null and ${t.processingMinutes} is not null and ${t.processingStartMinutes}>0 and ${t.processingMinutes}>0 and ${t.processingStartMinutes}+${t.processingMinutes}<${t.durationMinutes})`,

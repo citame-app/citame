@@ -131,10 +131,26 @@ export const checkoutLineSchema = z.object({
   description: z.string(),
   quantity: z.number().int(),
   unitAmountCents: moneyCentsSchema,
+  pricePending: z.boolean().optional(),
+  minimumUnitAmountCents: moneyCentsSchema.optional(),
   taxBasisPoints: z.number().int(),
   passPeriodId: idSchema.nullable().optional(),
   discountCents: z.number().int().nonnegative().max(2_147_483_647).optional(),
 });
+export const checkoutPricesSchema = z
+  .object({
+    version: z.number().int().positive(),
+    lines: z
+      .array(z.object({ id: idSchema, unitAmountCents: moneyCentsSchema }).strict())
+      .min(1)
+      .max(100),
+  })
+  .strict()
+  .refine(
+    (s) => new Set(s.lines.map((l) => l.id)).size === s.lines.length,
+    "Prices must be unique",
+  );
+export type CheckoutPrices = z.infer<typeof checkoutPricesSchema>;
 export const checkoutPaymentSchema = z.object({
   id: idSchema,
   method: paymentMethodSchema,
@@ -147,6 +163,7 @@ export const checkoutPaymentSchema = z.object({
 });
 export const checkoutSchema = z.object({
   id: idSchema,
+  pricingVersion: z.number().int().positive().optional(),
   appointmentId: idSchema.nullable(),
   clientId: idSchema.nullable(),
   staffId: idSchema.nullable().optional(),

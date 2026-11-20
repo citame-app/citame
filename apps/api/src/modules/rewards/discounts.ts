@@ -121,6 +121,8 @@ export async function rewardPricing(
       .from(checkoutLine)
       .where(eq(checkoutLine.checkoutId, row.id))
       .orderBy(asc(checkoutLine.createdAt), asc(checkoutLine.id)));
+  if (lines.some((l) => "pricePending" in l && l.pricePending))
+    throw new DomainError("invalid_state", "Set final service prices before applying promotions");
   let eligible = lines.filter((l) => ordinary(l.kind));
   const extra = new Map<string, number>();
   let promo: typeof promotion.$inferSelect | undefined;

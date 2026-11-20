@@ -121,7 +121,11 @@ export function CommerceView({
                 )}
               </p>
               <p className="my-3 flex justify-between gap-3">
-                <span>{formatMoney(sale.totalCents, sale.currency, locale)}</span>
+                <span>
+                  {sale.lines.some((line) => line.pricePending)
+                    ? t("services.price.pendingShort")
+                    : formatMoney(sale.totalCents, sale.currency, locale)}
+                </span>
                 <span className="text-sm">{t(`commerce.status.${sale.status}`)}</span>
               </p>
               <Button

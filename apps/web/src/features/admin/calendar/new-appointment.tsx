@@ -23,7 +23,7 @@ import { adminStaffQuery, clientsQuery } from "~/lib/admin-queries";
 import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { formatDateLong, formatDuration, formatMoney, formatTime, localDateOf } from "~/lib/format";
-import { salonQuery, servicesQuery } from "~/lib/queries";
+import { salonQuery } from "~/lib/queries";
 import { minutesIntoLocalDay, zonedInstant } from "~/lib/zoned";
 import { describeProblem } from "../problems";
 import { useDebounced } from "../use-debounced";
@@ -64,7 +64,10 @@ export function NewAppointmentSheet({
   const toast = useToast();
   const queryClient = useQueryClient();
   const salon = useQuery(salonQuery);
-  const services = useQuery(servicesQuery);
+  const services = useQuery({
+    queryKey: ["appointment-catalog"],
+    queryFn: async () => (await api().appointments.catalog()).services,
+  });
   const staff = useQuery(adminStaffQuery);
   const granularity = salon.data?.slotGranularityMinutes ?? 15;
   const timeRef = useRef<HTMLInputElement>(null);
@@ -225,7 +228,7 @@ export function NewAppointmentSheet({
       const problem = describeProblem(error);
       setFailure(problem);
       if (problem.recovery === "reload") {
-        void queryClient.invalidateQueries({ queryKey: ["services"] });
+        void queryClient.invalidateQueries({ queryKey: ["appointment-catalog"] });
         void queryClient.invalidateQueries({ queryKey: ["admin", "staff"] });
         void queryClient.invalidateQueries({ queryKey: ["availability"] });
       }

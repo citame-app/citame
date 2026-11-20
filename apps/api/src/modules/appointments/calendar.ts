@@ -15,6 +15,7 @@ import { protectionView } from "../booking-protection/value";
 import { calendarResources } from "../resources/reservations";
 import { getSalonSettings } from "../settings/service";
 import { asDatedHours, loadShiftRows } from "../staff/date-hours";
+import { loadBookingPrices } from "./pricing";
 import { loadSeriesReferences } from "./series-references";
 
 /**
@@ -123,6 +124,10 @@ export async function getCalendar(
     db,
     rows.map((r) => r.row.id),
   );
+  const prices = await loadBookingPrices(
+    db,
+    rows.map((r) => r.row.id),
+  );
   return {
     timezone: settings.timezone,
     from: query.from,
@@ -134,6 +139,7 @@ export async function getCalendar(
           .filter((s) => s.appointmentId === row.id)
           .sort((a, b) => a.position - b.position);
         return {
+          ...(prices.has(row.id) ? { bookingPrice: prices.get(row.id) } : {}),
           ...(series.has(row.id) ? { series: series.get(row.id) } : {}),
           id: row.id,
           staffId: row.staffId,
@@ -158,6 +164,7 @@ export async function getCalendar(
                 }
               : {}),
             priceCents: s.priceCents,
+            ...(s.priceType !== "fixed" ? { priceType: s.priceType } : {}),
             currency: s.currency,
           })),
           createdAt: row.createdAt.toISOString(),

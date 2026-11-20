@@ -37,7 +37,7 @@ beforeEach(() => {
     const url = new URL(String(input), "http://localhost");
     if (url.pathname === "/api/intake/requirements")
       return json({ forms: [], reviewHash: "1".repeat(64), readyResponses: [] });
-    if (url.pathname === "/api/services") {
+    if (url.pathname === "/api/appointments/catalog") {
       return json({
         services: [
           {
@@ -308,7 +308,7 @@ test("a changed catalog quote refreshes the displayed terms and the next submiss
   let hash = "a".repeat(64);
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     const path = new URL(String(input), "http://localhost").pathname;
-    if (path === "/api/services") {
+    if (path === "/api/appointments/catalog") {
       const response = await baseFetch(input, init);
       const body = (await response.json()) as { services: { id: string; priceCents: number }[] };
       return json({

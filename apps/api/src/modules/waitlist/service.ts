@@ -22,7 +22,7 @@ import { ownedClientIds, ownsClient, type Principal } from "../../auth/principal
 import { DomainError } from "../../errors";
 import { lockCalendars, lockScheduling, type Tx } from "../../tx";
 import { assertClientCanBook } from "../clients/controls";
-import { getBookableServices } from "../services/service";
+import { assertOnlineServices, getBookableServices } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { staffQualifiedFor } from "../staff/service";
 
@@ -282,6 +282,7 @@ export async function joinWaitlist(
         "validation_error",
         "The waitlist window must fit the salon booking horizon",
       );
+    await assertOnlineServices(tx, input.serviceIds, p.userId);
     const services = await getBookableServices(tx, input.serviceIds);
     const qualified = await staffQualifiedFor(tx, input.serviceIds);
     if (!qualified.length || (staffId && !qualified.includes(staffId)))

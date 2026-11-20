@@ -14,6 +14,7 @@ import { SlotPicker } from "~/features/booking/slot-picker";
 import { bookingActions, bookingStore } from "~/features/booking/store";
 import { BookingSummary } from "~/features/booking/summary";
 import { useBooking } from "~/features/booking/use-booking";
+import { VisitTime } from "~/features/booking/visit-time";
 import { useI18n } from "~/i18n/react";
 import { localDateOf } from "~/lib/format";
 import { availabilityQuery } from "~/lib/queries";
@@ -51,6 +52,11 @@ export const Route = createFileRoute("/book/time")({
 });
 
 function TimeStep() {
+  const booking = useBooking();
+  return booking.search.staff === "multiple" ? <VisitTime booking={booking} /> : <SingleTimeStep />;
+}
+
+function SingleTimeStep() {
   const { t } = useI18n();
   const { session } = Route.useRouteContext();
   const booking = useBooking();
@@ -71,6 +77,7 @@ function TimeStep() {
 
   return (
     <BookingFrame
+      teamAccount={booking.teamAccount}
       step="time"
       search={search}
       title={t("booking.time.title")}

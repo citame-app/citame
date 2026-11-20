@@ -1,7 +1,10 @@
 import {
   type AdminService,
+  type ServicePriceType,
   serviceCatalogCreateSchema,
   serviceCatalogUpdateSchema,
+  servicePriceTypeSchema,
+  serviceProcessingInputSchema,
 } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createColumnHelper, type SortingState } from "@tanstack/react-table";
@@ -12,14 +15,16 @@ import { DataTable, type DataTableFeatures } from "~/components/ui/data-table";
 import { ConfirmDialog } from "~/components/ui/dialog";
 import { TextField } from "~/components/ui/field";
 import { PlusIcon, ScissorsIcon } from "~/components/ui/icons";
-import { TextAreaField } from "~/components/ui/select-field";
+import { SelectField, TextAreaField } from "~/components/ui/select-field";
 import { Sheet } from "~/components/ui/sheet";
 import { EmptyState, ErrorState } from "~/components/ui/states";
 import { useToast } from "~/components/ui/toast";
+import { catalogText } from "~/features/booking/catalog-browser";
+import { priceLabel } from "~/features/booking/service-price";
 import { useI18n } from "~/i18n/react";
 import { adminServicesQuery, adminStaffQuery } from "~/lib/admin-queries";
 import { api } from "~/lib/api/instance";
-import { formatDuration, formatMoney } from "~/lib/format";
+import { formatDuration } from "~/lib/format";
 import { describeProblem } from "../problems";
 import { ResourcesPanel } from "../resources/resources-panel";
 import { UnsavedGuard } from "../unsaved-guard";
@@ -57,6 +62,9 @@ export function ServicesView() {
   const toast = useToast();
   const queryClient = useQueryClient();
   const services = useQuery(adminServicesQuery);
+  const [search, setSearch] = useState("");
+  const [category, setCategory] = useState("");
+  const [draft, setDraft] = useState<{ parent: AdminService; kind: "variant" | "addon" }>();
   const [sorting, setSorting] = useState<SortingState>([{ id: "name", desc: false }]);
   const [editorRevision, setEditorRevision] = useState(0);
   const [editing, setEditing] = useState<AdminService | "new" | null>(null);
@@ -65,6 +73,7 @@ export function ServicesView() {
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ["admin", "services"] });
     void queryClient.invalidateQueries({ queryKey: ["services"] });
+    void queryClient.invalidateQueries({ queryKey: ["appointment-catalog"] });
     void queryClient.invalidateQueries({ queryKey: ["staff"] });
   };
 
@@ -92,7 +101,14 @@ export function ServicesView() {
 
   const rows = useMemo(() => {
     const [sort] = sorting;
-    const list = [...(services.data ?? [])];
+    const list = [...(services.data ?? [])].filter(
+      (row) =>
+        (!category || row.category === category) &&
+        (!search.trim() ||
+          catalogText(`${row.name} ${row.description ?? ""} ${row.category ?? ""}`).includes(
+            catalogText(search),
+          )),
+    );
     if (!sort) return list;
     const value = (s: AdminService): string | number =>
       sort.id === "duration"
@@ -108,7 +124,7 @@ export function ServicesView() {
       (a, b) => (value(a) < value(b) ? -1 : value(a) > value(b) ? 1 : 0) * (sort.desc ? -1 : 1),
     );
     return list;
-  }, [services.data, sorting]);
+  }, [services.data, sorting, search, category]);
 
   const columns = useMemo(
     () =>
@@ -133,7 +149,7 @@ export function ServicesView() {
           id: "price",
           header: t("services.col.price"),
           meta: { numeric: true },
-          cell: (c) => formatMoney(c.getValue(), c.row.original.currency, locale),
+          cell: (c) => priceLabel(t, locale, c.row.original, true),
         }),
         helper.accessor((row) => row.staffIds.length, {
           id: "staff",
@@ -187,6 +203,33 @@ export function ServicesView() {
   return (
     <div className="space-y-4">
       <ResourcesPanel services={services.data ?? []} />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <TextField
+          type="search"
+          label={t("services.search")}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <label className="block text-sm font-medium">
+          {t("services.category")}
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            className="mt-1.5 min-h-11 w-full rounded-md border border-line-strong bg-surface px-3 text-base"
+          >
+            <option value="">{t("services.allCategories")}</option>
+            {[
+              ...new Set(
+                (services.data ?? []).map((s) => s.category).filter((s): s is string => Boolean(s)),
+              ),
+            ]
+              .sort()
+              .map((name) => (
+                <option key={name}>{name}</option>
+              ))}
+          </select>
+        </label>
+      </div>
       <DataTable
         label={t("services.table")}
         columns={columns}
@@ -198,7 +241,12 @@ export function ServicesView() {
         paginate={false}
         loading={services.isPending}
         actions={
-          <Button onClick={() => setEditing("new")}>
+          <Button
+            onClick={() => {
+              setDraft(undefined);
+              setEditing("new");
+            }}
+          >
             <PlusIcon />
             {t("services.new")}
           </Button>
@@ -213,10 +261,28 @@ export function ServicesView() {
             description={t("services.empty.body")}
             icon={<ScissorsIcon width={24} height={24} />}
           >
-            <Button onClick={() => setEditing("new")}>{t("services.new")}</Button>
+            <Button
+              onClick={() => {
+                setDraft(undefined);
+                setEditing("new");
+              }}
+            >
+              {t("services.new")}
+            </Button>
           </EmptyState>
         }
       />
+      {rows.length === 0 && (search || category) && (
+        <Button
+          variant="secondary"
+          onClick={() => {
+            setSearch("");
+            setCategory("");
+          }}
+        >
+          {t("services.clearFilters")}
+        </Button>
+      )}
       {editing && (
         <ServiceSheet
           key={`${editing === "new" ? "new" : editing.id}:${editorRevision}`}
@@ -224,6 +290,17 @@ export function ServicesView() {
           onClose={() => setEditing(null)}
           onSaved={refresh}
           catalog={services.data ?? []}
+          draft={draft}
+          onRelated={(parent, kind) => {
+            setDraft({ parent, kind });
+            setEditing("new");
+            setEditorRevision((n) => n + 1);
+          }}
+          onOpenRelated={(row) => {
+            setDraft(undefined);
+            setEditing(row);
+            setEditorRevision((n) => n + 1);
+          }}
           onReload={async () => {
             if (editing === "new") return;
             const result = await services.refetch();
@@ -256,7 +333,13 @@ function ServiceSheet({
   onSaved,
   catalog,
   onReload,
+  draft,
+  onRelated,
+  onOpenRelated,
 }: {
+  draft?: { parent: AdminService; kind: "variant" | "addon" };
+  onRelated: (parent: AdminService, kind: "variant" | "addon") => void;
+  onOpenRelated: (row: AdminService) => void;
   catalog: AdminService[];
   onReload: () => Promise<void>;
   service: AdminService | null;
@@ -266,23 +349,74 @@ function ServiceSheet({
   const { t, locale } = useI18n();
   const toast = useToast();
   const staff = useQuery(adminStaffQuery);
-  const initial = useMemo(() => (service ? toForm(service) : emptyForm("ARS")), [service]);
-  const initialStaff = useMemo(() => [...(service?.staffIds ?? [])].sort(), [service]);
+  const initial = useMemo(
+    () =>
+      service
+        ? toForm(service)
+        : draft
+          ? {
+              ...toForm(draft.parent),
+              name: draft.kind === "variant" ? `${draft.parent.name} · ` : "",
+              description: "",
+              ...(draft.kind === "addon"
+                ? { price: "0", durationMinutes: "0", bufferMinutes: "0" }
+                : {}),
+            }
+          : emptyForm(catalog[0]?.currency ?? "EUR"),
+    [service, draft, catalog],
+  );
+  const initialStaff = useMemo(
+    () => [...(service?.staffIds ?? draft?.parent.staffIds ?? [])].sort(),
+    [service, draft],
+  );
   const [values, setValues] = useState<ServiceFormValues>(initial);
   const [staffIds, setStaffIds] = useState<string[]>(initialStaff);
   const [errors, setErrors] = useState<ServiceFormErrors>({});
   const [catalogKind, setCatalogKind] = useState<"service" | "variant" | "addon">(
-    service?.catalog?.kind ?? "service",
+    service?.catalog?.kind ?? draft?.kind ?? "service",
   );
   const [parentId, setParentId] = useState(
-    service?.catalog?.kind === "variant" ? service.catalog.parentServiceId : "",
+    service?.catalog?.kind === "variant"
+      ? service.catalog.parentServiceId
+      : draft?.kind === "variant"
+        ? draft.parent.id
+        : "",
   );
   const [optionLabel, setOptionLabel] = useState(
     service?.catalog?.kind === "variant" ? service.catalog.optionLabel : "",
   );
   const [allowedIds, setAllowedIds] = useState<string[]>(
-    service?.catalog?.kind === "addon" ? service.catalog.allowedServiceIds : [],
+    service?.catalog?.kind === "addon"
+      ? service.catalog.allowedServiceIds
+      : draft?.kind === "addon"
+        ? [draft.parent.id]
+        : [],
   );
+  const defaults = {
+    bookingIntervalMinutes: String(
+      service?.bookingIntervalMinutes ?? draft?.parent.bookingIntervalMinutes ?? "",
+    ),
+    category: service?.category ?? draft?.parent.category ?? "",
+    sortOrder: String(service?.sortOrder ?? 0),
+    onlineBooking: service?.onlineBooking ?? draft?.parent.onlineBooking ?? true,
+    clientInstructions:
+      service?.clientInstructions ??
+      (draft?.kind === "variant" ? (draft.parent.clientInstructions ?? "") : ""),
+  };
+  const [priceType, setPriceType] = useState<ServicePriceType>(
+    service?.priceType ?? draft?.parent.priceType ?? "fixed",
+  );
+  const [presentation, setPresentation] = useState(defaults);
+  const categoryListId = useId();
+  const processingInitial = {
+    enabled: Boolean(service?.processing),
+    before: String(service?.processing?.startsAfterMinutes ?? ""),
+    minutes: String(service?.processing?.minutes ?? ""),
+  };
+  const [processing, setProcessing] = useState(processingInitial);
+  const processingDirty = JSON.stringify(processing) !== JSON.stringify(processingInitial);
+  const [processingError, setProcessingError] = useState(false);
+  const [presentationError, setPresentationError] = useState(false);
   const [optionsInvalid, setOptionsInvalid] = useState(false);
   const kindId = useId();
   const parentSelectId = useId();
@@ -302,6 +436,9 @@ function ServiceSheet({
   const [open, setOpen] = useState(true);
   const dirty =
     metadataDirty ||
+    priceType !== (service?.priceType ?? draft?.parent.priceType ?? "fixed") ||
+    processingDirty ||
+    JSON.stringify(presentation) !== JSON.stringify(defaults) ||
     JSON.stringify(values) !== JSON.stringify(initial) ||
     JSON.stringify([...staffIds].sort()) !== JSON.stringify(initialStaff);
 
@@ -317,7 +454,40 @@ function ServiceSheet({
         : { kind: "addon" as const, allowedServiceIds: allowedIds };
   const save = useMutation({
     mutationFn: async () => {
-      const request = toServiceRequest(values);
+      const request = {
+        ...toServiceRequest(values),
+        ...(priceType !== "fixed" || service?.priceType ? { priceType } : {}),
+        ...(priceType === "variable" || priceType === "free" ? { priceCents: 0 } : {}),
+        ...(processingDirty
+          ? {
+              processing: processing.enabled
+                ? {
+                    startsAfterMinutes: Number(processing.before),
+                    minutes: Number(processing.minutes),
+                  }
+                : null,
+            }
+          : {}),
+        ...(presentation.bookingIntervalMinutes || service?.bookingIntervalMinutes
+          ? {
+              bookingIntervalMinutes: presentation.bookingIntervalMinutes
+                ? Number(presentation.bookingIntervalMinutes)
+                : null,
+            }
+          : {}),
+        ...(presentation.category || service?.category
+          ? { category: presentation.category.trim() || null }
+          : {}),
+        ...(presentation.sortOrder !== "0" || service?.sortOrder
+          ? { sortOrder: Number(presentation.sortOrder) }
+          : {}),
+        ...(!presentation.onlineBooking || service?.onlineBooking === false
+          ? { onlineBooking: presentation.onlineBooking }
+          : {}),
+        ...(presentation.clientInstructions || service?.clientInstructions
+          ? { clientInstructions: presentation.clientInstructions.trim() || null }
+          : {}),
+      };
       const draft = catalogDraft();
       if (!service)
         return api().admin.services.create({
@@ -351,12 +521,43 @@ function ServiceSheet({
   });
 
   function submit() {
-    const found = validateServiceForm(values, { allowZeroDuration: catalogKind === "addon" });
+    const found = validateServiceForm(
+      priceType === "variable" || priceType === "free" ? { ...values, price: "0" } : values,
+      { allowZeroDuration: catalogKind === "addon" },
+    );
     const draft = catalogDraft();
     const valid = !draft || serviceCatalogCreateSchema.safeParse(draft).success;
+    const processingValid =
+      !processing.enabled ||
+      (serviceProcessingInputSchema.safeParse({
+        version: 1,
+        processing: {
+          startsAfterMinutes: Number(processing.before),
+          minutes: Number(processing.minutes),
+        },
+      }).success &&
+        Number(processing.before) + Number(processing.minutes) < Number(values.durationMinutes));
+    setProcessingError(!processingValid);
+    const presentationValid =
+      (!presentation.bookingIntervalMinutes ||
+        (/^\d+$/.test(presentation.bookingIntervalMinutes) &&
+          Number(presentation.bookingIntervalMinutes) >= 1 &&
+          Number(presentation.bookingIntervalMinutes) <= 120)) &&
+      presentation.category.trim().length <= 80 &&
+      presentation.clientInstructions.trim().length <= 2000 &&
+      /^\d+$/.test(presentation.sortOrder) &&
+      Number(presentation.sortOrder) <= 100000;
+    setPresentationError(!presentationValid);
     setOptionsInvalid(!valid);
     setErrors(found);
-    if (Object.keys(found).length === 0 && valid && !save.isPending && !reload.isPending)
+    if (
+      Object.keys(found).length === 0 &&
+      valid &&
+      presentationValid &&
+      processingValid &&
+      !save.isPending &&
+      !reload.isPending
+    )
       save.mutate();
   }
 
@@ -460,6 +661,14 @@ function ServiceSheet({
                           name: optionLabel ? `${parent.name} · ${optionLabel}` : parent.name,
                         });
                         setStaffIds(parent.staffIds);
+                        setPriceType(parent.priceType ?? "fixed");
+                        setPresentation((p) => ({
+                          ...p,
+                          category: parent.category ?? "",
+                          onlineBooking: parent.onlineBooking ?? true,
+                          bookingIntervalMinutes: String(parent.bookingIntervalMinutes ?? ""),
+                          clientInstructions: parent.clientInstructions ?? "",
+                        }));
                       }
                     }}
                   >
@@ -560,6 +769,69 @@ function ServiceSheet({
             />
             <div className="grid gap-4 sm:grid-cols-2">
               <TextField
+                label={t("services.category")}
+                list={categoryListId}
+                maxLength={80}
+                value={presentation.category}
+                onChange={(e) => setPresentation((p) => ({ ...p, category: e.target.value }))}
+              />
+              <datalist id={categoryListId}>
+                {[...new Set(catalog.map((s) => s.category).filter(Boolean))].map((name) => (
+                  <option key={name} value={name ?? ""} />
+                ))}
+              </datalist>
+              <TextField
+                label={t("services.sortOrder")}
+                inputMode="numeric"
+                value={presentation.sortOrder}
+                onChange={(e) => setPresentation((p) => ({ ...p, sortOrder: e.target.value }))}
+              />
+            </div>
+            <label className="flex min-h-11 items-center gap-3 text-sm font-medium">
+              <input
+                type="checkbox"
+                checked={presentation.onlineBooking}
+                onChange={(e) =>
+                  setPresentation((p) => ({ ...p, onlineBooking: e.target.checked }))
+                }
+              />
+              {t("services.onlineBooking")}
+            </label>
+            <TextAreaField
+              label={t("services.instructions")}
+              hint={t("services.instructionsHelp")}
+              maxLength={2000}
+              value={presentation.clientInstructions}
+              onChange={(e) =>
+                setPresentation((p) => ({ ...p, clientInstructions: e.target.value }))
+              }
+            />
+            {presentationError && (
+              <p role="alert" className="text-sm text-danger-fg">
+                {t("services.error.invalid")}
+              </p>
+            )}
+            <SelectField
+              label={t("services.priceType")}
+              value={priceType}
+              onChange={(value) => setPriceType(servicePriceTypeSchema.parse(value))}
+              options={servicePriceTypeSchema.options.map((value) => ({
+                value,
+                label: t(`services.price.${value}`),
+              }))}
+            />
+            <p className="text-sm text-muted">{t("services.price.help")}</p>
+            <TextField
+              label={t("services.bookingInterval")}
+              hint={t("services.bookingIntervalHelp")}
+              inputMode="numeric"
+              value={presentation.bookingIntervalMinutes}
+              onChange={(e) =>
+                setPresentation((p) => ({ ...p, bookingIntervalMinutes: e.target.value }))
+              }
+            />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <TextField
                 label={t("services.field.duration")}
                 inputMode="numeric"
                 value={values.durationMinutes}
@@ -576,6 +848,7 @@ function ServiceSheet({
               />
               <TextField
                 label={t("services.field.price")}
+                disabled={priceType === "variable" || priceType === "free"}
                 inputMode="decimal"
                 value={values.price}
                 onChange={(e) => set("price", e.target.value)}
@@ -591,6 +864,40 @@ function ServiceSheet({
               />
             </div>
 
+            <fieldset className="space-y-3 rounded-lg border border-line p-4">
+              <legend className="px-1 text-sm font-medium">{t("timing.processingTitle")}</legend>
+              <label className="flex min-h-11 items-center gap-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={processing.enabled}
+                  onChange={(e) => setProcessing((p) => ({ ...p, enabled: e.target.checked }))}
+                />
+                {t("timing.enableProcessing")}
+              </label>
+              {processing.enabled && (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <TextField
+                    label={t("timing.before")}
+                    type="number"
+                    min={1}
+                    value={processing.before}
+                    onChange={(e) => setProcessing((p) => ({ ...p, before: e.target.value }))}
+                  />
+                  <TextField
+                    label={t("timing.exposure")}
+                    type="number"
+                    min={1}
+                    value={processing.minutes}
+                    onChange={(e) => setProcessing((p) => ({ ...p, minutes: e.target.value }))}
+                  />
+                </div>
+              )}
+              {processingError && (
+                <p role="alert" className="text-sm text-danger-fg">
+                  {t("timing.processingInvalid")}
+                </p>
+              )}
+            </fieldset>
             <fieldset className="space-y-1">
               <legend className="mb-1 text-sm font-medium">{t("services.field.staff")}</legend>
               {activeStaff.length === 0 && (
@@ -640,20 +947,64 @@ function ServiceSheet({
                       : formatDuration(previewMinutes, locale)
                     : "-"}
                   {" · "}
-                  {previewCents === null
+                  {previewCents === null && priceType !== "variable" && priceType !== "free"
                     ? "-"
-                    : formatMoney(
-                        previewCents,
-                        /^[A-Za-z]{3}$/.test(values.currency)
+                    : priceLabel(t, locale, {
+                        priceType,
+                        priceCents: previewCents ?? 0,
+                        currency: /^[A-Za-z]{3}$/.test(values.currency)
                           ? values.currency.toUpperCase()
-                          : "ARS",
-                        locale,
-                      )}
+                          : "EUR",
+                      })}
                 </p>
               </div>
             </section>
           </fieldset>
         </form>
+        {service && !service.catalog && (
+          <section
+            aria-label={t("services.related")}
+            className="mt-6 space-y-3 border-t border-line pt-5"
+          >
+            <h2 className="text-heading">{t("services.related")}</h2>
+            <div className="flex flex-wrap gap-3">
+              <Button
+                variant="secondary"
+                disabled={dirty || save.isPending || reload.isPending}
+                onClick={() => onRelated(service, "variant")}
+              >
+                {t("services.addVariant")}
+              </Button>
+              <Button
+                variant="secondary"
+                disabled={dirty || save.isPending || reload.isPending}
+                onClick={() => onRelated(service, "addon")}
+              >
+                {t("services.addExtra")}
+              </Button>
+            </div>
+            <ul className="divide-y divide-line">
+              {catalog
+                .filter((row) =>
+                  row.catalog?.kind === "variant"
+                    ? row.catalog.parentServiceId === service.id
+                    : row.catalog?.kind === "addon" &&
+                      row.catalog.allowedServiceIds.includes(service.id),
+                )
+                .map((row) => (
+                  <li key={row.id}>
+                    <Button
+                      variant="ghost"
+                      disabled={dirty || save.isPending || reload.isPending}
+                      onClick={() => onOpenRelated(row)}
+                    >
+                      {row.name}
+                    </Button>
+                  </li>
+                ))}
+            </ul>
+          </section>
+        )}
       </Sheet>
       <ConfirmDialog
         open={discarding}

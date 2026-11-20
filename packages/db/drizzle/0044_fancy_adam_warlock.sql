@@ -1,0 +1,2 @@
+ALTER TABLE "service" ADD COLUMN "booking_interval_minutes" integer;--> statement-breakpoint
+ALTER TABLE "service" ADD CONSTRAINT "service_booking_interval_valid" CHECK ("service"."booking_interval_minutes" is null or "service"."booking_interval_minutes" between 1 and 120);

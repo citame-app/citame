@@ -8,7 +8,7 @@ import { loadPrincipal, type Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { lockScheduling, type Tx } from "../../tx";
 import { staffQualifiedFor } from "../staff/service";
-import { getBookableServices } from "./service";
+import { assertOnlineServices, getBookableServices } from "./service";
 
 type Connection = Database | Tx;
 type Row = typeof serviceCombination.$inferSelect;
@@ -16,16 +16,29 @@ async function validate(db: Connection, ids: string[]) {
   const services = await getBookableServices(db, ids);
   if (new Set(services.map((s) => s.currency)).size !== 1)
     throw new DomainError("validation_error", "Combined treatments must share a currency");
-  if (!(await staffQualifiedFor(db, ids)).length)
-    throw new DomainError(
-      "validation_error",
-      "A professional must perform every selected treatment and extra",
-    );
+  if (!(await staffQualifiedFor(db, ids)).length) {
+    const parts: string[][] = [];
+    for (const row of services) {
+      if (row.catalog?.kind === "addon") parts.at(-1)?.push(row.id);
+      else parts.push([row.id]);
+    }
+    if (
+      parts.length > 8 ||
+      !(await Promise.all(parts.map((part) => staffQualifiedFor(db, part)))).every(
+        (people) => people.length,
+      )
+    )
+      throw new DomainError(
+        "validation_error",
+        "Each treatment and its extras need a qualified professional",
+      );
+  }
 }
-async function view(db: Connection, row: Row) {
+async function view(db: Connection, row: Row, publicOnly = false) {
   let bookable = true;
   try {
     await validate(db, row.serviceIds);
+    if (publicOnly) await assertOnlineServices(db, row.serviceIds);
   } catch (error) {
     if (!(error instanceof DomainError)) throw error;
     bookable = false;
@@ -53,7 +66,7 @@ export async function listCombinations(db: Database, principal?: Principal) {
       .limit(100);
     const values = [];
     for (const row of rows) {
-      const result = await view(tx, row);
+      const result = await view(tx, row, !principal);
       if (principal || result.bookable) values.push(result);
     }
     return { combinations: values };
