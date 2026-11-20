@@ -88,19 +88,27 @@ export function intakeAdminRoutes({ db, now = () => new Date() }: AppDeps) {
       );
     });
 }
-export function intakeRoutes({ db, now = () => new Date() }: AppDeps) {
+export function intakeRoutes({ db, config, now = () => new Date() }: AppDeps) {
   return privateRouter()
-    .get("/requirements", async (c) =>
-      c.json(
-        await getIntakeRequirements(
-          db,
-          parseOrThrow(intakeRequirementsQuerySchema, c.req.query()).serviceIds,
-          c.get("principal"),
-          now(),
-          parseOrThrow(intakeRequirementsQuerySchema, c.req.query()).clientId,
-        ),
-      ),
-    )
+    .get("/requirements", async (c) => {
+      const query = parseOrThrow(intakeRequirementsQuerySchema, c.req.query());
+      const principal = c.get("principal");
+      const requirements = await getIntakeRequirements(
+        db,
+        query.serviceIds,
+        principal,
+        now(),
+        query.clientId,
+      );
+      return c.json(
+        principal.role === "client"
+          ? requirements
+          : {
+              ...requirements,
+              desktopGeneration: config.syncReplicaGeneration,
+            },
+      );
+    })
     .get("/submissions/:id", async (c) =>
       c.json(
         await getIntakeSubmission(

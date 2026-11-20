@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
+import { intakeRequirementsSchema, intakeSubmissionSchema } from "@sob/contracts";
 import {
   appointment,
   auditLog,
@@ -24,6 +25,7 @@ import {
 import { callTool, tokenFor } from "../../../test/oauth";
 import { loadPrincipal } from "../../auth/principal";
 import { lockScheduling, type Tx } from "../../tx";
+import { getBookableServices } from "../services/service";
 import { runWaitlist } from "../waitlist/matching";
 import { submitIntakeResponse } from "./intake";
 
@@ -357,6 +359,54 @@ const booking = () => ({
   serviceIds: [f.haircutId],
   startsAt: "2026-03-09T12:00:00.000Z",
 });
+test("reviewed desktop booking requires service quotes and explicit permission to reuse a saved response", async () => {
+  const form = await publish({ requiredAtBooking: true });
+  const recorded = await call(
+    "/me/intake",
+    "POST",
+    {
+      revisionId: form.published.id,
+      idempotencyKey: crypto.randomUUID(),
+      confirmation: true,
+      answers: { [QUESTION]: "Synthetic saved response" },
+    },
+    customer,
+  );
+  expect(recorded.status).toBe(201);
+  const saved = intakeSubmissionSchema.parse(await recorded.json());
+  const requirements = intakeRequirementsSchema.parse(
+    await (
+      await call(`/intake/requirements?serviceIds=${f.haircutId}&clientId=${customer.clientId}`)
+    ).json(),
+  );
+  const [service] = await getBookableServices(t.db, [f.haircutId]);
+  const path = "/appointments/desktop-booking";
+  const request = {
+    ...booking(),
+    clientId: customer.clientId,
+    intakeReviewHash: requirements.reviewHash,
+    desktopGeneration: requirements.desktopGeneration,
+  };
+  expect((await call(path, "POST", request)).status).toBe(400);
+  const quoted = { ...request, serviceQuotes: { [f.haircutId]: service?.quoteHash } };
+  expect((await call(path, "POST", quoted, customer)).status).toBe(403);
+  const oldGeneration = await call(path, "POST", {
+    ...quoted,
+    desktopGeneration: "earlier-history",
+  });
+  expect(oldGeneration.status).toBe(409);
+  expect(await oldGeneration.json()).toMatchObject({ error: { code: "sync_generation_changed" } });
+  const withoutChoice = await call(path, "POST", quoted);
+  expect(withoutChoice.status).toBe(409);
+  expect(await withoutChoice.json()).toMatchObject({ error: { code: "intake_required" } });
+  expect(await t.db.select().from(appointment)).toHaveLength(0);
+  const approved = { ...quoted, intakeSubmissionIds: [saved.id] };
+  const created = await call(path, "POST", approved);
+  expect(created.status, await created.clone().text()).toBe(201);
+  expect((await call(path, "POST", approved)).status).toBe(201);
+  expect(await t.db.select().from(appointment)).toHaveLength(1);
+  expect(await t.db.select().from(intakeAppointment)).toHaveLength(1);
+});
 test("a required questionnaire gates booking and a recent client-completed response is linked without exposing answers", async () => {
   const form = await publish({ requiredAtBooking: true });
   const request = booking();
@@ -681,6 +731,70 @@ test("forms are checked again after waiting for publication and a rejected walk-
   expect(await t.db.select().from(clientProfile)).toHaveLength(before.length);
   expect(await t.db.select().from(appointment)).toHaveLength(0);
   expect(await t.db.select().from(intakeSubmission)).toHaveLength(0);
+});
+
+test("a desktop booking without forms rechecks calendar permissions inside the scheduling lock", async () => {
+  const staff = await actor(t, "staff", "revoked-operator@intake.test", {
+    staffProfileId: f.anaId,
+  });
+  const [service] = await getBookableServices(t.db, [f.haircutId]);
+  const requirements = intakeRequirementsSchema.parse(
+    await (await call(`/intake/requirements?serviceIds=${f.haircutId}`)).json(),
+  );
+  expect(requirements.forms).toHaveLength(0);
+  const locked = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const configuration = t.db.transaction(async (tx) => {
+    await lockScheduling(tx);
+    locked.resolve();
+    await release.promise;
+    await tx
+      .update(staffProfile)
+      .set({ accessPreset: "restricted" })
+      .where(eq(staffProfile.id, f.anaId));
+  });
+  await locked.promise;
+  const pending = Promise.resolve(
+    call(
+      "/appointments/desktop-booking",
+      "POST",
+      {
+        ...booking(),
+        serviceQuotes: { [f.haircutId]: service?.quoteHash },
+        intakeReviewHash: requirements.reviewHash,
+        desktopGeneration: requirements.desktopGeneration,
+        client: { name: "Synthetic pending client" },
+      },
+      staff,
+    ),
+  );
+  try {
+    const deadline = Date.now() + 3000;
+    let waiting = false;
+    while (Date.now() < deadline) {
+      const rows = await t.db.execute(
+        sql`select 1 from pg_locks l join pg_stat_activity a on a.pid=l.pid where locktype='advisory' and not granted and a.datname=current_database() limit 1`,
+      );
+      if (rows.length) {
+        waiting = true;
+        break;
+      }
+      await Bun.sleep(10);
+    }
+    expect(waiting).toBe(true);
+  } finally {
+    release.resolve();
+    await configuration;
+  }
+  const rejected = await pending;
+  expect(rejected.status, await rejected.clone().text()).toBe(403);
+  expect(await t.db.select().from(appointment)).toHaveLength(0);
+  expect(
+    await t.db
+      .select()
+      .from(clientProfile)
+      .where(eq(clientProfile.name, "Synthetic pending client")),
+  ).toHaveLength(0);
 });
 
 test("accepting a held waitlist offer enforces and atomically records the required current answers", async () => {

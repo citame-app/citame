@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { idSchema, instantSchema, localDateSchema } from "./common";
+import { idSchema, instantSchema, localDateSchema, syncGenerationSchema } from "./common";
 
 const uniqueIds = (values: string[]) =>
   new Set(values.map((value) => value.toLowerCase())).size === values.length;
@@ -223,6 +223,7 @@ export const intakeRequirementsQuerySchema = z
 export const intakeRequirementsSchema = z.object({
   forms: z.array(intakeRevisionSchema).max(10),
   reviewHash: z.string().regex(/^[a-f0-9]{64}$/),
+  desktopGeneration: syncGenerationSchema.optional(),
   readyResponses: z
     .array(z.object({ id: idSchema, revisionId: idSchema, createdAt: instantSchema }))
     .max(10)

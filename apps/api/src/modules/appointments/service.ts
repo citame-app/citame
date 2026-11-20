@@ -186,7 +186,7 @@ export async function createAppointment(
   db: Database | Tx,
   request: CreateAppointmentRequest,
   actor?: Actor,
-  options: { now?: Date; sequentialContinuation?: boolean } = {},
+  options: { now?: Date; sequentialContinuation?: boolean; desktopReviewed?: boolean } = {},
 ): Promise<Appointment> {
   const now = options.now ?? new Date();
   await assertStaffExists(db, request.staffId);
@@ -249,7 +249,7 @@ export async function createAppointment(
         settings,
         workWindows: serviceWorkWindows(services),
       });
-      const clientId = await resolveClient(tx, request);
+      const clientId = await resolveClient(tx, request, options.desktopReviewed === true);
       await assertClientCanBook(tx, clientId, true);
       const intake = await prepareBookingIntake(
         tx,
@@ -258,6 +258,7 @@ export async function createAppointment(
         actor?.userId,
         now,
         services,
+        options.desktopReviewed === true,
       );
       const [row] = await tx
         .insert(appointment)
@@ -457,7 +458,11 @@ export async function assertBookable(
   return input.override && violations.includes("min_notice");
 }
 
-async function resolveClient(tx: Tx, request: CreateAppointmentRequest): Promise<string> {
+async function resolveClient(
+  tx: Tx,
+  request: CreateAppointmentRequest,
+  createDistinctClient: boolean,
+): Promise<string> {
   if (request.clientId) {
     const [existing] = await tx
       .select({ id: clientProfile.id, mergedIntoId: clientProfile.mergedIntoId })
@@ -485,7 +490,7 @@ async function resolveClient(tx: Tx, request: CreateAppointmentRequest): Promise
       ? and(isNull(clientProfile.userId), eq(clientProfile.phone, inline.phone))
       : undefined,
   ].filter((m) => m !== undefined);
-  if (candidates.length > 0) {
+  if (!createDistinctClient && candidates.length > 0) {
     const [match] = await tx
       .select({ id: clientProfile.id })
       .from(clientProfile)

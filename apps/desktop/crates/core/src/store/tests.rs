@@ -199,6 +199,28 @@ fn booking_notices_skip_snapshot_import_and_local_echo_and_follow_visibility() {
 }
 
 #[test]
+fn an_online_booking_marker_suppresses_only_the_origin_notification() {
+    let mut origin = Store::open_in_memory().unwrap();
+    let mut remote = Store::open_in_memory().unwrap();
+    let generation = origin.refresh_reviewed_generation().unwrap();
+    assert!(matches!(
+        origin.mark_local_booking_dispatch(A1, "earlier"),
+        Err(CoreError::CalendarGenerationChanged)
+    ));
+    origin.mark_local_booking_dispatch(A1, &generation).unwrap();
+    origin.mark_local_booking_dispatch(A1, &generation).unwrap();
+    for store in [&mut origin, &mut remote] {
+        store
+            .apply_sync_page(&[appt_change(1, A1, 1)], 1, true, true, &[], None)
+            .unwrap();
+        assert!(store.appointment(A1).unwrap().is_some());
+        assert_eq!(store.outbox_len().unwrap(), 0);
+    }
+    assert!(origin.booking_notices_after(0).unwrap().is_empty());
+    assert_eq!(remote.booking_notices_after(0).unwrap()[0].1.id, A1);
+}
+
+#[test]
 fn booksy_origin_refreshes_an_existing_appointment_at_the_same_version() {
     let mut store = Store::open_in_memory().unwrap();
     let mut imported = appt_change(1, A1, 1);

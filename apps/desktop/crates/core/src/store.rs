@@ -336,6 +336,53 @@ impl Store {
         Ok(self.reviewed_generation.clone())
     }
 
+    pub(crate) fn verified_reviewed_generation(&self) -> Result<String> {
+        let current = self.replica_generation()?;
+        if current != self.reviewed_generation || self.get_meta(REBUILD_KEY)?.is_some() {
+            return Err(CoreError::CalendarGenerationChanged);
+        }
+        Ok(current)
+    }
+
+    pub(crate) fn has_pending_client_creation(&self, id: &str) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM outbox WHERE kind = 'client.create' AND entity_id = ?1)",
+            [id],
+            |row| row.get(0),
+        )?)
+    }
+
+    pub(crate) fn mark_local_booking_dispatch(&mut self, id: &str, generation: &str) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let recorded = tx.execute(
+            "INSERT INTO local_booking_confirmation (appointment_id, applied_seq)
+             SELECT ?1, ?2 WHERE coalesce((SELECT value FROM meta WHERE key = ?3), ?4) = ?5
+               AND NOT EXISTS (SELECT 1 FROM meta WHERE key = ?6)
+             ON CONFLICT(appointment_id) DO UPDATE SET applied_seq = excluded.applied_seq",
+            params![
+                id,
+                i64::MAX,
+                GENERATION_KEY,
+                INITIAL_GENERATION,
+                generation,
+                REBUILD_KEY
+            ],
+        )?;
+        if recorded == 0 {
+            return Err(CoreError::CalendarGenerationChanged);
+        }
+        tx.execute(
+            "DELETE FROM local_booking_confirmation WHERE appointment_id IN (
+                SELECT appointment_id FROM local_booking_confirmation WHERE applied_seq = ?1
+                ORDER BY appointment_id DESC LIMIT -1 OFFSET 256)",
+            [i64::MAX],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     fn ensure_generation(conn: &Connection, expected: Option<&str>) -> Result<()> {
         if let Some(expected) = expected
             && Self::generation_at(conn)? != expected

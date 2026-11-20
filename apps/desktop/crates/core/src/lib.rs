@@ -4,6 +4,7 @@
 pub mod auth;
 pub mod backoff;
 pub mod billing;
+pub mod booking;
 pub mod calendar;
 pub mod csv_file;
 pub mod error;

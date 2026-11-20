@@ -26,6 +26,7 @@ export async function prepareBookingIntake(
   actorId: string | undefined,
   now: Date,
   services: Service[],
+  explicitReview = false,
 ): Promise<Prepared> {
   const forms = await applicableIntakeForms(tx, services);
   const inline = request.intakeResponses ?? [];
@@ -35,7 +36,7 @@ export async function prepareBookingIntake(
     request.intakeReviewHash !== intakeHash(forms.map((form) => [form.id, form.contentHash]))
   )
     throw required();
-  if (!forms.length && !inline.length && !requested.length) return null;
+  if (!forms.length && !inline.length && !requested.length && !explicitReview) return null;
   if (!actorId) throw required();
   const principal = await loadPrincipal(tx, actorId);
   if (!principal) throw new DomainError("unauthorized", "The account is no longer available");
@@ -91,6 +92,7 @@ export async function prepareBookingIntake(
   }
   for (const form of forms) {
     if (!form.definition.requiredAtBooking || selected.has(form.id)) continue;
+    if (explicitReview) throw required();
     const row = eligible.find((row) => row.revisionId === form.id);
     if (!row) throw required();
     selected.add(form.id);

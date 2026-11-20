@@ -111,6 +111,7 @@ export function requireAuth(
         : method === "GET" || method === "POST";
       if (
         !DESKTOP_PROXY_ROUTE.test(path) ||
+        (path === "/appointments/desktop-booking" && method !== "POST") ||
         ([
           "/me",
           "/me/desktop-workspaces",

@@ -1,4 +1,4 @@
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -158,6 +158,36 @@ impl FormDefinition {
             answers,
         })
     }
+}
+
+#[derive(Default)]
+pub struct IntakeSelection {
+    pub saved: Vec<String>,
+    pub inline: Vec<IntakeResponse>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntakeRequirements {
+    pub forms: Vec<RequiredForm>,
+    pub review_hash: String,
+    pub desktop_generation: Option<String>,
+    #[serde(default)]
+    pub ready_responses: Vec<ReadyResponse>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct RequiredForm {
+    pub id: String,
+    pub definition: FormDefinition,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadyResponse {
+    pub id: String,
+    pub revision_id: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[cfg(test)]

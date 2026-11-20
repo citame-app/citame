@@ -1,4 +1,4 @@
-use crate::intake::{FormDefinition, IntakeResponse};
+use crate::intake::{IntakeResponse, IntakeSelection};
 use crate::sync::TransportError;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
@@ -132,12 +132,6 @@ pub struct AcceptOffer {
     pub protection_waiver_reason: Option<String>,
 }
 
-#[derive(Default)]
-pub struct OfferIntakeSelection {
-    pub saved: Vec<String>,
-    pub inline: Vec<IntakeResponse>,
-}
-
 impl WaitlistEntry {
     pub fn reviewable_offer(
         &self,
@@ -160,7 +154,7 @@ impl WaitlistEntry {
         can_waive: bool,
         waiver: &str,
         review_hash: String,
-        intake: OfferIntakeSelection,
+        intake: IntakeSelection,
     ) -> Option<AcceptOffer> {
         let offer = self.reviewable_offer(now, can_waive, waiver)?;
         Some(AcceptOffer {
@@ -174,29 +168,6 @@ impl WaitlistEntry {
             protection_waiver_reason: offer.policy.enabled.then(|| waiver.trim().to_owned()),
         })
     }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OfferRequirements {
-    pub forms: Vec<RequiredForm>,
-    pub review_hash: String,
-    #[serde(default)]
-    pub ready_responses: Vec<ReadyResponse>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct RequiredForm {
-    pub id: String,
-    pub definition: FormDefinition,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReadyResponse {
-    pub id: String,
-    pub revision_id: String,
-    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]

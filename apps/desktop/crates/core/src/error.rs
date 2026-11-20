@@ -16,6 +16,10 @@ pub enum CoreError {
     TimeOffOverlap,
     #[error("this time exceeds the professional's capacity")]
     StaffCapacityExceeded,
+    #[error("this client has not finished syncing")]
+    PendingClient,
+    #[error("the calendar must be refreshed after a restore")]
+    CalendarGenerationChanged,
     #[error("not found: {0}")]
     NotFound(String),
     #[error("io error: {0}")]

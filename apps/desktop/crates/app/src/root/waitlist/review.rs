@@ -1,8 +1,7 @@
+use super::super::intake_editor::{self, IntakeDraft};
 use super::*;
-use sob_core::waitlist::{OfferIntakeSelection, WaitlistEntry};
-mod intake;
-
-use intake::IntakeDraft;
+use sob_core::intake::IntakeSelection;
+use sob_core::waitlist::WaitlistEntry;
 
 pub(super) struct OfferReview {
     entry: WaitlistEntry,
@@ -22,9 +21,13 @@ pub(super) struct PolicyReview {
 }
 
 impl OfferReview {
-    fn intake_selection(&self, cx: &App) -> Option<OfferIntakeSelection> {
+    pub(super) fn editable_intake(&mut self) -> Option<&mut Vec<IntakeDraft>> {
+        self.request.is_none().then_some(&mut self.forms)
+    }
+
+    fn intake_selection(&self, cx: &App) -> Option<IntakeSelection> {
         self.review_hash.as_ref()?;
-        intake::selection(&self.forms, cx)
+        intake_editor::selection(&self.forms, cx)
     }
 
     pub(super) fn require_intake_review(&mut self) {
@@ -122,30 +125,13 @@ impl Root {
                 match result {
                     Ok((requirements, can_waive)) => {
                         if let Some(review) = &mut desk.offer_review {
-                            let mut previous = std::mem::take(&mut review.forms);
-                            review.forms = requirements
-                                .forms
-                                .iter()
-                                .cloned()
-                                .map(|form| {
-                                    let saved = requirements
-                                        .ready_responses
-                                        .iter()
-                                        .find(|answer| answer.revision_id == form.id)
-                                        .cloned();
-                                    if let Some(index) = previous
-                                        .iter()
-                                        .position(|draft| draft.revision_id() == form.id)
-                                    {
-                                        let mut draft = previous.swap_remove(index);
-                                        draft.refresh_saved(saved);
-                                        draft
-                                    } else {
-                                        IntakeDraft::new(form, saved, this.locale, cx)
-                                    }
-                                })
-                                .collect();
-                            review.review_hash = Some(requirements.review_hash);
+                            review.review_hash = Some(requirements.review_hash.clone());
+                            intake_editor::refresh(
+                                &mut review.forms,
+                                requirements,
+                                this.locale,
+                                cx,
+                            );
                             review.can_waive = can_waive;
                         }
                     }
@@ -298,7 +284,7 @@ impl Root {
         let awaiting_confirmation = review.request.is_some();
         if !awaiting_confirmation && review.review_hash.is_some() {
             for form in &review.forms {
-                body = body.child(self.render_waitlist_intake(form, cx));
+                body = body.child(self.render_intake_form(form, cx));
             }
         } else if awaiting_confirmation {
             body = body.child(self.t(Key::WaitlistAcceptanceSubmitted));
@@ -512,4 +498,53 @@ impl Root {
             }),
         )
     }
+}
+
+#[cfg(test)]
+pub(in crate::root) fn show_intake_test_offer(root: &mut Root, cx: &mut Context<Root>) {
+    use serde_json::json;
+    let now = Utc::now();
+    let entry = serde_json::from_value(json!({
+        "id":"offer-entry","clientId":"client","serviceIds":[],"serviceNames":[],
+        "fromDate":now.date_naive(),"toDate":now.date_naive(),
+        "fromTime":"10:00","toTime":"12:00","state":"offered","version":2,"canManage":true,
+        "offer":{"id":"offer","staffId":"staff","staffName":"Test professional",
+            "startsAt":now,"endsAt":now + chrono::Duration::minutes(30),
+            "expiresAt":now + chrono::Duration::hours(1),"priceCents":1500,
+            "currency":"EUR","services":[],"policy":{"enabled":false}},
+    }))
+    .unwrap();
+    let form = serde_json::from_value(json!({
+        "id":"rev","definition":{"title":"Synthetic form","description":"","requiredAtBooking":true,
+            "allowTeamResponses":true,"fields":[
+                {"id":"q","label":"Does this apply?","help":"","kind":"boolean","required":true}
+            ]}
+    }))
+    .unwrap();
+    let waiver = cx.new(|cx| TextField::new("", false, cx));
+    let waiver_sub = cx.observe(&waiver, |_, _, cx| cx.notify());
+    root.overlay = Overlay::Waitlist(Box::new(Desk {
+        active: true,
+        page: 1,
+        data: None,
+        busy: false,
+        cached: false,
+        error: None,
+        confirm: None,
+        form: None,
+        policy_review: None,
+        booked: None,
+        observed_revision: 0,
+        requested_at: Instant::now(),
+        offer_review: Some(OfferReview {
+            entry,
+            review_hash: Some("current".into()),
+            can_waive: false,
+            forms: vec![IntakeDraft::new(form, None, root.locale, cx)],
+            waiver,
+            _waiver_sub: waiver_sub,
+            request: None,
+            confirming_requeue: false,
+        }),
+    }));
 }

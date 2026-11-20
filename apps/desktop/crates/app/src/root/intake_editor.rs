@@ -1,6 +1,6 @@
 use super::*;
 use sob_core::intake::{Answer, IntakeResponse, InvalidAnswer, Question, QuestionKind};
-use sob_core::waitlist::{OfferIntakeSelection, ReadyResponse, RequiredForm};
+use sob_core::intake::{IntakeRequirements, IntakeSelection, ReadyResponse, RequiredForm};
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -122,8 +122,38 @@ impl IntakeDraft {
     }
 }
 
-pub(super) fn selection(forms: &[IntakeDraft], cx: &App) -> Option<OfferIntakeSelection> {
-    let mut result = OfferIntakeSelection::default();
+pub(super) fn refresh(
+    drafts: &mut Vec<IntakeDraft>,
+    terms: IntakeRequirements,
+    locale: i18n::Locale,
+    cx: &mut Context<Root>,
+) {
+    let mut previous = std::mem::take(drafts);
+    *drafts = terms
+        .forms
+        .into_iter()
+        .map(|form| {
+            let saved = terms
+                .ready_responses
+                .iter()
+                .find(|answer| answer.revision_id == form.id)
+                .cloned();
+            if let Some(position) = previous
+                .iter()
+                .position(|draft| draft.revision_id() == form.id)
+            {
+                let mut draft = previous.swap_remove(position);
+                draft.refresh_saved(saved);
+                draft
+            } else {
+                IntakeDraft::new(form, saved, locale, cx)
+            }
+        })
+        .collect();
+}
+
+pub(super) fn selection(forms: &[IntakeDraft], cx: &App) -> Option<IntakeSelection> {
+    let mut result = IntakeSelection::default();
     for form in forms.iter().filter(|form| form.included()) {
         if form.use_saved {
             result.saved.push(form.saved.as_ref()?.id.clone());
@@ -168,17 +198,10 @@ fn answer_line(
         text
     });
     let events = cx.subscribe(&text, |root, entity, event, cx| {
-        let Overlay::Waitlist(desk) = &mut root.overlay else {
+        let Some(forms) = root.editable_intake_forms() else {
             return;
         };
-        let Some(review) = desk
-            .offer_review
-            .as_mut()
-            .filter(|review| review.request.is_none())
-        else {
-            return;
-        };
-        for form in &mut review.forms {
+        for form in forms {
             for field in &mut form.fields {
                 let Some(index) = field.lines.iter().position(|line| line.text == entity) else {
                     continue;
@@ -194,7 +217,9 @@ fn answer_line(
                         );
                         form.confirmed = false;
                     }
-                    FieldEvent::PasteTooLong => desk.error = Some(Key::IntakeInvalidAnswer),
+                    FieldEvent::PasteTooLong => {
+                        root.set_intake_editor_error(Key::IntakeInvalidAnswer)
+                    }
                     FieldEvent::Submit => (),
                 }
                 cx.notify();
@@ -216,29 +241,22 @@ enum FieldChange {
 }
 
 impl Root {
-    fn edit_waitlist_intake(
+    fn edit_intake_draft(
         &mut self,
         revision: &str,
         edit: impl FnOnce(&mut IntakeDraft, &mut Context<Self>),
         cx: &mut Context<Self>,
     ) {
-        if let Overlay::Waitlist(desk) = &mut self.overlay
-            && !desk.busy
-            && let Some(review) = desk
-                .offer_review
-                .as_mut()
-                .filter(|review| review.request.is_none())
-            && let Some(form) = review
-                .forms
-                .iter_mut()
-                .find(|form| form.revision_id() == revision)
+        if let Some(form) = self
+            .editable_intake_forms()
+            .and_then(|forms| forms.iter_mut().find(|form| form.revision_id() == revision))
         {
             edit(form, cx);
             cx.notify();
         }
     }
 
-    fn change_waitlist_answer(
+    fn change_intake_answer(
         &mut self,
         revision: &str,
         id: &str,
@@ -246,7 +264,7 @@ impl Root {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.edit_waitlist_intake(
+        self.edit_intake_draft(
             revision,
             |form, cx| {
                 let Some(field) = form.fields.iter_mut().find(|field| field.question.id == id)
@@ -312,7 +330,7 @@ impl Root {
         .debug_selector(move || id.clone())
     }
 
-    pub(super) fn render_waitlist_intake(
+    pub(super) fn render_intake_form(
         &self,
         form: &IntakeDraft,
         cx: &mut Context<Self>,
@@ -343,7 +361,7 @@ impl Root {
                 self.t(Key::IntakeInclude),
                 form.included,
                 cx.listener(move |this, _, _, cx| {
-                    this.edit_waitlist_intake(
+                    this.edit_intake_draft(
                         &revision,
                         |draft, _| {
                             draft.included = !draft.included;
@@ -367,7 +385,7 @@ impl Root {
                 ),
                 form.use_saved,
                 cx.listener(move |this, _, _, cx| {
-                    this.edit_waitlist_intake(
+                    this.edit_intake_draft(
                         &revision,
                         |draft, _| {
                             draft.use_saved = !draft.use_saved;
@@ -385,7 +403,7 @@ impl Root {
             return row.child(div().text_sm().child(self.t(Key::IntakeCustomerOnly)));
         }
         for field in &form.fields {
-            row = row.child(self.render_waitlist_question(rev, field, cx));
+            row = row.child(self.render_intake_question(rev, field, cx));
         }
         let revision = rev.clone();
         row.child(div().text_sm().child(self.t(Key::IntakeTeamConfirm)))
@@ -395,7 +413,7 @@ impl Root {
                     self.t(Key::IntakeConfirmed),
                     form.confirmed,
                     cx.listener(move |this, _, _, cx| {
-                        this.edit_waitlist_intake(
+                        this.edit_intake_draft(
                             &revision,
                             |draft, _| draft.confirmed = !draft.confirmed,
                             cx,
@@ -405,7 +423,7 @@ impl Root {
             })
     }
 
-    fn render_waitlist_question(
+    fn render_intake_question(
         &self,
         rev: &str,
         field: &QuestionDraft,
@@ -460,7 +478,7 @@ impl Root {
                     })
                     .collect()
             }
-            _ => return self.render_waitlist_text_answer(row, rev, field, &prefix, cx),
+            _ => return self.render_intake_text_answer(row, rev, field, &prefix, cx),
         };
         let multiple = matches!(question.kind, QuestionKind::MultipleChoice { .. });
         row.child(
@@ -485,14 +503,14 @@ impl Root {
                             } else {
                                 FieldChange::Answer(answer.clone())
                             };
-                            this.change_waitlist_answer(&revision, &field_id, change, window, cx);
+                            this.change_intake_answer(&revision, &field_id, change, window, cx);
                         }),
                     )
                 })),
         )
     }
 
-    fn render_waitlist_text_answer(
+    fn render_intake_text_answer(
         &self,
         row: gpui::Div,
         rev: &str,
@@ -517,7 +535,7 @@ impl Root {
                         self.t(Key::IntakeRemoveLine),
                         false,
                         cx.listener(move |this, _, window, cx| {
-                            this.change_waitlist_answer(
+                            this.change_intake_answer(
                                 &revision,
                                 &id,
                                 FieldChange::RemoveLine(index),
@@ -535,7 +553,7 @@ impl Root {
                 self.t(Key::IntakeAddLine),
                 false,
                 cx.listener(move |this, _, window, cx| {
-                    this.change_waitlist_answer(&revision, &id, FieldChange::AddLine, window, cx)
+                    this.change_intake_answer(&revision, &id, FieldChange::AddLine, window, cx)
                 }),
             )))
         })
@@ -612,33 +630,7 @@ mod tests {
         root.update(cx, |root, cx| {
             root.svc.stop_sync();
             root.status.connectivity = Connectivity::Online;
-            let now = Utc::now();
-            let entry = serde_json::from_value(json!({
-                "id":"offer-entry","clientId":"client","serviceIds":[],"serviceNames":[],
-                "fromDate":now.date_naive(),"toDate":now.date_naive(),
-                "fromTime":"10:00","toTime":"12:00","state":"offered","version":2,"canManage":true,
-                "offer":{"id":"offer","staffId":"staff","staffName":"Test professional",
-                    "startsAt":now,"endsAt":now + chrono::Duration::minutes(30),
-                    "expiresAt":now + chrono::Duration::hours(1),"priceCents":1500,
-                    "currency":"EUR","services":[],"policy":{"enabled":false}},
-            })).unwrap();
-            let form = serde_json::from_value(json!({
-                "id":"rev","definition":{"title":"Synthetic form","description":"","requiredAtBooking":true,
-                    "allowTeamResponses":true,"fields":[
-                        {"id":"q","label":"Does this apply?","help":"","kind":"boolean","required":true}
-                    ]}
-            })).unwrap();
-            let waiver = cx.new(|cx| TextField::new("", false, cx));
-            let waiver_sub = cx.observe(&waiver, |_, _, cx| cx.notify());
-            root.overlay = Overlay::Waitlist(Box::new(Desk {
-                active: true, page: 1, data: None, busy: false, cached: false, error: None,
-                confirm: None, form: None, policy_review: None, booked: None, observed_revision: 0,
-                requested_at: Instant::now(), offer_review: Some(OfferReview {
-                    entry, review_hash: Some("current".into()), can_waive: false,
-                    forms: vec![IntakeDraft::new(form, None, root.locale, cx)], waiver, _waiver_sub: waiver_sub,
-                    request: None, confirming_requeue: false,
-                }),
-            }));
+            crate::root::waitlist::show_intake_test_offer(root, cx);
             cx.notify();
         });
         let click = |cx: &mut gpui::VisualTestContext, selector| {
@@ -655,16 +647,13 @@ mod tests {
         assert!(cx.debug_bounds("wl-accept").is_some());
         click(cx, "intake-rev-q-true");
         root.update(cx, |root, cx| {
-            let Overlay::Waitlist(desk) = &root.overlay else {
-                panic!("missing waitlist");
-            };
-            let review = desk.offer_review.as_ref().unwrap();
+            let drafts = root.editable_intake_forms().unwrap();
             assert!(matches!(
-                review.forms[0].fields[0].answer,
+                drafts[0].fields[0].answer,
                 Some(Answer::Boolean(true))
             ));
-            assert!(!review.forms[0].confirmed);
-            assert!(review.intake_selection(cx).is_none());
+            assert!(!drafts[0].confirmed);
+            assert!(selection(drafts, cx).is_none());
         });
         click(cx, "intake-confirm-rev");
         assert!(cx.debug_bounds("wl-accept").is_some());

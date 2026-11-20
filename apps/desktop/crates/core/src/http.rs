@@ -17,6 +17,8 @@ use crate::billing::{
     PassRefundQuote, PaymentAttempt, ReceiptTender, RefundAttempt, RefundTender, SavedBankRefund,
     SavedBankRefundStatus, WalkInSale,
 };
+use crate::booking::{BookingError, BookingTerms, ReviewedBooking};
+use crate::intake::IntakeRequirements;
 use crate::inventory::{
     ContentWriteError, LedgerPage, LedgerQuery, MovementPage, PRODUCTS_PATH, PackageContent,
     PendingStock, Product, ProductId, ProductPage, ProductQuery, StockReturnAttempt,
@@ -32,7 +34,7 @@ use crate::runner::Wake;
 use crate::sse::{SseParser, nudge_seq};
 use crate::sync::{CatalogColors, Transport, TransportError};
 use crate::waitlist::{
-    AcceptOffer, AcceptOfferError, AcceptedOffer, OfferRequirements, WaitlistEntry, WaitlistPage,
+    AcceptOffer, AcceptOfferError, AcceptedOffer, BookedAppointment, WaitlistEntry, WaitlistPage,
     WaitlistPolicy, WaitlistRequest,
 };
 
@@ -1440,20 +1442,9 @@ impl HttpTransport {
     pub fn waitlist_offer_requirements(
         &self,
         entry: &WaitlistEntry,
-    ) -> Result<(OfferRequirements, bool), TransportError> {
-        let client = parse_id(&entry.client_id)?;
-        let services = entry
-            .service_ids
-            .iter()
-            .map(|id| parse_id(id).map(|id| id.to_string()))
-            .collect::<Result<Vec<_>, _>>()?
-            .join(",");
-        let requirements = self.get(
-            &self.agent,
-            &format!("/intake/requirements?clientId={client}&serviceIds={services}"),
-            None,
-        )?;
-        let requirements = read_response(requirements, false)?;
+    ) -> Result<(IntakeRequirements, bool), TransportError> {
+        let requirements =
+            self.intake_booking_requirements(&entry.service_ids, Some(&entry.client_id))?;
         #[derive(serde::Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Viewer {
@@ -1468,6 +1459,64 @@ impl HttpTransport {
         let waiver =
             viewer.user.role == "owner" || viewer.access_preset.as_deref() == Some("manager");
         Ok((requirements, waiver))
+    }
+
+    pub fn direct_booking_requirements(
+        &self,
+        terms: &BookingTerms,
+    ) -> Result<IntakeRequirements, TransportError> {
+        self.intake_booking_requirements(terms.service_ids(), terms.client_id())
+    }
+
+    fn intake_booking_requirements(
+        &self,
+        service_ids: &[String],
+        client_id: Option<&str>,
+    ) -> Result<IntakeRequirements, TransportError> {
+        let services = service_ids
+            .iter()
+            .map(|id| parse_id(id).map(|id| id.to_string()))
+            .collect::<Result<Vec<_>, _>>()?
+            .join(",");
+        let mut path = format!("/intake/requirements?serviceIds={services}");
+        if let Some(id) = client_id {
+            use std::fmt::Write as _;
+            let _ = write!(path, "&clientId={}", parse_id(id)?);
+        }
+        read_response(self.get(&self.agent, &path, None)?, false)
+    }
+
+    pub fn create_reviewed_booking(
+        &self,
+        booking: &ReviewedBooking,
+    ) -> Result<BookedAppointment, BookingError> {
+        let response = self.send_json("/appointments/desktop-booking", booking)?;
+        let result: BookedAppointment =
+            read_response_with(response, |status, retry_after, body| {
+                let error = serde_json::from_str::<serde_json::Value>(body).ok();
+                let code = error
+                    .as_ref()
+                    .and_then(|err| err.pointer("/error/code"))
+                    .and_then(serde_json::Value::as_str);
+                match (status, code) {
+                    (409, Some("intake_required")) => BookingError::IntakeChanged,
+                    (409, Some("slot_taken" | "slot_unavailable")) => BookingError::SlotUnavailable,
+                    (409, Some("version_conflict")) => BookingError::CatalogueChanged,
+                    (409, Some("booking_intent_conflict")) => BookingError::IntentConflict,
+                    (401, Some("unauthorized"))
+                    | (403, Some("forbidden"))
+                    | (404, Some("not_found")) => BookingError::AccessChanged,
+                    (400, Some("validation_error"))
+                    | (409, Some("invalid_state" | "client_merged" | "storage_limit")) => {
+                        BookingError::Rejected
+                    }
+                    _ => classify_status(status, retry_after, body, false).into(),
+                }
+            })?;
+        if !booking.matches(&result.id, result.starts_at) {
+            return Err(TransportError::Server("Unexpected booking acknowledgement".into()).into());
+        }
+        Ok(result)
     }
 
     fn post_json<T: serde::de::DeserializeOwned>(

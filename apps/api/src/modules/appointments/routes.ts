@@ -10,11 +10,12 @@ import {
   calendarQuerySchema,
   createAppointmentBaseSchema,
   createAppointmentRequestSchema,
+  desktopBookingRequestSchema,
   idSchema,
   updateAppointmentRequestSchema,
   visitCreateSchema,
 } from "@sob/contracts";
-import { Hono } from "hono";
+import { type Handler, Hono } from "hono";
 import type { AppDeps } from "../../app";
 import {
   authorizeAppointmentChange,
@@ -51,10 +52,57 @@ import { createVisit, getVisit } from "./visits";
 /** Mounted behind `requireAuth`, so every handler can rely on `c.get("principal")`. */
 export function appointmentsRoutes({
   db,
+  config,
   now = () => new Date(),
   metrics,
   booksyNativePreview,
 }: AppDeps) {
+  const create =
+    (desktopBooking: boolean): Handler<AppEnv> =>
+    async (c) => {
+      const principal = c.get("principal");
+      if (desktopBooking && principal.role === "client")
+        throw new DomainError("forbidden", "A centre account is required");
+      // Clients carry no client identity (the policy pins their own profile); staff and
+      // owners must name the client.
+      const schema =
+        principal.role === "client" ? createAppointmentBaseSchema : createAppointmentRequestSchema;
+      const body = await readJson(c);
+      const reviewed = desktopBooking ? parseOrThrow(desktopBookingRequestSchema, body) : undefined;
+      if (reviewed && reviewed.desktopGeneration !== config.syncReplicaGeneration) {
+        throw new DomainError(
+          "sync_generation_changed",
+          "Review the booking on the restored calendar",
+        );
+      }
+      const request = authorizeAppointmentCreate(principal, reviewed ?? parseOrThrow(schema, body));
+      const replay = async () => {
+        const existing = await findAppointmentReplay(db, request, principal.userId);
+        if (!existing) return null;
+        c.header("x-idempotent-replay", "true");
+        return c.json(existing, 201);
+      };
+      const previous = await replay();
+      if (previous) return previous;
+      try {
+        const created = await createAppointment(
+          db,
+          request,
+          { userId: principal.userId, role: principal.role },
+          { now: now(), desktopReviewed: desktopBooking },
+        );
+        metrics?.booking.inc({ source: "rest", outcome: "created" });
+        return c.json(created, 201);
+      } catch (error) {
+        // Another identical request may have committed while this one waited for locks.
+        if (error instanceof DomainError) {
+          const existing = await replay();
+          if (existing) return existing;
+        }
+        metrics?.booking.inc({ source: "rest", outcome: bookingOutcome(error) });
+        throw error;
+      }
+    };
   return (
     new Hono<AppEnv>()
       .post("/booksy-context/preview", async (c) =>
@@ -190,45 +238,8 @@ export function appointmentsRoutes({
           booksyNativePreview ? { ...calendar, importSnapshot: booksyNativePreview } : calendar,
         );
       })
-      .post("/", async (c) => {
-        const principal = c.get("principal");
-        // Clients carry no client identity (the policy pins their own profile); staff and
-        // owners must name the client.
-        const schema =
-          principal.role === "client"
-            ? createAppointmentBaseSchema
-            : createAppointmentRequestSchema;
-        const request = authorizeAppointmentCreate(
-          principal,
-          parseOrThrow(schema, await readJson(c)),
-        );
-        const replay = async () => {
-          const existing = await findAppointmentReplay(db, request, principal.userId);
-          if (!existing) return null;
-          c.header("x-idempotent-replay", "true");
-          return c.json(existing, 201);
-        };
-        const previous = await replay();
-        if (previous) return previous;
-        try {
-          const created = await createAppointment(
-            db,
-            request,
-            { userId: principal.userId, role: principal.role },
-            { now: now() },
-          );
-          metrics?.booking.inc({ source: "rest", outcome: "created" });
-          return c.json(created, 201);
-        } catch (error) {
-          // Another identical request may have committed while this one waited for locks.
-          if (error instanceof DomainError) {
-            const existing = await replay();
-            if (existing) return existing;
-          }
-          metrics?.booking.inc({ source: "rest", outcome: bookingOutcome(error) });
-          throw error;
-        }
-      })
+      .post("/", create(false))
+      .post("/desktop-booking", create(true))
       .get("/:id/availability", async (c) => {
         const id = parseOrThrow(idSchema, c.req.param("id"));
         const query = parseOrThrow(availabilityQuerySchema, c.req.query());

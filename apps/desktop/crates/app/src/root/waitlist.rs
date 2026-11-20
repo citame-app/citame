@@ -8,6 +8,8 @@ use sob_core::waitlist::{
 use std::sync::Arc;
 
 mod review;
+#[cfg(test)]
+pub(super) use review::show_intake_test_offer;
 
 pub(super) struct Desk {
     active: bool,
@@ -23,6 +25,18 @@ pub(super) struct Desk {
     booked: Option<BookedAppointment>,
     observed_revision: i64,
     requested_at: Instant,
+}
+
+impl Desk {
+    pub(super) fn editable_intake(
+        &mut self,
+    ) -> Option<&mut Vec<super::intake_editor::IntakeDraft>> {
+        self.offer_review.as_mut()?.editable_intake()
+    }
+
+    pub(super) fn set_intake_error(&mut self, key: Key) {
+        self.error = Some(key);
+    }
 }
 
 struct Draft {

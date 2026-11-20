@@ -34,7 +34,9 @@ Limits: 100 form definitions, 10 active forms, 30 questions/options per form/que
 
 Desktop can complete an applicable form while reviewing a waitlist offer. Operators can explicitly choose a recent response or record new answers when the form permits team responses. An optional form can be skipped. Questions and answers remain in memory during review. An unconfirmed request can be resent with the same answers and identity. The server rejects a review of superseded requirements and validates the current answers in the same transaction as the booking.
 
-Offline replay cannot bypass a required form. It records an actionable `intake_required` conflict and continues processing rather than endlessly retrying a deterministic validation failure. After a human completes the form, the operator may explicitly retry the proposal. If they booked in the web application, they should discard the old offline proposal to avoid a second visit. Native English/Spanish conflict instructions are included. Form administration and inline intake on the standard Desktop appointment editor remain separate work. Private responses stay outside the offline replica.
+When connected, the Desktop calendar checks applicable forms before confirming a new visit. The same editor supports an existing client or a new client created with the booking. The server validates the reviewed service prices, current form revisions and replica generation. A lost reply can be checked by resending the same appointment identity and responses during the review. Private answers stay in memory until confirmation and stay outside the offline replica. Form administration remains available in Cloud.
+
+Offline replay cannot bypass a required form. It records an actionable `intake_required` conflict and continues processing rather than endlessly retrying a deterministic validation failure. After a human completes the form, the operator may explicitly retry the proposal. If they booked in the web application, they should discard the old offline proposal to avoid a second visit. Native English/Spanish conflict instructions are included.
 
 ## Local verification
 

@@ -8,6 +8,7 @@ import {
   pageInfoSchema,
   pageSchema,
   pageSizeSchema,
+  syncGenerationSchema,
 } from "./common";
 import { intakeBookingShape } from "./intake";
 import { servicePriceTypeSchema } from "./service-pricing";
@@ -129,6 +130,13 @@ export const createAppointmentRequestSchema = createAppointmentBaseSchema.refine
 );
 
 export type CreateAppointmentRequest = z.infer<typeof createAppointmentRequestSchema>;
+
+export const desktopBookingRequestSchema = createAppointmentRequestSchema.safeExtend({
+  id: idSchema,
+  desktopGeneration: syncGenerationSchema,
+  serviceQuotes: createAppointmentBaseSchema.shape.serviceQuotes.unwrap(),
+  intakeReviewHash: intakeBookingShape.intakeReviewHash.unwrap(),
+});
 
 /** Statuses a caller may move an appointment to; "booked" is only ever the starting point. */
 export const appointmentTransitionSchema = z.enum(["completed", "no_show", "cancelled"]);

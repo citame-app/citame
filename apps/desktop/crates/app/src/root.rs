@@ -34,11 +34,13 @@ mod annotations;
 mod appointment_badges;
 mod billing;
 mod blocks;
+mod booking_intake;
 mod cash;
 mod checkout;
 mod connection;
 mod directory;
 mod inbox;
+mod intake_editor;
 mod inventory;
 mod notices;
 mod reports;
@@ -189,6 +191,7 @@ struct NewForm {
     selected_end: Option<i64>,
     staff_id: Option<String>,
     services: Vec<String>,
+    selected_quotes: std::collections::BTreeMap<String, String>,
     client_id: Option<String>,
     client_search: Entity<TextField>,
     _client_search_sub: Subscription,
@@ -198,6 +201,7 @@ struct NewForm {
     new_client: Entity<TextField>,
     new_client_phone: Entity<TextField>,
     notes: Entity<TextField>,
+    intake: Option<booking_intake::BookingReview>,
     error: Option<Key>,
 }
 
@@ -898,6 +902,7 @@ impl Root {
             selected_end: None,
             staff_id: self.staff.first().map(|s| s.id.clone()),
             services: vec![],
+            selected_quotes: Default::default(),
             client_id: None,
             client_search,
             _client_search_sub: client_search_sub,
@@ -907,6 +912,7 @@ impl Root {
             new_client,
             new_client_phone,
             notes,
+            intake: None,
             error: None,
         }));
         cx.notify();
@@ -917,6 +923,7 @@ impl Root {
         let performed = ops::performed_services(&self.svc.store, &id).unwrap_or_default();
         if let Overlay::New(f) = &mut self.overlay {
             f.services.retain(|s| performed.contains(s));
+            f.selected_quotes.retain(|id, _| performed.contains(id));
             f.staff_id = Some(id);
             f.service_scroll.set_offset(gpui::point(px(0.), px(0.)));
         }
@@ -927,6 +934,9 @@ impl Root {
         let Overlay::New(form) = &mut self.overlay else {
             return;
         };
+        if form.intake.is_some() {
+            return;
+        }
         let name = form.new_client.read(cx).text().trim().to_owned();
         let phone = form.new_client_phone.read(cx).text().trim().to_owned();
         let notes = form.notes.read(cx).text().trim().to_owned();
@@ -991,6 +1001,28 @@ impl Root {
             notes: (!notes.is_empty()).then_some(notes),
             override_notice: false,
         };
+        if self.status.connectivity == Connectivity::Online && self.svc.transport().is_some() {
+            let inline = (!has_client)
+                .then_some((name.as_str(), (!phone.is_empty()).then_some(phone.as_str())));
+            match sob_core::booking::BookingTerms::prepare(&self.svc.store, booking, inline) {
+                Ok(terms)
+                    if terms.service_ids().iter().all(|id| {
+                        form.selected_quotes
+                            .get(id)
+                            .is_some_and(|shown| terms.matches_service_quote(id, shown))
+                    }) =>
+                {
+                    self.start_booking_intake(terms, cx)
+                }
+                Ok(_) => {
+                    form.error = Some(Key::ErrRefreshCatalog);
+                    self.svc.wake(Wake::Manual);
+                    cx.notify();
+                }
+                Err(error) => self.show_new_booking_error(error, cx),
+            }
+            return;
+        }
         let result = if has_client {
             ops::create_appointment(&mut self.svc.store, booking)
         } else {
@@ -1002,26 +1034,37 @@ impl Root {
             )
         };
         match result {
-            Ok(_) => {
-                self.overlay = Overlay::None;
-                self.date = starts_at.with_timezone(&self.tz).date_naive();
-                if self.week_mode {
-                    self.date -= Span::days(self.date.weekday().num_days_from_monday().into());
-                }
-                self.edited(cx);
-            }
-            Err(e) => {
-                eprintln!("booking failed: {e}");
-                if let Overlay::New(f) = &mut self.overlay {
-                    f.error = Some(match e {
-                        CoreError::TimeOffOverlap => Key::TimeOffOverlap,
-                        CoreError::StaffCapacityExceeded => Key::ConflictSlotTaken,
-                        _ => Key::ErrGeneric,
-                    });
-                }
-                cx.notify();
-            }
+            Ok(_) => self.finish_new_booking(starts_at, cx),
+            Err(error) => self.show_new_booking_error(error, cx),
         }
+    }
+
+    fn finish_new_booking(&mut self, starts_at: DateTime<Utc>, cx: &mut Context<Self>) {
+        self.overlay = Overlay::None;
+        self.date = starts_at.with_timezone(&self.tz).date_naive();
+        if self.week_mode {
+            self.date -= Span::days(self.date.weekday().num_days_from_monday().into());
+        }
+        self.edited(cx);
+    }
+
+    fn show_new_booking_error(&mut self, error: CoreError, cx: &mut Context<Self>) {
+        if matches!(
+            error,
+            CoreError::PendingClient | CoreError::CalendarGenerationChanged
+        ) {
+            self.svc.wake(Wake::Manual);
+        }
+        if let Overlay::New(form) = &mut self.overlay {
+            form.error = Some(match error {
+                CoreError::TimeOffOverlap => Key::TimeOffOverlap,
+                CoreError::StaffCapacityExceeded => Key::ConflictSlotTaken,
+                CoreError::PendingClient => Key::BookingIntakeClientSync,
+                CoreError::CalendarGenerationChanged => Key::BookingIntakeRestore,
+                _ => Key::ErrGeneric,
+            });
+        }
+        cx.notify();
     }
 
     // ---------------------------------------------------------------- dialogs: details
@@ -2270,6 +2313,14 @@ impl Root {
         }
         match &mut self.overlay {
             Overlay::None => return,
+            Overlay::New(form)
+                if form
+                    .intake
+                    .as_ref()
+                    .is_some_and(booking_intake::BookingReview::blocks_dismissal) =>
+            {
+                return;
+            }
             Overlay::WalkIn(sale) if !sale.can_dismiss() => return,
             Overlay::WalkInReceipt(review) if !review.can_go_back() => return,
             Overlay::WalkIn(_) | Overlay::WalkInReceipt(_) => {
@@ -2444,6 +2495,9 @@ impl Root {
         viewport: gpui::Size<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        if let Some(review) = &f.intake {
+            return self.render_booking_intake(f, review, viewport, cx);
+        }
         const CLIENT_LIMIT: usize = 12;
         let wide = viewport.width >= px(850.);
         let start_label = format!(
@@ -2741,6 +2795,7 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> Stateful<gpui::Div> {
         let id = service.id.clone();
+        let displayed_quote = service.quote_hash.clone();
         let selected = form.services.contains(&id);
         let mut duration = format!("{} min", service.duration_minutes);
         if let Some(processing) = &service.processing {
@@ -2777,8 +2832,12 @@ impl Root {
                 if let Overlay::New(form) = &mut this.overlay {
                     if let Some(index) = form.services.iter().position(|service| *service == id) {
                         form.services.remove(index);
+                        form.selected_quotes.remove(&id);
                     } else {
                         form.services.push(id.clone());
+                        if let Some(quote) = &displayed_quote {
+                            form.selected_quotes.insert(id.clone(), quote.clone());
+                        }
                     }
                     form.error = None;
                 }

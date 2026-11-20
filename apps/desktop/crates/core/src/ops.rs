@@ -234,6 +234,39 @@ pub fn create_appointment(store: &mut Store, new: NewAppointment) -> Result<Stri
 }
 
 fn queue_appointment(store: &mut Store, new: NewAppointment) -> Result<String> {
+    if !known_clients(store)?
+        .iter()
+        .any(|(id, _)| *id == new.client_id)
+    {
+        return Err(CoreError::Invalid(format!(
+            "unknown client {}",
+            new.client_id
+        )));
+    }
+    let (quotes, reviewed) = reviewed_service_terms(store, &new)?;
+    let id = uuid::Uuid::now_v7().to_string();
+    let mut p = Map::new();
+    p.insert("id".into(), json!(id));
+    p.insert("staffId".into(), json!(new.staff_id));
+    p.insert("serviceIds".into(), json!(new.service_ids));
+    p.insert("serviceQuotes".into(), json!(quotes));
+    p.insert("_reviewedServices".into(), json!(reviewed));
+    p.insert("startsAt".into(), json!(iso(new.starts_at)));
+    p.insert("clientId".into(), json!(new.client_id));
+    if let Some(n) = new.notes.filter(|n| !n.trim().is_empty()) {
+        p.insert("notes".into(), json!(n));
+    }
+    if new.override_notice {
+        p.insert("override".into(), json!(true));
+    }
+    store.enqueue("appointment.create", &id, Value::Object(p))?;
+    Ok(id)
+}
+
+pub(crate) fn reviewed_service_terms(
+    store: &Store,
+    new: &NewAppointment,
+) -> Result<(BTreeMap<String, String>, Vec<AppointmentService>)> {
     if new.service_ids.is_empty() {
         return Err(CoreError::Invalid("pick at least one service".into()));
     }
@@ -253,15 +286,6 @@ fn queue_appointment(store: &mut Store, new: NewAppointment) -> Result<String> {
             "this staff member does not perform service {bad}"
         )));
     }
-    if !known_clients(store)?
-        .iter()
-        .any(|(id, _)| *id == new.client_id)
-    {
-        return Err(CoreError::Invalid(format!(
-            "unknown client {}",
-            new.client_id
-        )));
-    }
     if let Some(notes) = &new.notes {
         check_len("notes", notes, MAX_NOTES)?;
     }
@@ -271,7 +295,7 @@ fn queue_appointment(store: &mut Store, new: NewAppointment) -> Result<String> {
         .iter()
         .filter_map(|id| catalog.iter().find(|row| &row.id == id))
         .collect();
-    let mut quotes = Map::new();
+    let mut quotes = BTreeMap::new();
     let mut reviewed = Vec::new();
     for source in picked {
         let Some(hash) = &source.quote_hash else {
@@ -284,7 +308,7 @@ fn queue_appointment(store: &mut Store, new: NewAppointment) -> Result<String> {
                 "Refresh the service catalogue before creating a booking".into(),
             ));
         }
-        quotes.insert(source.id.clone(), json!(hash));
+        quotes.insert(source.id.clone(), hash.clone());
         reviewed.push(AppointmentService {
             service_id: Some(source.id.clone()),
             name: source.name.clone(),
@@ -307,23 +331,7 @@ fn queue_appointment(store: &mut Store, new: NewAppointment) -> Result<String> {
         &service_work_windows(&reviewed),
         None,
     )?;
-    let id = uuid::Uuid::now_v7().to_string();
-    let mut p = Map::new();
-    p.insert("id".into(), json!(id));
-    p.insert("staffId".into(), json!(new.staff_id));
-    p.insert("serviceIds".into(), json!(new.service_ids));
-    p.insert("serviceQuotes".into(), Value::Object(quotes));
-    p.insert("_reviewedServices".into(), json!(reviewed));
-    p.insert("startsAt".into(), json!(iso(new.starts_at)));
-    p.insert("clientId".into(), json!(new.client_id));
-    if let Some(n) = new.notes.filter(|n| !n.trim().is_empty()) {
-        p.insert("notes".into(), json!(n));
-    }
-    if new.override_notice {
-        p.insert("override".into(), json!(true));
-    }
-    store.enqueue("appointment.create", &id, Value::Object(p))?;
-    Ok(id)
+    Ok((quotes, reviewed))
 }
 
 pub fn create_appointment_for_new_client(
@@ -465,7 +473,7 @@ fn require_directory(store: &Store) -> Result<()> {
     Ok(())
 }
 
-fn validate_contact(name: &str, phone: Option<&str>) -> Result<()> {
+pub(crate) fn validate_contact(name: &str, phone: Option<&str>) -> Result<()> {
     if name.is_empty() {
         return Err(CoreError::Invalid("a client needs a name".into()));
     }

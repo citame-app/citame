@@ -2960,3 +2960,137 @@ fn native_directory_replays_contacts_and_preserves_newer_edits() {
             && conflict.reason == "conflict"
     }));
 }
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_books_with_current_intake_and_an_inline_client_through_the_proxy() {
+    use sob_core::booking::{BookingError, BookingTerms};
+    use sob_core::intake::IntakeSelection;
+
+    let mut browser = Device::sign_in();
+    browser.sync();
+    let catalog = catalog(&browser);
+    let start = free_slot(&browser, &catalog.staff);
+    let service = browser.rest_post(
+        "/admin/services",
+        json!({
+            "name": "Synthetic agenda service", "durationMinutes": 30, "priceCents": 1500,
+            "currency": "EUR", "staffIds": [catalog.staff],
+        }),
+    );
+    let service_id = service["id"].as_str().unwrap();
+    let household_contact = ops::create_client(
+        &mut browser.store,
+        "A different synthetic client on the same phone",
+        Some("+34 600 000 222"),
+    )
+    .unwrap();
+    browser.sync();
+    let device = proxy_device();
+    let terms = BookingTerms::prepare(
+        &browser.store,
+        NewAppointment {
+            staff_id: catalog.staff,
+            client_id: String::new(),
+            service_ids: vec![service_id.into()],
+            starts_at: start,
+            notes: Some("Synthetic appointment note".into()),
+            override_notice: false,
+        },
+        Some((
+            "Synthetic client with reviewed intake",
+            Some("+34 600 000 222"),
+        )),
+    )
+    .unwrap();
+    let initial = device
+        .transport
+        .direct_booking_requirements(&terms)
+        .unwrap();
+    assert_eq!(
+        initial.desktop_generation.as_deref(),
+        Some(terms.generation())
+    );
+    let answer_id = uuid::Uuid::now_v7().to_string();
+    let draft = browser.rest_post("/admin/intake-forms", json!({
+        "idempotencyKey": uuid::Uuid::now_v7(), "definition": {
+            "title": "Synthetic agenda intake", "requiredAtBooking": true, "allowTeamResponses": true,
+            "allServices": false, "serviceIds": [service_id], "fields": [
+                {"id": answer_id, "label": "Is this statement true?", "kind": "boolean", "required": true},
+            ],
+        }
+    }));
+    let form_id = draft["id"].as_str().unwrap();
+    browser.rest_post(
+        &format!("/admin/intake-forms/{form_id}/publish"),
+        json!({"version": draft["version"]}),
+    );
+    let stale = terms.reviewed(initial.review_hash, IntakeSelection::default());
+    assert!(matches!(
+        device.transport.create_reviewed_booking(&stale),
+        Err(BookingError::IntakeChanged)
+    ));
+    assert!(browser.store.outbox(50).unwrap().is_empty());
+    let current = device
+        .transport
+        .direct_booking_requirements(&terms)
+        .unwrap();
+    let form = &current.forms[0];
+    let answer = form
+        .definition
+        .team_response(
+            &form.id,
+            true,
+            [(answer_id.clone(), Answer::Boolean(false))].into(),
+        )
+        .unwrap();
+    let request = terms.reviewed(
+        current.review_hash,
+        IntakeSelection {
+            saved: vec![],
+            inline: vec![answer],
+        },
+    );
+    let origin_notice = browser.store.booking_notice_head().unwrap();
+    request.mark_local_dispatch(&mut browser.store).unwrap();
+    request.mark_local_dispatch(&mut browser.store).unwrap();
+    let appointment = device.transport.create_reviewed_booking(&request).unwrap();
+    assert_eq!(
+        device
+            .transport
+            .create_reviewed_booking(&request)
+            .unwrap()
+            .id,
+        appointment.id
+    );
+    browser.sync();
+    assert!(
+        browser
+            .store
+            .booking_notices_after(origin_notice)
+            .unwrap()
+            .iter()
+            .all(|(_, notice)| notice.id != appointment.id)
+    );
+    let local = browser.store.appointment(&appointment.id).unwrap().unwrap();
+    assert_ne!(local.client_id, household_contact);
+    let unrelated = browser.rest_get(&format!("/admin/clients/{household_contact}/intake"));
+    assert_eq!(unrelated["submissions"].as_array().unwrap().len(), 0);
+    let rows = browser.rest_get(&format!("/admin/clients/{}/intake", local.client_id));
+    let responses = rows["submissions"].as_array().unwrap();
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0]["appointmentId"], appointment.id);
+    assert_eq!(responses[0]["source"], "team");
+    let detail = browser.rest_get(&format!(
+        "/intake/submissions/{}",
+        responses[0]["id"].as_str().unwrap()
+    ));
+    assert_eq!(detail["answers"][&answer_id], false);
+    assert!(browser.store.outbox(50).unwrap().is_empty());
+    assert!(
+        serde_json::to_value(local)
+            .unwrap()
+            .get("intakeResponses")
+            .is_none()
+    );
+}
