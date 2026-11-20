@@ -418,9 +418,10 @@ export function CheckoutPanel({
                 ))}
               {mode === "admin" &&
                 canRefund &&
-                payment.status === "pending" &&
-                Date.now() - Date.parse(payment.updatedAt ?? payment.createdAt) >= 60000 && (
-                  <PaymentReconciliation paymentId={payment.id} />
+                payment.order &&
+                payment.reconcileAfter &&
+                Date.now() >= Date.parse(payment.reconcileAfter) && (
+                  <PaymentReconciliation paymentId={payment.id} bankOrder={payment.order} />
                 )}
             </div>
           ))}
@@ -606,12 +607,14 @@ function RefundStatus({ refund, owner }: { refund: Checkout["refunds"][number]; 
   );
 }
 
-function PaymentReconciliation({ paymentId }: { paymentId: string }) {
+function PaymentReconciliation({ paymentId, bankOrder }: { paymentId: string; bankOrder: string }) {
   const { t } = useI18n();
   const queries = useQueryClient();
+  const online = useOnline();
   const [reference, setReference] = useState("");
   const [outcome, setOutcome] = useState("");
   const reconcile = useMutation({
+    networkMode: "always",
     mutationFn: () =>
       api().commerce.reconcilePayment(paymentId, {
         outcome: outcome as "succeeded" | "failed",
@@ -622,22 +625,31 @@ function PaymentReconciliation({ paymentId }: { paymentId: string }) {
   return (
     <form
       aria-label={t("commerce.reconcilePayment")}
+      method="post"
       className="mt-3 grid gap-3 sm:grid-cols-2"
       onSubmit={(event) => {
         event.preventDefault();
-        if (reference.trim().length >= 8 && outcome) reconcile.mutate();
+        if (online && !reconcile.isPending && reference.trim().length >= 8 && outcome)
+          reconcile.mutate();
       }}
     >
+      <p className="text-sm sm:col-span-2">
+        {t("commerce.bankOrder")} · {bankOrder}
+      </p>
       <p className="text-sm text-muted sm:col-span-2">{t("commerce.paymentReconcileHelp")}</p>
       <TextField
         label={t("commerce.bankReference")}
+        name="reference"
         value={reference}
         onChange={(event) => setReference(event.target.value)}
         minLength={8}
+        maxLength={300}
         required
       />
       <SelectField
         label={t("commerce.reconcilePayment")}
+        name="outcome"
+        required
         value={outcome}
         options={[
           { value: "", label: "—" },
@@ -649,7 +661,7 @@ function PaymentReconciliation({ paymentId }: { paymentId: string }) {
       {reconcile.isError && <p role="alert">{t("commerce.paymentError")}</p>}
       <Button
         type="submit"
-        disabled={!outcome || reference.trim().length < 8 || reconcile.isPending}
+        disabled={!online || !outcome || reference.trim().length < 8 || reconcile.isPending}
       >
         {t("commerce.reconcilePayment")}
       </Button>

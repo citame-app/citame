@@ -1,4 +1,6 @@
 import {
+  type BankReconciliation,
+  bankPaymentReconciliationResponseSchema,
   type CheckoutListQuery,
   type CheckoutPrices,
   type CreateCheckoutInput,
@@ -80,11 +82,11 @@ export function commerceEndpoints(client: ApiClient) {
       reason: string;
       idempotencyKey: string;
     }) => client.post("/admin/commerce/cash-sessions/adjust", input, cashSessionSchema),
-    reconcilePayment: (id: string, input: { outcome: "succeeded" | "failed"; reference: string }) =>
+    reconcilePayment: (id: string, input: BankReconciliation) =>
       client.post(
         `/admin/commerce/payments/${id}/reconcile`,
         input,
-        z.object({ id: z.string(), status: z.string() }),
+        bankPaymentReconciliationResponseSchema,
       ),
     refund: (
       paymentId: string,

@@ -12,7 +12,7 @@ import {
   startedPaymentSchema,
   syncPullResponseSchema,
 } from "@sob/contracts";
-import { appointment, staffProfile } from "@sob/db";
+import { appointment, checkoutPayment, staffProfile } from "@sob/db";
 import { eq } from "drizzle-orm";
 import { actor, cookieFrom, json, NOW, seedFixtures, setupApiTest } from "../../test/helpers";
 import { authorizeFlow, ORIGIN, obtainTokens, tokenFor, tokenRequest } from "../../test/oauth";
@@ -125,6 +125,66 @@ const clientReportPath = "/admin/reports/clients?from=2026-11-18&to=2026-11-18";
 const outcomeParams = "?from=2026-11-18&to=2026-11-18&status=no_show";
 const outcomePath = `/admin/reports/outcomes${outcomeParams}`;
 const outcomeExportPath = `/admin/reports/outcomes/export${outcomeParams}`;
+
+test("desktop reconciliation is scoped, waits for the bank and updates the shared receipt", async () => {
+  const owner = await tokens("owner", "bank-review-owner");
+  const staff = await tokens("staff", "bank-review-staff");
+  const sale = await json(
+    t.app,
+    "/admin/commerce/checkouts",
+    "POST",
+    {
+      lines: [
+        {
+          kind: "custom",
+          description: "Synthetic POS receipt",
+          unitAmountCents: 1800,
+          quantity: 1,
+        },
+      ],
+      idempotencyKey: crypto.randomUUID(),
+    },
+    owner.who.cookie,
+  );
+  expect(sale.status).toBe(201);
+  const receipt = checkoutSchema.parse(await sale.json());
+  const path = `/admin/commerce/checkouts/${receipt.id}`;
+  const started = await json(
+    t.app,
+    `${path}/payments`,
+    "POST",
+    {
+      method: "redsys_card",
+      amountCents: 1800,
+      idempotencyKey: crypto.randomUUID(),
+    },
+    owner.who.cookie,
+  );
+  expect(started.status).toBe(201);
+  const { payment } = startedPaymentSchema.parse(await started.json());
+  const reconcile = (access: string, reference: string) =>
+    t.app.request(`/admin/commerce/payments/${payment.id}/reconcile`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${access}`, "content-type": "application/json" },
+      body: JSON.stringify({ outcome: "succeeded", reference }),
+    });
+  expect((await reconcile(owner.access, "TEST-REF-1800")).status).toBe(409);
+  await t.db
+    .update(checkoutPayment)
+    .set({ updatedAt: new Date(Date.now() - 120_000) })
+    .where(eq(checkoutPayment.id, payment.id));
+  expect((await reconcile(staff.access, "TEST-REF-1800")).status).toBe(403);
+  expect((await reconcile(owner.access, "short")).status).toBe(400);
+  expect((await reconcile(owner.access, "TEST-REF-1800")).status).toBe(200);
+  expect((await reconcile(owner.access, "TEST-REF-1800")).status).toBe(409);
+  const confirmed = await json(t.app, path, "GET", undefined, owner.who.cookie);
+  expect(checkoutSchema.parse(await confirmed.json())).toMatchObject({
+    status: "paid",
+    paidCents: 1800,
+    balanceCents: 0,
+    payments: [{ id: payment.id, status: "succeeded" }],
+  });
+});
 
 test("a desktop owner can review and replay a dated shift without broader staff access", async () => {
   const { access } = await tokens("owner", "dated-shifts-owner");

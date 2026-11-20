@@ -64,6 +64,7 @@ describe("route mapping", () => {
       "/admin/inventory/returns",
       "/admin/passes/eligible?checkoutId=01955500-0000-7000-8000-000000000001",
       "/admin/commerce/payments/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/refunds",
+      "/admin/commerce/payments/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/reconcile",
       "/admin/commerce/checkouts/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
       "/admin/commerce/checkouts/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/payments",
       "/admin/commerce/checkouts/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/prices",

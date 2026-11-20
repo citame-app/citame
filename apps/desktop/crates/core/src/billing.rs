@@ -140,6 +140,8 @@ pub struct AppointmentCheckout {
     pub tax_cents: u32,
     #[serde(default)]
     pub refunded_cents: u64,
+    #[serde(default)]
+    pub overpaid_cents: u64,
     pub reward: Option<ReceiptReward>,
     pub balance_cents: u32,
     pub payable_cents: Option<u32>,
@@ -175,6 +177,33 @@ pub enum PaymentAttention {
 }
 
 impl AppointmentCheckout {
+    pub fn reconcilable_bank_payments(
+        &self,
+        now: DateTime<Utc>,
+    ) -> impl Iterator<Item = PendingBankPayment> + '_ {
+        self.payments.iter().filter_map(move |payment| {
+            let method = BankPaymentMethod::from_api(payment.method.as_deref()?)?;
+            let bank_order = payment.order.as_deref().filter(|order| !order.is_empty())?;
+            let reconcile_after = payment.reconcile_after?;
+            (self.can_refund && payment.status == "pending" && now >= reconcile_after).then_some(
+                PendingBankPayment {
+                    id: payment.id?,
+                    method,
+                    amount_cents: payment.amount_cents,
+                    bank_order: bank_order.to_owned(),
+                    merchant_initiated: payment.merchant_initiated,
+                },
+            )
+        })
+    }
+
+    pub(super) fn bank_payment_status(&self, id: Uuid) -> Option<&str> {
+        self.payments
+            .iter()
+            .find(|payment| payment.id == Some(id))
+            .map(|payment| payment.status.as_str())
+    }
+
     pub fn recordable_refunds_available(&self) -> impl Iterator<Item = RefundablePayment> + '_ {
         self.payments.iter().filter_map(|payment| {
             if !self.can_refund || payment.status != "succeeded" {
@@ -419,6 +448,74 @@ struct CheckoutPayment {
     #[serde(default)]
     amount_cents: u32,
     status: String,
+    order: Option<String>,
+    reconcile_after: Option<DateTime<Utc>>,
+    #[serde(default)]
+    merchant_initiated: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BankPaymentMethod {
+    Card,
+    Bizum,
+}
+
+impl BankPaymentMethod {
+    fn from_api(method: &str) -> Option<Self> {
+        match method {
+            "redsys_card" => Some(Self::Card),
+            "redsys_bizum" => Some(Self::Bizum),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingBankPayment {
+    pub id: Uuid,
+    pub method: BankPaymentMethod,
+    pub amount_cents: u32,
+    pub bank_order: String,
+    pub merchant_initiated: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BankPaymentOutcome {
+    Succeeded,
+    Failed,
+}
+
+impl BankPaymentOutcome {
+    pub(super) fn matches_status(self, status: &str) -> bool {
+        match self {
+            Self::Succeeded => matches!(status, "succeeded" | "reconciliation"),
+            Self::Failed => status == "failed",
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct BankPaymentReconciliation {
+    pub(super) outcome: BankPaymentOutcome,
+    reference: String,
+}
+
+impl BankPaymentReconciliation {
+    pub fn new(outcome: BankPaymentOutcome, reference: &str) -> Option<Self> {
+        let reference = reference.trim();
+        (8..=300)
+            .contains(&reference.encode_utf16().count())
+            .then(|| Self {
+                outcome,
+                reference: reference.to_owned(),
+            })
+    }
+}
+
+pub struct BankPaymentResolution {
+    pub receipt: AppointmentCheckout,
+    pub bank_outcome_changed: bool,
 }
 
 #[derive(Debug, Deserialize)]

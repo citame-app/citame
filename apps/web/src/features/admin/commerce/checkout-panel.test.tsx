@@ -66,6 +66,15 @@ beforeEach(() => {
       serviceAmount = body.lines[0].unitAmountCents;
       return reply(sale());
     }
+    if (path.endsWith("/reconcile") && method === "POST") {
+      paid = true;
+      payments = payments.map((payment) => ({
+        ...payment,
+        status: "succeeded",
+        reconcileAfter: undefined,
+      }));
+      return reply({ id, checkoutId: id, status: "succeeded" });
+    }
     if (path.endsWith("/capabilities"))
       return reply({
         provider: online ? "redsys" : "none",
@@ -104,6 +113,39 @@ beforeEach(() => {
     if (path.endsWith(`/checkouts/${id}`)) return reply(sale());
     return reply({});
   }) as unknown as typeof fetch;
+});
+
+test("payment reconciliation shows the order and uses the server's review window", async () => {
+  const otherId = "0198f5a0-7b1c-7000-8000-000000000101";
+  const attempt = {
+    id,
+    status: "pending",
+    method: "redsys_card",
+    amountCents: 2500,
+    order: "120001000001",
+    createdAt: "2026-03-09T12:00:00.000Z",
+    reconcileAfter: "2026-03-09T12:01:00.000Z",
+  };
+  payments = [
+    attempt,
+    { ...attempt, id: otherId, order: "120001000002", reconcileAfter: "2100-01-01T00:00:00Z" },
+  ];
+  renderApp(<CheckoutPanel id={id} mode="admin" role="owner" />);
+  await screen.findByText("Bank order · 120001000001");
+  expect(screen.queryByText("Bank order · 120001000002")).toBeNull();
+  fireEvent.change(screen.getByLabelText("Bank confirmation reference"), {
+    target: { value: "BANK-2026-0001" },
+  });
+  fireEvent.change(screen.getByRole("combobox", { name: "Reconcile bank payment" }), {
+    target: { value: "succeeded" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Reconcile bank payment" }));
+  await waitFor(() =>
+    expect(requests.find((r) => r.path.endsWith("/reconcile"))?.body).toEqual({
+      outcome: "succeeded",
+      reference: "BANK-2026-0001",
+    }),
+  );
 });
 
 test("unresolved prices block payment until the operator reviews and saves the final amount", async () => {
@@ -225,6 +267,7 @@ test("only an owner is offered bank reconciliation for a stale pending attempt",
       status: "pending",
       order: "1234567890",
       createdAt: "2026-03-09T12:00:00.000Z",
+      reconcileAfter: "2026-03-09T12:01:00.000Z",
     },
   ];
   renderApp(<CheckoutPanel id={id} mode="admin" role="owner" />);

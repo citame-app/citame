@@ -145,6 +145,12 @@ export const reconcileRefundSchema = z
     reference: z.string().trim().min(8).max(300),
   })
   .strict();
+export type BankReconciliation = z.infer<typeof reconcileRefundSchema>;
+export const bankPaymentReconciliationResponseSchema = z.object({
+  id: idSchema,
+  checkoutId: idSchema,
+  status: z.enum(["succeeded", "failed", "reconciliation"]),
+});
 export const cashOpenSchema = z
   .object({ openingCents: moneyCentsSchema, sessionId: idSchema.optional() })
   .strict();
@@ -249,6 +255,7 @@ export const checkoutPaymentSchema = z.object({
   merchantInitiated: z.boolean().optional(),
   createdAt: instantSchema,
   updatedAt: instantSchema.optional(),
+  reconcileAfter: instantSchema.optional(),
 });
 export const checkoutSchema = z.object({
   externalBalance: externalBalanceSchema.optional(),

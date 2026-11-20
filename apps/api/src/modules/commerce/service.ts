@@ -114,6 +114,15 @@ export async function saleRow(db: Connection, id: string, principal: Principal, 
   if (lock && row.appointmentId) await lockScheduling(db as Tx);
   return row;
 }
+
+function bankPaymentReconcileAfter(payment: typeof checkoutPayment.$inferSelect) {
+  if (
+    payment.status === "pending" &&
+    payment.bankOrder &&
+    (payment.method === "redsys_card" || payment.method === "redsys_bizum")
+  )
+    return new Date(payment.updatedAt.getTime() + 60_000);
+}
 async function lockReceipt(tx: Tx, id: string) {
   const [row] = await tx.select().from(checkout).where(eq(checkout.id, id)).for("update");
   if (row?.appointmentId) await lockScheduling(tx);
@@ -205,6 +214,7 @@ async function snapshot(
       order: payment.bankOrder,
       createdAt: payment.createdAt.toISOString(),
       updatedAt: payment.updatedAt.toISOString(),
+      reconcileAfter: bankPaymentReconcileAfter(payment)?.toISOString(),
     })),
     refunds: refunds.map((refund) => ({
       id: refund.id,
@@ -1315,7 +1325,7 @@ export async function reconcileRefund(
   });
 }
 
-/** A pending hosted attempt can be resolved only by an owner with a bank-portal reference. */
+/** Resolve a pending hosted attempt with a verified bank-portal reference. */
 export async function reconcilePayment(
   db: Database,
   id: string,
@@ -1327,14 +1337,15 @@ export async function reconcilePayment(
   return db.transaction(async (tx) => {
     const [initial] = await tx.select().from(checkoutPayment).where(eq(checkoutPayment.id, id));
     if (!initial) throw new DomainError("not_found", "Payment not found");
-    const sale = await lockReceipt(tx, initial.checkoutId);
+    const sale = await saleRow(tx, initial.checkoutId, principal, true);
     const [payment] = await tx
       .select()
       .from(checkoutPayment)
       .where(eq(checkoutPayment.id, id))
       .for("update");
-    if (!sale || !payment) throw new DomainError("not_found", "Payment not found");
-    if (payment.status !== "pending" || Date.now() - payment.updatedAt.getTime() < 60000)
+    if (!payment) throw new DomainError("not_found", "Payment not found");
+    const reconcileAfter = bankPaymentReconcileAfter(payment);
+    if (!reconcileAfter || Date.now() < reconcileAfter.getTime())
       throw new DomainError(
         "invalid_state",
         "Only a pending bank payment outside its initial processing window can be reconciled",

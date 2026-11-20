@@ -3528,7 +3528,16 @@ impl Render for Root {
             .flex()
             .flex_col()
             .text_color(theme::text())
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if event.keystroke.key == "tab" && this.checkout_review_mut().is_some() {
+                    if event.keystroke.modifiers.shift {
+                        window.focus_prev();
+                    } else {
+                        window.focus_next();
+                    }
+                    cx.stop_propagation();
+                    return;
+                }
                 if event.keystroke.key == "escape"
                     && matches!(this.screen, Screen::Main)
                     && !this.login.server_editor

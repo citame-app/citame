@@ -10,6 +10,7 @@ use uuid::Uuid;
 mod cloud;
 mod passes;
 mod print;
+mod reconciliation;
 mod refunds;
 mod stock_return;
 
@@ -41,6 +42,8 @@ impl CheckoutReview {
             request: None,
             pass_picker: None,
             refund: None,
+            reconciliation: None,
+            bank_outcome_changed: false,
             stock_return: None,
             stock_return_notice: None,
             confirming_void: false,
@@ -77,6 +80,8 @@ pub(super) struct ReceiptForm {
     _amount_changed: Subscription,
     price_fields: Vec<PriceField>,
     refund: Option<refunds::RefundEditor>,
+    reconciliation: Option<reconciliation::BankPaymentReview>,
+    bank_outcome_changed: bool,
     stock_return: Option<stock_return::ReturnEditor>,
     stock_return_notice: Option<Key>,
     confirming_void: bool,
@@ -232,6 +237,14 @@ impl Root {
                         }
                         form.replace_receipt(receipt, cx);
                         form.error = None;
+                        if let Some(review) = &mut form.reconciliation {
+                            review.needs_refresh = false;
+                        }
+                    }
+                    Err(_) if form.reconciliation.is_some() => {
+                        if let Some(review) = &mut form.reconciliation {
+                            review.needs_refresh = true;
+                        }
                     }
                     Err(_) => {
                         // Avoid collecting against a balance we could not verify.
@@ -265,6 +278,7 @@ impl Root {
         if form.busy
             || form.refreshing
             || form.refund.is_some()
+            || form.reconciliation.is_some()
             || form.stock_return.is_some()
             || form.confirming_void
             || collectible == 0
@@ -433,7 +447,7 @@ impl Root {
         .detach();
     }
 
-    fn checkout_review_mut(&mut self) -> Option<&mut CheckoutReview> {
+    pub(super) fn checkout_review_mut(&mut self) -> Option<&mut CheckoutReview> {
         Self::checkout_review_in(&mut self.overlay)
     }
 
@@ -499,6 +513,21 @@ impl Root {
                         ))
                     })
                     .child(format!("{}: {due}", self.t(Key::CheckoutDue)))
+                    .when(receipt.overpaid_cents > 0, |view| {
+                        view.child(
+                            div()
+                                .text_sm()
+                                .text_color(theme::conflict_fg())
+                                .child(format!(
+                                    "{} · {}",
+                                    self.t(Key::CheckoutOverpaid),
+                                    self.amount_label(
+                                        receipt.overpaid_cents.min(i64::MAX as u64) as i64,
+                                        &receipt.currency
+                                    )
+                                )),
+                        )
+                    })
                     .when_some(receipt.payment_attention(), |view, attention| {
                         let key = match attention {
                             PaymentAttention::Pending => Key::CheckoutPaymentPending,
@@ -530,10 +559,21 @@ impl Root {
                                 .child(message.clone()),
                         )
                     });
+                let body = body.when(form.bank_outcome_changed, |view| {
+                    view.child(
+                        div()
+                            .text_sm()
+                            .text_color(theme::conflict_fg())
+                            .child(self.t(Key::CheckoutBankOutcomeChanged)),
+                    )
+                });
                 let body = body
-                    .child(self.render_refunds(form, cx))
-                    .child(self.render_void_receipt(form, cx))
-                    .child(self.render_stock_returns(form, cx))
+                    .child(self.render_bank_payment_review(form, cx))
+                    .when(form.reconciliation.is_none(), |view| {
+                        view.child(self.render_refunds(form, cx))
+                            .child(self.render_void_receipt(form, cx))
+                            .child(self.render_stock_returns(form, cx))
+                    })
                     .when(form.can_print(), |view| {
                         view.child(self.render_print_receipt(form, cx))
                     })
@@ -543,6 +583,7 @@ impl Root {
                         |view| view.child(self.render_cloud_receipt(form, cx)),
                     );
                 let reviewing_prices = form.refund.is_none()
+                    && form.reconciliation.is_none()
                     && form.stock_return.is_none()
                     && !form.confirming_void
                     && receipt.can_review_prices()
@@ -595,7 +636,11 @@ impl Root {
                             }),
                     )
                 });
-                if form.refund.is_some() || form.stock_return.is_some() || form.confirming_void {
+                if form.refund.is_some()
+                    || form.reconciliation.is_some()
+                    || form.stock_return.is_some()
+                    || form.confirming_void
+                {
                     body
                 } else if receipt.status == "paid" {
                     body.child(self.t(Key::ReceiptPaid))
@@ -715,7 +760,7 @@ impl Root {
                 }
             }
         };
-        let scrollable = div().child(
+        let scrollable = div().id("checkout-keyboard").tab_group().child(
             div()
                 .id("checkout-content")
                 .min_h_0()
@@ -723,14 +768,14 @@ impl Root {
                 .overflow_y_scroll()
                 .child(body),
         );
-        self.modal(scrollable.when(review.can_go_back(), |view| {
-            view.child(self.button(
+        self.modal(div().child(scrollable.when(review.can_go_back(), |view| {
+            view.child(self.checkout_keyboard_button(
                 "back-from-checkout",
                 self.t(Key::Back),
                 Kind::Ghost,
                 cx.listener(|this, _, _, cx| this.dismiss_overlay(cx)),
             ))
-        }))
+        })))
     }
 }
 
@@ -743,6 +788,7 @@ impl ReceiptForm {
         !self.busy
             && self.request.is_none()
             && self.refund.is_none()
+            && self.reconciliation.is_none()
             && self.stock_return.is_none()
             && !self.confirming_void
     }
@@ -770,6 +816,14 @@ impl ReceiptForm {
         }
         self.receipt = Arc::new(receipt);
         self.pass_picker = None;
+        if let Some(review) = &self.reconciliation
+            && !self
+                .receipt
+                .reconcilable_bank_payments(Utc::now())
+                .any(|payment| payment.id == review.payment_id())
+        {
+            self.reconciliation = None;
+        }
     }
 
     fn reviewed_prices(&self, cx: &App) -> Option<Vec<CheckoutFinalPrice>> {
@@ -841,6 +895,8 @@ mod tests {
                     request: None,
                     pass_picker: None,
                     refund: None,
+                    reconciliation: None,
+                    bank_outcome_changed: false,
                     stock_return: None,
                     stock_return_notice: None,
                     confirming_void: false,
@@ -889,6 +945,8 @@ mod tests {
                     request: None,
                     pass_picker: None,
                     refund: None,
+                    reconciliation: None,
+                    bank_outcome_changed: false,
                     stock_return: None,
                     stock_return_notice: None,
                     confirming_void: false,

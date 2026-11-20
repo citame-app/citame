@@ -10,10 +10,11 @@ use std::time::Duration;
 use crate::auth::{AuthError, AuthProvider, BrowserWorkspace, SessionHandle, TokenStore};
 use crate::backoff::Backoff;
 use crate::billing::{
-    AppointmentCheckout, CashCommand, CashSession, CheckoutFinalPrice, CheckoutHistoryFilters,
-    CheckoutPage, CheckoutRefund, EligiblePassUse, ImportedPartialPayment,
-    ImportedPartialPaymentPreview, ImportedPricePreview, ImportedPriceReview, ImportedSettlement,
-    ImportedSettlementStatus, PaymentAttempt, ReceiptTender, RefundAttempt, WalkInSale,
+    AppointmentCheckout, BankPaymentReconciliation, BankPaymentResolution, CashCommand,
+    CashSession, CheckoutFinalPrice, CheckoutHistoryFilters, CheckoutPage, CheckoutRefund,
+    EligiblePassUse, ImportedPartialPayment, ImportedPartialPaymentPreview, ImportedPricePreview,
+    ImportedPriceReview, ImportedSettlement, ImportedSettlementStatus, PaymentAttempt,
+    ReceiptTender, RefundAttempt, WalkInSale,
 };
 use crate::inventory::{
     ContentWriteError, LedgerPage, LedgerQuery, MovementPage, PRODUCTS_PATH, PackageContent,
@@ -655,6 +656,57 @@ impl HttpTransport {
             ));
         }
         validate_checkout(receipt, appointment, checkout.external_balance)
+    }
+
+    pub fn reconcile_bank_payment(
+        &self,
+        checkout: &AppointmentCheckout,
+        payment_id: uuid::Uuid,
+        review: &BankPaymentReconciliation,
+    ) -> Result<BankPaymentResolution, TransportError> {
+        if !checkout
+            .reconcilable_bank_payments(chrono::Utc::now())
+            .any(|payment| payment.id == payment_id)
+        {
+            return Err(TransportError::BadRequest(
+                "This bank payment is not eligible for reconciliation".into(),
+            ));
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Acknowledgement {
+            id: uuid::Uuid,
+            checkout_id: uuid::Uuid,
+            status: String,
+        }
+        let checkout_id = parse_id(&checkout.id)?;
+        let path = format!("/admin/commerce/payments/{payment_id}/reconcile");
+        let result: Result<Acknowledgement, _> = self.post_json(&path, review);
+        match result {
+            Ok(confirmed)
+                if confirmed.id == payment_id
+                    && confirmed.checkout_id == checkout_id
+                    && review.outcome.matches_status(&confirmed.status) => {}
+            Ok(_) => {
+                return Err(TransportError::Server(
+                    "Invalid reconciliation acknowledgement".into(),
+                ));
+            }
+            Err(error) => return Err(error),
+        }
+        let updated = self.refresh_checkout(checkout)?;
+        if let Some(status @ ("succeeded" | "failed" | "reconciliation")) =
+            updated.bank_payment_status(payment_id)
+        {
+            let bank_outcome_changed = !review.outcome.matches_status(status);
+            return Ok(BankPaymentResolution {
+                receipt: updated,
+                bank_outcome_changed,
+            });
+        }
+        Err(TransportError::Server(
+            "Reconciled payment missing from refreshed receipt".into(),
+        ))
     }
 
     pub fn current_cash_session(&self) -> Result<Option<CashSession>, TransportError> {

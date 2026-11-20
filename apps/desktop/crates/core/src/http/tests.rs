@@ -71,6 +71,76 @@ fn signed_in(base: &str) -> HttpTransport {
 }
 
 #[test]
+fn bank_reconciliation_checks_eligibility_and_reloads_only_the_reviewed_receipt() {
+    use crate::billing::BankPaymentOutcome;
+    use serde_json::{Value, json};
+    use uuid::Uuid;
+
+    let id = Uuid::now_v7();
+    let payment = Uuid::now_v7();
+    let mut checkout = json!({
+        "id": id, "currency": "EUR", "status": "open", "canRefund": true,
+        "totalCents": 2200, "discountCents": 0, "paidCents": 0, "balanceCents": 2200,
+        "payments": [{"id": payment, "method": "redsys_card", "status": "pending",
+            "amountCents": 2200, "order": "123412345678",
+            "reconcileAfter": (chrono::Utc::now() - chrono::Duration::minutes(1)).to_rfc3339()}]
+    });
+    let pending: AppointmentCheckout = serde_json::from_value(checkout.clone()).unwrap();
+    checkout["payments"][0]["reconcileAfter"] =
+        json!((chrono::Utc::now() + chrono::Duration::minutes(1)).to_rfc3339());
+    let recent: AppointmentCheckout = serde_json::from_value(checkout.clone()).unwrap();
+    checkout["status"] = json!("paid");
+    checkout["paidCents"] = json!(2200);
+    checkout["balanceCents"] = json!(0);
+    checkout["payments"][0]["status"] = json!("succeeded");
+    let (base, requests) = serve(vec![
+        http(
+            "200 OK",
+            &[],
+            &json!({"id": payment, "checkoutId": id, "status": "succeeded"}).to_string(),
+        ),
+        http("200 OK", &[], &checkout.to_string()),
+        http(
+            "200 OK",
+            &[],
+            &json!({"id": payment, "checkoutId": id, "status": "failed"}).to_string(),
+        ),
+        http("200 OK", &[], &checkout.to_string()),
+    ]);
+    let transport = signed_in(&base);
+    let command =
+        BankPaymentReconciliation::new(BankPaymentOutcome::Succeeded, "  BANK-1234  ").unwrap();
+    assert!(BankPaymentReconciliation::new(BankPaymentOutcome::Failed, "short").is_none());
+    assert!(matches!(
+        transport.reconcile_bank_payment(&recent, payment, &command),
+        Err(TransportError::BadRequest(_))
+    ));
+    assert!(requests.lock().unwrap().is_empty());
+    let reviewed = transport
+        .reconcile_bank_payment(&pending, payment, &command)
+        .unwrap();
+    assert_eq!(reviewed.receipt.paid_cents, 2200);
+    assert!(!reviewed.bank_outcome_changed);
+    let no_charge =
+        BankPaymentReconciliation::new(BankPaymentOutcome::Failed, "BANK-1235").unwrap();
+    let raced = transport
+        .reconcile_bank_payment(&pending, payment, &no_charge)
+        .unwrap();
+    assert_eq!(raced.receipt.paid_cents, 2200);
+    assert!(raced.bank_outcome_changed);
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 4);
+    assert!(requests[0].starts_with(&format!(
+        "POST /admin/commerce/payments/{payment}/reconcile "
+    )));
+    assert_eq!(
+        serde_json::from_str::<Value>(requests[0].split_once("\r\n\r\n").unwrap().1).unwrap(),
+        json!({"outcome": "succeeded", "reference": "BANK-1234"})
+    );
+    assert!(requests[1].starts_with(&format!("GET /admin/commerce/checkouts/{id} ")));
+}
+
+#[test]
 fn report_transport_reads_the_filtered_summary_and_exports_safe_csv() {
     let counts = serde_json::json!({"booked": 1, "completed": 0, "cancelled": 0, "no_show": 0});
     let slice = serde_json::json!({"appointments": 1, "revenueCents": 0, "byStatus": counts});
