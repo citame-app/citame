@@ -3,6 +3,7 @@ import {
   DESKTOP_CLIENT_ID,
   DESKTOP_SIGN_IN_SCOPE,
   desktopDeviceLinkResponseSchema,
+  desktopReceiptDestinationSchema,
   desktopWorkspaceSchema,
 } from "@sob/contracts";
 import { type Database, desktopDevice, oauthClient, session } from "@sob/db";
@@ -18,6 +19,7 @@ import type { AppConfig } from "../config";
 import { DomainError } from "../errors";
 import { parseOrThrow, readJson } from "../http";
 import { BearerError, type TokenVerifier } from "../mcp/verify";
+import { saleRow } from "../modules/commerce/service";
 import { desktopResource } from "./desktop";
 import { desktopWorkspacePath } from "./desktop-workspaces";
 
@@ -58,10 +60,12 @@ const calendarTarget = z.object({
 });
 const calendarDestination = { calendar: calendarTarget };
 const workspaceDestination = { workspace: desktopWorkspaceSchema };
+const receiptDestination = desktopReceiptDestinationSchema.shape;
 const browserOrigin = { origin: loopbackOrigin, proof: proof.optional() };
 const browserRequest = z.union([
   z.strictObject({ ...browserOrigin, ...calendarDestination }),
   z.strictObject({ ...browserOrigin, ...workspaceDestination }),
+  z.strictObject({ ...browserOrigin, ...receiptDestination }),
 ]);
 const browserSource = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("device"), id: deviceId }),
@@ -70,10 +74,26 @@ const browserSource = z.discriminatedUnion("kind", [
 const savedBrowserTicket = z.union([
   z.strictObject({ source: browserSource, ...calendarDestination }),
   z.strictObject({ source: browserSource, ...workspaceDestination }),
+  z.strictObject({ source: browserSource, ...receiptDestination }),
 ]);
 
-function browserPath(saved: z.infer<typeof savedBrowserTicket>, principal: Principal) {
+async function browserPath(
+  db: Database,
+  saved: z.infer<typeof savedBrowserTicket>,
+  principal: Principal,
+) {
   if ("workspace" in saved) return desktopWorkspacePath(saved.workspace, principal);
+  if ("receipt" in saved) {
+    const sales = desktopWorkspacePath("sales", principal);
+    if (!sales) return null;
+    try {
+      await saleRow(db, saved.receipt, principal);
+    } catch (error) {
+      if (error instanceof DomainError && error.code === "not_found") return null;
+      throw error;
+    }
+    return `${sales}?${new URLSearchParams({ checkout: saved.receipt })}`;
+  }
   const query = new URLSearchParams({ date: saved.calendar.date, view: saved.calendar.view });
   if (saved.calendar.staff) query.set("staff", saved.calendar.staff);
   return `/admin/calendar?${query}`;
@@ -277,7 +297,9 @@ export function createDesktopDevices({
         const binding =
           "workspace" in input
             ? [origin, "workspace", input.workspace]
-            : [origin, input.calendar.date, input.calendar.view, input.calendar.staff ?? ""];
+            : "receipt" in input
+              ? [origin, "receipt", input.receipt]
+              : [origin, input.calendar.date, input.calendar.view, input.calendar.staff ?? ""];
         const device = await verifyProof("browser-ticket", input.proof, binding);
         source = { kind: "device", id: device.id };
       } else {
@@ -287,12 +309,10 @@ export function createDesktopDevices({
         if (!sessionId) throw new DomainError("unauthorized", "Browser handoff requires a session");
         source = { kind: "session", id: sessionId };
       }
-      const saved =
-        "workspace" in input
-          ? { source, workspace: input.workspace }
-          : { source, calendar: input.calendar };
+      const { origin: _origin, proof: _proof, ...destination } = input;
+      const saved = { source, ...destination };
       const principal = await browserPrincipal(source);
-      if (!principal || !browserPath(saved, principal))
+      if (!principal || !(await browserPath(db, saved, principal)))
         throw new DomainError("forbidden", "Access denied");
       const ticket = randomBytes(32).toString("base64url");
       await valkey.send("SET", [
@@ -319,7 +339,7 @@ export function createDesktopDevices({
         throw new DomainError("unauthorized", "Expired browser handoff");
       const saved = savedBrowserTicket.parse(JSON.parse(serialized));
       const principal = await browserPrincipal(saved.source);
-      const path = principal && browserPath(saved, principal);
+      const path = principal && (await browserPath(db, saved, principal));
       if (!path) throw new DomainError("forbidden", "Access denied");
       const response = await browserSession(principal.userId);
       if (!response.ok) return response;

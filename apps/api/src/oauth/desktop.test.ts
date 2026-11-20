@@ -18,7 +18,11 @@ import { desktopResource } from "./desktop";
 
 let t: Awaited<ReturnType<typeof setupApiTest>>;
 beforeAll(async () => {
-  t = await setupApiTest({ dbSuffix: "oauth_desktop", deps: { syncHeartbeatMs: 20 } });
+  t = await setupApiTest({
+    dbSuffix: "oauth_desktop",
+    deps: { syncHeartbeatMs: 20 },
+    env: { RATE_LIMIT_OAUTH_MAX: "200" },
+  });
   await t.reset();
   await seedFixtures(t.db);
 });
@@ -392,6 +396,64 @@ test("linked devices renew independently and can be revoked from either client",
   );
   expect(workspace.status).toBe(303);
   expect(workspace.headers.get("location")).toBe("/admin/commerce?view=inventory");
+  const sale = await json(
+    t.app,
+    "/admin/commerce/checkouts",
+    "POST",
+    {
+      lines: [
+        { kind: "custom", description: "Synthetic receipt", unitAmountCents: 1200, quantity: 1 },
+      ],
+      idempotencyKey: crypto.randomUUID(),
+    },
+    who.cookie,
+  );
+  expect(sale.status).toBe(201);
+  const { id: receiptId } = (await sale.json()) as { id: string };
+  const receiptTicketRequest = () => ({
+    origin: browserOrigin,
+    receipt: receiptId,
+    proof: first.proof("browser-ticket", undefined, [browserOrigin, "receipt", receiptId]),
+  });
+  expect(
+    (await endpoint("browser-ticket", { ...receiptTicketRequest(), receipt: crypto.randomUUID() }))
+      .status,
+  ).toBe(401);
+  const missingReceipt = crypto.randomUUID();
+  expect(
+    (
+      await endpoint("browser-ticket", {
+        origin: browserOrigin,
+        receipt: missingReceipt,
+        proof: first.proof("browser-ticket", undefined, [browserOrigin, "receipt", missingReceipt]),
+      })
+    ).status,
+  ).toBe(403);
+  const issueReceipt = async () => {
+    const response = await endpoint("browser-ticket", receiptTicketRequest());
+    expect(response.status).toBe(200);
+    return ((await response.json()) as { ticket: string }).ticket;
+  };
+  const redeemReceipt = await redeemBrowser(await issueReceipt());
+  expect(redeemReceipt.status).toBe(303);
+  expect(redeemReceipt.headers.get("location")).toBe(`/admin/commerce?checkout=${receiptId}`);
+  const operator = await actor(t, "staff", "receipt-workspace-operator@example.test");
+  const setReceiptAccess = (accessPreset: "receptionist" | "professional") =>
+    t.db.update(staffProfile).set({ accessPreset }).where(eq(staffProfile.userId, operator.userId));
+  const requestStaffReceipt = () =>
+    t.app.request("/api/auth/desktop/browser-ticket", {
+      method: "POST",
+      headers: { origin: ORIGIN, cookie: operator.cookie, "content-type": "application/json" },
+      body: JSON.stringify({ origin: browserOrigin, receipt: receiptId }),
+    });
+  await setReceiptAccess("receptionist");
+  const staffReceipt = await requestStaffReceipt();
+  expect(staffReceipt.status).toBe(200);
+  await setReceiptAccess("professional");
+  expect((await requestStaffReceipt()).status).toBe(403);
+  expect(
+    (await redeemBrowser(((await staffReceipt.json()) as { ticket: string }).ticket)).status,
+  ).toBe(403);
   const restricted = await actor(t, "staff", "restricted-workspaces@example.test");
   await t.db
     .update(staffProfile)

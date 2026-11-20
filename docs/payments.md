@@ -25,6 +25,8 @@ Cash payments require an open drawer. External-card records mean a payment alrea
 
 Printing uses an isolated receipt document. It excludes register balances, other sales, operator controls and bank forms. Product/service descriptions are inserted as text, never executable markup.
 
+In Citame Desktop, **Open receipt in Citame Cloud** opens the same receipt in the browser as the signed-in operator. Use that receipt to start a hosted card or Bizum payment when configured. Desktop refreshes the receipt from the server when the commerce event arrives. The bank callback determines the recorded payment status.
+
 ## Bank authority and recovery
 
 - Browser return/query parameters cannot mark an order paid. A signed server notification must match the persisted order, amount, currency, merchant, terminal and operation.

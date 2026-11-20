@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use sob_core::auth::{
-    AuthProvider, BetterAuthSession, FileTokenStore, SessionHandle, TokenStore,
+    AuthProvider, BetterAuthSession, BrowserHandoff, FileTokenStore, SessionHandle, TokenStore,
     session_cookie_from_set_cookie,
 };
 use sob_core::http::HttpTransport;
@@ -14,7 +14,7 @@ use url::Url;
 
 pub(super) struct ProxyDevice {
     pub base: Url,
-    pub transport: HttpTransport,
+    pub transport: Arc<HttpTransport>,
     auth: Arc<BetterAuthSession>,
     session: SessionHandle,
     agent: ureq::Agent,
@@ -129,7 +129,7 @@ impl ProxyDevice {
             HttpTransport::new(origin, session.clone(), auth.clone()).with_token_store(tokens);
         Self {
             base,
-            transport,
+            transport: Arc::new(transport),
             auth,
             session,
             agent,
@@ -145,12 +145,26 @@ impl ProxyDevice {
             .begin_browser_workspace(&session, BrowserWorkspace::Settings)
             .unwrap()
             .unwrap();
+        self.browser_cookie(handoff, "/admin/settings");
+    }
+
+    pub fn browser_receipt_cookie(&self, receipt: uuid::Uuid) -> String {
+        let session = self.session.read().unwrap().clone().unwrap();
+        let handoff = self
+            .auth
+            .begin_browser_receipt(&session, receipt)
+            .unwrap()
+            .unwrap();
+        self.browser_cookie(handoff, &format!("/admin/commerce?checkout={receipt}"))
+    }
+
+    fn browser_cookie(&self, handoff: BrowserHandoff, destination: &str) -> String {
         let url = Url::parse(&handoff.url()).unwrap();
         let server = std::thread::spawn(move || handoff.serve());
         let mut page = self.agent.get(url.as_str()).call().unwrap();
         assert_eq!(page.status().as_u16(), 200);
         let document = page.body_mut().read_to_string().unwrap();
-        server.join().unwrap();
+        assert!(server.join().unwrap());
         let ticket = document
             .split_once("name=\"ticket\" value=\"")
             .unwrap()
@@ -171,7 +185,7 @@ impl ProxyDevice {
             .send(format!("ticket={ticket}"))
             .unwrap();
         assert_eq!(response.status().as_u16(), 303);
-        assert_eq!(response.headers()["location"], "/admin/settings");
+        assert_eq!(response.headers()["location"], destination);
         let cookie = response
             .headers()
             .get_all("set-cookie")
@@ -182,10 +196,38 @@ impl ProxyDevice {
         let mut me = self
             .agent
             .get(self.base.join("/api/me").unwrap().as_str())
-            .header("Cookie", cookie)
+            .header("Cookie", &cookie)
             .call()
             .unwrap();
-        assert_eq!(response_json(&mut me)["user"]["id"], session.user_id);
+        assert_eq!(
+            response_json(&mut me)["user"]["id"],
+            self.session.read().unwrap().as_ref().unwrap().user_id
+        );
+        cookie
+    }
+
+    pub fn pay_receipt_from_browser(&self, receipt: uuid::Uuid, cents: u32, cookie: &str) {
+        let response = self
+            .agent
+            .post(
+                self.base
+                    .join(&format!("/api/admin/commerce/checkouts/{receipt}/payments"))
+                    .unwrap()
+                    .as_str(),
+            )
+            .header("Origin", self.base.origin().ascii_serialization())
+            .header("Cookie", cookie)
+            .content_type("application/json")
+            .send(
+                json!({
+                    "amountCents": cents,
+                    "method": "external_card",
+                    "idempotencyKey": uuid::Uuid::now_v7(),
+                })
+                .to_string(),
+            )
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 201);
     }
 
     fn bearer_header(&self) -> (String, String) {

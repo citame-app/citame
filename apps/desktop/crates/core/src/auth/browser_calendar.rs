@@ -88,6 +88,20 @@ impl BetterAuthSession {
         )
     }
 
+    /// Open the exact receipt under the web session for the signed-in operator.
+    pub fn begin_browser_receipt(
+        &self,
+        session: &Session,
+        receipt: uuid::Uuid,
+    ) -> Result<Option<BrowserHandoff>, AuthError> {
+        let receipt = receipt.to_string();
+        self.begin_browser_handoff(
+            session,
+            serde_json::json!({ "receipt": receipt }),
+            &["receipt", &receipt],
+        )
+    }
+
     fn begin_browser_handoff(
         &self,
         session: &Session,
@@ -154,7 +168,7 @@ impl BrowserHandoff {
         format!("{}{}", self.origin, self.path)
     }
 
-    pub fn serve(self) {
+    pub fn serve(self) -> bool {
         let deadline = Instant::now() + Duration::from_secs(60);
         while Instant::now() < deadline {
             let mut stream = match self.listener.accept() {
@@ -163,7 +177,7 @@ impl BrowserHandoff {
                     std::thread::sleep(Duration::from_millis(25));
                     continue;
                 }
-                Err(_) => return,
+                Err(_) => return false,
             };
             if stream.set_nonblocking(false).is_err()
                 || stream
@@ -210,8 +224,8 @@ impl BrowserHandoff {
                 "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nReferrer-Policy: origin\r\nContent-Security-Policy: default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action {cloud}; script-src 'nonce-{nonce}'\r\nX-Content-Type-Options: nosniff\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len(),
             );
-            let _ = stream.write_all(response.as_bytes());
-            return;
+            return stream.write_all(response.as_bytes()).is_ok();
         }
+        false
     }
 }

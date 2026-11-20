@@ -76,6 +76,64 @@ fn desktop_opens_cloud_management_with_the_linked_users_web_session_through_the_
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
+fn desktop_opens_the_exact_receipt_and_observes_its_browser_payment_through_the_proxy() {
+    let device = proxy_device();
+    let receipt = device
+        .transport
+        .create_walk_in_sale(&WalkInSale {
+            idempotency_key: uuid::Uuid::now_v7(),
+            client_id: None,
+            staff_id: None,
+            use_client_discount: None,
+            lines: vec![SaleItem::Custom {
+                description: "Synthetic receipt handoff".into(),
+                unit_amount_cents: 1800,
+                quantity: 1,
+            }],
+            discount_cents: 0,
+            tip_cents: 0,
+        })
+        .unwrap();
+    assert_eq!(receipt.status, "open");
+    let cookie = device.browser_receipt_cookie(receipt.id.parse().unwrap());
+
+    let profile = tempfile::tempdir().unwrap();
+    let store_path = profile.path().join("receipt.sqlite");
+    let replica = Store::open(&store_path).unwrap();
+    let status: SharedStatus = Default::default();
+    let runner = SyncRunner::spawn(RunnerCore::new(
+        Store::open(&store_path).unwrap(),
+        device.transport.clone(),
+        status.clone(),
+    ));
+    let live = Arc::new(AtomicBool::new(false));
+    let stop = Arc::new(AtomicBool::new(false));
+    let listener = spawn_stream_listener(
+        device.transport.clone(),
+        runner.sender(),
+        live.clone(),
+        stop.clone(),
+    );
+    wait(Duration::from_secs(5), "native receipt watcher", || {
+        status.lock().unwrap().connectivity == Connectivity::Online && live.load(Ordering::SeqCst)
+    });
+    let before = replica.live_view_revision("commerce").unwrap();
+    device.pay_receipt_from_browser(receipt.id.parse().unwrap(), 1800, &cookie);
+    wait(
+        Duration::from_secs(3),
+        "browser payment to reach native",
+        || replica.live_view_revision("commerce").unwrap() > before,
+    );
+    let paid = device.transport.refresh_checkout(&receipt).unwrap();
+    assert_eq!(paid.status, "paid");
+    assert_eq!(paid.paid_cents, 1800);
+    stop.store(true, Ordering::SeqCst);
+    runner.stop();
+    drop(listener);
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_dated_shift_commits_and_replays_through_the_proxy() {
     let mut observer = Device::sign_in();
     observer.sync();
@@ -517,7 +575,7 @@ fn native_inventory_round_trips_pack_and_stock_through_the_proxy() {
     assert!(product.can_manage);
     assert!(product.package_content.is_none());
     let mut replica = Store::open_in_memory().unwrap();
-    sync::pull_all(&mut replica, &device.transport).unwrap();
+    sync::pull_all(&mut replica, device.transport.as_ref()).unwrap();
     let previous = replica.live_view_revision(INVENTORY_TOPIC).unwrap();
 
     let pack = PackageContent::parse("12,50", "ml").unwrap().unwrap();
@@ -532,7 +590,7 @@ fn native_inventory_round_trips_pack_and_stock_through_the_proxy() {
         browser.rest_get(&path)["packageContent"],
         json!({"quantity": "12.5", "unit": "ml"})
     );
-    sync::pull_all(&mut replica, &device.transport).unwrap();
+    sync::pull_all(&mut replica, device.transport.as_ref()).unwrap();
     assert!(replica.live_view_revision(INVENTORY_TOPIC).unwrap() > previous);
     assert!(matches!(
         device

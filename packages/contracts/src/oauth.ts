@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { idSchema } from "./common";
 
 /**
  * OAuth scopes of the authorization server (ADR 0009). A scope caps what a token may do; the
@@ -66,6 +67,7 @@ export const desktopWorkspacesResponseSchema = z.object({
   workspaces: z.array(desktopWorkspaceSchema),
 });
 export type DesktopWorkspacesResponse = z.infer<typeof desktopWorkspacesResponseSchema>;
+export const desktopReceiptDestinationSchema = z.strictObject({ receipt: idSchema });
 
 /** Routes supported by the desktop client and exposed through the same-origin proxy. */
 export const DESKTOP_PROXY_ROUTE =

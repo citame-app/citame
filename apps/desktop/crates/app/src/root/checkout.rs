@@ -1,12 +1,13 @@
 use super::*;
 use sob_core::billing::{
-    AppointmentCheckout, CheckoutFinalPrice, PaymentAttempt, ReceiptTender,
+    AppointmentCheckout, CheckoutFinalPrice, PaymentAttempt, PaymentAttention, ReceiptTender,
     normalize_gift_card_code, parse_reviewed_amount,
 };
 use sob_core::sync::TransportError;
 use std::sync::Arc;
 use uuid::Uuid;
 
+mod cloud;
 mod passes;
 mod print;
 mod refunds;
@@ -45,6 +46,7 @@ impl CheckoutReview {
             confirming_void: false,
             amount,
             print_opening: None,
+            cloud_opening: None,
             gift_code,
             _gift_code_changed: gift_code_changed,
             _amount_changed: amount_changed,
@@ -69,6 +71,7 @@ pub(super) struct ReceiptForm {
     pass_picker: Option<passes::PassPicker>,
     amount: Entity<TextField>,
     print_opening: Option<Arc<()>>,
+    cloud_opening: Option<Arc<()>>,
     gift_code: Entity<TextField>,
     _gift_code_changed: Subscription,
     _amount_changed: Subscription,
@@ -496,6 +499,18 @@ impl Root {
                         ))
                     })
                     .child(format!("{}: {due}", self.t(Key::CheckoutDue)))
+                    .when_some(receipt.payment_attention(), |view, attention| {
+                        let key = match attention {
+                            PaymentAttention::Pending => Key::CheckoutPaymentPending,
+                            PaymentAttention::Reconciliation => Key::CheckoutPaymentReview,
+                        };
+                        view.child(
+                            div()
+                                .text_sm()
+                                .text_color(theme::conflict_fg())
+                                .child(self.t(key)),
+                        )
+                    })
                     .when(
                         receipt.appointment_id.is_none()
                             || matches!(self.overlay, Overlay::SalesHistory(_)),
@@ -521,7 +536,12 @@ impl Root {
                     .child(self.render_stock_returns(form, cx))
                     .when(form.can_print(), |view| {
                         view.child(self.render_print_receipt(form, cx))
-                    });
+                    })
+                    .when(
+                        self.status.connectivity == Connectivity::Online
+                            && form.can_open_in_cloud(),
+                        |view| view.child(self.render_cloud_receipt(form, cx)),
+                    );
                 let reviewing_prices = form.refund.is_none()
                     && form.stock_return.is_none()
                     && !form.confirming_void
@@ -716,8 +736,11 @@ impl Root {
 
 impl ReceiptForm {
     fn can_print(&self) -> bool {
+        self.is_idle() && !self.refreshing
+    }
+
+    fn is_idle(&self) -> bool {
         !self.busy
-            && !self.refreshing
             && self.request.is_none()
             && self.refund.is_none()
             && self.stock_return.is_none()
@@ -823,6 +846,7 @@ mod tests {
                     confirming_void: false,
                     amount,
                     print_opening: None,
+                    cloud_opening: None,
                     gift_code,
                     _gift_code_changed: gift_code_changed,
                     _amount_changed: amount_changed,
@@ -870,6 +894,7 @@ mod tests {
                     confirming_void: false,
                     amount,
                     print_opening: None,
+                    cloud_opening: None,
                     gift_code,
                     _gift_code_changed: gift_code_changed,
                     _amount_changed: amount_changed,

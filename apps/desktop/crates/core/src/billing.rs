@@ -168,6 +168,12 @@ pub struct ReceiptReward {
     pub returned_points: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaymentAttention {
+    Pending,
+    Reconciliation,
+}
+
 impl AppointmentCheckout {
     pub fn recordable_refunds_available(&self) -> impl Iterator<Item = RefundablePayment> + '_ {
         self.payments.iter().filter_map(|payment| {
@@ -278,9 +284,21 @@ impl AppointmentCheckout {
     }
 
     fn has_unresolved_payment(&self) -> bool {
+        self.payment_attention().is_some()
+    }
+
+    pub fn payment_attention(&self) -> Option<PaymentAttention> {
+        if self
+            .payments
+            .iter()
+            .any(|payment| payment.status == "reconciliation")
+        {
+            return Some(PaymentAttention::Reconciliation);
+        }
         self.payments
             .iter()
-            .any(|payment| matches!(payment.status.as_str(), "pending" | "reconciliation"))
+            .any(|payment| payment.status == "pending")
+            .then_some(PaymentAttention::Pending)
     }
 
     pub fn collectible_cents(&self) -> u32 {
