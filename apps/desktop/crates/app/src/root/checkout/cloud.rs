@@ -6,53 +6,6 @@ impl ReceiptForm {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[gpui::test]
-    async fn cloud_receipt_requires_a_connection_and_ignores_a_replaced_form(
-        cx: &mut gpui::TestAppContext,
-    ) {
-        let (_dir, config) = crate::root::tests::desk();
-        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
-        let receipt = || {
-            serde_json::from_value(json!({
-                "id": Uuid::now_v7(), "currency": "EUR", "status": "open",
-                "totalCents": 1800, "discountCents": 0, "paidCents": 0, "balanceCents": 1800,
-                "payments": [],
-            }))
-            .unwrap()
-        };
-        root.update(cx, |root, cx| {
-            root.svc.stop_sync();
-            root.overlay = Overlay::WalkInReceipt(CheckoutReview::from_receipt(receipt(), 0, cx));
-            root.status.connectivity = Connectivity::Offline;
-            root.open_cloud_receipt(cx);
-            assert!(matches!(
-                root.checkout_review_mut(),
-                Some(CheckoutReview::Receipt(form)) if form.cloud_opening.is_none()
-            ));
-            root.status.connectivity = Connectivity::Online;
-            root.open_cloud_receipt(cx);
-            assert!(matches!(
-                root.checkout_review_mut(),
-                Some(CheckoutReview::Receipt(form)) if form.cloud_opening.is_some()
-            ));
-            root.overlay = Overlay::WalkInReceipt(CheckoutReview::from_receipt(receipt(), 0, cx));
-        });
-        cx.run_until_parked();
-        assert!(cx.opened_url().is_none());
-        root.update(cx, |root, _| {
-            assert!(matches!(
-                root.checkout_review_mut(),
-                Some(CheckoutReview::Receipt(form)) if form.error.is_none()
-            ));
-        });
-    }
-}
-
 impl Root {
     fn open_cloud_receipt(&mut self, cx: &mut Context<Self>) {
         let Some(session) = self
@@ -163,5 +116,52 @@ impl ReceiptForm {
         self.cloud_opening
             .as_ref()
             .is_some_and(|pending| Arc::ptr_eq(pending, request))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[gpui::test]
+    async fn cloud_receipt_requires_a_connection_and_ignores_a_replaced_form(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_dir, config) = crate::root::tests::desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        let receipt = || {
+            serde_json::from_value(json!({
+                "id": Uuid::now_v7(), "currency": "EUR", "status": "open",
+                "totalCents": 1800, "discountCents": 0, "paidCents": 0, "balanceCents": 1800,
+                "payments": [],
+            }))
+            .unwrap()
+        };
+        root.update(cx, |root, cx| {
+            root.svc.stop_sync();
+            root.overlay = Overlay::WalkInReceipt(CheckoutReview::from_receipt(receipt(), 0, cx));
+            root.status.connectivity = Connectivity::Offline;
+            root.open_cloud_receipt(cx);
+            assert!(matches!(
+                root.checkout_review_mut(),
+                Some(CheckoutReview::Receipt(form)) if form.cloud_opening.is_none()
+            ));
+            root.status.connectivity = Connectivity::Online;
+            root.open_cloud_receipt(cx);
+            assert!(matches!(
+                root.checkout_review_mut(),
+                Some(CheckoutReview::Receipt(form)) if form.cloud_opening.is_some()
+            ));
+            root.overlay = Overlay::WalkInReceipt(CheckoutReview::from_receipt(receipt(), 0, cx));
+        });
+        cx.run_until_parked();
+        assert!(cx.opened_url().is_none());
+        root.update(cx, |root, _| {
+            assert!(matches!(
+                root.checkout_review_mut(),
+                Some(CheckoutReview::Receipt(form)) if form.error.is_none()
+            ));
+        });
     }
 }

@@ -87,7 +87,7 @@ test("a live refresh updates the invitation and drops rows after revocation", as
   globalThis.fetch = read as unknown as typeof fetch;
   const { queryClient } = renderApp(<ReviewRequests />);
   await screen.findByText("Test client");
-  read.mockImplementationOnce(async () =>
+  read.mockImplementation(async () =>
     Response.json({
       visits: [
         {
@@ -106,12 +106,17 @@ test("a live refresh updates the invitation and drops rows after revocation", as
   }
   expect(await screen.findByText("Email sent")).toBeInTheDocument();
 
-  read.mockImplementationOnce(async () =>
+  read.mockImplementation(async () =>
     Response.json({ error: { code: "forbidden", message: "Access denied" } }, { status: 403 }),
   );
-  for (const queryKey of liveQueryKeys(["staff"])) {
-    await act(() => queryClient.invalidateQueries({ queryKey }));
-  }
-  await waitFor(() => expect(screen.queryByText("Test client")).not.toBeInTheDocument());
-  expect(screen.queryByRole("button", { name: "Copy review link" })).not.toBeInTheDocument();
+  await act(async () => {
+    await Promise.all(
+      Array.from(liveQueryKeys(["staff"]), (queryKey) =>
+        queryClient.invalidateQueries({ queryKey }),
+      ),
+    );
+  });
+  await screen.findByRole("alert");
+  expect(screen.queryByText("Test client")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Copy review link" })).toBeNull();
 });
