@@ -107,7 +107,7 @@ jobs:
       - uses: actions/attest-build-provenance@v2
         with:
           subject-path: .release/desktop/sisters-of-beauty-desktop-${{ needs.meta.outputs.version }}-linux-x86_64.tar.gz
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: desktop-linux
           path: .release/desktop/*
@@ -168,7 +168,7 @@ jobs:
       - uses: actions/attest-build-provenance@v2
         with:
           subject-path: .release/desktop/sisters-of-beauty-desktop-${{ needs.meta.outputs.version }}-macos-${{ matrix.architecture }}.zip
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: desktop-macos-${{ matrix.architecture }}
           path: .release/desktop/*
@@ -245,7 +245,7 @@ jobs:
           RELEASE_REVISION: ${{ needs.meta.outputs.revision }}
           RELEASE_DIGEST: ${{ steps.build.outputs.digest }}
         run: bun scripts/release-registry.ts
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-image-${{ matrix.name }}
           path: .release/images/${{ matrix.name }}.digest

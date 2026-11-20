@@ -168,7 +168,7 @@ jobs:
         env:
           K6_EMAIL: ci-owner@example.com
           K6_PASSWORD: correct horse battery staple
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: playwright-report
@@ -261,7 +261,7 @@ jobs:
           SOB_TEST_API_URL: http://127.0.0.1:3055
           SOB_TEST_EMAIL: ci-owner@example.com
           SOB_TEST_PASSWORD: ci-only-owner-password
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: desktop-api-log
