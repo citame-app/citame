@@ -1,5 +1,5 @@
 import type { Service } from "@sob/contracts";
-import { type Database, service } from "@sob/db";
+import { type Database, service, user } from "@sob/db";
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { DomainError } from "../../errors";
 import {
@@ -9,25 +9,65 @@ import {
   publicService,
 } from "./options";
 
-export async function listServices(db: Database): Promise<Service[]> {
+export async function listServices(db: Database, includeInternal = false): Promise<Service[]> {
   const rows = await activeCatalogRows(
     db,
     await db
       .select()
       .from(service)
-      .where(and(eq(service.active, true), isNull(service.deletedAt)))
-      .orderBy(asc(service.name)),
+      .where(
+        and(
+          eq(service.active, true),
+          includeInternal ? undefined : eq(service.onlineBooking, true),
+          isNull(service.deletedAt),
+        ),
+      )
+      .orderBy(asc(service.sortOrder), asc(service.name)),
   );
-  const metadata = await catalogMetadata(db, rows);
+  const visible = includeInternal ? rows : await onlineCatalogRows(db, rows);
+  const metadata = await catalogMetadata(db, visible);
   const activeBaseIds = new Set(
-    rows.filter((row) => row.catalogKind !== "addon").map((row) => row.id),
+    visible.filter((row) => row.catalogKind !== "addon").map((row) => row.id),
   );
-  return rows.flatMap((row) => {
+  return visible.flatMap((row) => {
     const catalog = metadata.get(row.id);
     if (catalog?.kind === "addon" && !catalog.allowedServiceIds.some((id) => activeBaseIds.has(id)))
       return [];
     return [publicService(row, catalog)];
   });
+}
+
+async function onlineCatalogRows(
+  db: Pick<Database, "select">,
+  rows: (typeof service.$inferSelect)[],
+) {
+  const parents = [...new Set(rows.flatMap((r) => (r.parentServiceId ? [r.parentServiceId] : [])))];
+  const hidden = parents.length
+    ? await db
+        .select({ id: service.id })
+        .from(service)
+        .where(and(inArray(service.id, parents), eq(service.onlineBooking, false)))
+    : [];
+  const hiddenIds = new Set(hidden.map((r) => r.id));
+  return rows.filter(
+    (r) => r.onlineBooking && (!r.parentServiceId || !hiddenIds.has(r.parentServiceId)),
+  );
+}
+
+/** Enforced inside the scheduling transaction, including MCP and offline replay. */
+export async function assertOnlineServices(
+  db: Pick<Database, "select">,
+  ids: string[],
+  actorUserId?: string,
+) {
+  if (actorUserId) {
+    const [actor] = await db.select({ role: user.role }).from(user).where(eq(user.id, actorUserId));
+    if (actor && actor.role !== "client") return false;
+  }
+  const rows = await db.select().from(service).where(inArray(service.id, ids));
+  if ((await onlineCatalogRows(db, rows)).length !== new Set(ids).size)
+    throw new DomainError("forbidden", "These services can only be booked by the salon team");
+  return Boolean(actorUserId);
 }
 
 export type ServiceRow = Service;

@@ -25,13 +25,43 @@ export function targetFingerprint(kind: string, row: Record<string, unknown>) {
     if (originalFields.sourceResourceWindow === null) delete originalFields.sourceResourceWindow;
     return fingerprint(originalFields);
   }
+  if (kind === "services") {
+    const originalFields = { ...row };
+    if (row.sortOrder === 0) delete originalFields.sortOrder;
+    if (row.onlineBooking === true) delete originalFields.onlineBooking;
+    if (row.clientInstructions === null) delete originalFields.clientInstructions;
+    if (row.bookingIntervalMinutes === null) delete originalFields.bookingIntervalMinutes;
+    if (row.priceType === "fixed") delete originalFields.priceType;
+    return fingerprint(originalFields);
+  }
   if (kind === "appointmentServices") {
     const originalFields = { ...row };
+    if (row.priceType === "fixed") delete originalFields.priceType;
     if (row.sourceUnpriced === false) delete originalFields.sourceUnpriced;
     if (row.reviewedPriceCents === null) delete originalFields.reviewedPriceCents;
     return fingerprint(originalFields);
   }
   return fingerprint(row);
+}
+
+export function normalizedBooksyCategory(category: string | null | undefined) {
+  return category?.replace(/^ +| +$/g, "") ?? null;
+}
+
+export function matchesBooksyTarget(
+  kind: string,
+  row: Record<string, unknown>,
+  expected: string,
+  sourceCategory?: string | null,
+) {
+  if (targetFingerprint(kind, row) === expected) return true;
+  // The catalogue migration trims the live category. The archived source remains exact.
+  return (
+    kind === "services" &&
+    typeof sourceCategory === "string" &&
+    row.category === normalizedBooksyCategory(sourceCategory) &&
+    targetFingerprint(kind, { ...row, category: sourceCategory }) === expected
+  );
 }
 
 export function sourceUuid(business: string, kind: string, sourceId: string) {

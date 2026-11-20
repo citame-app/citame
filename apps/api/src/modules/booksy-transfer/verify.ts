@@ -20,7 +20,7 @@ import {
   fingerprint,
   planBooksyTransfer,
   sourceUuid,
-  targetFingerprint,
+  matchesBooksyTarget,
 } from "./plan";
 import type { BooksyArchiveManifest } from "./stage";
 import { verifyArtifacts } from "./vault";
@@ -28,9 +28,21 @@ import { verifyArtifacts } from "./vault";
 // A verified backup can precede the additive price-review migration.
 export const archivedServiceColumns = {
   ...getTableColumns(appointmentService),
+  priceType: sql<string>`coalesce(to_jsonb(${appointmentService})->>'price_type','fixed')`,
   reviewedPriceCents: sql<
     number | null
   >`(to_jsonb(${appointmentService})->>'reviewed_price_cents')::integer`,
+};
+
+const archivedCatalogColumns = {
+  ...getTableColumns(service),
+  sortOrder: sql<number>`coalesce((to_jsonb(${service})->>'sort_order')::integer,0)`,
+  onlineBooking: sql<boolean>`coalesce((to_jsonb(${service})->>'online_booking')::boolean,true)`,
+  clientInstructions: sql<string | null>`to_jsonb(${service})->>'client_instructions'`,
+  bookingIntervalMinutes: sql<
+    number | null
+  >`(to_jsonb(${service})->>'booking_interval_minutes')::integer`,
+  priceType: sql<string>`coalesce(to_jsonb(${service})->>'price_type','fixed')`,
 };
 
 const archivedStaffColumns = {
@@ -181,6 +193,12 @@ export async function verifyBooksyProjection(
     throw new Error(
       "Native mapping identifiers differ from the expected import document or source hashes",
     );
+  const sourceCategories = new Map(
+    input.services.map((item) => [
+      sourceUuid(input.businessId, "services", item.sourceId),
+      item.category,
+    ]),
+  );
   const counts: Record<string, number> = {};
   for (const [kind, table] of Object.entries(tables)) {
     const own = reviewed.filter((row) => row.kind === kind);
@@ -203,11 +221,21 @@ export async function verifyBooksyProjection(
               .select(archivedStaffColumns)
               .from(staffProfile)
               .where(inArray(staffProfile.id, ids))
-          : await db.select().from(table).where(inArray(table.id, ids));
+          : table === service
+            ? await db.select(archivedCatalogColumns).from(service).where(inArray(service.id, ids))
+            : await db.select().from(table).where(inArray(table.id, ids));
     const found = new Map(rows.map((row) => [row.id, row]));
     for (const expected of own) {
       const row = found.get(expected.target_id);
-      if (!row || targetFingerprint(kind, row) !== expected.target_hash)
+      if (
+        !row ||
+        !matchesBooksyTarget(
+          kind,
+          row,
+          expected.target_hash,
+          sourceCategories.get(expected.target_id),
+        )
+      )
         throw new Error(`Native projection changed: ${kind}`);
     }
   }

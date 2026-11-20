@@ -1,5 +1,6 @@
 import {
   type CheckoutListQuery,
+  type CheckoutPrices,
   type CreateCheckoutInput,
   cashSessionSchema,
   checkoutListSchema,
@@ -49,6 +50,8 @@ export function commerceEndpoints(client: ApiClient) {
       client.get("/admin/commerce/checkouts", checkoutListSchema, { query }),
     create: (input: CreateCheckoutInput, mode: CommerceMode = "admin") =>
       client.post(`${base(mode)}/checkouts`, input, checkoutSchema),
+    finalizePrices: (id: string, input: CheckoutPrices) =>
+      client.put(`/admin/commerce/checkouts/${id}/prices`, input, checkoutSchema),
     get: (id: string, mode: CommerceMode) =>
       client.get(`${base(mode)}/checkouts/${id}`, checkoutSchema),
     byOrder: (order: string) =>

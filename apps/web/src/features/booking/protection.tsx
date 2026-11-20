@@ -12,7 +12,9 @@ export function BookingPolicyConsent({
   totalCents,
   acceptedVersion,
   onAccept,
+  variablePrice = false,
 }: {
+  variablePrice?: boolean;
   policy: BookingPolicy;
   totalCents: number;
   acceptedVersion: number | null;
@@ -20,12 +22,16 @@ export function BookingPolicyConsent({
 }) {
   const { t, locale } = useI18n();
   if (!policy.enabled) return null;
-  const amount = Math.min(
-    totalCents,
-    policy.depositKind === "fixed"
-      ? policy.depositValue
-      : Math.max(1, Math.ceil((totalCents * policy.depositValue) / 10000)),
-  );
+  if (variablePrice && policy.depositKind !== "fixed")
+    return <p role="alert">{t("services.price.fixedDeposit")}</p>;
+  const amount = variablePrice
+    ? policy.depositValue
+    : Math.min(
+        totalCents,
+        policy.depositKind === "fixed"
+          ? policy.depositValue
+          : Math.max(1, Math.ceil((totalCents * policy.depositValue) / 10000)),
+      );
   return (
     <section
       aria-label={t("protection.title")}

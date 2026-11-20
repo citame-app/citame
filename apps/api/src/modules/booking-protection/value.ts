@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   type BookingProtection,
   type CreateAppointmentRequest,
+  needsFinalPrice,
   permissionsFor,
 } from "@sob/contracts";
 import {
@@ -169,7 +170,14 @@ export async function createProtection(
   if (request.promotion && !promotionalSale) throw new Error("Missing reviewed promotion receipt");
   const discountCents =
     promotionalSale?.discountCents ?? discounts.reduce((sum, d) => sum + d.amountCents, 0);
-  const totalCents = promotionalSale?.totalCents ?? subtotalCents - discountCents;
+  let totalCents = promotionalSale?.totalCents ?? subtotalCents - discountCents;
+  const pendingPrices = snapshots.some((s) => needsFinalPrice(s.priceType));
+  const unknownPrice = snapshots.some((s) => s.priceType === "variable");
+  if (unknownPrice && !waived && policy.depositKind !== "fixed")
+    throw new DomainError(
+      "invalid_state",
+      "Variable-price services require a fixed deposit amount instead of a percentage",
+    );
   if (
     !waived &&
     request.protectionAcceptedTotalCents !== (request.promotion ? totalCents : subtotalCents)
@@ -181,13 +189,19 @@ export async function createProtection(
   if (
     !snapshots.length ||
     snapshots.some((s) => s.currency !== "EUR") ||
-    subtotalCents <= 0 ||
+    (subtotalCents <= 0 && !unknownPrice && !snapshots.every((s) => s.priceType === "free")) ||
     totalCents > 999999999
   )
     throw new DomainError(
       "validation_error",
       "Protected bookings need a positive EUR service total",
     );
+  // Unknown final prices reserve only the explicitly accepted fixed deposit. This provisional
+  // amount is never fulfilled as a service sale; the team must set the final price in checkout.
+  const provisionalExtra =
+    unknownPrice && !waived ? Math.max(0, policy.depositValue - totalCents) : 0;
+  const receiptSubtotalCents = subtotalCents + provisionalExtra;
+  totalCents += provisionalExtra;
   const noDeposit = waived || totalCents === 0;
   const depositCents = noDeposit
     ? 0
@@ -197,6 +211,11 @@ export async function createProtection(
           ? policy.depositValue
           : Math.max(1, Math.ceil((totalCents * policy.depositValue) / 10000)),
       );
+  if (unknownPrice && !waived && request.protectionAcceptedDepositCents !== depositCents)
+    throw new DomainError(
+      "invalid_state",
+      "Review and accept the exact fixed deposit for this variable-price service",
+    );
   let sale = promotionalSale;
   if (!sale) {
     const [created] = await tx
@@ -205,27 +224,34 @@ export async function createProtection(
         appointmentId: booking.id,
         clientId: booking.clientId,
         staffId: booking.staffId,
-        subtotalCents,
+        subtotalCents: receiptSubtotalCents,
         discountCents,
         totalCents,
-        status: totalCents === 0 ? "paid" : "open",
+        status: totalCents === 0 && !pendingPrices ? "paid" : "open",
         createdBy: actor?.userId,
         idempotencyKey: `booking-${booking.id}`,
         requestHash: createHash("sha256").update(`booking:${booking.id}`).digest("hex"),
       })
       .returning();
     if (!created) throw new Error("Protected receipt insert failed");
+    let provisionalAssigned = false;
     await tx.insert(checkoutLine).values(
-      snapshots.map((s, index) => ({
-        checkoutId: created.id,
-        kind: "service",
-        serviceId: s.serviceId,
-        description: s.name,
-        quantity: 1,
-        unitAmountCents: s.priceCents,
-        discountCents: discounts[index]?.amountCents ?? 0,
-        membershipPeriodId: discounts[index]?.periodId,
-      })),
+      snapshots.map((s, index) => {
+        const extra = s.priceType === "variable" && !provisionalAssigned ? provisionalExtra : 0;
+        if (s.priceType === "variable") provisionalAssigned = true;
+        return {
+          checkoutId: created.id,
+          kind: "service",
+          serviceId: s.serviceId,
+          description: s.name,
+          quantity: 1,
+          unitAmountCents: s.priceCents + extra,
+          pricePending: needsFinalPrice(s.priceType),
+          minimumUnitAmountCents: s.priceType === "from" ? s.priceCents : 0,
+          discountCents: discounts[index]?.amountCents ?? 0,
+          membershipPeriodId: discounts[index]?.periodId,
+        };
+      }),
     );
     sale = created;
   }

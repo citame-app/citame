@@ -1,0 +1,109 @@
+gate: checking http://localhost:4280/book (place); this takes a few minutes on a CPU Chrome
+gate: 33 FAIL open
+  FAIL no-visual        main#main > div.page-container.mx-auto "Elige tus servicios"  [1440, 390]
+       no picture, effect or mock in this section; a feature section needs a visual
+       fix: give the section a visual: a UI fragment on a ground, real icons, or a photograph that fits
+  FAIL cta              main#main > div.page-container.mx-auto  [1440, 390]
+       the hero has no button (the nav's does not count)
+       fix: add the action: a button in the hero, one on every priced item, one in the closing section
+  FAIL copy-headline    h1#step-title "Elige tus servicios"  [1440]
+       "Elige tus servicios" does not name what is sold (reservas de belleza, reservas, belleza, from flags)
+       fix: put the category noun in the h1 (and who it is for, or where), in 2 to 8 words
+  FAIL focus-visible    div.space-y-4:nth-of-type(2) > section.space-y-3:nth-of-type(1) > div.relative > input.pee  [1440]
+       Tab stop 9, input "Coloración (demo)": the focus lands on something you cannot see
+       fix: keep the kit's ring (system.css :focus-visible, 2px in --action, there at once); a control that hides itself shows on focus
+  FAIL focus-visible    div.space-y-4:nth-of-type(2) > section.space-y-3:nth-of-type(2) > div.relative > input.pee  [1440]
+       Tab stop 10, input "Corte y peinado (demo)": the focus lands on something you cannot see
+       fix: keep the kit's ring (system.css :focus-visible, 2px in --action, there at once); a control that hides itself shows on focus
+  FAIL focus-visible    div.space-y-4:nth-of-type(2) > section.space-y-3:nth-of-type(3) > div.relative > input.pee  [1440]
+       Tab stop 11, input "Diseño de cejas (demo)": the focus lands on something you cannot see
+       fix: keep the kit's ring (system.css :focus-visible, 2px in --action, there at once); a control that hides itself shows on focus
+  FAIL moment-none      (the page)  [1440]
+       a place page (--type) deals no moment: every kind carries one, two on a long page (moments.md)
+       fix: deal one (moments.mjs pick --page place --photo) and mount it in its own section
+  FAIL hero-screen      main#main > div.page-container.mx-auto "1Servicios2Profesional3Horario4Confirmac"  [1440]
+       the hero ends at 1117px on a 900px screen, 217px below the fold: it ends at the fold, 1px either way (SR-1)
+       fix: make the hero exactly one screen (height: 100svh, its content fitted inside), never taller or shorter
+  FAIL section-height   main#main > div.page-container.mx-auto "1Servicios2Profesional3Horario4Confirmac"  [1440]
+       the section starts at 65px, 65px below the screen grid (0 x 900px): sections start on whole screens (SR-2)
+       fix: make every section above it exactly one or two screens tall, so this one starts on a whole screen
+  FAIL one-section      main#main > div.page-container.mx-auto "1Servicios2Profesional3Horario4Confirmac"  [1440]
+       a <div> sits directly in <main>: every part of <main> is a <section> (SR-4)
+       fix: put every block of <main> in a <section>, and give a band its own section instead of a ground inside one
+  FAIL one-heading      div.mt-6.grid > aside.booking-summary.fixed > div.mx-auto.max-w-3xl > h2.mb-4.hidden "Tu r  [1440]
+       the hero holds an h2 (1): its heading is the h1, and an h2 opens the next section (SR-5)
+       fix: give each section one h2, first in its .wrap, and the hero only its h1
+  FAIL container-edges  main#main > div.page-container.mx-auto "1Servicios2Profesional3Horario4Confirmac"  [1440]
+       the content of section 1 runs 168px from the left and 168px from the right (read from its outermost blocks: no .wrap): the page's container starts at 120px; the margin is 64-120px at 1440px (one container, equal margins,
+       fix: use one container on every section and the nav (.wrap): one margin left and right, 64-120px on a desktop, 16-24px on a phone
+  FAIL container-edges  div.relative > label.booking-choice.relative > span.min-w-0.flex-1 > span.block.font-mediu  [1440]
+       6 text blocks start on a left line at x 177, 57px from the container's left: text starts on the container's left, or on one split line (x 630, 732, 834) (also "Corte y peinado (demo)", "Diseño de cejas (demo)", "Manicura
+       fix: start the text on the container's left, or on the one split line every split shares
+  FAIL container-edges  div.space-y-4 > section.space-y-3:nth-of-type(1) > div.relative > label.booking-choice.rel  [1440]
+       6 text blocks start on a left line at x 141, 21px from the container's left: text starts on the container's left, or on one split line (x 630, 732, 834) (also "Corte y peinado (demo)45minEUR 3", "Diseño de cejas (demo)20
+       fix: start the text on the container's left, or on the one split line every split shares
+  FAIL split-pair       main#main > div.page-container.mx-auto > div.booking-frame.pt-6 > div.mt-6.grid "Elige tus  [1440]
+       the two columns of the split start 16px apart at the top: a split's columns are top-aligned, 8px either way (SR-8)
+       fix: top-align both columns of the split (align-items: start)
+  FAIL edge-left        div.page-container.mx-auto section.booking-content.min-w-0 "Elige tus serviciosSelecciona   [1440]
+       starts at x 168; the lines are 120 and the column starts
+       fix: start it on the .wrap left line
+  FAIL edge-right       div.page-container.mx-auto section.booking-content.min-w-0 "Elige tus serviciosSelecciona   [1440]
+       ends at x 888; the right line is 1320
+       fix: end it on the .wrap right line
+  FAIL edge-left        header.mb-6 h1.text-title "Elige tus servicios"  [1440]
+       starts at x 168; the lines are 120 and the column starts
+       fix: start it on the .wrap left line
+  FAIL edge-left        header.mb-6 p.mt-2.max-w-prose "Selecciona uno o más. Puedes com"  [1440]
+       starts at x 168; the lines are 120 and the column starts
+       fix: start it on the .wrap left line
+  FAIL edge-left        div.page-container.mx-auto div "Buscar servicios"  [1440]
+       starts at x 168; the lines are 120 and the column starts
+       fix: start it on the .wrap left line
+  FAIL edge-left        div.page-container.mx-auto div "CategoríaTodas las categorías"  [1440]
+       starts at x 534; the lines are 120 and the column starts
+       fix: start it on the .wrap left line
+  FAIL edge-left        div.page-container.mx-auto aside.booking-summary.fixed "Tu reservaElige al menos un serv"  [1440]
+       starts at x 920; the lines are 120 and the column starts
+       fix: start it on the .wrap left line
+  FAIL edge-left        div.page-container.mx-auto h2.mb-4.hidden "Tu reserva"  [1440]
+       starts at x 945; the lines are 120 and the column starts
+       fix: start it on the .wrap left line
+  FAIL edge-left        div.page-container.mx-auto p.pb-3.text-muted "Elige al menos un servicio para "  [1440]
+       starts at x 945; the lines are 120 and the column starts
+       fix: start it on the .wrap left line
+  FAIL edge-left        div.page-container.mx-auto p.flex.items-center "0 servicios"  [1440]
+       starts at x 945; the lines are 120 and the column starts
+       fix: start it on the .wrap left line
+  FAIL edge-left        div.page-container.mx-auto p.mt-1.flex "Total—"  [1440]
+       starts at x 945; the lines are 120 and the column starts
+       fix: start it on the .wrap left line
+  FAIL lines            page  [1440]
+       headings and leads start on 2 lines (x 168, 945); the page has 120 and one split line
+       fix: put the block on the .wrap lines or the grid columns
+  FAIL spill            div.page-container.mx-auto ol.flex.items-center "1Servicios2Profesional3Horario4C"  [390]
+       x 16 to 374, the page runs 24 to 366
+       fix: keep it inside the .wrap; nothing past the right edge
+  FAIL spill            div.page-container.mx-auto section.booking-content.min-w-0 "Elige tus serviciosSelecciona   [390]
+       x 16 to 374, the page runs 24 to 366
+       fix: keep it inside the .wrap; nothing past the right edge
+  FAIL spill            header.mb-6 h1.text-title "Elige tus servicios"  [390]
+       x 16 to 374, the page runs 24 to 366
+       fix: keep it inside the .wrap; nothing past the right edge
+  FAIL spill            header.mb-6 p.mt-2.max-w-prose "Selecciona uno o más. Puedes com"  [390]
+       x 16 to 374, the page runs 24 to 366
+       fix: keep it inside the .wrap; nothing past the right edge
+  FAIL spill            div.page-container.mx-auto div "Buscar servicios"  [390]
+       x 16 to 374, the page runs 24 to 366
+       fix: keep it inside the .wrap; nothing past the right edge
+  FAIL spill            div.page-container.mx-auto div "CategoríaTodas las categorías"  [390]
+       x 16 to 374, the page runs 24 to 366
+       fix: keep it inside the .wrap; nothing past the right edge
+  WAIVED focus-visible input#locale-es-AR: The native transparent radio is stretched over its visible label. Playwright verifies keyboard focus draws a solid 3px outline on both associated labels in light and dark themes; the checker evaluates the transparent input alone.
+  WAIVED section-height footer.closing.site-footer "Sisters of BeautyPeluquería, uñas y ceja": This existing booking application shares a compact navigation and illustration-credit footer across public, booking and account routes. Stretching it to a full viewport adds empty space without helping salon customers.
+  WAIVED one-section footer.closing.site-footer "Sisters of BeautyPeluquería, uñas y ceja": The shared application footer intentionally follows the closing brand section as a compact footer, rather than consuming another full marketing screen. Its links and provenance remain visible and accessible.
+  waiver ignored (matches no open finding): text-only "section.salon-close.editorial-section"
+  waiver ignored (matches no open finding): hero-lines "section.hero h1"
+  6 WARN (not blocking), first: copy-buttons aside.booking-summary.fixed > div.mx-aut; nav-family header.nav.site-header; nav-labels header.nav.site-header > a.sr-only.round; share-meta head; section-height main#main
+A FAIL you judge false: add {"check": "<id>", "target": "<its where, enough to name that one finding>", "reason": "<why, 12+ characters>"} to .taste-skill/waivers.json (one finding each, 5 at most, never for kit-edited or checker-gaming); it goes in your report. Never edit the kit's files or hide the page from the checker.
+GATE: FAIL 33 (round 2 of 3)

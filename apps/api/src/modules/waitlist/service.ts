@@ -25,7 +25,7 @@ import { DomainError } from "../../errors";
 import { lockCalendars, lockScheduling, type Tx } from "../../tx";
 import { totalBlockMinutes } from "../availability/compute";
 import { assertClientCanBook } from "../clients/controls";
-import { getBookableServices } from "../services/service";
+import { assertOnlineServices, getBookableServices } from "../services/service";
 import { assertOnlineBookingEnabled, getSalonSettings } from "../settings/service";
 import { staffQualifiedFor } from "../staff/service";
 
@@ -355,6 +355,7 @@ export async function joinWaitlist(
         "validation_error",
         "The waitlist window must fit the salon booking horizon",
       );
+    await assertOnlineServices(tx, input.serviceIds, p.userId);
     const services = await getBookableServices(tx, input.serviceIds);
     if (requestedDuration !== undefined && totalBlockMinutes(services) !== requestedDuration)
       throw new DomainError(

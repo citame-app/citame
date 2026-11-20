@@ -40,7 +40,7 @@ export const combinationsEs = {
     "El límite del salón es de 100 combinaciones, incluidas las archivadas. Edita una existente para reutilizarla.",
   "combinations.title": "Combinaciones de tratamientos",
   "combinations.lead":
-    "Prepara selecciones ordenadas de tratamientos y extras existentes. El precio, la duración y la disponibilidad siguen el catálogo actual; cada cita utiliza un profesional habilitado.",
+    "Prepara selecciones ordenadas de tratamientos y extras existentes. El precio, la duración y la disponibilidad siguen el catálogo actual; cada tratamiento utiliza un profesional habilitado.",
   "combinations.chooseHelp":
     "Elige una combinación para sustituir tu selección. Puedes ajustar los tratamientos después. El precio suma las tarifas actuales.",
   "combinations.choose": "Elegir combinación: {name}",

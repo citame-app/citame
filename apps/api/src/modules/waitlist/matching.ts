@@ -20,7 +20,7 @@ import { serviceWorkWindows } from "../availability/work-windows";
 import { getBookingPolicy } from "../booking-protection/policy";
 import { assertClientCanBook } from "../clients/controls";
 import { reserveResources } from "../resources/reservations";
-import { getBookableServices, type ServiceRow } from "../services/service";
+import { assertOnlineServices, getBookableServices, type ServiceRow } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { staffQualifiedFor } from "../staff/service";
 import { type EntryRow, getWaitlistPolicy, localToday, selectionHash } from "./service";
@@ -35,6 +35,9 @@ export function offerServices(services: ServiceRow[]) {
     bufferMinutes: s.bufferMinutes,
     ...(s.processing ? { processing: s.processing } : {}),
     priceCents: s.priceCents,
+    ...(s.priceType ? { priceType: s.priceType } : {}),
+    ...(s.bookingIntervalMinutes ? { bookingIntervalMinutes: s.bookingIntervalMinutes } : {}),
+    ...(s.clientInstructions ? { clientInstructions: s.clientInstructions } : {}),
     currency: s.currency,
   }));
 }
@@ -120,11 +123,12 @@ export async function expireWaitlistOffers(db: Connection, now: Date, limit = 10
         .where(eq(staffProfile.id, offer.staffId));
       let validSelection = true;
       try {
+        await assertOnlineServices(tx, entry.serviceIds, entry.createdBy ?? undefined);
         await getBookableServices(tx, entry.serviceIds);
       } catch (error) {
         if (
           !(error instanceof DomainError) ||
-          !["not_found", "validation_error"].includes(error.code)
+          !["not_found", "validation_error", "forbidden"].includes(error.code)
         )
           throw error;
         validSelection = false;
@@ -222,11 +226,12 @@ async function matchEntry(db: Connection, id: string, now: Date): Promise<boolea
       .for("share");
     let services: ServiceRow[];
     try {
+      await assertOnlineServices(tx, entry.serviceIds, entry.createdBy ?? undefined);
       services = await getBookableServices(tx, entry.serviceIds);
     } catch (error) {
       if (
         !(error instanceof DomainError) ||
-        !["not_found", "validation_error"].includes(error.code)
+        !["not_found", "validation_error", "forbidden"].includes(error.code)
       )
         throw error;
       await finishEntry(tx, entry, "unavailable", now);

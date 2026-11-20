@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { transferFixture } from "./fixtures";
 import {
   fingerprint,
+  matchesBooksyTarget,
   planBooksyTransfer,
   sourceUuid,
   summarizeTransferIssues,
@@ -46,6 +47,27 @@ test("old service receipts survive the migration and still detect a change to un
   expect(targetFingerprint("appointmentServices", { ...original, sourceUnpriced: true })).not.toBe(
     fingerprint(original),
   );
+});
+
+test("catalogue migration preserves a legacy receipt without masking later catalogue edits", () => {
+  const original = { id: "catalogue-service", category: " Facials  ", priceCents: 2500 };
+  const migrated = {
+    ...original,
+    category: "Facials",
+    sortOrder: 0,
+    onlineBooking: true,
+    clientInstructions: null,
+    bookingIntervalMinutes: null,
+    priceType: "fixed",
+  };
+  const expected = fingerprint(original);
+  expect(matchesBooksyTarget("services", migrated, expected, original.category)).toBe(true);
+  expect(
+    matchesBooksyTarget("services", { ...migrated, category: "Nails" }, expected, original.category),
+  ).toBe(false);
+  expect(
+    matchesBooksyTarget("services", { ...migrated, sortOrder: 1 }, expected, original.category),
+  ).toBe(false);
 });
 
 test("old appointment receipts still verify and detect unexpected imported group membership", () => {

@@ -5,9 +5,10 @@ import { PageContainer } from "~/components/pages";
 import { buttonClasses } from "~/components/ui/button";
 import { ChevronRightIcon, ClockIcon } from "~/components/ui/icons";
 import { Skeleton } from "~/components/ui/states";
+import { priceLabel } from "~/features/booking/service-price";
 import { createTranslator } from "~/i18n";
 import { useI18n } from "~/i18n/react";
-import { formatDuration, formatMoney } from "~/lib/format";
+import { formatDuration } from "~/lib/format";
 import { salonQuery, servicesQuery, staffQuery } from "~/lib/queries";
 import { pageMeta } from "~/lib/seo";
 
@@ -146,7 +147,7 @@ function Home() {
                       </span>
                     </span>
                     <span className="service-menu-price">
-                      {formatMoney(service.priceCents, service.currency, locale)}
+                      {priceLabel(t, locale, service)}
                       <span className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-accent-text">
                         {t("home.services.book")}
                         <ChevronRightIcon width={16} height={16} />

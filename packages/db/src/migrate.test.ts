@@ -1,9 +1,18 @@
 import { expect, test } from "bun:test";
+import { cp, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sql } from "drizzle-orm";
+import { migrate } from "drizzle-orm/bun-sql/migrator";
+import originLedger from "../drizzle/legacy/e5061d7/ledger.json";
 import { createDb, DEFAULT_DATABASE_URL, NO_DB_TIMEOUTS } from "./client";
-import { migrationsFolder, runMigrations, verifyMigrationLedger } from "./migrate";
+import {
+  getReleaseMigrationLedger,
+  migrationsFolder,
+  runMigrations,
+  verifyMigrationLedger,
+} from "./migrate";
 
 test("database scripts check the actual database selected by PGDATABASE", async () => {
   const url = new URL(process.env.DATABASE_URL ?? DEFAULT_DATABASE_URL);
@@ -171,3 +180,82 @@ test("independent migrators wait before reading the journal and apply each migra
     }
   }
 }, 25_000);
+
+for (const prefix of ["local", "upstream-first", "upstream-full"] as const) {
+  test(`merges the ${prefix} catalogue migration history without losing rows`, async () => {
+    const url = new URL(process.env.DATABASE_URL ?? DEFAULT_DATABASE_URL);
+    const database = `sob_test_merge_${Bun.randomUUIDv7().replaceAll("-", "")}`;
+    const admin = createDb(url.href, NO_DB_TIMEOUTS);
+    const folder = await mkdtemp(join(tmpdir(), "citame-merge-migration-"));
+    const legacyFolder = join(migrationsFolder, "legacy", "e5061d7");
+    const legacyNames = [
+      "0041_bored_yellowjacket",
+      "0042_eager_patch",
+      "0043_flat_mongu",
+      "0044_fancy_adam_warlock",
+    ];
+    try {
+      const journal = await Bun.file(join(migrationsFolder, "meta", "_journal.json")).json();
+      journal.entries = journal.entries.slice(0, prefix === "local" ? 77 : 41);
+      for (const row of journal.entries)
+        await cp(join(migrationsFolder, row.tag + ".sql"), join(folder, row.tag + ".sql"));
+      if (prefix !== "local") {
+        const upstream = originLedger.slice(0, prefix === "upstream-first" ? 1 : 4);
+        for (const [index, entry] of upstream.entries()) {
+          const tag = legacyNames[index]!;
+          journal.entries.push({
+            idx: 41 + index,
+            version: "7",
+            when: entry.legacyTimestamp,
+            tag,
+            breakpoints: true,
+          });
+          await cp(join(legacyFolder, tag + ".sql"), join(folder, tag + ".sql"));
+        }
+      }
+      await mkdir(join(folder, "meta"));
+      await Bun.write(join(folder, "meta", "_journal.json"), JSON.stringify(journal));
+      await admin.db.execute(sql`create database ${sql.identifier(database)}`);
+      url.pathname = "/" + database;
+      const target = createDb(url.href, NO_DB_TIMEOUTS);
+      try {
+        await migrate(target.db, { migrationsFolder: folder });
+        const id = Bun.randomUUIDv7();
+        const longCategory = "Brow treatments " + "A".repeat(80);
+        const category = prefix === "local" ? `  ${longCategory} ` : "Brow treatments";
+        await target.db.execute(sql`
+          insert into service(id, name, category, duration_minutes, price_cents)
+          values (${id}, 'Preserved synthetic service', ${category}, 30, 2500)
+        `);
+        if (prefix === "upstream-full") {
+          await target.db.execute(sql`
+            update service set booking_interval_minutes=20, sort_order=4, price_type='from'
+            where id=${id}
+          `);
+        }
+        await runMigrations(target.db);
+        expect(await verifyMigrationLedger(target.db)).toEqual(getReleaseMigrationLedger());
+        await runMigrations(target.db);
+        const [preserved] = await target.db.execute(sql`
+          select name, category, price_cents, price_type, sort_order, booking_interval_minutes
+          from service where id = ${id}
+        `);
+        expect({ ...preserved }).toEqual({
+          name: "Preserved synthetic service",
+          category: category.trim(),
+          price_cents: 2500,
+          price_type: prefix === "upstream-full" ? "from" : "fixed",
+          sort_order: prefix === "upstream-full" ? 4 : 0,
+          booking_interval_minutes: prefix === "upstream-full" ? 20 : null,
+        });
+        await target.db.execute(sql`update service set category = ${longCategory} where id = ${id}`);
+      } finally {
+        await target.close();
+      }
+    } finally {
+      await admin.db.execute(sql`drop database if exists ${sql.identifier(database)}`);
+      await admin.close();
+      await rm(folder, { recursive: true, force: true });
+    }
+  }, 30_000);
+}

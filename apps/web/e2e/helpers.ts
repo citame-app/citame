@@ -72,7 +72,7 @@ export async function expectNoSeriousA11yViolations(page: Page, context = "") {
     (v) =>
       `${v.id} (${v.impact}): ${v.help}\n  ${v.nodes
         .slice(0, 3)
-        .map((n) => n.target.join(" "))
+        .map((n) => `${n.target.join(" ")} ${n.html} ${n.failureSummary ?? ""}`)
         .join("\n  ")}`,
   );
   if (blocking.length)

@@ -29,6 +29,14 @@ const promotion = promotionSchema.parse({
   createdAt: "2026-03-02T12:00:00Z",
 });
 const options = { locale: "en" as const, timeZone: "UTC", now: new Date("2026-03-02T12:00:00Z") };
+test("a variable-price service creative never advertises a free treatment", () => {
+  const model = creativeModel(
+    { kind: "service", service: { ...service, priceType: "variable", priceCents: 0 } },
+    options,
+  );
+  expect(model.emphasis).toContain("Price varies");
+  expect(model.caption).not.toContain("€0");
+});
 test("promotion creative keeps every qualifying restriction and advertises a bounded maximum rather than a guaranteed saving", () => {
   const model = creativeModel({ kind: "promotion", promotion, service }, options);
   expect(model.emphasis).toContain("12.5%");

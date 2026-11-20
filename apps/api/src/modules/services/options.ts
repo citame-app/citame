@@ -49,6 +49,7 @@ export function publicService(row: CatalogRow, catalog?: ServiceCatalog): Servic
     description: row.description,
     category: row.category,
     color: row.color,
+    ...(row.clientInstructions ? { clientInstructions: row.clientInstructions } : {}),
     durationMinutes: row.durationMinutes,
     bufferMinutes: row.bufferMinutes,
     ...(row.processingStartMinutes !== null && row.processingMinutes !== null
@@ -60,11 +61,22 @@ export function publicService(row: CatalogRow, catalog?: ServiceCatalog): Servic
         }
       : {}),
     priceCents: row.priceCents,
+    ...(row.priceType !== "fixed" ? { priceType: row.priceType } : {}),
+    ...(row.bookingIntervalMinutes !== null
+      ? { bookingIntervalMinutes: row.bookingIntervalMinutes }
+      : {}),
     currency: row.currency,
     ...(catalog ? { catalog } : {}),
   };
   const quoteHash = createHash("sha256").update(JSON.stringify(fields)).digest("hex");
-  return { ...fields, quoteHash };
+  return {
+    ...fields,
+    quoteHash,
+    category: row.category,
+    sortOrder: row.sortOrder,
+    onlineBooking: row.onlineBooking,
+    clientInstructions: row.clientInstructions,
+  };
 }
 
 /** Variant roots must be active ordinary services. Add-ons never depend on other add-ons. */
@@ -90,6 +102,8 @@ export async function catalogTargets(tx: Tx, input: ServiceCatalogCreate) {
 }
 /** Preserve request order: each extra follows its eligible base; families are mutually exclusive. */
 export function assertCatalogSelection(rows: Service[]) {
+  if (new Set(rows.map((row) => row.currency)).size > 1)
+    throw new DomainError("validation_error", "A visit must use one currency");
   const families = new Set<string>();
   let base: Service | undefined;
   for (const row of rows) {

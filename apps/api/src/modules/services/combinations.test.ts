@@ -33,6 +33,15 @@ const input = () => ({
   active: true,
   idempotencyKey: crypto.randomUUID(),
 });
+test("a combination can hand off to another qualified professional", async () => {
+  await t.db.delete(serviceStaff).where(eq(serviceStaff.staffId, f.anaId));
+  await t.db.insert(serviceStaff).values({ serviceId: f.colorId, staffId: f.anaId });
+  const result = await call("/admin/services/combinations", "POST", input());
+  expect(result.status).toBe(201);
+  expect(await (await call("/services/combinations")).json()).toMatchObject({
+    combinations: [{ bookable: true }],
+  });
+});
 test("curated combinations keep ordered service IDs and current prices without changing appointment terms", async () => {
   const created = await call("/admin/services/combinations", "POST", input());
   expect(created.status, await created.clone().text()).toBe(201);

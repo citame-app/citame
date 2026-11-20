@@ -30,13 +30,20 @@ export function printableReceipt(
     ),
     text("p", t(`commerce.status.${sale.status}`)),
   );
+  if (sale.lines.some((line) => line.pricePending))
+    main.append(text("p", t("services.price.pending")));
   const table = doc.createElement("table");
   table.style.width = "100%";
   for (const line of sale.lines) {
     const row = doc.createElement("tr");
     row.append(
       text("td", `${line.description} × ${line.quantity}`),
-      text("td", formatMoney(line.quantity * line.unitAmountCents, sale.currency, locale)),
+      text(
+        "td",
+        line.pricePending
+          ? t("services.price.variable")
+          : formatMoney(line.quantity * line.unitAmountCents, sale.currency, locale),
+      ),
     );
     table.append(row);
   }

@@ -17,7 +17,11 @@ export async function findAvailability(
   db: Database | Tx,
   query: AvailabilityQuery,
   now: Date,
-  options: { excludeAppointmentId?: string; services?: TimedService[] } = {},
+  options: {
+    excludeAppointmentId?: string;
+    services?: TimedService[];
+    granularityMinutes?: number;
+  } = {},
 ): Promise<AvailabilityResponse> {
   const settings = await getSalonSettings(db);
   const services = options.services ?? (await getBookableServices(db, query.serviceIds));
@@ -63,7 +67,10 @@ export async function findAvailability(
   const computed = computeAvailability({
     date: query.date,
     timeZone: settings.timezone,
-    granularityMinutes: settings.slotGranularityMinutes,
+    granularityMinutes:
+      options.granularityMinutes ??
+      services[0]?.bookingIntervalMinutes ??
+      settings.slotGranularityMinutes,
     minNoticeMinutes: settings.minNoticeMinutes,
     maxDaysAhead: settings.maxDaysAhead,
     now,

@@ -58,6 +58,7 @@ export const checkout = pgTable(
     staffId: uuid().references(() => staffProfile.id),
     currency: text().notNull().default("EUR"),
     status: checkoutStatus().notNull().default("open"),
+    pricingVersion: integer().notNull().default(1),
     subtotalCents: integer().notNull(),
     discountCents: integer().notNull().default(0),
     tipCents: integer().notNull().default(0),
@@ -103,6 +104,8 @@ export const checkoutLine = pgTable(
     description: text().notNull(),
     quantity: integer().notNull(),
     unitAmountCents: integer().notNull(),
+    pricePending: boolean().notNull().default(false),
+    minimumUnitAmountCents: integer().notNull().default(0),
     unitCostCents: integer(),
     discountCents: integer().notNull().default(0),
     taxCents: integer().notNull().default(0),
@@ -111,6 +114,10 @@ export const checkoutLine = pgTable(
   },
   (t) => [
     index("checkout_line_checkout_idx").on(t.checkoutId),
+    check(
+      "checkout_line_price_minimum",
+      sql`${t.minimumUnitAmountCents} between 0 and ${t.unitAmountCents} and (not ${t.pricePending} or ${t.kind}='service')`,
+    ),
     check(
       "checkout_line_valid",
       sql`${t.quantity} between 1 and 1000 and ${t.unitAmountCents} between 0 and 999999999 and ${t.taxBasisPoints} between 0 and 10000`,

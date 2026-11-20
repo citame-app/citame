@@ -10,7 +10,7 @@ export function eligibleAddon(addon: Service, base: Service) {
   );
 }
 type Segment = { base: Service; extras: Service[] };
-function segments(ids: string[], catalog: Service[]): Segment[] {
+export function catalogSegments(ids: string[], catalog: Service[]): Segment[] {
   const result: Segment[] = [];
   const families = new Set<string>();
   const seen = new Set<string>();
@@ -34,7 +34,7 @@ function segments(ids: string[], catalog: Service[]): Segment[] {
 const flatten = (items: Segment[]) =>
   items.flatMap((s) => [s.base.id, ...s.extras.map((s) => s.id)]);
 export function normalizeCatalogSelection(ids: string[], catalog: Service[], max = 24) {
-  return flatten(segments(ids, catalog)).slice(0, max);
+  return flatten(catalogSegments(ids, catalog)).slice(0, max);
 }
 export function toggleCatalogSelection(
   ids: string[],
@@ -43,7 +43,7 @@ export function toggleCatalogSelection(
   baseId?: string,
   max = 24,
 ) {
-  const selected = segments(ids, catalog);
+  const selected = catalogSegments(ids, catalog);
   const original = flatten(selected);
   const row = catalog.find((s) => s.id === id);
   if (!row) return original;
@@ -71,6 +71,6 @@ export function toggleCatalogSelection(
 
 export function catalogAddonOwners(ids: string[], catalog: Service[]) {
   return new Map(
-    segments(ids, catalog).flatMap((s) => s.extras.map((e) => [e.id, s.base.id] as const)),
+    catalogSegments(ids, catalog).flatMap((s) => s.extras.map((e) => [e.id, s.base.id] as const)),
   );
 }

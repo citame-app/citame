@@ -4,10 +4,11 @@ import { Button } from "~/components/ui/button";
 import { TextField } from "~/components/ui/field";
 import { SelectField, TextAreaField } from "~/components/ui/select-field";
 import { ErrorState, Skeleton } from "~/components/ui/states";
+import { priceLabel } from "~/features/booking/service-price";
 import { useI18n } from "~/i18n/react";
 import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
-import { formatDuration, formatMoney } from "~/lib/format";
+import { formatDuration } from "~/lib/format";
 import { servicesQuery, staffQuery } from "~/lib/queries";
 import { CreativeOverflowError } from "./creative-layout";
 import {
@@ -285,7 +286,7 @@ export function SocialCreative({
           {kind !== "review" && service && (
             <p className="text-sm text-muted">
               {t("social.serviceDetails", {
-                price: formatMoney(service.priceCents, service.currency, locale),
+                price: priceLabel(t, locale, service),
                 duration: formatDuration(service.durationMinutes, locale),
               })}
             </p>

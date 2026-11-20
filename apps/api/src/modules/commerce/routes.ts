@@ -4,6 +4,7 @@ import {
   cashCloseSchema,
   cashOpenSchema,
   checkoutListQuerySchema,
+  checkoutPricesSchema,
   createCheckoutSchema,
   idSchema,
   importedPartialPaymentSchema,
@@ -25,6 +26,7 @@ import { errorBody, parseOrThrow, readJson } from "../../http";
 import { recurringSettings } from "../../payments/recurring-settings";
 import { InvalidBankNotificationError, RedsysGateway } from "../../payments/redsys";
 import { checkoutRewardRoutes } from "../rewards/routes";
+import { finalizeCheckoutPrices } from "./prices";
 import {
   confirmImportedPartialPayment,
   confirmImportedSettlement,
@@ -187,6 +189,17 @@ export function commerceAdminRoutes(deps: AppDeps) {
     )
     .post("/checkouts/:id/void", async (c) =>
       c.json(await voidCheckout(deps.db, checkoutId(c.req.param("id")), c.get("principal"))),
+    )
+    .put("/checkouts/:id/prices", async (c) =>
+      c.json(
+        await finalizeCheckoutPrices(
+          deps.db,
+          checkoutId(c.req.param("id")),
+          parseOrThrow(checkoutPricesSchema, await readJson(c)),
+          c.get("principal"),
+          deps.now?.() ?? new Date(),
+        ),
+      ),
     )
     .post("/checkouts/:id/payments", async (c) =>
       c.json(

@@ -67,6 +67,8 @@ export async function acceptWaitlist(
         "Cancel this old waitlist entry and review a new request on the surviving profile",
       );
     const booking = authorizeAppointmentCreate(p, {
+      priceTermsAccepted: input.priceTermsAccepted,
+      protectionAcceptedDepositCents: input.protectionAcceptedDepositCents,
       intakeResponses: input.intakeResponses,
       intakeSubmissionIds: input.intakeSubmissionIds,
       intakeReviewHash: input.intakeReviewHash,

@@ -1,3 +1,4 @@
+import type { BooksyTransfer } from "@sob/contracts";
 import {
   appointment,
   appointmentContext,
@@ -19,6 +20,8 @@ import {
   planBooksyTransfer,
   sourceUuid,
   type TransferPlan,
+  matchesBooksyTarget,
+  normalizedBooksyCategory,
   targetFingerprint,
 } from "./plan";
 import { verifyBooksyAddonLinks } from "./verify";
@@ -78,7 +81,17 @@ export async function applyBooksyRehearsal(db: Database, raw: unknown, reviewHas
           throw new Error(
             `Source changed for ${kind}:${sourceId}; retain the old run and build a fresh rehearsal for the new snapshot`,
           );
-        if (!rows[0] || targetFingerprint(kind, rows[0]) !== previous[0].target_hash)
+        if (
+          !rows[0] ||
+          !matchesBooksyTarget(
+            kind,
+            rows[0],
+            previous[0].target_hash,
+            kind === "services"
+              ? (source as BooksyTransfer["services"][number]).category
+              : undefined,
+          )
+        )
           throw new Error(`Local target changed for ${kind}:${sourceId}; no data was overwritten`);
         return;
       }
@@ -115,7 +128,7 @@ export async function applyBooksyRehearsal(db: Database, raw: unknown, reviewHas
           name: row.name,
           catalogKind: row.catalogKind ?? "service",
           description: row.description,
-          category: row.category,
+          category: normalizedBooksyCategory(row.category),
           color: row.color,
           durationMinutes: row.durationMinutes,
           bufferMinutes: row.bufferMinutes,

@@ -49,6 +49,7 @@ import { Route as PaymentsOrderRouteImport } from './routes/payments.$order'
 import { Route as AdminClientsIndexRouteImport } from './routes/admin.clients.index'
 import { Route as AdminClientsIdRouteImport } from './routes/admin.clients.$id'
 import { Route as BookConfirmedAppointmentIdRouteImport } from './routes/book.confirmed.$appointmentId'
+import { Route as BookVisitConfirmedVisitIdRouteImport } from './routes/book.visit-confirmed.$visitId'
 import { Route as AccountAppointmentsIdRescheduleRouteImport } from './routes/account.appointments.$id.reschedule'
 
 const IndexRoute = IndexRouteImport.update({
@@ -252,6 +253,12 @@ const BookConfirmedAppointmentIdRoute =
     path: '/confirmed/$appointmentId',
     getParentRoute: () => BookRoute,
   } as any)
+const BookVisitConfirmedVisitIdRoute =
+  BookVisitConfirmedVisitIdRouteImport.update({
+    id: '/visit-confirmed/$visitId',
+    path: '/visit-confirmed/$visitId',
+    getParentRoute: () => BookRoute,
+  } as any)
 const AccountAppointmentsIdRescheduleRoute =
   AccountAppointmentsIdRescheduleRouteImport.update({
     id: '/appointments/$id/reschedule',
@@ -299,6 +306,7 @@ export interface FileRoutesByFullPath {
   '/book/': typeof BookIndexRoute
   '/admin/clients/$id': typeof AdminClientsIdRoute
   '/book/confirmed/$appointmentId': typeof BookConfirmedAppointmentIdRoute
+  '/book/visit-confirmed/$visitId': typeof BookVisitConfirmedVisitIdRoute
   '/admin/clients/': typeof AdminClientsIndexRoute
   '/account/appointments/$id/reschedule': typeof AccountAppointmentsIdRescheduleRoute
 }
@@ -339,6 +347,7 @@ export interface FileRoutesByTo {
   '/book': typeof BookIndexRoute
   '/admin/clients/$id': typeof AdminClientsIdRoute
   '/book/confirmed/$appointmentId': typeof BookConfirmedAppointmentIdRoute
+  '/book/visit-confirmed/$visitId': typeof BookVisitConfirmedVisitIdRoute
   '/admin/clients': typeof AdminClientsIndexRoute
   '/account/appointments/$id/reschedule': typeof AccountAppointmentsIdRescheduleRoute
 }
@@ -383,6 +392,7 @@ export interface FileRoutesById {
   '/book/': typeof BookIndexRoute
   '/admin/clients/$id': typeof AdminClientsIdRoute
   '/book/confirmed/$appointmentId': typeof BookConfirmedAppointmentIdRoute
+  '/book/visit-confirmed/$visitId': typeof BookVisitConfirmedVisitIdRoute
   '/admin/clients/': typeof AdminClientsIndexRoute
   '/account/appointments/$id/reschedule': typeof AccountAppointmentsIdRescheduleRoute
 }
@@ -428,6 +438,7 @@ export interface FileRouteTypes {
     | '/book/'
     | '/admin/clients/$id'
     | '/book/confirmed/$appointmentId'
+    | '/book/visit-confirmed/$visitId'
     | '/admin/clients/'
     | '/account/appointments/$id/reschedule'
   fileRoutesByTo: FileRoutesByTo
@@ -468,6 +479,7 @@ export interface FileRouteTypes {
     | '/book'
     | '/admin/clients/$id'
     | '/book/confirmed/$appointmentId'
+    | '/book/visit-confirmed/$visitId'
     | '/admin/clients'
     | '/account/appointments/$id/reschedule'
   id:
@@ -511,6 +523,7 @@ export interface FileRouteTypes {
     | '/book/'
     | '/admin/clients/$id'
     | '/book/confirmed/$appointmentId'
+    | '/book/visit-confirmed/$visitId'
     | '/admin/clients/'
     | '/account/appointments/$id/reschedule'
   fileRoutesById: FileRoutesById
@@ -816,6 +829,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof BookConfirmedAppointmentIdRouteImport
       parentRoute: typeof BookRoute
     }
+    '/book/visit-confirmed/$visitId': {
+      id: '/book/visit-confirmed/$visitId'
+      path: '/visit-confirmed/$visitId'
+      fullPath: '/book/visit-confirmed/$visitId'
+      preLoaderRoute: typeof BookVisitConfirmedVisitIdRouteImport
+      parentRoute: typeof BookRoute
+    }
     '/account/appointments/$id/reschedule': {
       id: '/account/appointments/$id/reschedule'
       path: '/appointments/$id/reschedule'
@@ -889,6 +909,7 @@ interface BookRouteChildren {
   BookTimeRoute: typeof BookTimeRoute
   BookIndexRoute: typeof BookIndexRoute
   BookConfirmedAppointmentIdRoute: typeof BookConfirmedAppointmentIdRoute
+  BookVisitConfirmedVisitIdRoute: typeof BookVisitConfirmedVisitIdRoute
 }
 
 const BookRouteChildren: BookRouteChildren = {
@@ -897,6 +918,7 @@ const BookRouteChildren: BookRouteChildren = {
   BookTimeRoute: BookTimeRoute,
   BookIndexRoute: BookIndexRoute,
   BookConfirmedAppointmentIdRoute: BookConfirmedAppointmentIdRoute,
+  BookVisitConfirmedVisitIdRoute: BookVisitConfirmedVisitIdRoute,
 }
 
 const BookRouteWithChildren = BookRoute._addFileChildren(BookRouteChildren)

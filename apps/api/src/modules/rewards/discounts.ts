@@ -123,6 +123,8 @@ export async function rewardPricing(
       .orderBy(asc(checkoutLine.createdAt), asc(checkoutLine.id)));
   if (lines.some((line) => line.kind === "external_balance"))
     throw new DomainError("invalid_state", "A reconciled Booksy balance cannot be discounted");
+  if (lines.some((l) => "pricePending" in l && l.pricePending))
+    throw new DomainError("invalid_state", "Set final service prices before applying promotions");
   let eligible = lines.filter((l) => ordinary(l.kind));
   const extra = new Map<string, number>();
   let promo: typeof promotion.$inferSelect | undefined;

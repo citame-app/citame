@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "license": "MIT",
   "private": true,
-  "packageManager": "bun@1.4.4",
+  "packageManager": "bun@1.4.5",
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -35,8 +35,8 @@
     "esbuild": "0.28.2"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.7",
-    "turbo": "2.11.11",
+    "@biomejs/biome": "2.6.8",
+    "turbo": "2.11.13",
     "typescript": "7.0.2"
   }
 }

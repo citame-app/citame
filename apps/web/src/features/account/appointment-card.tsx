@@ -5,6 +5,7 @@ import { ClockIcon, UserIcon } from "~/components/ui/icons";
 import { AppointmentCheckout } from "~/features/admin/commerce/appointment-checkout";
 import { BookingProtectionNotice } from "~/features/booking/protection";
 import { SeriesVisits } from "~/features/booking/series-visits";
+import { priceLabel, totalPriceLabel } from "~/features/booking/service-price";
 import { useI18n } from "~/i18n/react";
 import { cn } from "~/lib/cn";
 import { formatDateLong, formatMoney, formatTime, localDateOf } from "~/lib/format";
@@ -78,9 +79,7 @@ export function AppointmentCard({
             className="flex justify-between gap-3"
           >
             <span>{service.name}</span>
-            <span className="text-muted">
-              {formatMoney(service.priceCents, service.currency, locale)}
-            </span>
+            <span className="text-muted">{priceLabel(t, locale, service, true)}</span>
           </li>
         ))}
       </ul>
@@ -106,7 +105,9 @@ export function AppointmentCard({
         </span>
         {currency && (
           <span className="font-display text-lg font-semibold">
-            {formatMoney(total, currency, locale)}
+            {appointment.bookingPrice?.finalized
+              ? formatMoney(total, currency, locale)
+              : totalPriceLabel(t, locale, appointment.services, total, currency, true)}
           </span>
         )}
       </div>

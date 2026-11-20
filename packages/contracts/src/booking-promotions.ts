@@ -31,6 +31,7 @@ export type BookingPromotionQuoteRequest = z.infer<typeof bookingPromotionQuoteR
 export type BookingPromotionQuote = z.infer<typeof bookingPromotionQuoteSchema>;
 export const bookingPriceSchema = z
   .object({
+    finalized: z.boolean().optional(),
     subtotalCents: z.number().int().min(0).max(999999999),
     discountCents: z.number().int().min(0).max(999999999),
     totalCents: z.number().int().min(0).max(999999999),

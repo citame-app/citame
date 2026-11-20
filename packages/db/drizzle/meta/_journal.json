@@ -540,6 +540,34 @@
       "when": 1795057784682,
       "tag": "0076_sync_calendar_annotation_badges",
       "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1795131600000,
+      "tag": "0077_catalog_presentation",
+      "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1795131601000,
+      "tag": "0078_grouped_appointment_visits",
+      "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1795131602000,
+      "tag": "0079_service_pricing",
+      "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1795131603000,
+      "tag": "0080_service_booking_interval",
+      "breakpoints": true
     }
   ]
 }

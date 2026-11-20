@@ -20,12 +20,20 @@ export const service = pgTable(
     description: text(),
     category: text(),
     color: text(),
+    sortOrder: integer().notNull().default(0),
+    onlineBooking: boolean().notNull().default(true),
+    clientInstructions: text(),
+    bookingIntervalMinutes: integer(),
     durationMinutes: integer().notNull(),
     /** Cleanup/transition time blocked after the service. */
     bufferMinutes: integer().notNull().default(0),
     processingStartMinutes: integer(),
     processingMinutes: integer(),
     priceCents: integer().notNull(),
+    priceType: text()
+      .$type<"fixed" | "variable" | "hidden" | "free" | "from">()
+      .notNull()
+      .default("fixed"),
     currency: text().notNull().default("ARS"),
     resourceVersion: integer().notNull().default(1),
     catalogKind: text().$type<"service" | "variant" | "addon">().notNull().default("service"),
@@ -53,6 +61,23 @@ export const service = pgTable(
     ),
     check("service_buffer_non_negative", sql`${t.bufferMinutes} >= 0`),
     check("service_price_non_negative", sql`${t.priceCents} >= 0`),
+    check(
+      "service_price_type_valid",
+      sql`${t.priceType} in ('fixed','variable','hidden','free','from') and (${t.priceType} not in ('variable','free') or ${t.priceCents}=0)`,
+    ),
+    check(
+      "service_category_valid",
+      sql`${t.category} is null or (length(trim(${t.category})) between 1 and 100 and ${t.category}=trim(${t.category}))`,
+    ),
+    check("service_sort_order_valid", sql`${t.sortOrder} between 0 and 100000`),
+    check(
+      "service_booking_interval_valid",
+      sql`${t.bookingIntervalMinutes} is null or ${t.bookingIntervalMinutes} between 1 and 120`,
+    ),
+    check(
+      "service_instructions_valid",
+      sql`${t.clientInstructions} is null or length(${t.clientInstructions})<=2000`,
+    ),
   ],
 );
 

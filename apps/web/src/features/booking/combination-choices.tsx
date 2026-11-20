@@ -3,16 +3,18 @@ import { useQuery } from "@tanstack/react-query";
 import { Button } from "~/components/ui/button";
 import { ErrorState, Skeleton } from "~/components/ui/states";
 import { useI18n } from "~/i18n/react";
-import { formatDuration, formatMoney } from "~/lib/format";
+import { formatDuration } from "~/lib/format";
 import { publicCombinationsQuery } from "~/lib/queries";
 import { normalizeCatalogSelection } from "./catalog-selection";
 import { bookingTotals, eligibleStaff } from "./logic";
+import { totalPriceLabel } from "./service-price";
+import { canPlanVisit } from "./visit-selection";
 export function combinationAvailable(ids: string[], catalog: Service[], staff: Staff[]) {
   return (
     ids.length >= 2 &&
     JSON.stringify(ids) === JSON.stringify(normalizeCatalogSelection(ids, catalog)) &&
     new Set(catalog.filter((row) => ids.includes(row.id)).map((row) => row.currency)).size === 1 &&
-    eligibleStaff(staff, ids).length > 0
+    (eligibleStaff(staff, ids).length > 0 || canPlanVisit(ids, catalog, staff))
   );
 }
 export function CombinationChoices({
@@ -57,8 +59,14 @@ export function CombinationChoices({
                 {row.serviceIds.map((id) => catalog.find((s) => s.id === id)?.name).join(" → ")}
               </p>
               <p className="font-medium">
-                {formatMoney(totals.priceCents, totals.currency ?? "EUR", locale)} ·{" "}
-                {formatDuration(totals.durationMinutes, locale)}
+                {totalPriceLabel(
+                  t,
+                  locale,
+                  catalog.filter((s) => row.serviceIds.includes(s.id)),
+                  totals.priceCents,
+                  totals.currency ?? "EUR",
+                )}{" "}
+                · {formatDuration(totals.durationMinutes, locale)}
               </p>
               <Button
                 variant="secondary"

@@ -18,6 +18,7 @@ import { calendarResources } from "../resources/reservations";
 import { getSalonSettings } from "../settings/service";
 import { asDatedHours, loadShiftRows } from "../staff/date-hours";
 import { calendarBadges } from "./context";
+import { loadBookingPrices } from "./pricing";
 import { loadSeriesReferences } from "./series-references";
 
 /**
@@ -125,10 +126,11 @@ export async function getCalendar(
     : [];
 
   const appointmentIds = rows.map((r) => r.row.id);
-  const [resources, series, protections, badges] = await Promise.all([
+  const [resources, series, protections, prices, badges] = await Promise.all([
     calendarResources(db, appointmentIds),
     loadSeriesReferences(db, appointmentIds),
     calendarProtections(db, appointmentIds),
+    loadBookingPrices(db, scope.includeBilling ? appointmentIds : []),
     calendarBadges(
       db,
       rows.map((r) => r.row),
@@ -152,6 +154,7 @@ export async function getCalendar(
       const context = badges.get(row.id);
       const unresolved = own.filter((s) => s.sourceUnpriced && s.reviewedPriceCents === null);
       return {
+        ...(prices.has(row.id) ? { bookingPrice: prices.get(row.id) } : {}),
         ...(series.has(row.id) ? { series: series.get(row.id) } : {}),
         ...(row.visitGroupId ? { visitGroupId: row.visitGroupId } : {}),
         id: row.id,
@@ -177,6 +180,7 @@ export async function getCalendar(
               }
             : {}),
           priceCents: s.reviewedPriceCents ?? s.priceCents,
+          ...(s.priceType !== "fixed" ? { priceType: s.priceType } : {}),
           ...(s.sourceUnpriced && s.reviewedPriceCents === null
             ? { sourceUnpriced: true as const }
             : {}),

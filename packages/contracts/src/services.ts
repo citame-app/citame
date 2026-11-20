@@ -5,14 +5,24 @@ import {
   serviceCatalogSchema,
   serviceCatalogUpdateSchema,
 } from "./service-options";
+import { servicePriceTypeSchema } from "./service-pricing";
 import { processingTimeSchema } from "./staff-capacity";
+
+export const SERVICE_CATEGORY_MAX_LENGTH = 100;
+
+const presentationFields = {
+  bookingIntervalMinutes: z.number().int().min(1).max(120).nullable().optional(),
+  category: z.string().trim().min(1).max(SERVICE_CATEGORY_MAX_LENGTH).nullable().optional(),
+  sortOrder: z.number().int().min(0).max(100000).optional(),
+  onlineBooking: z.boolean().optional(),
+  clientInstructions: z.string().trim().max(2000).nullable().optional(),
+};
 
 export const serviceSchema = z
   .object({
     id: idSchema,
     name: z.string().min(1),
     description: z.string().nullable(),
-    category: z.string().nullable().optional(),
     color: z
       .string()
       .regex(/^#[0-9a-fA-F]{6}$/)
@@ -22,8 +32,10 @@ export const serviceSchema = z
     bufferMinutes: z.number().int().min(0),
     processing: processingTimeSchema.optional(),
     priceCents: z.number().int().min(0),
+    priceType: servicePriceTypeSchema.optional(),
     currency: z.string().length(3),
     catalog: serviceCatalogSchema.optional(),
+    ...presentationFields,
     quoteHash: z
       .string()
       .regex(/^[a-f0-9]{64}$/)
@@ -32,6 +44,10 @@ export const serviceSchema = z
   .refine((s) => s.durationMinutes > 0 || s.catalog?.kind === "addon", {
     message: "A standalone service needs a positive duration",
     path: ["durationMinutes"],
+  })
+  .refine((s) => !["variable", "free"].includes(s.priceType ?? "fixed") || s.priceCents === 0, {
+    message: "An unknown or free price has no fixed charge",
+    path: ["priceCents"],
   })
   .refine(
     (s) =>
@@ -60,7 +76,6 @@ const MAX_DURATION_MINUTES = 24 * 60;
 const serviceFields = {
   name: z.string().trim().min(1).max(LIMITS.name),
   description: z.string().max(LIMITS.description).nullable(),
-  category: z.string().trim().min(1).max(100).nullable(),
   color: z
     .string()
     .regex(/^#[0-9a-fA-F]{6}$/)
@@ -68,6 +83,7 @@ const serviceFields = {
   durationMinutes: z.number().int().nonnegative().max(MAX_DURATION_MINUTES),
   bufferMinutes: z.number().int().min(0).max(MAX_DURATION_MINUTES),
   priceCents: z.number().int().min(0),
+  priceType: servicePriceTypeSchema.optional(),
   currency: z.string().length(3),
 };
 
@@ -75,12 +91,14 @@ const serviceFields = {
 export const createServiceRequestSchema = z
   .object({
     name: serviceFields.name,
+    ...presentationFields,
+    processing: processingTimeSchema.nullable().optional(),
     description: serviceFields.description.optional(),
-    category: serviceFields.category.optional(),
     color: serviceFields.color.optional(),
     durationMinutes: serviceFields.durationMinutes,
     bufferMinutes: serviceFields.bufferMinutes.optional(),
-    priceCents: serviceFields.priceCents,
+    priceCents: serviceFields.priceCents.optional(),
+    priceType: serviceFields.priceType,
     currency: serviceFields.currency.optional(),
     catalog: serviceCatalogCreateSchema.optional(),
     staffIds: z
@@ -92,18 +110,28 @@ export const createServiceRequestSchema = z
   .refine((s) => s.durationMinutes > 0 || s.catalog?.kind === "addon", {
     message: "A standalone service needs a positive duration",
     path: ["durationMinutes"],
+  })
+  .refine(
+    (s) => s.priceCents !== undefined || s.priceType === "variable" || s.priceType === "free",
+    { message: "Enter a price", path: ["priceCents"] },
+  )
+  .refine((s) => !["variable", "free"].includes(s.priceType ?? "fixed") || !s.priceCents, {
+    message: "Variable and free services do not have a fixed price",
+    path: ["priceCents"],
   });
 export type CreateServiceRequest = z.infer<typeof createServiceRequestSchema>;
 
 export const updateServiceRequestSchema = z
   .object({
     name: serviceFields.name,
+    ...presentationFields,
+    processing: processingTimeSchema.nullable().optional(),
     description: serviceFields.description,
-    category: serviceFields.category,
     color: serviceFields.color,
     durationMinutes: serviceFields.durationMinutes,
     bufferMinutes: serviceFields.bufferMinutes,
     priceCents: serviceFields.priceCents,
+    priceType: serviceFields.priceType,
     currency: serviceFields.currency,
     active: z.boolean(),
   })

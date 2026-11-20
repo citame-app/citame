@@ -85,6 +85,10 @@ export const appointmentService = pgTable(
     priceCents: integer().notNull(),
     sourceUnpriced: boolean().notNull().default(false),
     reviewedPriceCents: integer(),
+    priceType: text()
+      .$type<"fixed" | "variable" | "hidden" | "free" | "from">()
+      .notNull()
+      .default("fixed"),
     currency: text().notNull(),
   },
   (t) => [
@@ -92,6 +96,10 @@ export const appointmentService = pgTable(
     check(
       "appointment_service_reviewed_price_valid",
       sql`${t.reviewedPriceCents} is null or (${t.sourceUnpriced} and ${t.currency} = 'EUR' and ${t.reviewedPriceCents} between 0 and 999999999)`,
+    ),
+    check(
+      "appointment_service_price_type_valid",
+      sql`${t.priceType} in ('fixed','variable','hidden','free','from') and (${t.priceType} not in ('variable','free') or ${t.priceCents}=0)`,
     ),
     check(
       "appointment_service_processing_valid",

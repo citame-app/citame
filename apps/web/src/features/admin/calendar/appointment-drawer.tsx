@@ -10,6 +10,7 @@ import { useToast } from "~/components/ui/toast";
 import { buildDateStrip } from "~/features/booking/logic";
 import { BookingProtectionNotice } from "~/features/booking/protection";
 import { SeriesVisits } from "~/features/booking/series-visits";
+import { priceLabel, totalPriceLabel } from "~/features/booking/service-price";
 import { SlotPicker } from "~/features/booking/slot-picker";
 import { useI18n } from "~/i18n/react";
 import { clientDetailQuery } from "~/lib/admin-queries";
@@ -241,10 +242,7 @@ function DrawerBody({
               <li key={`${s.serviceId}-${s.name}`} className="flex justify-between gap-3">
                 <span>{s.name}</span>
                 <span className="tabular-nums text-muted">
-                  {s.priceDisplayLabel ??
-                    (s.sourceUnpriced
-                      ? t("badge.unquoted")
-                      : formatMoney(s.priceCents, s.currency, locale))}
+                  {s.priceDisplayLabel ?? (s.sourceUnpriced ? t("badge.unquoted") : priceLabel(t, locale, s, true))}
                 </span>
               </li>
             ))}
@@ -262,7 +260,9 @@ function DrawerBody({
             <span className="tabular-nums">
               {appointment.services.some((s) => s.sourceUnpriced)
                 ? t("badge.unquoted")
-                : formatMoney(totalCents, currency, locale)}
+                : appointment.bookingPrice?.finalized
+                  ? formatMoney(appointment.bookingPrice.totalCents, currency, locale)
+                  : totalPriceLabel(t, locale, appointment.services, totalCents, currency, true)}
             </span>
           </p>
         </dd>

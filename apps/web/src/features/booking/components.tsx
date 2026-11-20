@@ -7,12 +7,12 @@ import {
   dayOfMonth,
   formatDateLong,
   formatDuration,
-  formatMoney,
   formatTime,
   monthShort,
   weekdayShort,
 } from "~/lib/format";
 import type { SlotGroup } from "./logic";
+import { priceLabel } from "./service-price";
 
 /** A native input stretched over its label: clicks, taps and assistive tech hit the real control. */
 const HIDDEN_INPUT =
@@ -33,6 +33,7 @@ export function ServiceChoice({
   group,
   label,
   disabled = false,
+  disabledReason,
 }: {
   service: Service;
   selected: boolean;
@@ -41,6 +42,7 @@ export function ServiceChoice({
   group?: string;
   label?: string;
   disabled?: boolean;
+  disabledReason?: string;
 }) {
   const { locale, t } = useI18n();
   const inputId = useId();
@@ -55,9 +57,12 @@ export function ServiceChoice({
         className={HIDDEN_INPUT}
         checked={selected}
         onChange={() => onToggle(service.id)}
-        aria-describedby={`${inputId}-meta`}
+        aria-describedby={`${inputId}-meta${disabledReason ? ` ${inputId}-reason` : ""}`}
       />
-      <label htmlFor={inputId} className={choiceCard}>
+      <label
+        htmlFor={inputId}
+        className={cn(choiceCard, disabled && "opacity-65 cursor-not-allowed")}
+      >
         <span
           aria-hidden="true"
           className={cn(
@@ -89,10 +94,15 @@ export function ServiceChoice({
             </span>
           )}
         </span>
-        <span className="shrink-0 font-display text-lg font-semibold text-fg">
-          {formatMoney(service.priceCents, service.currency, locale)}
+        <span className="max-w-[45%] shrink-0 text-right font-display text-lg font-semibold text-fg wrap-anywhere">
+          {priceLabel(t, locale, service)}
         </span>
       </label>
+      {disabledReason && (
+        <p id={`${inputId}-reason`} className="mt-2 text-sm text-muted">
+          {disabledReason}
+        </p>
+      )}
     </div>
   );
 }
@@ -255,7 +265,7 @@ export function DateStrip({
       aria-label={label}
       className="-mx-4 flex gap-2 overflow-x-auto px-4 pt-3 pb-2 snap-x sm:mx-0 sm:px-0"
     >
-      {dates.map((date) => {
+      {dates.map((date, index) => {
         const count = slotCounts[date];
         const unavailable = count === 0;
         const isSelected = date === selected;
@@ -293,7 +303,16 @@ export function DateStrip({
                 {monthShort(date, locale)}
               </span>
               {date === nextAvailable && !unavailable && (
-                <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full border border-accent/40 bg-accent-soft px-2 text-[0.65rem] font-semibold leading-4 text-accent-soft-fg">
+                <span
+                  className={cn(
+                    "absolute -top-2.5 whitespace-nowrap rounded-full border border-accent/40 bg-accent-soft px-2 text-[0.65rem] font-semibold leading-4 text-accent-soft-fg",
+                    index === 0
+                      ? "left-0"
+                      : index === dates.length - 1
+                        ? "right-0"
+                        : "left-1/2 -translate-x-1/2",
+                  )}
+                >
                   {t("booking.date.nextAvailable")}
                 </span>
               )}

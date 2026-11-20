@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/bun-sql";
 import { migrate } from "drizzle-orm/bun-sql/migrator";
 import { readMigrationFiles } from "drizzle-orm/migrator";
+import originLedger from "../drizzle/legacy/e5061d7/ledger.json";
 import type { Database } from "./client";
 import { assertOperationalDatabase } from "./operational-database";
 
@@ -77,6 +78,35 @@ export async function verifyMigrationLedger(
   return getReleaseMigrationLedger(expected);
 }
 
+const COMMON_MIGRATION_COUNT = 41;
+const LOCAL_CATEGORY_MIGRATION = 42;
+const MERGED_CATALOG_PRESENTATION = originLedger[0]?.timestamp;
+const CATEGORY_COLUMN = 'ALTER TABLE "service" ADD COLUMN "category" text;';
+
+function legacyOriginEntries(
+  expected: ReturnType<typeof readMigrationFiles>,
+  applied: Awaited<ReturnType<typeof readAppliedLedger>>,
+) {
+  if (applied[COMMON_MIGRATION_COUNT]?.timestamp !== String(originLedger[0]?.legacyTimestamp))
+    return [];
+  assertLedger(
+    expected.slice(0, COMMON_MIGRATION_COUNT),
+    applied.slice(0, COMMON_MIGRATION_COUNT),
+    "exact",
+  );
+  const suffix = applied.slice(COMMON_MIGRATION_COUNT);
+  return suffix.map((row, index) => {
+    const entry = originLedger[index];
+    if (!entry || row.timestamp !== String(entry.legacyTimestamp) || row.hash !== entry.legacyHash)
+      throw new MigrationLedgerError(
+        "PostgreSQL migration ledger differs from the verified upstream prefix",
+      );
+    const migration = expected.find((candidate) => candidate.folderMillis === entry.timestamp);
+    if (!migration) throw new MigrationLedgerError("Missing merged PostgreSQL migration");
+    return { ...entry, migration };
+  });
+}
+
 /** Applies pending drizzle-kit migrations in journal order. Only isolated rehearsal and test callers opt in to review databases. */
 export async function runMigrations(
   db: Database,
@@ -105,12 +135,53 @@ export async function runMigrations(
       select to_regclass('drizzle.__drizzle_migrations') is not null as initialized
     `;
     const applied = journal?.initialized ? await readAppliedLedger(migrationDb) : [];
+    const legacy = legacyOriginEntries(expected, applied);
+    if (legacy.length) {
+      if (online)
+        throw new Error("Merging the upstream migration history requires a maintenance upgrade.");
+      const alreadyApplied = new Set(legacy.map(({ timestamp }) => timestamp));
+      await migrationDb.transaction(async (tx) => {
+        for (const migration of expected.slice(COMMON_MIGRATION_COUNT)) {
+          const hasUpstreamEntry = alreadyApplied.has(migration.folderMillis);
+          // Reconcile the upstream constraint with the wider limit already supported locally.
+          if (hasUpstreamEntry && migration.folderMillis !== MERGED_CATALOG_PRESENTATION) continue;
+          for (const statement of migration.sql) {
+            // The verified first upstream migration already created this shared column.
+            if (
+              migration === expected[LOCAL_CATEGORY_MIGRATION] &&
+              statement.trim() === CATEGORY_COLUMN
+            ) {
+              continue;
+            }
+            await tx.execute(sql.raw(statement));
+          }
+          if (!hasUpstreamEntry) {
+            await tx.execute(sql`
+              insert into drizzle.__drizzle_migrations(hash, created_at)
+              values (${migration.hash}, ${migration.folderMillis})
+            `);
+          }
+        }
+        for (const entry of legacy) {
+          await tx.execute(sql`
+            update drizzle.__drizzle_migrations set hash = ${entry.migration.hash}, created_at = ${entry.timestamp}
+            where hash = ${entry.legacyHash} and created_at = ${entry.legacyTimestamp}
+          `);
+        }
+        assertLedger(expected, await readAppliedLedger(tx), "exact");
+      });
+      return;
+    }
     assertLedger(expected, applied, "before-migration");
     if (
       online &&
-      expected.slice(applied.length).some(({ folderMillis }) => folderMillis === calendarBadgeBackfillTimestamp)
+      expected
+        .slice(applied.length)
+        .some(({ folderMillis }) => folderMillis === calendarBadgeBackfillTimestamp)
     ) {
-      throw new Error("Migration 0076 requires a maintenance upgrade with old API replicas drained.");
+      throw new Error(
+        "Migration 0076 requires a maintenance upgrade with old API replicas drained.",
+      );
     }
     await migrate(migrationDb, { migrationsFolder });
     assertLedger(expected, await readAppliedLedger(migrationDb), "required");

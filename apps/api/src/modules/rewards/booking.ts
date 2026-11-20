@@ -1,4 +1,5 @@
 import type { BookingPromotionQuoteRequest, CreateAppointmentRequest } from "@sob/contracts";
+import { needsFinalPrice } from "@sob/contracts";
 import type { Database } from "@sob/db";
 import { loadPrincipal, type Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
@@ -23,6 +24,11 @@ async function quoteInTransaction(
   if (p?.role !== "client" || !p.clientId)
     throw new DomainError("forbidden", "A customer booking account is required");
   const services = await getBookableServices(tx, input.serviceIds, input.serviceQuotes);
+  if (services.some((s) => needsFinalPrice(s.priceType)))
+    throw new DomainError(
+      "invalid_state",
+      "Apply promotions in checkout after the final price has been set",
+    );
   if (services.some((s) => s.currency !== "EUR"))
     throw new DomainError("validation_error", "Booking promotions require EUR services");
   await assertStaffExists(tx, input.staffId);

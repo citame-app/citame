@@ -76,7 +76,7 @@ for (const scheme of ["light", "dark"] as const)
         const extra = await serviceResponse.json();
         extraId = extra.id;
         await signInThroughUi(page, fixture.ownerEmail, "/admin/services");
-        await page.getByRole("button", { name: "Combos", exact: true }).click();
+        await page.getByRole("tab", { name: "Combinations", exact: true }).click();
         await page.getByRole("button", { name: "New combination", exact: true }).click();
         let form = page.getByRole("dialog", { name: "New combination", exact: true });
         await form.getByLabel("Combination name", { exact: true }).fill(name);
