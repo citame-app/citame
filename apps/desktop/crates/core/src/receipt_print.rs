@@ -56,9 +56,12 @@ impl ReceiptPreview {
                 }
                 Err(_) => return false,
             };
-            if socket
-                .set_write_timeout(Some(Duration::from_secs(1)))
-                .is_err()
+            // A listening socket is nonblocking, and some platforms inherit that on accept.
+            // The bounded header reader needs blocking reads with its deadline instead.
+            if socket.set_nonblocking(false).is_err()
+                || socket
+                    .set_write_timeout(Some(Duration::from_secs(1)))
+                    .is_err()
             {
                 continue;
             }
@@ -359,11 +362,9 @@ mod tests {
             socket
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();
-            write!(
-                socket,
-                "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
-            )
-            .unwrap();
+            write!(socket, "GET {path} HTTP/1.1\r\n").unwrap();
+            std::thread::sleep(Duration::from_millis(40));
+            write!(socket, "Host: {host}\r\nConnection: close\r\n\r\n").unwrap();
             let mut response = String::new();
             socket.read_to_string(&mut response).unwrap();
             response
