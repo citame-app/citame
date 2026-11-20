@@ -291,7 +291,38 @@ fn native_dated_shift_copy_reviews_and_syncs_all_target_dates_through_the_proxy(
     let catalog = catalog(&observer);
     let staff = &catalog.staff;
     let timezone = salon_tz(&observer.store).unwrap();
-    let source_slot = free_slot(&observer, staff).with_timezone(&timezone);
+    let overrides = observer.store.date_shifts().unwrap();
+    // This scenario closes the source and writes four target days. A free source
+    // slot can still correspond to a busy target after earlier scenarios ran.
+    let source_slot = free_slot_matching(&observer, staff, |candidate| {
+        let source = candidate.with_timezone(&timezone).date_naive();
+        [0, 1, 7, 8, 14, 15].into_iter().all(|offset| {
+            let date = source + chrono::Days::new(offset);
+            if overrides.iter().any(|shift| {
+                &shift.staff_id == staff && shift.date == date.to_string() && shift.ranges.is_some()
+            }) {
+                return false;
+            }
+            let (from, to) = calendar::local_day_range(timezone, date);
+            let from = from.timestamp_millis();
+            let to = to.timestamp_millis();
+            !observer
+                .store
+                .appointments_between(from, to)
+                .unwrap()
+                .iter()
+                .any(|visit| {
+                    &visit.staff_id == staff && visit.status != AppointmentStatus::Cancelled
+                })
+                && !observer
+                    .store
+                    .time_off_between(from, to)
+                    .unwrap()
+                    .iter()
+                    .any(|block| &block.staff_id == staff)
+        })
+    })
+    .with_timezone(&timezone);
     let source = source_slot.date_naive();
     let target = source + chrono::Days::new(7);
     let target_slot = timezone
@@ -973,6 +1004,14 @@ fn jitter(modulo: u64) -> u64 {
 /// A free 60-minute slot, with 2 more free hours after it, inside the staff member's working
 /// hours, a few days from now (after the minimum-notice window, before the advance limit).
 fn free_slot(d: &Device, staff_id: &str) -> DateTime<Utc> {
+    free_slot_matching(d, staff_id, |_| true)
+}
+
+fn free_slot_matching(
+    d: &Device,
+    staff_id: &str,
+    matches_fixture: impl Fn(DateTime<Utc>) -> bool,
+) -> DateTime<Utc> {
     let tz = salon_tz(&d.store).unwrap();
     let hours = d.store.working_hours().unwrap();
     // Earlier scenarios leave real date overrides behind. This helper picks weekly hours only.
@@ -1019,7 +1058,7 @@ fn free_slot(d: &Device, staff_id: &str) -> DateTime<Utc> {
             .unwrap()
             .iter()
             .any(|a| a.staff_id == staff_id && a.status != AppointmentStatus::Cancelled);
-        if !busy {
+        if !busy && matches_fixture(t) {
             return t;
         }
     }
