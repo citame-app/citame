@@ -32,8 +32,8 @@ use crate::runner::Wake;
 use crate::sse::{SseParser, nudge_seq};
 use crate::sync::{CatalogColors, Transport, TransportError};
 use crate::waitlist::{
-    AcceptOffer, AcceptedOffer, OfferRequirements, WaitlistEntry, WaitlistPage, WaitlistPolicy,
-    WaitlistRequest,
+    AcceptOffer, AcceptOfferError, AcceptedOffer, OfferRequirements, WaitlistEntry, WaitlistPage,
+    WaitlistPolicy, WaitlistRequest,
 };
 
 pub struct HttpTransport {
@@ -1394,11 +1394,35 @@ impl HttpTransport {
         &self,
         id: &str,
         input: &AcceptOffer,
-    ) -> Result<AcceptedOffer, TransportError> {
-        self.post_json(
+    ) -> Result<AcceptedOffer, AcceptOfferError> {
+        let response = self.send_json(
             &format!("/admin/waitlist/desk/{}/accept", parse_id(id)?),
             input,
-        )
+        )?;
+        read_response_with(response, |status, retry_after, body| {
+            let error = serde_json::from_str::<serde_json::Value>(body).ok();
+            let code = error
+                .as_ref()
+                .and_then(|value| value.pointer("/error/code"))
+                .and_then(serde_json::Value::as_str);
+            match (status, code) {
+                (409, Some("intake_required")) => AcceptOfferError::IntakeChanged,
+                (409, Some("storage_limit")) => AcceptOfferError::ResponseLimit,
+                (400, Some("validation_error"))
+                | (
+                    409,
+                    Some(
+                        "invalid_state"
+                        | "version_conflict"
+                        | "slot_unavailable"
+                        | "slot_taken"
+                        | "client_merged"
+                        | "online_booking_paused",
+                    ),
+                ) => AcceptOfferError::Rejected,
+                _ => classify_status(status, retry_after, body, false).into(),
+            }
+        })
     }
 
     pub fn requeue_waitlist_offer(

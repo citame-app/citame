@@ -1,12 +1,14 @@
 use super::*;
-use sob_core::waitlist::{OfferRequirements, WaitlistEntry};
-use std::collections::BTreeSet;
+use sob_core::waitlist::{OfferIntakeSelection, WaitlistEntry};
+mod intake;
+
+use intake::IntakeDraft;
 
 pub(super) struct OfferReview {
     entry: WaitlistEntry,
-    requirements: Option<OfferRequirements>,
+    review_hash: Option<String>,
     can_waive: bool,
-    selected: BTreeSet<String>,
+    forms: Vec<IntakeDraft>,
     waiver: Entity<TextField>,
     _waiver_sub: Subscription,
     request: Option<AcceptOffer>,
@@ -20,43 +22,44 @@ pub(super) struct PolicyReview {
 }
 
 impl OfferReview {
-    fn requirements_met(&self) -> bool {
-        self.requirements.as_ref().is_some_and(|data| {
-            data.forms
-                .iter()
-                .filter(|form| form.definition.required_at_booking)
-                .all(|form| {
-                    data.ready_responses.iter().any(|answer| {
-                        answer.revision_id == form.id && self.selected.contains(&answer.id)
-                    })
-                })
-        })
+    fn intake_selection(&self, cx: &App) -> Option<OfferIntakeSelection> {
+        self.review_hash.as_ref()?;
+        intake::selection(&self.forms, cx)
     }
 
-    fn offer_is_current(&self) -> bool {
-        self.entry.can_manage
-            && self.entry.state == WaitlistState::Offered
-            && self
-                .entry
-                .offer
-                .as_ref()
-                .is_some_and(|offer| offer.expires_at > Utc::now())
+    pub(super) fn require_intake_review(&mut self) {
+        self.clear_request();
+        self.review_hash = None;
+    }
+
+    pub(super) fn clear_request(&mut self) {
+        self.request = None;
+    }
+
+    pub(super) fn is_same_offer(&self, entry: &WaitlistEntry) -> bool {
+        entry.can_manage
+            && entry.state == WaitlistState::Offered
+            && entry.id == self.entry.id
+            && entry.version == self.entry.version
+            && entry.offer.as_ref().is_some_and(|offer| {
+                offer.expires_at > Utc::now()
+                    && self
+                        .entry
+                        .offer
+                        .as_ref()
+                        .is_some_and(|prior| prior.id == offer.id)
+            })
     }
 }
 
 impl Root {
     pub(super) fn begin_waitlist_offer(&mut self, entry: WaitlistEntry, cx: &mut Context<Self>) {
-        let Some(transport) = self.svc.transport() else {
-            return;
-        };
         let Overlay::Waitlist(desk) = &mut self.overlay else {
             return;
         };
         if desk.busy || !entry.can_manage || entry.offer.is_none() {
             return;
         }
-        desk.error = None;
-        desk.busy = true;
         let locale = self.locale;
         let waiver =
             cx.new(|cx| TextField::new(i18n::t(locale, Key::WaitlistWaiverReason), false, cx));
@@ -66,15 +69,36 @@ impl Root {
             }
         });
         desk.offer_review = Some(OfferReview {
-            entry: entry.clone(),
-            requirements: None,
-            selected: BTreeSet::new(),
+            entry,
+            review_hash: None,
+            forms: Vec::new(),
             can_waive: false,
             waiver,
             _waiver_sub: waiver_sub,
             request: None,
             confirming_requeue: false,
         });
+        self.load_waitlist_offer_requirements(cx);
+    }
+
+    fn load_waitlist_offer_requirements(&mut self, cx: &mut Context<Self>) {
+        let Some(transport) = self.svc.transport() else {
+            return;
+        };
+        let Overlay::Waitlist(desk) = &mut self.overlay else {
+            return;
+        };
+        let Some(review) = desk
+            .offer_review
+            .as_mut()
+            .filter(|review| !desk.busy && review.request.is_none())
+        else {
+            return;
+        };
+        let entry = review.entry.clone();
+        review.review_hash = None;
+        desk.busy = true;
+        desk.error = None;
         self.waitlist_generation = self.waitlist_generation.wrapping_add(1);
         let generation = self.waitlist_generation;
         let session = self.svc.session.clone();
@@ -98,7 +122,30 @@ impl Root {
                 match result {
                     Ok((requirements, can_waive)) => {
                         if let Some(review) = &mut desk.offer_review {
-                            review.requirements = Some(requirements);
+                            let mut previous = std::mem::take(&mut review.forms);
+                            review.forms = requirements
+                                .forms
+                                .iter()
+                                .cloned()
+                                .map(|form| {
+                                    let saved = requirements
+                                        .ready_responses
+                                        .iter()
+                                        .find(|answer| answer.revision_id == form.id)
+                                        .cloned();
+                                    if let Some(index) = previous
+                                        .iter()
+                                        .position(|draft| draft.revision_id() == form.id)
+                                    {
+                                        let mut draft = previous.swap_remove(index);
+                                        draft.refresh_saved(saved);
+                                        draft
+                                    } else {
+                                        IntakeDraft::new(form, saved, this.locale, cx)
+                                    }
+                                })
+                                .collect();
+                            review.review_hash = Some(requirements.review_hash);
                             review.can_waive = can_waive;
                         }
                     }
@@ -117,35 +164,31 @@ impl Root {
         let Some(review) = desk.offer_review.as_mut() else {
             return;
         };
-        if desk.busy || !review.offer_is_current() || !review.requirements_met() {
+        if desk.busy || self.status.connectivity != Connectivity::Online {
             return;
         }
-        let (Some(offer), Some(requirements)) = (&review.entry.offer, &review.requirements) else {
+        if let Some(input) = &review.request {
+            let action = Action::Accept(review.entry.id.clone(), input.clone());
+            self.waitlist_request(action, cx);
+            return;
+        }
+        if desk.cached {
+            return;
+        }
+        let (Some(review_hash), Some(selection)) =
+            (&review.review_hash, review.intake_selection(cx))
+        else {
             return;
         };
-        let reason = review.waiver.read(cx).text().trim();
-        if offer.policy.enabled
-            && (!review.can_waive || !(8..=300).contains(&reason.chars().count()))
-        {
+        let Some(input) = review.entry.reviewed_acceptance(
+            Utc::now(),
+            review.can_waive,
+            review.waiver.read(cx).text(),
+            review_hash.clone(),
+            selection,
+        ) else {
             return;
-        }
-        let mut input = AcceptOffer {
-            version: review.entry.version,
-            offer_id: offer.id.clone(),
-            expected_total_cents: offer.price_cents,
-            idempotency_key: review
-                .request
-                .as_ref()
-                .map_or_else(WaitlistRequest::new_key, |prior| {
-                    prior.idempotency_key.clone()
-                }),
-            intake_review_hash: requirements.review_hash.clone(),
-            intake_submission_ids: review.selected.iter().cloned().collect(),
-            protection_waiver_reason: offer.policy.enabled.then(|| reason.to_owned()),
         };
-        if review.request.as_ref().is_some_and(|prior| prior != &input) {
-            input.idempotency_key = WaitlistRequest::new_key();
-        }
         review.request = Some(input.clone());
         let id = review.entry.id.clone();
         self.waitlist_request(Action::Accept(id, input), cx);
@@ -158,7 +201,7 @@ impl Root {
         let Some(review) = desk.offer_review.as_mut() else {
             return;
         };
-        if desk.busy || !review.entry.can_manage {
+        if desk.busy || !review.entry.can_manage || review.request.is_some() {
             return;
         }
         if !review.confirming_requeue {
@@ -200,12 +243,12 @@ impl Root {
         let Some(offer) = &review.entry.offer else {
             return div();
         };
-        let waiver = review.waiver.read(cx).text().trim();
         let allowed = can_write
-            && review.offer_is_current()
-            && review.requirements_met()
-            && (!offer.policy.enabled
-                || (review.can_waive && (8..=300).contains(&waiver.chars().count())));
+            && review
+                .entry
+                .reviewable_offer(Utc::now(), review.can_waive, review.waiver.read(cx).text())
+                .is_some()
+            && review.intake_selection(cx).is_some();
         let mut body = div()
             .flex()
             .flex_col()
@@ -252,56 +295,20 @@ impl Root {
             .when(offer.expires_at <= Utc::now(), |d| {
                 d.child(self.t(Key::WaitlistOfferExpired))
             });
-        if let Some(requirements) = &review.requirements {
-            for form in requirements
-                .forms
-                .iter()
-                .filter(|form| form.definition.required_at_booking)
-            {
-                let answer = requirements
-                    .ready_responses
-                    .iter()
-                    .find(|answer| answer.revision_id == form.id);
-                let mut row = div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .p_2()
-                    .border_1()
-                    .border_color(theme::line())
-                    .rounded_lg()
-                    .child(SharedString::from(form.definition.title.clone()));
-                if let Some(answer) = answer {
-                    let id = answer.id.clone();
-                    row = row.child(self.chip(
-                        SharedString::from(format!("wl-form-{id}")),
-                        SharedString::from(i18n::fill(
-                            self.t(Key::WaitlistUseResponse),
-                            &[("date", &self.date_time_label(answer.created_at))],
-                        )),
-                        review.selected.contains(&id),
-                        cx.listener(move |this, _, _, cx| {
-                            if let Overlay::Waitlist(desk) = &mut this.overlay
-                                && !desk.busy
-                                && let Some(review) = &mut desk.offer_review
-                            {
-                                if !review.selected.remove(&id) {
-                                    review.selected.insert(id.clone());
-                                }
-                                cx.notify();
-                            }
-                        }),
-                    ));
-                } else {
-                    row = row.child(div().text_sm().child(self.t(Key::WaitlistFormsOnWeb)));
-                }
-                body = body.child(row);
+        let awaiting_confirmation = review.request.is_some();
+        if !awaiting_confirmation && review.review_hash.is_some() {
+            for form in &review.forms {
+                body = body.child(self.render_waitlist_intake(form, cx));
             }
+        } else if awaiting_confirmation {
+            body = body.child(self.t(Key::WaitlistAcceptanceSubmitted));
         }
         if offer.policy.enabled {
             body = body
                 .child(div().text_sm().child(self.t(Key::WaitlistDepositWeb)))
-                .when(review.can_waive, |d| d.child(review.waiver.clone()));
+                .when(review.can_waive && !awaiting_confirmation, |d| {
+                    d.child(review.waiver.clone())
+                });
         }
         div()
             .flex()
@@ -320,26 +327,63 @@ impl Root {
                     .flex_wrap()
                     .gap_2()
                     .child(self.review_back_button(cx))
-                    .when(allowed, |d| {
-                        d.child(self.button(
-                            "wl-accept",
-                            self.t(Key::WaitlistAcceptOffer),
-                            Kind::Primary,
-                            cx.listener(|this, _, _, cx| this.confirm_waitlist_offer(cx)),
-                        ))
-                    })
-                    .when(can_write && review.entry.can_manage, |d| {
-                        d.child(self.button(
-                            "wl-requeue",
-                            self.t(if review.confirming_requeue {
-                                Key::WaitlistConfirmRequeue
-                            } else {
-                                Key::WaitlistRequeue
-                            }),
-                            Kind::Ghost,
-                            cx.listener(|this, _, _, cx| this.requeue_waitlist(cx)),
-                        ))
-                    }),
+                    .when(
+                        can_write
+                            && !awaiting_confirmation
+                            && (review.review_hash.is_none() || !review.forms.is_empty()),
+                        |d| {
+                            d.child(
+                                self.button(
+                                    "wl-load-forms",
+                                    self.t(Key::WaitlistRefreshForms),
+                                    Kind::Ghost,
+                                    cx.listener(|this, _, _, cx| {
+                                        this.load_waitlist_offer_requirements(cx)
+                                    }),
+                                )
+                                .tab_index(0)
+                                .focus(|style| style.border_color(theme::text())),
+                            )
+                        },
+                    )
+                    .when(
+                        allowed
+                            || (awaiting_confirmation
+                                && self.status.connectivity == Connectivity::Online
+                                && matches!(&self.overlay, Overlay::Waitlist(desk) if !desk.busy)),
+                        |d| {
+                            d.child(
+                                self.button(
+                                    "wl-accept",
+                                    self.t(if awaiting_confirmation {
+                                        Key::WaitlistRetryAcceptance
+                                    } else {
+                                        Key::WaitlistAcceptOffer
+                                    }),
+                                    Kind::Primary,
+                                    cx.listener(|this, _, _, cx| this.confirm_waitlist_offer(cx)),
+                                )
+                                .tab_index(0)
+                                .focus(|style| style.border_color(theme::text()))
+                                .debug_selector(|| "wl-accept".to_owned()),
+                            )
+                        },
+                    )
+                    .when(
+                        can_write && review.entry.can_manage && !awaiting_confirmation,
+                        |d| {
+                            d.child(self.button(
+                                "wl-requeue",
+                                self.t(if review.confirming_requeue {
+                                    Key::WaitlistConfirmRequeue
+                                } else {
+                                    Key::WaitlistRequeue
+                                }),
+                                Kind::Ghost,
+                                cx.listener(|this, _, _, cx| this.requeue_waitlist(cx)),
+                            ))
+                        },
+                    ),
             )
     }
 

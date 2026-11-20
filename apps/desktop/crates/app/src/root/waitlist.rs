@@ -2,8 +2,8 @@ use super::*;
 use chrono::NaiveTime;
 use sob_core::sync::TransportError;
 use sob_core::waitlist::{
-    AcceptOffer, BookedAppointment, ImportedRequest, WaitlistPage, WaitlistPolicy, WaitlistRequest,
-    WaitlistState,
+    AcceptOffer, AcceptOfferError, BookedAppointment, ImportedRequest, WaitlistPage,
+    WaitlistPolicy, WaitlistRequest, WaitlistState,
 };
 use std::sync::Arc;
 
@@ -63,6 +63,12 @@ enum Action {
     Decline(String, u32, String),
     Policy(WaitlistPolicy),
     Accept(String, AcceptOffer),
+}
+
+enum ReloadNotice {
+    ImportedRejected,
+    IntakeChanged,
+    OfferRejected(Key),
 }
 
 impl Root {
@@ -134,7 +140,7 @@ impl Root {
         d.error = None;
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let (changed, booked, result, rejected_write) = cx
+            let (changed, booked, result, notice) = cx
                 .background_executor()
                 .spawn(async move {
                     let changed = !matches!(action, Action::Read);
@@ -150,24 +156,34 @@ impl Root {
                         Action::Policy(policy) => {
                             transport.update_waitlist_policy(policy).map(|_| None)
                         }
-                        Action::Accept(id, input) => transport
-                            .accept_waitlist_offer(id, input)
-                            .map(|response| Some(response.appointment)),
+                        Action::Accept(id, input) => match transport.accept_waitlist_offer(id, input) {
+                            Ok(response) => Ok(Some(response.appointment)),
+                            Err(AcceptOfferError::Transport(error)) => Err(error),
+                            Err(AcceptOfferError::IntakeChanged) => {
+                                return (false, None, transport.waitlist(page, active), Some(ReloadNotice::IntakeChanged));
+                            }
+                            Err(AcceptOfferError::ResponseLimit) => {
+                                return (false, None, transport.waitlist(page, active), Some(ReloadNotice::OfferRejected(Key::WaitlistResponseLimit)));
+                            }
+                            Err(AcceptOfferError::Rejected) => {
+                                return (false, None, transport.waitlist(page, active), Some(ReloadNotice::OfferRejected(Key::WaitlistOfferRejected)));
+                            }
+                        },
                     };
                     let booked = match change {
                         Ok(booked) => booked,
                         Err(TransportError::BadRequest(_))
                             if matches!(&action, Action::Join(input) if input.imported_entry_id.is_some()) =>
                         {
-                            return (false, None, transport.waitlist(page, active), true);
+                            return (false, None, transport.waitlist(page, active), Some(ReloadNotice::ImportedRejected));
                         }
-                        Err(e) => return (false, None, Err(e), false),
+                        Err(e) => return (false, None, Err(e), None),
                     };
                     let mut result = transport.waitlist(page, active);
                     if page > 1 && result.as_ref().is_ok_and(|page| page.entries.is_empty()) {
                         result = transport.waitlist(1, active);
                     }
-                    (changed, booked, result, false)
+                    (changed, booked, result, None)
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
@@ -192,6 +208,26 @@ impl Root {
                     return;
                 };
                 d.busy = false;
+                match notice {
+                    Some(ReloadNotice::IntakeChanged) => {
+                        if let Some(review) = &mut d.offer_review {
+                            review.require_intake_review();
+                        }
+                        d.error = Some(Key::WaitlistFormsChanged);
+                    }
+                    Some(ReloadNotice::OfferRejected(message)) => {
+                        let current = d.offer_review.as_ref().is_some_and(|review| {
+                            result.as_ref().is_ok_and(|page| page.entries.iter().any(|entry| review.is_same_offer(entry)))
+                        });
+                        if current && let Some(review) = &mut d.offer_review {
+                            review.clear_request();
+                        } else {
+                            d.offer_review = None;
+                        }
+                        d.error = Some(message);
+                    }
+                    _ => {}
+                }
                 if changed || denied {
                     d.form = None;
                     d.offer_review = None;
@@ -214,7 +250,7 @@ impl Root {
                         }
                         d.data = Some(data);
                         d.cached = false;
-                        if rejected_write {
+                        if matches!(notice, Some(ReloadNotice::ImportedRejected)) {
                             d.error = Some(Key::WaitlistError);
                         }
                     }

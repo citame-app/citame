@@ -1,4 +1,4 @@
-import type { WaitlistAccept } from "@sob/contracts";
+import { intakeBookingIdentity, type WaitlistAccept } from "@sob/contracts";
 import {
   appointment,
   type Database,
@@ -51,7 +51,8 @@ export async function acceptWaitlist(
 ) {
   if (p.role === "client" && input.protectionWaiverReason)
     throw new DomainError("forbidden", "Customers cannot waive deposits");
-  const hash = selectionHash(input);
+  const { intakeReviewHash, intakeSubmissionIds, intakeResponses, ...terms } = input;
+  const hash = selectionHash({ ...terms, intake: intakeBookingIdentity(input) });
   return db.transaction(async (tx) => {
     const entry = await entryRow(tx, id, p, true);
     await lockScheduling(tx);
@@ -90,7 +91,7 @@ export async function acceptWaitlist(
       if (
         offer.acceptedBy !== p.userId ||
         offer.acceptKey !== input.idempotencyKey ||
-        offer.acceptHash !== hash ||
+        (offer.acceptHash !== hash && offer.acceptHash !== selectionHash(input)) ||
         !offer.appointmentId
       )
         throw new DomainError("invalid_state", "This offer has already been accepted");

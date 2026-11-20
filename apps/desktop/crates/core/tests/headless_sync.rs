@@ -27,6 +27,7 @@ use sob_core::calendar::{self, salon_tz};
 use sob_core::http::{
     DatedShiftCopy, DatedShiftEdit, DatedShiftSelection, HttpTransport, spawn_stream_listener,
 };
+use sob_core::intake::Answer;
 use sob_core::inventory::{
     ContentWriteError, LIVE_TOPIC as INVENTORY_TOPIC, LedgerQuery, PackageContent, PendingStock,
     ProductQuery, StockKind, StockWriteError,
@@ -2682,6 +2683,14 @@ fn native_waitlist_reviews_accepts_and_requeues_real_offers() {
     desk.sync();
     let catalog = catalog(&desk);
     let starts_at = free_slot(&desk, &catalog.staff);
+    let service = desk.rest_post(
+        "/admin/services",
+        json!({
+            "name": "Synthetic waitlist service with intake", "durationMinutes": 30,
+            "priceCents": 1500, "currency": "EUR", "staffIds": [catalog.staff],
+        }),
+    );
+    let service_id = service["id"].as_str().unwrap();
     let tz = salon_tz(&desk.store).unwrap();
     let policy = desk.transport.waitlist(1, true).unwrap().policy;
     if !policy.enabled {
@@ -2704,7 +2713,7 @@ fn native_waitlist_reviews_accepts_and_requeues_real_offers() {
                 .join_waitlist(&WaitlistRequest {
                     client_id,
                     staff_id: Some(catalog.staff.clone()),
-                    service_ids: vec![catalog.haircut.clone()],
+                    service_ids: vec![service_id.to_owned()],
                     from_date: start.date_naive(),
                     to_date: start.date_naive(),
                     from_time: start.format("%H:%M").to_string(),
@@ -2744,11 +2753,31 @@ fn native_waitlist_reviews_accepts_and_requeues_real_offers() {
         .iter()
         .find(|offer| offer.id == entries[1].id)
         .unwrap();
-    let (requirements, can_waive) = desk
-        .transport
-        .waitlist_offer_requirements(accepted)
-        .unwrap();
-    assert!(requirements.forms.is_empty() && can_waive);
+    let linked =
+        (std::env::var("SOB_TEST_REST_PREFIX").as_deref() == Ok("/api")).then(proxy_device);
+    let transport = linked
+        .as_ref()
+        .map_or(&desk.transport, |device| &device.transport);
+    let (initial, can_waive) = transport.waitlist_offer_requirements(accepted).unwrap();
+    assert!(initial.forms.is_empty() && can_waive);
+    let yes_no = uuid::Uuid::now_v7().to_string();
+    let note = uuid::Uuid::now_v7().to_string();
+    let draft = desk.rest_post("/admin/intake-forms", json!({
+        "idempotencyKey": uuid::Uuid::now_v7(), "definition": {
+            "title": "Synthetic offer review", "requiredAtBooking": true, "allowTeamResponses": true,
+            "allServices": false, "serviceIds": [service_id], "fields": [
+                {"id": yes_no, "label": "Is this answer yes?", "kind": "boolean", "required": true},
+                {"id": note, "label": "Multiline notes", "kind": "textarea", "required": true},
+            ],
+        }
+    }));
+    let form_id = draft["id"].as_str().unwrap();
+    desk.rest_post(
+        &format!("/admin/intake-forms/{form_id}/publish"),
+        json!({"version": draft["version"]}),
+    );
+    let (requirements, _) = transport.waitlist_offer_requirements(accepted).unwrap();
+    let form = &requirements.forms[0];
     let offer = accepted.offer.as_ref().unwrap();
     let input = AcceptOffer {
         version: accepted.version,
@@ -2757,10 +2786,34 @@ fn native_waitlist_reviews_accepts_and_requeues_real_offers() {
         idempotency_key: WaitlistRequest::new_key(),
         intake_review_hash: requirements.review_hash,
         intake_submission_ids: Vec::new(),
+        intake_responses: vec![
+            form.definition
+                .team_response(
+                    &form.id,
+                    true,
+                    [
+                        (yes_no.clone(), Answer::Boolean(false)),
+                        (note.clone(), Answer::Text("First line\nSecond line".into())),
+                    ]
+                    .into(),
+                )
+                .unwrap(),
+        ],
         protection_waiver_reason: None,
     };
+    assert!(matches!(
+        transport.accept_waitlist_offer(
+            &accepted.id,
+            &AcceptOffer {
+                intake_review_hash: initial.review_hash,
+                intake_responses: Vec::new(),
+                ..input.clone()
+            }
+        ),
+        Err(sob_core::waitlist::AcceptOfferError::IntakeChanged)
+    ));
     assert!(
-        desk.transport
+        transport
             .accept_waitlist_offer(
                 &accepted.id,
                 &AcceptOffer {
@@ -2770,20 +2823,73 @@ fn native_waitlist_reviews_accepts_and_requeues_real_offers() {
             )
             .is_err()
     );
-    let booked = desk
-        .transport
+    let booked = transport
         .accept_waitlist_offer(&accepted.id, &input)
         .unwrap()
         .appointment;
     assert_eq!(booked.starts_at, offer.starts_at);
+    let refreshed = AcceptOffer {
+        intake_review_hash: "a".repeat(64),
+        intake_responses: vec![
+            form.definition
+                .team_response(
+                    &form.id,
+                    true,
+                    [
+                        (yes_no.clone(), Answer::Boolean(false)),
+                        (
+                            note.clone(),
+                            Answer::Text("  First line\nSecond line  ".into()),
+                        ),
+                    ]
+                    .into(),
+                )
+                .unwrap(),
+        ],
+        ..input.clone()
+    };
     assert_eq!(
-        desk.transport
-            .accept_waitlist_offer(&accepted.id, &input)
+        transport
+            .accept_waitlist_offer(&accepted.id, &refreshed)
             .unwrap()
             .appointment
             .id,
         booked.id
     );
+    assert!(
+        transport
+            .accept_waitlist_offer(
+                &accepted.id,
+                &AcceptOffer {
+                    intake_responses: vec![
+                        form.definition
+                            .team_response(
+                                &form.id,
+                                true,
+                                [
+                                    (yes_no.clone(), Answer::Boolean(true)),
+                                    (note.clone(), Answer::Text("First line\nSecond line".into())),
+                                ]
+                                .into()
+                            )
+                            .unwrap()
+                    ],
+                    ..input.clone()
+                }
+            )
+            .is_err()
+    );
+    let responses = desk.rest_get(&format!("/admin/clients/{}/intake", accepted.client_id));
+    let rows = responses["submissions"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["appointmentId"], booked.id);
+    assert_eq!(rows[0]["source"], "team");
+    let detail = desk.rest_get(&format!(
+        "/intake/submissions/{}",
+        rows[0]["id"].as_str().unwrap()
+    ));
+    assert_eq!(detail["answers"][&yes_no], false);
+    assert_eq!(detail["answers"][&note], "First line\nSecond line");
     let requeue = desk
         .transport
         .requeue_waitlist_offer(

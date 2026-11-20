@@ -71,6 +71,42 @@ fn signed_in(base: &str) -> HttpTransport {
 }
 
 #[test]
+fn waitlist_storage_rejection_is_distinct_from_a_rate_limited_retry() {
+    let (base, _) = serve(vec![
+        http(
+            "409 Conflict",
+            &[],
+            r#"{"error":{"code":"storage_limit","message":"Too many responses"}}"#,
+        ),
+        http(
+            "429 Too Many Requests",
+            &["Retry-After: 2"],
+            r#"{"error":{"code":"rate_limited"}}"#,
+        ),
+    ]);
+    let input = AcceptOffer {
+        version: 1,
+        offer_id: uuid::Uuid::now_v7().to_string(),
+        expected_total_cents: 1500,
+        idempotency_key: WaitlistRequest::new_key(),
+        intake_review_hash: "0".repeat(64),
+        intake_submission_ids: vec![],
+        intake_responses: vec![],
+        protection_waiver_reason: None,
+    };
+    let entry = uuid::Uuid::now_v7().to_string();
+    let transport = signed_in(&base);
+    assert!(matches!(
+        transport.accept_waitlist_offer(&entry, &input),
+        Err(AcceptOfferError::ResponseLimit)
+    ));
+    assert!(matches!(
+        transport.accept_waitlist_offer(&entry, &input),
+        Err(AcceptOfferError::Transport(TransportError::RateLimited(_)))
+    ));
+}
+
+#[test]
 fn bank_reconciliation_checks_eligibility_and_reloads_only_the_reviewed_receipt() {
     use crate::billing::BankPaymentOutcome;
     use serde_json::{Value, json};

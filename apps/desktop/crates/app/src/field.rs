@@ -6,7 +6,9 @@ use gpui::{
     FocusHandle, Focusable, IntoElement, KeyDownEvent, MouseButton, Pixels, Point, Render,
     ShapedLine, SharedString, TextRun, UTF16Selection, Window, canvas, div, fill, point, px, size,
 };
+use std::cell::Cell;
 use std::ops::Range;
+use std::rc::Rc;
 use unicode_segmentation::UnicodeSegmentation;
 
 pub enum FieldEvent {
@@ -28,6 +30,7 @@ pub struct TextField {
     scroll: Pixels,
     selecting: bool,
     line_paste_limit: Option<usize>,
+    paste_newlines_remaining: Option<Rc<Cell<usize>>>,
 }
 impl EventEmitter<FieldEvent> for TextField {}
 impl Focusable for TextField {
@@ -50,6 +53,7 @@ impl TextField {
             scroll: px(0.),
             selecting: false,
             line_paste_limit: None,
+            paste_newlines_remaining: None,
         }
     }
     pub fn text(&self) -> &str {
@@ -57,6 +61,11 @@ impl TextField {
     }
     pub fn with_line_paste(mut self, limit: usize) -> Self {
         self.line_paste_limit = Some(limit);
+        self
+    }
+    pub fn with_bounded_line_paste(mut self, limit: usize, remaining: Rc<Cell<usize>>) -> Self {
+        self.line_paste_limit = Some(limit);
+        self.paste_newlines_remaining = Some(remaining);
         self
     }
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
@@ -174,6 +183,14 @@ impl TextField {
             self.replace(None, &text, false, None, cx);
             return;
         };
+        if let Some(remaining) = &self.paste_newlines_remaining {
+            let newlines = 1 + rest.bytes().filter(|byte| *byte == b'\n').count();
+            let Some(next) = remaining.get().checked_sub(newlines) else {
+                cx.emit(FieldEvent::PasteTooLong);
+                return;
+            };
+            remaining.set(next);
+        }
         let selection = self.selection();
         let suffix = &self.text[selection.end..];
         let tail = format!("{rest}{suffix}")
@@ -527,6 +544,30 @@ mod tests {
                 assert_eq!(field.text(), "Start\tFirst");
                 field.paste(&"x".repeat(21), cx);
                 assert_eq!(field.text(), "Start\tFirst");
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    async fn a_paste_over_the_shared_line_limit_preserves_text_and_selection(
+        cx: &mut TestAppContext,
+    ) {
+        let budget = Rc::new(Cell::new(0));
+        let window = cx.add_window(|_, cx| {
+            TextField::new("", false, cx).with_bounded_line_paste(5, budget.clone())
+        });
+        window
+            .update(cx, |field, _, cx| {
+                field.set_text("ab", cx);
+                field.move_cursor(0, false, cx);
+                field.paste("x\ny", cx);
+                assert_eq!(field.text(), "ab");
+                assert_eq!(field.selection(), 0..0);
+                assert_eq!(budget.get(), 0);
+                budget.set(1);
+                field.paste("x\ny", cx);
+                assert_eq!(field.text(), "x");
+                assert_eq!(budget.get(), 0);
             })
             .unwrap();
     }

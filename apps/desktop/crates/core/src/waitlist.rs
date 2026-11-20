@@ -1,3 +1,5 @@
+use crate::intake::{FormDefinition, IntakeResponse};
+use crate::sync::TransportError;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -103,7 +105,19 @@ pub struct AcceptedOffer {
     pub appointment: BookedAppointment,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, thiserror::Error)]
+pub enum AcceptOfferError {
+    #[error("the offer needs to be reviewed against the current forms")]
+    IntakeChanged,
+    #[error("the server reached its saved response limit")]
+    ResponseLimit,
+    #[error("the offer acceptance was rejected")]
+    Rejected,
+    #[error(transparent)]
+    Transport(#[from] TransportError),
+}
+
+#[derive(Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AcceptOffer {
     pub version: u32,
@@ -112,8 +126,54 @@ pub struct AcceptOffer {
     pub idempotency_key: String,
     pub intake_review_hash: String,
     pub intake_submission_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub intake_responses: Vec<IntakeResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub protection_waiver_reason: Option<String>,
+}
+
+#[derive(Default)]
+pub struct OfferIntakeSelection {
+    pub saved: Vec<String>,
+    pub inline: Vec<IntakeResponse>,
+}
+
+impl WaitlistEntry {
+    pub fn reviewable_offer(
+        &self,
+        now: DateTime<Utc>,
+        can_waive: bool,
+        reason: &str,
+    ) -> Option<&WaitlistOffer> {
+        let offer = self.offer.as_ref()?;
+        (self.can_manage
+            && self.state == WaitlistState::Offered
+            && offer.expires_at > now
+            && (!offer.policy.enabled
+                || (can_waive && (8..=300).contains(&reason.trim().encode_utf16().count()))))
+        .then_some(offer)
+    }
+
+    pub fn reviewed_acceptance(
+        &self,
+        now: DateTime<Utc>,
+        can_waive: bool,
+        waiver: &str,
+        review_hash: String,
+        intake: OfferIntakeSelection,
+    ) -> Option<AcceptOffer> {
+        let offer = self.reviewable_offer(now, can_waive, waiver)?;
+        Some(AcceptOffer {
+            version: self.version,
+            offer_id: offer.id.clone(),
+            expected_total_cents: offer.price_cents,
+            idempotency_key: WaitlistRequest::new_key(),
+            intake_review_hash: review_hash,
+            intake_submission_ids: intake.saved,
+            intake_responses: intake.inline,
+            protection_waiver_reason: offer.policy.enabled.then(|| waiver.trim().to_owned()),
+        })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -129,13 +189,6 @@ pub struct OfferRequirements {
 pub struct RequiredForm {
     pub id: String,
     pub definition: FormDefinition,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FormDefinition {
-    pub title: String,
-    pub required_at_booking: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
