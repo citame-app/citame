@@ -112,11 +112,13 @@ test("walk-in receipts require a final catalog price before money is collected",
   expect(sale.appointmentId).toBeNull();
   expect(sale.lines[0]).toMatchObject({ pricePending: true, minimumUnitAmountCents: 3000 });
   expect(
-    (await call(`/admin/commerce/checkouts/${sale.id}/payments`, "POST", {
-      method: "external_card",
-      amountCents: 3000,
-      idempotencyKey: crypto.randomUUID(),
-    })).status,
+    (
+      await call(`/admin/commerce/checkouts/${sale.id}/payments`, "POST", {
+        method: "external_card",
+        amountCents: 3000,
+        idempotencyKey: crypto.randomUUID(),
+      })
+    ).status,
   ).toBe(409);
   const finalized = await call(`/admin/commerce/checkouts/${sale.id}/prices`, "PUT", {
     version: sale.pricingVersion,

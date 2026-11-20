@@ -118,7 +118,7 @@ export function toAppointment(
         ...(s.sourceUnpriced && s.reviewedPriceCents === null
           ? { sourceUnpriced: true as const }
           : {}),
-    ...(s.priceType !== "fixed" ? { priceType: s.priceType } : {}),
+        ...(s.priceType !== "fixed" ? { priceType: s.priceType } : {}),
         currency: s.currency,
       })),
     createdAt: row.createdAt.toISOString(),

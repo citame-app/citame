@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { type Database, waitlistSourceEntry } from "@sob/db";
+import type { Database, waitlistSourceEntry } from "@sob/db";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { fingerprint, sourceUuid } from "./plan";

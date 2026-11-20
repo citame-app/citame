@@ -24,10 +24,10 @@ import { planBooksyTransfer, sourceUuid, stableJson, summarizeTransferIssues } f
 import { reviewBooksyCombinations, verifyBookedBooksyCombinations } from "./source-combinations";
 import {
   BOOKSY_HIDDEN_PRICE,
+  type BooksySourceReadModel,
   booksyBookedAddonsSchema,
   booksyBookedServiceSchema,
   booksyCents,
-  type BooksySourceReadModel,
   projectBookedAddons,
   sourceInstant,
 } from "./source-read-model";

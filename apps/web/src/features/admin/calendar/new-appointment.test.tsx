@@ -117,6 +117,26 @@ async function clickReady(name: string) {
   fireEvent.click(button);
 }
 
+function CalendarSelection({
+  first,
+  captureSelect,
+}: {
+  first: NewAppointmentInitial;
+  captureSelect: (select: (slot: NewAppointmentInitial) => void) => void;
+}) {
+  const [initial, select] = useState(first);
+  captureSelect(select);
+  return (
+    <NewAppointmentSheet
+      open
+      onOpenChange={() => {}}
+      initial={initial}
+      role="owner"
+      ownStaffId={null}
+    />
+  );
+}
+
 describe("NewAppointmentSheet", () => {
   test("is prefilled from the clicked slot", async () => {
     open();
@@ -135,20 +155,14 @@ describe("NewAppointmentSheet", () => {
   test("rerenders keep the draft for the same slot and a different slot starts a clean draft", async () => {
     const first = { staffId: ANA, date: "2026-03-09", minutesOfDay: 540 };
     let selectSlot: (slot: NewAppointmentInitial) => void = () => {};
-    function CalendarSelection() {
-      const [initial, select] = useState<NewAppointmentInitial>(first);
-      selectSlot = select;
-      return (
-        <NewAppointmentSheet
-          open
-          onOpenChange={() => {}}
-          initial={initial}
-          role="owner"
-          ownStaffId={null}
-        />
-      );
-    }
-    renderApp(<CalendarSelection />);
+    renderApp(
+      <CalendarSelection
+        first={first}
+        captureSelect={(select) => {
+          selectSlot = select;
+        }}
+      />,
+    );
     fireEvent.click(await screen.findByRole("radio", { name: "New client" }));
     fireEvent.change(screen.getByLabelText("Full name"), { target: { value: "Private draft" } });
     fireEvent.click(await screen.findByRole("checkbox", { name: /Haircut/ }));

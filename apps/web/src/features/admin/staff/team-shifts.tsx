@@ -114,9 +114,9 @@ export function TeamShifts({
           {t("shifts.noTeam")}
         </p>
       ) : (
-        <div
-          role="region"
+        <section
           aria-labelledby={caption}
+          // biome-ignore lint/a11y/noNoninteractiveTabindex: Keyboard users need to focus this scroll region.
           tabIndex={0}
           className="max-h-[65dvh] overflow-auto rounded-xl border border-line bg-surface focus-visible:outline-2 focus-visible:outline-ring"
         >
@@ -203,7 +203,7 @@ export function TeamShifts({
               ))}
             </tbody>
           </table>
-        </div>
+        </section>
       )}
     </section>
   );

@@ -18,9 +18,9 @@ import { unpackBooksyJson } from "./jsonb-codec";
 import {
   booksyAddonLinks,
   fingerprint,
+  matchesBooksyTarget,
   planBooksyTransfer,
   sourceUuid,
-  matchesBooksyTarget,
 } from "./plan";
 import type { BooksyArchiveManifest } from "./stage";
 import { verifyArtifacts } from "./vault";

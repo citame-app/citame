@@ -90,9 +90,7 @@ function ServiceContext({
     appointmentVersion,
     version: row?.version ?? 0,
     note: row?.internalNote ?? "",
-    requested: row
-      ? Boolean(row.requestedStaffId)
-      : (badges?.some((b) => b.requested) ?? false),
+    requested: row ? Boolean(row.requestedStaffId) : (badges?.some((b) => b.requested) ?? false),
   };
   const [draft, setDraft] = useState<NoteDraft | null>(null);
   const values = draft ?? latest;

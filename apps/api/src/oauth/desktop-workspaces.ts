@@ -1,7 +1,7 @@
 import {
+  type DesktopWorkspace,
   desktopWorkspaceSchema,
   permissionsFor,
-  type DesktopWorkspace,
   type StaffPermissions,
 } from "@sob/contracts";
 import type { Principal } from "../auth/principal";

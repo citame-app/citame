@@ -8,8 +8,8 @@ import {
   type reviewAdminQuerySchema,
   type reviewPrivateQuerySchema,
   type reviewPublicQuerySchema,
-  type reviewRequestQuerySchema,
   reviewPublicSchema,
+  type reviewRequestQuerySchema,
   reviewServicesSchema,
   reviewSocialSchema,
 } from "@sob/contracts";

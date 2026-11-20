@@ -39,9 +39,7 @@ test("the restored waitlist rehearsal preserves originals and rolls back synthet
         timezone: "Europe/Madrid",
       })
       .onConflictDoNothing();
-    const empty = await db.transaction((tx) =>
-      checkRestoredWaitlist(tx, operator),
-    );
+    const empty = await db.transaction((tx) => checkRestoredWaitlist(tx, operator));
     expect(empty).toMatchObject({
       sourceRequests: 0,
       preparedOnce: 0,
@@ -102,9 +100,9 @@ test("the restored waitlist rehearsal preserves originals and rolls back synthet
         target: waitlistPolicy.id,
         set: { terms: { enabled: true, offerMinutes: 30 } },
       });
-    await expect(
-      db.transaction((tx) => checkRestoredWaitlist(tx, operator)),
-    ).rejects.toThrow("must keep waitlist offers paused");
+    await expect(db.transaction((tx) => checkRestoredWaitlist(tx, operator))).rejects.toThrow(
+      "must keep waitlist offers paused",
+    );
     expect(await db.select().from(waitlistSourceEntry)).toEqual(originals);
   } finally {
     await database.close();

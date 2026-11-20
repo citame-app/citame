@@ -38,9 +38,9 @@ test("named connections require an explicit database in the URL", async () => {
 test.each(["host=127.0.0.2", "port=2", "socket=/tmp/citame-named-db-test"])(
   "named connections reject endpoint overrides (%s) before connecting",
   async (query) => {
-    await expect(connectToNamedDatabase(`postgres://127.0.0.1:1/intended?${query}`)).rejects.toThrow(
-      "The selected PostgreSQL endpoint differs from the connection URL",
-    );
+    await expect(
+      connectToNamedDatabase(`postgres://127.0.0.1:1/intended?${query}`),
+    ).rejects.toThrow("The selected PostgreSQL endpoint differs from the connection URL");
   },
 );
 

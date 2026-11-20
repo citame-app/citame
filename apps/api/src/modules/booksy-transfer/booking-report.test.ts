@@ -3,8 +3,8 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   renameSync,
   rmSync,
   statSync,

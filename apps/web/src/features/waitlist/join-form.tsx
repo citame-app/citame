@@ -226,7 +226,13 @@ export function WaitlistJoinForm({
           onChange={setChosenStaff}
           options={[
             ...(imported
-              ? [{ value: unreviewedStaff, label: t("waitlist.importedChooseStaff"), disabled: true }]
+              ? [
+                  {
+                    value: unreviewedStaff,
+                    label: t("waitlist.importedChooseStaff"),
+                    disabled: true,
+                  },
+                ]
               : []),
             ...(!ownOnly ? [{ value: "", label: t("waitlist.anyStaff") }] : []),
             ...qualified.map((s) => ({ value: s.id, label: s.displayName })),

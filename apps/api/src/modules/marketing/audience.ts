@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { CampaignDraft } from "@sob/contracts";
-import { type Database } from "@sob/db";
+import type { Database } from "@sob/db";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import type { NotificationConfig } from "../../config";

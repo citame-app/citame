@@ -16,7 +16,7 @@ import { EmptyState, ErrorState, Skeleton, useOnline } from "~/components/ui/sta
 import { usePolicySubmission } from "~/features/admin/policy-submission";
 import { UnsavedGuard } from "~/features/admin/unsaved-guard";
 import { useDebounced } from "~/features/admin/use-debounced";
-import { type Translator } from "~/i18n";
+import type { Translator } from "~/i18n";
 import { useI18n } from "~/i18n/react";
 import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";

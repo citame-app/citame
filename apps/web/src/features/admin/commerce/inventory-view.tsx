@@ -1,9 +1,9 @@
 import {
   type PackageContent,
-  packageContentSchema,
-  permissionsFor,
   type Product,
   type ProductSort,
+  packageContentSchema,
+  permissionsFor,
   productSortSchema,
   type StaffAccessPreset,
   type StockLedgerQuery,

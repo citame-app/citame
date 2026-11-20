@@ -5,10 +5,10 @@ import { readBooksyPaymentEvidence } from "./payment-evidence";
 import { fingerprint } from "./plan";
 import {
   BOOKSY_HIDDEN_PRICE,
+  type BooksySourceReadModel,
   booksyBookingLeaves,
   booksyCents,
   sourceInstant,
-  type BooksySourceReadModel,
 } from "./source-read-model";
 
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);

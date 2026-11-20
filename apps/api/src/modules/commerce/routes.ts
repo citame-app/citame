@@ -26,7 +26,6 @@ import { errorBody, parseOrThrow, readJson } from "../../http";
 import { recurringSettings } from "../../payments/recurring-settings";
 import { InvalidBankNotificationError, RedsysGateway } from "../../payments/redsys";
 import { checkoutRewardRoutes } from "../rewards/routes";
-import { finalizeCheckoutPrices } from "./prices";
 import {
   confirmImportedPartialPayment,
   confirmImportedSettlement,
@@ -35,6 +34,7 @@ import {
   previewImportedPartialPayment,
   reviewImportedAppointmentPrice,
 } from "./appointment-billing";
+import { finalizeCheckoutPrices } from "./prices";
 import {
   adjustCash,
   closeCashSession,

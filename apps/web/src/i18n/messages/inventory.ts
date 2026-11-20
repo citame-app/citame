@@ -204,7 +204,8 @@ export const inventoryEsAR: Record<keyof typeof inventoryEn, string> = {
   "inventory.history.export": "Descargar movimientos en CSV",
   "inventory.history.latest": "Ver los últimos movimientos",
   "inventory.history.newer": "Hay nuevos movimientos de stock.",
-  "inventory.history.restored": "El historial de stock cambió tras una restauración. Carga los últimos movimientos.",
+  "inventory.history.restored":
+    "El historial de stock cambió tras una restauración. Carga los últimos movimientos.",
   "inventory.previous": "Página anterior",
   "inventory.next": "Página siguiente",
   "inventory.back": "Volver al inventario",

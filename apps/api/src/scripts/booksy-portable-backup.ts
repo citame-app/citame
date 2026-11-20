@@ -22,15 +22,15 @@ import {
   operationalProbePrefix,
   pauseBooksyCopyBooking,
 } from "../modules/booksy-transfer/operational-copy-check";
+import { OperationalDesktopProofError } from "../modules/booksy-transfer/operational-desktop-check";
+import { OperationalMoveProofError } from "../modules/booksy-transfer/operational-move-check";
 import { inspectNativeBooksy } from "../modules/booksy-transfer/operational-rehearsal";
 import { fingerprint } from "../modules/booksy-transfer/plan";
 import { rehearseRecoveredReplica } from "../modules/booksy-transfer/replica-check";
-import { OperationalMoveProofError } from "../modules/booksy-transfer/operational-move-check";
-import { OperationalDesktopProofError } from "../modules/booksy-transfer/operational-desktop-check";
 import { rehearseRestoredSchedule } from "../modules/booksy-transfer/schedule-check";
 import { restoredStockEvidenceSchema } from "../modules/booksy-transfer/stock-check";
-import { restoredWaitlistEvidenceSchema } from "../modules/booksy-transfer/waitlist-check";
 import { privateWrite } from "../modules/booksy-transfer/vault";
+import { restoredWaitlistEvidenceSchema } from "../modules/booksy-transfer/waitlist-check";
 import { headSeq } from "../modules/sync/pull";
 import { dumpDatabase, fingerprintTables, restoreDatabase } from "./booksy-backup";
 

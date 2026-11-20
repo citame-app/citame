@@ -36,9 +36,7 @@ export const staffProfile = pgTable(
     accessVersion: integer().notNull().default(1),
     maxConcurrent: integer().notNull().default(1),
     capacityVersion: integer().notNull().default(1),
-    capacityEffectiveAt: timestamptz()
-      .notNull()
-      .default(sql`'epoch'::timestamptz`),
+    capacityEffectiveAt: timestamptz().notNull().default(sql`'epoch'::timestamptz`),
     /** Last removal's write fence, kept while there is no portrait image. */
     portraitAbsenceVersion: uuid(),
     createdAt: createdAt(),

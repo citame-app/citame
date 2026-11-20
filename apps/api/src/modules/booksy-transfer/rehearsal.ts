@@ -17,11 +17,11 @@ import { packBooksyJson } from "./jsonb-codec";
 import {
   booksyAddonLinks,
   fingerprint,
+  matchesBooksyTarget,
+  normalizedBooksyCategory,
   planBooksyTransfer,
   sourceUuid,
   type TransferPlan,
-  matchesBooksyTarget,
-  normalizedBooksyCategory,
   targetFingerprint,
 } from "./plan";
 import { verifyBooksyAddonLinks } from "./verify";

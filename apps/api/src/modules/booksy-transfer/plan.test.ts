@@ -63,7 +63,12 @@ test("catalogue migration preserves a legacy receipt without masking later catal
   const expected = fingerprint(original);
   expect(matchesBooksyTarget("services", migrated, expected, original.category)).toBe(true);
   expect(
-    matchesBooksyTarget("services", { ...migrated, category: "Nails" }, expected, original.category),
+    matchesBooksyTarget(
+      "services",
+      { ...migrated, category: "Nails" },
+      expected,
+      original.category,
+    ),
   ).toBe(false);
   expect(
     matchesBooksyTarget("services", { ...migrated, sortOrder: 1 }, expected, original.category),

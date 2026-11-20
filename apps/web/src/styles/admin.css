@@ -329,7 +329,8 @@ main[data-area="admin"] {
 .catalog-directory-categories :is(button, .settings-section-link):hover {
   background: var(--surface-sunken);
 }
-.catalog-directory-categories :is(button[aria-pressed="true"], .settings-section-link[aria-current="page"]) {
+.catalog-directory-categories
+  :is(button[aria-pressed="true"], .settings-section-link[aria-current="page"]) {
   background: var(--accent-soft);
   color: var(--accent-soft-fg);
 }

@@ -42,9 +42,7 @@ export const stockReservation = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [
-    index("stock_reservation_expiry_idx")
-      .on(t.expiresAt)
-      .where(sql`${t.status} = 'reserved'`),
+    index("stock_reservation_expiry_idx").on(t.expiresAt).where(sql`${t.status} = 'reserved'`),
     index("stock_reservation_checkout_idx").on(t.checkoutId),
     check("stock_reservation_quantity_positive", sql`${t.quantity} between 1 and 999999999`),
   ],
@@ -64,9 +62,7 @@ export const stockMovement = pgTable(
     createdBy: text().references(() => user.id, { onDelete: "set null" }),
     idempotencyKey: text().notNull(),
     requestHash: text().notNull(),
-    ledgerPosition: bigint({ mode: "bigint" })
-      .notNull()
-      .default(sql`0`),
+    ledgerPosition: bigint({ mode: "bigint" }).notNull().default(sql`0`),
     createdAt: createdAt(),
   },
   (t) => [

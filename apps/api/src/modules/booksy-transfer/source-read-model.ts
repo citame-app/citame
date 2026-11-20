@@ -700,7 +700,9 @@ export async function prepareBooksySourceReadModel(
       throw new Error("Booked treatment differs between the calendar and reservation detail");
     const requested = z.boolean().nullable().parse(sub.is_staffer_requested_by_client);
     if ((requested === true) !== (b.is_staffer_requested_by_client === true))
-      throw new Error("Booked staff preference differs between the calendar and reservation detail");
+      throw new Error(
+        "Booked staff preference differs between the calendar and reservation detail",
+      );
     const staff = b.resources.filter((r) => sourceStaff.has(r.id));
     if (staff.length !== 1 || sub.staffer_id !== staff[0]!.id)
       throw new Error("Booked professional is ambiguous");

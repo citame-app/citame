@@ -4,7 +4,7 @@ import { and, count, sql } from "drizzle-orm";
 import { requirePermission } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import { streamCsv } from "../../csv";
-import { productFilter, productOrder, type ProductRow } from "./service";
+import { type ProductRow, productFilter, productOrder } from "./service";
 
 export async function inventoryReport(db: Database, filters: ProductFilters, principal: Principal) {
   requirePermission(principal, "readInventory");

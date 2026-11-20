@@ -160,7 +160,7 @@ export async function createService(
             : input.bookingIntervalMinutes,
         processingStartMinutes: input.processing?.startsAfterMinutes ?? null,
         processingMinutes: input.processing?.minutes ?? null,
-      color: input.color ?? parent?.color ?? null,
+        color: input.color ?? parent?.color ?? null,
         durationMinutes: input.durationMinutes,
         bufferMinutes: input.bufferMinutes ?? parent?.bufferMinutes ?? 0,
         priceCents: input.priceCents ?? 0,

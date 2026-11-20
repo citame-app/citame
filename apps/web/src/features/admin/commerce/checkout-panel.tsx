@@ -294,7 +294,9 @@ export function CheckoutPanel({
         !form &&
         !order.reward &&
         order.appointmentId &&
-              !order.externalBalance && order.clientId && !unresolved && <PassTender checkoutId={order.id} mode={mode} />}
+        !order.externalBalance &&
+        order.clientId &&
+        !unresolved && <PassTender checkoutId={order.id} mode={mode} />}
       {order.status === "open" && payableCents > 0 && !pending && !review && !form && (
         <div>
           {capabilities.isPending ? (

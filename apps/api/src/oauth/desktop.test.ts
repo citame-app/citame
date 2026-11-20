@@ -2,11 +2,11 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { generateKeyPairSync, randomBytes, sign } from "node:crypto";
 import {
   adminReviewsSchema,
+  DESKTOP_CLIENT_ID,
+  DESKTOP_SIGN_IN_SCOPE,
   dateShiftPreviewSchema,
   dateShiftResultSchema,
   dateShiftsResponseSchema,
-  DESKTOP_CLIENT_ID,
-  DESKTOP_SIGN_IN_SCOPE,
   reviewPrivateSchema,
   syncPullResponseSchema,
 } from "@sob/contracts";

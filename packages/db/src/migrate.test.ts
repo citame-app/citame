@@ -248,7 +248,9 @@ for (const prefix of ["local", "upstream-first", "upstream-full"] as const) {
           sort_order: prefix === "upstream-full" ? 4 : 0,
           booking_interval_minutes: prefix === "upstream-full" ? 20 : null,
         });
-        await target.db.execute(sql`update service set category = ${longCategory} where id = ${id}`);
+        await target.db.execute(
+          sql`update service set category = ${longCategory} where id = ${id}`,
+        );
       } finally {
         await target.close();
       }

@@ -1,4 +1,4 @@
-import { createCheckoutSchema, stockMovementInputSchema, type Product } from "@sob/contracts";
+import { createCheckoutSchema, type Product, stockMovementInputSchema } from "@sob/contracts";
 import { retailProduct, stockMovement } from "@sob/db";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";

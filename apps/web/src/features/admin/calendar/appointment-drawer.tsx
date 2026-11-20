@@ -242,7 +242,8 @@ function DrawerBody({
               <li key={`${s.serviceId}-${s.name}`} className="flex justify-between gap-3">
                 <span>{s.name}</span>
                 <span className="tabular-nums text-muted">
-                  {s.priceDisplayLabel ?? (s.sourceUnpriced ? t("badge.unquoted") : priceLabel(t, locale, s, true))}
+                  {s.priceDisplayLabel ??
+                    (s.sourceUnpriced ? t("badge.unquoted") : priceLabel(t, locale, s, true))}
                 </span>
               </li>
             ))}

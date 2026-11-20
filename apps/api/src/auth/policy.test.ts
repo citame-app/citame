@@ -337,7 +337,10 @@ describe("authorizeCalendarQuery", () => {
   });
 
   test("staff are pinned to their own calendar; naming anyone else is forbidden", () => {
-    expect(authorizeCalendarQuery(staffA, range)).toEqual({ staffIds: [id(0xa)], includeBilling: true });
+    expect(authorizeCalendarQuery(staffA, range)).toEqual({
+      staffIds: [id(0xa)],
+      includeBilling: true,
+    });
     expect(authorizeCalendarQuery(staffA, { ...range, staffIds: [id(0xa)] })).toEqual({
       staffIds: [id(0xa)],
       includeBilling: true,

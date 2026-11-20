@@ -51,9 +51,9 @@ export function ClientReportView({
         </div>
       </dl>
       {report.rows.length ? (
-        <div
-          role="region"
+        <section
           aria-labelledby={captionId}
+          // biome-ignore lint/a11y/noNoninteractiveTabindex: Keyboard users need to focus this scroll region.
           tabIndex={0}
           className="max-h-[28rem] overflow-auto rounded-xl border border-line bg-surface focus-visible:outline-2 focus-visible:outline-ring"
         >
@@ -90,12 +90,12 @@ export function ClientReportView({
               ))}
             </tbody>
           </table>
-        </div>
+        </section>
       ) : (
         <EmptyState title={t("reports.clients.empty")} />
       )}
       {report.groups && (
-        <section aria-labelledby={groupsId} className="space-y-3">
+        <section className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 id={groupsId} className="text-heading">
               {t("reports.clients.groups")}
@@ -108,9 +108,9 @@ export function ClientReportView({
           </div>
           <p className="text-sm text-muted">{t("reports.clients.groupsBasis")}</p>
           {report.groups.length > 0 ? (
-            <div
-              role="region"
+            <section
               aria-labelledby={groupsId}
+              // biome-ignore lint/a11y/noNoninteractiveTabindex: Keyboard users need to focus this scroll region.
               tabIndex={0}
               className="max-h-[28rem] overflow-auto rounded-xl border border-line bg-surface focus-visible:outline-2 focus-visible:outline-ring"
             >
@@ -138,7 +138,7 @@ export function ClientReportView({
                   ))}
                 </tbody>
               </table>
-            </div>
+            </section>
           ) : (
             <EmptyState title={t("reports.clients.groupsEmpty")} />
           )}

@@ -656,7 +656,11 @@ function ServiceSheet({
         >
           <fieldset disabled={save.isPending || reload.isPending} className="space-y-5">
             <div className="flex flex-wrap gap-2">
-              <Button type="button" variant="secondary" onClick={() => staffSection.current?.focus()}>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => staffSection.current?.focus()}
+              >
                 {t("pos.employees")}
               </Button>
               <Button
