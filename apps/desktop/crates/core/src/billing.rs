@@ -127,6 +127,7 @@ pub struct ImportedPartialPaymentTerms {
 pub struct AppointmentCheckout {
     pub id: String,
     pub appointment_id: Option<String>,
+    client_id: Option<Uuid>,
     pub currency: String,
     pub status: String,
     pub total_cents: u32,
@@ -158,6 +159,8 @@ impl AppointmentCheckout {
                 "cash" => ReceiptTender::Cash,
                 "external_card" => ReceiptTender::ExternalCard,
                 "gift_card" => ReceiptTender::GiftCard,
+                "package" => ReceiptTender::Package,
+                "membership" => ReceiptTender::Membership,
                 _ => return None,
             };
             let already_committed: u64 = self
@@ -178,6 +181,17 @@ impl AppointmentCheckout {
 
     pub fn allows_gift_card(&self) -> bool {
         self.external_balance.is_none() && self.lines.iter().all(|line| line.kind != "gift_card")
+    }
+
+    pub fn allows_pass(&self) -> bool {
+        self.appointment_id.is_some()
+            && self.client_id.is_some()
+            && self.external_balance.is_none()
+            && self.collectible_cents() > 0
+            && !self
+                .protection
+                .as_ref()
+                .is_some_and(|p| p.state == "pending")
     }
 
     pub fn can_void(&self) -> bool {
@@ -341,6 +355,15 @@ pub struct RefundablePayment {
     pub available: u32,
 }
 
+impl RefundablePayment {
+    pub fn is_full_visit(self) -> bool {
+        matches!(
+            self.tender,
+            ReceiptTender::Package | ReceiptTender::Membership
+        )
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RefundAttempt {
@@ -368,6 +391,18 @@ pub enum ReceiptTender {
     Cash,
     ExternalCard,
     GiftCard,
+    Package,
+    Membership,
+}
+
+#[derive(Clone, Debug)]
+pub struct EligiblePassUse {
+    pub(super) period_id: Uuid,
+    pub(super) line_id: Uuid,
+    pub kind: ReceiptTender,
+    pub name: String,
+    pub description: String,
+    pub amount_cents: u32,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
@@ -378,6 +413,10 @@ pub struct PaymentAttempt {
     pub(crate) idempotency_key: uuid::Uuid,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) gift_card_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pass_period_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) checkout_line_id: Option<Uuid>,
 }
 
 impl PaymentAttempt {
@@ -387,6 +426,8 @@ impl PaymentAttempt {
             amount_cents,
             idempotency_key: uuid::Uuid::now_v7(),
             gift_card_code: None,
+            pass_period_id: None,
+            checkout_line_id: None,
         }
     }
 
@@ -394,6 +435,17 @@ impl PaymentAttempt {
         let mut attempt = Self::new(ReceiptTender::GiftCard, amount_cents);
         attempt.gift_card_code = Some(normalize_gift_card_code(code)?);
         Some(attempt)
+    }
+
+    pub fn for_pass(choice: &EligiblePassUse) -> Self {
+        let mut attempt = Self::new(choice.kind, choice.amount_cents);
+        attempt.pass_period_id = Some(choice.period_id);
+        attempt.checkout_line_id = Some(choice.line_id);
+        attempt
+    }
+
+    pub fn tender(&self) -> ReceiptTender {
+        self.method
     }
 
     pub fn amount_cents(&self) -> u32 {

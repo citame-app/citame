@@ -749,6 +749,7 @@ impl Device {
         serde_json::from_str(&resp.body_mut().read_to_string().unwrap()).unwrap()
     }
 
+    #[track_caller]
     fn rest_post(&self, path: &str, body: serde_json::Value) -> serde_json::Value {
         let prefix = std::env::var("SOB_TEST_REST_PREFIX").unwrap_or_default();
         let mut resp = ureq::post(&format!("{}{prefix}{path}", self.base))
@@ -1218,6 +1219,124 @@ fn native_gift_card_redemption_and_refund_update_cloud_balance_once() {
     );
     let cloud = browser.rest_get(&format!("/admin/gift-cards/{gift_id}"));
     assert_eq!(cloud["balanceCents"], 1100);
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_redeems_and_restores_the_reviewed_pass_visit_once() {
+    let mut browser = Device::sign_in();
+    browser.sync();
+    let catalog = catalog(&browser);
+    let slot = free_slot(&browser, &catalog.staff);
+    let client = ops::create_client(&mut browser.store, "Synthetic pass customer", None).unwrap();
+    let service = browser.rest_post(
+        "/admin/services",
+        json!({
+            "name": "Synthetic service eligible for the pass",
+            "durationMinutes": 30,
+            "priceCents": 3500,
+            "currency": "EUR",
+            "staffIds": [catalog.staff],
+        }),
+    );
+    let service_id = service["id"].as_str().unwrap();
+    browser.sync();
+    let plan = browser.rest_post(
+        "/admin/benefit-plans",
+        json!({
+            "name": "Synthetic three visits",
+            "kind": "package",
+            "priceCents": 3000,
+            "includedUses": 3,
+            "serviceIds": [service_id],
+            "idempotencyKey": uuid::Uuid::now_v7(),
+        }),
+    );
+    let purchase = browser.rest_post(
+        "/admin/passes",
+        json!({
+            "planId": plan["id"],
+            "clientId": client,
+            "idempotencyKey": uuid::Uuid::now_v7(),
+        }),
+    );
+    let purchase_id = purchase["checkout"]["id"].as_str().unwrap();
+    browser.rest_post(
+        &format!("/admin/commerce/checkouts/{purchase_id}/payments"),
+        json!({"method":"external_card","amountCents":3000,"idempotencyKey":uuid::Uuid::now_v7()}),
+    );
+    let mut input = booking(&catalog, &catalog.staff, &client, slot);
+    input.service_ids = vec![service_id.to_owned()];
+    let appointment = ops::create_appointment(&mut browser.store, input).unwrap();
+    browser.sync();
+    let linked = proxy_device();
+    let checkout = linked
+        .transport
+        .open_appointment_checkout(&appointment, None)
+        .unwrap();
+    let choices = linked
+        .transport
+        .eligible_checkout_passes(&checkout)
+        .unwrap();
+    let [choice] = choices.as_slice() else {
+        panic!("expected one eligible service and pass, got {choices:?}");
+    };
+    assert_eq!(choice.kind, ReceiptTender::Package);
+    assert_eq!(choice.amount_cents, checkout.collectible_cents());
+    let attempt = PaymentAttempt::for_pass(choice);
+    let paid = linked
+        .transport
+        .record_checkout_payment(&checkout, &attempt)
+        .unwrap();
+    assert_eq!(paid.status, "paid");
+    assert_eq!(
+        linked
+            .transport
+            .record_checkout_payment(&checkout, &attempt)
+            .unwrap()
+            .id,
+        paid.id
+    );
+    let pass = browser.rest_get(&format!(
+        "/admin/passes/{}",
+        purchase["pass"]["id"].as_str().unwrap()
+    ));
+    assert_eq!(pass["periods"][0]["availableUses"], 2);
+    assert_eq!(pass["periods"][0]["usedUses"], 1);
+
+    let payment = paid.recordable_refunds_available().next().unwrap();
+    assert!(payment.is_full_visit());
+    let invalid =
+        sob_core::billing::RefundAttempt::new(payment.available - 1, "Partial pass refund")
+            .unwrap();
+    assert!(matches!(
+        linked
+            .transport
+            .record_checkout_refund(&paid, payment.id, &invalid),
+        Err(TransportError::BadRequest(_))
+    ));
+    let refund =
+        sob_core::billing::RefundAttempt::new(payment.available, "Restore visit to pass").unwrap();
+    let refunded = linked
+        .transport
+        .record_checkout_refund(&paid, payment.id, &refund)
+        .unwrap();
+    assert_eq!(refunded.status, "refunded");
+    assert_eq!(
+        linked
+            .transport
+            .record_checkout_refund(&paid, payment.id, &refund)
+            .unwrap()
+            .refunds
+            .len(),
+        1
+    );
+    let pass = browser.rest_get(&format!(
+        "/admin/passes/{}",
+        purchase["pass"]["id"].as_str().unwrap()
+    ));
+    assert_eq!(pass["periods"][0]["availableUses"], 3);
+    assert_eq!(pass["periods"][0]["usedUses"], 0);
 }
 
 #[test]

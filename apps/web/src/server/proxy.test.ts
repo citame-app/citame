@@ -61,6 +61,7 @@ describe("route mapping", () => {
       "/admin/commerce/unpaid?from=2026-11-20T00%3A00%3A00Z&to=2026-11-21T00%3A00%3A00Z",
       "/admin/commerce/checkouts",
       "/admin/commerce/capabilities",
+      "/admin/passes/eligible?checkoutId=01955500-0000-7000-8000-000000000001",
       "/admin/commerce/payments/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/refunds",
       "/admin/commerce/checkouts/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
       "/admin/commerce/checkouts/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/payments",

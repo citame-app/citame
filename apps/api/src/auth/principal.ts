@@ -113,6 +113,7 @@ export function requireAuth(
           "/me/desktop-workspaces",
           "/admin/commerce/unpaid",
           "/admin/commerce/capabilities",
+          "/admin/passes/eligible",
         ].includes(path) &&
           method !== "GET") ||
         (path.startsWith("/admin/inventory/") && !inventoryAllowed) ||

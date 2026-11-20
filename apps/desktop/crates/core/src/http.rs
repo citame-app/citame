@@ -11,9 +11,9 @@ use crate::auth::{AuthError, AuthProvider, BrowserWorkspace, SessionHandle, Toke
 use crate::backoff::Backoff;
 use crate::billing::{
     AppointmentCheckout, CashCommand, CashSession, CheckoutFinalPrice, CheckoutHistoryFilters,
-    CheckoutPage, CheckoutRefund, ImportedPartialPayment, ImportedPartialPaymentPreview,
-    ImportedPricePreview, ImportedPriceReview, ImportedSettlement, ImportedSettlementStatus,
-    PaymentAttempt, ReceiptTender, RefundAttempt, WalkInSale,
+    CheckoutPage, CheckoutRefund, EligiblePassUse, ImportedPartialPayment,
+    ImportedPartialPaymentPreview, ImportedPricePreview, ImportedPriceReview, ImportedSettlement,
+    ImportedSettlementStatus, PaymentAttempt, ReceiptTender, RefundAttempt, WalkInSale,
 };
 use crate::inventory::{
     ContentWriteError, LedgerPage, LedgerQuery, MovementPage, PRODUCTS_PATH, PackageContent,
@@ -430,6 +430,74 @@ impl HttpTransport {
         Ok(receipt)
     }
 
+    pub fn eligible_checkout_passes(
+        &self,
+        checkout: &AppointmentCheckout,
+    ) -> Result<Vec<EligiblePassUse>, TransportError> {
+        if !checkout.allows_pass() {
+            return Ok(Vec::new());
+        }
+        #[derive(serde::Deserialize)]
+        struct Period {
+            id: uuid::Uuid,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Line {
+            id: uuid::Uuid,
+            description: String,
+            amount_cents: u32,
+        }
+        #[derive(serde::Deserialize)]
+        struct Pass {
+            period: Period,
+            name: String,
+            kind: ReceiptTender,
+            lines: Vec<Line>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Eligibility {
+            eligible: Vec<Pass>,
+        }
+        let id = parse_id(&checkout.id)?;
+        let response: Eligibility = read_response(
+            self.get(
+                &self.agent,
+                &format!("/admin/passes/eligible?checkoutId={id}"),
+                None,
+            )?,
+            false,
+        )?;
+        let limit = checkout.collectible_cents();
+        Ok(response
+            .eligible
+            .into_iter()
+            .filter(|pass| {
+                matches!(
+                    pass.kind,
+                    ReceiptTender::Package | ReceiptTender::Membership
+                )
+            })
+            .flat_map(|pass| {
+                pass.lines.into_iter().filter_map(move |line| {
+                    ((1..=limit).contains(&line.amount_cents)
+                        && checkout
+                            .lines
+                            .iter()
+                            .any(|candidate| candidate.id == line.id))
+                    .then(|| EligiblePassUse {
+                        period_id: pass.period.id,
+                        line_id: line.id,
+                        kind: pass.kind,
+                        name: pass.name.clone(),
+                        description: line.description,
+                        amount_cents: line.amount_cents,
+                    })
+                })
+            })
+            .collect())
+    }
+
     pub fn record_checkout_payment(
         &self,
         checkout: &AppointmentCheckout,
@@ -445,6 +513,18 @@ impl HttpTransport {
         {
             return Err(TransportError::BadRequest(
                 "A valid gift card is required for this receipt".into(),
+            ));
+        }
+        if matches!(
+            attempt.method,
+            ReceiptTender::Package | ReceiptTender::Membership
+        ) && (!checkout.allows_pass()
+            || !attempt
+                .checkout_line_id
+                .is_some_and(|line| checkout.lines.iter().any(|candidate| candidate.id == line)))
+        {
+            return Err(TransportError::BadRequest(
+                "Choose an eligible pass and service".into(),
             ));
         }
         #[derive(serde::Deserialize)]
@@ -515,10 +595,14 @@ impl HttpTransport {
         payment_id: uuid::Uuid,
         attempt: &RefundAttempt,
     ) -> Result<AppointmentCheckout, TransportError> {
-        if !checkout
-            .recordable_refunds_available()
-            .any(|payment| payment.id == payment_id && attempt.amount_cents <= payment.available)
-        {
+        if !checkout.recordable_refunds_available().any(|payment| {
+            payment.id == payment_id
+                && if payment.is_full_visit() {
+                    attempt.amount_cents == payment.available
+                } else {
+                    attempt.amount_cents <= payment.available
+                }
+        }) {
             return Err(TransportError::BadRequest(
                 "This payment cannot be refunded for the requested amount".into(),
             ));

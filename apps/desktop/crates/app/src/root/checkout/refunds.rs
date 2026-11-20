@@ -16,12 +16,14 @@ impl RefundEditor {
     }
 
     fn reviewed_amount(&self, receipt: &AppointmentCheckout, cx: &App) -> Option<u32> {
-        let limit = receipt
+        let payment = receipt
             .recordable_refunds_available()
-            .find(|payment| payment.id == self.payment.id)?
-            .available;
+            .find(|payment| payment.id == self.payment.id)?;
+        if payment.is_full_visit() {
+            return Some(payment.available);
+        }
         parse_reviewed_amount(self.amount.read(cx).text())
-            .filter(|amount| (1..=limit).contains(amount))
+            .filter(|amount| (1..=payment.available).contains(amount))
     }
 
     fn valid_reason(&self, cx: &App) -> bool {
@@ -358,7 +360,13 @@ impl Root {
                 });
         }
         body.child(self.label(Key::CheckoutAmount))
-            .child(editor.amount.clone())
+            .map(|view| {
+                if editor.payment.is_full_visit() {
+                    view.child(money(editor.payment.available))
+                } else {
+                    view.child(editor.amount.clone())
+                }
+            })
             .child(self.label(Key::CheckoutRefundReason))
             .child(editor.reason.clone())
             .when(

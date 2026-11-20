@@ -7,6 +7,7 @@ use sob_core::sync::TransportError;
 use std::sync::Arc;
 use uuid::Uuid;
 
+mod passes;
 mod refunds;
 
 pub(super) enum CheckoutReview {
@@ -35,6 +36,7 @@ impl CheckoutReview {
             receipt: Arc::new(receipt),
             selected: None,
             request: None,
+            pass_picker: None,
             refund: None,
             confirming_void: false,
             amount,
@@ -59,6 +61,7 @@ pub(super) struct ReceiptForm {
     receipt: Arc<AppointmentCheckout>,
     selected: Option<ReceiptTender>,
     request: Option<PaymentAttempt>,
+    pass_picker: Option<passes::PassPicker>,
     amount: Entity<TextField>,
     gift_code: Entity<TextField>,
     _gift_code_changed: Subscription,
@@ -83,6 +86,8 @@ fn tender_label(method: ReceiptTender) -> Key {
         ReceiptTender::Cash => Key::CheckoutCash,
         ReceiptTender::ExternalCard => Key::CheckoutExternalCard,
         ReceiptTender::GiftCard => Key::SalesGiftCard,
+        ReceiptTender::Package => Key::SalesPackage,
+        ReceiptTender::Membership => Key::SalesMembership,
     }
 }
 
@@ -229,7 +234,11 @@ impl Root {
         .detach();
     }
 
-    fn record_checkout_payment(&mut self, cx: &mut Context<Self>) {
+    fn record_checkout_payment(
+        &mut self,
+        pass_attempt: Option<PaymentAttempt>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(transport) = self
             .svc
             .transport()
@@ -238,9 +247,6 @@ impl Root {
             return;
         };
         let Some(CheckoutReview::Receipt(form)) = self.checkout_review_mut() else {
-            return;
-        };
-        let Some(selected) = form.selected else {
             return;
         };
         let collectible = form.receipt.collectible_cents();
@@ -252,14 +258,19 @@ impl Root {
         {
             return;
         }
-        let Some(amount) = form.reviewed_amount(cx) else {
-            return;
-        };
         if form.request.is_none() {
-            form.request = if selected == ReceiptTender::GiftCard {
-                PaymentAttempt::with_gift_card(amount, form.gift_code.read(cx).text())
+            form.request = if let Some(attempt) = pass_attempt {
+                form.pass_picker = None;
+                Some(attempt)
             } else {
-                Some(PaymentAttempt::new(selected, amount))
+                let Some((selected, amount)) = form.selected.zip(form.reviewed_amount(cx)) else {
+                    return;
+                };
+                if selected == ReceiptTender::GiftCard {
+                    PaymentAttempt::with_gift_card(amount, form.gift_code.read(cx).text())
+                } else {
+                    Some(PaymentAttempt::new(selected, amount))
+                }
             };
         }
         let Some(request) = form.request.clone() else {
@@ -564,6 +575,11 @@ impl Root {
                         form.request.is_none() && form.selected == Some(ReceiptTender::GiftCard);
                     let valid_tender = !needs_gift_code
                         || normalize_gift_card_code(form.gift_code.read(cx).text()).is_some();
+                    let selected = form
+                        .request
+                        .as_ref()
+                        .map(PaymentAttempt::tender)
+                        .or(form.selected);
                     body.when(collectible < receipt.balance_cents, |view| {
                         view.child(format!(
                             "{}: {}",
@@ -627,6 +643,9 @@ impl Root {
                                 },
                             )
                     })
+                    .when(form.request.is_none() && receipt.allows_pass(), |view| {
+                        view.child(self.render_pass_picker(form, cx))
+                    })
                     .when(reviewed.is_none(), |view| {
                         view.child(
                             div()
@@ -636,7 +655,7 @@ impl Root {
                         )
                     })
                     .when_some(
-                        form.selected.zip(reviewed.filter(|_| valid_tender)),
+                        selected.zip(reviewed.filter(|_| valid_tender)),
                         |view, (method, amount)| {
                             view.child(self.button(
                                 "checkout-confirm",
@@ -647,7 +666,9 @@ impl Root {
                                     money(i64::from(amount))
                                 ),
                                 Kind::Primary,
-                                cx.listener(|this, _, _, cx| this.record_checkout_payment(cx)),
+                                cx.listener(|this, _, _, cx| {
+                                    this.record_checkout_payment(None, cx)
+                                }),
                             ))
                         },
                     )
@@ -696,6 +717,7 @@ impl ReceiptForm {
             self.price_fields = Self::price_fields(&receipt, cx);
         }
         self.receipt = Arc::new(receipt);
+        self.pass_picker = None;
     }
 
     fn reviewed_prices(&self, cx: &App) -> Option<Vec<CheckoutFinalPrice>> {
@@ -765,6 +787,7 @@ mod tests {
                     receipt: Arc::new(receipt),
                     selected: None,
                     request: None,
+                    pass_picker: None,
                     refund: None,
                     confirming_void: false,
                     amount,
@@ -808,6 +831,7 @@ mod tests {
                     price_fields: Vec::new(),
                     selected: Some(ReceiptTender::Cash),
                     request: None,
+                    pass_picker: None,
                     refund: None,
                     confirming_void: false,
                     amount,
