@@ -2,26 +2,38 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { generateKeyPairSync, randomBytes, sign } from "node:crypto";
 import {
   adminReviewsSchema,
+  checkoutSchema,
   DESKTOP_CLIENT_ID,
   DESKTOP_SIGN_IN_SCOPE,
   dateShiftPreviewSchema,
   dateShiftResultSchema,
   dateShiftsResponseSchema,
   reviewPrivateSchema,
+  startedPaymentSchema,
   syncPullResponseSchema,
 } from "@sob/contracts";
 import { appointment, staffProfile } from "@sob/db";
 import { eq } from "drizzle-orm";
-import { actor, json, NOW, seedFixtures, setupApiTest } from "../../test/helpers";
+import { actor, cookieFrom, json, NOW, seedFixtures, setupApiTest } from "../../test/helpers";
 import { authorizeFlow, ORIGIN, obtainTokens, tokenFor, tokenRequest } from "../../test/oauth";
+import { redsysSignature } from "../payments/redsys";
 import { desktopResource } from "./desktop";
 
 let t: Awaited<ReturnType<typeof setupApiTest>>;
+const bankSecret = "sq7HjrUOBfKmC576ILgskD5srU870gJ7"; // Official public test fixture.
 beforeAll(async () => {
   t = await setupApiTest({
     dbSuffix: "oauth_desktop",
     deps: { syncHeartbeatMs: 20 },
-    env: { RATE_LIMIT_OAUTH_MAX: "200" },
+    env: {
+      RATE_LIMIT_OAUTH_MAX: "200",
+      PAYMENT_PROVIDER: "redsys",
+      REDSYS_MERCHANT_CODE: "999008881",
+      REDSYS_TERMINAL: "001",
+      REDSYS_SECRET_KEY: bankSecret,
+      REDSYS_ENVIRONMENT: "test",
+      REDSYS_BIZUM_ENABLED: "true",
+    },
   });
   await t.reset();
   await seedFixtures(t.db);
@@ -60,6 +72,54 @@ async function tokens(role: "owner" | "client" | "staff", emailName: string = ro
 
 const request = (path: string, access: unknown) =>
   t.app.request(path, { headers: { authorization: `Bearer ${String(access)}` } });
+
+async function assertHostedReceiptPayment(receiptId: string, cookie: string, access: string) {
+  const path = `/admin/commerce/checkouts/${receiptId}`;
+  const response = await json(
+    t.app,
+    `${path}/payments`,
+    "POST",
+    { method: "redsys_bizum", amountCents: 1200, idempotencyKey: crypto.randomUUID() },
+    cookie,
+  );
+  expect(response.status).toBe(201);
+  const { payment, form } = startedPaymentSchema.parse(await response.json());
+  expect(payment.status).toBe("pending");
+  expect(form?.action).toBe("https://sis-t.redsys.es:25443/sis/realizarPago");
+  const nativeReceipt = async () =>
+    checkoutSchema.parse(await (await request(path, access)).json());
+  expect((await nativeReceipt()).paidCents).toBe(0);
+  const cursor = syncPullResponseSchema.parse(
+    await (await request("/sync/pull", access)).json(),
+  ).nextCursor;
+
+  const order = payment.order;
+  if (!order) throw new Error("Expected a pending sandbox bank order");
+  const merchantParameters = Buffer.from(
+    JSON.stringify({
+      Ds_Order: order,
+      Ds_Amount: "1200",
+      Ds_Currency: "978",
+      Ds_MerchantCode: "999008881",
+      Ds_Terminal: "1",
+      Ds_Response: "0000",
+      Ds_TransactionType: "0",
+    }),
+  ).toString("base64url");
+  const confirmed = await t.app.request("/payments/redsys/notify", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      Ds_MerchantParameters: merchantParameters,
+      Ds_SignatureVersion: "HMAC_SHA512_V2",
+      Ds_Signature: redsysSignature(bankSecret, order, merchantParameters),
+    }),
+  });
+  expect(confirmed.status).toBe(200);
+  const changes = await request(`/sync/pull?since=${cursor}`, access);
+  expect(syncPullResponseSchema.parse(await changes.json()).refresh).toContain("commerce");
+  expect(await nativeReceipt()).toMatchObject({ status: "paid", paidCents: 1200, balanceCents: 0 });
+}
 const reportPath = "/admin/reports/summary?from=2026-11-18&to=2026-11-18";
 const clientReportPath = "/admin/reports/clients?from=2026-11-18&to=2026-11-18";
 const outcomeParams = "?from=2026-11-18&to=2026-11-18&status=no_show";
@@ -437,6 +497,13 @@ test("linked devices renew independently and can be revoked from either client",
   const redeemReceipt = await redeemBrowser(await issueReceipt());
   expect(redeemReceipt.status).toBe(303);
   expect(redeemReceipt.headers.get("location")).toBe(`/admin/commerce?checkout=${receiptId}`);
+  const observer = await endpoint("token", second.proof("token"));
+  expect(observer.status).toBe(200);
+  await assertHostedReceiptPayment(
+    receiptId,
+    cookieFrom(redeemReceipt),
+    ((await observer.json()) as { access_token: string }).access_token,
+  );
   const operator = await actor(t, "staff", "receipt-workspace-operator@example.test");
   const setReceiptAccess = (accessPreset: "receptionist" | "professional") =>
     t.db.update(staffProfile).set({ accessPreset }).where(eq(staffProfile.userId, operator.userId));
