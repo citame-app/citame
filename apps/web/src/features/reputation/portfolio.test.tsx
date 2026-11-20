@@ -30,7 +30,9 @@ test("portfolio upload keeps an uncertain image and exact request for retry and 
     target: { files: [new File(["fixture"], "photo.png", { type: "image/png" })] },
   });
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: "Save private draft" })).toBeEnabled(),
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Save private draft" }).disabled,
+    ).toBe(false),
   );
   fireEvent.click(screen.getByRole("button", { name: "Save private draft" }));
   await screen.findByRole("alert");
@@ -70,7 +72,9 @@ test("a photo added from a service stays associated with that service and remain
     target: { files: [new File(["fixture"], "photo.png", { type: "image/png" })] },
   });
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: "Save private draft" })).toBeEnabled(),
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Save private draft" }).disabled,
+    ).toBe(false),
   );
   fireEvent.click(screen.getByRole("button", { name: "Save private draft" }));
   await screen.findByRole("alert");

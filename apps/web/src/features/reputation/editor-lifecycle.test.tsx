@@ -52,7 +52,9 @@ for (const kind of ["review", "portfolio"] as const)
         target: { files: [new File(["fixture"], "photo.jpg", { type: "image/jpeg" })] },
       });
       await waitFor(() =>
-        expect(screen.getByRole("button", { name: "Save private draft" })).toBeEnabled(),
+        expect(
+          screen.getByRole<HTMLButtonElement>("button", { name: "Save private draft" }).disabled,
+        ).toBe(false),
       );
       fireEvent.click(screen.getByRole("button", { name: "Save private draft" }));
     }
