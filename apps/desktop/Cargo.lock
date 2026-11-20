@@ -5176,6 +5176,7 @@ dependencies = [
  "tempfile",
  "unicode-segmentation",
  "url",
+ "uuid",
 ]
 
 [[package]]

@@ -110,6 +110,9 @@ export function requireAuth(
         !DESKTOP_PROXY_ROUTE.test(path) ||
         ((path === "/me" || path === "/admin/commerce/unpaid") && method !== "GET") ||
         (path.startsWith("/admin/inventory/") && !inventoryAllowed) ||
+        (path.startsWith("/admin/commerce/checkouts/") &&
+          path.endsWith("/prices") &&
+          method !== "PUT") ||
         (path.startsWith("/admin/staff/") && path.includes("/date-shifts") && !dateShiftAllowed) ||
         (path.startsWith("/admin/staff/") &&
           path.endsWith("/working-hours") &&

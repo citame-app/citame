@@ -1,7 +1,10 @@
 use super::*;
-use sob_core::billing::{AppointmentCheckout, ManualTender, PaymentAttempt, parse_reviewed_amount};
+use sob_core::billing::{
+    AppointmentCheckout, CheckoutFinalPrice, ManualTender, PaymentAttempt, parse_reviewed_amount,
+};
 use sob_core::sync::TransportError;
 use std::sync::Arc;
+use uuid::Uuid;
 
 pub(super) enum CheckoutReview {
     Loading(Arc<()>),
@@ -21,10 +24,17 @@ pub(super) struct ReceiptForm {
     request: Option<PaymentAttempt>,
     amount: Entity<TextField>,
     _amount_changed: Subscription,
+    price_fields: Vec<PriceField>,
     busy: bool,
     refreshing: bool,
     observed_revision: i64,
     error: Option<String>,
+}
+
+struct PriceField {
+    id: Uuid,
+    editor: Entity<TextField>,
+    _changed: Subscription,
 }
 
 fn tender_label(method: ManualTender) -> Key {
@@ -108,8 +118,10 @@ impl Root {
                             field
                         });
                         let amount_changed = cx.observe(&amount, |_, _, cx| cx.notify());
+                        let price_fields = ReceiptForm::price_fields(&receipt, cx);
                         CheckoutReview::Receipt(Box::new(ReceiptForm {
                             receipt: Arc::new(receipt),
+                            price_fields,
                             selected: None,
                             request: None,
                             amount,
@@ -182,7 +194,7 @@ impl Root {
                                 field.set_text(&amount_entry(receipt.collectible_cents()), cx)
                             });
                         }
-                        form.receipt = Arc::new(receipt);
+                        form.replace_receipt(receipt, cx);
                         form.error = None;
                     }
                     Err(_) => {
@@ -258,12 +270,101 @@ impl Root {
                         form.amount.update(cx, |field, cx| {
                             field.set_text(&amount_entry(receipt.collectible_cents()), cx);
                         });
-                        form.receipt = Arc::new(receipt);
+                        form.replace_receipt(receipt, cx);
                         form.selected = None;
                         form.request = None;
                     }
                     Err(TransportError::BadRequest(message)) => form.error = Some(message),
                     Err(_) => form.error = Some(fallback.to_owned()),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn finalize_checkout_prices(&mut self, cx: &mut Context<Self>) {
+        let Some(transport) = self
+            .svc
+            .transport()
+            .filter(|_| self.status.connectivity == Connectivity::Online)
+        else {
+            return;
+        };
+        let Overlay::Details(details) = &mut self.overlay else {
+            return;
+        };
+        let Some(CheckoutReview::Receipt(form)) = &mut details.checkout else {
+            return;
+        };
+        if form.busy || form.refreshing || form.request.is_some() {
+            return;
+        }
+        let Some(prices) = form.reviewed_prices(cx) else {
+            return;
+        };
+        let previous = form.receipt.clone();
+        let receipt = previous.clone();
+        let session = self.svc.session.clone();
+        form.busy = true;
+        form.error = None;
+        cx.notify();
+        cx.spawn(async move |root, cx| {
+            let (result, refreshed) = cx
+                .background_executor()
+                .spawn(async move {
+                    let result = transport.finalize_appointment_prices(&receipt, &prices);
+                    let refreshed = if result.is_err() {
+                        transport.refresh_appointment_checkout(&receipt).ok()
+                    } else {
+                        None
+                    };
+                    (result, refreshed)
+                })
+                .await;
+            let _ = root.update(cx, |root, cx| {
+                if !Arc::ptr_eq(&session, &root.svc.session) || root.svc.current_session().is_none()
+                {
+                    return;
+                }
+                if result.is_ok() {
+                    root.svc.wake(Wake::Manual);
+                }
+                let fallback = root.t(Key::CheckoutPricesNotConfirmed);
+                let Overlay::Details(details) = &mut root.overlay else {
+                    return;
+                };
+                let Some(CheckoutReview::Receipt(form)) = &mut details.checkout else {
+                    return;
+                };
+                if !Arc::ptr_eq(&form.receipt, &previous) {
+                    return;
+                }
+                form.busy = false;
+                match result {
+                    Ok(receipt) => {
+                        form.amount.update(cx, |field, cx| {
+                            field.set_text(&amount_entry(receipt.collectible_cents()), cx);
+                        });
+                        form.replace_receipt(receipt, cx);
+                        form.selected = None;
+                    }
+                    Err(error) => {
+                        let Some(receipt) = refreshed else {
+                            details.checkout = Some(CheckoutReview::Failed);
+                            cx.notify();
+                            return;
+                        };
+                        form.amount.update(cx, |field, cx| {
+                            field.set_text(&amount_entry(receipt.collectible_cents()), cx);
+                        });
+                        form.replace_receipt(receipt, cx);
+                        form.selected = None;
+                        form.error = Some(match error {
+                            TransportError::BadRequest(message) => message,
+                            _ => fallback.to_owned(),
+                        });
+                    }
                 }
                 cx.notify();
             });
@@ -317,17 +418,77 @@ impl Root {
                             money(i64::from(receipt.discount_cents))
                         ))
                     })
-                    .child(format!("{}: {due}", self.t(Key::CheckoutDue)));
+                    .child(format!("{}: {due}", self.t(Key::CheckoutDue)))
+                    .when_some(form.error.as_ref(), |view, message| {
+                        view.child(
+                            div()
+                                .text_sm()
+                                .text_color(theme::conflict_fg())
+                                .child(message.clone()),
+                        )
+                    });
+                let reviewing_prices = receipt.can_review_prices()
+                    && self.status.connectivity == Connectivity::Online
+                    && !form.busy
+                    && !form.refreshing
+                    && form.request.is_none();
+                let body = body.when(reviewing_prices, |view| {
+                    let fields = form.price_fields.iter().filter_map(|field| {
+                        let line = receipt.lines.iter().find(|line| line.id == field.id)?;
+                        Some(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .text_sm()
+                                .child(line.description.clone())
+                                .when(line.minimum_unit_amount_cents > 0, |view| {
+                                    view.child(format!(
+                                        "{}: {}",
+                                        self.t(Key::CheckoutPriceMinimum),
+                                        money(i64::from(line.minimum_unit_amount_cents))
+                                    ))
+                                })
+                                .child(field.editor.clone()),
+                        )
+                    });
+                    view.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(self.t(Key::CheckoutFinalPrices))
+                            .children(fields)
+                            .map(|view| {
+                                if form.reviewed_prices(cx).is_some() {
+                                    view.child(self.button(
+                                        "checkout-final-prices",
+                                        self.t(Key::CheckoutSetFinalPrices),
+                                        Kind::Primary,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.finalize_checkout_prices(cx)
+                                        }),
+                                    ))
+                                } else {
+                                    view.child(
+                                        div().text_sm().child(self.t(Key::CheckoutPricesInvalid)),
+                                    )
+                                }
+                            }),
+                    )
+                });
                 if receipt.status == "paid" {
                     body.child(self.t(Key::ReceiptPaid))
-                } else if collectible == 0 {
-                    body.child(self.t(Key::CheckoutCannotCollect))
                 } else if self.status.connectivity != Connectivity::Online {
                     body.child(self.t(Key::CheckoutOffline))
                 } else if form.refreshing {
                     body.child(self.t(Key::CheckoutLoading))
                 } else if form.busy {
                     body.child(self.t(Key::CheckoutRecording))
+                } else if collectible == 0 {
+                    body.when(!reviewing_prices, |view| {
+                        view.child(self.t(Key::CheckoutCannotCollect))
+                    })
                 } else {
                     let reviewed = form.reviewed_amount(cx);
                     body.when(collectible < receipt.balance_cents, |view| {
@@ -373,14 +534,6 @@ impl Root {
                             }),
                         )
                     })
-                    .when_some(form.error.clone(), |view, message| {
-                        view.child(
-                            div()
-                                .text_sm()
-                                .text_color(theme::conflict_fg())
-                                .child(message),
-                        )
-                    })
                     .when(reviewed.is_none(), |view| {
                         view.child(
                             div()
@@ -408,7 +561,15 @@ impl Root {
                 }
             }
         };
-        self.modal(body.when(review.can_go_back(), |view| {
+        let scrollable = div().child(
+            div()
+                .id("checkout-content")
+                .min_h_0()
+                .max_h(px(530.))
+                .overflow_y_scroll()
+                .child(body),
+        );
+        self.modal(scrollable.when(review.can_go_back(), |view| {
             view.child(self.button(
                 "back-from-checkout",
                 self.t(Key::Back),
@@ -420,6 +581,52 @@ impl Root {
 }
 
 impl ReceiptForm {
+    fn price_fields(receipt: &AppointmentCheckout, cx: &mut Context<Root>) -> Vec<PriceField> {
+        receipt
+            .lines
+            .iter()
+            .filter(|line| line.price_pending)
+            .map(|line| {
+                let editor = cx.new(|cx| TextField::new("EUR", false, cx));
+                let changed = cx.observe(&editor, |_, _, cx| cx.notify());
+                PriceField {
+                    id: line.id,
+                    editor,
+                    _changed: changed,
+                }
+            })
+            .collect()
+    }
+
+    fn replace_receipt(&mut self, receipt: AppointmentCheckout, cx: &mut Context<Root>) {
+        if self.receipt.pricing_version != receipt.pricing_version {
+            self.price_fields = Self::price_fields(&receipt, cx);
+        }
+        self.receipt = Arc::new(receipt);
+    }
+
+    fn reviewed_prices(&self, cx: &App) -> Option<Vec<CheckoutFinalPrice>> {
+        if !self.receipt.can_review_prices() || self.price_fields.is_empty() {
+            return None;
+        }
+        self.price_fields
+            .iter()
+            .map(|field| {
+                let line = self
+                    .receipt
+                    .lines
+                    .iter()
+                    .find(|l| l.id == field.id && l.price_pending)?;
+                let cents = parse_reviewed_amount(field.editor.read(cx).text())
+                    .filter(|price| *price >= line.minimum_unit_amount_cents)?;
+                Some(CheckoutFinalPrice {
+                    id: field.id,
+                    unit_amount_cents: cents,
+                })
+            })
+            .collect()
+    }
+
     fn reviewed_amount(&self, cx: &App) -> Option<u32> {
         self.request
             .map(PaymentAttempt::amount_cents)
@@ -439,6 +646,47 @@ mod tests {
     use serde_json::json;
 
     #[gpui::test]
+    async fn a_final_price_requires_a_reviewed_amount_at_or_above_the_minimum(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, window) = crate::root::tests::open(cx);
+        window
+            .update(cx, |_, _, cx| {
+                let receipt = serde_json::from_value(json!({
+                    "id": "checkout", "appointmentId": "visit", "currency": "EUR", "status": "open",
+                    "totalCents": 3000, "discountCents": 0, "paidCents": 0, "balanceCents": 3000,
+                    "pricingVersion": 1, "payments": [],
+                    "lines": [{
+                        "id": "01a1d81f-2231-75bd-ba65-bc41f42803e9", "description": "Treatment",
+                        "unitAmountCents": 3000, "minimumUnitAmountCents": 3000, "pricePending": true
+                    }]
+                }))
+                .unwrap();
+                let amount = cx.new(|cx| TextField::new("EUR", false, cx));
+                let amount_changed = cx.observe(&amount, |_, _, cx| cx.notify());
+                let form = ReceiptForm {
+                    price_fields: ReceiptForm::price_fields(&receipt, cx),
+                    receipt: Arc::new(receipt),
+                    selected: None,
+                    request: None,
+                    amount,
+                    _amount_changed: amount_changed,
+                    busy: false,
+                    refreshing: false,
+                    observed_revision: 0,
+                    error: None,
+                };
+                let editor = &form.price_fields[0].editor;
+                assert!(form.reviewed_prices(cx).is_none());
+                editor.update(cx, |field, cx| field.set_text("29,99", cx));
+                assert!(form.reviewed_prices(cx).is_none());
+                editor.update(cx, |field, cx| field.set_text("30,00", cx));
+                assert_eq!(form.reviewed_prices(cx).unwrap()[0].unit_amount_cents, 3000);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
     async fn a_receipt_amount_respects_the_deposit_limit_and_is_frozen_for_retry(
         cx: &mut TestAppContext,
     ) {
@@ -455,6 +703,7 @@ mod tests {
                 let amount_changed = cx.observe(&amount, |_, _, cx| cx.notify());
                 let mut form = ReceiptForm {
                     receipt: Arc::new(receipt),
+                    price_fields: Vec::new(),
                     selected: Some(ManualTender::Cash),
                     request: None,
                     amount,

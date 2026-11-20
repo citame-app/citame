@@ -46,7 +46,7 @@ export const DESKTOP_CLIENT_ID = "sob-desktop";
 
 /** Routes supported by the desktop client and exposed through the same-origin proxy. */
 export const DESKTOP_PROXY_ROUTE =
-  /^\/(?:me|sync\/(?:pull|push|stream)|intake\/requirements|appointments\/[\da-f-]+\/context|admin\/staff\/[\da-f-]+\/(?:date-shifts(?:\/preview)?|working-hours)|admin\/reports\/(?:summary|clients|outcomes(?:\/export)?)|admin\/reviews(?:\/requests(?:\/[\da-f-]+\/email)?|\/[\da-f-]+\/(?:moderation|reply))?|admin\/notifications\/inbox(?:\/archive)?|admin\/waitlist\/desk(?:\/policy|\/[\da-f-]+\/(?:cancel|accept|decline))?|admin\/inventory\/(?:movements(?:\/export)?|products(?:\/[\da-f-]+(?:\/(?:package-content|movements))?)?)|admin\/commerce\/(?:unpaid|appointments\/[\da-f-]+\/imported-(?:price|settlement|partial-payment)|checkouts(?:\/[\da-f-]+(?:\/payments)?)?|cash-sessions(?:\/(?:current|adjust|[\da-f-]+\/close))?))(?:\?|$)/;
+  /^\/(?:me|sync\/(?:pull|push|stream)|intake\/requirements|appointments\/[\da-f-]+\/context|admin\/staff\/[\da-f-]+\/(?:date-shifts(?:\/preview)?|working-hours)|admin\/reports\/(?:summary|clients|outcomes(?:\/export)?)|admin\/reviews(?:\/requests(?:\/[\da-f-]+\/email)?|\/[\da-f-]+\/(?:moderation|reply))?|admin\/notifications\/inbox(?:\/archive)?|admin\/waitlist\/desk(?:\/policy|\/[\da-f-]+\/(?:cancel|accept|decline))?|admin\/inventory\/(?:movements(?:\/export)?|products(?:\/[\da-f-]+(?:\/(?:package-content|movements))?)?)|admin\/commerce\/(?:unpaid|appointments\/[\da-f-]+\/imported-(?:price|settlement|partial-payment)|checkouts(?:\/[\da-f-]+(?:\/(?:payments|prices))?)?|cash-sessions(?:\/(?:current|adjust|[\da-f-]+\/close))?))(?:\?|$)/;
 
 export const oauthConnectionIdSchema = z.string().min(1).max(512);
 export const oauthConnectionsSchema = z.object({

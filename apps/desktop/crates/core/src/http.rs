@@ -10,7 +10,7 @@ use std::time::Duration;
 use crate::auth::{AuthError, AuthProvider, SessionHandle, TokenStore};
 use crate::backoff::Backoff;
 use crate::billing::{
-    AppointmentCheckout, CashCommand, CashSession, ImportedPartialPayment,
+    AppointmentCheckout, CashCommand, CashSession, CheckoutFinalPrice, ImportedPartialPayment,
     ImportedPartialPaymentPreview, ImportedPricePreview, ImportedPriceReview, ImportedSettlement,
     ImportedSettlementStatus, ManualTender, PaymentAttempt,
 };
@@ -279,6 +279,58 @@ impl HttpTransport {
         }
         let receipt = self.post_json("/admin/commerce/checkouts", &input)?;
         validate_appointment_checkout(receipt, id, balance)
+    }
+
+    pub fn finalize_appointment_prices(
+        &self,
+        checkout: &AppointmentCheckout,
+        prices: &[CheckoutFinalPrice],
+    ) -> Result<AppointmentCheckout, TransportError> {
+        let version = checkout
+            .pricing_version
+            .filter(|_| checkout.can_review_prices());
+        let next_version = version.and_then(|version| version.checked_add(1));
+        let mut pending = checkout.lines.iter().filter(|line| line.price_pending);
+        if next_version.is_none()
+            || prices.len() != pending.clone().count()
+            || prices.len() > 100
+            || pending.any(|line| {
+                prices
+                    .iter()
+                    .filter(|price| {
+                        price.id == line.id
+                            && (line.minimum_unit_amount_cents..=999_999_999)
+                                .contains(&price.unit_amount_cents)
+                    })
+                    .count()
+                    != 1
+            })
+        {
+            return Err(TransportError::BadRequest(
+                "Review all pending service prices".into(),
+            ));
+        }
+        let id = parse_id(&checkout.id)?;
+        let appointment = parse_id(&checkout.appointment_id)?;
+        let receipt = self.put_json(
+            &format!("/admin/commerce/checkouts/{id}/prices"),
+            &serde_json::json!({ "version": version, "lines": prices }),
+        )?;
+        let receipt = validate_appointment_checkout(receipt, appointment, None)?;
+        if parse_id(&receipt.id).ok() != Some(id)
+            || receipt.pricing_version != next_version
+            || receipt.lines.iter().any(|line| line.price_pending)
+            || prices.iter().any(|price| {
+                !receipt.lines.iter().any(|line| {
+                    line.id == price.id && line.unit_amount_cents == price.unit_amount_cents
+                })
+            })
+        {
+            return Err(TransportError::Server(
+                "Invalid final-price acknowledgement".into(),
+            ));
+        }
+        Ok(receipt)
     }
 
     pub fn record_appointment_payment(

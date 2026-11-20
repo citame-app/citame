@@ -61,6 +61,7 @@ describe("route mapping", () => {
       "/admin/commerce/checkouts",
       "/admin/commerce/checkouts/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
       "/admin/commerce/checkouts/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/payments",
+      "/admin/commerce/checkouts/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/prices",
       "/admin/commerce/cash-sessions",
       "/admin/commerce/cash-sessions/current",
       "/admin/commerce/cash-sessions/adjust",

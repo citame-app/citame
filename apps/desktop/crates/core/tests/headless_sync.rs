@@ -19,8 +19,8 @@ use chrono::{DateTime, Datelike, Duration as Span, NaiveTime, TimeZone, Utc};
 use serde_json::json;
 use sob_core::auth::{AuthProvider, BetterAuthSession, Credentials, SessionHandle};
 use sob_core::billing::{
-    CashAdjustment, CashCommand, ImportedPartialPaymentPreview, ImportedSettlement, ManualTender,
-    PaymentAttempt,
+    CashAdjustment, CashCommand, CheckoutFinalPrice, ImportedPartialPaymentPreview,
+    ImportedSettlement, ManualTender, PaymentAttempt,
 };
 use sob_core::calendar::{self, salon_tz};
 use sob_core::http::{
@@ -954,6 +954,84 @@ fn imported_eur_booking(desk: &mut Device, price: u32) -> Appointment {
     );
     desk.sync();
     desk.store.appointment(&id).unwrap().unwrap()
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_finalizes_a_pending_service_price_through_the_proxy() {
+    let mut browser = Device::sign_in();
+    browser.sync();
+    let catalog = catalog(&browser);
+    let starts_at = free_slot(&browser, &catalog.staff);
+    let client = ops::create_client(&mut browser.store, "Synthetic pricing client", None).unwrap();
+    let service = browser.rest_post(
+        "/admin/services",
+        json!({
+            "name": "Synthetic service with minimum price",
+            "durationMinutes": 45,
+            "priceType": "from",
+            "priceCents": 3000,
+            "currency": "EUR",
+            "staffIds": [catalog.staff],
+        }),
+    );
+    browser.sync();
+    let mut input = booking(&catalog, &catalog.staff, &client, starts_at);
+    input.service_ids = vec![service["id"].as_str().unwrap().to_owned()];
+    let id = ops::create_appointment(&mut browser.store, input).unwrap();
+    browser.sync();
+
+    let device = proxy_device();
+    let receipt = device
+        .transport
+        .open_appointment_checkout(&id, None)
+        .unwrap();
+    assert!(receipt.can_review_prices());
+    assert_eq!(receipt.collectible_cents(), 0);
+    let line = receipt
+        .lines
+        .iter()
+        .find(|line| line.price_pending)
+        .unwrap();
+    assert_eq!(line.minimum_unit_amount_cents, 3000);
+    let reviewed = CheckoutFinalPrice {
+        id: line.id,
+        unit_amount_cents: 7550,
+    };
+    let below_minimum = CheckoutFinalPrice {
+        id: line.id,
+        unit_amount_cents: 2999,
+    };
+    assert!(matches!(
+        device
+            .transport
+            .finalize_appointment_prices(&receipt, &[below_minimum]),
+        Err(TransportError::BadRequest(_))
+    ));
+    let prices = std::slice::from_ref(&reviewed);
+    let confirmed = device
+        .transport
+        .finalize_appointment_prices(&receipt, prices)
+        .unwrap();
+    assert_eq!(confirmed.collectible_cents(), 7550);
+    assert!(!confirmed.can_review_prices());
+    assert!(matches!(
+        device
+            .transport
+            .finalize_appointment_prices(&receipt, prices),
+        Err(TransportError::BadRequest(_))
+    ));
+    let paid = device
+        .transport
+        .record_appointment_payment(
+            &confirmed,
+            PaymentAttempt::new(ManualTender::ExternalCard, 7550),
+        )
+        .unwrap();
+    assert_eq!(paid.status, "paid");
+    let web = browser.rest_get(&format!("/admin/commerce/checkouts/{}", paid.id));
+    assert_eq!(web["paidCents"], 7550);
+    assert_eq!(web["lines"][0]["pricePending"], false);
 }
 
 #[test]

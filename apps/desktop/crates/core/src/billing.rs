@@ -135,21 +135,69 @@ pub struct AppointmentCheckout {
     pub balance_cents: u32,
     pub payable_cents: Option<u32>,
     pub external_balance: Option<ExternalBalance>,
+    pub pricing_version: Option<u32>,
+    #[serde(default)]
+    pub lines: Vec<CheckoutPriceLine>,
+    protection: Option<CheckoutProtection>,
     payments: Vec<CheckoutPayment>,
 }
 
 impl AppointmentCheckout {
+    pub fn can_review_prices(&self) -> bool {
+        self.status == "open"
+            && self.external_balance.is_none()
+            && self.pricing_version.is_some_and(|version| version > 0)
+            && self.lines.iter().any(|line| line.price_pending)
+            && !self.has_unresolved_payment()
+    }
+
+    fn has_unresolved_payment(&self) -> bool {
+        self.payments
+            .iter()
+            .any(|payment| matches!(payment.status.as_str(), "pending" | "reconciliation"))
+    }
+
     pub fn collectible_cents(&self) -> u32 {
-        if self.status != "open"
-            || self
-                .payments
-                .iter()
-                .any(|payment| matches!(payment.status.as_str(), "pending" | "reconciliation"))
-        {
+        if self.status != "open" || self.has_unresolved_payment() {
             return 0;
+        }
+        if self.lines.iter().any(|line| line.price_pending) {
+            return if self
+                .protection
+                .as_ref()
+                .is_some_and(|p| p.state == "pending")
+            {
+                self.payable_cents.unwrap_or_default()
+            } else {
+                0
+            };
         }
         self.payable_cents.unwrap_or(self.balance_cents)
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckoutPriceLine {
+    pub id: Uuid,
+    pub description: String,
+    pub unit_amount_cents: u32,
+    #[serde(default)]
+    pub price_pending: bool,
+    #[serde(default)]
+    pub minimum_unit_amount_cents: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckoutFinalPrice {
+    pub id: Uuid,
+    pub unit_amount_cents: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct CheckoutProtection {
+    state: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -285,7 +333,29 @@ pub fn parse_reviewed_amount(text: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_reviewed_amount;
+    use super::{AppointmentCheckout, parse_reviewed_amount};
+    use serde_json::json;
+
+    #[test]
+    fn pending_prices_allow_only_an_explicit_protected_deposit() {
+        let mut response = json!({
+            "id":"receipt", "appointmentId":"appointment", "currency":"EUR", "status":"open",
+            "totalCents": 3000, "discountCents": 0, "paidCents": 0, "balanceCents": 3000,
+            "pricingVersion": 1, "payments": [],
+            "lines": [{
+                "id": "01a1d81f-2231-75bd-ba65-bc41f42803e9", "description": "Treatment",
+                "unitAmountCents": 3000, "minimumUnitAmountCents": 3000, "pricePending": true
+            }]
+        });
+        let read = |v| serde_json::from_value::<AppointmentCheckout>(v).unwrap();
+        assert_eq!(read(response.clone()).collectible_cents(), 0);
+        response["protection"] = json!({ "state": "pending" });
+        assert_eq!(read(response.clone()).collectible_cents(), 0);
+        response["payableCents"] = json!(1500);
+        assert_eq!(read(response.clone()).collectible_cents(), 1500);
+        response["protection"] = json!({ "state": "confirmed" });
+        assert_eq!(read(response).collectible_cents(), 0);
+    }
 
     #[test]
     fn verified_euro_amounts_are_exact_and_unambiguous() {
