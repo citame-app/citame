@@ -68,6 +68,7 @@ import {
   canReturnCheckoutPoints,
   releaseCheckoutReward,
   syncCheckoutRewards,
+  syncStampsAfterSpecialRefund,
 } from "../rewards/value";
 import { getSalonSettings } from "../settings/service";
 import { assertAppointmentBillable, importedPartialPayments } from "./appointment-billing";
@@ -330,8 +331,10 @@ export async function refreshStatus(tx: Tx, id: string, now = new Date()) {
   await syncProtectionPayment(tx, id, now);
   const [row] = await tx.select().from(checkout).where(eq(checkout.id, id));
   if (!row || row.status === "void") return;
-  if (await syncCheckoutPassRefunds(tx, id)) return;
-  if (await syncCheckoutGiftRefunds(tx, id)) return;
+  if ((await syncCheckoutPassRefunds(tx, id)) || (await syncCheckoutGiftRefunds(tx, id))) {
+    await syncStampsAfterSpecialRefund(tx, row, now);
+    return;
+  }
   const view = await snapshot(tx, row);
   if (view.lines.some((line) => line.pricePending)) {
     await tx.update(checkout).set({ status: "open" }).where(eq(checkout.id, id));

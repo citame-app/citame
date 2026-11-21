@@ -8,6 +8,8 @@ import {
 } from "@sob/contracts";
 import {
   appointmentService,
+  checkout,
+  checkoutLine,
   type Database,
   retailProduct,
   service,
@@ -96,7 +98,9 @@ export async function updateStampProgram(
       const matches = await tx
         .select({ id: service.id })
         .from(service)
-        .where(and(inArray(service.id, [...ids]), isNull(service.deletedAt)));
+        .where(
+          and(inArray(service.id, [...ids]), isNull(service.deletedAt), eq(service.active, true)),
+        );
       if (matches.length !== ids.size)
         throw new DomainError("invalid_state", "Review the inactive services in the programme");
     }
@@ -142,14 +146,15 @@ function state(card: Card, program: Program, now: Date): StampCard["state"] {
   return card.stampExpiresAt && card.stampExpiresAt <= now ? "expired" : "active";
 }
 
-function view(card: Card, program: Program, now: Date): StampCard {
+function view(card: Card, program: Program, now: Date, activeId?: string): StampCard {
+  const current = state(card, program, now);
   return {
     id: card.id,
     version: card.version,
     programVersion: card.programVersion,
     program: stampProgramTermsSchema.parse(card.program),
     stamps: card.stamps,
-    state: state(card, program, now),
+    state: current === "active" && activeId && card.id !== activeId ? "queued" : current,
     needsReview: card.needsReview,
     createdAt: card.createdAt.toISOString(),
     stampExpiresAt: card.stampExpiresAt?.toISOString() ?? null,
@@ -166,6 +171,7 @@ export async function listStampCards(db: Database, clientId: string, now: Date) 
       const root = await clientRoot(tx, clientId);
       const ids = await clientIdentityIds(tx, root.id);
       const program = await currentProgram(tx);
+      const active = await firstActiveCard(tx, ids, program, now);
       const rows = await tx
         .select()
         .from(stampCard)
@@ -173,7 +179,7 @@ export async function listStampCards(db: Database, clientId: string, now: Date) 
         .orderBy(desc(stampCard.createdAt), desc(stampCard.id))
         .limit(100);
       return {
-        cards: rows.map((row) => view(row, program, now)),
+        cards: rows.map((row) => view(row, program, now, active?.id)),
         programVersion: program.version,
         program: program.program,
       };
@@ -182,8 +188,7 @@ export async function listStampCards(db: Database, clientId: string, now: Date) 
   );
 }
 
-const activeCard = async (tx: Tx, clientId: string, program: Program, now: Date) => {
-  const identities = await clientIdentityIds(tx, clientId);
+async function firstActiveCard(tx: Tx, identities: string[], program: Program, now: Date) {
   const [card] = await tx
     .select()
     .from(stampCard)
@@ -199,7 +204,17 @@ const activeCard = async (tx: Tx, clientId: string, program: Program, now: Date)
     .orderBy(asc(stampCard.createdAt), asc(stampCard.id))
     .limit(1);
   return card;
-};
+}
+
+async function activeCard(tx: Tx, clientId: string, program: Program, now: Date) {
+  return firstActiveCard(tx, await clientIdentityIds(tx, clientId), program, now);
+}
+
+async function operatorView(tx: Tx, card: Card, rootId: string, program: Program, now: Date) {
+  const active =
+    state(card, program, now) === "active" ? await activeCard(tx, rootId, program, now) : undefined;
+  return view(card, program, now, active?.id);
+}
 
 async function enrol(
   tx: Tx,
@@ -228,6 +243,7 @@ async function enrol(
           : expiry === null
             ? null
             : new Date(expiry),
+      stampExpiryOverridden: expiry !== undefined,
       ...(complete
         ? { completedAt: now, rewardExpiresAt: expires(now, terms.rewardExpiryDays) }
         : {}),
@@ -280,7 +296,8 @@ export async function issueStampCard(
     const command = await stampCommand(tx, principal, input, input.clientId);
     const root = await lockClientRoot(tx, input.clientId);
     const program = await lockProgramForCard(tx);
-    if (command.existing) return view(await cardById(tx, command.existing.cardId), program, now);
+    if (command.existing)
+      return operatorView(tx, await cardById(tx, command.existing.cardId), root.id, program, now);
     if (root.id !== input.clientId)
       throw new DomainError("client_merged", "Review the surviving client before issuing a card");
     if (program.version !== input.programVersion)
@@ -304,7 +321,7 @@ export async function issueStampCard(
       metadata: { stamps: card.stamps, programVersion: program.version },
     });
     if (card.completedAt && program.program.automaticIssue) await enrol(tx, root.id, program, now);
-    return view(card, program, now);
+    return operatorView(tx, card, root.id, program, now);
   });
 }
 
@@ -322,7 +339,7 @@ export async function changeStampCard(
     const root = await lockClientRoot(tx, original.clientId);
     const program = await lockProgramForCard(tx);
     const card = await cardById(tx, id);
-    if (command.existing) return view(card, program, now);
+    if (command.existing) return operatorView(tx, card, root.id, program, now);
     if (card.version !== input.version)
       throw new DomainError("version_conflict", "Review the current loyalty card");
     const current = state(card, program, now);
@@ -337,6 +354,8 @@ export async function changeStampCard(
         throw new DomainError("invalid_state", "This card cannot be edited");
       changes.stamps = input.stamps;
       changes.stampExpiresAt = input.expiresAt ? new Date(input.expiresAt) : null;
+      if (changes.stampExpiresAt?.getTime() !== card.stampExpiresAt?.getTime())
+        changes.stampExpiryOverridden = true;
       changes.completedAt = input.stamps === terms.goal ? (card.completedAt ?? now) : null;
       changes.rewardExpiresAt = changes.completedAt
         ? expires(changes.completedAt, terms.rewardExpiryDays)
@@ -372,7 +391,7 @@ export async function changeStampCard(
       !(await activeCard(tx, root.id, program, now))
     )
       await enrol(tx, root.id, program, now);
-    return view(saved, program, now);
+    return operatorView(tx, saved, root.id, program, now);
   });
 }
 
@@ -403,16 +422,19 @@ async function awardStamp(tx: Tx, clientId: string, award: Award) {
   card ??= await enrol(tx, root.id, current, award.now);
   const then = card.stamps + 1;
   const complete = then === terms.goal;
-  await tx
-    .insert(stampCardEvent)
-    .values({ source: award.source, cardId: card.id, checkoutId: award.checkoutId });
+  await tx.insert(stampCardEvent).values({
+    source: award.source,
+    cardId: card.id,
+    checkoutId: award.checkoutId,
+    createdAt: award.now,
+  });
   await tx
     .update(stampCard)
     .set({
       stamps: then,
       version: card.version + 1,
       updatedAt: award.now,
-      ...(terms.expiryFrom === "activity"
+      ...(terms.expiryFrom === "activity" && !card.stampExpiryOverridden
         ? { stampExpiresAt: expires(award.now, terms.stampExpiryDays) }
         : {}),
       ...(complete
@@ -468,6 +490,15 @@ export async function syncCheckoutStamp(
   const terms = stampProgramTermsSchema.parse(card.program);
   const spend = checkoutSpend(value, terms);
   if (spend > 0 && spend >= terms.minimumSpendCents) return;
+  await revokeStamp(tx, card, event, now);
+}
+
+async function revokeStamp(
+  tx: Tx,
+  card: Card,
+  event: typeof stampCardEvent.$inferSelect,
+  now: Date,
+) {
   const stamps = Math.max(0, card.stamps - 1);
   await tx
     .update(stampCardEvent)
@@ -479,10 +510,28 @@ export async function syncCheckoutStamp(
       .set({ needsReview: true, version: card.version + 1, updatedAt: now })
       .where(eq(stampCard.id, card.id));
   } else {
+    const terms = stampProgramTermsSchema.parse(card.program);
+    let stampExpiresAt = card.stampExpiresAt;
+    if (terms.expiryFrom === "activity" && !card.stampExpiryOverridden) {
+      const [last] = await tx
+        .select({ createdAt: stampCardEvent.createdAt })
+        .from(stampCardEvent)
+        .where(
+          and(
+            eq(stampCardEvent.cardId, card.id),
+            isNull(stampCardEvent.requestHash),
+            isNull(stampCardEvent.revokedAt),
+          ),
+        )
+        .orderBy(desc(stampCardEvent.createdAt))
+        .limit(1);
+      stampExpiresAt = expires(last?.createdAt ?? card.createdAt, terms.stampExpiryDays);
+    }
     await tx
       .update(stampCard)
       .set({
         stamps,
+        stampExpiresAt,
         completedAt: null,
         rewardExpiresAt: null,
         version: card.version + 1,
@@ -490,6 +539,27 @@ export async function syncCheckoutStamp(
       })
       .where(eq(stampCard.id, card.id));
   }
+}
+
+export async function reverseAppointmentStamp(
+  tx: Tx,
+  visit: { id: string; clientId: string },
+  now: Date,
+) {
+  const source = `visit:${visit.id}`;
+  const condition = and(
+    eq(stampCardEvent.source, source),
+    isNull(stampCardEvent.checkoutId),
+    isNull(stampCardEvent.revokedAt),
+  );
+  const [observed] = await tx
+    .select({ cardId: stampCardEvent.cardId })
+    .from(stampCardEvent)
+    .where(condition);
+  if (!observed) return;
+  await lockClientRoot(tx, visit.clientId, true);
+  const [event] = await tx.select().from(stampCardEvent).where(condition);
+  if (event) await revokeStamp(tx, await cardById(tx, event.cardId), event, now);
 }
 
 export async function awardAppointmentStamp(
@@ -504,17 +574,40 @@ export async function awardAppointmentStamp(
     kind: "appointment",
     now,
     qualifiedSpend: async (terms) => {
+      const qualifies = (id: string | null) =>
+        terms.qualifyingServiceIds.length === 0 ||
+        (id !== null && terms.qualifyingServiceIds.includes(id));
+      const [quoted] = await tx
+        .select({ id: checkout.id })
+        .from(checkout)
+        .where(
+          and(
+            eq(checkout.appointmentId, visit.id),
+            eq(checkout.currency, "EUR"),
+            sql`(${checkout.idempotencyKey} = 'booking-promotion-' || ${visit.id} or ${checkout.pricingVersion} > 1)`,
+          ),
+        )
+        .orderBy(desc(checkout.createdAt), desc(checkout.id))
+        .limit(1);
+      if (quoted) {
+        const lines = await tx
+          .select()
+          .from(checkoutLine)
+          .where(and(eq(checkoutLine.checkoutId, quoted.id), eq(checkoutLine.kind, "service")));
+        if (lines.length)
+          return lines
+            .filter((line) => !line.pricePending && qualifies(line.serviceId))
+            .reduce(
+              (total, line) => total + line.quantity * line.unitAmountCents - line.discountCents,
+              0,
+            );
+      }
       const lines = await tx
         .select()
         .from(appointmentService)
         .where(eq(appointmentService.appointmentId, visit.id));
       return lines
-        .filter(
-          (line) =>
-            line.currency === "EUR" &&
-            (!terms.qualifyingServiceIds.length ||
-              (line.serviceId && terms.qualifyingServiceIds.includes(line.serviceId))),
-        )
+        .filter((line) => line.currency === "EUR" && qualifies(line.serviceId))
         .reduce(
           (total, line) =>
             total + (line.reviewedPriceCents ?? (line.sourceUnpriced ? 0 : line.priceCents)),

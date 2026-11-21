@@ -16,6 +16,7 @@ CREATE TABLE stamp_card (
   version integer NOT NULL DEFAULT 1,
   stamps integer NOT NULL,
   stamp_expires_at timestamptz,
+  stamp_expiry_overridden boolean NOT NULL DEFAULT false,
   reward_expires_at timestamptz,
   completed_at timestamptz,
   reward_issued_at timestamptz,

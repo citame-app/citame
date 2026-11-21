@@ -56,7 +56,7 @@ import { prepareBookingIntake, recordBookingIntake } from "../clients/intake-boo
 import { refreshAppointmentCheckout } from "../commerce/service";
 import { reassignAppointmentResources, reserveResources } from "../resources/reservations";
 import { applyBookingPromotion } from "../rewards/booking";
-import { awardAppointmentStamp } from "../rewards/stamps";
+import { awardAppointmentStamp, reverseAppointmentStamp } from "../rewards/stamps";
 import { assertPromotionReschedule } from "../rewards/timing";
 import { releaseUnfulfilledAppointmentRewards } from "../rewards/value";
 import { assertOnlineServices, getBookableServices } from "../services/service";
@@ -770,6 +770,8 @@ export async function updateAppointment(
         if (updated.status === "completed") {
           await refreshAppointmentCheckout(tx, id, now);
           if (current.status !== "completed") await awardAppointmentStamp(tx, updated, now);
+        } else if (current.status === "completed") {
+          await reverseAppointmentStamp(tx, updated, now);
         }
         if (updated.status === "cancelled" && current.status !== "cancelled") {
           await closeAppointment(tx, updated, now, { notify: true });

@@ -34,6 +34,7 @@ export const stampCard = pgTable(
     version: integer().notNull().default(1),
     stamps: integer().notNull(),
     stampExpiresAt: timestamptz(),
+    stampExpiryOverridden: boolean().notNull().default(false),
     rewardExpiresAt: timestamptz(),
     completedAt: timestamptz(),
     rewardIssuedAt: timestamptz(),

@@ -1,6 +1,7 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import type { StampCard, StampProgramTerms } from "@sob/contracts";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { renderApp } from "../../../../test/render";
 import { StampCardsView } from "./stamp-cards-view";
 import { StampProgramForm } from "./stamp-program-form";
@@ -51,11 +52,44 @@ afterEach(() => {
 test("customers see card progress and their reward without operator actions", async () => {
   const read = mock(async (_input: RequestInfo | URL) => Response.json({ cards: [card] }));
   globalThis.fetch = read as unknown as typeof fetch;
-  renderApp(<StampCardsView mode="client" role="client" />);
+  renderApp(<StampCardsView mode="client" role="client" clientId={clientId} />);
   expect(await screen.findByText("2 of 2 stamps")).toBeVisible();
   expect(screen.getByText("Colour treatment discount")).toBeVisible();
   expect(screen.queryByRole("button", { name: "Issue reward" })).not.toBeInTheDocument();
   expect(String(read.mock.calls[0]?.[0])).toContain("/me/loyalty-cards");
+});
+
+function SwitchCustomer() {
+  const [id, setId] = useState(clientId);
+  return (
+    <>
+      <button type="button" onClick={() => setId("019a0000-0000-7000-8000-000000000003")}>
+        Switch customer
+      </button>
+      <StampCardsView mode="client" role="client" clientId={id} />
+    </>
+  );
+}
+
+test("switching customer sessions cannot display the previous customer's cached card", async () => {
+  let first = true;
+  globalThis.fetch = mock(async () => {
+    if (first) {
+      first = false;
+      return Response.json({ cards: [card] });
+    }
+    return Response.json(
+      { error: { code: "unknown", message: "Offline fixture" } },
+      { status: 503 },
+    );
+  }) as unknown as typeof fetch;
+  renderApp(<SwitchCustomer />);
+  expect(await screen.findByText("Colour treatment discount")).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Switch customer" }));
+  expect(screen.queryByText("Colour treatment discount")).not.toBeInTheDocument();
+  await waitFor(() =>
+    expect(screen.queryByText("Colour treatment discount")).not.toBeInTheDocument(),
+  );
 });
 
 test("issuing a reward requires explicit confirmation and the reviewed card version", async () => {

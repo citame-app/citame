@@ -71,7 +71,7 @@ export function RewardsView(props: {
       ) : null}
       {openedStamps && (
         <div hidden={tab !== "stamps"}>
-          <StampCardsView {...props} />
+          <StampCardsView {...props} visible={tab === "stamps"} />
         </div>
       )}
     </div>

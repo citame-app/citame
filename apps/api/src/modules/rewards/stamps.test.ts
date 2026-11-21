@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
-import { appointment, appointmentService, service } from "@sob/db";
+import { appointment, appointmentService, checkout, checkoutLine, service } from "@sob/db";
 import {
   type Actor,
   actor,
@@ -148,6 +148,31 @@ test("a refund below the minimum reverses the original stamp without starting a 
   expect(await cards()).toMatchObject([{ id: before[0]?.id, stamps: 0, state: "active" }]);
 });
 
+test("refunding the final stamp queues the successor without taking away its progress", async () => {
+  expect((await save({ goal: 2, welcomeStamps: 1 })).status).toBe(200);
+  const receipt = await settle("");
+  expect(await cards()).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ state: "completed", stamps: 2 }),
+      expect.objectContaining({ state: "active", stamps: 1 }),
+    ]),
+  );
+  const refund = await call(owner, `/admin/commerce/payments/${receipt.payment}/refunds`, "POST", {
+    amountCents: receipt.amount,
+    reason: "Synthetic refund of final stamp",
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(refund.status).toBe(201);
+  expect(await cards()).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ state: "active", stamps: 1 }),
+      expect.objectContaining({ state: "queued", stamps: 1 }),
+    ]),
+  );
+  await settle("");
+  expect(await cards()).toHaveLength(2);
+});
+
 test("programme updates preserve existing terms and can explicitly invalidate an older card", async () => {
   expect((await save({ automaticIssue: false })).status).toBe(200);
   const issued = await call(owner, `${path}/cards`, "POST", {
@@ -203,4 +228,71 @@ test("completing a visit awards once without a checkout", async () => {
   expect(await cards()).toMatchObject([{ stamps: 1, state: "active" }]);
   await settle(fixtures.haircutId);
   expect(await cards()).toMatchObject([{ stamps: 1, state: "active" }]);
+  const wrongVisit = await call(owner, `/appointments/${visit.id}`, "PATCH", {
+    status: "no_show",
+    version: 2,
+  });
+  expect(wrongVisit.status, await wrongVisit.clone().text()).toBe(200);
+  expect(await cards()).toMatchObject([{ stamps: 0, state: "active" }]);
+});
+
+test("a booking promotion reduces the eligible spend for visit-based stamps", async () => {
+  expect(
+    (
+      await save({
+        awardOn: "appointment",
+        minimumSpendCents: 9500,
+        qualifyingServiceIds: [fixtures.haircutId],
+      })
+    ).status,
+  ).toBe(200);
+  const [visit] = await t.db
+    .insert(appointment)
+    .values({
+      staffId: fixtures.anaId,
+      clientId: customer.clientId!,
+      startsAt: new Date("2026-02-27T09:00:00Z"),
+      endsAt: new Date("2026-02-27T10:00:00Z"),
+    })
+    .returning();
+  if (!visit) throw new Error("Missing visit fixture");
+  await t.db.insert(appointmentService).values({
+    appointmentId: visit.id,
+    serviceId: fixtures.haircutId,
+    name: "Synthetic discounted visit",
+    position: 0,
+    durationMinutes: 45,
+    bufferMinutes: 15,
+    priceCents: 10_000,
+    currency: "EUR",
+  });
+  const [receipt] = await t.db
+    .insert(checkout)
+    .values({
+      appointmentId: visit.id,
+      staffId: fixtures.anaId,
+      clientId: customer.clientId,
+      subtotalCents: 10_000,
+      discountCents: 1000,
+      totalCents: 9000,
+      idempotencyKey: `booking-promotion-${visit.id}`,
+      requestHash: "synthetic",
+    })
+    .returning();
+  if (!receipt) throw new Error("Missing receipt fixture");
+  await t.db.insert(checkoutLine).values({
+    checkoutId: receipt.id,
+    kind: "service",
+    serviceId: fixtures.haircutId,
+    description: "Synthetic discounted visit",
+    quantity: 1,
+    unitAmountCents: 10_000,
+    discountCents: 1000,
+  });
+  const complete = await call(owner, `/appointments/${visit.id}`, "PATCH", {
+    status: "completed",
+    version: 1,
+  });
+  expect(complete.status, await complete.clone().text()).toBe(200);
+  expect(await cards()).toEqual([]);
 });

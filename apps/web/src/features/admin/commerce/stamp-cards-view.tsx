@@ -6,6 +6,7 @@ import {
   permissionsFor,
   type StaffAccessPreset,
   type StampCard,
+  type StampProgramTerms,
   type UserRole,
 } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -42,11 +43,13 @@ export function StampCardsView({
   role,
   accessPreset,
   clientId,
+  visible = true,
 }: {
   mode: CommerceMode;
   role: UserRole;
   accessPreset?: StaffAccessPreset | null;
   clientId?: string | null;
+  visible?: boolean;
 }) {
   const { t } = useI18n();
   const permissions = permissionsFor(role, accessPreset);
@@ -58,9 +61,11 @@ export function StampCardsView({
     queryKey: ["rewards", "customers", debounced],
     queryFn: () =>
       api().admin.clients.list({ search: debounced, pageSize: 8, sort: "name", order: "asc" }),
-    enabled: mode === "admin" && !clientId && permissions.clients && debounced.length > 0,
+    enabled:
+      visible && mode === "admin" && !clientId && permissions.clients && debounced.length > 0,
   });
-  if (mode === "client") return <CustomerCards />;
+  if (mode === "client")
+    return clientId ? <CustomerCards clientId={clientId} visible={visible} /> : null;
   return (
     <section className="space-y-6" aria-label={t("stamps.title")}>
       {role === "owner" && !clientId && <StampProgramForm />}
@@ -121,7 +126,8 @@ function StampCardTile({
       : card.state === "issued" && !card.needsReview
         ? "redeem"
         : null;
-  const canAdjust = !card.rewardIssuedAt && ["active", "completed", "expired"].includes(card.state);
+  const canAdjust =
+    !card.rewardIssuedAt && ["active", "queued", "completed", "expired"].includes(card.state);
   return (
     <article className="overflow-hidden rounded-xl border border-line bg-surface">
       <div className={`space-y-4 p-4 ${cardStyles[card.program.appearance]}`}>
@@ -144,7 +150,7 @@ function StampCardTile({
         </p>
       </div>
       <div className="space-y-2 p-4">
-        <p className="font-medium">{card.program.reward.name}</p>
+        <RewardSummary reward={card.program.reward} />
         {expiration && (
           <p className="text-sm text-muted">
             {t("stamps.expires", {
@@ -193,6 +199,20 @@ function StampCardTile({
   );
 }
 
+function RewardSummary({ reward }: { reward: StampProgramTerms["reward"] }) {
+  const { t, locale } = useI18n();
+  return (
+    <div>
+      <p className="font-medium">{reward.name}</p>
+      <p className="text-sm text-muted">
+        {t(`stamps.${reward.kind}`)}
+        {reward.discountBasisPoints !== null &&
+          ` · ${new Intl.NumberFormat(locale, { style: "percent", maximumFractionDigits: 2 }).format(reward.discountBasisPoints / 10_000)}`}
+      </p>
+    </div>
+  );
+}
+
 function CardList({
   cards,
   choose,
@@ -211,12 +231,13 @@ function CardList({
   );
 }
 
-function CustomerCards() {
+function CustomerCards({ clientId, visible }: { clientId: string; visible: boolean }) {
   const cards = useQuery({
-    queryKey: ["rewards", "stamps", "me"],
+    queryKey: ["rewards", "stamps", "me", clientId],
     queryFn: ({ signal }) => api().rewards.myStampCards(signal),
     refetchOnMount: "always",
-    refetchInterval: 15_000,
+    enabled: visible,
+    refetchInterval: visible ? 15_000 : false,
   });
   if (cards.isPending) return <Skeleton className="h-40" />;
   if (!cards.data) return <ErrorState error={cards.error} onRetry={() => void cards.refetch()} />;
@@ -285,7 +306,7 @@ function AdminCards({
         <>
           {canEdit &&
             source.program.enabled &&
-            !source.cards.some((card) => card.state === "active") && (
+            !source.cards.some((card) => card.state === "active" || card.state === "queued") && (
               <Button type="button" onClick={() => choose({ type: "issue" })}>
                 {t("stamps.issue")}
               </Button>
@@ -402,7 +423,7 @@ function CardCommandForm({
       <h3 id={heading} className="text-heading">
         {t(`stamps.${selection.type}`)}
       </h3>
-      <p>{(card?.program ?? source.program).reward.name}</p>
+      <RewardSummary reward={(card?.program ?? source.program).reward} />
       <fieldset disabled={Boolean(command) || save.isPending} className="grid gap-3 sm:grid-cols-2">
         {showCount && (
           <TextField

@@ -358,6 +358,22 @@ export async function syncCheckoutRewards(
     eventKey: `loyalty-earn:${checkoutId}`,
   });
 }
+
+export async function syncStampsAfterSpecialRefund(
+  tx: Tx,
+  sale: typeof checkout.$inferSelect,
+  now: Date,
+) {
+  if (!sale.clientId || !sale.fulfilledAt) return;
+  await lockRewardClient(tx, sale.clientId, true);
+  await syncCheckoutStamp(
+    tx,
+    { id: sale.id, clientId: sale.clientId, appointmentId: sale.appointmentId },
+    await retainedValue(tx, sale),
+    false,
+    now,
+  );
+}
 export async function expireLoyaltyLots(db: Database, now = new Date(), limit = 100) {
   const rows = await db
     .select({ id: loyaltyLot.id, clientId: loyaltyLot.clientId })

@@ -98,7 +98,7 @@ export const stampCardSchema = z.object({
   programVersion: version,
   program: stampProgramTermsSchema,
   stamps,
-  state: z.enum(["active", "completed", "issued", "redeemed", "expired", "void"]),
+  state: z.enum(["active", "queued", "completed", "issued", "redeemed", "expired", "void"]),
   needsReview: z.boolean(),
   createdAt: instantSchema,
   stampExpiresAt: instantSchema.nullable(),
