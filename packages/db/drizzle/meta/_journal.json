@@ -645,6 +645,13 @@
       "when": 1795213487919,
       "tag": "0091_inventory_suppliers_and_receipts",
       "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1795213487920,
+      "tag": "0092_inventory_document_acknowledgements",
+      "breakpoints": true
     }
   ]
 }

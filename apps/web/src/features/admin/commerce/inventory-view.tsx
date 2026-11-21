@@ -23,10 +23,10 @@ import { formatMoney } from "~/lib/format";
 import { useInventoryLiveRevision } from "../calendar/live-provider";
 import { UnsavedGuard } from "../unsaved-guard";
 import { useDebounced } from "../use-debounced";
-import { centsInput, inputCents } from "./money";
+import { type InventoryNavigation, inventoryTabs } from "./inventory-navigation";
 import { InventoryReceipts } from "./inventory-receipts";
 import { InventorySuppliers } from "./inventory-suppliers";
-import { type InventoryNavigation, inventoryTabs } from "./inventory-navigation";
+import { centsInput, inputCents } from "./money";
 import { ProductPhoto, ProductPhotoEditor } from "./product-photo";
 import { StockAdjustment } from "./stock-adjustment";
 

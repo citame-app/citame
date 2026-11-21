@@ -28,15 +28,16 @@ export const stockReceipt = pgTable(
     receivedOn: date({ mode: "string" }).notNull(),
     invoiceReference: text(),
     notes: text(),
-    lines: bunJsonb<
-      {
-        productId: string;
-        name: string;
-        sku: string;
-        quantity: number;
-        unitCostCents: number | null;
-      }[]
-    >().notNull(),
+    lines:
+      bunJsonb<
+        {
+          productId: string;
+          name: string;
+          sku: string;
+          quantity: number;
+          unitCostCents: number | null;
+        }[]
+      >().notNull(),
     lineCount: integer().notNull(),
     createdBy: text().references(() => user.id, { onDelete: "set null" }),
     idempotencyKey: text().notNull(),

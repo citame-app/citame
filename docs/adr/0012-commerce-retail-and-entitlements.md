@@ -17,6 +17,7 @@ Redsys is a server-only adapter, disabled until configured. Checkout totals and 
 - Returns and internal consumption are explicit stock movements. A refund does not automatically mean a product was physically returned. Returns against a sold line cannot exceed the sold quantity and are idempotent. Product deactivation preserves history and existing reservations.
 - Inventory adjustments cannot reduce physical stock below reserved stock. Prices/costs on an existing checkout are snapshots. Monetary values and stock base units are integers; there is no implicit exchange-rate conversion.
 - A numbered stock receipt records a completed delivery. It locks products in ID order, verifies the reviewed versions, and writes every movement in one transaction. The receipt keeps its supplier name and product details at receipt time. Later catalogue and supplier edits preserve that history. Receipt numbers can have gaps after rolled-back writes. Retrying the same actor and request returns the existing receipt.
+- Desktop stores reviewed supplier and product data for offline preparation. A queued receipt's UUID is also its server identity. If a restored replica retains that receipt, Desktop can recognise it by ID during conflict review without posting its movements again.
 
 ## Following blocks
 

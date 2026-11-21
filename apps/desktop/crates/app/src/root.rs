@@ -728,6 +728,7 @@ impl Root {
                 && !self.preserve_open_combinations(generation.as_deref())
                 && !self.preserve_open_product_form(generation.as_deref())
                 && !self.preserve_open_product_photo()
+                && !self.preserve_open_inventory_documents()
             {
                 self.overlay = Overlay::None;
             }
@@ -2357,6 +2358,9 @@ impl Root {
         if self.saving_service_annotations() {
             return;
         }
+        if self.dismiss_inventory_document_panel(cx) {
+            return;
+        }
         match &mut self.overlay {
             Overlay::None => return,
             Overlay::New(form)
@@ -3315,6 +3319,8 @@ impl Root {
                     Key::InventoryProductDetails
                 }
                 sob_core::product_editor::PHOTO => Key::InventoryProductPhoto,
+                sob_core::inventory_documents::SUPPLIER_SAVE => Key::InventorySuppliers,
+                sob_core::inventory_documents::RECEIVE_STOCK => Key::InventoryReceipts,
                 _ => Key::ConflictOther,
             });
             let when = c
@@ -3395,7 +3401,12 @@ impl Root {
                             },
                         )
                         .when(
-                            c.requires_restored_review()
+                            (c.requires_restored_review()
+                                && !matches!(
+                                    c.kind.as_str(),
+                                    sob_core::inventory_documents::SUPPLIER_SAVE
+                                        | sob_core::inventory_documents::RECEIVE_STOCK
+                                ))
                                 || matches!(
                                     c.kind.as_str(),
                                     "service.staff_replace"
@@ -3540,6 +3551,24 @@ impl Root {
                                 }),
                             ))
                         })
+                        .when(
+                            matches!(
+                                c.kind.as_str(),
+                                sob_core::inventory_documents::SUPPLIER_SAVE
+                                    | sob_core::inventory_documents::RECEIVE_STOCK
+                            ) && self.svc.store.can_queue_product_edits(),
+                            |row| {
+                                let id = c.mutation_id.clone();
+                                row.child(self.button(
+                                    ("review-inventory-document", i),
+                                    self.t(Key::InventoryDocumentReview),
+                                    Kind::Primary,
+                                    cx.listener(move |root, _, _, cx| {
+                                        root.open_inventory_document_conflict(&id, cx)
+                                    }),
+                                ))
+                            },
+                        )
                         .when(c.kind != sob_core::product_editor::PHOTO, |row| {
                             row.child(self.button(
                                 ("c-dismiss", i),

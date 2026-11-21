@@ -4,8 +4,8 @@ import {
   type Product,
   type StockReceipt,
   type StockReceiptInput,
-  stockReceiptInputSchema,
   type Supplier,
+  stockReceiptInputSchema,
 } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState } from "react";

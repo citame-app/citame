@@ -6,11 +6,11 @@ import {
   CommerceView,
   type CommerceViewName,
 } from "~/features/admin/commerce/commerce-view";
-import { adminHead } from "~/features/admin/route-head";
 import {
   type InventoryNavigation,
   parseInventoryNavigation,
 } from "~/features/admin/commerce/inventory-navigation";
+import { adminHead } from "~/features/admin/route-head";
 import { useI18n } from "~/i18n/react";
 export const Route = createFileRoute("/admin/commerce")({
   validateSearch: (

@@ -362,6 +362,7 @@ pub struct StockMovement {
     pub kind: StockKind,
     pub quantity_delta: i64,
     pub reason: String,
+    pub receipt_id: Option<Uuid>,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -459,7 +460,7 @@ pub enum StockWriteError {
     Transport(#[from] TransportError),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Pagination {
     pub page: u32,

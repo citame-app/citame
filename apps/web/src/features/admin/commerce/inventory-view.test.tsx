@@ -55,6 +55,7 @@ beforeEach(() => {
     if (path.endsWith("/facets")) return Response.json({ categories: [], brands: [] });
     if (path.endsWith("/receipts"))
       return Response.json({
+        generation: detailProduct.inventoryGeneration,
         receipts: [
           {
             id,

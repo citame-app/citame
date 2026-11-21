@@ -30,6 +30,7 @@ import {
 } from "../appointments/service";
 import { updateClient } from "../clients/admin";
 import { saveProductPhoto } from "../inventory/photo";
+import { receiveStockDocument, saveSupplier } from "../inventory/receipts";
 import { createProduct, updateProduct } from "../inventory/service";
 import { createResource, setServiceResources, updateResource } from "../resources/catalog";
 import {
@@ -46,6 +47,7 @@ import { createTimeOff, deleteTimeOff, updateTimeOff } from "../staff/schedule";
 export interface ApplyContext {
   /** Clock for booking rules (injectable in tests). */
   now: () => Date;
+  generation: string;
 }
 
 const FOREIGN_KEY_VIOLATION = "23503";
@@ -297,6 +299,28 @@ export async function applyMutation(
     case "product.photo": {
       const { id, ...photo } = mutation.payload;
       await saveProductPhoto(db, id, photo, principal);
+      return;
+    }
+    case "supplier.save": {
+      const { id, ...input } = mutation.payload;
+      await saveSupplier(
+        db,
+        id,
+        { ...input, generation: ctx.generation },
+        principal,
+        ctx.generation,
+      );
+      return;
+    }
+    case "stock.receipt": {
+      const { id, ...input } = mutation.payload;
+      await receiveStockDocument(
+        db,
+        { ...input, idempotencyKey: id, generation: ctx.generation },
+        principal,
+        ctx.generation,
+        id,
+      );
       return;
     }
     case "staff.update": {

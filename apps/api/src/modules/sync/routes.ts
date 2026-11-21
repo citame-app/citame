@@ -34,7 +34,7 @@ export function syncRoutes(
             "Refresh the restored replica before sending changes",
           );
         }
-        const response = await pushMutations({ db, now }, c.get("principal"), request);
+        const response = await pushMutations({ db, now, generation }, c.get("principal"), request);
         for (const result of response.results) {
           metrics?.syncPush.inc({
             status: result.status,

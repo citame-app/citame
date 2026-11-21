@@ -1569,6 +1569,8 @@ impl Store {
                                 | crate::product_editor::CREATE
                                 | crate::product_editor::UPDATE
                                 | crate::product_editor::PHOTO
+                                | crate::inventory_documents::SUPPLIER_SAVE
+                                | crate::inventory_documents::RECEIVE_STOCK
                         )
                     {
                         Self::set_meta_at(
@@ -1593,6 +1595,8 @@ impl Store {
                             crate::product_editor::CREATE
                                 | crate::product_editor::UPDATE
                                 | crate::product_editor::PHOTO
+                                | crate::inventory_documents::SUPPLIER_SAVE
+                                | crate::inventory_documents::RECEIVE_STOCK
                         )
                     {
                         Self::apply_inventory_access_at(&tx, false)?;
@@ -1709,6 +1713,7 @@ impl Store {
 mod service_assignments;
 pub use service_assignments::{AssignmentSnapshot, AssignmentWork, ServiceAssignment};
 mod combinations;
+mod inventory_documents;
 mod product_editor;
 mod resource_pools;
 mod resource_requirements;

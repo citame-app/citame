@@ -4,6 +4,7 @@ import { calendarAppointmentSchema } from "./calendar";
 import { idSchema, instantSchema, LIMITS, localDateSchema, syncGenerationSchema } from "./common";
 import { dateShiftRangesSchema } from "./date-shifts";
 import { createProductSchema, productPhotoInputSchema, updateProductSchema } from "./inventory";
+import { stockReceiptInputSchema, supplierInputSchema } from "./inventory-receipts";
 import {
   resourceCreateSchema,
   resourceSchema,
@@ -295,6 +296,20 @@ const productPhoto = z.object({
   payload: productPhotoInputSchema.extend({ id: idSchema }),
 });
 
+const supplierSave = z.object({
+  ...envelope,
+  kind: z.literal("supplier.save"),
+  payload: supplierInputSchema.omit({ generation: true }).extend({ id: idSchema }),
+});
+
+const stockReceipt = z.object({
+  ...envelope,
+  kind: z.literal("stock.receipt"),
+  payload: stockReceiptInputSchema
+    .omit({ generation: true, idempotencyKey: true })
+    .extend({ id: idSchema }),
+});
+
 const staffUpdate = z.object({
   ...envelope,
   kind: z.literal("staff.update"),
@@ -335,6 +350,8 @@ export const syncMutationSchema = z.discriminatedUnion("kind", [
   productCreate,
   productUpdate,
   productPhoto,
+  supplierSave,
+  stockReceipt,
   staffUpdate,
   settingsUpdate,
 ]);

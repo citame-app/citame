@@ -1965,6 +1965,211 @@ fn native_moderation_publishes_replies_and_hides_through_the_proxy() {
 }
 
 #[test]
+#[ignore = "needs the synthetic production proxy"]
+fn native_inventory_documents_survive_restart_and_rebase_a_concurrent_cloud_delivery() {
+    use sob_core::inventory_documents::{
+        Delivery, DeliveryLine, DeliveryReview, DeliveryReviewRequest, DocumentProposal, Supplier,
+    };
+    let device = proxy_device();
+    let web = Device::sign_in();
+    let actor = web.rest_get("/me")["user"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let left = web.rest_post(
+        "/admin/inventory/products",
+        json!({
+            "name": "Native document fixture A", "priceCents": 1000, "openingStock": 3,
+            "idempotencyKey": uuid::Uuid::now_v7().to_string(),
+        }),
+    );
+    let right = web.rest_post(
+        "/admin/inventory/products",
+        json!({
+            "name": "Native document fixture B", "priceCents": 1000, "openingStock": 1,
+            "idempotencyKey": uuid::Uuid::now_v7().to_string(),
+        }),
+    );
+    let left_id = left["id"].as_str().unwrap().parse().unwrap();
+    let right_id = right["id"].as_str().unwrap().parse().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("inventory-documents.db");
+    let mut store = Store::open(&file).unwrap();
+    sync::pull_all(&mut store, &*device.transport).unwrap();
+    let generation = store.verified_reviewed_generation().unwrap();
+    let mut supplier = Supplier::new();
+    supplier.fields.name = "Native document supplier".into();
+    supplier.fields.email = Some("inventory@example.org".into());
+    store
+        .queue_inventory_document(
+            &generation,
+            DocumentProposal::Supplier(supplier.clone()),
+            None,
+        )
+        .unwrap();
+    drop(store);
+    let mut store = Store::open(&file).unwrap();
+    assert_eq!(
+        store.pending_inventory_documents().unwrap()[0].id(),
+        supplier.id
+    );
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let supplier_page = device
+        .transport
+        .inventory_suppliers("Native document supplier", Some(true), 1)
+        .unwrap();
+    assert!(
+        supplier_page
+            .suppliers
+            .iter()
+            .any(|row| row.id == supplier.id)
+    );
+    store.cache_supplier_page(&supplier_page).unwrap();
+    let current = device
+        .transport
+        .inventory_supplier(supplier.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.value.fields, supplier.fields);
+    let left = device.transport.inventory_product(left_id).unwrap();
+    let right = device.transport.inventory_product(right_id).unwrap();
+    for product in [&left, &right] {
+        store.remember_reviewed_product(product).unwrap();
+    }
+    let id = uuid::Uuid::now_v7();
+    let mut receipt = Delivery {
+        id,
+        received_on: "2026-01-30".into(),
+        supplier_id: Some(supplier.id),
+        invoice_reference: Some("Native-123".into()),
+        notes: Some("Receipt fixture".into()),
+        actor_user_id: actor.clone(),
+        lines: vec![
+            DeliveryLine::reviewed(&left, "2", &generation).unwrap(),
+            DeliveryLine::reviewed(&right, "4", &generation).unwrap(),
+        ],
+    };
+    store
+        .queue_inventory_document(
+            &generation,
+            DocumentProposal::Receipt(receipt.clone()),
+            None,
+        )
+        .unwrap();
+    drop(store);
+    let mut store = Store::open(&file).unwrap();
+    assert_eq!(store.pending_inventory_documents().unwrap()[0].id(), id);
+    web.rest_post(
+        "/admin/inventory/receipts",
+        json!({
+            "actorUserId": actor, "generation": generation, "receivedOn": "2026-01-29",
+            "supplierId": null, "invoiceReference": null, "notes": null,
+            "idempotencyKey": uuid::Uuid::now_v7().to_string(),
+            "lines": [{ "productId": left_id, "version": left.version, "quantity": 5 }],
+        }),
+    );
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .rejected,
+        1
+    );
+    assert_eq!(
+        device
+            .transport
+            .inventory_product(right_id)
+            .unwrap()
+            .stock_on_hand,
+        1
+    );
+    let conflict = store
+        .conflicts()
+        .unwrap()
+        .into_iter()
+        .find(|row| row.entity_id == id.to_string())
+        .unwrap();
+    let request = DeliveryReviewRequest {
+        id,
+        supplier_id: Some(supplier.id),
+        product_ids: vec![left_id, right_id],
+    };
+    let DeliveryReview::Current {
+        products,
+        supplier: Some(reviewed_supplier),
+    } = device.transport.review_delivery(&request).unwrap()
+    else {
+        panic!("a rejected receipt must remain available for review");
+    };
+    store
+        .cache_reviewed_supplier(&reviewed_supplier.value, &reviewed_supplier.generation)
+        .unwrap();
+    for (line, product) in receipt.lines.iter_mut().zip(products) {
+        let product = product.unwrap();
+        store.remember_reviewed_product(&product).unwrap();
+        *line = DeliveryLine::reviewed(&product, &line.quantity.to_string(), &generation).unwrap();
+    }
+    store
+        .queue_inventory_document(
+            &generation,
+            DocumentProposal::Receipt(receipt.clone()),
+            Some(&conflict.mutation_id),
+        )
+        .unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    assert!(store.pending_inventory_documents().unwrap().is_empty());
+    let DeliveryReview::Recorded(document) = device.transport.review_delivery(&request).unwrap()
+    else {
+        panic!("an existing receipt should be recovered by its original identity");
+    };
+    assert_eq!(document.generation, generation);
+    assert_eq!(document.value.header.id, id);
+    assert_eq!(document.value.header.line_count, 2);
+    assert_eq!(
+        document.value.header.invoice_reference.as_deref(),
+        Some("Native-123")
+    );
+    let page = device.transport.inventory_receipts(1).unwrap();
+    assert!(page.value.receipts.iter().any(|row| row.id == id));
+    store
+        .cache_receipt_page(&page.value, &page.generation)
+        .unwrap();
+    store.cache_receipt(&document.value, &generation).unwrap();
+    assert_eq!(
+        store.cached_receipt(id).unwrap().unwrap().header.number,
+        document.value.header.number
+    );
+    assert_eq!(
+        device
+            .transport
+            .inventory_product(left_id)
+            .unwrap()
+            .stock_on_hand,
+        10
+    );
+    assert_eq!(
+        device
+            .transport
+            .inventory_product(right_id)
+            .unwrap()
+            .stock_on_hand,
+        5
+    );
+}
+
+#[test]
 #[ignore = "needs the synthetic product from the production smoke test"]
 fn native_product_photo_replays_after_restart_and_checks_the_current_photo_version() {
     use sob_core::product_editor::ProductPhotoProposal;

@@ -248,6 +248,87 @@ test("product photos are private, normalized and protected against stale writes"
   ).toBeUndefined();
 });
 
+test("offline inventory documents write one receipt and emit commerce acknowledgments", async () => {
+  const first = await product();
+  const second = await product({ sku: "SECOND", openingStock: 1 });
+  const supplierId = crypto.randomUUID();
+  const supplier = {
+    kind: "supplier.save",
+    mutationId: mid(),
+    createdAt: new Date().toISOString(),
+    payload: {
+      id: supplierId,
+      name: "Native supplier",
+      email: null,
+      phone: null,
+      taxId: null,
+      notes: null,
+      active: true,
+      version: 0,
+    },
+  };
+  const receiptId = crypto.randomUUID();
+  const receipt = {
+    kind: "stock.receipt",
+    mutationId: mid(),
+    createdAt: new Date().toISOString(),
+    payload: {
+      id: receiptId,
+      receivedOn: "2026-01-30",
+      supplierId,
+      invoiceReference: "Native-2",
+      notes: null,
+      actorUserId: owner.userId,
+      lines: [
+        { productId: first.id, version: first.version, quantity: 2 },
+        { productId: second.id, version: second.version, quantity: 4 },
+      ],
+    },
+  };
+  const before = await pull(t, owner);
+  expect((await push(t, staff, [{ ...receipt, mutationId: mid() }])).body.results[0]).toMatchObject(
+    { status: "rejected", reason: "forbidden" },
+  );
+  const wrong = {
+    ...receipt,
+    mutationId: mid(),
+    payload: { ...receipt.payload, actorUserId: client.userId },
+  };
+  expect((await push(t, owner, [wrong])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "forbidden",
+  });
+  const applied = await push(t, owner, [supplier, receipt]);
+  expect(applied.body.results).toEqual([
+    expect.objectContaining({ status: "applied", appliedSeq: expect.any(Number) }),
+    expect.objectContaining({ status: "applied", appliedSeq: expect.any(Number) }),
+  ]);
+  expect((await push(t, owner, [receipt])).body.results[0]).toMatchObject({
+    status: "applied",
+    replayed: true,
+  });
+  expect((await push(t, owner, [{ ...receipt, mutationId: mid() }])).body.results[0]).toMatchObject(
+    { status: "applied" },
+  );
+  expect((await pull(t, owner, { since: before.headSeq })).refresh).toContain("commerce");
+  const response = await call(owner, `/admin/inventory/receipts/${receiptId}`);
+  expect(response.status).toBe(200);
+  const body = await response.json();
+  expect(stockReceiptSchema.parse(body)).toMatchObject({ id: receiptId, supplierId, lineCount: 2 });
+  expect(body).toHaveProperty("generation", first.inventoryGeneration);
+  const createAgain = {
+    ...receipt,
+    mutationId: mid(),
+    payload: { ...receipt.payload, id: crypto.randomUUID() },
+  };
+  expect((await push(t, owner, [createAgain])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "conflict",
+  });
+  const detail = await call(owner, `/admin/inventory/products/${first.id}`);
+  expect(await detail.json()).toMatchObject({ stockOnHand: 7, version: 2 });
+});
+
 test("desktop photo writes are private, replay safely and emit a commerce refresh", async () => {
   const item = await product();
   const path = `/admin/inventory/products/${item.id}`;

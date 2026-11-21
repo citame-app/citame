@@ -9,17 +9,19 @@ import {
   productSchema,
   reviewedInventoryMovementsSchema,
   reviewedInventoryProductSchema,
+  reviewedStockReceiptListSchema,
+  reviewedStockReceiptSchema,
+  reviewedSupplierSchema,
   type StockLedgerFilters,
   type StockLedgerQuery,
   type StockMovementInput,
   type StockReceiptInput,
   type StockReceiptQuery,
   type StockReturnInput,
-  stockLedgerSchema,
-  stockReceiptListSchema,
-  stockReceiptSchema,
   type SupplierInput,
   type SupplierQuery,
+  stockLedgerSchema,
+  stockReceiptSchema,
   supplierListSchema,
   supplierSchema,
   type UpdateProductInput,
@@ -54,12 +56,14 @@ export function inventoryEndpoints(client: ApiClient) {
       client.get("/admin/inventory/suppliers", supplierListSchema, {
         query: { ...query, active: active === undefined ? undefined : String(active) },
       }),
-    supplier: (id: string) => client.get(`/admin/inventory/suppliers/${id}`, supplierSchema),
+    supplier: (id: string) =>
+      client.get(`/admin/inventory/suppliers/${id}`, reviewedSupplierSchema),
     saveSupplier: (id: string, body: SupplierInput) =>
       client.put(`/admin/inventory/suppliers/${id}`, body, supplierSchema),
     receipts: (query: Partial<StockReceiptQuery> = {}) =>
-      client.get("/admin/inventory/receipts", stockReceiptListSchema, { query }),
-    receipt: (id: string) => client.get(`/admin/inventory/receipts/${id}`, stockReceiptSchema),
+      client.get("/admin/inventory/receipts", reviewedStockReceiptListSchema, { query }),
+    receipt: (id: string) =>
+      client.get(`/admin/inventory/receipts/${id}`, reviewedStockReceiptSchema),
     receive: (body: StockReceiptInput) =>
       client.post("/admin/inventory/receipts", body, stockReceiptSchema),
     facets: () => client.get("/admin/inventory/facets", inventoryFacetsSchema),

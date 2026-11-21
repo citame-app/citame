@@ -65,7 +65,14 @@ export function inventoryRoutes(deps: AppDeps) {
     )
     .get("/suppliers/:id", async (c) =>
       c.json(
-        await getSupplier(deps.db, parseOrThrow(idSchema, c.req.param("id")), c.get("principal")),
+        {
+          ...(await getSupplier(
+            deps.db,
+            parseOrThrow(idSchema, c.req.param("id")),
+            c.get("principal"),
+          )),
+          generation,
+        },
         200,
         { "Cache-Control": "private, no-store" },
       ),
@@ -83,22 +90,28 @@ export function inventoryRoutes(deps: AppDeps) {
     )
     .get("/receipts", async (c) =>
       c.json(
-        await listStockReceipts(
-          deps.db,
-          parseOrThrow(stockReceiptQuerySchema, c.req.query()),
-          c.get("principal"),
-        ),
+        {
+          ...(await listStockReceipts(
+            deps.db,
+            parseOrThrow(stockReceiptQuerySchema, c.req.query()),
+            c.get("principal"),
+          )),
+          generation,
+        },
         200,
         { "Cache-Control": "private, no-store" },
       ),
     )
     .get("/receipts/:id", async (c) =>
       c.json(
-        await getStockReceipt(
-          deps.db,
-          parseOrThrow(idSchema, c.req.param("id")),
-          c.get("principal"),
-        ),
+        {
+          ...(await getStockReceipt(
+            deps.db,
+            parseOrThrow(idSchema, c.req.param("id")),
+            c.get("principal"),
+          )),
+          generation,
+        },
         200,
         { "Cache-Control": "private, no-store" },
       ),

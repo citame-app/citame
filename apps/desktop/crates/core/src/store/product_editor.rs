@@ -94,6 +94,7 @@ impl Store {
         } else {
             conn.execute("DELETE FROM meta WHERE key = ?1", [ACCESS])?;
             conn.execute("DELETE FROM meta WHERE key GLOB 'inventory_review:*'", [])?;
+            conn.execute("DELETE FROM meta WHERE key GLOB 'inventory_document:*'", [])?;
         }
         Ok(())
     }

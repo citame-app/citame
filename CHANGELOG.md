@@ -21,6 +21,7 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 - Desktop creates, edits, archives and reactivates inventory products with versioned offline proposals. Only product creation records opening stock.
 - Desktop can view private product photos and queue replacements or removals offline. Cloud and Desktop refresh after either client changes the photo, and stale drafts require explicit review.
 - Cloud manages supplier profiles and numbered stock receipts. Each receipt posts all reviewed product quantities in one transaction and keeps the supplier name and invoice reference in its history. An interrupted request can be retried with the same receipt identity.
+- Desktop manages suppliers and stock receipts from Inventory. Reviewed changes can be queued without a connection, and a conflicting receipt keeps its quantities for review against Cloud.
 - Desktop can create services, variants and add-ons with professional assignments. New services use the persistent synchronization queue and are bookable once acknowledged by the server.
 - Desktop queues edits to existing service details offline. Cloud checks the version before applying the edit, and rejected drafts can be compared and resubmitted from Sync conflicts.
 

@@ -34,6 +34,7 @@ export const supplierSchema = z.object({
   id: idSchema,
   version: version.positive(),
 });
+export const reviewedSupplierSchema = supplierSchema.extend({ generation: syncGenerationSchema });
 const page = {
   page: z.coerce.number().int().min(1).max(100000).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
@@ -99,6 +100,12 @@ export const stockReceiptQuerySchema = z.object(page);
 export const stockReceiptListSchema = z.object({
   receipts: z.array(receiptHeader),
   pagination: pageInfoSchema,
+});
+export const reviewedStockReceiptSchema = stockReceiptSchema.extend({
+  generation: syncGenerationSchema,
+});
+export const reviewedStockReceiptListSchema = stockReceiptListSchema.extend({
+  generation: syncGenerationSchema,
 });
 export type Supplier = z.infer<typeof supplierSchema>;
 export type SupplierInput = z.infer<typeof supplierInputSchema>;

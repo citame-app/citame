@@ -299,6 +299,16 @@ impl Root {
                                 }),
                             ))
                         })
+                        .when_some(movement.receipt_id.filter(|_| ready), |row, id| {
+                            row.child(self.button(
+                                SharedString::from(format!("ledger-receipt-{}", movement.id)),
+                                self.t(Key::InventoryReceiptView),
+                                Kind::Ghost,
+                                cx.listener(move |root, _, _, cx| {
+                                    root.open_linked_inventory_receipt(id, cx)
+                                }),
+                            ))
+                        })
                 }))
                 .when(ready, |body| {
                     body.child(

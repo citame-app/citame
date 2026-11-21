@@ -175,6 +175,7 @@ export async function receiveStockDocument(
   input: StockReceiptInput,
   principal: Principal,
   generation: string,
+  requestedId?: string,
 ) {
   if (input.actorUserId !== principal.userId)
     throw new DomainError("forbidden", "Switch back to the account that reviewed this receipt");
@@ -236,6 +237,7 @@ export async function receiveStockDocument(
     const [receipt] = await tx
       .insert(stockReceipt)
       .values({
+        ...(requestedId ? { id: requestedId } : {}),
         supplierId: input.supplierId,
         supplierName,
         receivedOn: input.receivedOn,

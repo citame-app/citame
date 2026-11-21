@@ -8,6 +8,7 @@ use sob_core::inventory::{
 use sob_core::sync::TransportError;
 
 mod catalogue;
+mod documents;
 mod ledger;
 mod product_form;
 mod product_photo;
@@ -25,6 +26,7 @@ pub(super) struct Desk {
     editor: Option<Editor>,
     product_form: Option<Box<product_form::Panel>>,
     product_photo: Option<Box<product_photo::Panel>>,
+    documents: Option<Box<documents::Panel>>,
     stock: Option<stock::Panel>,
     request: Option<Arc<()>>,
     saving: bool,
@@ -222,6 +224,7 @@ impl Root {
             editor: None,
             product_form: None,
             product_photo: None,
+            documents: None,
             stock: None,
             request: None,
             saving: false,
@@ -264,6 +267,9 @@ impl Root {
     }
 
     pub(super) fn refresh_inventory(&mut self, reconnected: bool, cx: &mut Context<Self>) {
+        if self.refresh_inventory_documents(reconnected, cx) {
+            return;
+        }
         if self.refresh_product_photo(reconnected, cx) {
             return;
         }
@@ -668,7 +674,8 @@ impl Root {
                     && desk.editor.is_none()
                     && desk.stock.is_none()
                     && desk.product_form.is_none()
-                    && desk.product_photo.is_none(),
+                    && desk.product_photo.is_none()
+                    && desk.documents.is_none(),
                 |header| {
                     header.child(self.button(
                         "inventory-refresh",
@@ -686,7 +693,9 @@ impl Root {
                     cx.listener(|root, _, _, cx| root.dismiss_overlay(cx)),
                 ))
             });
-        let content = if let Some(photo) = &desk.product_photo {
+        let content = if let Some(documents) = &desk.documents {
+            self.render_inventory_documents(documents, cx)
+        } else if let Some(photo) = &desk.product_photo {
             self.render_product_photo(photo, cx)
         } else if let Some(form) = &desk.product_form {
             self.render_product_form(form, cx)
@@ -771,6 +780,30 @@ impl Root {
                     }),
             )
             .child(self.render_catalogue_tools(desk, ready, cx))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(self.button(
+                        "inventory-receipts",
+                        self.t(Key::InventoryReceipts),
+                        Kind::Ghost,
+                        cx.listener(|root, _, _, cx| {
+                            root.open_inventory_documents(documents::Tab::Receipts, cx)
+                        }),
+                    ))
+                    .when(self.svc.store.can_queue_product_edits(), |row| {
+                        row.child(self.button(
+                            "inventory-suppliers",
+                            self.t(Key::InventorySuppliers),
+                            Kind::Ghost,
+                            cx.listener(|root, _, _, cx| {
+                                root.open_inventory_documents(documents::Tab::Suppliers, cx)
+                            }),
+                        ))
+                    }),
+            )
             .child(self.render_product_writes(desk, cx))
             .when_some(desk.catalog.as_ref(), |body, page| {
                 body.when(page.products.is_empty(), |body| {
