@@ -61,47 +61,43 @@ async function processOne(
   if (existing) return toResult(existing, principal, true);
 
   const parsed = syncMutationSchema.safeParse(raw);
-  let created = false;
-
-  const record = async (
-    tx: Pick<Database, "insert">,
-    status: "applied" | "rejected",
-    kind: string,
-    result: Record<string, unknown>,
-  ) => {
-    const inserted = await tx
-      .insert(syncMutation)
-      .values({ mutationId: id, deviceId, userId: principal.userId, kind, status, result })
-      .onConflictDoNothing()
-      .returning({ id: syncMutation.mutationId });
-    created = inserted.length > 0;
-  };
   const kind = parsed.success
     ? parsed.data.kind
     : String((raw as { kind?: unknown }).kind ?? "unknown");
+  const entry = { mutationId: id, deviceId, userId: principal.userId, kind };
 
-  if (!parsed.success) {
-    const message = parsed.error.issues
-      .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
-      .join("; ");
-    await record(db, "rejected", kind, { reason: "invalid", message });
-  } else {
+  const created = await db.transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${`sob.sync_mutation:${id}`}, 0))`,
+    );
+    if (await readStored(tx, id)) return false;
+
+    if (!parsed.success) {
+      const message = parsed.error.issues
+        .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
+        .join("; ");
+      await tx
+        .insert(syncMutation)
+        .values({ ...entry, status: "rejected", result: { reason: "invalid", message } });
+      return true;
+    }
+
     try {
-      await db.transaction(async (tx) => {
-        await tx.execute(
-          sql`select pg_advisory_xact_lock(hashtextextended(${`sob.sync_mutation:${id}`}, 0))`,
-        );
-        if (await readStored(tx, id)) return;
-        await tx.execute(sql`select set_config('sob.mutation_id', ${id}, true)`);
-        await applyMutation(tx as unknown as Database, principal, parsed.data, ctx);
-        await record(tx, "applied", kind, {});
+      await tx.transaction(async (changes) => {
+        await changes.execute(sql`select set_config('sob.mutation_id', ${id}, true)`);
+        await applyMutation(changes as unknown as Database, principal, parsed.data, ctx);
+        await changes.insert(syncMutation).values({ ...entry, status: "applied", result: {} });
+        // Run deferred constraints while a rejection can still roll back the changes alone.
+        // Sync triggers can now fill applied_seq. The outer transaction takes no more write locks.
+        await changes.execute(sql`set constraints all immediate`);
       });
     } catch (error) {
       const rejection = rejectionReason(error);
       if (!rejection) throw error;
-      await record(db, "rejected", kind, rejection);
+      await tx.insert(syncMutation).values({ ...entry, status: "rejected", result: rejection });
     }
-  }
+    return true;
+  });
 
   const stored = await readStored(db, id);
   if (!stored) throw new Error("Mutation ledger row missing after processing");

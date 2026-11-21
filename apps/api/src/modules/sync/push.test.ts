@@ -165,6 +165,69 @@ test("native service creation replays once and keeps its professional assignment
   ]);
 });
 
+test("a rejected mutation keeps ownership of its ID until both deliveries can read the receipt", async () => {
+  const id = mid();
+  const bookingId = uuid();
+  const rejected = mutation(
+    "appointment.cancel",
+    { id: bookingId, version: 1 },
+    { mutationId: id },
+  );
+  const alternate = { ...createAppt({ id: bookingId }), mutationId: id };
+  const barrierKey = 852017;
+  const waiting = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  await t.db.execute(sql`
+    create function sync_test_pause_rejection() returns trigger language plpgsql as $$
+    begin
+      if new.status = 'rejected' then perform pg_advisory_xact_lock(852017); end if;
+      return new;
+    end $$;
+    create trigger sync_test_pause_rejection before insert on sync_mutation
+    for each row execute function sync_test_pause_rejection();
+  `);
+  const barrier = t.db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${barrierKey}::bigint)`);
+    waiting.resolve();
+    await release.promise;
+  });
+  let deliveries: Promise<Awaited<ReturnType<typeof push>>>[] = [];
+  try {
+    await waiting.promise;
+    const first = push(t, owner, [rejected]);
+    deliveries = [first];
+    let reachedReceipt = false;
+    for (let attempt = 0; attempt < 100 && !reachedReceipt; attempt++) {
+      const [row] = await rows<{ waiting: boolean }>(sql`
+        select exists(select 1 from pg_locks where locktype = 'advisory' and database =
+          (select oid from pg_database where datname = current_database()) and classid = 0
+          and objid = ${barrierKey} and objsubid = 1 and not granted) as waiting
+      `);
+      reachedReceipt = row?.waiting === true;
+      if (!reachedReceipt) await Bun.sleep(10);
+    }
+    expect(reachedReceipt).toBe(true);
+    const [lock] = await rows<{ acquired: boolean }>(sql`
+      select pg_try_advisory_xact_lock(hashtextextended(${`sob.sync_mutation:${id}`}, 0)) as acquired
+    `);
+    expect(lock?.acquired).toBe(false);
+    const second = push(t, owner, [alternate]);
+    deliveries.push(second);
+    release.resolve();
+    const results = await Promise.all(deliveries);
+    expect(results.map(({ body }) => body.results[0])).toEqual([
+      expect.objectContaining({ status: "rejected", reason: "not_found", replayed: false }),
+      expect.objectContaining({ status: "rejected", reason: "not_found", replayed: true }),
+    ]);
+    expect(await t.db.select().from(appointment).where(eq(appointment.id, bookingId))).toEqual([]);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([barrier, ...deliveries]);
+    await t.db.execute(sql`drop trigger sync_test_pause_rejection on sync_mutation`);
+    await t.db.execute(sql`drop function sync_test_pause_rejection()`);
+  }
+});
+
 test("a reviewed native service edit cannot overwrite a newer Cloud version", async () => {
   const path = `/admin/services/${f.haircutId}`;
   expect((await pull(t, owner)).viewerEditCatalogue).toBe(true);
