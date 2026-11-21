@@ -35,6 +35,12 @@ pub struct WarehouseBalance {
     pub reserved: u32,
 }
 
+impl WarehouseBalance {
+    pub fn available(&self) -> u32 {
+        self.on_hand.saturating_sub(self.reserved)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct WarehouseStock {
     pub warehouse: Warehouse,
@@ -136,4 +142,9 @@ impl RecordedWarehouseTransfer {
                 })
             })
     }
+}
+
+pub enum PendingWarehouseChange {
+    Edit(WarehouseEdit),
+    Transfer(WarehouseTransfer),
 }

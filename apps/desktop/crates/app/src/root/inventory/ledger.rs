@@ -306,6 +306,16 @@ impl Root {
                                 }),
                             ))
                         })
+                        .when_some(movement.transfer_id.filter(|_| ready), |row, id| {
+                            row.child(self.button(
+                                SharedString::from(format!("ledger-transfer-{}", movement.id)),
+                                self.t(Key::InventoryWarehouseViewTransfer),
+                                Kind::Ghost,
+                                cx.listener(move |root, _, _, cx| {
+                                    root.open_warehouse_transfer(id, cx)
+                                }),
+                            ))
+                        })
                         .when_some(movement.receipt_id.filter(|_| ready), |row, id| {
                             row.child(self.button(
                                 SharedString::from(format!("ledger-receipt-{}", movement.id)),

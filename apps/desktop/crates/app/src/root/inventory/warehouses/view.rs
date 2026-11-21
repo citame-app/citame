@@ -1,4 +1,5 @@
 use super::*;
+use sob_core::warehouses::PendingWarehouseChange;
 
 impl Root {
     pub(in crate::root::inventory) fn render_warehouses(
@@ -23,6 +24,69 @@ impl Root {
             .when(panel.request.is_some(), |body| {
                 body.child(self.t(Key::InventoryLoading))
             });
+        if !self.svc.store.can_read_cached_orders() {
+            return body.child(self.t(Key::InventoryWarehouseUnavailable));
+        }
+        if let Some((id, record)) = &panel.transfer_record {
+            return body
+                .child(self.button(
+                    "warehouse-back-to-ledger",
+                    self.t(Key::Back),
+                    Kind::Ghost,
+                    cx.listener(|root, _, _, cx| root.dismiss_overlay(cx)),
+                ))
+                .child(self.label(Key::InventoryStockTransfer))
+                .when_some(record.as_ref(), |body, record| {
+                    body.child(self.date_time_label(record.created_at))
+                        .child(format!(
+                            "{} → {}",
+                            record
+                                .source_name
+                                .as_deref()
+                                .unwrap_or_else(|| self.t(Key::InventoryWarehouseMain)),
+                            record
+                                .destination_name
+                                .as_deref()
+                                .unwrap_or_else(|| self.t(Key::InventoryWarehouseMain)),
+                        ))
+                        .child(record.reason.clone())
+                        .children(record.lines.iter().map(|line| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .gap_2()
+                                .child(format!("{} · {}", line.name, line.sku))
+                                .child(line.quantity.to_string())
+                        }))
+                })
+                .when(record.is_none() && panel.request.is_none(), |body| {
+                    body.child(self.button(
+                        "warehouse-retry-document",
+                        self.t(Key::InventoryRefresh),
+                        Kind::Ghost,
+                        cx.listener({
+                            let id = *id;
+                            move |root, _, _, cx| root.open_warehouse_transfer(id, cx)
+                        }),
+                    ))
+                });
+        }
+        if panel.draft.is_some() && panel.generation.is_none() && panel.request.is_some() {
+            return body;
+        }
+        if can_write
+            && panel.draft.is_some()
+            && panel.generation.is_none()
+            && self.status.connectivity == Connectivity::Online
+        {
+            body = body.child(self.button(
+                "warehouse-review",
+                self.t(Key::InventoryDocumentReview),
+                Kind::Primary,
+                cx.listener(|root, _, _, cx| root.review_warehouse_draft(cx)),
+            ));
+        }
         if panel.discard {
             return body
                 .child(self.t(Key::SalonConfirmDiscard))
@@ -46,7 +110,7 @@ impl Root {
             let current = panel
                 .replaces
                 .as_ref()
-                .and_then(|_| panel.locations.as_ref())
+                .and(panel.locations.as_ref())
                 .and_then(|list| {
                     list.warehouses
                         .iter()
@@ -150,7 +214,7 @@ impl Root {
                         .child(div().flex_1().child(line.balance.name.clone()).child(
                             div().text_xs().text_color(theme::muted()).child(format!(
                                 "{} {}",
-                                line.balance.on_hand.saturating_sub(line.balance.reserved),
+                                line.balance.available(),
                                 self.t(Key::InventoryWarehouseAvailable),
                             )),
                         ))
@@ -220,11 +284,11 @@ impl Root {
                                 cx.listener(|root, _, _, cx| root.edit_warehouse(None, cx)),
                             ))
                             .when_some(
-                                panel
-                                    .stock
-                                    .as_ref()
-                                    .map(|stock| &stock.warehouse)
-                                    .filter(|row| row.id.is_some()),
+                                panel.locations.as_ref().and_then(|list| {
+                                    list.warehouses.iter().find(|row| {
+                                        row.id.is_some() && row.id == panel.query.location
+                                    })
+                                }),
                                 |row, warehouse| {
                                     let warehouse = warehouse.clone();
                                     row.child(self.button(
@@ -257,6 +321,45 @@ impl Root {
                     )
                 });
         }
+        if panel.draft.is_none() {
+            body = body.children(
+                self.svc
+                    .store
+                    .pending_warehouse_changes()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|entry| {
+                        let details = match entry {
+                            PendingWarehouseChange::Edit(edit) => edit.name,
+                            PendingWarehouseChange::Transfer(transfer) => {
+                                let units = transfer
+                                    .lines
+                                    .iter()
+                                    .map(|line| u64::from(line.quantity))
+                                    .sum::<u64>();
+                                format!(
+                                    "{} · {} ({units})",
+                                    self.t(Key::InventoryWarehouseTransfer),
+                                    transfer.reason
+                                )
+                            }
+                        };
+                        div()
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(theme::line())
+                            .child(details)
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme::muted())
+                                    .child(self.t(Key::InventoryDocumentQueued)),
+                            )
+                    }),
+            );
+        }
         let transfer = matches!(panel.draft, Some(Draft::Transfer { .. }));
         body.child(
             div()
@@ -281,7 +384,7 @@ impl Root {
             })
             .children(stock.products.iter().enumerate().map(|(index, product)| {
                 let balance = product.clone();
-                let available = product.on_hand.saturating_sub(product.reserved);
+                let available = product.available();
                 div()
                     .flex()
                     .items_center()

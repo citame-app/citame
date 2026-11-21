@@ -1,7 +1,7 @@
 use super::*;
 use crate::warehouses::{
-    RecordedWarehouseTransfer, SAVE, TRANSFER, WarehouseBalance, WarehouseEdit, WarehouseList,
-    WarehouseStock, WarehouseTransfer, location_key,
+    PendingWarehouseChange, RecordedWarehouseTransfer, SAVE, TRANSFER, WarehouseBalance,
+    WarehouseEdit, WarehouseList, WarehouseStock, WarehouseTransfer, location_key,
 };
 use serde::de::DeserializeOwned;
 use uuid::Uuid;
@@ -19,6 +19,31 @@ impl Store {
         self.get_meta(key)?
             .map(|value| Ok(serde_json::from_str(&value)?))
             .transpose()
+    }
+
+    pub fn pending_warehouse_changes(&self) -> Result<Vec<PendingWarehouseChange>> {
+        if !self.can_read_cached_orders() {
+            return Ok(Vec::new());
+        }
+        let mut statement = self
+            .conn
+            .prepare("SELECT kind, payload FROM outbox WHERE kind IN (?1, ?2) ORDER BY seq")?;
+        let rows = statement.query_map(params![SAVE, TRANSFER], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.map(|row| {
+            let (kind, payload) = row?;
+            if kind == SAVE {
+                Ok(PendingWarehouseChange::Edit(serde_json::from_str(
+                    &payload,
+                )?))
+            } else {
+                Ok(PendingWarehouseChange::Transfer(serde_json::from_str(
+                    &payload,
+                )?))
+            }
+        })
+        .collect()
     }
 
     pub fn cached_warehouses(&self) -> Result<Option<WarehouseList>> {
@@ -182,7 +207,7 @@ impl Store {
                 let current = store.read_warehouse_cache::<WarehouseBalance>(
                     &balance_key(transfer.source_id, line.product_id),
                 )?;
-                if !current.is_some_and(|row| row.version == line.version && row.on_hand.saturating_sub(row.reserved) >= line.quantity) {
+                if !current.is_some_and(|row| row.version == line.version && row.available() >= line.quantity) {
                     return Err(CoreError::CatalogueVersionChanged);
                 }
                 if store.conn.query_row(

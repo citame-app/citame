@@ -1,7 +1,8 @@
 use super::*;
+use review::Proposal;
 use sob_core::warehouses::{
-    TransferLine, Warehouse, WarehouseBalance, WarehouseEdit, WarehouseList, WarehouseStock,
-    WarehouseTransfer,
+    RecordedWarehouseTransfer, TransferLine, Warehouse, WarehouseBalance, WarehouseEdit,
+    WarehouseList, WarehouseStock, WarehouseTransfer,
 };
 use uuid::Uuid;
 
@@ -37,6 +38,7 @@ pub(super) struct Panel {
     query: StockQuery,
     locations: Option<WarehouseList>,
     stock: Option<WarehouseStock>,
+    transfer_record: Option<(Uuid, Option<RecordedWarehouseTransfer>)>,
     draft: Option<Draft>,
     generation: Option<String>,
     replaces: Option<String>,
@@ -90,6 +92,7 @@ impl Root {
             },
             locations: None,
             stock: None,
+            transfer_record: None,
             draft: None,
             generation: None,
             replaces: None,
@@ -107,6 +110,7 @@ impl Root {
         };
         panel.locations = None;
         panel.stock = None;
+        panel.transfer_record = None;
         panel.request = None;
         panel.generation = None;
         panel.observed_revision = -1;
@@ -133,8 +137,13 @@ impl Root {
         if !allowed || staff_changed {
             panel.locations = None;
             panel.stock = None;
+            if let Some((_, recorded)) = &mut panel.transfer_record {
+                *recorded = None;
+                panel.notice = Some(Key::InventoryWarehouseUnavailable);
+            }
         }
         if allowed
+            && panel.transfer_record.is_none()
             && panel.request.is_none()
             && (staff_changed
                 || panel.draft.is_none() && (reconnected || revision != panel.observed_revision))
@@ -365,51 +374,25 @@ impl Root {
             return;
         };
         let replaces = panel.replaces.clone();
-        let result = match &panel.draft {
-            Some(Draft::Location { warehouse, name }) => {
-                let mut warehouse = warehouse.clone();
-                warehouse.name = name.read(cx).text().to_owned();
+        let Some(proposal) = panel
+            .draft
+            .as_ref()
+            .and_then(|draft| Proposal::from_draft(draft, cx))
+        else {
+            panel.notice = Some(Key::InventoryWarehouseInvalid);
+            cx.notify();
+            return;
+        };
+        let result = match proposal {
+            Proposal::Location(edit) => {
                 self.svc
                     .store
-                    .queue_warehouse_edit(&generation, warehouse, replaces.as_deref())
+                    .queue_warehouse_edit(&generation, edit, replaces.as_deref())
             }
-            Some(Draft::Transfer {
-                id,
-                source,
-                destination: Some(destination),
-                reason,
-                lines,
-            }) => {
-                let lines = lines
-                    .iter()
-                    .map(|line| {
-                        Some(TransferLine {
-                            product_id: line.balance.product_id,
-                            version: line.balance.version,
-                            quantity: line.quantity.read(cx).text().trim().parse().ok()?,
-                        })
-                    })
-                    .collect::<Option<Vec<_>>>();
-                let Some(lines) = lines else {
-                    panel.notice = Some(Key::InventoryWarehouseInvalid);
-                    cx.notify();
-                    return;
-                };
-                let command = WarehouseTransfer {
-                    id: *id,
-                    source_id: *source,
-                    destination_id: *destination,
-                    reason: reason.read(cx).text().to_owned(),
-                    lines,
-                };
+            Proposal::Transfer(transfer) => {
                 self.svc
                     .store
-                    .queue_warehouse_transfer(&generation, command, replaces.as_deref())
-            }
-            _ => {
-                panel.notice = Some(Key::InventoryWarehouseInvalid);
-                cx.notify();
-                return;
+                    .queue_warehouse_transfer(&generation, transfer, replaces.as_deref())
             }
         };
         if let Some(panel) = self.warehouse_panel() {
@@ -422,7 +405,10 @@ impl Root {
                 }
                 Err(CoreError::CatalogueEditPending) => Key::InventoryWarehousePending,
                 Err(CoreError::Invalid(_)) => Key::InventoryWarehouseInvalid,
-                Err(_) => Key::InventoryWarehouseChanged,
+                Err(_) => {
+                    panel.generation = None;
+                    Key::InventoryWarehouseChanged
+                }
             });
         }
         if result.is_ok() && self.svc.status().connectivity == Connectivity::Online {
@@ -440,3 +426,61 @@ impl Root {
 
 mod review;
 mod view;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+    use sob_core::inventory::Pagination;
+    use sob_core::warehouses::PendingWarehouseChange;
+
+    #[gpui::test]
+    async fn offline_transfer_editor_keeps_a_saved_proposal_and_hides_revoked_stock(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, window) = crate::root::tests::open(cx);
+        window.update(cx, |root, _, cx| {
+            let generation = root.svc.store.verified_reviewed_generation().unwrap();
+            root.svc.store.set_meta("inventory_write_access", &generation).unwrap();
+            let main = Warehouse { id: None, active: true, name: None, version: 0 };
+            let location = Uuid::now_v7();
+            let stockroom = Warehouse {
+                id: Some(location), active: true, name: Some("Synthetic warehouse".into()), version: 1,
+            };
+            let product = WarehouseBalance {
+                product_id: Uuid::now_v7(), sku: "TEST".into(), name: "Synthetic product".into(),
+                on_hand: 10, reserved: 2, version: 3,
+            };
+            root.svc.store.cache_warehouses(
+                &WarehouseList { warehouses: vec![main.clone(), stockroom], generation: generation.clone() },
+                &WarehouseStock {
+                    warehouse: main, products: vec![product.clone()],
+                    pagination: Pagination { page: 1, page_size: 20, total: 1 }, generation,
+                },
+                "",
+            ).unwrap();
+            root.prepare_inventory(cx);
+            root.open_warehouses(cx);
+            root.start_stock_transfer(cx);
+            root.add_transfer_line(product.clone(), cx);
+            let Some(Draft::Transfer { destination, reason, .. }) = root.warehouse_panel().unwrap().draft.as_mut() else {
+                panic!("transfer draft did not open");
+            };
+            *destination = Some(Some(location));
+            reason.update(cx, |input, cx| input.set_text("Move one item", cx));
+            root.queue_warehouse_draft(cx);
+            assert!(root.warehouse_panel().unwrap().draft.is_none());
+            let queued = root.svc.store.pending_warehouse_changes().unwrap();
+            assert!(matches!(&queued[..], [PendingWarehouseChange::Transfer(transfer)]
+                if transfer.destination_id == Some(location) && transfer.lines[0].product_id == product.product_id));
+            root.start_stock_transfer(cx);
+            root.add_transfer_line(product, cx);
+            root.svc.store.withdraw_inventory_access().unwrap();
+            root.refresh_warehouses(false, cx);
+            let panel = root.warehouse_panel().unwrap();
+            assert!(panel.stock.is_none() && panel.locations.is_none());
+            assert!(panel.draft.is_some());
+            assert!(root.svc.store.pending_warehouse_changes().unwrap().is_empty());
+        }).unwrap();
+    }
+}

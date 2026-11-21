@@ -653,6 +653,7 @@ keys! {
     InventoryWarehouseActive => ("Active", "Activo"),
     InventoryWarehouseArchived => ("Archived", "Archivado"),
     InventoryWarehouseTransfer => ("Transfer stock", "Traspasar existencias"),
+    InventoryWarehouseViewTransfer => ("View transfer", "Ver traspaso"),
     InventoryWarehouseSource => ("Source warehouse", "Almacén de origen"),
     InventoryWarehouseAvailable => ("available", "disponibles"),
     InventoryWarehouseDestination => ("Destination warehouse", "Almacén de destino"),

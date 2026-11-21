@@ -118,6 +118,8 @@ Open **Stock movements** to see the history across products. Search by name, SKU
 
 If a connection drops with a product already open, you can save one movement per product on this device. Open the product and choose **Retry the same movement** when connected. Citame keeps the exact request in SQLite through app restarts and uses its original version and key. A version conflict requires reviewing current stock. After a database restore, Citame asks you to review the current stock and history before discarding a rejected request from the previous generation. The full catalog and movement history load from the server.
 
+Open **Warehouses** to see physical and reserved stock by location. Inventory writers can add, rename, archive and reactivate secondary locations and transfer several products at once. Previously loaded pages are available offline. Drafts use the reviewed location and product versions, and saved changes appear as pending until Cloud confirms them. If Cloud reports a conflict, open it from **Sync conflicts** to review current quantities before resubmitting. A transfer that was already recorded keeps its original document ID.
+
 ## Prepare a Linux release locally
 
 ```sh

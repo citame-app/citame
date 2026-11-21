@@ -5431,17 +5431,52 @@ fn native_warehouse_transfers_survive_restart_and_reject_stale_stock() {
             .rejected,
         1
     );
+    let conflict = store
+        .conflicts()
+        .unwrap()
+        .into_iter()
+        .find(|conflict| conflict.entity_id == stale.id.to_string())
+        .unwrap();
+    assert_eq!(conflict.reason, "conflict");
     assert!(
-        store
-            .conflicts()
+        desktop
+            .transport
+            .inventory_recorded_transfer(stale.id)
             .unwrap()
-            .iter()
-            .any(|conflict| conflict.entity_id == stale.id.to_string()
-                && conflict.reason == "version_conflict")
+            .is_none()
     );
     let secondary = desktop
         .transport
         .inventory_warehouse_stock(Some(warehouse), "NATIVE-WAREHOUSE", 1)
         .unwrap();
     assert_eq!(secondary.products[0].on_hand, 4);
+    let refreshed = desktop
+        .transport
+        .warehouse_product(None, product_id)
+        .unwrap();
+    let mut reviewed = stale;
+    reviewed.lines[0].version = refreshed.products[0].version;
+    store.cache_warehouse_review(&list, &[refreshed]).unwrap();
+    store
+        .queue_warehouse_transfer(&generation, reviewed.clone(), Some(&conflict.mutation_id))
+        .unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*desktop.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    assert!(store.conflict(&conflict.mutation_id).unwrap().is_none());
+    let document = desktop
+        .transport
+        .inventory_recorded_transfer(reviewed.id)
+        .unwrap()
+        .unwrap();
+    assert!(document.matches(&reviewed));
+    let secondary = desktop
+        .transport
+        .warehouse_product(Some(warehouse), product_id)
+        .unwrap();
+    assert_eq!(secondary.products[0].on_hand, 8);
 }
