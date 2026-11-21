@@ -225,6 +225,7 @@ keys! {
     CatalogPhotosCaption => ("Caption", "Pie de foto"),
     CatalogPhotosAlt => ("Alternative text for the image", "Texto alternativo de la imagen"),
     CatalogPhotosOffline => ("Connect to Cloud to load or save photos.", "Conéctate a Cloud para cargar o guardar fotos."),
+    CatalogPhotosPreviewUnavailable => ("The preview could not be loaded. Refresh the gallery to try again.", "No se pudo cargar la vista previa. Actualiza la galería para reintentarlo."),
     CatalogPhotosFailure => ("Could not confirm this change. Review the gallery before retrying.", "No se pudo confirmar el cambio. Revisa la galería antes de reintentarlo."),
     CatalogPhotosInvalid => ("Enter a caption and alternative text of up to 300 characters.", "Introduce un pie de foto y un texto alternativo de hasta 300 caracteres."),
     CatalogPhotosPublishConfirm => ("Confirm you have permission to make this photo public on the booking website.", "Confirma que tienes permiso para publicar esta foto en la web de reservas."),

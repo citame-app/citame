@@ -11,10 +11,38 @@ struct Draft {
     alt: Entity<TextField>,
     source: Source,
     needs_review: bool,
+    upload_packet: Option<PortfolioEdit>,
+}
+
+impl Draft {
+    fn input(&self, service: Uuid, cx: &App) -> PortfolioEdit {
+        self.upload_packet.clone().unwrap_or_else(|| PortfolioEdit {
+            caption: self.caption.read(cx).text().to_owned(),
+            alt: self.alt.read(cx).text().to_owned(),
+            service_id: Some(service),
+        })
+    }
+}
+
+fn scoped_preview(
+    image: Arc<gpui::RenderImage>,
+    cx: &mut Context<Root>,
+) -> Entity<Arc<gpui::RenderImage>> {
+    cx.new(|cx| {
+        cx.on_release(|image: &mut Arc<gpui::RenderImage>, app| {
+            app.drop_image(image.clone(), None);
+        })
+        .detach();
+        image
+    })
 }
 
 enum Source {
-    Upload { key: Uuid, jpeg: Arc<Vec<u8>> },
+    Upload {
+        key: Uuid,
+        jpeg: Arc<Vec<u8>>,
+        preview: Entity<Arc<gpui::RenderImage>>,
+    },
     Existing(PortfolioPhoto),
 }
 
@@ -37,19 +65,22 @@ impl Action {
     fn perform(
         &self,
         transport: &sob_core::http::HttpTransport,
+        generation: &str,
     ) -> Result<Option<Uuid>, TransportError> {
         match self {
             Self::Load => Ok(None),
             Self::Upload(key, input, jpeg) => transport
-                .upload_portfolio_photo(*key, input, jpeg)
+                .upload_portfolio_photo(generation, *key, input, jpeg)
                 .map(|photo| Some(photo.id)),
             Self::Edit(photo, input) => transport
-                .edit_portfolio_photo(photo, input)
+                .edit_portfolio_photo(generation, photo, input)
                 .map(|photo| Some(photo.id)),
             Self::Publication(photo, action) => transport
-                .set_portfolio_publication(photo, *action)
+                .set_portfolio_publication(generation, photo, *action)
                 .map(|photo| Some(photo.id)),
-            Self::Remove(photo) => transport.remove_portfolio_photo(photo).map(|()| None),
+            Self::Remove(photo) => transport
+                .remove_portfolio_photo(generation, photo)
+                .map(|()| None),
         }
     }
 }
@@ -63,6 +94,7 @@ pub(super) struct Panel {
     selected: Option<Uuid>,
     preview: Option<Entity<Arc<gpui::RenderImage>>>,
     observed: Option<(i64, i64)>,
+    retry_at: Option<Instant>,
     busy: bool,
     draft: Option<Draft>,
     confirm: Option<Confirm>,
@@ -85,6 +117,7 @@ impl Panel {
         self.busy = false;
         self.confirm = None;
         self.observed = None;
+        self.retry_at = None;
         if let Some(draft) = &mut self.draft {
             draft.needs_review = matches!(draft.source, Source::Existing(_));
         }
@@ -136,6 +169,7 @@ impl Root {
             selected: None,
             preview: None,
             observed: None,
+            retry_at: None,
             busy: false,
             draft: None,
             confirm: None,
@@ -167,10 +201,15 @@ impl Root {
             }
             return;
         }
-        if self
-            .catalog_portfolio()
-            .is_some_and(|panel| !panel.busy && (reconnected || panel.observed != Some(observed)))
-            && self.svc.status().connectivity == Connectivity::Online
+        if self.catalog_portfolio().is_some_and(|panel| {
+            !panel.busy
+                && (reconnected
+                    || panel
+                        .retry_at
+                        .map_or(panel.observed != Some(observed), |retry| {
+                            Instant::now() >= retry
+                        }))
+        }) && self.svc.status().connectivity == Connectivity::Online
         {
             self.request_catalog_portfolio(Action::Load, None, cx);
         }
@@ -191,6 +230,7 @@ impl Root {
             .transport()
             .filter(|_| self.svc.status().connectivity == Connectivity::Online);
         let session = self.svc.session.clone();
+        let reviewed_generation = self.svc.store.verified_reviewed_generation().ok();
         let Some(panel) = self.catalog_portfolio() else {
             return;
         };
@@ -207,16 +247,29 @@ impl Root {
         let instance = panel.instance.clone();
         let renderer = cx.svg_renderer();
         let writing = !matches!(action, Action::Load);
+        let generation = panel.photos.as_ref().map(|list| list.generation.clone());
+        if writing && (generation.is_none() || generation != reviewed_generation) {
+            panel.notice = Some(Key::CatalogPhotosCurrent);
+            cx.notify();
+            return;
+        }
+        if let Action::Upload(_, upload, _) = &action
+            && let Some(draft) = &mut panel.draft
+        {
+            draft.upload_packet = Some(upload.clone());
+        }
         panel.busy = true;
         panel.notice = None;
         panel.observed = Some(observed);
+        panel.retry_at = None;
         cx.notify();
         cx.spawn(async move |handle, cx| {
             let (changed, result) = cx
                 .background_executor()
                 .spawn(async move {
-                    let changed = action.perform(&transport);
-                    let result = transport.portfolio().map(|list| {
+                    let changed =
+                        action.perform(&transport, generation.as_deref().unwrap_or_default());
+                    let result = transport.portfolio().and_then(|list| {
                         let photos = list
                             .photos
                             .iter()
@@ -225,13 +278,19 @@ impl Root {
                         let selected = preferred
                             .filter(|id| photos.clone().any(|row| row.id == *id))
                             .or_else(|| photos.clone().next().map(|row| row.id));
-                        let preview = selected.and_then(|id| {
-                            let bytes = transport.portfolio_photo(id).ok()?;
-                            gpui::Image::from_bytes(gpui::ImageFormat::Jpeg, bytes)
-                                .to_image_data(renderer)
-                                .ok()
-                        });
-                        (list, selected, preview)
+                        let preview = match selected.map(|id| transport.portfolio_photo(id)) {
+                            Some(Ok(bytes)) => {
+                                gpui::Image::from_bytes(gpui::ImageFormat::Jpeg, bytes)
+                                    .to_image_data(renderer)
+                                    .ok()
+                            }
+                            Some(Err(
+                                error @ (TransportError::Unauthorized
+                                | TransportError::Forbidden(_)),
+                            )) => return Err(error),
+                            _ => None,
+                        };
+                        Ok((list, selected, preview))
                     });
                     (changed, result)
                 })
@@ -247,6 +306,28 @@ impl Root {
                     return;
                 };
                 panel.busy = false;
+                if writing
+                    && changed.as_ref().is_err_and(|error| {
+                        matches!(
+                            error,
+                            TransportError::BadRequest(_)
+                                | TransportError::ReplicaGenerationChanged
+                        )
+                    })
+                    && let Some(draft) = &mut panel.draft
+                {
+                    draft.upload_packet = None;
+                }
+                let retry_after = match &result {
+                    Err(TransportError::RateLimited(delay)) => {
+                        Some(delay.unwrap_or(Duration::from_secs(5)))
+                    }
+                    Err(TransportError::Offline(_) | TransportError::Server(_)) => {
+                        Some(Duration::from_secs(5))
+                    }
+                    _ => None,
+                };
+                panel.retry_at = retry_after.and_then(|delay| Instant::now().checked_add(delay));
                 if writing && changed.is_ok() {
                     panel.draft = None;
                     panel.confirm = None;
@@ -266,15 +347,7 @@ impl Root {
                 } else if let Ok((list, selected, preview)) = result {
                     panel.photos = Some(list);
                     panel.selected = selected;
-                    panel.preview = preview.map(|image| {
-                        cx.new(|cx| {
-                            cx.on_release(|image: &mut Arc<gpui::RenderImage>, app| {
-                                app.drop_image(image.clone(), None);
-                            })
-                            .detach();
-                            image
-                        })
-                    });
+                    panel.preview = preview.map(|image| scoped_preview(image, cx));
                 }
                 panel.notice = if changed.is_err() || load_failed {
                     Some(Key::CatalogPhotosFailure)
@@ -304,11 +377,17 @@ impl Root {
                 field
             })
         };
+        let caption = field(caption, cx);
+        let alt = field(alt, cx);
+        for field in [&caption, &alt] {
+            cx.observe(field, |_, _, cx| cx.notify()).detach();
+        }
         panel.draft = Some(Draft {
-            caption: field(caption, cx),
-            alt: field(alt, cx),
+            caption,
+            alt,
             source,
             needs_review: false,
+            upload_packet: None,
         });
         panel.notice = None;
         cx.notify();
@@ -326,6 +405,7 @@ impl Root {
         let instance = panel.instance.clone();
         panel.busy = true;
         cx.notify();
+        let renderer = cx.svg_renderer();
         let picker = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: true,
             directories: false,
@@ -338,8 +418,15 @@ impl Root {
                     let path = paths.into_iter().next();
                     cx.background_executor()
                         .spawn(async move {
-                            path.map(|path| prepare_photo(&path).ok_or(Key::StaffPortraitInvalid))
-                                .transpose()
+                            path.map(|path| {
+                                let jpeg = prepare_photo(&path).ok_or(Key::StaffPortraitInvalid)?;
+                                let preview =
+                                    gpui::Image::from_bytes(gpui::ImageFormat::Jpeg, jpeg.clone())
+                                        .to_image_data(renderer)
+                                        .map_err(|_| Key::StaffPortraitInvalid)?;
+                                Ok((jpeg, preview))
+                            })
+                            .transpose()
                         })
                         .await
                 }
@@ -358,10 +445,11 @@ impl Root {
                 };
                 panel.busy = false;
                 match image {
-                    Ok(Some(jpeg)) => root.start_portfolio_draft(
+                    Ok(Some((jpeg, preview))) => root.start_portfolio_draft(
                         Source::Upload {
                             key: Uuid::now_v7(),
                             jpeg: Arc::new(jpeg),
+                            preview: scoped_preview(preview, cx),
                         },
                         cx,
                     ),
@@ -379,19 +467,18 @@ impl Root {
             return;
         };
         let Some(draft) = &panel.draft else { return };
-        let input = PortfolioEdit {
-            caption: draft.caption.read(cx).text().to_owned(),
-            alt: draft.alt.read(cx).text().to_owned(),
-            service_id: Some(panel.service),
-        };
+        let input = draft.input(panel.service, cx);
         let Ok(input) = input.normalized() else {
             panel.notice = Some(Key::CatalogPhotosInvalid);
             cx.notify();
             return;
         };
         let action = match &draft.source {
-            Source::Upload { key, jpeg } => Action::Upload(*key, input, jpeg.clone()),
-            Source::Existing(photo) => Action::Edit(photo.clone(), input),
+            Source::Upload { key, jpeg, .. } => Action::Upload(*key, input, jpeg.clone()),
+            Source::Existing(photo) if photo.caption != input.caption || photo.alt != input.alt => {
+                Action::Edit(photo.clone(), input)
+            }
+            Source::Existing(_) => return,
         };
         self.request_catalog_portfolio(action, None, cx);
     }
@@ -483,11 +570,30 @@ impl Root {
             };
             let stale = draft.needs_review
                 || matches!(&draft.source, Source::Existing(baseline) if reviewed.is_none_or(|current| current.version != baseline.version));
+            let frozen = panel.busy || draft.upload_packet.is_some();
+            let input = draft.input(panel.service, cx);
+            let changed = input.normalized().is_ok_and(|input| {
+                !matches!(&draft.source, Source::Existing(photo)
+                    if photo.caption == input.caption && photo.alt == input.alt)
+            });
+            let preview = match &draft.source {
+                Source::Upload { preview, .. } => Some(preview),
+                Source::Existing(_) => panel.preview.as_ref(),
+            };
             return body
+                .when_some(preview, |body, preview| {
+                    body.child(
+                        gpui::img(preview.read(cx).clone())
+                            .max_h(px(175.))
+                            .object_fit(gpui::ObjectFit::Contain),
+                    )
+                })
                 .child(self.label(Key::CatalogPhotosCaption))
-                .child(draft.caption.clone())
+                .when(frozen, |body| body.child(input.caption.clone()))
+                .when(!frozen, |body| body.child(draft.caption.clone()))
                 .child(self.label(Key::CatalogPhotosAlt))
-                .child(draft.alt.clone())
+                .when(frozen, |body| body.child(input.alt.clone()))
+                .when(!frozen, |body| body.child(draft.alt.clone()))
                 .when(
                     reviewed.is_some_and(|photo| photo.status == PortfolioStatus::Published),
                     |body| body.child(self.t(Key::CatalogPhotosEditPublic)),
@@ -517,7 +623,7 @@ impl Root {
                         },
                     )
                 })
-                .when(!panel.busy && online && !stale, |body| {
+                .when(!panel.busy && online && !stale && changed, |body| {
                     body.child(self.button(
                         "portfolio-save",
                         self.t(Key::StaffPortraitSave),
@@ -656,6 +762,9 @@ impl Root {
                         .object_fit(gpui::ObjectFit::Contain),
                 )
             })
+            .when(panel.preview.is_none(), |body| {
+                body.child(self.t(Key::CatalogPhotosPreviewUnavailable))
+            })
             .child(self.t(if public {
                 Key::StaffPortraitPublic
             } else {
@@ -676,30 +785,32 @@ impl Root {
                                 root.start_portfolio_draft(Source::Existing(edit.clone()), cx)
                             }),
                         ))
-                        .child(self.button(
-                            "portfolio-publish",
-                            self.t(if public {
-                                Key::StaffPortraitUnpublish
-                            } else {
-                                Key::StaffPortraitPublish
-                            }),
-                            Kind::Ghost,
-                            cx.listener(move |root, _, _, cx| {
-                                if public {
-                                    root.request_catalog_portfolio(
-                                        Action::Publication(
-                                            unpublish.clone(),
-                                            PortfolioPublication::Unpublish,
-                                        ),
-                                        None,
-                                        cx,
-                                    );
-                                } else if let Some(panel) = root.catalog_portfolio() {
-                                    panel.confirm = Some(Confirm::Publish(id, version));
-                                    cx.notify();
-                                }
-                            }),
-                        ))
+                        .when(public || panel.preview.is_some(), |actions| {
+                            actions.child(self.button(
+                                "portfolio-publish",
+                                self.t(if public {
+                                    Key::StaffPortraitUnpublish
+                                } else {
+                                    Key::StaffPortraitPublish
+                                }),
+                                Kind::Ghost,
+                                cx.listener(move |root, _, _, cx| {
+                                    if public {
+                                        root.request_catalog_portfolio(
+                                            Action::Publication(
+                                                unpublish.clone(),
+                                                PortfolioPublication::Unpublish,
+                                            ),
+                                            None,
+                                            cx,
+                                        );
+                                    } else if let Some(panel) = root.catalog_portfolio() {
+                                        panel.confirm = Some(Confirm::Publish(id, version));
+                                        cx.notify();
+                                    }
+                                }),
+                            ))
+                        })
                         .child(self.button(
                             "portfolio-remove",
                             self.t(Key::StaffPortraitRemove),
@@ -714,5 +825,69 @@ impl Root {
                 )
             })
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    async fn restoring_a_replica_retains_the_photo_draft_for_explicit_review(
+        cx: &mut TestAppContext,
+    ) {
+        let (_directory, window) = crate::root::tests::open(cx);
+        window
+            .update(cx, |root, _, cx| {
+                let service = Uuid::now_v7();
+                root.svc.store.apply_page(&[RawChange {
+                seq: 1000, entity: "service".into(), id: service.to_string(), op: "upsert".into(),
+                data: Some(serde_json::json!({
+                    "id": service, "version": 1, "name": "Fixture treatment", "durationMinutes": 30,
+                    "bufferMinutes": 0, "priceCents": 2000, "sortOrder": 1, "currency": "EUR",
+                    "onlineBooking": true, "active": true, "updatedAt": "2026-03-01T10:00:00Z",
+                })),
+            }], 1000).unwrap();
+                root.open_service_catalog(cx);
+                root.select_catalog_service(&service.to_string(), cx);
+                root.open_catalog_portfolio(cx);
+                let photo = PortfolioPhoto {
+                    id: Uuid::now_v7(),
+                    service_id: Some(service),
+                    service_name: Some("Fixture treatment".into()),
+                    caption: "First caption".into(),
+                    alt: "Alternative text".into(),
+                    status: PortfolioStatus::Draft,
+                    version: 1,
+                };
+                let panel = root.catalog_portfolio().unwrap();
+                panel.photos = Some(PortfolioList {
+                    photos: vec![photo.clone()],
+                    limit: 200,
+                    generation: "fixture".into(),
+                });
+                panel.selected = Some(photo.id);
+                root.start_portfolio_draft(Source::Existing(photo), cx);
+                root.catalog_portfolio()
+                    .unwrap()
+                    .draft
+                    .as_ref()
+                    .unwrap()
+                    .caption
+                    .update(cx, |field, cx| field.set_text("My new caption", cx));
+                assert!(root.preserve_open_catalogue());
+                let panel = root.catalog_portfolio().unwrap();
+                assert!(panel.photos.is_none());
+                let draft = panel.draft.as_ref().unwrap();
+                assert!(draft.needs_review);
+                assert_eq!(draft.caption.read(cx).text(), "My new caption");
+                root.close_service_catalog(cx);
+                assert!(matches!(
+                    root.catalog_portfolio().unwrap().confirm,
+                    Some(Confirm::Discard)
+                ));
+            })
+            .unwrap();
     }
 }

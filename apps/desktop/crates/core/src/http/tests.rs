@@ -1295,7 +1295,8 @@ fn portfolio_requests_require_valid_metadata_and_send_explicit_publication_confi
         http(
             "200 OK",
             &[],
-            &serde_json::json!({"photos": [draft], "limit": 200}).to_string(),
+            &serde_json::json!({"photos": [draft], "limit": 200, "generation": "fixture"})
+                .to_string(),
         ),
         http(
             "409 Conflict",
@@ -1317,15 +1318,15 @@ fn portfolio_requests_require_valid_metadata_and_send_explicit_publication_confi
         service_id: None,
     };
     assert!(matches!(
-        transport.edit_portfolio_photo(&photo, &invalid),
+        transport.edit_portfolio_photo("fixture", &photo, &invalid),
         Err(TransportError::BadRequest(_))
     ));
     assert!(
         transport
-            .set_portfolio_publication(&photo, PortfolioPublication::ConfirmedPublish)
+            .set_portfolio_publication("fixture", &photo, PortfolioPublication::ConfirmedPublish)
             .is_err()
     );
-    transport.remove_portfolio_photo(&photo).unwrap();
+    transport.remove_portfolio_photo("fixture", &photo).unwrap();
     let requests = seen.lock().unwrap();
     assert_eq!(requests.len(), 3);
     assert!(requests[1].starts_with(&format!("POST /admin/portfolio/{id}/publish ")));
@@ -1333,7 +1334,7 @@ fn portfolio_requests_require_valid_metadata_and_send_explicit_publication_confi
         serde_json::from_str(requests[1].split_once("\r\n\r\n").unwrap().1).unwrap();
     assert_eq!(
         input,
-        serde_json::json!({"version": 3, "publicationConfirmed": true})
+        serde_json::json!({"version": 3, "generation": "fixture", "publicationConfirmed": true})
     );
     assert!(requests[2].starts_with(&format!("POST /admin/portfolio/{id}/remove ")));
 }

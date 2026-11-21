@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { clientPhotoUploadSchema } from "./client-photos";
-import { idSchema, instantSchema } from "./common";
+import { idSchema, instantSchema, syncGenerationSchema } from "./common";
 export const PORTFOLIO_LIMIT = 200;
 export const PORTFOLIO_PERMISSION_VERSION = "public-portfolio-v1";
 const caption = z
@@ -9,18 +9,22 @@ const caption = z
   .min(1)
   .max(300)
   .refine((value) => !value.includes("\u0000"), "Unsupported null byte");
+const generation = syncGenerationSchema.optional();
 const metadata = { caption, alt: caption, serviceId: idSchema.nullable().default(null) };
 export const portfolioUploadSchema = z
   .object({
     idempotencyKey: idSchema,
+    generation,
     ...metadata,
     imageBase64: clientPhotoUploadSchema.shape.imageBase64,
   })
   .strict();
 export const portfolioEditSchema = z
-  .object({ version: z.number().int().positive(), ...metadata })
+  .object({ version: z.number().int().positive(), generation, ...metadata })
   .strict();
-export const portfolioVersionSchema = z.object({ version: z.number().int().positive() }).strict();
+export const portfolioVersionSchema = z
+  .object({ version: z.number().int().positive(), generation })
+  .strict();
 export const portfolioPublishSchema = portfolioVersionSchema
   .extend({ publicationConfirmed: z.literal(true) })
   .strict();

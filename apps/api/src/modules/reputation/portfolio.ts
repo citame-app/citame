@@ -165,6 +165,12 @@ export async function changePortfolio(
     let changes: Partial<typeof portfolioPhoto.$inferInsert>;
     switch (change.kind) {
       case "edit":
+        if (
+          row.caption === change.input.caption &&
+          row.alt === change.input.alt &&
+          row.serviceId === change.input.serviceId
+        )
+          return adminView(row);
         changes = {
           caption: change.input.caption,
           alt: change.input.alt,

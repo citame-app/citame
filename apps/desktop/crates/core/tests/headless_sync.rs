@@ -2208,9 +2208,10 @@ fn native_portfolio_keeps_drafts_private_and_rechecks_publication_versions() {
         service_id: Some(service_id),
     };
     let key = Uuid::now_v7();
+    let generation = desktop.transport.portfolio().unwrap().generation;
     let photo = desktop
         .transport
-        .upload_portfolio_photo(key, &input, &jpeg)
+        .upload_portfolio_photo(&generation, key, &input, &jpeg)
         .unwrap();
     web.sync();
     assert!(web.store.live_view_revision(PORTFOLIO_LIVE_TOPIC).unwrap() > revision);
@@ -2219,7 +2220,7 @@ fn native_portfolio_keeps_drafts_private_and_rechecks_publication_versions() {
     assert_eq!(
         desktop
             .transport
-            .upload_portfolio_photo(key, &input, &jpeg)
+            .upload_portfolio_photo(&generation, key, &input, &jpeg)
             .unwrap()
             .id,
         photo.id
@@ -2242,18 +2243,37 @@ fn native_portfolio_keeps_drafts_private_and_rechecks_publication_versions() {
 
     let published = desktop
         .transport
-        .set_portfolio_publication(&photo, PortfolioPublication::ConfirmedPublish)
+        .set_portfolio_publication(&generation, &photo, PortfolioPublication::ConfirmedPublish)
         .unwrap();
+    assert!(is_public());
+    let unchanged = desktop
+        .transport
+        .edit_portfolio_photo(&generation, &published, &input)
+        .unwrap();
+    assert_eq!(unchanged.status, PortfolioStatus::Published);
+    assert_eq!(unchanged.version, published.version);
+    assert_eq!(
+        desktop
+            .transport
+            .set_portfolio_publication(
+                "wrong-fixture-generation",
+                &published,
+                PortfolioPublication::Unpublish,
+            )
+            .unwrap_err(),
+        TransportError::ReplicaGenerationChanged,
+    );
     assert!(is_public());
     assert!(
         desktop
             .transport
-            .set_portfolio_publication(&photo, PortfolioPublication::Unpublish)
+            .set_portfolio_publication(&generation, &photo, PortfolioPublication::Unpublish)
             .is_err()
     );
     let edited = desktop
         .transport
         .edit_portfolio_photo(
+            &generation,
             &published,
             &PortfolioEdit {
                 caption: "Reviewed update".into(),
@@ -2263,7 +2283,10 @@ fn native_portfolio_keeps_drafts_private_and_rechecks_publication_versions() {
         .unwrap();
     assert_eq!(edited.status, PortfolioStatus::Draft);
     assert!(!is_public());
-    desktop.transport.remove_portfolio_photo(&edited).unwrap();
+    desktop
+        .transport
+        .remove_portfolio_photo(&generation, &edited)
+        .unwrap();
     assert!(desktop.transport.portfolio_photo(photo.id).is_err());
 }
 

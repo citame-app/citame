@@ -10,6 +10,7 @@ import {
 import { Hono } from "hono";
 import type { AppDeps } from "../../app";
 import type { AppEnv } from "../../auth/principal";
+import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
 import {
   changePortfolio,
@@ -31,9 +32,18 @@ export function portfolioPublicRoutes({ db }: AppDeps) {
     )
     .get("/:id/image", (c) => portfolioImage(db, parseOrThrow(idSchema, c.req.param("id"))));
 }
-export function portfolioAdminRoutes({ db, now = () => new Date() }: AppDeps) {
+export function portfolioAdminRoutes({ db, config, now = () => new Date() }: AppDeps) {
+  const generation = config.syncReplicaGeneration;
+  function checked<T extends { generation?: string }>(input: T, desktop: boolean | undefined) {
+    if ((desktop || input.generation !== undefined) && input.generation !== generation) {
+      throw new DomainError("sync_generation_changed", "Refresh the gallery after the restore");
+    }
+    return input;
+  }
   return router()
-    .get("/", async (c) => c.json(await listPortfolioAdmin(db, c.get("principal"))))
+    .get("/", async (c) =>
+      c.json({ ...(await listPortfolioAdmin(db, c.get("principal"))), generation }),
+    )
     .get("/:id/image", (c) =>
       portfolioImage(db, parseOrThrow(idSchema, c.req.param("id")), c.get("principal")),
     )
@@ -41,7 +51,7 @@ export function portfolioAdminRoutes({ db, now = () => new Date() }: AppDeps) {
       c.json(
         await uploadPortfolio(
           db,
-          parseOrThrow(portfolioUploadSchema, await readJson(c)),
+          checked(parseOrThrow(portfolioUploadSchema, await readJson(c)), c.get("desktopRequest")),
           c.get("principal"),
           now(),
         ),
@@ -53,7 +63,13 @@ export function portfolioAdminRoutes({ db, now = () => new Date() }: AppDeps) {
         await changePortfolio(
           db,
           parseOrThrow(idSchema, c.req.param("id")),
-          { kind: "edit", input: parseOrThrow(portfolioEditSchema, await readJson(c)) },
+          {
+            kind: "edit",
+            input: checked(
+              parseOrThrow(portfolioEditSchema, await readJson(c)),
+              c.get("desktopRequest"),
+            ),
+          },
           c.get("principal"),
           now(),
         ),
@@ -64,7 +80,13 @@ export function portfolioAdminRoutes({ db, now = () => new Date() }: AppDeps) {
         await changePortfolio(
           db,
           parseOrThrow(idSchema, c.req.param("id")),
-          { kind: "publish", input: parseOrThrow(portfolioPublishSchema, await readJson(c)) },
+          {
+            kind: "publish",
+            input: checked(
+              parseOrThrow(portfolioPublishSchema, await readJson(c)),
+              c.get("desktopRequest"),
+            ),
+          },
           c.get("principal"),
           now(),
         ),
@@ -75,7 +97,13 @@ export function portfolioAdminRoutes({ db, now = () => new Date() }: AppDeps) {
         await changePortfolio(
           db,
           parseOrThrow(idSchema, c.req.param("id")),
-          { kind: "unpublish", input: parseOrThrow(portfolioVersionSchema, await readJson(c)) },
+          {
+            kind: "unpublish",
+            input: checked(
+              parseOrThrow(portfolioVersionSchema, await readJson(c)),
+              c.get("desktopRequest"),
+            ),
+          },
           c.get("principal"),
           now(),
         ),
@@ -86,7 +114,13 @@ export function portfolioAdminRoutes({ db, now = () => new Date() }: AppDeps) {
         await changePortfolio(
           db,
           parseOrThrow(idSchema, c.req.param("id")),
-          { kind: "remove", input: parseOrThrow(portfolioRemoveSchema, await readJson(c)) },
+          {
+            kind: "remove",
+            input: checked(
+              parseOrThrow(portfolioRemoveSchema, await readJson(c)),
+              c.get("desktopRequest"),
+            ),
+          },
           c.get("principal"),
           now(),
         ),

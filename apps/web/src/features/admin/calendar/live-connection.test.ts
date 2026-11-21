@@ -202,6 +202,14 @@ test("a review request marker refreshes the invitation list without invalidating
   ]);
 });
 
+test("a portfolio marker refreshes the gallery without refetching the calendar", async () => {
+  const h = harness(async () => ({ ...response(11), changes: [], refresh: ["portfolio"] }));
+  h.send(10);
+  h.send(11);
+  await waitFor(() => expect(h.onChanges).toHaveBeenCalledWith([], ["portfolio"]));
+  expect([...liveQueryKeys(["portfolio"])]).toEqual([["portfolio"]]);
+});
+
 test("intake nudges target directories and histories without replacing answers being edited", async () => {
   const h = harness(async () => ({
     ...response(11),

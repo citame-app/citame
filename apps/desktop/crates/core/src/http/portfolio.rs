@@ -30,6 +30,7 @@ pub enum PortfolioStatus {
 pub struct PortfolioList {
     pub photos: Vec<PortfolioPhoto>,
     pub limit: usize,
+    pub generation: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -81,6 +82,7 @@ impl HttpTransport {
 
     pub fn upload_portfolio_photo(
         &self,
+        generation: &str,
         idempotency_key: Uuid,
         edit: &PortfolioEdit,
         jpeg: &[u8],
@@ -95,6 +97,7 @@ impl HttpTransport {
             PORTFOLIO,
             &serde_json::json!({
                 "idempotencyKey": idempotency_key,
+                "generation": generation,
                 "caption": edit.caption,
                 "alt": edit.alt,
                 "serviceId": edit.service_id,
@@ -105,6 +108,7 @@ impl HttpTransport {
 
     pub fn edit_portfolio_photo(
         &self,
+        generation: &str,
         photo: &PortfolioPhoto,
         edit: &PortfolioEdit,
     ) -> Result<PortfolioPhoto, TransportError> {
@@ -113,6 +117,7 @@ impl HttpTransport {
             &format!("{PORTFOLIO}/{}", photo.id),
             &serde_json::json!({
                 "version": photo.version,
+                "generation": generation,
                 "caption": edit.caption,
                 "alt": edit.alt,
                 "serviceId": edit.service_id,
@@ -122,22 +127,28 @@ impl HttpTransport {
 
     pub fn set_portfolio_publication(
         &self,
+        generation: &str,
         photo: &PortfolioPhoto,
         action: PortfolioPublication,
     ) -> Result<PortfolioPhoto, TransportError> {
         let (path, input) = match action {
             PortfolioPublication::ConfirmedPublish => (
                 "publish",
-                serde_json::json!({"version": photo.version, "publicationConfirmed": true}),
+                serde_json::json!({"version": photo.version, "generation": generation, "publicationConfirmed": true}),
             ),
-            PortfolioPublication::Unpublish => {
-                ("unpublish", serde_json::json!({"version": photo.version}))
-            }
+            PortfolioPublication::Unpublish => (
+                "unpublish",
+                serde_json::json!({"version": photo.version, "generation": generation}),
+            ),
         };
         self.post_json(&format!("{PORTFOLIO}/{}/{path}", photo.id), &input)
     }
 
-    pub fn remove_portfolio_photo(&self, photo: &PortfolioPhoto) -> Result<(), TransportError> {
+    pub fn remove_portfolio_photo(
+        &self,
+        generation: &str,
+        photo: &PortfolioPhoto,
+    ) -> Result<(), TransportError> {
         #[derive(Deserialize)]
         struct Removed {
             id: Uuid,
@@ -145,7 +156,7 @@ impl HttpTransport {
         }
         let result: Removed = self.post_json(
             &format!("{PORTFOLIO}/{}/remove", photo.id),
-            &serde_json::json!({"version": photo.version, "confirmation": true}),
+            &serde_json::json!({"version": photo.version, "generation": generation, "confirmation": true}),
         )?;
         if !result.removed || result.id != photo.id {
             return Err(TransportError::Server(
