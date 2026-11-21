@@ -18,10 +18,13 @@ const verifyToken = "validation-for-synthetic-webhook";
 const calls: string[] = [];
 const originalSender = { wabaId: "456789", phoneId: "345678" };
 let graphPhoneId = originalSender.phoneId;
+let pauseExchange: (() => Promise<void>) | undefined;
 const graph = (async (url: URL) => {
   calls.push(url.pathname);
-  if (url.pathname.endsWith("/oauth/access_token"))
+  if (url.pathname.endsWith("/oauth/access_token")) {
+    await pauseExchange?.();
     return Response.json({ access_token: "synthetic-credential" });
+  }
   if (url.pathname.endsWith("/phone_numbers"))
     return Response.json({
       data: [
@@ -510,6 +513,8 @@ test("reviewed Embedded Signup rejects a stale renewal before exchanging the Met
   expect(calls).toHaveLength(callsBefore);
   const current = await json(t.app, "/admin/whatsapp", "GET", undefined, owner.cookie);
   const newSignup = whatsappSettingsSchema.parse(await current.json()).signupRevision;
+  expect(newSignup).toMatch(/^[a-f0-9]{64}$/);
+  expect(whatsappSettingsSchema.parse(await disconnected.json()).signupRevision).toBe(newSignup);
   expect(newSignup).not.toEqual(oldSignup);
   const connected = await review(newSignup);
   expect(connected.status).toBe(200);
@@ -519,4 +524,45 @@ test("reviewed Embedded Signup rejects a stale renewal before exchanging the Met
   const after = calls.length;
   expect((await review(newSignup)).status).toBe(409);
   expect(calls).toHaveLength(after);
+});
+
+test("renewal keeps the reviewed rules stable while Meta exchanges the code", async () => {
+  const original = whatsappSettingsSchema.parse(await (await connect()).json());
+  const revision = original.connection?.revision;
+  const exchanged = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<void>();
+  pauseExchange = () => {
+    exchanged.resolve();
+    return resume.promise;
+  };
+  const renewal = json(
+    t.app,
+    "/admin/whatsapp/connect/reviewed",
+    "POST",
+    { code: "synthetic-login-code", ...originalSender, revision },
+    owner.cookie,
+  );
+  try {
+    await Promise.race([
+      exchanged.promise,
+      Promise.resolve(renewal).then((response) => {
+        throw new Error(
+          `The renewal finished before the expected exchange with ${response.status}`,
+        );
+      }),
+    ]);
+    const edit = await json(
+      t.app,
+      "/admin/whatsapp/rules/reviewed",
+      "PATCH",
+      { revision, rules: [{ kind: "confirmation", templateId: "678901", variables: ["time"] }] },
+      owner.cookie,
+    );
+    expect(edit.status).toBe(409);
+    expect(await edit.json()).toMatchObject({ error: { code: "version_conflict" } });
+  } finally {
+    pauseExchange = undefined;
+    resume.resolve();
+    expect((await renewal).status).toBe(200);
+  }
 });

@@ -178,6 +178,7 @@ export const whatsappSettingsSchema = z.object({
     })
     .nullable(),
 });
+export type WhatsAppSettings = z.infer<typeof whatsappSettingsSchema>;
 export type WhatsAppRule = z.infer<typeof whatsappRuleSchema>;
 export type WhatsAppTemplate = z.infer<typeof whatsappTemplateSchema>;
 

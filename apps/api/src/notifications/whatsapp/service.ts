@@ -144,6 +144,7 @@ export async function updateWhatsAppRules(
     ? mapRules(rules, await listTemplates(config, connection, request))
     : [];
   return db.transaction(async (tx) => {
+    if (!(await tryLockWhatsAppConnection(tx, "shared"))) throw changed();
     await lockScheduling(tx);
     const current = await readConnection(tx, "update");
     if (!current || senderRevision(current) !== loadedRevision) throw changed();
@@ -172,15 +173,21 @@ export async function updateWhatsAppRules(
   });
 }
 
-async function lockWhatsAppConnection(tx: Tx) {
-  const [lock] = await tx.execute<{ locked: boolean }>(
-    sql`select pg_try_advisory_xact_lock(hashtext('citame.whatsapp.connection')) as locked`,
+async function tryLockWhatsAppConnection(tx: Tx, mode: "shared" | "exclusive") {
+  const lock = mode === "shared" ? "pg_try_advisory_xact_lock_shared" : "pg_try_advisory_xact_lock";
+  const [result] = await tx.execute<{ locked: boolean }>(
+    sql`select ${sql.identifier(lock)}(hashtext('citame.whatsapp.connection')) as locked`,
   );
-  if (!lock?.locked) throw new DomainError("invalid_state", "Ya hay una conexión en curso.");
+  return result?.locked === true;
+}
+
+async function lockWhatsAppConnection(tx: Tx) {
+  if (!(await tryLockWhatsAppConnection(tx, "exclusive")))
+    throw new DomainError("invalid_state", "Ya hay una conexión en curso.");
 }
 
 // Compaction retains the latest entry per topic. Its position distinguishes disconnected periods.
-async function disconnectedRevision(db: Pick<Database, "select">) {
+async function disconnectedRevision(db: Pick<Database, "select">, generation: string) {
   const [entry] = await db
     .select({ seq: syncChange.seq })
     .from(syncChange)
@@ -188,15 +195,21 @@ async function disconnectedRevision(db: Pick<Database, "select">) {
     .orderBy(desc(syncChange.seq))
     .limit(1);
   return createHash("sha256")
-    .update(`disconnected:${entry?.seq ?? 0}`)
+    .update(`disconnected:${generation}:${entry?.seq ?? 0}`)
     .digest("hex");
 }
 
-export async function readWhatsappSettings(db: Database, config: NotificationConfig) {
+export async function readWhatsappSettings(
+  db: Database,
+  config: NotificationConfig,
+  generation: string,
+) {
   const connection = await readConnection(db);
   return {
     ...whatsappSettings(config, connection),
-    ...(!connection && config.whatsapp ? { signupRevision: await disconnectedRevision(db) } : {}),
+    ...(!connection && config.whatsapp
+      ? { signupRevision: await disconnectedRevision(db, generation) }
+      : {}),
   };
 }
 
@@ -206,7 +219,7 @@ export async function connectWhatsApp(
   input: WhatsAppConnectInput,
   now: () => Date,
   request: typeof fetch | undefined,
-  reviewedRevision?: string,
+  review?: { revision: string; generation: string },
 ) {
   const settings = notifications.whatsapp;
   if (!settings) throw new DomainError("invalid_state", "Meta WhatsApp no está configurado.");
@@ -218,12 +231,13 @@ export async function connectWhatsApp(
       await lockWhatsAppConnection(tx);
       const current = await readConnection(tx);
       if (
-        reviewedRevision !== undefined &&
-        reviewedRevision !== (current ? senderRevision(current) : await disconnectedRevision(tx))
+        review &&
+        review.revision !==
+          (current ? senderRevision(current) : await disconnectedRevision(tx, review.generation))
       )
         throw new DomainError(
           "version_conflict",
-          "La conexión de WhatsApp cambió. Vuelva a iniciar el alta en Meta.",
+          "The WhatsApp connection changed. Start a new signup to continue.",
         );
       const grant = await meta.exchange(input.code);
       const phones = await meta.phones(input.wabaId, grant.access_token);
@@ -289,18 +303,24 @@ export async function connectWhatsApp(
   }
 }
 
-export async function disconnectWhatsApp(db: Database, revision?: string) {
-  await db.transaction(async (tx) => {
+export async function disconnectWhatsApp(
+  db: Database,
+  review?: { revision: string; signupGeneration?: string },
+) {
+  return db.transaction(async (tx) => {
     await lockWhatsAppConnection(tx);
     await lockScheduling(tx);
     const current = await readConnection(tx, "update");
-    if (!current) return;
-    if (revision !== undefined && senderRevision(current) !== revision)
+    if (current && review && senderRevision(current) !== review.revision)
       throw new DomainError(
         "version_conflict",
-        "La conexión de WhatsApp cambió. Revísela antes de desconectar.",
+        "The WhatsApp connection changed. Review the current number before disconnecting.",
       );
-    await disableWhatsApp(tx);
+    if (current) await disableWhatsApp(tx);
+    if (review?.signupGeneration === undefined) return undefined;
+    // Publish this disconnect's marker before calculating its revision inside the lock.
+    if (current) await tx.execute(sql`set constraints sync_whatsapp_settings_live_view immediate`);
+    return disconnectedRevision(tx, review.signupGeneration);
   });
 }
 

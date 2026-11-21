@@ -1,4 +1,9 @@
-import { type WhatsAppRule, whatsappKindSchema, whatsappVariableSchema } from "@sob/contracts";
+import {
+  type WhatsAppRule,
+  type WhatsAppSettings,
+  whatsappKindSchema,
+  whatsappVariableSchema,
+} from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
@@ -175,6 +180,10 @@ function orderedRules(rules: WhatsAppRule[]) {
   return events.flatMap((kind) => rules.filter((rule) => rule.kind === kind));
 }
 
+function reviewedSignupRevision(settings: WhatsAppSettings | undefined) {
+  return settings?.connection ? settings.connection.revision : settings?.signupRevision;
+}
+
 export function WhatsAppSettings() {
   const { locale, t } = useI18n();
   const copy = locale.startsWith("es") ? words.es : words.en;
@@ -186,7 +195,7 @@ export function WhatsAppSettings() {
   });
   const connection = status.data?.connection;
   const setup = status.data?.setup;
-  const signupRevision = connection ? connection.revision : status.data?.signupRevision;
+  const signupRevision = reviewedSignupRevision(status.data);
   const templates = useQuery({
     queryKey: templatesKey,
     queryFn: endpoints.templates,
@@ -218,9 +227,7 @@ export function WhatsAppSettings() {
       setRenewing(false);
       queryClient.removeQueries({ queryKey: templatesKey });
       queryClient.setQueryData<typeof result>(settingsKey, (current) =>
-        !current || (current.connection?.revision ?? null) === submitted.revision
-          ? result
-          : current,
+        !current || reviewedSignupRevision(current) === submitted.revision ? result : current,
       );
       void queryClient.invalidateQueries({ queryKey: settingsKey });
     },

@@ -41,7 +41,9 @@ export function whatsappAdminRoutes({
       c.header("Cache-Control", "private, no-store");
       await next();
     })
-    .get("/", async (c) => c.json(await readWhatsappSettings(db, notifications)))
+    .get("/", async (c) =>
+      c.json(await readWhatsappSettings(db, notifications, config.syncReplicaGeneration)),
+    )
     .post("/connect", bodyLimit({ maxSize: 8192 }), async (c) => {
       const input = parseOrThrow(whatsappCompleteSchema, await readJson(c));
       const connection = await connectWhatsApp(db, notifications, input, now, whatsappFetch);
@@ -49,14 +51,10 @@ export function whatsappAdminRoutes({
     })
     .post("/connect/reviewed", bodyLimit({ maxSize: 8192 }), async (c) => {
       const { revision, ...input } = parseOrThrow(whatsappReviewedConnectSchema, await readJson(c));
-      const connection = await connectWhatsApp(
-        db,
-        notifications,
-        input,
-        now,
-        whatsappFetch,
+      const connection = await connectWhatsApp(db, notifications, input, now, whatsappFetch, {
         revision,
-      );
+        generation: config.syncReplicaGeneration,
+      });
       return c.json(whatsappSettings(notifications, connection));
     })
     .get("/deliveries", async (c) => c.json(await listDeliveries(db)))
@@ -90,8 +88,11 @@ export function whatsappAdminRoutes({
     })
     .post("/disconnect/reviewed", bodyLimit({ maxSize: 1024 }), async (c) => {
       const { revision } = parseOrThrow(whatsappReviewedDisconnectSchema, await readJson(c));
-      await disconnectWhatsApp(db, revision);
-      return c.json(whatsappSettings(notifications, undefined));
+      const signupRevision = await disconnectWhatsApp(db, {
+        revision,
+        signupGeneration: notifications.whatsapp ? config.syncReplicaGeneration : undefined,
+      });
+      return c.json({ ...whatsappSettings(notifications, undefined), signupRevision });
     });
 }
 
