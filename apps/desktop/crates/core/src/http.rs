@@ -1588,7 +1588,7 @@ impl HttpTransport {
     pub fn record_reviewed_commission_payout(
         &self,
         payout: &SavedCommissionPayout,
-        reconcile_existing_in: Option<&str>,
+        reconciliation: Option<(&str, uuid::Uuid)>,
     ) -> Result<RecordedCommissionPayout, CommissionPayoutError> {
         #[derive(serde::Serialize)]
         #[serde(rename_all = "camelCase")]
@@ -1596,15 +1596,15 @@ impl HttpTransport {
             #[serde(flatten)]
             review: crate::reports::commissions::CommissionPayoutReview,
             #[serde(skip_serializing_if = "Option::is_none")]
-            already_recorded: Option<bool>,
+            existing_payout_id: Option<uuid::Uuid>,
         }
         let mut review = payout.review.clone();
-        if let Some(generation) = reconcile_existing_in {
+        if let Some((generation, _)) = reconciliation {
             review.generation = generation.to_owned();
         }
         let input = Input {
             review,
-            already_recorded: reconcile_existing_in.map(|_| true),
+            existing_payout_id: reconciliation.map(|(_, id)| id),
         };
         let path = format!(
             "/admin/accounting/staff/{}/payouts/reviewed",
@@ -1621,7 +1621,7 @@ impl HttpTransport {
                 match (status, code) {
                     (409, Some("invalid_state")) => CommissionPayoutError::BalanceChanged,
                     (409, Some("version_conflict")) => CommissionPayoutError::KeyConflict,
-                    (404, Some("not_found")) if reconcile_existing_in.is_some() => {
+                    (404, Some("not_found")) if reconciliation.is_some() => {
                         CommissionPayoutError::NoMatch
                     }
                     (400, Some("validation_error")) => CommissionPayoutError::InvalidReview,
@@ -1629,6 +1629,7 @@ impl HttpTransport {
                 }
             })?;
         if recorded.staff_id != payout.staff_id
+            || reconciliation.is_some_and(|(_, id)| recorded.id != id)
             || recorded.idempotency_key != payout.review.idempotency_key
             || recorded.amount_cents != payout.review.amount_cents
             || recorded.reference != crate::trim_like_javascript(&payout.review.reference)

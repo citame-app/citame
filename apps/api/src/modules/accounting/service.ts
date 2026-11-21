@@ -216,6 +216,7 @@ export async function commissionStatement(
 export async function findRecordedPayout(
   db: Database,
   staffId: string,
+  payoutId: string,
   input: CommissionPayoutInput,
   principal: Principal,
 ) {
@@ -226,12 +227,12 @@ export async function findRecordedPayout(
     .from(commissionPayout)
     .where(
       and(
+        eq(commissionPayout.id, payoutId),
         eq(commissionPayout.staffId, staffId),
         eq(commissionPayout.amountCents, input.amountCents),
         eq(commissionPayout.reference, input.reference),
       ),
     )
-    .orderBy(desc(commissionPayout.createdAt), desc(commissionPayout.id))
     .limit(1);
   if (!row)
     throw new DomainError("not_found", "No recorded payout matches this reference and amount");
@@ -243,7 +244,7 @@ export async function recordPayout(
   staffId: string,
   input: CommissionPayoutInput,
   principal: Principal,
-  keyConflictCode: "invalid_state" | "version_conflict" = "invalid_state",
+  reviewed = false,
 ) {
   requirePermission(principal, "manageCommissions");
   await requireStaff(db, staffId);
@@ -265,8 +266,29 @@ export async function recordPayout(
       );
     if (previous) {
       if (previous.requestHash !== requestHash)
-        throw new DomainError(keyConflictCode, "Payout key belongs to another request");
+        throw new DomainError(
+          reviewed ? "version_conflict" : "invalid_state",
+          "Payout key belongs to another request",
+        );
       return payoutView(previous);
+    }
+    if (reviewed) {
+      const [existing] = await tx
+        .select({ id: commissionPayout.id })
+        .from(commissionPayout)
+        .where(
+          and(
+            eq(commissionPayout.staffId, staffId),
+            eq(commissionPayout.amountCents, input.amountCents),
+            eq(commissionPayout.reference, input.reference),
+          ),
+        )
+        .limit(1);
+      if (existing)
+        throw new DomainError(
+          "version_conflict",
+          "A payout with this amount and reference already exists. Review the ledger entry.",
+        );
     }
     const totals = await balances(tx, staffId);
     if (input.amountCents > totals.outstandingCents)

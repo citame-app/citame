@@ -83,7 +83,7 @@ export function accountingRoutes(deps: AppDeps) {
       const {
         generation: reviewed,
         actorUserId,
-        alreadyRecorded,
+        existingPayoutId,
         ...input
       } = parseOrThrow(reviewedCommissionPayoutInputSchema, await readJson(c));
       if (principal.userId !== actorUserId)
@@ -93,12 +93,12 @@ export function accountingRoutes(deps: AppDeps) {
         );
       checkGeneration(reviewed);
       const staffId = parseOrThrow(idSchema, c.req.param("id"));
-      const payout = alreadyRecorded
-        ? await findRecordedPayout(deps.db, staffId, input, principal)
-        : await recordPayout(deps.db, staffId, input, principal, "version_conflict");
+      const payout = existingPayoutId
+        ? await findRecordedPayout(deps.db, staffId, existingPayoutId, input, principal)
+        : await recordPayout(deps.db, staffId, input, principal, true);
       return c.json(
         { ...payout, idempotencyKey: input.idempotencyKey },
-        alreadyRecorded ? 200 : 201,
+        existingPayoutId ? 200 : 201,
         {
           "Cache-Control": "private, no-store",
         },

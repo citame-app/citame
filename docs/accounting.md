@@ -32,9 +32,11 @@ key before sending it. If the outcome is uncertain, reopen the payout for the sa
 and retry the saved request. That retry uses the original reference, amount and key. A database
 restore requires reviewing the statement from the current generation before retrying the old
 request. Confirm the reconciliation to bind the same payment and key to the restored generation.
-If the payment was already recorded separately, **This payment is already recorded. Verify it.**
-checks the current ledger for the same professional, amount and reference before clearing the
-local request. Recording a payout only adds an accounting entry.
+If the payment was already recorded separately, use **Verify this existing payment** on its dated
+ledger entry. Desktop clears the local request only after the server verifies the selected entry
+against the saved professional, amount and reference. Reviewed writes send the same record back
+for the same request key and reject a second entry with the same professional, amount and
+reference. Recording a payout only adds an accounting entry.
 
 ## Financial summary
 

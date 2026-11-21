@@ -41,7 +41,7 @@ export const reviewedCommissionRateInputSchema = commissionPolicyInputSchema.ext
 export const reviewedCommissionPayoutInputSchema = commissionPayoutInputSchema.extend({
   generation: syncGenerationSchema,
   actorUserId: z.string().min(1).max(256),
-  alreadyRecorded: z.literal(true).optional(),
+  existingPayoutId: idSchema.optional(),
 });
 export const commissionScopeSchema = z.object({
   staffId: idSchema.nullable(),

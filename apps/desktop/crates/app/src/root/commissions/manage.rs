@@ -1,8 +1,8 @@
 use super::*;
 use sob_core::billing::parse_reviewed_amount;
 use sob_core::reports::commissions::{
-    CommissionPayoutError, CommissionPayoutReview, CommissionPolicy, CommissionRateEdit,
-    SavedCommissionPayout,
+    CommissionPayout, CommissionPayoutError, CommissionPayoutReview, CommissionPolicy,
+    CommissionRateEdit, SavedCommissionPayout,
 };
 
 #[derive(Clone, Copy)]
@@ -40,7 +40,7 @@ enum Fields {
 
 enum Command {
     Rates(CommissionRateEdit),
-    Payout(SavedCommissionPayout, Option<String>),
+    Payout(SavedCommissionPayout, Option<(String, uuid::Uuid)>),
 }
 
 enum WriteResult {
@@ -159,10 +159,15 @@ impl Root {
     }
 
     fn save_commission_editor(&mut self, cx: &mut Context<Self>) {
-        self.submit_commission_editor(false, cx);
+        self.submit_commission_editor(None, cx);
     }
 
-    fn submit_commission_editor(&mut self, resolve_existing: bool, cx: &mut Context<Self>) {
+    fn submit_commission_editor(
+        &mut self,
+        recorded_id: Option<uuid::Uuid>,
+        cx: &mut Context<Self>,
+    ) {
+        let resolve_existing = recorded_id.is_some();
         let Some(transport) = self
             .svc
             .transport()
@@ -292,9 +297,19 @@ impl Root {
                     cx.notify();
                     return;
                 }
+                if !self
+                    .svc
+                    .store
+                    .pending_commission_payout(staff_id, &actor.user_id)
+                    .is_ok_and(|current| current.as_ref() == Some(review))
+                {
+                    editor.error = Some(Key::CommissionLocalSaveError);
+                    cx.notify();
+                    return;
+                }
                 Command::Payout(
                     review.clone(),
-                    resolve_existing.then(|| editor.generation.clone()),
+                    recorded_id.map(|id| (editor.generation.clone(), id)),
                 )
             }
         };
@@ -320,7 +335,9 @@ impl Root {
                             let result = transport
                                 .record_reviewed_commission_payout(
                                     &saved,
-                                    reconciliation.as_deref(),
+                                    reconciliation
+                                        .as_ref()
+                                        .map(|(generation, id)| (generation.as_str(), *id)),
                                 )
                                 .map(|_| ());
                             (WriteResult::Payout(result), Some(saved))
@@ -332,14 +349,13 @@ impl Root {
                 if !Arc::ptr_eq(&session, &root.svc.session) {
                     return;
                 }
-                let confirmed_or_rejected = matches!(
-                    &result,
-                    WriteResult::Payout(
-                        Ok(())
-                            | Err(CommissionPayoutError::BalanceChanged
-                                | CommissionPayoutError::InvalidReview)
-                    )
-                );
+                let confirmed_or_rejected = matches!(&result, WriteResult::Payout(Ok(())))
+                    || (!resolve_existing
+                        && matches!(
+                            &result,
+                            WriteResult::Payout(Err(CommissionPayoutError::BalanceChanged
+                                | CommissionPayoutError::InvalidReview))
+                        ));
                 let clear_failed = confirmed_or_rejected
                     && payout.as_ref().is_some_and(|saved| {
                         root.svc.store.clear_commission_payout(saved).is_err()
@@ -521,6 +537,41 @@ impl Root {
         }
     }
 
+    pub(super) fn render_payout_reconciliation(
+        &self,
+        desk: &Desk,
+        statement: &CommissionStatement,
+        payout: &CommissionPayout,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement> {
+        let Some(Edit::Ready(editor)) = &desk.editor else {
+            return None;
+        };
+        let Fields::Payout {
+            pending: Some(saved),
+            ..
+        } = &editor.fields
+        else {
+            return None;
+        };
+        if editor.sending
+            || desk.request.is_some()
+            || !desk.can_manage
+            || self.status.connectivity != Connectivity::Online
+            || statement.generation.as_deref() != Some(editor.generation.as_str())
+            || !payout.matches(&saved.review)
+        {
+            return None;
+        }
+        let payout_id = payout.id;
+        Some(self.button(
+            SharedString::from(format!("commission-match-{payout_id}")),
+            self.t(Key::CommissionPayoutAlreadyRecorded),
+            Kind::Ghost,
+            cx.listener(move |root, _, _, cx| root.submit_commission_editor(Some(payout_id), cx)),
+        ))
+    }
+
     fn render_commission_editor(
         &self,
         editor: &Editor,
@@ -613,14 +664,11 @@ impl Root {
                             ))
                         },
                     )
-                    .when(ready && current && !editor.sending, |view| {
-                        view.child(self.button(
-                            "commission-resolve-recorded",
-                            self.t(Key::CommissionPayoutAlreadyRecorded),
-                            Kind::Ghost,
-                            cx.listener(|root, _, _, cx| root.submit_commission_editor(true, cx)),
-                        ))
-                    })
+                    .child(
+                        div()
+                            .text_sm()
+                            .child(self.t(Key::CommissionPayoutSelectRecorded)),
+                    )
             }
         };
         panel

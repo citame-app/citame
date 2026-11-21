@@ -120,9 +120,17 @@ pub struct CommissionAccrual {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommissionPayout {
+    pub id: uuid::Uuid,
     pub amount_cents: i64,
     pub reference: String,
     pub created_at: DateTime<Utc>,
+}
+
+impl CommissionPayout {
+    pub fn matches(&self, review: &CommissionPayoutReview) -> bool {
+        self.amount_cents == i64::from(review.amount_cents)
+            && self.reference == crate::trim_like_javascript(&review.reference)
+    }
 }
 
 #[derive(Debug, Deserialize)]

@@ -471,6 +471,7 @@ impl Root {
                             .child(self.date_time_label(row.created_at)),
                     )
                     .child(div().text_sm().child(money(row.amount_cents)))
+                    .children(self.render_payout_reconciliation(desk, statement, row, cx))
             }))
             .child(self.commission_pager(
                 Section::Payouts,
@@ -563,6 +564,7 @@ mod tests {
                         "createdAt": "2026-11-21T08:00:00.000Z"
                     }],
                     "payouts": [{
+                        "id": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
                         "amountCents": 200,
                         "reference": "External payout #1",
                         "createdAt": "2026-11-21T09:00:00.000Z"
