@@ -2,31 +2,6 @@ use super::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CatalogPrice {
-    #[default]
-    Fixed,
-    From,
-    Variable,
-    Hidden,
-    Free,
-}
-
-impl CatalogPrice {
-    pub const ALL: [Self; 5] = [
-        Self::Fixed,
-        Self::From,
-        Self::Variable,
-        Self::Hidden,
-        Self::Free,
-    ];
-
-    pub fn requires_amount(self) -> bool {
-        !matches!(self, Self::Variable | Self::Free)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceDetails {
@@ -46,6 +21,23 @@ pub struct ServiceDetails {
     pub currency: String,
     pub online_booking: bool,
     pub active: bool,
+}
+
+impl ServiceDetails {
+    pub(crate) fn patch(
+        &self,
+        proposed: &Self,
+    ) -> serde_json::Result<serde_json::Map<String, serde_json::Value>> {
+        let original = serde_json::to_value(self)?;
+        let values = serde_json::to_value(proposed)?;
+        Ok(values
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(key, value)| original.get(*key) != Some(*value))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -110,17 +102,10 @@ impl HttpTransport {
         proposed: &ServiceDetails,
     ) -> Result<CatalogService, CatalogWriteError> {
         let id = parse_id(&before.id)?;
-        let values = serde_json::to_value(proposed)
+        let changes = before
+            .details
+            .patch(proposed)
             .map_err(|_| TransportError::BadRequest("Invalid service details".into()))?;
-        let original = serde_json::to_value(&before.details)
-            .map_err(|_| TransportError::BadRequest("Invalid reviewed service details".into()))?;
-        let changes: serde_json::Map<String, serde_json::Value> = values
-            .as_object()
-            .into_iter()
-            .flatten()
-            .filter(|(key, value)| original.get(*key) != Some(*value))
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect();
         if changes.is_empty() {
             return Ok(before.clone());
         }

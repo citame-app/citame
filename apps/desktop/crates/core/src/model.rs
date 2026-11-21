@@ -215,9 +215,48 @@ pub struct Client {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogPrice {
+    #[default]
+    Fixed,
+    From,
+    Variable,
+    Hidden,
+    Free,
+}
+
+impl CatalogPrice {
+    pub const ALL: [Self; 5] = [
+        Self::Fixed,
+        Self::From,
+        Self::Variable,
+        Self::Hidden,
+        Self::Free,
+    ];
+
+    pub fn requires_amount(self) -> bool {
+        !matches!(self, Self::Variable | Self::Free)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Service {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort_order: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub online_booking: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub booking_interval_minutes: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_instructions: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_type: Option<CatalogPrice>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog: Option<ServiceOption>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -355,6 +394,8 @@ pub struct PullResponse {
     pub calendar_scope: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub viewer_role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewer_edit_catalogue: Option<bool>,
 }
 
 /// A mutation exactly as sent in `POST /sync/push`.
@@ -445,6 +486,10 @@ impl OutboxEntry {
             && let Some(fields) = payload.as_object_mut()
         {
             fields.remove("_reviewedServices");
+        } else if self.kind == crate::store::SERVICE_EDIT_KIND
+            && let Some(fields) = payload.as_object_mut()
+        {
+            fields.remove("_reviewed");
         }
         WireMutation {
             mutation_id: self.mutation_id.clone(),

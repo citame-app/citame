@@ -68,6 +68,7 @@ impl Transport for Scripted {
             client_directory: None,
             calendar_scope: None,
             viewer_role: None,
+            viewer_edit_catalogue: None,
             head_seq: 5,
         })
     }

@@ -1,6 +1,6 @@
-use super::service_catalog::{CatalogPrice, ServiceDetails};
+use super::service_catalog::ServiceDetails;
 use crate::billing::parse_reviewed_amount;
-use crate::model::ProcessingTime;
+use crate::model::{CatalogPrice, ProcessingTime};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ServiceField {
@@ -156,16 +156,40 @@ impl CatalogForm {
         })
     }
 
-    /// Keep edits to money and processing together when reviewing a changed base.
-    pub fn review(mut self, before: &Self, latest: Self) -> Self {
+    fn changed_group(&self, before: &Self, fields: &[ServiceField]) -> bool {
+        fields
+            .iter()
+            .any(|field| self.text(*field) != before.text(*field))
+    }
+
+    fn pricing_edited(&self, before: &Self) -> bool {
+        self.price_type != before.price_type
+            || self.changed_group(before, &[ServiceField::Price, ServiceField::Currency])
+    }
+
+    fn processing_edited(&self, before: &Self) -> bool {
+        self.changed_group(
+            before,
+            &[
+                ServiceField::ProcessingStart,
+                ServiceField::ProcessingLength,
+            ],
+        )
+    }
+
+    pub fn has_overlapping_groups(&self, before: &Self, latest: &Self) -> bool {
+        (self.pricing_edited(before) && latest.pricing_edited(before))
+            || (self.processing_edited(before) && latest.processing_edited(before))
+    }
+
+    /// Keep edits to money and processing together. The editor explicitly chooses
+    /// whether overlapping groups are kept from the draft or from Cloud.
+    pub fn review(mut self, before: &Self, latest: Self, keep_draft_groups: bool) -> Self {
         use ServiceField::*;
-        let edited = |fields: &[ServiceField]| {
-            fields
-                .iter()
-                .any(|field| self.text(*field) != before.text(*field))
-        };
-        let price_edited = self.price_type != before.price_type || edited(&[Price, Currency]);
-        let processing_edited = edited(&[ProcessingStart, ProcessingLength]);
+        let price_edited =
+            self.pricing_edited(before) && (keep_draft_groups || !latest.pricing_edited(before));
+        let processing_edited = self.processing_edited(before)
+            && (keep_draft_groups || !latest.processing_edited(before));
         for field in ServiceField::ALL {
             let keep = match field {
                 Price | Currency => price_edited,

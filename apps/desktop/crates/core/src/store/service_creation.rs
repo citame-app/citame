@@ -29,8 +29,24 @@ impl Store {
     }
 
     pub fn forget_catalogue_access(&self) -> Result<()> {
-        self.conn
-            .execute("DELETE FROM meta WHERE key = ?1", [CATALOGUE_ACCESS])?;
+        Self::forget_catalogue_access_at(&self.conn)
+    }
+
+    pub(super) fn forget_catalogue_access_at(conn: &Connection) -> Result<()> {
+        conn.execute("DELETE FROM meta WHERE key = ?1", [CATALOGUE_ACCESS])?;
+        Ok(())
+    }
+
+    pub(crate) fn apply_catalogue_access(&mut self, generation: &str, allowed: bool) -> Result<()> {
+        let saved = self.get_meta(CATALOGUE_ACCESS)?;
+        let desired = allowed.then_some(generation);
+        if saved.as_deref() != desired {
+            if allowed {
+                self.remember_catalogue_access(generation)?;
+            } else {
+                self.forget_catalogue_access()?;
+            }
+        }
         Ok(())
     }
 

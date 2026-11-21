@@ -197,6 +197,74 @@ fn native_catalogue_creation_queues_offline_and_publishes_an_assigned_variant_on
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
+fn an_offline_catalogue_edit_keeps_the_cloud_version_until_the_operator_reviews_it() {
+    use sob_core::store::PendingServiceEdit;
+
+    let device = proxy_device();
+    let web = Device::sign_in();
+    let created = web.rest_post(
+        "/admin/services",
+        json!({
+            "name": "Synthetic catalogue conflict", "durationMinutes": 30, "priceCents": 2000,
+        }),
+    );
+    let id = created["id"].as_str().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("catalogue-replica.sqlite");
+    let mut store = Store::open(&path).unwrap();
+    sync::sync_cycle(&mut store, &*device.transport).unwrap();
+    let base = store.reviewed_catalogue().unwrap();
+    let row = base.services.iter().find(|row| row.id == id).unwrap();
+    let mut proposed = row.details.clone();
+    proposed.price_cents = 3200;
+    store
+        .queue_service_edit(&base.generation, row, &proposed, None)
+        .unwrap();
+    drop(store);
+
+    let prefix = std::env::var("SOB_TEST_REST_PREFIX").unwrap_or_default();
+    ureq::patch(&format!("{}{prefix}/admin/services/{id}", web.base))
+        .header("Cookie", &web.cookie)
+        .header("Origin", &web.base)
+        .content_type("application/json")
+        .send(json!({"description":"Cloud changed the description","priceCents":2900}).to_string())
+        .unwrap();
+    let mut reopened = Store::open(&path).unwrap();
+    assert_eq!(
+        reopened.pending_service_edits().unwrap()[0]
+            .proposal()
+            .unwrap(),
+        proposed
+    );
+    let first = sync::sync_cycle(&mut reopened, &*device.transport).unwrap();
+    assert_eq!(first.push.rejected, 1);
+    let rejected = reopened.conflicts().unwrap().pop().unwrap();
+    assert_eq!(rejected.reason, "conflict");
+    let saved: PendingServiceEdit = serde_json::from_value(rejected.payload).unwrap();
+    let current = reopened.reviewed_catalogue().unwrap();
+    let row = current.services.iter().find(|row| row.id == id).unwrap();
+    assert_eq!(row.details.price_cents, 2900);
+    let mut review = row.details.clone();
+    review.price_cents = saved.proposal().unwrap().price_cents;
+    reopened
+        .queue_service_edit(
+            &current.generation,
+            row,
+            &review,
+            Some(&rejected.mutation_id),
+        )
+        .unwrap();
+    let next = sync::sync_cycle(&mut reopened, &*device.transport).unwrap();
+    assert_eq!(next.push.applied, 1);
+    let approved = reopened.reviewed_catalogue().unwrap();
+    let row = approved.services.iter().find(|row| row.id == id).unwrap();
+    assert_eq!(row.details, review);
+    assert!(reopened.pending_service_edits().unwrap().is_empty());
+    assert!(reopened.conflicts().unwrap().is_empty());
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_catalogue_edits_reach_web_and_respect_newer_values_through_the_proxy() {
     let device = proxy_device();
     let mut web = Device::sign_in();

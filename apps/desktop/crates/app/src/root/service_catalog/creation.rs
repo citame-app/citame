@@ -525,7 +525,7 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         if !self.can_create_catalogue_item() {
-            return div().text_sm().child(self.t(Key::CatalogOffline));
+            return div().text_sm().child(self.t(Key::CatalogAccessLost));
         }
         if self
             .services

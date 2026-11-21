@@ -128,6 +128,7 @@ async function loadVisible(
       for (const r of rows) {
         put(r.id, {
           ...publicService(r, catalog.get(r.id)),
+          version: r.catalogVersion,
           active: r.active,
           updatedAt: r.updatedAt.toISOString(),
         });
@@ -326,6 +327,7 @@ export async function pullChanges(
     timeOffScope,
     clientDirectory: permissions.clients,
     viewerRole: principal.role === "owner" ? "owner" : "staff",
+    viewerEditCatalogue: permissions.editCatalog,
     calendarScope: permissions.allCalendars ? "all" : (principal.staffId ?? "none"),
   };
 }

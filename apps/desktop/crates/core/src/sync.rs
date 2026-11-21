@@ -9,6 +9,8 @@ use crate::model::*;
 use crate::store::{INITIAL_GENERATION, Store};
 
 pub const PUSH_BATCH: usize = 100;
+// Leave headroom below the server's default one-MiB request limit.
+const PUSH_JSON_BYTES: usize = 900 * 1024;
 pub const PULL_PAGE: u32 = 200;
 pub type CatalogColors = BTreeMap<String, String>;
 pub(crate) const CATALOG_COLORS_CACHED: &str = "catalog_colors_cached";
@@ -128,15 +130,42 @@ fn classify(e: TransportError) -> SyncError {
 pub fn push_outbox(store: &mut Store, transport: &dyn Transport) -> Result<PushReport, SyncError> {
     let mut report = PushReport::default();
     loop {
-        let (generation, batch) = store.push_snapshot(PUSH_BATCH)?;
+        let (generation, mut batch) = store.push_snapshot(PUSH_BATCH)?;
         if batch.is_empty() {
             return Ok(report);
         }
-        let request = PushRequest {
+        let mut request = PushRequest {
             device_id: store.device_id()?,
             generation: Some(generation.clone()),
-            mutations: batch.iter().map(OutboxEntry::to_wire).collect(),
+            mutations: Vec::with_capacity(batch.len()),
         };
+        let mut bytes = serde_json::to_vec(&request).map_err(CoreError::from)?.len();
+        for entry in &batch {
+            let wire = entry.to_wire();
+            bytes += serde_json::to_vec(&wire).map_err(CoreError::from)?.len() + 1;
+            if bytes > PUSH_JSON_BYTES {
+                break;
+            }
+            request.mutations.push(wire);
+        }
+        if request.mutations.is_empty() {
+            let entry = &batch[0];
+            let rejection = MutationResult::Rejected {
+                mutation_id: entry.mutation_id.clone(),
+                reason: "invalid".into(),
+                message: "This change exceeds the maximum sync request size".into(),
+                replayed: false,
+            };
+            store.apply_push_results_in(
+                std::slice::from_ref(entry),
+                &[rejection],
+                Some(&generation),
+                None,
+            )?;
+            report.rejected += 1;
+            continue;
+        }
+        batch.truncate(request.mutations.len());
         let response = match transport.push(&request) {
             Ok(r) => r,
             Err(e) => {
@@ -257,6 +286,9 @@ pub fn pull_all(store: &mut Store, transport: &dyn Transport) -> Result<PullRepo
             && store.get_meta("time_off_scope")?.as_deref() != Some(scope)
         {
             store.set_meta_in("time_off_scope", scope, &generation)?;
+        }
+        if let Some(allowed) = page.viewer_edit_catalogue {
+            store.apply_catalogue_access(&generation, allowed)?;
         }
         report.pages += 1;
         report.changes += applied;

@@ -84,6 +84,7 @@ fn empty_pull(since: i64, _limit: u32) -> Result<PullResponse, TransportError> {
         client_directory: None,
         calendar_scope: None,
         viewer_role: None,
+        viewer_edit_catalogue: None,
         head_seq: since,
     })
 }
@@ -100,6 +101,44 @@ fn enqueue_clients(s: &mut Store, n: usize) -> Vec<String> {
             .mutation_id
         })
         .collect()
+}
+
+#[test]
+fn pushes_split_at_the_wire_limit_and_keep_oversized_drafts_in_conflicts() {
+    let mut store = Store::open_in_memory().unwrap();
+    let mut ids = vec![];
+    for (i, size) in [500_000, 500_000, PUSH_JSON_BYTES, 20]
+        .into_iter()
+        .enumerate()
+    {
+        ids.push(
+            store
+                .enqueue(
+                    "client.create",
+                    &format!("c{i}"),
+                    json!({"id":format!("c{i}"),"name":"x".repeat(size)}),
+                )
+                .unwrap()
+                .mutation_id,
+        );
+    }
+    let peer = Fake::new(Box::new(applied_all), Box::new(empty_pull));
+    let report = push_outbox(&mut store, &peer).unwrap();
+    let requests = peer.pushes();
+    assert!(
+        requests
+            .iter()
+            .all(|request| serde_json::to_vec(request).unwrap().len() <= PUSH_JSON_BYTES)
+    );
+    let sent: Vec<_> = requests
+        .iter()
+        .flat_map(|request| &request.mutations)
+        .map(|mutation| &mutation.mutation_id)
+        .collect();
+    assert_eq!(sent, [&ids[0], &ids[1], &ids[3]]);
+    assert_eq!(report.rejected, 1);
+    assert!(store.conflict(&ids[2]).unwrap().is_some());
+    assert!(store.outbox(1).unwrap().is_empty());
 }
 
 #[test]
@@ -401,6 +440,7 @@ fn page(from: i64, n: i64, has_more: bool) -> PullResponse {
             client_directory: None,
             calendar_scope: None,
             viewer_role: None,
+            viewer_edit_catalogue: None,
         head_seq: 6,
     }
 }
@@ -456,6 +496,7 @@ fn client_visibility_change_purges_the_previous_replica_and_keeps_the_outbox() {
                 client_directory: Some(false),
                 calendar_scope: Some("staff".into()),
                 viewer_role: None,
+                viewer_edit_catalogue: None,
             })
         }),
     );
@@ -508,6 +549,7 @@ fn tombstones_in_a_pull_remove_local_rows() {
                 client_directory: None,
                 calendar_scope: None,
                 viewer_role: None,
+                viewer_edit_catalogue: None,
                 head_seq: 3,
             })
         }),
@@ -578,6 +620,7 @@ fn a_server_that_says_has_more_without_progress_cannot_spin_the_client() {
                 client_directory: None,
                 calendar_scope: None,
                 viewer_role: None,
+                viewer_edit_catalogue: None,
                 head_seq: 9,
             })
         }),
@@ -604,6 +647,7 @@ fn empty_pages_that_still_advance_the_cursor_are_followed() {
                 client_directory: None,
                 calendar_scope: None,
                 viewer_role: None,
+                viewer_edit_catalogue: None,
                 head_seq: 15,
             })
         }),
@@ -746,6 +790,7 @@ fn offline_create_then_reconnect_applies_and_clears_the_pending_flag() {
                 client_directory: None,
                 calendar_scope: None,
                 viewer_role: None,
+                viewer_edit_catalogue: None,
                 head_seq: 4,
             })
         }),

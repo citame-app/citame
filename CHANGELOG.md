@@ -13,6 +13,7 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 - The Desktop management menu opens permitted Cloud areas in the browser with the linked account.
 - Desktop edits existing service prices, timing, presentation and booking availability with the same catalogue permissions as Cloud. A stale draft must be reviewed before publishing.
 - Desktop can create services, variants and add-ons with professional assignments. New services use the persistent synchronization queue and are bookable once acknowledged by the server.
+- Desktop queues edits to existing service details offline. Cloud checks the version before applying the edit, and rejected drafts can be compared and resubmitted from Sync conflicts.
 
 - Weekly team shifts in the web admin with dated overrides, absence intervals and links to individual schedules. [Scheduling guide](docs/date-shifts.md).
 - Native weekly team shifts read the offline replica, mark pending blocks and open the selected professional's calendar. Dates and names remain visible while scrolling, and a date field jumps directly to a week.

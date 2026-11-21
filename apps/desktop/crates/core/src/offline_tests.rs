@@ -51,6 +51,114 @@ fn up(seq: i64, entity: &str, id: &str, data: serde_json::Value) -> RawChange {
 const T0: &str = "2026-03-01T10:00:00.000Z";
 
 #[test]
+fn a_reviewed_offline_service_edit_reopens_without_mutating_the_booking_replica() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("reviewed-catalogue.sqlite");
+    let mut store = Store::open(&path).unwrap();
+    seed(&mut store);
+    let wire_row = |price_cents, version| {
+        json!({
+            "id": CUT, "name": "Haircut", "description": null, "category": "Hair",
+            "priceCents": price_cents, "currency": "ARS", "sortOrder": 0, "onlineBooking": true,
+            "durationMinutes": 45, "bufferMinutes": 15, "active": true,
+            "updatedAt": T0, "version": version, "quoteHash": "a".repeat(64),
+        })
+    };
+    store
+        .apply_page(&[up(10, "service", CUT, wire_row(1200, 1))], 10)
+        .unwrap();
+    let review = store.reviewed_catalogue().unwrap();
+    let original = review.services.iter().find(|row| row.id == CUT).unwrap();
+    let mut proposed = original.details.clone();
+    proposed.name = "🔔".repeat(101);
+    assert!(
+        store
+            .queue_service_edit(&review.generation, original, &proposed, None)
+            .is_err()
+    );
+    assert!(store.outbox(1).unwrap().is_empty());
+    proposed.name = original.details.name.clone();
+    proposed.price_cents = 2000;
+    assert!(
+        store
+            .queue_service_edit(&review.generation, original, &proposed, None)
+            .unwrap()
+    );
+    assert!(
+        store
+            .queue_service_edit(&review.generation, original, &proposed, None)
+            .is_err()
+    );
+    drop(store);
+    let mut reopened = Store::open(&path).unwrap();
+    let pending = reopened.pending_service_edits().unwrap();
+    assert_eq!(pending[0].proposal().unwrap(), proposed);
+    assert_eq!(
+        reopened
+            .services()
+            .unwrap()
+            .iter()
+            .find(|row| row.id == CUT)
+            .unwrap()
+            .price_cents,
+        1200
+    );
+    let booking = new_appt("2026-03-10T13:00:00Z");
+    assert!(matches!(
+        reviewed_service_terms(&reopened, &booking),
+        Err(crate::error::CoreError::CatalogueEditPending)
+    ));
+    let mut unaffected_booking = booking;
+    unaffected_booking.service_ids = vec![DRY.into()];
+    assert!(reviewed_service_terms(&reopened, &unaffected_booking).is_ok());
+    let entry = reopened.outbox(1).unwrap().pop().unwrap();
+    assert_eq!(
+        entry.to_wire().payload,
+        json!({"id":CUT,"version":1,"service":{"priceCents":2000}})
+    );
+    reopened
+        .apply_push_results(
+            std::slice::from_ref(&entry),
+            &[MutationResult::Rejected {
+                mutation_id: entry.mutation_id.clone(),
+                reason: "conflict".into(),
+                message: "Service changed".into(),
+                replayed: false,
+            }],
+        )
+        .unwrap();
+    reopened
+        .apply_page(&[up(11, "service", CUT, wire_row(1800, 2))], 11)
+        .unwrap();
+    assert!(matches!(
+        reopened.queue_service_edit(
+            &review.generation,
+            original,
+            &proposed,
+            Some(&entry.mutation_id)
+        ),
+        Err(crate::error::CoreError::CatalogueVersionChanged)
+    ));
+    let current = reopened.reviewed_catalogue().unwrap();
+    let row = current.services.iter().find(|row| row.id == CUT).unwrap();
+    assert!(
+        reopened
+            .queue_service_edit(
+                &current.generation,
+                row,
+                &proposed,
+                Some(&entry.mutation_id)
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        reopened.outbox(1).unwrap()[0].to_wire().payload["version"],
+        2
+    );
+    assert!(reopened.conflicts().unwrap().is_empty());
+}
+
+#[test]
 fn a_catalogue_creation_reopens_with_its_exact_request_and_is_not_bookable_before_sync() {
     use crate::http::ServiceCreation;
     let directory = tempfile::tempdir().unwrap();

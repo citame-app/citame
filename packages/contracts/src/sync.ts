@@ -198,6 +198,16 @@ const serviceCreate = z.object({
   payload: z.strictObject({ id: idSchema, service: createServiceRequestSchema }),
 });
 
+const serviceConfigure = z.object({
+  ...envelope,
+  kind: z.literal("service.configure"),
+  payload: z.strictObject({
+    id: idSchema,
+    version: z.number().int().positive(),
+    service: updateServiceRequestSchema,
+  }),
+});
+
 const serviceStaffReplace = z.object({
   ...envelope,
   kind: z.literal("service.staff_replace"),
@@ -235,6 +245,7 @@ export const syncMutationSchema = z.discriminatedUnion("kind", [
   timeOffUpdate,
   timeOffDelete,
   serviceCreate,
+  serviceConfigure,
   serviceUpdate,
   serviceStaffReplace,
   staffUpdate,
@@ -349,6 +360,7 @@ export type SyncClient = z.infer<typeof syncClientSchema>;
 
 export const syncServiceSchema = serviceSchema.safeExtend({
   active: z.boolean(),
+  version: z.number().int().positive().optional(),
   updatedAt: instantSchema,
 });
 export type SyncService = z.infer<typeof syncServiceSchema>;
@@ -475,6 +487,7 @@ export const syncPullResponseSchema = z.object({
   timeOffScope: z.union([z.literal("none"), z.literal("all"), idSchema]).optional(),
   clientDirectory: z.boolean().optional(),
   viewerRole: z.enum(["owner", "staff"]).optional(),
+  viewerEditCatalogue: z.boolean().optional(),
   calendarScope: z.union([z.literal("none"), z.literal("all"), idSchema]).optional(),
 });
 export type SyncPullResponse = z.infer<typeof syncPullResponseSchema>;

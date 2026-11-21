@@ -1092,6 +1092,7 @@ impl Root {
                 CoreError::PendingClient => Key::BookingIntakeClientSync,
                 CoreError::CalendarGenerationChanged => Key::BookingIntakeRestore,
                 CoreError::IncompatibleServices => Key::ErrIncompatibleServices,
+                CoreError::CatalogueEditPending => Key::ErrCatalogueEditPending,
                 _ => Key::ErrGeneric,
             });
         }
@@ -3285,6 +3286,7 @@ impl Root {
                 "settings.update" => Key::SalonConfiguration,
                 "service.staff_replace" => Key::ServiceAssignments,
                 sob_core::store::SERVICE_CREATION_KIND => Key::CatalogNew,
+                sob_core::store::SERVICE_EDIT_KIND => Key::CatalogTitle,
                 _ => Key::ConflictOther,
             });
             let when = c
@@ -3294,9 +3296,13 @@ impl Root {
                 .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
                 .map(|d| self.date_time_label(d.with_timezone(&Utc)))
                 .unwrap_or_default();
-            let description = if c.kind == sob_core::store::SERVICE_CREATION_KIND {
+            let description = if matches!(
+                c.kind.as_str(),
+                sob_core::store::SERVICE_CREATION_KIND | sob_core::store::SERVICE_EDIT_KIND
+            ) {
                 c.payload
                     .pointer("/service/name")
+                    .or_else(|| c.payload.pointer("/_reviewed/name"))
                     .and_then(|value| value.as_str())
                     .unwrap_or_default()
                     .to_owned()
@@ -3414,6 +3420,21 @@ impl Root {
                                 }),
                             ))
                         })
+                        .when(
+                            c.kind == sob_core::store::SERVICE_EDIT_KIND
+                                && self.can_create_catalogue_item(),
+                            |row| {
+                                let id = c.mutation_id.clone();
+                                row.child(self.button(
+                                    ("c-service-edit", i),
+                                    self.t(Key::CatalogReview),
+                                    Kind::Primary,
+                                    cx.listener(move |root, _, _, cx| {
+                                        root.open_catalog_edit_conflict(&id, cx)
+                                    }),
+                                ))
+                            },
+                        )
                         .child(self.button(
                             ("c-dismiss", i),
                             self.t(Key::ConflictDismiss),

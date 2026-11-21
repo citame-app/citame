@@ -14,6 +14,10 @@ pub enum CoreError {
     Invalid(String),
     #[error("the chosen services cannot be booked together")]
     IncompatibleServices,
+    #[error("the reviewed service version has changed")]
+    CatalogueVersionChanged,
+    #[error("the selected service has booking details waiting to sync")]
+    CatalogueEditPending,
     #[error("this time overlaps a schedule block")]
     TimeOffOverlap,
     #[error("this time exceeds the professional's capacity")]

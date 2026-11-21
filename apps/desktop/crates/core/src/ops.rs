@@ -340,6 +340,13 @@ pub(crate) fn reviewed_service_terms(
     }
     let catalog = store.services()?;
     validate_catalogue_selection(&catalog, new.service_ids.iter().map(String::as_str))?;
+    if store
+        .pending_service_edits()?
+        .iter()
+        .any(|edit| edit.affects_booking() && new.service_ids.contains(&edit.id))
+    {
+        return Err(CoreError::CatalogueEditPending);
+    }
     if !store.staff()?.iter().any(|s| s.id == new.staff_id) {
         return Err(CoreError::Invalid(format!(
             "unknown staff member {}",

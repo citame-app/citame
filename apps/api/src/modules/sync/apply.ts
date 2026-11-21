@@ -220,6 +220,12 @@ export async function applyMutation(
       await createService(db, mutation.payload.service, actor, mutation.payload.id);
       return;
     }
+    case "service.configure": {
+      authorizeServiceAdmin(principal);
+      const { id, version, service: patch } = mutation.payload;
+      await updateService(db, id, patch, actor, version);
+      return;
+    }
     case "service.update": {
       authorizeServiceAdmin(principal);
       const { id, ...changes } = mutation.payload;

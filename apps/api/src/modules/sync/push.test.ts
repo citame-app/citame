@@ -108,6 +108,47 @@ test("native service creation replays once and keeps its professional assignment
   ]);
 });
 
+test("a reviewed native service edit cannot overwrite a newer Cloud version", async () => {
+  const path = `/admin/services/${f.haircutId}`;
+  expect((await pull(t, owner)).viewerEditCatalogue).toBe(true);
+  expect((await pull(t, ana)).viewerEditCatalogue).toBe(false);
+  await t.db
+    .update(staffProfile)
+    .set({ accessPreset: "manager" })
+    .where(eq(staffProfile.id, f.anaId));
+  expect((await pull(t, ana)).viewerEditCatalogue).toBe(true);
+  const snapshot = (await pullAll(t, owner)).changes.find(
+    (change) => change.entity === "service" && change.id === f.haircutId && change.op === "upsert",
+  );
+  expect(snapshot?.data).toMatchObject({ version: 1 });
+  const edit = {
+    mutationId: mid(),
+    createdAt: new Date().toISOString(),
+    kind: "service.configure",
+    payload: { id: f.haircutId, version: 1, service: { priceCents: 4800 } },
+  };
+  const browser = await json(t.app, path, "PATCH", { priceCents: 4900 }, owner.cookie);
+  expect(browser.status).toBe(200);
+  expect((await push(t, owner, [edit])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "conflict",
+  });
+  const revised = {
+    ...edit,
+    mutationId: mid(),
+    payload: { ...edit.payload, version: 2 },
+  };
+  expect((await push(t, ana, [revised])).body.results[0]).toMatchObject({
+    status: "applied",
+  });
+  expect((await push(t, ana, [revised])).body.results[0]).toMatchObject({
+    status: "applied",
+    replayed: true,
+  });
+  const [row] = await t.db.select().from(service).where(eq(service.id, f.haircutId));
+  expect(row).toMatchObject({ catalogVersion: 3, priceCents: 4800 });
+});
+
 describe("authorization and envelope", () => {
   test("a restored generation rejects legacy and stale batches before writing or recording them", async () => {
     const restored = await setupApiTest({

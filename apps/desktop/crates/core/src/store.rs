@@ -1473,7 +1473,7 @@ impl Store {
                     } else if let Some(through) = response_head
                         && matches!(
                             s.kind.as_str(),
-                            service_assignments::KIND | SERVICE_CREATION_KIND
+                            service_assignments::KIND | SERVICE_CREATION_KIND | SERVICE_EDIT_KIND
                         )
                     {
                         Self::set_meta_at(
@@ -1492,6 +1492,14 @@ impl Store {
                 MutationResult::Rejected {
                     reason, message, ..
                 } => {
+                    if reason == "forbidden"
+                        && matches!(
+                            s.kind.as_str(),
+                            SERVICE_EDIT_KIND | SERVICE_CREATION_KIND | service_assignments::KIND
+                        )
+                    {
+                        Self::forget_catalogue_access_at(&tx)?;
+                    }
                     tx.execute(
                         "DELETE FROM outbox WHERE mutation_id = ?1",
                         params![s.mutation_id],
@@ -1588,7 +1596,9 @@ impl Store {
 mod service_assignments;
 pub use service_assignments::{AssignmentSnapshot, AssignmentWork, ServiceAssignment};
 mod service_creation;
+mod service_edit;
 pub use service_creation::SERVICE_CREATION_KIND;
+pub use service_edit::{PendingServiceEdit, SERVICE_EDIT_KIND};
 
 #[cfg(test)]
 mod tests;
