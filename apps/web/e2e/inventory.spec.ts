@@ -645,7 +645,7 @@ test("a live catalogue refresh does not interrupt saving a brand", async ({ page
       await releaseRefresh.promise;
       await route.continue();
     });
-    const concurrent = await owner.put(
+    const otherBrandResponse = await owner.put(
       `/api/admin/inventory/classifications/${crypto.randomUUID()}`,
       {
         data: {
@@ -659,7 +659,7 @@ test("a live catalogue refresh does not interrupt saving a brand", async ({ page
         },
       },
     );
-    expect(concurrent.status(), await concurrent.text()).toBe(200);
+    expect(otherBrandResponse.status(), await otherBrandResponse.text()).toBe(200);
     await refreshStarted.promise;
     const submitted = page.waitForResponse(
       (response) =>
@@ -671,6 +671,61 @@ test("a live catalogue refresh does not interrupt saving a brand", async ({ page
     expect((await submitted).status()).toBe(200);
     releaseRefresh.resolve();
     await expect(page.getByText(name, { exact: true })).toBeVisible();
+  } finally {
+    releaseRefresh.resolve();
+    await owner.dispose();
+  }
+});
+
+test("a rejected classification draft requires review even while the catalogue refreshes", async ({
+  page,
+}) => {
+  const owner = await asOwner();
+  const pattern = "**/api/admin/inventory/classifications";
+  const refreshStarted = Promise.withResolvers<void>();
+  const releaseRefresh = Promise.withResolvers<void>();
+  try {
+    const catalogue = await owner.get("/api/admin/inventory/classifications");
+    expect(catalogue.status()).toBe(200);
+    const { generation } = await catalogue.json();
+    const id = crypto.randomUUID();
+    const url = `/api/admin/inventory/classifications/${id}`;
+    const name = `Brand ${id}`;
+    const fields = { name, kind: "brand", parentId: null, active: true, position: 0, generation };
+    const created = await owner.put(url, { data: { ...fields, version: 0 } });
+    expect(created.status(), await created.text()).toBe(200);
+    const { version } = await created.json();
+    await signInAs(
+      page,
+      OWNER_EMAIL,
+      "/admin/commerce?view=inventory&inventoryTab=classifications",
+    );
+    await page.getByRole("button", { name: `Edit classification · ${name}`, exact: true }).click();
+    const editor = page.getByRole("form", { name: "Edit classification" });
+    const editedName = `${name} edited`;
+    await editor.getByLabel("Name", { exact: true }).fill(editedName);
+    await page.route(pattern, async (route) => {
+      refreshStarted.resolve();
+      await releaseRefresh.promise;
+      await route.continue();
+    });
+    const updated = await owner.put(url, { data: { ...fields, position: 42, version } });
+    expect(updated.status(), await updated.text()).toBe(200);
+    await refreshStarted.promise;
+    const submit = editor.getByRole("button", { name: "Save classification", exact: true });
+    const [rejection] = await Promise.all([
+      page.waitForResponse((response) => response.url().endsWith(url)),
+      submit.click({ timeout: 5_000 }),
+    ]);
+    expect(rejection.status()).toBe(409);
+    await expect(editor.getByRole("status")).toBeVisible();
+    await expect(submit).toBeDisabled();
+    releaseRefresh.resolve();
+    await editor.getByRole("button", { name: "Use current version and keep my changes" }).click();
+    await expect(editor.getByLabel("Name", { exact: true })).toHaveValue(editedName);
+    await expect(editor.getByRole("spinbutton")).toHaveValue("42");
+    await submit.click();
+    await expect(page.getByText(editedName, { exact: true })).toBeVisible();
   } finally {
     releaseRefresh.resolve();
     await owner.dispose();

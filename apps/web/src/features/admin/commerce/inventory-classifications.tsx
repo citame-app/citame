@@ -6,6 +6,7 @@ import { TextField } from "~/components/ui/field";
 import { SelectField } from "~/components/ui/select-field";
 import { ErrorState, Skeleton, useOnline } from "~/components/ui/states";
 import { useI18n } from "~/i18n/react";
+import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { useInventoryLiveRevision } from "../calendar/live-provider";
 import { UnsavedGuard } from "../unsaved-guard";
@@ -21,6 +22,13 @@ export function useInventoryClassifications(enabled = true) {
 }
 
 type Draft = InventoryClassification & { generation: string };
+
+function isClassificationConflict(error: unknown) {
+  return (
+    error instanceof ApiError &&
+    (error.code === "version_conflict" || error.code === "sync_generation_changed")
+  );
+}
 
 export function InventoryClassifications({
   canWrite,
@@ -52,6 +60,9 @@ export function InventoryClassifications({
   }, [editing, onEditingChange]);
   const save = useMutation({
     mutationFn: ({ id, ...value }: Draft) => api().inventory.saveClassification(id, value),
+    onError: (error) => {
+      if (isClassificationConflict(error)) void catalogue.refetch();
+    },
     onSuccess: async () => {
       await query.invalidateQueries({ queryKey: ["inventory"] });
       setDraft(undefined);
@@ -60,7 +71,8 @@ export function InventoryClassifications({
   });
   // Background refreshes retain the last reviewed data. The API checks the draft's
   // generation and version before writing, even if a newer catalogue is still loading.
-  const canSave = canWrite && online && !stale && !save.isPending;
+  const conflict = isClassificationConflict(save.error);
+  const canSave = canWrite && online && !stale && !conflict && !save.isPending;
   function edit(entry: InventoryClassification) {
     if (!review || !canWrite) return;
     save.reset();
@@ -157,10 +169,10 @@ export function InventoryClassifications({
           />
           {t("inventory.active")}
         </label>
-        {stale && review && (
+        {(stale || conflict) && review && (
           <div className="space-y-2 sm:col-span-2" role="status">
             <p>{t("inventory.classification.changed")}</p>
-            {current && (
+            {stale && current && (
               <p>
                 {current.name} ·{" "}
                 {t(current.active ? "inventory.active" : "inventory.classification.archived")} ·{" "}
@@ -169,16 +181,27 @@ export function InventoryClassifications({
                   t("inventory.classification.noParent")}
               </p>
             )}
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => keepReviewedChanges(draft, review.generation)}
-            >
-              {t("inventory.classification.review")}
-            </Button>
+            {stale ? (
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => keepReviewedChanges(draft, review.generation)}
+              >
+                {t("inventory.classification.review")}
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                variant="secondary"
+                loading={catalogue.isFetching}
+                onClick={() => void catalogue.refetch()}
+              >
+                {t("common.retry")}
+              </Button>
+            )}
           </div>
         )}
-        {save.isError && (
+        {save.isError && !conflict && (
           <div className="sm:col-span-2">
             <ErrorState error={save.error} />
           </div>

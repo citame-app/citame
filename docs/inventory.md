@@ -4,6 +4,8 @@ Open **Sales & register → Inventory**. The owner and managers can create/edit/
 
 Catalog prices are EUR amounts including the configured tax percentage. An empty unit cost means unknown, not zero. SKU values are normalized to uppercase and unique; optional barcodes are also unique. Archived products remain in historical receipts and movements.
 
+In the web catalogue, you can save a category or brand while the list refreshes in the background. If someone changed that entry or the database was restored, Citame keeps your edits and blocks another save until you review the current version.
+
 **Content per pack** is optional and records an amount and unit such as 150 ml. Stock movements and sale quantities still use the selected stock unit. Product details show the latest saved content, and the product CSV exports it in `package_content_quantity` and `package_content_unit`. Clearing both fields removes the content without changing stock or prior sales.
 
 **On hand** means physical units, **reserved** means units held by open sales, and **available** is their difference. Low-stock filtering uses available units. Physical counts replace the on-hand total; they cannot reduce it below reservations. All stock changes require a reason, optimistic version and idempotency key. If a product changes during editing, reload it before submitting a new adjustment.
