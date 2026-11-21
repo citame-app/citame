@@ -262,15 +262,15 @@ impl Root {
             return;
         };
         if use_search {
-            desk.applied_search = desk.search.read(cx).text().trim().to_owned();
+            let search = desk.search.read(cx).text().trim();
+            if search.encode_utf16().count() > 100 {
+                desk.error = Some(Key::PromoInvalid);
+                cx.notify();
+                return;
+            }
+            desk.applied_search = search.to_owned();
         }
         let search = desk.applied_search.clone();
-        if search.encode_utf16().count() > 100 {
-            desk.error = Some(Key::PromoInvalid);
-            desk.refresh_after = Instant::now() + Duration::from_secs(10);
-            cx.notify();
-            return;
-        }
         desk.loading = true;
         if desk.editor.is_none() {
             desk.error = None;
