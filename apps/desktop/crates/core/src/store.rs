@@ -958,6 +958,7 @@ impl Store {
                         | crate::intake::FORM_LIVE_TOPIC
                         | crate::intake::RECORD_LIVE_TOPIC
                         | crate::booking_policy::LIVE_TOPIC
+                        | crate::service_resources::LIVE_TOPIC
                 ) {
                     tx.execute(
                         "INSERT INTO meta (key, value) VALUES (?1, ?2)
@@ -1032,7 +1033,7 @@ impl Store {
             tx.execute(&format!("DELETE FROM {t}"), [])?;
         }
         tx.execute(
-            "DELETE FROM meta WHERE key IN ('cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','desk_waitlist',?1,?2,?3,?4) OR key LIKE 'live_view:%'",
+            "DELETE FROM meta WHERE key IN ('cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','desk_waitlist',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
             [CATALOG_COLORS_CACHED, SALON_CONFIGURATION_CACHE, SALON_CONFIGURATION_ACK, SALON_CONFIGURATION_UNAVAILABLE],
         )?;
         tx.execute("DELETE FROM local_booking_confirmation", [])?;
@@ -1450,6 +1451,9 @@ impl Store {
         for (s, r) in sent.iter().zip(results) {
             match r {
                 MutationResult::Applied { applied_seq, .. } => {
+                    if s.kind == crate::service_resources::MUTATION_KIND {
+                        Self::acknowledge_service_resources_at(&tx, s)?;
+                    }
                     if s.kind == "appointment.create" {
                         tx.execute(
                             "INSERT OR REPLACE INTO local_booking_confirmation (appointment_id,applied_seq)
@@ -1473,7 +1477,10 @@ impl Store {
                     } else if let Some(through) = response_head
                         && matches!(
                             s.kind.as_str(),
-                            service_assignments::KIND | SERVICE_CREATION_KIND | SERVICE_EDIT_KIND
+                            service_assignments::KIND
+                                | SERVICE_CREATION_KIND
+                                | SERVICE_EDIT_KIND
+                                | crate::service_resources::MUTATION_KIND
                         )
                     {
                         Self::set_meta_at(
@@ -1495,7 +1502,10 @@ impl Store {
                     if reason == "forbidden"
                         && matches!(
                             s.kind.as_str(),
-                            SERVICE_EDIT_KIND | SERVICE_CREATION_KIND | service_assignments::KIND
+                            SERVICE_EDIT_KIND
+                                | SERVICE_CREATION_KIND
+                                | service_assignments::KIND
+                                | crate::service_resources::MUTATION_KIND
                         )
                     {
                         Self::forget_catalogue_access_at(&tx)?;
@@ -1595,6 +1605,7 @@ impl Store {
 
 mod service_assignments;
 pub use service_assignments::{AssignmentSnapshot, AssignmentWork, ServiceAssignment};
+mod resource_requirements;
 mod service_creation;
 mod service_edit;
 pub use service_creation::SERVICE_CREATION_KIND;

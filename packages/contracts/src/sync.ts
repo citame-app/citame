@@ -3,6 +3,7 @@ import { appointmentSchema, createAppointmentBaseSchema } from "./appointments";
 import { calendarAppointmentSchema } from "./calendar";
 import { idSchema, instantSchema, LIMITS, localDateSchema, syncGenerationSchema } from "./common";
 import { dateShiftRangesSchema } from "./date-shifts";
+import { serviceResourceInputSchema } from "./resources";
 import {
   reviewedSalonSettingsRequestSchema,
   reviewedSalonSettingsSchema,
@@ -232,6 +233,15 @@ const serviceStaffReplace = z.object({
     .strict(),
 });
 
+const serviceResources = z.object({
+  ...envelope,
+  kind: z.literal("service.resources"),
+  payload: serviceResourceInputSchema.extend({
+    id: idSchema,
+    selectionMode: serviceResourceInputSchema.shape.selectionMode.unwrap(),
+  }),
+});
+
 const staffUpdate = z.object({
   ...envelope,
   kind: z.literal("staff.update"),
@@ -264,6 +274,7 @@ export const syncMutationSchema = z.discriminatedUnion("kind", [
   serviceConfigure,
   serviceUpdate,
   serviceStaffReplace,
+  serviceResources,
   staffUpdate,
   settingsUpdate,
 ]);
@@ -359,6 +370,7 @@ export const syncPullQuerySchema = z.object({
   reviewRequests: z.literal("1").optional(),
   intakeViews: z.literal("1").optional(),
   bookingPolicy: z.literal("1").optional(),
+  resourceCatalogue: z.literal("1").optional(),
 });
 export type SyncPullQuery = z.infer<typeof syncPullQuerySchema>;
 
@@ -483,6 +495,7 @@ export const syncLiveViewSchema = z.enum([
   "intake_forms",
   "intake_records",
   "booking_policy",
+  "resource_catalogue",
 ]);
 export type SyncLiveView = z.infer<typeof syncLiveViewSchema>;
 

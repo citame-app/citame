@@ -114,11 +114,15 @@ test("the desktop proxy permits only reviewed catalogue operations and enforces 
   expect((await write(`/admin/services/${row.id}`, "PATCH", owner.access)).status).toBe(403);
   const reviewed = `/admin/services/${row.id}/reviewed`;
   expect((await write(reviewed, "PUT", manager.access)).status).toBe(200);
+  const resources = `/admin/services/${row.id}/resources/reviewed`;
+  expect((await request(resources, manager.access)).status).toBe(200);
+  expect((await write(resources, "PUT", owner.access)).status).toBe(403);
   await t.db
     .update(staffProfile)
     .set({ accessPreset: "professional" })
     .where(eq(staffProfile.id, manager.who.staffId));
   expect((await write(reviewed, "PUT", manager.access)).status).toBe(403);
+  expect((await request(resources, manager.access)).status).toBe(403);
 });
 
 test("desktop staff provisioning is owner-only and preserves the existing profile", async () => {

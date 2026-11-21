@@ -29,6 +29,7 @@ import {
   updateAppointment,
 } from "../appointments/service";
 import { updateClient } from "../clients/admin";
+import { setServiceResources } from "../resources/catalog";
 import {
   createService,
   setServiceStaff,
@@ -248,6 +249,11 @@ export async function applyMutation(
       authorizeServiceAdmin(principal);
       const { id, reviewedStaffIds, staffIds } = mutation.payload;
       await setServiceStaff(db, id, { staffIds }, actor, reviewedStaffIds);
+      return;
+    }
+    case "service.resources": {
+      const { id, ...input } = mutation.payload;
+      await setServiceResources(db, id, input, principal, now);
       return;
     }
     case "staff.update": {

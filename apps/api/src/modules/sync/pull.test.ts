@@ -391,6 +391,7 @@ describe("snapshot (since=0)", () => {
       clientDirectory: true,
       calendarScope: "all",
       viewerRole: "owner",
+      viewerEditCatalogue: true,
     });
   });
 

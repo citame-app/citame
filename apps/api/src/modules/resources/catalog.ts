@@ -34,7 +34,7 @@ function mapError(error: unknown): never {
     throw new DomainError("invalid_state", "An active resource with that name already exists");
   throw error;
 }
-export async function listResources(db: Database, p: Principal) {
+export async function listResources(db: Connection, p: Principal) {
   requirePermission(p, "editCatalog");
   const rows = await db
     .select()
@@ -201,8 +201,28 @@ export async function getServiceResources(db: Database, id: string, p: Principal
     { isolationLevel: "repeatable read", accessMode: "read only" },
   );
 }
-export async function setServiceResources(
+export async function getReviewedServiceResources(
   db: Database,
+  id: string,
+  p: Principal,
+  generation: string,
+) {
+  requirePermission(p, "editCatalog");
+  return db.transaction(
+    async (tx) => {
+      const row = await serviceRow(tx, id);
+      const { resources } = await listResources(tx, p);
+      return {
+        generation,
+        resources,
+        service: await requirementsView(tx, id, row.resourceVersion),
+      };
+    },
+    { isolationLevel: "repeatable read", accessMode: "read only" },
+  );
+}
+export async function setServiceResources(
+  db: Connection,
   id: string,
   input: ServiceResourceInput,
   p: Principal,
@@ -228,6 +248,8 @@ export async function setServiceResources(
     for (const requirement of input.requirements) {
       const pool = pools.find((r) => r.id === requirement.resourceId);
       if (!pool) throw new DomainError("not_found", "Required resource not found");
+      if (!pool.active)
+        throw new DomainError("validation_error", "Choose active resources for this service");
       if (alternative && requirement.quantity !== 1)
         throw new DomainError("validation_error", "Each alternative must represent one resource");
       if (requirement.quantity > pool.capacity)

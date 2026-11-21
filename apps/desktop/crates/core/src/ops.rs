@@ -347,6 +347,11 @@ pub(crate) fn reviewed_service_terms(
     {
         return Err(CoreError::CatalogueEditPending);
     }
+    for id in &new.service_ids {
+        if store.pending_service_resources(id)?.is_some() {
+            return Err(CoreError::CatalogueEditPending);
+        }
+    }
     if !store.staff()?.iter().any(|s| s.id == new.staff_id) {
         return Err(CoreError::Invalid(format!(
             "unknown staff member {}",

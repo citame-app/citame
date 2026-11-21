@@ -208,6 +208,14 @@ impl Root {
                         Kind::Ghost,
                         cx.listener(|root, _, _, cx| root.open_service_catalog(cx)),
                     ))
+                    .when(self.can_create_catalogue_item(), |view| {
+                        view.child(self.button(
+                            "native-service-resources",
+                            self.t(Key::ResourceRequirements),
+                            Kind::Ghost,
+                            cx.listener(|root, _, _, cx| root.open_resource_requirements(cx)),
+                        ))
+                    })
                 },
             )
             .when(self.can_configure_salon(), |view| {

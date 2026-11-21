@@ -18,7 +18,11 @@ import { authorizeServiceAdmin } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
-import { getServiceResources, setServiceResources } from "../resources/catalog";
+import {
+  getReviewedServiceResources,
+  getServiceResources,
+  setServiceResources,
+} from "../resources/catalog";
 import {
   createService,
   deactivateService,
@@ -100,6 +104,16 @@ export function serviceAdminRoutes({ db, config, now = () => new Date() }: AppDe
           db,
           parseOrThrow(idSchema, c.req.param("id")),
           c.get("principal"),
+        ),
+      ),
+    )
+    .get("/:id/resources/reviewed", ownerOnly, async (c) =>
+      c.json(
+        await getReviewedServiceResources(
+          db,
+          parseOrThrow(idSchema, c.req.param("id")),
+          c.get("principal"),
+          config.syncReplicaGeneration,
         ),
       ),
     )

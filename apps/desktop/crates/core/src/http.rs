@@ -54,6 +54,7 @@ pub struct HttpTransport {
 
 mod service_catalog;
 mod service_catalog_form;
+mod service_resources;
 mod staff_access;
 mod staff_portraits;
 pub use crate::model::{CatalogPrice, ServiceOption};
@@ -1863,7 +1864,7 @@ impl HttpTransport {
         let resp = self.get(
             &self.agent,
             &format!(
-                "/sync/pull?since={since}&limit={limit}{catalog}&reviewRequests=1&intakeViews=1&bookingPolicy=1"
+                "/sync/pull?since={since}&limit={limit}{catalog}&reviewRequests=1&intakeViews=1&bookingPolicy=1&resourceCatalogue=1"
             ),
             None,
         )?;

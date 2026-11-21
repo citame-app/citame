@@ -207,7 +207,14 @@ export function createEndpoints(client: ApiClient) {
     sync: {
       pull: (since: number, signal?: AbortSignal) =>
         client.get("/sync/pull", syncPullResponseSchema, {
-          query: { since, limit: 200, reviewRequests: "1", intakeViews: "1", bookingPolicy: "1" },
+          query: {
+            since,
+            limit: 200,
+            reviewRequests: "1",
+            intakeViews: "1",
+            bookingPolicy: "1",
+            resourceCatalogue: "1",
+          },
           signal,
           cache: "no-store",
         }),

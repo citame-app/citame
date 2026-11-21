@@ -499,6 +499,10 @@ impl OutboxEntry {
         {
             fields.remove("_reviewed");
             fields.remove("_reviewedCatalog");
+        } else if self.kind == crate::service_resources::MUTATION_KIND
+            && let Some(fields) = payload.as_object_mut()
+        {
+            fields.remove("_reviewed");
         }
         WireMutation {
             mutation_id: self.mutation_id.clone(),

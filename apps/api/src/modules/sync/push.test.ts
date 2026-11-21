@@ -294,6 +294,88 @@ test("native service configuration can rename a variant without changing its par
   });
 });
 
+test("native resource requirements are versioned, validated and replay safely", async () => {
+  const path = `/admin/services/${f.haircutId}/resources`;
+  const create = await json(
+    t.app,
+    "/admin/resources",
+    "POST",
+    { name: "Room A", kind: "room", capacity: 2, idempotencyKey: mid() },
+    owner.cookie,
+  );
+  expect(create.status).toBe(201);
+  const room = (await create.json()) as { id: string };
+  const snapshot = await json(t.app, `${path}/reviewed`, "GET", undefined, owner.cookie);
+  expect(snapshot.status).toBe(200);
+  expect(await snapshot.json()).toMatchObject({
+    generation: expect.any(String),
+    resources: [expect.objectContaining({ id: room.id, capacity: 2 })],
+    service: { serviceId: f.haircutId, version: 1, requirements: [] },
+  });
+  const save = (quantity: number, selectionMode = "all") => ({
+    mutationId: mid(),
+    createdAt: new Date().toISOString(),
+    kind: "service.resources",
+    payload: {
+      id: f.haircutId,
+      version: 1,
+      selectionMode,
+      requirements: [{ resourceId: room.id, quantity }],
+    },
+  });
+  expect((await push(t, ana, [save(1)])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "forbidden",
+  });
+  expect((await push(t, owner, [save(2, "one_of")])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "invalid",
+  });
+  const valid = save(2);
+  expect((await push(t, owner, [valid])).body.results[0]).toMatchObject({ status: "applied" });
+  expect((await push(t, owner, [valid])).body.results[0]).toMatchObject({
+    status: "applied",
+    replayed: true,
+  });
+  expect((await push(t, owner, [save(1)])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "conflict",
+  });
+  const saved = await json(t.app, path, "GET", undefined, owner.cookie);
+  expect(await saved.json()).toMatchObject({
+    version: 2,
+    requirements: [expect.objectContaining({ resourceId: room.id, quantity: 2 })],
+  });
+  expect((await pull(t, owner, { resourceCatalogue: "1" })).refresh).toContain(
+    "resource_catalogue",
+  );
+  expect((await pull(t, owner)).refresh ?? []).not.toContain("resource_catalogue");
+  expect((await pull(t, ana, { resourceCatalogue: "1" })).refresh ?? []).not.toContain(
+    "resource_catalogue",
+  );
+  const retired = await json(
+    t.app,
+    `/admin/resources/${room.id}`,
+    "PUT",
+    { name: "Room A", kind: "room", capacity: 2, active: false, version: 1 },
+    owner.cookie,
+  );
+  expect(retired.status).toBe(200);
+  const stalePool = save(1);
+  expect(
+    (await push(t, owner, [{ ...stalePool, payload: { ...stalePool.payload, version: 2 } }])).body
+      .results[0],
+  ).toMatchObject({
+    status: "rejected",
+    reason: "invalid",
+  });
+  const clear = {
+    ...save(1),
+    payload: { ...save(1).payload, version: 2, requirements: [] },
+  };
+  expect((await push(t, owner, [clear])).body.results[0]).toMatchObject({ status: "applied" });
+});
+
 describe("authorization and envelope", () => {
   test("a restored generation rejects legacy and stale batches before writing or recording them", async () => {
     const restored = await setupApiTest({

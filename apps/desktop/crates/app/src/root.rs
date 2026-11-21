@@ -48,6 +48,7 @@ mod intake_record;
 mod inventory;
 mod notices;
 mod reports;
+mod resource_requirements;
 mod review_moderation;
 mod reviews;
 mod salon_configuration;
@@ -264,6 +265,7 @@ enum Overlay {
     StaffAccess(Box<staff_access::Desk>),
     ServiceAssignments(Box<service_assignments::Desk>),
     ServiceCatalog(Box<service_catalog::Desk>),
+    ResourceRequirements(Box<resource_requirements::Desk>),
     Reviews(Box<reviews::Desk>),
     ReviewModeration(Box<review_moderation::Desk>),
     Waitlist(Box<waitlist::Desk>),
@@ -688,6 +690,7 @@ impl Root {
         self.refresh_booking_policy(reconnected, cx);
         self.refresh_staff_access(reconnected, cx);
         self.refresh_open_service_catalog(reconnected, cx);
+        self.refresh_service_resources(reconnected, cx);
         if reconnected {
             self.refresh_weekly_conflicts_if_ready(cx);
             self.refresh_open_annotations(true, cx);
@@ -714,6 +717,7 @@ impl Root {
                 && !self.preserve_open_assignment_draft()
                 && !self.preserve_open_staff_access()
                 && !self.preserve_open_catalogue()
+                && !self.preserve_open_resource_requirements()
             {
                 self.overlay = Overlay::None;
             }
@@ -2380,6 +2384,7 @@ impl Root {
             Overlay::BookingPolicy(_) => self.dismiss_booking_policy(cx),
             Overlay::ServiceAssignments(_) => self.close_service_assignment(cx),
             Overlay::ServiceCatalog(_) => self.close_service_catalog(cx),
+            Overlay::ResourceRequirements(_) => self.close_resource_requirements(cx),
             Overlay::StaffAccess(_) => self.close_staff_access(cx),
             Overlay::Directory(desk) if desk.intake.is_some() => self.back_record(cx),
             Overlay::ReviewModeration(desk) => {
@@ -3287,6 +3292,7 @@ impl Root {
                 "service.staff_replace" => Key::ServiceAssignments,
                 sob_core::store::SERVICE_CREATION_KIND => Key::CatalogNew,
                 sob_core::store::SERVICE_EDIT_KIND => Key::CatalogTitle,
+                sob_core::service_resources::MUTATION_KIND => Key::ResourceRequirements,
                 _ => Key::ConflictOther,
             });
             let when = c
@@ -3431,6 +3437,21 @@ impl Root {
                                     Kind::Primary,
                                     cx.listener(move |root, _, _, cx| {
                                         root.open_catalog_edit_conflict(&id, cx)
+                                    }),
+                                ))
+                            },
+                        )
+                        .when(
+                            c.kind == sob_core::service_resources::MUTATION_KIND
+                                && self.can_create_catalogue_item(),
+                            |row| {
+                                let id = c.mutation_id.clone();
+                                row.child(self.button(
+                                    ("review-resource-configuration", i),
+                                    self.t(Key::CatalogReview),
+                                    Kind::Primary,
+                                    cx.listener(move |root, _, _, cx| {
+                                        root.open_resource_conflict(&id, cx)
                                     }),
                                 ))
                             },
@@ -3687,6 +3708,9 @@ impl Render for Root {
                         Overlay::ServiceCatalog(desk) => {
                             Some(self.render_service_catalog(desk, window.viewport_size(), cx))
                         }
+                        Overlay::ResourceRequirements(desk) => Some(
+                            self.render_resource_requirements(desk, window.viewport_size(), cx),
+                        ),
                         Overlay::Reviews(desk) => {
                             Some(self.render_review_requests(desk, window.viewport_size(), cx))
                         }

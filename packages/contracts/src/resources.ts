@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { idSchema, instantSchema } from "./common";
+import { idSchema, instantSchema, syncGenerationSchema } from "./common";
 export const resourceKindSchema = z.enum(["room", "equipment", "station", "other"]);
 const fields = {
   name: z.string().trim().min(1).max(80),
@@ -52,3 +52,8 @@ export const serviceResourcesSchema = z.object({
   ),
 });
 export type ServiceResources = z.infer<typeof serviceResourcesSchema>;
+export const reviewedServiceResourcesSchema = z.object({
+  generation: syncGenerationSchema,
+  resources: z.array(resourceSchema),
+  service: serviceResourcesSchema,
+});

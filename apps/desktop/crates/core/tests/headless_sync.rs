@@ -140,6 +140,131 @@ fn native_team_access_uses_reviewed_permissions_through_the_proxy() {
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_resource_requirements_reopen_and_rebase_through_the_proxy() {
+    use sob_core::service_resources::{
+        LIVE_TOPIC, PendingServiceResources, ResourceDraft, SelectionMode,
+    };
+    let device = proxy_device();
+    let web = Device::sign_in();
+    let pool = |name| {
+        web.rest_post(
+            "/admin/resources",
+            json!({
+                "name":name,"kind":"room","capacity":2,"idempotencyKey":uuid::Uuid::now_v7()
+            }),
+        )["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let local_room = pool("Synthetic Desktop resource requirement");
+    let cloud_room = pool("Synthetic Cloud resource requirement");
+    let service = web.rest_post(
+        "/admin/services",
+        json!({
+            "name":"Synthetic resource-backed service", "durationMinutes":35, "priceCents":2200
+        }),
+    );
+    let id = service["id"].as_str().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("resources.sqlite");
+    let mut store = Store::open(&path).unwrap();
+    sync::pull_all(&mut store, &*device.transport).unwrap();
+    let baseline_marker = store.live_view_revision(LIVE_TOPIC).unwrap();
+    let revision = store.resource_catalogue_revision().unwrap();
+    let baseline = device.transport.service_resources(id).unwrap();
+    assert!(baseline.service.requirements.is_empty());
+    store
+        .remember_service_resources(&baseline, revision)
+        .unwrap();
+    let mut local = ResourceDraft::from(&baseline.service);
+    local.quantities.insert(local_room.clone(), 1);
+    assert!(
+        store
+            .queue_service_resources(&baseline, &local, None)
+            .unwrap()
+    );
+    drop(store);
+
+    let prefix = std::env::var("SOB_TEST_REST_PREFIX").unwrap_or_default();
+    ureq::put(&format!(
+        "{}{prefix}/admin/services/{id}/resources",
+        web.base
+    ))
+    .header("Cookie", &web.cookie)
+    .header("Origin", &web.base)
+    .content_type("application/json")
+    .send(
+        json!({"version":baseline.service.version,"selectionMode":"one_of",
+            "requirements":[{"resourceId":cloud_room,"quantity":1}]})
+        .to_string(),
+    )
+    .unwrap();
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(
+        store
+            .pending_service_resources(id)
+            .unwrap()
+            .unwrap()
+            .edit
+            .proposal(),
+        local
+    );
+    assert_eq!(
+        store.reviewed_service_resources(id).unwrap(),
+        Some(baseline.clone())
+    );
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .rejected,
+        1
+    );
+    assert!(store.live_view_revision(LIVE_TOPIC).unwrap() > baseline_marker);
+    let conflict = store.conflicts().unwrap().pop().unwrap();
+    assert_eq!(conflict.reason, "conflict");
+    let saved: PendingServiceResources = serde_json::from_value(conflict.payload).unwrap();
+    let revision = store.resource_catalogue_revision().unwrap();
+    let latest = device.transport.service_resources(id).unwrap();
+    assert_eq!(latest.service.selection_mode, SelectionMode::OneOf);
+    store.remember_service_resources(&latest, revision).unwrap();
+    let revised =
+        saved
+            .proposal()
+            .review(&saved.reviewed, &ResourceDraft::from(&latest.service), true);
+    assert!(
+        store
+            .queue_service_resources(&latest, &revised, Some(&conflict.mutation_id))
+            .unwrap()
+    );
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let published = device.transport.service_resources(id).unwrap();
+    assert_eq!(
+        ResourceDraft::from(&published.service),
+        ResourceDraft {
+            mode: SelectionMode::OneOf,
+            quantities: [(local_room, 1), (cloud_room, 1)].into()
+        }
+    );
+    assert!(store.pending_service_resources(id).unwrap().is_none());
+    let cached = store.reviewed_service_resources(id).unwrap().unwrap();
+    assert_eq!(cached.service.version, published.service.version);
+    assert_eq!(
+        ResourceDraft::from(&cached.service),
+        ResourceDraft::from(&published.service)
+    );
+    assert!(store.conflicts().unwrap().is_empty());
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_extra_eligibility_preserves_concurrent_edits_through_the_proxy() {
     let device = proxy_device();
     let web = Device::sign_in();

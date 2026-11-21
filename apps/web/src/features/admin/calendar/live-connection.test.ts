@@ -84,6 +84,13 @@ test("service and team changes refresh the catalogue used by an open appointment
   }
 });
 
+test("resource changes refresh requirements and booking availability", () => {
+  const keys = [...liveQueryKeys(["resource_catalogue"])];
+  expect(keys).toContainEqual(["admin", "resources"]);
+  expect(keys).toContainEqual(["admin", "calendar"]);
+  expect(keys).toContainEqual(["availability"]);
+});
+
 test("initial connection does not replay history; pages and repeated nudges advance once", async () => {
   const pull = mock(async (since: number) => response(since + 1, 12));
   const h = harness(pull);

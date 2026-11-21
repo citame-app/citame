@@ -125,7 +125,10 @@ export function requireAuth(
         (path === "/appointments/desktop-booking" && method !== "POST") ||
         (path === "/admin/staff-accounts" && method !== "POST") ||
         (path.startsWith("/admin/services/") &&
-          method !== (path === "/admin/services/reviewed" ? "GET" : "PUT")) ||
+          method !==
+            (path === "/admin/services/reviewed" || path.endsWith("/resources/reviewed")
+              ? "GET"
+              : "PUT")) ||
         (path === "/admin/settings/desktop" && method !== "GET" && method !== "PUT") ||
         (path === "/admin/settings/booking-policy/reviewed" &&
           method !== "GET" &&

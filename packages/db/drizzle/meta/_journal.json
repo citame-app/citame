@@ -603,6 +603,13 @@
       "when": 1795213487913,
       "tag": "0085_sync_service_catalogue_versions",
       "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
+      "when": 1795213487914,
+      "tag": "0086_resource_catalogue_live_view",
+      "breakpoints": true
     }
   ]
 }

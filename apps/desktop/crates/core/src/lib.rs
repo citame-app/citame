@@ -20,6 +20,7 @@ pub mod receipt_print;
 pub mod reports;
 pub mod reviews;
 pub mod runner;
+pub mod service_resources;
 pub mod sse;
 pub mod staff_portrait_image;
 pub mod store;

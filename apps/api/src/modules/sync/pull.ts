@@ -271,7 +271,9 @@ export async function pullChanges(
         (topic.data !== "intake_forms" ||
           (query.intakeViews === "1" && permissions.deleteClients)) &&
         (topic.data !== "intake_records" || (query.intakeViews === "1" && permissions.clients)) &&
-        (topic.data !== "booking_policy" || query.bookingPolicy === "1")
+        (topic.data !== "booking_policy" || query.bookingPolicy === "1") &&
+        (topic.data !== "resource_catalogue" ||
+          (query.resourceCatalogue === "1" && permissions.editCatalog))
       )
         refresh.add(topic.data);
       continue;
