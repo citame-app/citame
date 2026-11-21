@@ -10,6 +10,7 @@ pub(super) struct Desk {
     identity: Arc<()>,
     request: Option<Arc<()>>,
     refreshing: bool,
+    retry_after: Option<std::time::Instant>,
     list: Option<CampaignPage>,
     detail: Option<(Campaign, DeliveryPage)>,
     review: Option<(Preview, Capabilities)>,
@@ -119,6 +120,7 @@ impl Root {
             identity: Arc::new(()),
             request: None,
             refreshing: false,
+            retry_after: None,
             list: None,
             detail: None,
             review: None,
@@ -153,6 +155,9 @@ impl Root {
         if desk.busy
             || desk.refreshing
             || desk.action.is_some()
+            || desk
+                .retry_after
+                .is_some_and(|retry| retry > std::time::Instant::now())
             || (!reconnected && desk.observed == observed)
         {
             return;
@@ -255,7 +260,13 @@ impl Root {
                 desk.busy = false;
                 desk.refreshing = false;
                 desk.request = None;
-                desk.observed = observed;
+                if matches!(&result, Ok(Loaded::List(_) | Loaded::Detail(_, _))) {
+                    desk.observed = observed;
+                    desk.retry_after = None;
+                } else if background && result.is_err() {
+                    desk.retry_after =
+                        Some(std::time::Instant::now() + std::time::Duration::from_secs(3));
+                }
                 let reload = match result {
                     Ok(Loaded::List(list)) => {
                         desk.list = Some(list);
@@ -311,6 +322,12 @@ impl Root {
                         None
                     }
                     Err(MutationError::Transport(error)) => {
+                        if matches!(error, TransportError::Forbidden(_)) {
+                            desk.list = None;
+                            desk.detail = None;
+                            desk.review = None;
+                            desk.observed = observed;
+                        }
                         desk.uncertain |= writing
                             && matches!(
                                 error,
