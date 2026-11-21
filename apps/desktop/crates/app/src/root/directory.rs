@@ -8,7 +8,7 @@ pub(super) struct Directory {
     search: Entity<TextField>,
     _search: Subscription,
     page: usize,
-    clients: Vec<Client>,
+    contacts: calendar::ClientDirectory,
     group_filter: Option<String>,
     choosing_group: bool,
     form: Option<Form>,
@@ -58,7 +58,7 @@ impl Root {
             search,
             _search: subscription,
             page: 0,
-            clients: vec![],
+            contacts: calendar::ClientDirectory::default(),
             group_filter: None,
             choosing_group: false,
             form: None,
@@ -80,12 +80,17 @@ impl Root {
             return;
         }
         if let Overlay::Directory(desk) = &mut self.overlay {
-            desk.clients = calendar::directory_clients(&self.svc.store).unwrap_or_default();
+            desk.contacts = calendar::directory_clients(&self.svc.store).unwrap_or_default();
             if let Some(intake) = &mut desk.intake {
-                intake.subject_visibility(&desk.clients);
+                intake.subject_visibility(&desk.contacts.clients);
             }
             if let Some(previous) = desk.form.as_ref().and_then(|form| form.previous.as_ref()) {
-                if desk.clients.iter().all(|client| client.id != previous.id) {
+                if desk
+                    .contacts
+                    .clients
+                    .iter()
+                    .all(|client| client.id != previous.id)
+                {
                     desk.form = None;
                     desk.controls = None;
                     desk.history.clear();
@@ -110,8 +115,13 @@ impl Root {
         let Overlay::Directory(desk) = &mut self.overlay else {
             return;
         };
-        let previous =
-            id.and_then(|id| desk.clients.iter().find(|client| client.id == id).cloned());
+        let previous = id.and_then(|id| {
+            desk.contacts
+                .clients
+                .iter()
+                .find(|client| client.id == id)
+                .cloned()
+        });
         if id.is_some() && previous.is_none() {
             return;
         }
@@ -344,7 +354,7 @@ impl Root {
             return self.render_directory_groups(desk, cx);
         }
         let filtered = calendar::search_directory(
-            &desk.clients,
+            &desk.contacts,
             desk.search.read(cx).text(),
             desk.group_filter.as_deref(),
         );
@@ -502,7 +512,7 @@ impl Root {
     }
 
     fn render_directory_groups(&self, desk: &Directory, cx: &mut Context<Self>) -> gpui::Div {
-        let groups = calendar::directory_groups(&desk.clients);
+        let groups = calendar::directory_groups(&desk.contacts.clients);
         let message = match &groups {
             None => Some(Key::DirectoryGroupsAwaitSync),
             Some(groups) if groups.is_empty() => Some(Key::DirectoryGroupsEmpty),
@@ -611,6 +621,7 @@ mod tests {
                     panic!("directory didn't open");
                 };
                 let contact_id = desk
+                    .contacts
                     .clients
                     .iter()
                     .find(|c| c.name == "Lucia")
@@ -633,6 +644,7 @@ mod tests {
                 assert!(
                     calendar::directory_clients(&root.svc.store)
                         .unwrap()
+                        .clients
                         .iter()
                         .any(|contact| contact.name == "Native test contact")
                 );

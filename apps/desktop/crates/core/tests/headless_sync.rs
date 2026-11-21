@@ -5038,6 +5038,7 @@ fn native_directory_replays_contacts_and_preserves_newer_edits() {
     let read = |device: &Device| {
         calendar::directory_clients(&device.store)
             .unwrap()
+            .clients
             .into_iter()
             .find(|client| client.id == id)
             .unwrap()

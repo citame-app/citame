@@ -164,7 +164,7 @@ impl Root {
         if desk.busy || desk.must_reload || desk.confirm_back {
             return;
         }
-        let newer_revision = mirrored_revision(&directory.clients, &desk.client_id)
+        let newer_revision = mirrored_revision(&directory.contacts.clients, &desk.client_id)
             .is_some_and(|version| version > current.version);
         if newer_revision {
             if desk.change(cx).is_some() {
@@ -485,7 +485,7 @@ mod tests {
                 let Overlay::Directory(directory) = &root.overlay else {
                     panic!("missing directory")
                 };
-                let contact = directory.clients[0].clone();
+                let contact = directory.contacts.clients[0].clone();
                 root.directory_form(Some(&contact.id), cx);
                 root.open_client_controls(cx);
                 let snapshot = |version, access| ClientControls {
@@ -510,7 +510,7 @@ mod tests {
                     desk.apply_snapshot(snapshot(1, BookingAccess::Normal), false, cx);
                     desk.tags
                         .update(cx, |field, cx| field.set_text("colour", cx));
-                    directory.clients[0].controls_version = Some(2);
+                    directory.contacts.clients[0].controls_version = Some(2);
                 }
                 root.back_client_controls(cx);
                 root.refresh_client_controls(cx);

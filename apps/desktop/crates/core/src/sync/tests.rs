@@ -552,7 +552,13 @@ fn client_visibility_change_purges_the_previous_replica_and_keeps_the_outbox() {
         }),
     );
     pull_all(&mut store, &allowed).unwrap();
-    assert_eq!(crate::calendar::directory_clients(&store).unwrap().len(), 1);
+    assert_eq!(
+        crate::calendar::directory_clients(&store)
+            .unwrap()
+            .clients
+            .len(),
+        1
+    );
     let id = crate::ops::create_directory_client(&mut store, "Walk in", "", "", "").unwrap();
     let denied = Fake::new(
         Box::new(applied_all),
@@ -583,7 +589,13 @@ fn client_visibility_change_purges_the_previous_replica_and_keeps_the_outbox() {
     assert!(store.clients().unwrap().is_empty());
     assert_eq!(store.outbox(10).unwrap()[0].entity_id, id);
     assert!(pull_all(&mut store, &allowed).unwrap().replica_reset);
-    assert_eq!(crate::calendar::directory_clients(&store).unwrap().len(), 2);
+    assert_eq!(
+        crate::calendar::directory_clients(&store)
+            .unwrap()
+            .clients
+            .len(),
+        2
+    );
 }
 
 #[test]

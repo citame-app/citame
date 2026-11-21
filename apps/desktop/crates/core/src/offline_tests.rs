@@ -38,7 +38,7 @@ fn directory_groups_backfill_keeps_contacts_and_pending_edits() {
     assert_eq!(replica.client_groups_cursor().unwrap(), Some(0));
     assert_eq!(replica.outbox_len().unwrap(), 1);
     let clients = directory_clients(&replica).unwrap();
-    assert!(directory_groups(&clients).is_none());
+    assert!(directory_groups(&clients.clients).is_none());
     assert_eq!(search_directory(&clients, "pending", None)[0].id, id);
 
     client.group_names = Some(vec!["vip".into()]);
@@ -52,12 +52,45 @@ fn directory_groups_backfill_keeps_contacts_and_pending_edits() {
     assert_eq!(replica.client_groups_cursor().unwrap(), None);
     let clients = directory_clients(&replica).unwrap();
     assert_eq!(
-        directory_groups(&clients).unwrap(),
+        directory_groups(&clients.clients).unwrap(),
         std::collections::BTreeMap::from([("vip", 1)])
     );
     assert_eq!(search_directory(&clients, "VIP", None)[0].id, client.id);
     assert_eq!(search_directory(&clients, "", Some("vip"))[0].id, client.id);
     assert!(search_directory(&clients, "%", Some("vip")).is_empty());
+}
+
+#[test]
+fn directory_search_finds_the_active_contact_through_merged_aliases() {
+    let mut store = seeded();
+    store.set_meta("client_directory", "allowed").unwrap();
+    let mut active = store.clients().unwrap().remove(0);
+    active.group_names = Some(vec!["vip".into()]);
+    let mut previous = active.clone();
+    previous.id = "also-known-as".into();
+    previous.name = "Previous name".into();
+    previous.merged_into_id = Some(active.id.clone());
+    previous.group_names = Some(vec!["archived-group".into()]);
+    let mut oldest = previous.clone();
+    oldest.id = "original-name".into();
+    oldest.name = "Oldest name".into();
+    oldest.phone = Some("+34 6-1".into());
+    oldest.email = Some("history@example.test".into());
+    oldest.merged_into_id = Some(previous.id.clone());
+    let changes = [active.clone(), previous, oldest]
+        .iter()
+        .enumerate()
+        .map(|(index, client)| up(30 + index as i64, "client", &client.id, json!(client)))
+        .collect::<Vec<_>>();
+    store.apply_page(&changes, 32).unwrap();
+
+    let directory = directory_clients(&store).unwrap();
+    for query in ["previous name", "oldest name", "61", "HISTORY@example.test"] {
+        assert_eq!(search_directory(&directory, query, Some("vip")), [&active]);
+    }
+    assert!(search_directory(&directory, "oldest name", Some("archived-group")).is_empty());
+    assert!(search_directory(&directory, "archived-group", None).is_empty());
+    assert_eq!(directory_groups(&directory.clients).unwrap()["vip"], 1);
 }
 
 #[test]

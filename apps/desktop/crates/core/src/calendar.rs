@@ -333,17 +333,49 @@ pub fn known_clients(store: &Store) -> Result<Vec<(String, String)>> {
     Ok(v)
 }
 
+#[derive(Default)]
+pub struct ClientDirectory {
+    pub clients: Vec<Client>,
+    aliases: HashMap<String, Vec<Client>>,
+}
+
 /// The directory uses the same replica as booking and displays unsynced contact edits.
-pub fn directory_clients(store: &Store) -> Result<Vec<Client>> {
+pub fn directory_clients(store: &Store) -> Result<ClientDirectory> {
     if !store.client_directory_enabled()? {
-        return Ok(vec![]);
+        return Ok(ClientDirectory::default());
     }
-    let mut clients: HashMap<_, _> = store
+    let (active, historical): (Vec<_>, Vec<_>) = store
         .clients()?
         .into_iter()
-        .filter(|client| client.merged_into_id.is_none())
+        .partition(|client| client.merged_into_id.is_none());
+    let mut clients: HashMap<_, _> = active
+        .into_iter()
         .map(|client| (client.id.clone(), client))
         .collect();
+    let parents: HashMap<_, _> = historical
+        .iter()
+        .filter_map(|client| Some((client.id.as_str(), client.merged_into_id.as_deref()?)))
+        .collect();
+    let roots: Vec<_> = historical
+        .iter()
+        .map(|alias| {
+            let mut id = alias.id.as_str();
+            // Cloud bounds identity chains at 20 profiles.
+            for _ in 0..20 {
+                match parents.get(id) {
+                    Some(parent) => id = parent,
+                    None => return clients.contains_key(id).then(|| id.to_owned()),
+                }
+            }
+            None
+        })
+        .collect();
+    let mut aliases: HashMap<String, Vec<Client>> = HashMap::new();
+    for (alias, root) in historical.into_iter().zip(roots) {
+        if let Some(root) = root {
+            aliases.entry(root).or_default().push(alias);
+        }
+    }
     for entry in store.calendar_outbox()? {
         let payload = &entry.payload;
         match entry.kind.as_str() {
@@ -384,7 +416,7 @@ pub fn directory_clients(store: &Store) -> Result<Vec<Client>> {
     }
     let mut clients: Vec<_> = clients.into_values().collect();
     clients.sort_by_cached_key(|client| (client.name.to_lowercase(), client.id.clone()));
-    Ok(clients)
+    Ok(ClientDirectory { clients, aliases })
 }
 
 /// Group counts are usable once the server has supplied groups for every visible profile.
@@ -399,7 +431,7 @@ pub fn directory_groups(clients: &[Client]) -> Option<BTreeMap<&str, usize>> {
 }
 
 pub fn search_directory<'a>(
-    clients: &'a [Client],
+    directory: &'a ClientDirectory,
     query: &str,
     group: Option<&str>,
 ) -> Vec<&'a Client> {
@@ -410,7 +442,24 @@ pub fn search_directory<'a>(
             && query
                 .chars()
                 .all(|ch| ch.is_ascii_digit() || "+-(). ".contains(ch)));
-    clients
+    let matches_contact = |client: &Client| {
+        client.name.to_lowercase().contains(&query)
+            || client
+                .email
+                .as_ref()
+                .is_some_and(|email| email.to_lowercase().contains(&query))
+            || client.phone.as_ref().is_some_and(|phone| {
+                phone.contains(&query)
+                    || (match_by_digits
+                        && phone
+                            .chars()
+                            .filter(char::is_ascii_digit)
+                            .collect::<String>()
+                            .contains(&digits))
+            })
+    };
+    directory
+        .clients
         .iter()
         .filter(|client| {
             let groups = client.group_names.as_deref().unwrap_or_default();
@@ -418,21 +467,12 @@ pub fn search_directory<'a>(
                 return false;
             }
             query.is_empty()
-                || client.name.to_lowercase().contains(&query)
-                || client
-                    .email
-                    .as_ref()
-                    .is_some_and(|email| email.to_lowercase().contains(&query))
-                || client.phone.as_ref().is_some_and(|phone| {
-                    phone.contains(&query)
-                        || (match_by_digits
-                            && phone
-                                .chars()
-                                .filter(char::is_ascii_digit)
-                                .collect::<String>()
-                                .contains(&digits))
-                })
+                || matches_contact(client)
                 || groups.iter().any(|name| name.contains(&query))
+                || directory
+                    .aliases
+                    .get(&client.id)
+                    .is_some_and(|aliases| aliases.iter().any(&matches_contact))
         })
         .collect()
 }
