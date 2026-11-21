@@ -162,13 +162,33 @@ jobs:
         run: bun run --cwd apps/web e2e --output test-results/pos
         env:
           E2E_POS_FIXTURE: "true"
-      # Contention under load against the same stack: one 201 per slot, the rest 409, then SQL proof.
       - uses: grafana/setup-k6-action@v1
-      - run: |
+      - name: Booking contention on a fresh database
+        run: |
+          bun -e 'await Bun.sql`CREATE DATABASE sob_contention`; await Bun.sql.close()'
+          contention_url="$(bun -e 'const url = new URL(process.env.DATABASE_URL); url.pathname = "/sob_contention"; process.stdout.write(url.href)')"
+          export DATABASE_URL="$contention_url"
+          export VALKEY_KEY_PREFIX=sob-contention:
+          bun run db:migrate
+          bun run db:seed
+          bun run bootstrap:owner
+
+          NODE_ENV=production HOST=127.0.0.1 PORT=3001 BETTER_AUTH_URL="$BASE_URL" \
+            TRUSTED_ORIGINS="$BASE_URL" TRUST_PROXY=true AUTH_REQUIRE_EMAIL_VERIFICATION=false \
+            RATE_LIMIT_GLOBAL_MAX=2000 \
+            bun apps/api/src/index.ts > contention-api.log 2>&1 &
+          api_pid=$!
+          API_INTERNAL_URL=http://127.0.0.1:3001 HOST=127.0.0.1 PORT=4175 PUBLIC_URL="$BASE_URL" \
+            bun apps/web/server.ts > contention-web.log 2>&1 &
+          web_pid=$!
+          trap 'kill "$api_pid" "$web_pid" 2>/dev/null || true' EXIT
+          curl --fail --silent --show-error --retry 30 --retry-delay 1 --retry-connrefused \
+            "$BASE_URL/api/ready"
+
           k6 run k6/booking-contention.js
           bun k6/check-overlaps.ts
         env:
-          BASE_URL: http://localhost:4173
+          BASE_URL: http://127.0.0.1:4175
           API_PREFIX: /api
           K6_EMAIL: ci-owner@example.com
           K6_PASSWORD: correct horse battery staple
@@ -180,6 +200,8 @@ jobs:
             apps/web/test-results
             api.log
             web.log
+            contention-api.log
+            contention-web.log
 
   desktop:
     runs-on: ubuntu-latest
