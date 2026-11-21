@@ -1,4 +1,6 @@
 use super::*;
+use sob_core::inventory_classifications::ClassificationKind;
+use uuid::Uuid;
 
 #[derive(Default)]
 pub(super) struct Tools {
@@ -15,18 +17,37 @@ enum Facet {
     Brand,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+enum FilterValue {
+    Managed(Uuid),
+    Label(String),
+}
+
 impl Facet {
-    fn active(self, query: &ProductQuery) -> &Option<String> {
-        match self {
-            Self::Category => &query.category,
-            Self::Brand => &query.brand,
-        }
+    fn active(self, query: &ProductQuery) -> Option<FilterValue> {
+        let (id, label) = match self {
+            Self::Category => (query.category_id, &query.category),
+            Self::Brand => (query.brand_id, &query.brand),
+        };
+        id.map(FilterValue::Managed)
+            .or_else(|| label.clone().map(FilterValue::Label))
     }
 
-    fn set(self, query: &mut ProductQuery, value: Option<String>) {
+    fn set(self, query: &mut ProductQuery, value: Option<FilterValue>) {
+        let (id, label) = match value {
+            Some(FilterValue::Managed(id)) => (Some(id), None),
+            Some(FilterValue::Label(label)) => (None, Some(label)),
+            None => (None, None),
+        };
         match self {
-            Self::Category => query.category = value,
-            Self::Brand => query.brand = value,
+            Self::Category => {
+                query.category_id = id;
+                query.category = label;
+            }
+            Self::Brand => {
+                query.brand_id = id;
+                query.brand = label;
+            }
         }
     }
 }
@@ -288,20 +309,8 @@ impl Root {
                         }),
                     )),
             )
-            .when_some(desk.catalogue_tools.facets.as_ref(), |body, facets| {
-                body.child(self.render_inventory_facet(
-                    query,
-                    Facet::Category,
-                    &facets.categories,
-                    cx,
-                ))
-                .child(self.render_inventory_facet(
-                    query,
-                    Facet::Brand,
-                    &facets.brands,
-                    cx,
-                ))
-            })
+            .child(self.render_inventory_facet(query, Facet::Category, cx))
+            .child(self.render_inventory_facet(query, Facet::Brand, cx))
             .child(self.render_subcategory_filter(query, cx))
             .child(self.label(Key::InventorySort))
             .child(
@@ -343,7 +352,6 @@ impl Root {
         &self,
         query: &ProductQuery,
         facet: Facet,
-        values: &[String],
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let (id, heading, any) = match facet {
@@ -358,6 +366,41 @@ impl Root {
                 Key::InventoryAnyBrand,
             ),
         };
+        let legacy = match &self.overlay {
+            Overlay::Inventory(desk) => desk.catalogue_tools.facets.as_ref(),
+            _ => None,
+        };
+        let labels = legacy.map_or(&[][..], |facets| match facet {
+            Facet::Category => &facets.categories,
+            Facet::Brand => &facets.brands,
+        });
+        let kind = match facet {
+            Facet::Category => ClassificationKind::Category,
+            Facet::Brand => ClassificationKind::Brand,
+        };
+        let roots = self
+            .svc
+            .store
+            .inventory_classifications()
+            .ok()
+            .flatten()
+            .map(|catalogue| catalogue.entries)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|entry| entry.kind == kind && entry.parent_id.is_none())
+            .collect::<Vec<_>>();
+        let managed = roots
+            .iter()
+            .map(|entry| (FilterValue::Managed(entry.id), entry.name.clone()));
+        let legacy = labels
+            .iter()
+            .filter(|label| {
+                let normalized = label.trim().to_lowercase();
+                !roots
+                    .iter()
+                    .any(|entry| entry.name.to_lowercase() == normalized)
+            })
+            .map(|label| (FilterValue::Label(label.clone()), label.clone()));
         let active = facet.active(query);
         div().child(self.label(heading)).child(
             div().id(id).max_h(px(108.)).overflow_y_scroll().child(
@@ -373,20 +416,25 @@ impl Root {
                             root.filter_inventory_catalogue(|query| facet.set(query, None), cx)
                         }),
                     ))
-                    .children(values.iter().enumerate().map(|(i, value)| {
-                        let chosen = value.clone();
-                        self.button(
-                            (id, i + 1),
-                            value.clone(),
-                            selected(active.as_ref() == Some(value)),
-                            cx.listener(move |root, _, _, cx| {
-                                root.filter_inventory_catalogue(
-                                    |query| facet.set(query, Some(chosen.clone())),
-                                    cx,
+                    .children(
+                        managed
+                            .chain(legacy)
+                            .enumerate()
+                            .map(|(i, (value, label))| {
+                                let is_selected = active.as_ref() == Some(&value);
+                                self.button(
+                                    (id, i + 1),
+                                    label,
+                                    selected(is_selected),
+                                    cx.listener(move |root, _, _, cx| {
+                                        root.filter_inventory_catalogue(
+                                            |query| facet.set(query, Some(value.clone())),
+                                            cx,
+                                        )
+                                    }),
                                 )
                             }),
-                        )
-                    })),
+                    ),
             ),
         )
     }

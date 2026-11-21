@@ -90,6 +90,8 @@ pub struct ProductQuery {
     pub activity: ProductActivity,
     pub category: Option<String>,
     pub brand: Option<String>,
+    pub category_id: Option<Uuid>,
+    pub brand_id: Option<Uuid>,
     pub subcategory_id: Option<Uuid>,
     pub resellable: Option<bool>,
     pub low_stock: bool,
@@ -129,13 +131,17 @@ impl ProductQuery {
                 ProductActivity::All => "all",
             },
         );
-        if let Some(category) = &self.category {
+        if let Some(category) = self.category_id {
+            query.append_pair("categoryId", &category.to_string());
+        } else if let Some(category) = &self.category {
             query.append_pair("category", category);
         }
         if let Some(subcategory) = self.subcategory_id {
             query.append_pair("subcategoryId", &subcategory.to_string());
         }
-        if let Some(brand) = &self.brand {
+        if let Some(brand) = self.brand_id {
+            query.append_pair("brandId", &brand.to_string());
+        } else if let Some(brand) = &self.brand {
             query.append_pair("brand", brand);
         }
         if let Some(resellable) = self.resellable {

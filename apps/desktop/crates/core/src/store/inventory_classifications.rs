@@ -44,6 +44,18 @@ impl Store {
         rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
     }
 
+    pub fn inventory_classification_choices(&self) -> Result<Option<ClassificationCatalogue>> {
+        let Some(mut catalogue) = self.inventory_classifications()? else {
+            return Ok(None);
+        };
+        for pending in self.pending_inventory_classifications()? {
+            if pending.version == 0 && !catalogue.entries.iter().any(|row| row.id == pending.id) {
+                catalogue.entries.push(pending);
+            }
+        }
+        Ok(Some(catalogue))
+    }
+
     pub fn queue_inventory_classification(
         &mut self,
         generation: &str,
@@ -60,7 +72,7 @@ impl Store {
                 return Err(CoreError::CalendarGenerationChanged);
             }
             let catalogue = store
-                .inventory_classifications()?
+                .inventory_classification_choices()?
                 .filter(|list| list.generation == generation)
                 .ok_or(CoreError::CalendarGenerationChanged)?;
             let current = catalogue
@@ -99,10 +111,16 @@ impl Store {
                 return Err(CoreError::CatalogueEditPending);
             }
             if let Some(previous) = replaces {
-                store
+                let conflict = store
                     .conflict(previous)?
                     .filter(|row| row.kind == SAVE && row.entity_id == id)
                     .ok_or_else(|| CoreError::NotFound("inventory classification".into()))?;
+                if conflict.reason == "conflict" {
+                    let rejected: Classification = serde_json::from_value(conflict.payload)?;
+                    if proposal.version <= rejected.version {
+                        return Err(CoreError::CatalogueVersionChanged);
+                    }
+                }
                 store.resolve_conflict(previous, "resubmitted")?;
             }
             let saved = ClassificationProposal {

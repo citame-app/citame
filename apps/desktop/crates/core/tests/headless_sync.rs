@@ -5817,11 +5817,12 @@ fn native_classifications_replay_after_restart_and_keep_legacy_product_stock() {
     let list = desktop.transport.inventory_classifications().unwrap();
     let generation = list.generation.clone();
     store.remember_inventory_classifications(&list).unwrap();
+    let parent_id = Uuid::now_v7();
     let parent = Classification {
-        id: Uuid::now_v7(),
+        id: parent_id,
         kind: ClassificationKind::Category,
         parent_id: None,
-        name: "Native classification fixture".into(),
+        name: format!("Native classification {parent_id}"),
         position: 2,
         active: true,
         version: 0,
@@ -5829,20 +5830,6 @@ fn native_classifications_replay_after_restart_and_keep_legacy_product_stock() {
     store
         .queue_inventory_classification(&generation, parent.clone(), None)
         .unwrap();
-    drop(store);
-
-    let mut store = Store::open(&path).unwrap();
-    assert_eq!(store.pending_inventory_classifications().unwrap().len(), 1);
-    assert_eq!(
-        sync::sync_cycle(&mut store, &*desktop.transport)
-            .unwrap()
-            .push
-            .applied,
-        1
-    );
-    let list = desktop.transport.inventory_classifications().unwrap();
-    assert!(list.entries.iter().any(|row| parent.acknowledged_by(row)));
-    store.remember_inventory_classifications(&list).unwrap();
     let subcategory = Classification {
         id: Uuid::now_v7(),
         parent_id: Some(parent.id),
@@ -5853,11 +5840,13 @@ fn native_classifications_replay_after_restart_and_keep_legacy_product_stock() {
         .queue_inventory_classification(&generation, subcategory.clone(), None)
         .unwrap();
     assert_eq!(
-        sync::sync_cycle(&mut store, &*desktop.transport)
+        store
+            .inventory_classification_choices()
             .unwrap()
-            .push
-            .applied,
-        1
+            .unwrap()
+            .entries
+            .len(),
+        list.entries.len() + 2,
     );
     let product_id = web.rest_post(
         "/admin/inventory/products",
@@ -5881,12 +5870,23 @@ fn native_classifications_replay_after_restart_and_keep_legacy_product_stock() {
             .queue_product_edit(&generation, product_id, Some(&review), fields, None)
             .unwrap()
     );
+    drop(store);
+
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(store.pending_inventory_classifications().unwrap().len(), 2);
     assert_eq!(
         sync::sync_cycle(&mut store, &*desktop.transport)
             .unwrap()
             .push
             .applied,
-        1
+        3
+    );
+    let list = desktop.transport.inventory_classifications().unwrap();
+    assert!(list.entries.iter().any(|row| parent.acknowledged_by(row)));
+    assert!(
+        list.entries
+            .iter()
+            .any(|row| subcategory.acknowledged_by(row))
     );
     let product = desktop.transport.inventory_product(product_id).unwrap();
     assert_eq!(product.stock_on_hand, 5);

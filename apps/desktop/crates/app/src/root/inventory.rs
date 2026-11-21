@@ -31,6 +31,7 @@ pub(super) struct Desk {
     documents: Option<Box<documents::Panel>>,
     warehouses: Option<Box<warehouses::Panel>>,
     classifications: Option<Box<classifications::Panel>>,
+    classification_load: classifications::Load,
     stock: Option<stock::Panel>,
     request: Option<Arc<()>>,
     saving: bool,
@@ -219,6 +220,7 @@ impl Root {
     pub(super) fn open_inventory(&mut self, cx: &mut Context<Self>) {
         self.prepare_inventory(cx);
         self.request_inventory(Action::Catalog(ProductQuery::default(), 1), cx);
+        self.load_classifications(cx);
     }
 
     fn prepare_inventory(&mut self, cx: &mut Context<Self>) {
@@ -245,6 +247,7 @@ impl Root {
             documents: None,
             warehouses: None,
             classifications: None,
+            classification_load: classifications::Load::default(),
             stock: None,
             request: None,
             saving: false,

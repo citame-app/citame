@@ -35,7 +35,7 @@ impl Classification {
     }
 
     pub fn acknowledged_by(&self, current: &Self) -> bool {
-        current.version == self.version + 1
+        self.version.checked_add(1) == Some(current.version)
             && current.id == self.id
             && current.kind == self.kind
             && current.parent_id == self.parent_id

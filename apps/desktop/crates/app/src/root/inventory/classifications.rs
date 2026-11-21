@@ -17,11 +17,15 @@ struct Draft {
 #[derive(Default)]
 pub(super) struct Panel {
     draft: Option<Draft>,
-    request: Option<Arc<()>>,
-    revision: i64,
-    staff_revision: i64,
     notice: Option<Key>,
     discard: bool,
+}
+
+#[derive(Default)]
+pub(super) struct Load {
+    request: Option<Arc<()>>,
+    observed: Option<(i64, i64)>,
+    current: bool,
 }
 
 impl Panel {
@@ -43,6 +47,14 @@ impl Root {
         }
     }
 
+    fn classification_load(&mut self) -> Option<&mut Load> {
+        if let Overlay::Inventory(desk) = &mut self.overlay {
+            Some(&mut desk.classification_load)
+        } else {
+            None
+        }
+    }
+
     pub(super) fn open_classifications(&mut self, cx: &mut Context<Self>) {
         if let Overlay::Inventory(desk) = &mut self.overlay {
             desk.classifications = Some(Box::default());
@@ -55,10 +67,11 @@ impl Root {
         let Some(panel) = self.classifications_panel() else {
             return false;
         };
-        panel.request = None;
-        panel.revision = -1;
         if panel.draft.is_some() {
             panel.notice = Some(Key::InventoryClassificationsChanged);
+        }
+        if let Some(load) = self.classification_load() {
+            *load = Load::default();
         }
         true
     }
@@ -78,18 +91,15 @@ impl Root {
             .store
             .staff_directory_revision()
             .unwrap_or_default();
-        let Some(panel) = self.classifications_panel() else {
-            return false;
-        };
-        if panel.request.is_none()
-            && (reconnected || panel.revision != revision || panel.staff_revision != staff)
-        {
+        if self.classification_load().is_some_and(|load| {
+            load.request.is_none() && (reconnected || load.observed != Some((revision, staff)))
+        }) {
             self.load_classifications(cx);
         }
-        true
+        self.classifications_panel().is_some()
     }
 
-    fn load_classifications(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn load_classifications(&mut self, cx: &mut Context<Self>) {
         let Some(transport) = self
             .svc
             .transport()
@@ -108,14 +118,15 @@ impl Root {
             .store
             .staff_directory_revision()
             .unwrap_or_default();
-        let Some(panel) = self.classifications_panel() else {
+        let Some(load) = self.classification_load() else {
             return;
         };
-        if panel.request.is_some() {
+        if load.request.is_some() {
             return;
         }
         let token = Arc::new(());
-        panel.request = Some(token.clone());
+        load.request = Some(token.clone());
+        load.current = false;
         cx.notify();
         cx.spawn(async move |handle, cx| {
             let result = cx
@@ -124,9 +135,8 @@ impl Root {
                 .await;
             let _ = handle.update(cx, |root, cx| {
                 if !Arc::ptr_eq(&root.svc.session, &session)
-                    || !root.classifications_panel().is_some_and(|panel| {
-                        panel
-                            .request
+                    || !root.classification_load().is_some_and(|load| {
+                        load.request
                             .as_ref()
                             .is_some_and(|request| Arc::ptr_eq(request, &token))
                     })
@@ -139,25 +149,35 @@ impl Root {
                 ) {
                     let _ = root.svc.store.withdraw_inventory_access();
                 }
-                let saved = root
+                let current = root
                     .svc
                     .store
                     .staff_directory_revision()
                     .unwrap_or_default()
                     == staff
+                    && root
+                        .svc
+                        .store
+                        .live_view_revision(LIVE_TOPIC)
+                        .unwrap_or_default()
+                        == revision;
+                let saved = current
                     && result.ok().is_some_and(|catalogue| {
                         root.svc
                             .store
                             .remember_inventory_classifications(&catalogue)
                             .is_ok()
                     });
-                if let Some(panel) = root.classifications_panel() {
-                    panel.request = None;
-                    panel.revision = revision;
-                    panel.staff_revision = staff;
-                    if !saved {
-                        panel.notice = Some(Key::InventoryClassificationsUnavailable);
-                    }
+                if let Some(load) = root.classification_load() {
+                    load.request = None;
+                    load.observed = Some((revision, staff));
+                    load.current = saved;
+                }
+                if current
+                    && !saved
+                    && let Some(panel) = root.classifications_panel()
+                {
+                    panel.notice = Some(Key::InventoryClassificationsUnavailable);
                 }
                 cx.notify();
             });
@@ -190,7 +210,17 @@ impl Root {
         if !self.svc.store.can_queue_product_edits() {
             return;
         }
-        let Some(catalogue) = self.svc.store.inventory_classifications().ok().flatten() else {
+        let generation = if conflict.is_some() {
+            self.svc.store.verified_reviewed_generation().ok()
+        } else {
+            self.svc
+                .store
+                .inventory_classifications()
+                .ok()
+                .flatten()
+                .map(|catalogue| catalogue.generation)
+        };
+        let Some(generation) = generation else {
             return;
         };
         let Some(panel) = self.classifications_panel() else {
@@ -206,7 +236,7 @@ impl Root {
         panel.draft = Some(Draft {
             baseline: entry.clone(),
             entry,
-            generation: catalogue.generation,
+            generation,
             needs_review: conflict.is_some(),
             conflict,
             name,
@@ -283,6 +313,11 @@ impl Root {
     }
 
     fn review_classification(&mut self, cx: &mut Context<Self>) {
+        if !self.classification_load().is_some_and(|load| load.current)
+            || !self.svc.store.can_queue_product_edits()
+        {
+            return;
+        }
         let Some(list) = self.svc.store.inventory_classifications().ok().flatten() else {
             return;
         };
@@ -351,6 +386,13 @@ impl Root {
         panel: &Panel,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        let (loading, current) = match &self.overlay {
+            Overlay::Inventory(desk) => (
+                desk.classification_load.request.is_some(),
+                desk.classification_load.current,
+            ),
+            _ => (false, false),
+        };
         let body = div()
             .flex()
             .flex_col()
@@ -361,13 +403,11 @@ impl Root {
                     .child(self.t(Key::InventoryClassifications)),
             )
             .when_some(panel.notice, |body, key| body.child(self.t(key)))
-            .when(panel.request.is_some(), |body| {
-                body.child(self.t(Key::InventoryLoading))
-            });
+            .when(loading, |body| body.child(self.t(Key::InventoryLoading)));
         let Some(list) = self.svc.store.inventory_classifications().ok().flatten() else {
             return body
                 .child(self.t(Key::InventoryClassificationsUnavailable))
-                .when(panel.request.is_none(), |body| {
+                .when(!loading, |body| {
                     body.child(self.button(
                         "reload-classifications",
                         self.t(Key::InventoryRefresh),
@@ -376,7 +416,7 @@ impl Root {
                     ))
                 });
         };
-        let write = self.svc.store.can_queue_product_edits() && panel.request.is_none();
+        let write = self.svc.store.can_queue_product_edits() && !loading;
         if panel.discard {
             return body
                 .child(self.t(Key::SalonConfirmDiscard))
@@ -465,8 +505,14 @@ impl Root {
                     body.child(self.t(Key::InventoryClassificationsChanged))
                         .when_some(latest, |body, current| {
                             body.child(format!(
-                                "{} · {}",
+                                "{} · {} · {} · {}",
                                 current.name,
+                                current.position,
+                                self.t(if current.active {
+                                    Key::InventoryWarehouseActive
+                                } else {
+                                    Key::InventoryWarehouseArchived
+                                }),
                                 list.entries
                                     .iter()
                                     .find(|row| Some(row.id) == current.parent_id)
@@ -478,9 +524,19 @@ impl Root {
                         })
                         .child(self.button(
                             "classification-review",
-                            self.t(Key::InventoryDocumentReviewed),
+                            self.t(if current {
+                                Key::InventoryDocumentReviewed
+                            } else {
+                                Key::InventoryRefresh
+                            }),
                             Kind::Primary,
-                            cx.listener(|root, _, _, cx| root.review_classification(cx)),
+                            cx.listener(move |root, _, _, cx| {
+                                if current {
+                                    root.review_classification(cx);
+                                } else {
+                                    root.load_classifications(cx);
+                                }
+                            }),
                         ))
                 })
                 .when(write && !stale, |body| {

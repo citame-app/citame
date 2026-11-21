@@ -337,6 +337,12 @@ impl Root {
         let Overlay::Inventory(desk) = &mut self.overlay else {
             return;
         };
+        let opened_managed = draft.classification.is_some_and(|assignment| {
+            assignment.subcategory_id.is_some()
+                || (conflict.is_some()
+                    && Some(assignment)
+                        != baseline.as_ref().and_then(|row| row.fields.classification))
+        });
         desk.error = None;
         desk.product_form = Some(Box::new(Panel {
             id,
@@ -349,9 +355,7 @@ impl Root {
             resellable: draft.resellable,
             active: draft.active,
             assignment: draft.classification,
-            managed: draft
-                .classification
-                .is_some_and(|assignment| assignment.subcategory_id.is_some()),
+            managed: opened_managed,
             opened: draft,
             needs_review: conflict.is_some(),
             restored: false,
@@ -397,6 +401,7 @@ impl Root {
             cx,
         );
         self.edit_product_form(cx, |form, _| form.restored = restored);
+        self.load_classifications(cx);
         if creating {
             self.edit_product_form(cx, |form, _| form.needs_review = false);
         } else {
@@ -762,10 +767,17 @@ impl Root {
     }
 
     fn render_product_classification(&self, form: &Panel, cx: &mut Context<Self>) -> gpui::Div {
-        let list = self.svc.store.inventory_classifications().ok().flatten();
+        let list = self
+            .svc
+            .store
+            .inventory_classification_choices()
+            .ok()
+            .flatten();
         let assignment = form.assignment.unwrap_or_default();
         let body = div().flex().flex_col().gap_2();
-        let Some(list) = list else { return body };
+        if list.is_none() && !form.managed {
+            return body;
+        }
         let controls = body.child(self.button(
             "product-classifications-mode",
             self.t(if form.managed {
@@ -781,9 +793,11 @@ impl Root {
                 })
             }),
         ));
-        if !form.managed {
-            return controls;
-        }
+        let Some(list) = list.filter(|_| form.managed) else {
+            return controls.when(form.managed, |body| {
+                body.child(self.t(Key::InventoryClassificationsUnavailable))
+            });
+        };
         let selected = [
             (Key::InventoryCategoryFilter, assignment.category_id),
             (
@@ -1158,6 +1172,64 @@ impl Root {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+    use uuid::Uuid;
+
+    #[gpui::test]
+    async fn reopening_product_conflicts_keeps_managed_assignments_and_explicit_clears(
+        cx: &mut TestAppContext,
+    ) {
+        let (_directory, window) = crate::root::tests::open(cx);
+        window
+            .update(cx, |root, _, cx| {
+                let generation = root.svc.store.verified_reviewed_generation().unwrap();
+                let id = Uuid::now_v7();
+                let category = Uuid::now_v7();
+                let brand = Uuid::now_v7();
+                let baseline = ProductReview {
+                    id,
+                    generation: generation.clone(),
+                    version: 1,
+                    fields: ProductDraft {
+                        classification: Some(ClassificationAssignment {
+                            category_id: Some(category),
+                            subcategory_id: Some(Uuid::now_v7()),
+                            brand_id: None,
+                        }),
+                        ..ProductDraft::default()
+                    },
+                };
+                for assignment in [
+                    ClassificationAssignment {
+                        brand_id: Some(brand),
+                        ..Default::default()
+                    },
+                    ClassificationAssignment {
+                        category_id: Some(category),
+                        ..Default::default()
+                    },
+                    ClassificationAssignment::default(),
+                ] {
+                    root.prepare_inventory(cx);
+                    root.install_product_form(
+                        generation.clone(),
+                        id,
+                        Some(baseline.clone()),
+                        ProductDraft {
+                            classification: Some(assignment),
+                            ..baseline.fields.clone()
+                        },
+                        Some("reopened".to_owned()),
+                        cx,
+                    );
+                    let Overlay::Inventory(desk) = &root.overlay else {
+                        panic!("inventory should be open");
+                    };
+                    let form = desk.product_form.as_ref().unwrap();
+                    assert_eq!(form.draft(cx).unwrap().classification, Some(assignment));
+                }
+            })
+            .unwrap();
+    }
 
     #[gpui::test]
     async fn inspecting_the_net_price_does_not_change_the_queued_gross_price(
