@@ -1294,10 +1294,11 @@ impl Store {
             .query_row(
                 "SELECT json_extract(json, '$.controlsVersion') FROM client WHERE id = ?1",
                 [id],
-                |row| row.get::<_, Option<u64>>(0),
+                |row| row.get::<_, Option<i64>>(0),
             )
             .optional()?
-            .flatten())
+            .flatten()
+            .and_then(|value| u64::try_from(value).ok()))
     }
 
     pub fn clients(&self) -> Result<Vec<Client>> {

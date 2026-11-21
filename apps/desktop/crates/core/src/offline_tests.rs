@@ -15,6 +15,19 @@ const DRY: &str = "01a1d81e-0000-7000-8000-0000000000a2";
 const LUCIA: &str = "01a1d81e-0000-7000-8000-0000000000c1";
 const EXISTING: &str = "01a1d81e-0000-7000-8000-0000000000e1";
 
+#[test]
+fn a_persisted_client_controls_revision_is_read_without_reloading_the_directory() {
+    let mut store = seeded();
+    assert!(store.client_is_synced(LUCIA).unwrap());
+    assert_eq!(store.client_controls_revision(LUCIA).unwrap(), None);
+    let mut client = store.clients().unwrap().remove(0);
+    client.controls_version = Some(4);
+    store
+        .apply_page(&[up(20, "client", LUCIA, json!(client))], 20)
+        .unwrap();
+    assert_eq!(store.client_controls_revision(LUCIA).unwrap(), Some(4));
+}
+
 fn at(iso: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(iso)
         .unwrap()
