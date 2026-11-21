@@ -5456,22 +5456,68 @@ fn native_directory_replays_contacts_and_preserves_newer_edits() {
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_reviews_future_campaign_delivery_and_cancels_through_the_proxy() {
-    use sob_core::http::marketing::{CampaignAction, LIVE_TOPIC, Status};
+    use sob_core::http::marketing::{
+        Audience, CampaignAction, Channel, Draft, DraftRevision, DraftWrite, LIVE_TOPIC,
+        MutationError, Status, Trigger,
+    };
 
     let mut browser = Device::sign_in();
     browser.sync();
     let previous = browser.store.live_view_revision(LIVE_TOPIC).unwrap();
     let id = uuid::Uuid::now_v7().to_string();
     let name = format!("Synthetic Desk Marketing {id}");
-    browser.rest_post("/admin/marketing/campaigns", json!({
-        "id": id, "name": name, "channel": "email", "trigger": "birthday",
-        "subject": "Synthetic test subject", "emailBody": "Synthetic test body",
-        "smsBody": "", "delayMinutes": 0, "birthdayLeadDays": 0,
-        "audience": { "tags": ["synthetic-desk"], "inactiveDays": null, "noFutureAppointments": false },
-    }));
+    let device = proxy_device();
+    let generation = browser.store.verified_reviewed_generation().unwrap();
+    let mut create = DraftWrite {
+        generation: "old-generation".into(),
+        revision: DraftRevision::Create { id: id.clone() },
+        draft: Draft {
+            name: name.clone(),
+            channel: Channel::Email,
+            trigger: Trigger::Birthday,
+            subject: "Synthetic test subject".into(),
+            email_body: "Synthetic test body\n\nSecond paragraph".into(),
+            sms_body: String::new(),
+            delay_minutes: 0,
+            birthday_lead_days: 0,
+            audience: Audience {
+                tags: vec!["synthetic-desk".into()],
+                inactive_days: None,
+                no_future_appointments: false,
+            },
+        },
+    };
+    assert!(matches!(
+        device.transport.save_campaign_draft(&create),
+        Err(MutationError::Transport(
+            sob_core::sync::TransportError::ReplicaGenerationChanged
+        ))
+    ));
+    create.generation = generation.clone();
+    let created = device.transport.save_campaign_draft(&create).unwrap();
+    assert_eq!(created.status, Status::Draft);
+    assert_eq!(created.email_body, create.draft.email_body);
+    assert_eq!(
+        device.transport.save_campaign_draft(&create).unwrap().id,
+        created.id
+    );
+    let mut update = DraftWrite {
+        revision: DraftRevision::Edit {
+            id: id.clone(),
+            version: created.version,
+        },
+        ..create
+    };
+    update.draft.birthday_lead_days = 5;
+    let updated = device.transport.save_campaign_draft(&update).unwrap();
+    assert_eq!(updated.version, created.version + 1);
+    assert_eq!(updated.birthday_lead_days, 5);
+    assert!(matches!(
+        device.transport.save_campaign_draft(&update),
+        Err(MutationError::Changed)
+    ));
     browser.sync();
     assert!(browser.store.live_view_revision(LIVE_TOPIC).unwrap() > previous);
-    let device = proxy_device();
     let found = device
         .transport
         .marketing_campaigns(1, &name, Some(Status::Draft))
@@ -5492,7 +5538,6 @@ fn native_reviews_future_campaign_delivery_and_cancels_through_the_proxy() {
     if !capabilities.can_deliver(campaign.channel) {
         return;
     }
-    let generation = browser.store.verified_reviewed_generation().unwrap();
     let scheduled = DateTime::from_timestamp((Utc::now() + Span::days(2)).timestamp(), 0).unwrap();
     let command =
         CampaignAction::queue(&campaign, &preview, generation.clone(), Some(scheduled)).unwrap();

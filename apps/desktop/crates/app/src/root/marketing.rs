@@ -6,6 +6,9 @@ use sob_core::http::marketing::{
 };
 use sob_core::sync::TransportError;
 
+mod draft;
+use draft::Editor;
+
 pub(super) struct Desk {
     identity: Arc<()>,
     request: Option<Arc<()>>,
@@ -19,6 +22,7 @@ pub(super) struct Desk {
     schedule: Entity<TextField>,
     status: Option<Status>,
     action: Option<CampaignAction>,
+    editor: Option<Editor>,
     uncertain: bool,
     confirm_exit: bool,
     busy: bool,
@@ -53,6 +57,7 @@ enum Request {
     Detail(String, u32),
     Review(String),
     Write(CampaignAction),
+    SaveDraft(sob_core::http::marketing::DraftWrite),
 }
 
 enum Loaded {
@@ -125,6 +130,7 @@ impl Root {
             detail: None,
             review: None,
             action: None,
+            editor: None,
             search: cx.new(|cx| TextField::new(search, false, cx)),
             applied_search: String::new(),
             schedule: cx.new(|cx| TextField::new(schedule, false, cx)),
@@ -155,6 +161,7 @@ impl Root {
         if desk.busy
             || desk.refreshing
             || desk.action.is_some()
+            || desk.editor.is_some()
             || desk
                 .retry_after
                 .is_some_and(|retry| retry > std::time::Instant::now())
@@ -176,6 +183,10 @@ impl Root {
             return;
         };
         if desk.busy {
+            return;
+        }
+        if desk.editor.is_some() {
+            self.leave_campaign_editor(cx);
             return;
         }
         if desk.uncertain && !desk.confirm_exit {
@@ -213,7 +224,8 @@ impl Root {
         }
         let search = desk.applied_search.clone();
         let status = desk.status;
-        let writing = matches!(request, Request::Write(_));
+        let saving = matches!(request, Request::SaveDraft(_));
+        let writing = saving || matches!(request, Request::Write(_));
         if matches!(request, Request::Review(_)) {
             desk.review = None;
         }
@@ -239,6 +251,9 @@ impl Root {
                         ),
                         Request::Write(action) => {
                             Loaded::Written(transport.act_on_campaign(&action)?)
+                        }
+                        Request::SaveDraft(write) => {
+                            Loaded::Written(transport.save_campaign_draft(&write)?)
                         }
                     })
                 })
@@ -291,6 +306,7 @@ impl Root {
                         None
                     }
                     Ok(Loaded::Written(campaign)) => {
+                        desk.editor = None;
                         desk.action = None;
                         desk.uncertain = false;
                         desk.review = None;
@@ -301,6 +317,9 @@ impl Root {
                         Some(id)
                     }
                     Err(MutationError::Changed) => {
+                        if saving && let Some(editor) = &mut desk.editor {
+                            editor.mark_stale();
+                        }
                         desk.error = Some(Key::MarketingChanged);
                         desk.review = None;
                         desk.action = None;
@@ -308,13 +327,23 @@ impl Root {
                         None
                     }
                     Err(MutationError::Rejected) => {
-                        desk.error = Some(Key::MarketingRejected);
+                        if saving && let Some(editor) = &mut desk.editor {
+                            editor.unlock();
+                        }
+                        desk.error = Some(if saving {
+                            Key::MarketingDraftInvalid
+                        } else {
+                            Key::MarketingRejected
+                        });
                         desk.action = None;
                         desk.review = None;
                         desk.uncertain = false;
                         None
                     }
                     Err(MutationError::Transport(TransportError::ReplicaGenerationChanged)) => {
+                        if saving && let Some(editor) = &mut desk.editor {
+                            editor.mark_stale();
+                        }
                         desk.error = Some(Key::BookingIntakeRestore);
                         desk.review = None;
                         desk.action = None;
@@ -323,6 +352,7 @@ impl Root {
                     }
                     Err(MutationError::Transport(error)) => {
                         if matches!(error, TransportError::Forbidden(_)) {
+                            desk.editor = None;
                             desk.list = None;
                             desk.detail = None;
                             desk.review = None;
@@ -345,6 +375,9 @@ impl Root {
                             && !matches!(error, TransportError::RateLimited(_))
                         {
                             desk.action = None;
+                            if let Some(editor) = &mut desk.editor {
+                                editor.unlock();
+                            }
                         }
                         None
                     }
@@ -451,13 +484,21 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let ready = self.status.connectivity == Connectivity::Online && !desk.busy;
-        let body = if let Some((campaign, deliveries)) = &desk.detail {
+        let body = if let Some(editor) = &desk.editor {
+            self.render_campaign_editor(desk, editor, ready, cx)
+        } else if let Some((campaign, deliveries)) = &desk.detail {
             self.render_campaign(desk, campaign, deliveries, ready, cx)
         } else {
             self.render_campaign_list(desk, ready, cx)
         };
         let footer = div().flex().flex_wrap().gap_2().when(!desk.busy, |row| {
-            let close = if desk.confirm_exit {
+            let close = if desk.editor.is_some() {
+                if desk.confirm_exit {
+                    Key::MarketingDiscardDraft
+                } else {
+                    Key::Back
+                }
+            } else if desk.confirm_exit {
                 Key::MarketingExitConfirm
             } else {
                 Key::Close
@@ -519,6 +560,13 @@ impl Root {
         let mut body = div().flex().flex_col().gap_3();
         if ready {
             body = body
+                .child(self.marketing_button(
+                    "create-campaign-draft",
+                    Key::MarketingCreateDraft,
+                    Kind::Primary,
+                    |root, cx| root.open_campaign_editor(false, cx),
+                    cx,
+                ))
                 .child(div().flex().gap_2().child(desk.search.clone()).child(
                     self.marketing_button(
                         "search-marketing",
@@ -845,6 +893,13 @@ impl Root {
                     .when(campaign.status == Status::Draft, |row| {
                         let id = campaign.id.clone();
                         row.child(self.marketing_button(
+                            "edit-campaign-draft",
+                            Key::MarketingEditDraft,
+                            Kind::Ghost,
+                            |root, cx| root.open_campaign_editor(true, cx),
+                            cx,
+                        ))
+                        .child(self.marketing_button(
                             "preview-marketing-audience",
                             Key::MarketingAudience,
                             Kind::Ghost,

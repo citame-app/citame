@@ -28,7 +28,7 @@ impl Status {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Channel {
     Email,
@@ -36,7 +36,7 @@ pub enum Channel {
     Optimized,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Trigger {
     Manual,
@@ -83,17 +83,56 @@ pub struct Campaign {
     pub subject: String,
     pub email_body: String,
     pub sms_body: String,
+    pub delay_minutes: u32,
+    pub birthday_lead_days: u32,
     pub scheduled_for: Option<DateTime<Utc>>,
     pub audience: Audience,
     pub counts: Counts,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Audience {
     pub tags: Vec<String>,
     pub no_future_appointments: bool,
     pub inactive_days: Option<u32>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Draft {
+    pub name: String,
+    pub channel: Channel,
+    pub trigger: Trigger,
+    pub subject: String,
+    pub email_body: String,
+    pub sms_body: String,
+    pub delay_minutes: u32,
+    pub birthday_lead_days: u32,
+    pub audience: Audience,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(untagged)]
+pub enum DraftRevision {
+    Create {
+        id: String,
+    },
+    Edit {
+        #[serde(skip)]
+        id: String,
+        version: u32,
+    },
+}
+
+#[derive(Clone, Serialize)]
+pub struct DraftWrite {
+    #[serde(skip)]
+    pub generation: String,
+    #[serde(flatten)]
+    pub revision: DraftRevision,
+    #[serde(flatten)]
+    pub draft: Draft,
 }
 
 #[derive(Clone, Deserialize)]
@@ -320,14 +359,39 @@ impl HttpTransport {
         } else {
             "queue"
         };
-        let mut req = self
+        let req = self
             .agent
             .post(&format!("{}{PATH}/{id}/{endpoint}", self.base_url));
+        self.send_campaign_write(req, &action.generation, body)
+    }
+
+    pub fn save_campaign_draft(&self, write: &DraftWrite) -> Result<Campaign, MutationError> {
+        let body =
+            serde_json::to_string(write).map_err(|e| TransportError::BadRequest(e.to_string()))?;
+        let req = match &write.revision {
+            DraftRevision::Create { id } => {
+                parse_id(id)?;
+                self.agent.post(&format!("{}{PATH}", self.base_url))
+            }
+            DraftRevision::Edit { id, .. } => {
+                self.agent
+                    .patch(&format!("{}{PATH}/{}", self.base_url, parse_id(id)?))
+            }
+        };
+        self.send_campaign_write(req, &write.generation, body)
+    }
+
+    fn send_campaign_write(
+        &self,
+        mut req: ureq::RequestBuilder<ureq::typestate::WithBody>,
+        generation: &str,
+        body: String,
+    ) -> Result<Campaign, MutationError> {
         for (key, value) in self.headers()? {
             req = req.header(key, value);
         }
         let response = req
-            .header("x-citame-generation", &action.generation)
+            .header("x-citame-generation", generation)
             .content_type("application/json")
             .send(body)
             .map_err(|error| TransportError::Offline(error.to_string()))?;

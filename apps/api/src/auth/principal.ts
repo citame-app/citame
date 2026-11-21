@@ -132,6 +132,10 @@ export function requireAuth(
         : path.endsWith("/payouts/reviewed")
           ? method === "POST"
           : method === "GET";
+      const campaignMutation =
+        (method === "POST" &&
+          /^\/admin\/marketing\/campaigns(?:\/[\da-f-]+\/(?:queue|cancel))?$/.test(path)) ||
+        (method === "PATCH" && /^\/admin\/marketing\/campaigns\/[\da-f-]+$/.test(path));
       if (
         ((path === "/admin/portfolio" || path.startsWith("/admin/portfolio/")) &&
           !portfolioAllowed) ||
@@ -141,7 +145,7 @@ export function requireAuth(
         (path === "/admin/intake-forms" && method === "GET" && c.req.query("view") !== "summary") ||
         !DESKTOP_PROXY_ROUTE.test(path) ||
         (path.startsWith("/admin/marketing/") &&
-          method !== (/\/(?:queue|cancel)$/.test(path) ? "POST" : "GET")) ||
+          (method === "GET" ? /\/(?:queue|cancel)$/.test(path) : !campaignMutation)) ||
         (method !== "POST" &&
           [
             "/appointments/desktop-booking",
