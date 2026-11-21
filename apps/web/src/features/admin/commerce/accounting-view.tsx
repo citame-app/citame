@@ -432,6 +432,8 @@ function SalesReport() {
         <SelectField
           label={t("accounting.staff")}
           value={professional}
+          disabled={staff.isPending || (staff.isError && !staff.data)}
+          hint={staff.isPending ? t("admin.loading") : undefined}
           options={[
             { value: "", label: t("accounting.allStaff") },
             ...(staff.data ?? []).map((member) => ({
@@ -443,6 +445,9 @@ function SalesReport() {
         />
         <Button type="submit">{t("accounting.load")}</Button>
       </form>
+      {staff.isError && !staff.data && (
+        <ErrorState error={staff.error} onRetry={() => void staff.refetch()} />
+      )}
       {report.isPending ? (
         <Skeleton className="h-48" />
       ) : report.isError ? (

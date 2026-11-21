@@ -691,6 +691,32 @@ test("financial reports separate new cash, receipt face values and the prepaid a
     prepaidReturnedCents: 2000,
     prepaidAllocationReturnedCents: 334,
   });
+  // Simulate a historical receipt whose line tax no longer reconciles to its settled header.
+  await t.db.execute(sql`update checkout_line set tax_cents = 100 where checkout_id = ${s.id}`);
+  const legacy = await call(owner, `/admin/accounting/sales?from=${date}&to=${date}`);
+  expect(await legacy.json()).toMatchObject({
+    settledByFamily: expect.arrayContaining([
+      { family: "unallocated", amountCents: 334, taxCents: 0 },
+    ]),
+  });
+  await t.db.execute(sql`update checkout_line set tax_cents = 0 where checkout_id = ${s.id}`);
+  await t.db.execute(sql`
+    update pass_redemption pr set refunded_at = c.fulfilled_at - interval '1 minute'
+    from checkout c where c.id = pr.checkout_id and c.id = ${s.id}
+  `);
+  const returnedBeforeSettlement = await call(
+    owner,
+    `/admin/accounting/sales?from=${date}&to=${date}`,
+  );
+  expect(await returnedBeforeSettlement.json()).toMatchObject({
+    soldCents: 2000,
+    prepaidAllocatedCents: 0,
+    prepaidAllocationReturnedCents: 0,
+    settledByFamily: [
+      { family: "service", amountCents: 2000, taxCents: 0 },
+      { family: "package_purchase", amountCents: 1000, taxCents: 0 },
+    ],
+  });
 });
 test("returning a pass visit preserves commission on independently paid service lines", async () => {
   await call(owner, `/admin/accounting/staff/${f.anaId}/policy`, "PUT", {

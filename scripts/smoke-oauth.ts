@@ -569,6 +569,28 @@ assert.equal(
     .status,
   403,
 );
+const saleDate = new Intl.DateTimeFormat("en-CA", { timeZone: reportSummary.timezone }).format(
+  new Date(),
+);
+const saleFilters = new URLSearchParams({ from: saleDate, to: saleDate, staffId: professional.id });
+const familyPath = `/admin/accounting/sales?${saleFilters}`;
+const [nativeFamilies, webFamilies] = await Promise.all([
+  desktopRequest(familyPath, receptionToken),
+  request(`${origin}/api${familyPath}`, { headers: { cookie } }),
+]);
+assert.equal(nativeFamilies.status, 200);
+assert.equal(webFamilies.status, 200);
+const salesFamilies = salesReportSchema.parse(await nativeFamilies.json());
+assert.deepEqual(salesReportSchema.parse(await webFamilies.json()), salesFamilies);
+assert.deepEqual(
+  salesFamilies.settledByFamily?.find((row) => row.family === "product"),
+  {
+    family: "product",
+    amountCents: 1000,
+    taxCents: 0,
+  },
+);
+assert.deepEqual(salesFamilies.cashSessions, []);
 for (const status of ["cancelled", "no_show"] as const) {
   const filters = new URLSearchParams(dateFilters);
   filters.set("status", status);

@@ -8,7 +8,7 @@ export function SalesFamilies({ rows }: { rows: SalesFamilyTotal[] }) {
   const heading = useId();
   const basis = useId();
   return (
-    <section className="space-y-2" aria-labelledby={heading}>
+    <div className="space-y-2">
       <h4 id={heading} className="font-semibold">
         {t("accounting.families.title")}
       </h4>
@@ -56,6 +56,6 @@ export function SalesFamilies({ rows }: { rows: SalesFamilyTotal[] }) {
       ) : (
         <p className="text-sm text-muted">{t("accounting.families.empty")}</p>
       )}
-    </section>
+    </div>
   );
 }

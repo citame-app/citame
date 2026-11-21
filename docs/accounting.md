@@ -53,11 +53,12 @@ for the unfiltered team only. Desktop refreshes the open report when the connect
 Web and Desktop both filter by professional and use the same CSV columns.
 
 The settled amount by family uses receipt line snapshots after discounts, with tips and later
-refunds excluded. A redeemed prepaid visit uses its allocated amount and tax. Gift-card,
+refunds excluded. A prepaid visit applied at settlement uses its allocated amount and tax.
+Visits already returned before settlement are excluded from those adjustments. Gift-card,
 package and membership issuance have separate rows. These rows include payments for stored
 value and should be read separately from the sale total, which excludes prepaid issuance.
 When historical line amounts, discounts or tax do not reconcile to a receipt, its settled
-amount and tax appear in the unallocated row without an inferred split. The family breakdown
+amount and recorded receipt tax appear in the unallocated row without an inferred split. The family breakdown
 uses the same salon dates and professional filter as the financial summary.
 
 Migrations `0011_staff_accounting.sql` and `0012_backfill_checkout_attribution.sql` add the ledgers and prepare previously open receipts. The upgrade retains settled historical totals and allocates discounts/tax on unfulfilled open receipts using exact integer arithmetic. No bank transfers or real charges are performed by local verification.

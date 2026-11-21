@@ -20,7 +20,7 @@ import type { Tx } from "../../tx";
 import { multiplyDivide } from "../commerce/money";
 import { getSalonSettings } from "../settings/service";
 import { requireStaff } from "../staff/admin";
-import { settledFamilies } from "./settled-families";
+import { redeemedAtSettlement, settledFamilies } from "./settled-families";
 
 type Connection = Database | Tx;
 function ownStatement(principal: Principal, staffId: string) {
@@ -333,7 +333,7 @@ export async function salesReport(db: Database, query: ReportQuery, principal: P
         tax: string | number;
         tips: string | number;
       }>(
-        sql`select coalesce(sum(c.total_cents - (select coalesce(sum(pr.amount_cents-pr.allocated_cents),0) from pass_redemption pr where pr.checkout_id=c.id)),0)::bigint as sold, coalesce(sum(c.tax_cents - (select coalesce(sum(l.tax_cents-pr.tax_cents),0) from pass_redemption pr join checkout_line l on l.id=pr.checkout_line_id where pr.checkout_id=c.id)),0)::bigint as tax, coalesce(sum(c.tip_cents),0)::bigint as tips from checkout c where c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt} and not exists (select 1 from checkout_line gl where gl.checkout_id = c.id and gl.kind in ('gift_card','package_purchase','membership_period')) ${staff}`,
+        sql`select coalesce(sum(c.total_cents - (select coalesce(sum(pr.amount_cents-pr.allocated_cents),0) from pass_redemption pr where pr.checkout_id=c.id and ${redeemedAtSettlement})),0)::bigint as sold, coalesce(sum(c.tax_cents - (select coalesce(sum(l.tax_cents-pr.tax_cents),0) from pass_redemption pr join checkout_line l on l.id=pr.checkout_line_id where pr.checkout_id=c.id and ${redeemedAtSettlement})),0)::bigint as tax, coalesce(sum(c.tip_cents),0)::bigint as tips from checkout c where c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt} and not exists (select 1 from checkout_line gl where gl.checkout_id = c.id and gl.kind in ('gift_card','package_purchase','membership_period')) ${staff}`,
       );
       const [costs] = await tx.execute<{ cost: string | number; unknown: number }>(
         sql`select coalesce(sum(l.quantity * l.unit_cost_cents::bigint),0)::bigint as cost, count(*) filter (where l.unit_cost_cents is null)::int as unknown from checkout_line l join checkout c on c.id = l.checkout_id where l.kind = 'product' and c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt} ${staff}`,
@@ -345,8 +345,8 @@ export async function salesReport(db: Database, query: ReportQuery, principal: P
         applied: string | number;
         returned: string | number;
       }>(sql`select
- coalesce(sum(pr.allocated_cents) filter (where c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt}),0)::bigint as applied,
- coalesce(sum(pr.allocated_cents) filter (where c.fulfilled_at is not null and pr.refunded_at >= ${fromAt} and pr.refunded_at < ${toAt}),0)::bigint as returned
+ coalesce(sum(pr.allocated_cents) filter (where c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt} and ${redeemedAtSettlement}),0)::bigint as applied,
+ coalesce(sum(pr.allocated_cents) filter (where pr.refunded_at > c.fulfilled_at and pr.refunded_at >= ${fromAt} and pr.refunded_at < ${toAt}),0)::bigint as returned
  from pass_redemption pr join checkout c on c.id=pr.checkout_id where true ${staff}`);
       const [fees] = await tx.execute<{ amount: string | number }>(
         sql`select coalesce(sum(l.unit_amount_cents),0)::bigint as amount from checkout_line l join checkout c on c.id=l.checkout_id join pass_period pp on pp.id=l.pass_period_id join pass_contract pc on pc.id=pp.contract_id where pc.included_uses=0 and c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt} ${staff}`,
