@@ -18,7 +18,7 @@ import {
 } from "./service";
 
 /** Owner-only salon settings, mounted at `/admin/settings` behind `requireAuth`. */
-export function settingsAdminRoutes({ db }: AppDeps) {
+export function settingsAdminRoutes({ db, config }: AppDeps) {
   return new Hono<AppEnv>()
     .get("/booking-policy", async (c) => {
       requireRole(c.get("principal"), "owner");
@@ -40,7 +40,11 @@ export function settingsAdminRoutes({ db }: AppDeps) {
     })
     .get("/desktop", async (c) => {
       requireRole(c.get("principal"), "owner");
-      return c.json(toReviewedSettings(await getSalonSettings(db)));
+      c.header("Cache-Control", "private, no-store");
+      return c.json({
+        ...toReviewedSettings(await getSalonSettings(db)),
+        generation: config.syncReplicaGeneration,
+      });
     })
     .put("/desktop", async (c) => {
       const principal = c.get("principal");

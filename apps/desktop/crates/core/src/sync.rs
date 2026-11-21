@@ -45,6 +45,10 @@ pub trait Transport: Send + Sync {
     fn push(&self, request: &PushRequest) -> Result<PushResponse, TransportError>;
     fn pull(&self, since: i64, limit: u32) -> Result<PullResponse, TransportError>;
 
+    fn owner_salon_configuration(&self) -> Option<crate::http::ReviewedSalonConfiguration> {
+        None
+    }
+
     fn pull_with_catalog_colors(
         &self,
         since: i64,
@@ -149,7 +153,12 @@ pub fn push_outbox(store: &mut Store, transport: &dyn Transport) -> Result<PushR
                 return Err(classify(e));
             }
         };
-        let done = store.apply_push_results_in(&batch, &response.results, Some(&generation))?;
+        let done = store.apply_push_results_in(
+            &batch,
+            &response.results,
+            Some(&generation),
+            Some(response.head_seq),
+        )?;
         report.batches += 1;
         report.applied += done.applied;
         report.rejected += done.rejected;

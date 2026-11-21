@@ -676,9 +676,7 @@ impl Root {
             cx.notify();
         }
         self.refresh_unpaid_if_changed(reconnected, cx);
-        if self.status.connectivity == Connectivity::Online {
-            self.refresh_salon_configuration(reconnected, cx);
-        }
+        self.refresh_salon_configuration(reconnected, cx);
         if reconnected {
             self.refresh_weekly_conflicts_if_ready(cx);
             self.refresh_open_annotations(true, cx);
@@ -696,14 +694,15 @@ impl Root {
         // still trigger a refresh on the next tick.
         self.data_version = self.svc.store.data_version().ok();
         let generation = self.svc.store.refresh_reviewed_generation().ok();
-        let store = &self.svc.store;
-        let scope = store.get_meta("calendar_scope").ok().flatten();
+        let scope = self.svc.store.get_meta("calendar_scope").ok().flatten();
         if (self.calendar_scope.is_some() && self.calendar_scope != scope)
             || self.replica_generation != generation
         {
-            self.overlay = Overlay::None;
+            if !self.preserve_open_salon_draft(cx) {
+                self.overlay = Overlay::None;
+            }
             self.notices.clear();
-            self.notice_cursor = store.booking_notice_head().unwrap_or_default();
+            self.notice_cursor = self.svc.store.booking_notice_head().unwrap_or_default();
         }
         self.calendar_scope = scope;
         self.replica_generation = generation;
@@ -3252,6 +3251,7 @@ impl Root {
                 "appointment.reschedule" => Key::ConflictReschedule,
                 "appointment.cancel" => Key::ConflictCancel,
                 "time_off.create" | "time_off.update" | "time_off.delete" => Key::TimeOff,
+                "settings.update" => Key::SalonConfiguration,
                 _ => Key::ConflictOther,
             });
             let when = c
@@ -3305,6 +3305,19 @@ impl Root {
                         .flex()
                         .flex_wrap()
                         .gap_2()
+                        .when(
+                            c.kind == "settings.update"
+                                && c.payload.get("expectedRevision").is_some()
+                                && self.can_configure_salon(),
+                            |row| {
+                                row.child(self.button(
+                                    ("c-settings", i),
+                                    self.t(Key::SalonConfiguration),
+                                    Kind::Primary,
+                                    cx.listener(|root, _, _, cx| root.open_salon_configuration(cx)),
+                                ))
+                            },
+                        )
                         .when(c.requires_restored_review(), |row| {
                             let details = serde_json::json!({
                                 "kind": c.kind,

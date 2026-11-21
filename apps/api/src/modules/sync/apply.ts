@@ -30,7 +30,7 @@ import {
 } from "../appointments/service";
 import { updateClient } from "../clients/admin";
 import { updateService } from "../services/admin";
-import { getSalonSettings, updateSalonSettings } from "../settings/service";
+import { getSalonSettings, updateReviewedSettings, updateSalonSettings } from "../settings/service";
 import { requireStaff, updateStaff } from "../staff/admin";
 import { createTimeOff, deleteTimeOff, updateTimeOff } from "../staff/schedule";
 
@@ -239,6 +239,11 @@ export async function applyMutation(
     }
     case "settings.update": {
       requireRole(principal, "owner");
+      if ("expectedRevision" in mutation.payload) {
+        const { changes, expectedRevision } = mutation.payload;
+        await updateReviewedSettings(db, changes, actor, expectedRevision);
+        return;
+      }
       const current = await getSalonSettings(db);
       assertNewer(current.updatedAt, at);
       await updateSalonSettings(db, mutation.payload, actor);

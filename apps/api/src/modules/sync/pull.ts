@@ -19,6 +19,7 @@ import { DomainError } from "../../errors";
 import { calendarBadges } from "../appointments/context";
 import { loadSnapshots, toAppointment } from "../appointments/service";
 import { catalogMetadata, publicService } from "../services/options";
+import { toReviewedSettings, toSalonResponse } from "../settings/service";
 
 /**
  * Highest committed `seq`. Because seq order equals commit order (ADR 0007), everything at or
@@ -209,11 +210,8 @@ async function loadVisible(
       const rows = await db.select().from(salonSettings);
       for (const r of rows) {
         put(String(r.id), {
-          name: r.name,
-          timezone: r.timezone,
-          slotGranularityMinutes: r.slotGranularityMinutes,
-          minNoticeMinutes: r.minNoticeMinutes,
-          maxDaysAhead: r.maxDaysAhead,
+          ...toSalonResponse(r),
+          ownerConfiguration: owner ? toReviewedSettings(r) : null,
           updatedAt: r.updatedAt.toISOString(),
         });
       }

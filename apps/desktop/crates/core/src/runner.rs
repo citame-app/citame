@@ -123,6 +123,15 @@ impl RunnerCore {
         self.refresh_counts();
         let wait = match result {
             Ok(_) => {
+                // Older replicas may already be past the most recent settings upsert.
+                if self
+                    .store
+                    .cached_salon_configuration()
+                    .is_ok_and(|saved| saved.is_none())
+                    && let Some(settings) = self.transport.owner_salon_configuration()
+                {
+                    let _ = self.store.cache_salon_configuration(&settings);
+                }
                 self.backoff.reset();
                 self.update(|s| {
                     s.connectivity = Connectivity::Online;

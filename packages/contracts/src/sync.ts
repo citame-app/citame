@@ -3,7 +3,12 @@ import { appointmentSchema, createAppointmentBaseSchema } from "./appointments";
 import { calendarAppointmentSchema } from "./calendar";
 import { idSchema, instantSchema, LIMITS, localDateSchema, syncGenerationSchema } from "./common";
 import { dateShiftRangesSchema } from "./date-shifts";
-import { salonResponseSchema, updateSalonSettingsRequestSchema } from "./salon";
+import {
+  reviewedSalonSettingsRequestSchema,
+  reviewedSalonSettingsSchema,
+  salonResponseSchema,
+  updateSalonSettingsRequestSchema,
+} from "./salon";
 import { serviceSchema, updateServiceRequestSchema } from "./services";
 import { timeOfDaySchema, timeOffSchema, weekdaySchema } from "./staff";
 
@@ -197,7 +202,7 @@ const staffUpdate = z.object({
 const settingsUpdate = z.object({
   ...envelope,
   kind: z.literal("settings.update"),
-  payload: updateSalonSettingsRequestSchema,
+  payload: z.union([reviewedSalonSettingsRequestSchema, updateSalonSettingsRequestSchema]),
 });
 
 export const syncMutationSchema = z.discriminatedUnion("kind", [
@@ -365,7 +370,10 @@ export type SyncDateShift = z.infer<typeof syncDateShiftSchema>;
 export const syncTimeOffSchema = timeOffSchema.extend({ updatedAt: instantSchema });
 export type SyncTimeOff = z.infer<typeof syncTimeOffSchema>;
 
-export const syncSalonSettingsSchema = salonResponseSchema.extend({ updatedAt: instantSchema });
+export const syncSalonSettingsSchema = salonResponseSchema.extend({
+  updatedAt: instantSchema,
+  ownerConfiguration: reviewedSalonSettingsSchema.nullable().optional(),
+});
 export type SyncSalonSettings = z.infer<typeof syncSalonSettingsSchema>;
 
 const upsert = <E extends string, S extends z.ZodType>(entity: E, data: S) =>

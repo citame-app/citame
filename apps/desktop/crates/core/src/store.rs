@@ -13,6 +13,7 @@ use serde_json::Value;
 
 use crate::billing::SavedBankRefund;
 use crate::error::{CoreError, Result};
+use crate::http::{ReviewedSalonConfiguration, SalonConfigurationWrite};
 use crate::model::*;
 use crate::sync::{CATALOG_COLORS_CACHED, CatalogColors};
 
@@ -23,6 +24,25 @@ fn pending_bank_refund_key(checkout_id: uuid::Uuid, actor_user_id: &str) -> Stri
 pub(crate) const INITIAL_GENERATION: &str = "initial";
 const GENERATION_KEY: &str = "sync_generation";
 const REBUILD_KEY: &str = "sync_rebuilding";
+const SALON_CONFIGURATION_CACHE: &str = "salon_configuration_cache";
+const SALON_CONFIGURATION_ACK: &str = "salon_configuration_ack";
+const SALON_CONFIGURATION_UNAVAILABLE: &str = "salon_configuration_unavailable";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SalonConfigurationAck {
+    mutation_id: String,
+    through: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SalonConfigurationWork {
+    Idle,
+    Pending(Option<SalonConfigurationWrite>),
+    Conflict {
+        id: String,
+        write: SalonConfigurationWrite,
+    },
+}
 const STAFF_DIRECTORY_TOPIC: &str = "staff_directory";
 
 const MIGRATIONS: &[&str] = &[
@@ -157,6 +177,9 @@ fn apply_change(tx: &Transaction, c: &RawChange) -> Result<()> {
     }
     match c.op.as_str() {
         "delete" => {
+            if c.entity == "salon_settings" {
+                Store::remove_salon_configuration(tx)?;
+            }
             tx.execute(
                 &format!("DELETE FROM {} WHERE id = ?1", c.entity),
                 params![c.id],
@@ -241,6 +264,26 @@ fn upsert(tx: &Transaction, c: &RawChange) -> Result<()> {
         "salon_settings" => {
             let v: SalonSettings = parse(&c.data, "salon_settings", id)?;
             upsert_json(tx, "salon_settings", "1", &serde_json::to_string(&v)?)?;
+            if let Some(data) = c
+                .data
+                .as_ref()
+                .and_then(|value| value.get("ownerConfiguration"))
+            {
+                if data.is_null() {
+                    return Store::remove_salon_configuration(tx);
+                }
+                let mut settings = data.as_object().cloned().ok_or_else(|| {
+                    CoreError::Protocol("Expected an owner settings snapshot".into())
+                })?;
+                let generation = Store::generation_at(tx)?;
+                settings.insert("generation".into(), Value::String(generation));
+                let reviewed = serde_json::from_value(Value::Object(settings))?;
+                tx.execute(
+                    "DELETE FROM meta WHERE key = ?1",
+                    [SALON_CONFIGURATION_UNAVAILABLE],
+                )?;
+                Store::cache_salon_configuration_at(tx, &reviewed)?;
+            }
         }
         _ => unreachable!("filtered by KNOWN"),
     }
@@ -396,6 +439,149 @@ impl Store {
 
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
         Self::set_meta_at(&self.conn, key, value)
+    }
+
+    pub fn cache_salon_configuration(
+        &mut self,
+        settings: &ReviewedSalonConfiguration,
+    ) -> Result<()> {
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        Self::ensure_generation(&tx, Some(&settings.generation))?;
+        if Self::meta_at(&tx, SALON_CONFIGURATION_UNAVAILABLE)?.is_some() {
+            return Err(CoreError::Invalid(
+                "The latest replica removed the settings snapshot".into(),
+            ));
+        }
+        let applied = Self::cache_salon_configuration_at(&tx, settings)?;
+        tx.commit()?;
+        if !applied {
+            return Err(CoreError::Invalid(
+                "Settings response is older than the cached review".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn cache_salon_configuration_at(
+        conn: &Connection,
+        settings: &ReviewedSalonConfiguration,
+    ) -> Result<bool> {
+        let cached = Self::meta_at(conn, SALON_CONFIGURATION_CACHE)?
+            .map(|raw| serde_json::from_str::<ReviewedSalonConfiguration>(&raw))
+            .transpose()?;
+        if let Some(cached) = cached
+            && cached.generation == settings.generation
+            && cached.revision > settings.revision
+        {
+            return Ok(false);
+        }
+        Self::set_meta_at(
+            conn,
+            SALON_CONFIGURATION_CACHE,
+            &serde_json::to_string(settings)?,
+        )?;
+        Ok(true)
+    }
+
+    pub fn cached_salon_configuration(&self) -> Result<Option<ReviewedSalonConfiguration>> {
+        let Some(raw) = self.get_meta(SALON_CONFIGURATION_CACHE)? else {
+            return Ok(None);
+        };
+        let saved: ReviewedSalonConfiguration = serde_json::from_str(&raw)?;
+        Ok((saved.generation == self.replica_generation()?).then_some(saved))
+    }
+
+    fn remove_salon_configuration(conn: &Connection) -> Result<()> {
+        conn.execute(
+            "DELETE FROM meta WHERE key = ?1",
+            [SALON_CONFIGURATION_CACHE],
+        )?;
+        Self::set_meta_at(conn, SALON_CONFIGURATION_UNAVAILABLE, "1")
+    }
+
+    fn salon_configuration_ack(conn: &Connection) -> Result<Option<SalonConfigurationAck>> {
+        Self::meta_at(conn, SALON_CONFIGURATION_ACK)?
+            .map(|value| Ok(serde_json::from_str(&value)?))
+            .transpose()
+    }
+
+    pub fn salon_configuration_work(&self) -> Result<SalonConfigurationWork> {
+        let pending: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT payload FROM outbox WHERE kind = 'settings.update' ORDER BY seq LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(payload) = pending {
+            return Ok(SalonConfigurationWork::Pending(
+                serde_json::from_str(&payload).ok(),
+            ));
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT mutation_id,payload FROM conflict WHERE kind = 'settings.update' AND resolved_at IS NULL ORDER BY seq",
+        )?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let payload: String = row.get(1)?;
+            if let Ok(write) = serde_json::from_str(&payload) {
+                return Ok(SalonConfigurationWork::Conflict {
+                    id: row.get(0)?,
+                    write,
+                });
+            }
+        }
+        Ok(SalonConfigurationWork::Idle)
+    }
+
+    pub fn queue_salon_configuration(
+        &mut self,
+        reviewed: &ReviewedSalonConfiguration,
+        draft: &crate::http::SalonConfiguration,
+        replacing: Option<&str>,
+    ) -> Result<bool> {
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        if self.verified_reviewed_generation()? != reviewed.generation {
+            return Err(CoreError::CalendarGenerationChanged);
+        }
+        if Self::meta_at(&tx, SALON_CONFIGURATION_UNAVAILABLE)?.is_some() {
+            return Err(CoreError::Invalid(
+                "The latest replica removed the settings snapshot".into(),
+            ));
+        }
+        let allowed = match self.salon_configuration_work()? {
+            SalonConfigurationWork::Idle => replacing.is_none(),
+            SalonConfigurationWork::Conflict { id, .. } => replacing == Some(id.as_str()),
+            SalonConfigurationWork::Pending(_) => false,
+        };
+        if !allowed {
+            return Err(CoreError::Invalid(
+                "Another settings edit needs attention".into(),
+            ));
+        }
+        let write = SalonConfigurationWrite::new(reviewed, draft);
+        if let Some(write) = &write {
+            self.enqueue_with_timestamp(
+                "settings.update",
+                "1",
+                serde_json::to_value(write)?,
+                now_iso(),
+            )?;
+        }
+        if let Some(id) = replacing {
+            Self::resolve_conflict_at(
+                &tx,
+                id,
+                if write.is_some() {
+                    "resubmitted"
+                } else {
+                    "reviewed"
+                },
+            )?;
+        }
+        tx.commit()?;
+        Ok(write.is_some())
     }
 
     pub fn pending_stock(
@@ -722,6 +908,15 @@ impl Store {
         if alert {
             tx.execute("DELETE FROM booking_notice WHERE id NOT IN (SELECT id FROM booking_notice ORDER BY id DESC LIMIT 12)",[])?;
         }
+        if let Some(ack) = Self::salon_configuration_ack(&tx)?
+            && next_cursor >= ack.through
+        {
+            tx.execute(
+                "DELETE FROM outbox WHERE mutation_id = ?1",
+                [ack.mutation_id],
+            )?;
+            tx.execute("DELETE FROM meta WHERE key = ?1", [SALON_CONFIGURATION_ACK])?;
+        }
         if complete {
             tx.execute(
                 "INSERT OR IGNORE INTO meta (key,value) VALUES ('calendar_snapshot_complete','1')",
@@ -824,8 +1019,8 @@ impl Store {
             tx.execute(&format!("DELETE FROM {t}"), [])?;
         }
         tx.execute(
-            "DELETE FROM meta WHERE key IN ('cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','desk_waitlist',?1) OR key LIKE 'live_view:%'",
-            [CATALOG_COLORS_CACHED],
+            "DELETE FROM meta WHERE key IN ('cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','desk_waitlist',?1,?2,?3,?4) OR key LIKE 'live_view:%'",
+            [CATALOG_COLORS_CACHED, SALON_CONFIGURATION_CACHE, SALON_CONFIGURATION_ACK, SALON_CONFIGURATION_UNAVAILABLE],
         )?;
         tx.execute("DELETE FROM local_booking_confirmation", [])?;
         Ok(())
@@ -1094,7 +1289,7 @@ impl Store {
     }
 
     fn enqueue_with_timestamp(
-        &mut self,
+        &self,
         kind: &str,
         entity_id: &str,
         payload: Value,
@@ -1154,14 +1349,20 @@ impl Store {
     }
 
     pub fn outbox(&self, limit: usize) -> Result<Vec<OutboxEntry>> {
-        Self::outbox_at(&self.conn, limit)
+        Self::outbox_at(&self.conn, limit, None)
     }
 
     pub(crate) fn push_snapshot(&self, limit: usize) -> Result<(String, Vec<OutboxEntry>)> {
         let tx = self.conn.unchecked_transaction()?;
         let generation = Self::generation_at(&tx)?;
         let batch = if Self::meta_at(&tx, REBUILD_KEY)?.is_none() {
-            Self::outbox_at(&tx, limit)?
+            Self::outbox_at(
+                &tx,
+                limit,
+                Self::salon_configuration_ack(&tx)?
+                    .as_ref()
+                    .map(|ack| ack.mutation_id.as_str()),
+            )?
         } else {
             Vec::new()
         };
@@ -1169,12 +1370,12 @@ impl Store {
         Ok((generation, batch))
     }
 
-    fn outbox_at(conn: &Connection, limit: usize) -> Result<Vec<OutboxEntry>> {
+    fn outbox_at(conn: &Connection, limit: usize, skip: Option<&str>) -> Result<Vec<OutboxEntry>> {
         let mut stmt = conn.prepare(&format!(
-            "SELECT {OUTBOX_COLS} FROM outbox ORDER BY seq LIMIT ?1"
+            "SELECT {OUTBOX_COLS} FROM outbox WHERE ?2 IS NULL OR mutation_id != ?2 ORDER BY seq LIMIT ?1"
         ))?;
         Ok(stmt
-            .query_map(params![limit as i64], outbox_from_row)?
+            .query_map(params![limit as i64, skip], outbox_from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
@@ -1193,7 +1394,7 @@ impl Store {
         sent: &[OutboxEntry],
         results: &[MutationResult],
     ) -> Result<PushApplied> {
-        self.apply_push_results_in(sent, results, None)
+        self.apply_push_results_in(sent, results, None, None)
     }
 
     pub(crate) fn apply_push_results_in(
@@ -1201,6 +1402,7 @@ impl Store {
         sent: &[OutboxEntry],
         results: &[MutationResult],
         generation: Option<&str>,
+        response_head: Option<i64>,
     ) -> Result<PushApplied> {
         if results.len() != sent.len() {
             return Err(CoreError::Protocol(format!(
@@ -1233,10 +1435,25 @@ impl Store {
                             params![s.entity_id, applied_seq],
                         )?;
                     }
-                    tx.execute(
-                        "DELETE FROM outbox WHERE mutation_id = ?1",
-                        params![s.mutation_id],
-                    )?;
+                    if let Some(through) = response_head
+                        && s.kind == "settings.update"
+                        && s.payload.get("expectedRevision").is_some()
+                    {
+                        let ack = SalonConfigurationAck {
+                            mutation_id: s.mutation_id.clone(),
+                            through: through.max(applied_seq.unwrap_or(0)),
+                        };
+                        Self::set_meta_at(
+                            &tx,
+                            SALON_CONFIGURATION_ACK,
+                            &serde_json::to_string(&ack)?,
+                        )?;
+                    } else {
+                        tx.execute(
+                            "DELETE FROM outbox WHERE mutation_id = ?1",
+                            [&s.mutation_id],
+                        )?;
+                    }
                     out.applied += 1;
                 }
                 MutationResult::Rejected {
@@ -1319,7 +1536,11 @@ impl Store {
     }
 
     pub fn resolve_conflict(&mut self, mutation_id: &str, resolution: &str) -> Result<()> {
-        let n = self.conn.execute(
+        Self::resolve_conflict_at(&self.conn, mutation_id, resolution)
+    }
+
+    fn resolve_conflict_at(conn: &Connection, mutation_id: &str, resolution: &str) -> Result<()> {
+        let n = conn.execute(
             "UPDATE conflict SET resolved_at = ?2, resolution = ?3
              WHERE mutation_id = ?1 AND resolved_at IS NULL",
             params![mutation_id, now_iso(), resolution],

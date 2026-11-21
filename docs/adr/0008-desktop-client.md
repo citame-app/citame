@@ -84,6 +84,6 @@ All UI copy lives in `sob_core::i18n` (a macro-generated `Key` enum with an Engl
 ## Consequences
 
 - The Rust toolchain (stable, edition 2024) and, for the GUI crate, the system libraries GPUI needs on Linux (Wayland/X11, xkbcommon, fontconfig, Vulkan loader) are required to build `sob-desktop`; `sob-core` needs only a C compiler (bundled SQLite) and, for TLS, the ring build prerequisites.
-- Last-writer-wins entities (clients, time off, settings) are queued for push but the v1 UI only edits appointments and creates clients; the sync layer already carries all twelve mutation kinds.
+- The original v1 UI edited appointments and created clients. The sync layer carries the original last-writer-wins edits as well. Native settings use the reviewed queue defined in [ADR 0022](0022-reviewed-offline-salon-settings.md).
 - Added in the 2026-11-15 release-readiness pass: day/week navigation with one staff member per week, native UTF-16/IME text input with grapheme editing and selection, persisted light/dark theme with system default, and completed/no-show controls backed by versioned offline mutations.
 - Initially deferred in v1: OS keyring, system installers and auto-update, and macOS/Windows builds. [ADR 0020](0020-desktop-release-platforms.md) updates the platform release decision.

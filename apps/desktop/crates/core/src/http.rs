@@ -64,7 +64,7 @@ pub use date_shifts::{
 };
 pub use salon_configuration::{
     ReviewedSalonConfiguration, SALON_SLOT_STEPS, SalonConfiguration, SalonConfigurationDraft,
-    SalonConfigurationWrite, SalonWriteResult,
+    SalonConfigurationWrite,
 };
 
 /// The stream is reconnected at least this often. ureq bounds the whole body, not each read,
@@ -1767,6 +1767,11 @@ fn read_response_with<T: serde::de::DeserializeOwned, E: From<TransportError>>(
 }
 
 impl Transport for HttpTransport {
+    fn owner_salon_configuration(&self) -> Option<ReviewedSalonConfiguration> {
+        let owner = self.session.read().ok()?.as_ref()?.role == "owner";
+        owner.then(|| self.salon_configuration().ok()).flatten()
+    }
+
     fn push(&self, request: &PushRequest) -> Result<PushResponse, TransportError> {
         let body = serde_json::to_string(request)
             .map_err(|e| TransportError::BadRequest(e.to_string()))?;

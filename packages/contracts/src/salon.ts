@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { instantSchema } from "./common";
+import { instantSchema, syncGenerationSchema } from "./common";
 import { reminderLeadSchema } from "./notifications";
 
 /** Public salon information: what the booking flow needs to render dates and limits. */
@@ -93,6 +93,10 @@ export const reviewedSalonSettingsSchema = ownerSalonSettingsSchema
   .required({ onlineBookingEnabled: true })
   .extend({ revision: instantSchema });
 export type ReviewedSalonSettings = z.infer<typeof reviewedSalonSettingsSchema>;
+
+export const desktopSalonSettingsSchema = reviewedSalonSettingsSchema.extend({
+  generation: syncGenerationSchema,
+});
 
 /** Native edits are conditional on the settings revision reviewed by the owner. */
 export const reviewedSalonSettingsRequestSchema = z.strictObject({

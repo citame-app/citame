@@ -20,11 +20,12 @@ pub struct SalonConfiguration {
     pub reminder_second_lead_minutes: Option<u32>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ReviewedSalonConfiguration {
     #[serde(flatten)]
     pub settings: SalonConfiguration,
     pub revision: DateTime<Utc>,
+    pub generation: String,
 }
 
 pub struct SalonConfigurationDraft<'a> {
@@ -71,7 +72,7 @@ impl SalonConfigurationDraft<'_> {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SalonConfigurationWrite {
     expected_revision: DateTime<Utc>,
@@ -99,27 +100,17 @@ impl SalonConfigurationWrite {
         reviewed.as_object_mut()?.extend(self.changes.clone());
         serde_json::from_value(reviewed).ok()
     }
-}
 
-pub enum SalonWriteResult {
-    Saved(ReviewedSalonConfiguration),
-    Conflict,
+    pub fn proposed_fields(&self) -> impl Iterator<Item = (&str, &Value)> {
+        self.changes
+            .iter()
+            .map(|(name, value)| (name.as_str(), value))
+    }
 }
 
 impl HttpTransport {
     pub fn salon_configuration(&self) -> Result<ReviewedSalonConfiguration, TransportError> {
         read_response(self.get(&self.agent, PATH, None)?, false)
-    }
-
-    pub fn write_salon_configuration(
-        &self,
-        write: &SalonConfigurationWrite,
-    ) -> Result<SalonWriteResult, TransportError> {
-        let response = self.send_put_json(PATH, write)?;
-        if response.status().as_u16() == 409 {
-            return Ok(SalonWriteResult::Conflict);
-        }
-        read_response(response, false).map(SalonWriteResult::Saved)
     }
 }
 
@@ -148,6 +139,7 @@ mod tests {
         let reviewed = ReviewedSalonConfiguration {
             settings: saved,
             revision: "2026-11-21T00:00:00Z".parse().unwrap(),
+            generation: "initial".into(),
         };
         assert!(SalonConfigurationWrite::new(&reviewed, &reviewed.settings).is_none());
         let write = SalonConfigurationWrite::new(&reviewed, &draft).unwrap();

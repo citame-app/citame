@@ -3,6 +3,114 @@ use serde_json::{Value, json};
 use super::*;
 
 #[test]
+fn saved_salon_settings_survive_restart_and_review_after_a_restore() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("replica.sqlite");
+    let reviewed: ReviewedSalonConfiguration = serde_json::from_value(json!({
+        "generation": INITIAL_GENERATION, "revision": "2026-11-21T00:00:00Z",
+        "name": "Studio", "timezone": "Europe/Madrid", "slotGranularityMinutes": 15,
+        "minNoticeMinutes": 30, "maxDaysAhead": 60, "onlineBookingEnabled": true,
+        "reminderFirstLeadMinutes": 1440, "reminderSecondLeadMinutes": 120
+    }))
+    .unwrap();
+    let mut draft = reviewed.settings.clone();
+    draft.online_booking_enabled = false;
+    let mut store = Store::open(&path).unwrap();
+    store.cache_salon_configuration(&reviewed).unwrap();
+    assert!(
+        store
+            .queue_salon_configuration(&reviewed, &draft, None)
+            .unwrap()
+    );
+    assert!(
+        store
+            .queue_salon_configuration(&reviewed, &draft, None)
+            .is_err()
+    );
+    drop(store);
+
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(
+        store.cached_salon_configuration().unwrap(),
+        Some(reviewed.clone())
+    );
+    assert!(matches!(
+        store.salon_configuration_work().unwrap(),
+        SalonConfigurationWork::Pending(Some(_))
+    ));
+    let original = store.outbox(1).unwrap().pop().unwrap();
+    assert_eq!(
+        original.payload["changes"],
+        json!({"onlineBookingEnabled": false})
+    );
+    store
+        .switch_replica_generation(INITIAL_GENERATION, "restored")
+        .unwrap();
+    assert!(store.cached_salon_configuration().unwrap().is_none());
+    assert!(
+        store
+            .queue_salon_configuration(&reviewed, &draft, None)
+            .is_err()
+    );
+    let SalonConfigurationWork::Conflict { id, write } = store.salon_configuration_work().unwrap()
+    else {
+        panic!("Queued settings must survive a restore as a conflict");
+    };
+    assert_eq!(id, original.mutation_id);
+    let mut current = reviewed.clone();
+    current.generation = "restored".into();
+    current.revision += chrono::Duration::days(1);
+    current.settings.min_notice_minutes = 90;
+    store
+        .apply_sync_page(&[], 0, false, true, &[], Some("restored"))
+        .unwrap();
+    let rebased = write.review_against(&current.settings).unwrap();
+    assert_eq!(rebased.min_notice_minutes, 90);
+    assert!(!rebased.online_booking_enabled);
+    assert!(
+        store
+            .queue_salon_configuration(&current, &rebased, Some(&id))
+            .unwrap()
+    );
+    assert!(store.conflict(&id).unwrap().is_none());
+    assert_ne!(store.outbox(1).unwrap()[0].mutation_id, id);
+}
+
+#[test]
+fn a_settings_tombstone_invalidates_the_owner_copy_and_late_gets() {
+    let mut store = Store::open_in_memory().unwrap();
+    let reviewed: ReviewedSalonConfiguration = serde_json::from_value(json!({
+        "generation": INITIAL_GENERATION, "revision": "2026-11-21T00:00:00Z",
+        "name": "Studio", "timezone": "Europe/Madrid", "slotGranularityMinutes": 15,
+        "minNoticeMinutes": 30, "maxDaysAhead": 60, "onlineBookingEnabled": true,
+        "reminderFirstLeadMinutes": 1440, "reminderSecondLeadMinutes": 120
+    }))
+    .unwrap();
+    store.cache_salon_configuration(&reviewed).unwrap();
+    store
+        .apply_page(
+            &[RawChange {
+                seq: 1,
+                entity: "salon_settings".into(),
+                id: "1".into(),
+                op: "delete".into(),
+                data: None,
+            }],
+            1,
+        )
+        .unwrap();
+    assert!(store.cached_salon_configuration().unwrap().is_none());
+    assert!(store.cache_salon_configuration(&reviewed).is_err());
+    let mut draft = reviewed.settings.clone();
+    draft.online_booking_enabled = false;
+    assert!(
+        store
+            .queue_salon_configuration(&reviewed, &draft, None)
+            .is_err()
+    );
+}
+
+#[test]
 fn review_refresh_advances_the_topic_without_replica_changes() {
     let mut store = Store::open_in_memory().unwrap();
     assert_eq!(store.live_view_revision("review_requests").unwrap(), 0);

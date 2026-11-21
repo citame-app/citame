@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { desktopSalonSettingsSchema } from "@sob/contracts";
 import {
   appointment,
   clientProfile,
@@ -614,6 +615,58 @@ describe("other last-writer-wins entities and tombstones", () => {
     );
     const { body } = await push(t, owner, [stale]);
     expect(body.results[0]).toMatchObject({ status: "rejected", reason: "conflict" });
+  });
+
+  test("a reviewed settings edit replays safely and cannot overwrite a newer Cloud revision", async () => {
+    const read = async () =>
+      desktopSalonSettingsSchema.parse(
+        await (await call(owner, "GET", "/admin/settings/desktop")).json(),
+      );
+    const { revision, minNoticeMinutes } = await read();
+    const cursor = (await pull(t, owner)).headSeq;
+    const queued = mutation(
+      "settings.update",
+      { expectedRevision: revision, changes: { onlineBookingEnabled: false } },
+      { createdAt: "2020-01-01T00:00:00.000Z" },
+    );
+    const staff = mutation("settings.update", {
+      expectedRevision: revision,
+      changes: { minNoticeMinutes: 70 },
+    });
+    expect((await push(t, ana, [staff])).body.results[0]).toMatchObject({
+      status: "rejected",
+      reason: "forbidden",
+    });
+    expect((await push(t, owner, [queued])).body.results[0]).toMatchObject({ status: "applied" });
+    expect(await read()).toMatchObject({ onlineBookingEnabled: false });
+    const ownerChanges = (await pull(t, owner, { since: cursor })).changes;
+    expect(ownerChanges.find((change) => change.entity === "salon_settings")).toMatchObject({
+      data: {
+        onlineBookingEnabled: false,
+        ownerConfiguration: { onlineBookingEnabled: false, reminderFirstLeadMinutes: 1440 },
+      },
+    });
+    const staffChanges = (await pull(t, ana, { since: cursor })).changes;
+    expect(staffChanges.find((change) => change.entity === "salon_settings")?.data).toMatchObject({
+      ownerConfiguration: null,
+    });
+    expect(
+      (await call(owner, "PATCH", "/admin/settings", { onlineBookingEnabled: true })).status,
+    ).toBe(200);
+    const reopened = await read();
+    expect((await push(t, owner, [queued])).body.results[0]).toMatchObject({
+      status: "applied",
+      replayed: true,
+    });
+    const stale = mutation("settings.update", {
+      expectedRevision: revision,
+      changes: { onlineBookingEnabled: false, minNoticeMinutes: minNoticeMinutes === 70 ? 80 : 70 },
+    });
+    expect((await push(t, owner, [stale])).body.results[0]).toMatchObject({
+      status: "rejected",
+      reason: "conflict",
+    });
+    expect(await read()).toEqual(reopened);
   });
 
   test("a business rule of the admin layer still applies (cannot deactivate staff with future bookings)", async () => {

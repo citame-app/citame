@@ -36,7 +36,7 @@ use sob_core::model::*;
 use sob_core::ops::{self, NewAppointment, Resolution};
 use sob_core::reviews::{EmailStatus, ModerationCommand, ReviewStatus};
 use sob_core::runner::{Connectivity, RunnerCore, SharedStatus, SyncRunner};
-use sob_core::store::Store;
+use sob_core::store::{SalonConfigurationWork, Store};
 use sob_core::sync::{self, Transport, TransportError};
 use sob_core::waitlist::{
     AcceptOffer, WaitlistPage, WaitlistPolicy, WaitlistRequest, WaitlistState,
@@ -73,6 +73,100 @@ fn desktop_opens_cloud_management_with_the_linked_users_web_session_through_the_
             .any(|area| matches!(area, BrowserWorkspace::Settings))
     );
     device.assert_browser_workspace();
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_salon_settings_resume_after_restart_and_preserve_cloud_changes_through_the_proxy() {
+    let device = proxy_device();
+    let browser = Device::sign_in();
+    let prefix = std::env::var("SOB_TEST_REST_PREFIX").unwrap_or_default();
+    let patch = |lead: Option<u32>| {
+        ureq::patch(&format!("{}{prefix}/admin/settings", browser.base))
+            .header("Cookie", &browser.cookie)
+            .header("Origin", &browser.base)
+            .content_type("application/json")
+            .send(json!({"reminderSecondLeadMinutes":lead}).to_string())
+            .unwrap();
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("salon-settings.sqlite");
+    let mut store = Store::open(&path).unwrap();
+    sync::pull_all(&mut store, &*device.transport).unwrap();
+    let initial = store.cached_salon_configuration().unwrap().unwrap();
+    assert_eq!(initial, device.transport.salon_configuration().unwrap());
+    let original = initial.settings.reminder_second_lead_minutes;
+    let edited = Some(if original == Some(30) { 45 } else { 30 });
+    let mut draft = initial.settings.clone();
+    draft.reminder_second_lead_minutes = edited;
+    assert!(
+        store
+            .queue_salon_configuration(&initial, &draft, None)
+            .unwrap()
+    );
+    drop(store);
+
+    let mut store = Store::open(&path).unwrap();
+    assert!(matches!(
+        store.salon_configuration_work().unwrap(),
+        SalonConfigurationWork::Pending(Some(_))
+    ));
+    assert_eq!(
+        sync::push_outbox(&mut store, &*device.transport)
+            .unwrap()
+            .applied,
+        1
+    );
+    drop(store);
+    let mut store = Store::open(&path).unwrap();
+    assert!(matches!(
+        store.salon_configuration_work().unwrap(),
+        SalonConfigurationWork::Pending(Some(_))
+    ));
+    assert_eq!(
+        sync::push_outbox(&mut store, &*device.transport)
+            .unwrap()
+            .applied,
+        0
+    );
+    sync::pull_all(&mut store, &*device.transport).unwrap();
+    assert_eq!(
+        store.salon_configuration_work().unwrap(),
+        SalonConfigurationWork::Idle
+    );
+    let saved = store.cached_salon_configuration().unwrap().unwrap();
+    assert_eq!(saved.settings.reminder_second_lead_minutes, edited);
+    assert_eq!(
+        browser.rest_get("/admin/settings")["reminderSecondLeadMinutes"],
+        json!(edited)
+    );
+
+    let mut stale = saved.settings.clone();
+    stale.reminder_second_lead_minutes = Some(60);
+    assert!(
+        store
+            .queue_salon_configuration(&saved, &stale, None)
+            .unwrap()
+    );
+    patch(original);
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .rejected,
+        1
+    );
+    let SalonConfigurationWork::Conflict { write, .. } = store.salon_configuration_work().unwrap()
+    else {
+        panic!("Expected a settings conflict after the Cloud edit");
+    };
+    let current = store.cached_salon_configuration().unwrap().unwrap();
+    assert_eq!(current.settings.reminder_second_lead_minutes, original);
+    assert_eq!(write.review_against(&current.settings).unwrap(), stale);
+    assert_eq!(
+        browser.rest_get("/admin/settings")["reminderSecondLeadMinutes"],
+        json!(original)
+    );
 }
 
 #[test]

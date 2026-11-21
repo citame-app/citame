@@ -1,9 +1,8 @@
 use super::*;
 use sob_core::http::{
     ReviewedSalonConfiguration, SALON_SLOT_STEPS, SalonConfiguration, SalonConfigurationDraft,
-    SalonConfigurationWrite, SalonWriteResult,
 };
-use sob_core::sync::TransportError;
+use sob_core::store::SalonConfigurationWork;
 
 const LABELS: [Key; 6] = [
     Key::SalonName,
@@ -18,12 +17,25 @@ pub(super) struct Desk {
     instance: Arc<()>,
     editor: Option<Editor>,
     busy: bool,
-    pending: Option<SalonConfigurationWrite>,
-    conflict: bool,
+    work: SalonConfigurationWork,
+    reviewing_conflict: Option<String>,
     confirm_close: bool,
     observed: Option<DateTime<Utc>>,
     message: Option<Key>,
     read_failed: bool,
+    review_after_restore: bool,
+}
+
+impl Desk {
+    fn editable(&self) -> bool {
+        match &self.work {
+            SalonConfigurationWork::Idle => true,
+            SalonConfigurationWork::Pending(_) => false,
+            SalonConfigurationWork::Conflict { id, .. } => {
+                self.reviewing_conflict.as_ref() == Some(id)
+            }
+        }
+    }
 }
 
 struct Editor {
@@ -101,18 +113,42 @@ impl Root {
         if !self.can_configure_salon() {
             return;
         }
+        let store = &self.svc.store;
+        let editor = store
+            .cached_salon_configuration()
+            .ok()
+            .flatten()
+            .map(|saved| Editor::new(saved, None, LABELS.map(|key| self.t(key)), cx));
+        let work = store.salon_configuration_work();
+        let message = work.is_err().then_some(Key::SalonLocalFailure);
         self.overlay = Overlay::SalonConfiguration(Box::new(Desk {
             instance: Arc::new(()),
-            editor: None,
+            editor,
             busy: false,
-            pending: None,
-            conflict: false,
+            work: work.unwrap_or(SalonConfigurationWork::Pending(None)),
+            reviewing_conflict: None,
             confirm_close: false,
             observed: None,
-            message: None,
+            message,
             read_failed: false,
+            review_after_restore: false,
         }));
-        self.request_salon_configuration(None, cx);
+        self.request_salon_configuration(false, cx);
+    }
+
+    pub(super) fn preserve_open_salon_draft(&mut self, cx: &App) -> bool {
+        let Overlay::SalonConfiguration(desk) = &mut self.overlay else {
+            return false;
+        };
+        let keep = desk.editor.as_ref().is_some_and(|editor| editor.dirty(cx))
+            || desk.reviewing_conflict.is_some();
+        if keep {
+            desk.instance = Arc::new(());
+            desk.busy = false;
+            desk.review_after_restore = true;
+            desk.message = Some(Key::SalonRestoreReview);
+        }
+        keep
     }
 
     pub(super) fn refresh_salon_configuration(
@@ -120,16 +156,24 @@ impl Root {
         reconnected: bool,
         cx: &mut Context<Self>,
     ) {
-        let Overlay::SalonConfiguration(desk) = &self.overlay else {
+        let Overlay::SalonConfiguration(desk) = &mut self.overlay else {
             return;
         };
-        if desk.busy
-            || desk.pending.is_some()
-            || desk.conflict
-            || desk.confirm_close
-            || desk.editor.as_ref().is_some_and(|editor| editor.dirty(cx))
-        {
+        let Ok(work) = self.svc.store.salon_configuration_work() else {
             return;
+        };
+        let finished = matches!(desk.work, SalonConfigurationWork::Pending(_))
+            && work == SalonConfigurationWork::Idle;
+        if work != desk.work {
+            desk.work = work;
+            desk.reviewing_conflict = None;
+            if finished {
+                desk.editor = None;
+                desk.message = Some(Key::SalonSaved);
+            } else if matches!(desk.work, SalonConfigurationWork::Conflict { .. }) {
+                desk.message = Some(Key::SalonConflict);
+            }
+            cx.notify();
         }
         let observed = self
             .svc
@@ -138,24 +182,34 @@ impl Root {
             .ok()
             .flatten()
             .map(|s| s.updated_at);
-        if reconnected || observed != desk.observed {
-            self.request_salon_configuration(None, cx);
+        if self.status.connectivity == Connectivity::Online
+            && !desk.busy
+            && !desk.review_after_restore
+            && desk.work == SalonConfigurationWork::Idle
+            && !desk.confirm_close
+            && !desk.editor.as_ref().is_some_and(|editor| editor.dirty(cx))
+            && (finished || reconnected || observed != desk.observed)
+        {
+            self.request_salon_configuration(false, cx);
         }
     }
 
-    fn request_salon_configuration(
-        &mut self,
-        write: Option<SalonConfigurationWrite>,
-        cx: &mut Context<Self>,
-    ) {
+    fn request_salon_configuration(&mut self, review_conflict: bool, cx: &mut Context<Self>) {
         let Overlay::SalonConfiguration(desk) = &mut self.overlay else {
             return;
         };
-        if desk.busy {
+        if desk.busy
+            || matches!(desk.work, SalonConfigurationWork::Pending(_))
+            || self.status.connectivity != Connectivity::Online
+        {
             return;
         }
-        if self.status.connectivity != Connectivity::Online {
-            desk.message = Some(Key::SalonNeedsConnection);
+        if desk
+            .editor
+            .as_ref()
+            .is_some_and(|editor| editor.draft(cx).is_none())
+        {
+            desk.message = Some(Key::SalonInvalid);
             cx.notify();
             return;
         }
@@ -172,17 +226,11 @@ impl Root {
             .map(|s| s.updated_at);
         let instance = desk.instance.clone();
         let session = self.svc.session.clone();
-        let retry = write.clone();
         cx.notify();
         cx.spawn(async move |root, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move {
-                    match write {
-                        Some(write) => transport.write_salon_configuration(&write),
-                        None => transport.salon_configuration().map(SalonWriteResult::Saved),
-                    }
-                })
+                .spawn(async move { transport.salon_configuration() })
                 .await;
             let _ = root.update(cx, |root, cx| {
                 if !Arc::ptr_eq(&session, &root.svc.session) {
@@ -197,55 +245,44 @@ impl Root {
                 }
                 desk.busy = false;
                 match result {
-                    Ok(SalonWriteResult::Saved(saved)) => {
-                        let reviewed = if retry.is_none()
-                            && (desk.conflict || desk.pending.is_some())
-                        {
-                            desk.editor
-                                .as_ref()
-                                .and_then(|editor| {
-                                    SalonConfigurationWrite::new(&editor.saved, &editor.draft(cx)?)
-                                })
-                                .and_then(|write| write.review_against(&saved.settings))
-                        } else {
-                            None
-                        };
-                        desk.message = if retry.is_some() {
-                            Some(Key::SalonSaved)
-                        } else {
-                            reviewed
-                                .as_ref()
-                                .filter(|draft| **draft != saved.settings)
-                                .map(|_| Key::SalonReviewLatest)
-                        };
-                        desk.editor = Some(Editor::new(saved, reviewed, labels, cx));
-                        desk.pending = None;
-                        desk.conflict = false;
-                        desk.read_failed = false;
-                        if retry.is_some() {
-                            root.svc.wake(Wake::Manual);
-                        }
-                    }
-                    Ok(SalonWriteResult::Conflict) => {
-                        desk.conflict = true;
-                        desk.pending = None;
-                        desk.message = Some(Key::SalonConflict);
-                    }
-                    Err(error) => {
-                        desk.read_failed = retry.is_none();
-                        if matches!(
-                            error,
-                            TransportError::Offline(_)
-                                | TransportError::Server(_)
-                                | TransportError::RateLimited(_)
-                        ) {
-                            desk.pending = retry;
-                        }
-                        desk.message = Some(match error {
-                            TransportError::BadRequest(_) => Key::SalonInvalid,
-                            _ if desk.pending.is_some() => Key::SalonUnconfirmed,
-                            _ => Key::SalonLoadFailed,
+                    Ok(saved) if root.svc.store.cache_salon_configuration(&saved).is_ok() => {
+                        let recovered = desk.editor.as_ref().and_then(|editor| {
+                            sob_core::http::SalonConfigurationWrite::new(
+                                &editor.saved,
+                                &editor.draft(cx)?,
+                            )
                         });
+                        let draft = match &desk.work {
+                            SalonConfigurationWork::Conflict { id, write } if review_conflict => {
+                                desk.reviewing_conflict = Some(id.clone());
+                                recovered
+                                    .as_ref()
+                                    .unwrap_or(write)
+                                    .review_against(&saved.settings)
+                            }
+                            _ => recovered
+                                .as_ref()
+                                .and_then(|write| write.review_against(&saved.settings)),
+                        };
+                        if review_conflict && draft.is_none() && !desk.review_after_restore {
+                            desk.message = Some(Key::SalonLocalFailure);
+                            desk.reviewing_conflict = None;
+                        } else if desk.reviewing_conflict.is_some() || draft.is_some() {
+                            desk.message = Some(Key::SalonReviewLatest);
+                        } else if desk.message != Some(Key::SalonSaved) {
+                            desk.message = None;
+                        }
+                        desk.editor = Some(Editor::new(saved, draft, labels, cx));
+                        desk.read_failed = false;
+                        desk.review_after_restore = false;
+                    }
+                    Ok(_) => {
+                        desk.read_failed = true;
+                        desk.message = Some(Key::SalonLocalFailure);
+                    }
+                    Err(_) => {
+                        desk.read_failed = true;
+                        desk.message = Some(Key::SalonLoadFailed);
                     }
                 }
                 cx.notify();
@@ -258,11 +295,7 @@ impl Root {
         let Overlay::SalonConfiguration(desk) = &mut self.overlay else {
             return;
         };
-        if desk.conflict || desk.busy || desk.confirm_close {
-            return;
-        }
-        if let Some(pending) = desk.pending.clone() {
-            self.request_salon_configuration(Some(pending), cx);
+        if !desk.editable() || desk.busy || desk.confirm_close || desk.review_after_restore {
             return;
         }
         let Some(editor) = &desk.editor else { return };
@@ -271,9 +304,33 @@ impl Root {
             cx.notify();
             return;
         };
-        if let Some(write) = SalonConfigurationWrite::new(&editor.saved, &draft) {
-            self.request_salon_configuration(Some(write), cx);
+        match self.svc.store.queue_salon_configuration(
+            &editor.saved,
+            &draft,
+            desk.reviewing_conflict.as_deref(),
+        ) {
+            Ok(true) => {
+                desk.work = self
+                    .svc
+                    .store
+                    .salon_configuration_work()
+                    .unwrap_or(SalonConfigurationWork::Pending(None));
+                desk.message = None;
+                desk.reviewing_conflict = None;
+                desk.editor = None;
+                self.edited(cx);
+                return;
+            }
+            Ok(false) => {
+                if desk.reviewing_conflict.take().is_some() {
+                    desk.message = Some(Key::SalonSaved);
+                    self.edited(cx);
+                    return;
+                }
+            }
+            Err(_) => desk.message = Some(Key::SalonLocalFailure),
         }
+        cx.notify();
     }
 
     pub(super) fn close_salon_configuration(&mut self, cx: &mut Context<Self>) {
@@ -285,9 +342,7 @@ impl Root {
         }
         if desk.confirm_close {
             desk.confirm_close = false;
-        } else if desk.editor.as_ref().is_some_and(|editor| editor.dirty(cx))
-            || desk.pending.is_some()
-        {
+        } else if desk.editor.as_ref().is_some_and(|editor| editor.dirty(cx)) {
             desk.confirm_close = true;
         } else {
             self.overlay = Overlay::None;
@@ -316,8 +371,21 @@ impl Root {
                 body.child(div().text_sm().child(self.t(message)))
             })
             .when(
-                !online && desk.message != Some(Key::SalonNeedsConnection),
+                !online && desk.editor.is_none() && desk.work == SalonConfigurationWork::Idle,
                 |body| body.child(self.t(Key::SalonNeedsConnection)),
+            )
+            .when_some(
+                match &desk.work {
+                    SalonConfigurationWork::Pending(Some(write)) => Some(write),
+                    _ => None,
+                },
+                |body, write| {
+                    body.child(div().flex().flex_col().gap_1().children(
+                        write.proposed_fields().filter_map(|(field, value)| {
+                            self.render_pending_salon_field(field, value)
+                        }),
+                    ))
+                },
             )
             .when(desk.busy, |body| {
                 body.child(self.t(Key::CloudWorkspacesLoading))
@@ -345,55 +413,111 @@ impl Root {
                 )
             })
             .when(!desk.busy && !desk.confirm_close, |body| {
-                let locked = desk.pending.is_some() || desk.conflict;
+                let locked = !desk.editable();
+                let pending = matches!(desk.work, SalonConfigurationWork::Pending(_));
+                let needs_review =
+                    matches!(desk.work, SalonConfigurationWork::Conflict { .. }) && locked;
                 let mut actions = div().flex().flex_wrap().gap_2();
                 if let Some(editor) = &desk.editor
                     && !locked
                 {
-                    actions = actions.when(online && editor.dirty(cx), |actions| {
-                        actions.child(self.button(
-                            "salon-save",
-                            self.t(Key::SalonSave),
-                            Kind::Primary,
-                            cx.listener(|root, _, _, cx| root.save_salon_configuration(cx)),
-                        ))
-                    });
+                    actions = actions.when(
+                        !desk.review_after_restore
+                            && (editor.dirty(cx) || desk.reviewing_conflict.is_some()),
+                        |actions| {
+                            actions.child(self.button(
+                                "salon-save",
+                                self.t(if online {
+                                    Key::SalonSave
+                                } else {
+                                    Key::SalonSaveOffline
+                                }),
+                                Kind::Primary,
+                                cx.listener(|root, _, _, cx| root.save_salon_configuration(cx)),
+                            ))
+                        },
+                    );
                 }
-                if online && (desk.editor.is_none() || locked || desk.read_failed) {
+                if online
+                    && !pending
+                    && (desk.editor.is_none()
+                        || needs_review
+                        || desk.read_failed
+                        || desk.review_after_restore)
+                {
                     actions = actions.child(self.button(
                         "salon-refresh",
-                        self.t(if locked {
+                        self.t(if needs_review || desk.review_after_restore {
                             Key::SalonReloadReview
                         } else {
                             Key::FormReload
                         }),
                         Kind::Ghost,
-                        cx.listener(|root, _, _, cx| root.request_salon_configuration(None, cx)),
+                        cx.listener(move |root, _, _, cx| {
+                            root.request_salon_configuration(needs_review, cx)
+                        }),
                     ));
-                    if desk.pending.is_some() {
-                        actions = actions.child(self.button(
-                            "salon-retry",
-                            self.t(Key::ShiftRetrySave),
-                            Kind::Primary,
-                            cx.listener(|root, _, _, cx| root.save_salon_configuration(cx)),
-                        ));
-                    }
                 }
-                body.when_some(desk.editor.as_ref().filter(|_| !locked), |body, editor| {
-                    body.child(self.render_salon_editor(editor, cx))
-                })
-                .child(actions.child(self.button(
-                    "salon-close",
-                    self.t(Key::Close),
-                    Kind::Ghost,
-                    cx.listener(|root, _, _, cx| root.dismiss_overlay(cx)),
-                )))
+                body.when(pending, |body| body.child(self.t(Key::SalonQueued)))
+                    .when(
+                        needs_review && desk.message != Some(Key::SalonConflict),
+                        |body| body.child(self.t(Key::SalonConflict)),
+                    )
+                    .when_some(
+                        desk.editor
+                            .as_ref()
+                            .filter(|_| !locked || desk.review_after_restore),
+                        |body, editor| body.child(self.render_salon_editor(editor, cx)),
+                    )
+                    .child(actions.child(self.button(
+                        "salon-close",
+                        self.t(Key::Close),
+                        Kind::Ghost,
+                        cx.listener(|root, _, _, cx| root.dismiss_overlay(cx)),
+                    )))
             });
         self.modal_with_height(
             body,
             (viewport.width - px(32.)).max(px(220.)).min(px(610.)),
             (viewport.height - px(28.)).max(px(140.)),
             Some(cx),
+        )
+    }
+
+    fn render_pending_salon_field(
+        &self,
+        field: &str,
+        value: &serde_json::Value,
+    ) -> Option<gpui::Div> {
+        let label = match field {
+            "name" => Key::SalonName,
+            "timezone" => Key::SalonTimezone,
+            "minNoticeMinutes" => Key::SalonMinNotice,
+            "maxDaysAhead" => Key::SalonMaxDays,
+            "reminderFirstLeadMinutes" => Key::SalonFirstReminder,
+            "reminderSecondLeadMinutes" => Key::SalonSecondReminder,
+            "slotGranularityMinutes" => Key::SalonStep,
+            "onlineBookingEnabled" => Key::SalonBooking,
+            _ => return None,
+        };
+        let value = match value {
+            serde_json::Value::String(text) => text.clone(),
+            serde_json::Value::Bool(enabled) => self
+                .t(if *enabled {
+                    Key::SalonBookingOn
+                } else {
+                    Key::SalonBookingOff
+                })
+                .to_owned(),
+            serde_json::Value::Null => self.t(Key::SalonOff).to_owned(),
+            _ => value.to_string(),
+        };
+        Some(
+            div()
+                .text_sm()
+                .child(self.t(label))
+                .child(" · ")
+                .child(value),
         )
     }
 
@@ -477,23 +601,50 @@ mod tests {
     use super::*;
     use gpui::TestAppContext;
 
+    fn reviewed_fixture() -> ReviewedSalonConfiguration {
+        serde_json::from_value(serde_json::json!({
+            "name": "Test Salon", "timezone": "Europe/Madrid", "slotGranularityMinutes": 15,
+            "minNoticeMinutes": 30, "maxDaysAhead": 60, "onlineBookingEnabled": true,
+            "reminderFirstLeadMinutes": 1440, "reminderSecondLeadMinutes": 120,
+            "revision": "2026-11-21T00:00:00Z", "generation": "initial"
+        }))
+        .unwrap()
+    }
+
+    #[gpui::test]
+    async fn saving_settings_offline_queues_the_edit_and_closes_without_discarding_it(
+        cx: &mut TestAppContext,
+    ) {
+        let (_directory, window) = super::super::tests::open(cx);
+        window.update(cx, |root, _, cx| {
+            root.svc.store.cache_salon_configuration(&reviewed_fixture()).unwrap();
+            root.status.connectivity = Connectivity::Offline;
+            root.open_salon_configuration(cx);
+            let Overlay::SalonConfiguration(desk) = &mut root.overlay else { panic!("Expected offline settings") };
+            assert!(desk.editable());
+            desk.editor.as_mut().unwrap().online = false;
+            root.save_salon_configuration(cx);
+            assert!(matches!(&root.overlay, Overlay::SalonConfiguration(desk) if matches!(desk.work, SalonConfigurationWork::Pending(_))));
+            root.dismiss_overlay(cx);
+            assert!(matches!(&root.overlay, Overlay::None));
+            assert!(matches!(root.svc.store.salon_configuration_work().unwrap(), SalonConfigurationWork::Pending(Some(_))));
+        }).unwrap();
+    }
+
     #[gpui::test]
     async fn leaving_a_native_settings_draft_requires_confirmation(cx: &mut TestAppContext) {
         let (_directory, window) = super::super::tests::open(cx);
         window.update(cx, |root, _, cx| {
-            let saved: ReviewedSalonConfiguration = serde_json::from_value(serde_json::json!({
-                "name": "Test Salon", "timezone": "Europe/Madrid", "slotGranularityMinutes": 15,
-                "minNoticeMinutes": 30, "maxDaysAhead": 60, "onlineBookingEnabled": true,
-                "reminderFirstLeadMinutes": 1440, "reminderSecondLeadMinutes": 120,
-                "revision": "2026-11-21T00:00:00Z"
-            })).unwrap();
-            let mut editor = Editor::new(saved, None, LABELS.map(|key| root.t(key)), cx);
+            let mut editor = Editor::new(reviewed_fixture(), None, LABELS.map(|key| root.t(key)), cx);
             assert!(!editor.dirty(cx));
             editor.online = false;
             root.overlay = Overlay::SalonConfiguration(Box::new(Desk {
-                instance: Arc::new(()), editor: Some(editor), busy: false, pending: None,
-                conflict: false, confirm_close: false, observed: None, message: None, read_failed: false,
+                instance: Arc::new(()), editor: Some(editor), busy: false, work: SalonConfigurationWork::Idle,
+                reviewing_conflict: None, confirm_close: false, observed: None, message: None, read_failed: false, review_after_restore: false,
             }));
+            assert!(root.preserve_open_salon_draft(cx));
+            root.save_salon_configuration(cx);
+            assert!(root.svc.store.outbox(1).unwrap().is_empty());
             root.dismiss_overlay(cx);
             assert!(matches!(&root.overlay, Overlay::SalonConfiguration(desk) if desk.confirm_close));
             root.dismiss_overlay(cx);
