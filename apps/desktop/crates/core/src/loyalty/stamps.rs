@@ -254,3 +254,36 @@ impl Draft<'_> {
         ))
     }
 }
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RewardNotice {
+    pub card_id: Uuid,
+    pub client_id: Option<Uuid>,
+    pub client_name: Option<String>,
+    pub card_name: String,
+    pub reward_name: String,
+    pub earned_at: DateTime<Utc>,
+    pub reward_expires_at: Option<DateTime<Utc>>,
+    pub issued: bool,
+    pub read: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RewardNotices {
+    pub generation: String,
+    pub unread_count: u32,
+    pub entries: Vec<RewardNotice>,
+    pub page: u32,
+    pub page_size: u32,
+    pub total: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RewardNoticeRead {
+    pub generation: String,
+    pub card_id: Uuid,
+    pub earned_at: DateTime<Utc>,
+}

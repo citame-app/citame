@@ -3,6 +3,7 @@ import { useState } from "react";
 import { UnsavedGuard } from "~/features/admin/unsaved-guard";
 import { MarketingConsent } from "~/features/marketing/consent";
 import { PreferencesForm } from "~/features/notifications/preferences-form";
+import { StampNotices } from "~/features/notifications/stamp-notices";
 import { useI18n } from "~/i18n/react";
 
 export const Route = createFileRoute("/account/notifications")({ component: NotificationsPage });
@@ -20,6 +21,9 @@ function NotificationsPage() {
       {/* Staff and owners have no booking profile, hence nothing to configure. */}
       {session?.clientId ? (
         <>
+          <div className="mb-8">
+            <StampNotices key={session.user.id} mode="client" userId={session.user.id} />
+          </div>
           <PreferencesForm />
           <UnsavedGuard dirty={marketingDirty} />
           <div className="mt-8">

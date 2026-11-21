@@ -67,7 +67,7 @@ fn proxy_device() -> ProxyDevice {
 fn native_stamp_programme_shares_revision_and_card_terms_through_the_proxy() {
     use sob_core::loyalty::LIVE_TOPIC;
     use sob_core::loyalty::stamps::{
-        Command, Issue, State,
+        Action, Change, Command, Issue, RewardNoticeRead, State,
         programme::{ExistingCards, Review},
     };
     use uuid::Uuid;
@@ -137,6 +137,59 @@ fn native_stamp_programme_shares_revision_and_card_terms_through_the_proxy() {
         assert_eq!(reviewed_cards.cards[0].id, card.id);
         assert_eq!(reviewed_cards.cards[0].state, State::Active);
         assert_eq!(reviewed_cards.cards[0].program.goal, 4);
+        let completed = device
+            .transport
+            .change_stamp_card(&Command::Change(
+                card.id,
+                Change {
+                    generation: newer.generation.clone(),
+                    idempotency_key: Uuid::now_v7(),
+                    version: reviewed_cards.cards[0].version,
+                    action: Action::Edit {
+                        stamps: 4,
+                        expires_at: None,
+                        reason: "Synthetic reviewed stamp award".into(),
+                    },
+                },
+            ))
+            .unwrap();
+        assert_eq!(completed.state, State::Completed);
+        let inbox = device.transport.stamp_notices(1, true, false).unwrap();
+        let notice = inbox
+            .entries
+            .iter()
+            .find(|entry| entry.card_id == card.id)
+            .unwrap();
+        assert_eq!(notice.client_id, Some(client));
+        assert_eq!(notice.card_name, "Synthetic reviewed treatment card");
+        assert_eq!(
+            web.rest_get("/admin/rewards/stamps/notices?unread=true")["entries"][0]["cardId"],
+            serde_json::json!(card.id)
+        );
+        let acknowledgment = RewardNoticeRead {
+            card_id: notice.card_id,
+            earned_at: notice.earned_at,
+            generation: inbox.generation,
+        };
+        device.transport.read_stamp_notice(&acknowledgment).unwrap();
+        device.transport.read_stamp_notice(&acknowledgment).unwrap();
+        assert!(
+            !device
+                .transport
+                .stamp_notices(1, true, false)
+                .unwrap()
+                .entries
+                .iter()
+                .any(|entry| entry.card_id == card.id)
+        );
+        assert!(
+            !web.rest_get("/admin/rewards/stamps/notices?unread=true")["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["cardId"] == serde_json::json!(card.id))
+        );
+
         web.sync();
         assert!(web.store.live_view_revision(LIVE_TOPIC).unwrap() > marker);
     }));

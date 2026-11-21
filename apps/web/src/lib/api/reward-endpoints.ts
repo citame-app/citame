@@ -13,9 +13,12 @@ import {
   type RewardChoice,
   reviewedLoyaltyPolicySchema,
   rewardQuoteSchema,
+  type StampNoticeQuery,
+  type StampNoticeRead,
   type StampProgramInput,
   stampCardSchema,
   stampCardsSchema,
+  stampNoticesSchema,
   stampProgramSchema,
 } from "@sob/contracts";
 import { z } from "zod";
@@ -25,10 +28,17 @@ import type { CommerceMode } from "./commerce-endpoints";
 const base = (mode: CommerceMode) => (mode === "admin" ? "/admin/commerce" : "/me");
 export const loyaltyPolicyQueryKey = ["rewards", "policy"] as const;
 export const stampProgramQueryKey = ["rewards", "stamps", "program"] as const;
+export const stampNoticesQueryKey = ["rewards", "stamps", "notices"] as const;
 export const stampCardsQueryKey = ["rewards", "stamps", "admin"] as const;
+const noticePath = (mode: CommerceMode) =>
+  mode === "admin" ? "/admin/rewards/stamps/notices" : "/me/loyalty-notices";
 const policyPath = "/admin/rewards/policy/reviewed";
 export function rewardEndpoints(client: ApiClient) {
   return {
+    stampNotices: (mode: CommerceMode, query: StampNoticeQuery, signal?: AbortSignal) =>
+      client.get(noticePath(mode), stampNoticesSchema, { query, signal }),
+    readStampNotice: (mode: CommerceMode, input: StampNoticeRead) =>
+      client.post(`${noticePath(mode)}/read`, input, z.object({ ok: z.literal(true) })),
     stampProgram: (signal?: AbortSignal) =>
       client.get("/admin/rewards/stamps/program", stampProgramSchema, { signal }),
     saveStampProgram: (input: StampProgramInput) =>

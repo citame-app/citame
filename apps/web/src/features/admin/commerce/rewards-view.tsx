@@ -12,6 +12,7 @@ export function RewardsView(props: {
   role: UserRole;
   accessPreset?: StaffAccessPreset | null;
   clientId?: string | null;
+  stampClientId?: string;
   initialTab?: "gift" | "packages" | "memberships" | "loyalty" | "stamps";
 }) {
   const { t } = useI18n();
@@ -71,7 +72,11 @@ export function RewardsView(props: {
       ) : null}
       {openedStamps && (
         <div hidden={tab !== "stamps"}>
-          <StampCardsView {...props} visible={tab === "stamps"} />
+          <StampCardsView
+            {...props}
+            clientId={props.stampClientId ?? props.clientId}
+            visible={tab === "stamps"}
+          />
         </div>
       )}
     </div>

@@ -388,6 +388,7 @@ pub struct Root {
     notice_cursor: i64,
     notices: Vec<(Appointment, Instant)>,
     inbox_generation: u64,
+    reward_badge: inbox::RewardBadge,
     waitlist_generation: u64,
     review_generation: u64,
     _subs: Vec<Subscription>,
@@ -475,6 +476,7 @@ impl Root {
             notice_cursor: 0,
             notices: vec![],
             inbox_generation: 0,
+            reward_badge: inbox::RewardBadge::default(),
             waitlist_generation: 0,
             review_generation: 0,
             _subs: subs,
@@ -706,6 +708,7 @@ impl Root {
     }
 
     fn sign_out(&mut self, cx: &mut Context<Self>) {
+        self.reward_badge = inbox::RewardBadge::default();
         self.pending_loyalty = None;
         self.pending_stamp = None;
         if let Some(session) = self.svc.sign_out() {
@@ -827,6 +830,7 @@ impl Root {
                 self.overlay = Overlay::None;
             }
             self.notices.clear();
+            self.reward_badge = inbox::RewardBadge::default();
             self.notice_cursor = self.svc.store.booking_notice_head().unwrap_or_default();
         }
         self.calendar_scope = scope;
@@ -1967,12 +1971,7 @@ impl Root {
                 Kind::Ghost,
                 cx.listener(|this, _, _, cx| this.open_review_requests(cx)),
             ))
-            .child(self.button(
-                "calendar-inbox",
-                self.t(Key::CalendarInbox),
-                Kind::Ghost,
-                cx.listener(|this, _, _, cx| this.open_inbox(false, 1, cx)),
-            ))
+            .child(self.inbox_toolbar_button(cx))
             .child(self.button(
                 "toggle-theme",
                 self.t(if theme::is_dark() {

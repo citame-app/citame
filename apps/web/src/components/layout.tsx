@@ -1,5 +1,5 @@
 import { Popover } from "@base-ui/react/popover";
-import type { MeResponse } from "@sob/contracts";
+import { type MeResponse, permissionsFor } from "@sob/contracts";
 import { Link } from "@tanstack/react-router";
 import { CalendarInbox } from "~/features/admin/calendar/inbox";
 import type { Locale } from "~/i18n";
@@ -44,12 +44,18 @@ export function Header({
 }) {
   const { t } = useI18n();
   const staff = session && session.user.role !== "client";
+  const access = session ? permissionsFor(session.user.role, session.accessPreset) : undefined;
   if (adminMode || calendarMode)
     return (
       <>
         <SkipLink />
         <div className="admin-account-tools" data-calendar={calendarMode || undefined}>
-          {!calendarMode && staff && <CalendarInbox userId={session.user.id} />}
+          {!calendarMode && staff && (
+            <CalendarInbox
+              userId={session.user.id}
+              rewardAccess={Boolean(access?.commerce && access.clients)}
+            />
+          )}
           <Popover.Root>
             <Popover.Trigger
               className="calendar-account-trigger"
@@ -111,7 +117,12 @@ export function Header({
           </nav>
         )}
         <nav aria-label={t("nav.main")} className="flex items-center gap-1 sm:gap-2">
-          {staff && <CalendarInbox userId={session.user.id} />}
+          {staff && (
+            <CalendarInbox
+              userId={session.user.id}
+              rewardAccess={Boolean(access?.commerce && access.clients)}
+            />
+          )}
           <LocaleSwitch locale={locale} onChange={onLocaleChange} />
           <ThemeToggle initial={theme} onChange={onThemeChange} />
           {session ? (

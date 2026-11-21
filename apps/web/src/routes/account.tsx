@@ -4,6 +4,7 @@ import { PageContainer, PageHeading } from "~/components/pages";
 import { Button } from "~/components/ui/button";
 import { LogOutIcon } from "~/components/ui/icons";
 import { useAuth } from "~/features/auth/use-auth";
+import { useStampNoticeCount } from "~/features/notifications/stamp-notices";
 import { createTranslator } from "~/i18n";
 import { useI18n } from "~/i18n/react";
 import { resolveAccess } from "~/lib/auth/access";
@@ -51,6 +52,11 @@ function AccountLayout() {
             ? t("notify.title")
             : t("account.title");
   const { session } = Route.useRouteContext();
+  const notices = useStampNoticeCount(
+    "client",
+    session?.user.id ?? "",
+    session?.user.role === "client" && Boolean(session.clientId),
+  );
   return (
     <PageContainer width="max-w-6xl">
       <div className="account-layout py-8 sm:py-12">
@@ -79,6 +85,12 @@ function AccountLayout() {
             {session?.clientId && (
               <Link to="/account/notifications" className={tabClass}>
                 {t("account.nav.notifications")}
+                <span
+                  className="ml-2 min-w-6 rounded-full bg-accent-soft px-1 text-center text-xs tabular-nums"
+                  style={{ visibility: notices ? "visible" : "hidden" }}
+                >
+                  {notices > 99 ? "99+" : notices}
+                </span>
               </Link>
             )}
             {session &&

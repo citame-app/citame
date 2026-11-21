@@ -37,6 +37,7 @@ export function CommerceView({
   view,
   onViewChange,
   checkoutId,
+  rewardClientId,
   onCheckoutChange,
   inventoryNavigation,
   onInventoryNavigation,
@@ -47,6 +48,7 @@ export function CommerceView({
   view?: CommerceViewName;
   onViewChange?: (view: CommerceViewName) => void;
   checkoutId?: string;
+  rewardClientId?: string;
   onCheckoutChange?: (id: string | null) => void;
   inventoryNavigation?: InventoryNavigation;
   onInventoryNavigation?: (navigation: InventoryNavigation, replace?: boolean) => void;
@@ -132,8 +134,9 @@ export function CommerceView({
       )}
       {active === "rewards" && (
         <RewardsView
-          key={benefitsTab}
-          initialTab={benefitsTab}
+          key={rewardClientId ?? benefitsTab}
+          initialTab={rewardClientId ? "stamps" : benefitsTab}
+          stampClientId={rewardClientId}
           mode="admin"
           role={role}
           accessPreset={accessPreset}

@@ -15,11 +15,18 @@ import { useI18n } from "~/i18n/react";
 export const Route = createFileRoute("/admin/commerce")({
   validateSearch: (
     search: Record<string, unknown>,
-  ): InventoryNavigation & { view: CommerceViewName; checkout?: string } => ({
+  ): InventoryNavigation & {
+    view: CommerceViewName;
+    checkout?: string;
+    rewardClient?: string;
+  } => ({
     view: COMMERCE_VIEWS.includes(search.view as CommerceViewName)
       ? (search.view as CommerceViewName)
       : "sale",
     ...(idSchema.safeParse(search.checkout).success ? { checkout: String(search.checkout) } : {}),
+    ...(search.view === "rewards" && idSchema.safeParse(search.rewardClient).success
+      ? { rewardClient: String(search.rewardClient) }
+      : {}),
     ...(search.view === "inventory" ? parseInventoryNavigation(search) : {}),
   }),
   head: adminHead("commerce.title"),
@@ -40,6 +47,7 @@ function SalesPage() {
         accessPreset={session.accessPreset}
         view={search.view}
         checkoutId={search.checkout}
+        rewardClientId={search.rewardClient}
         inventoryNavigation={search}
         onInventoryNavigation={(next, replace) =>
           void navigate({ search: { view: "inventory", ...next }, replace })

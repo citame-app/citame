@@ -119,6 +119,19 @@ impl Root {
         cx.notify();
     }
 
+    pub(super) fn open_reward_notice_client(
+        &mut self,
+        client: Uuid,
+        name: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_loyalty(cx);
+        if let Some(desk) = self.loyalty_desk() {
+            desk.selected = Some((client, name));
+            self.show_stamp_cards(cx);
+        }
+    }
+
     fn pending_loyalty(&self) -> Option<&Pending> {
         self.pending_loyalty
             .as_ref()
@@ -697,7 +710,7 @@ impl Root {
         }
     }
 
-    fn loyalty_button(
+    pub(super) fn loyalty_button(
         &self,
         id: impl Into<ElementId>,
         key: Key,

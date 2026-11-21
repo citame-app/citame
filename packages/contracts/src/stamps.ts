@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { idSchema, instantSchema, syncGenerationSchema } from "./common";
+import {
+  idSchema,
+  instantSchema,
+  pageInfoSchema,
+  pageSchema,
+  syncGenerationSchema,
+} from "./common";
 
 const days = z.number().int().min(1).max(3650).nullable();
 const stamps = z.number().int().min(0).max(15);
@@ -115,4 +121,39 @@ export const adminStampCardsSchema = stampCardsSchema.extend({
   generation: syncGenerationSchema,
   programVersion: version,
   program: stampProgramTermsSchema,
+});
+
+export const stampNoticeQuerySchema = z.object({
+  page: pageSchema.optional(),
+  unread: z.enum(["true", "false"]).optional(),
+  summary: z.literal("true").optional(),
+});
+export type StampNoticeQuery = z.infer<typeof stampNoticeQuerySchema>;
+
+export const stampNoticeReadSchema = z
+  .object({
+    cardId: idSchema,
+    earnedAt: instantSchema,
+    generation: syncGenerationSchema,
+  })
+  .strict();
+export type StampNoticeRead = z.infer<typeof stampNoticeReadSchema>;
+
+export const stampNoticeSchema = z.object({
+  cardId: idSchema,
+  clientId: idSchema.nullable(),
+  clientName: z.string().nullable(),
+  cardName: z.string(),
+  rewardName: z.string(),
+  earnedAt: instantSchema,
+  rewardExpiresAt: instantSchema.nullable(),
+  issued: z.boolean(),
+  read: z.boolean(),
+});
+export type StampNotice = z.infer<typeof stampNoticeSchema>;
+
+export const stampNoticesSchema = pageInfoSchema.extend({
+  generation: syncGenerationSchema,
+  unreadCount: z.number().int().nonnegative(),
+  entries: z.array(stampNoticeSchema),
 });

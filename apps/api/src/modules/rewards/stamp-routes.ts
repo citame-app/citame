@@ -3,6 +3,8 @@ import {
   idSchema,
   issueStampCardSchema,
   permissionsFor,
+  stampNoticeQuerySchema,
+  stampNoticeReadSchema,
   stampProgramInputSchema,
 } from "@sob/contracts";
 import { Hono } from "hono";
@@ -11,6 +13,7 @@ import { requirePermission, requireRole } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
+import { listStampNotices, readStampNotice } from "./stamp-notices";
 import {
   changeStampCard,
   getStampProgram,
@@ -27,7 +30,34 @@ function ensureGeneration(reviewed: string, current: string) {
     );
 }
 
-export function stampAdminRoutes({ db, config, now = () => new Date() }: AppDeps) {
+function noticeRoutes({ db, config, now = () => new Date() }: AppDeps, mode: "admin" | "client") {
+  const generation = config.syncReplicaGeneration;
+  return new Hono<AppEnv>()
+    .use("*", async (c, next) => {
+      c.header("Cache-Control", "private, no-store");
+      await next();
+    })
+    .get("/", async (c) =>
+      c.json(
+        await listStampNotices(
+          db,
+          c.get("principal"),
+          mode,
+          generation,
+          parseOrThrow(stampNoticeQuerySchema, c.req.query()),
+          now(),
+        ),
+      ),
+    )
+    .post("/read", async (c) => {
+      const input = parseOrThrow(stampNoticeReadSchema, await readJson(c));
+      ensureGeneration(input.generation, generation);
+      return c.json(await readStampNotice(db, c.get("principal"), mode, input, now()));
+    });
+}
+
+export function stampAdminRoutes(deps: AppDeps) {
+  const { db, config, now = () => new Date() } = deps;
   const generation = config.syncReplicaGeneration;
   return new Hono<AppEnv>()
     .use("*", async (c, next) => {
@@ -35,6 +65,7 @@ export function stampAdminRoutes({ db, config, now = () => new Date() }: AppDeps
       c.header("Cache-Control", "private, no-store");
       await next();
     })
+    .route("/notices", noticeRoutes(deps, "admin"))
     .get("/program", async (c) => {
       requireRole(c.get("principal"), "owner");
       return c.json(await getStampProgram(db, generation));
@@ -71,13 +102,16 @@ export function stampAdminRoutes({ db, config, now = () => new Date() }: AppDeps
     });
 }
 
-export function stampClientRoutes({ db, now = () => new Date() }: AppDeps) {
-  return new Hono<AppEnv>().get("/loyalty-cards", async (c) => {
-    const principal = c.get("principal");
-    if (principal.role !== "client" || !principal.clientId)
-      throw new DomainError("forbidden", "Customer account required");
-    c.header("Cache-Control", "private, no-store");
-    const { cards } = await listStampCards(db, principal.clientId, now());
-    return c.json({ cards });
-  });
+export function stampClientRoutes(deps: AppDeps) {
+  const { db, now = () => new Date() } = deps;
+  return new Hono<AppEnv>()
+    .route("/loyalty-notices", noticeRoutes(deps, "client"))
+    .get("/loyalty-cards", async (c) => {
+      const principal = c.get("principal");
+      if (principal.role !== "client" || !principal.clientId)
+        throw new DomainError("forbidden", "Customer account required");
+      c.header("Cache-Control", "private, no-store");
+      const { cards } = await listStampCards(db, principal.clientId, now());
+      return c.json({ cards });
+    });
 }

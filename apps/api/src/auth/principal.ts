@@ -140,6 +140,7 @@ export function requireAuth(
         path === "/admin/rewards/stamps/program" || path === "/admin/rewards/policy/reviewed"
           ? method === "GET" || method === "PUT"
           : /^\/admin\/rewards\/stamps\/cards(?:\/[\da-f-]+)?$/.test(path) ||
+              path === "/admin/rewards/stamps/notices/read" ||
               path.endsWith("/adjustments")
             ? method === "POST"
             : path === "/admin/rewards/promotions"

@@ -334,7 +334,10 @@ export function CalendarView({
           </div>
         </div>
         <div className="calendar-toolbar-actions">
-          <CalendarInbox userId={userId} />
+          <CalendarInbox
+            userId={userId}
+            rewardAccess={permissions.commerce && permissions.clients}
+          />
           {live !== undefined && (
             <span
               className="calendar-live-state"

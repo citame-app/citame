@@ -1,6 +1,6 @@
 use super::*;
 use crate::loyalty::stamps::{
-    Card, Cards, Command,
+    Card, Cards, Command, RewardNoticeRead, RewardNotices,
     programme::{Programme, Review},
 };
 use crate::loyalty::{
@@ -50,6 +50,40 @@ impl HttpTransport {
             false,
         )?;
         Ok(result.clients)
+    }
+
+    pub fn stamp_notices(
+        &self,
+        page: u32,
+        unread: bool,
+        summary: bool,
+    ) -> Result<RewardNotices, TransportError> {
+        let summary = if summary { "&summary=true" } else { "" };
+        read_response(
+            self.get(
+                &self.agent,
+                &format!("{STAMPS}/notices?page={page}&unread={unread}{summary}"),
+                Some("application/json"),
+            )?,
+            false,
+        )
+    }
+
+    pub fn read_stamp_notice(&self, input: &RewardNoticeRead) -> Result<(), TransportError> {
+        #[derive(serde::Deserialize)]
+        struct Receipt {
+            ok: bool,
+        }
+        let result: Receipt = read_response_with(
+            self.send_json(&format!("{STAMPS}/notices/read"), input)?,
+            review_transport_error,
+        )?;
+        if !result.ok {
+            return Err(TransportError::Server(
+                "Unexpected reward notice acknowledgement".into(),
+            ));
+        }
+        Ok(())
     }
 
     pub fn stamp_programme(&self) -> Result<Programme, TransportError> {

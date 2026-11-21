@@ -1,5 +1,13 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
-import { appointment, appointmentService, checkout, checkoutLine, service } from "@sob/db";
+import {
+  appointment,
+  appointmentService,
+  checkout,
+  checkoutLine,
+  service,
+  staffProfile,
+} from "@sob/db";
+import { eq } from "drizzle-orm";
 import {
   type Actor,
   actor,
@@ -117,6 +125,55 @@ async function settle(serviceId: string, amountCents = 10_000) {
   expect((await pay()).status).toBe(201);
   return { receipt: sale.id, payment: body.payment?.id, amount: sale.totalCents };
 }
+
+test("a reward notice is private, read per account, and withdrawn after a refund", async () => {
+  const inbox = "/me/loyalty-notices";
+  const team = `${path}/notices`;
+  const list = async (by: Actor, url = inbox) => {
+    const response = await call(by, url);
+    expect(response.status, await response.clone().text()).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    return (await response.json()) as {
+      entries: { cardId: string; earnedAt: string; clientName: string | null }[];
+      unreadCount: number;
+    };
+  };
+  expect((await save({ goal: 1 })).status).toBe(200);
+  expect(await list(customer)).toMatchObject({ entries: [], unreadCount: 0 });
+  const receipt = await settle(fixtures.haircutId);
+  const notice = (await list(customer)).entries[0];
+  expect(notice).toMatchObject({ clientName: null, rewardName: program.reward.name });
+  expect(await list(customer)).toMatchObject({ unreadCount: 1, entries: [notice] });
+  expect(await list(other)).toMatchObject({ unreadCount: 0, entries: [] });
+  expect((await call(customer, team)).status).toBe(403);
+  const staff = await actor(t, "staff", "notice-professional@stamps.test");
+  expect(await list(staff, team)).toMatchObject({ unreadCount: 1 });
+  await t.db
+    .update(staffProfile)
+    .set({ accessPreset: "restricted" })
+    .where(eq(staffProfile.id, staff.staffId ?? ""));
+  expect((await call(staff, team)).status).toBe(403);
+  expect(await list(owner, team)).toMatchObject({
+    unreadCount: 1,
+    entries: [{ cardId: notice?.cardId }],
+  });
+  const input = { cardId: notice?.cardId, earnedAt: notice?.earnedAt, generation: generation() };
+  const read = (by: Actor, url: string, body = input) => call(by, `${url}/read`, "POST", body);
+  expect((await read(other, inbox)).status).toBe(404);
+  expect((await read(customer, inbox, { ...input, generation: "restored" })).status).toBe(409);
+  expect((await read(customer, inbox)).status).toBe(200);
+  expect((await read(customer, inbox)).status).toBe(200);
+  expect(await list(customer)).toMatchObject({ unreadCount: 0, entries: [{ read: true }] });
+  expect(await list(owner, team)).toMatchObject({ unreadCount: 1 });
+  const refund = await call(owner, `/admin/commerce/payments/${receipt.payment}/refunds`, "POST", {
+    amountCents: receipt.amount,
+    reason: "Synthetic reversal of qualifying payment",
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(refund.status).toBe(201);
+  expect(await list(owner, team)).toMatchObject({ unreadCount: 0, entries: [] });
+  expect(await list(customer)).toMatchObject({ unreadCount: 0, entries: [] });
+});
 
 test("qualified settled treatments add one stamp per visit and require reviewed reward issuance", async () => {
   const saved = await save({ qualifyingServiceIds: [fixtures.haircutId] });

@@ -1,4 +1,15 @@
 export const stampsEn = {
+  "stamps.noticeTitle": "Reward notifications",
+  "stamps.noticeBookings": "Appointments",
+  "stamps.noticeEarned": "Reward earned",
+  "stamps.noticeIssued": "Ready to redeem",
+  "stamps.noticeEmpty": "There are no available reward notifications.",
+  "stamps.noticeUnread": "Unread",
+  "stamps.noticeAll": "All",
+  "stamps.noticeRead": "Mark as read",
+  "stamps.noticeReadState": "Read",
+  "stamps.noticeReadStatus": "Notification marked as read.",
+  "stamps.noticeOpen": "View stamp cards",
   "stamps.title": "Stamp cards",
   "stamps.program": "Stamp card programme",
   "stamps.enabled": "Enable the programme",
@@ -74,6 +85,17 @@ export const stampsEn = {
 } as const;
 
 export const stampsEsAR: Record<keyof typeof stampsEn, string> = {
+  "stamps.noticeTitle": "Avisos de recompensas",
+  "stamps.noticeBookings": "Citas",
+  "stamps.noticeEarned": "Recompensa conseguida",
+  "stamps.noticeIssued": "Lista para canjear",
+  "stamps.noticeEmpty": "No hay avisos de recompensas disponibles.",
+  "stamps.noticeUnread": "Sin leer",
+  "stamps.noticeAll": "Todos",
+  "stamps.noticeRead": "Marcar como leído",
+  "stamps.noticeReadState": "Leído",
+  "stamps.noticeReadStatus": "Aviso marcado como leído.",
+  "stamps.noticeOpen": "Ver tarjetas de sellos",
   "stamps.title": "Tarjetas de sellos",
   "stamps.program": "Programa de tarjetas de sellos",
   "stamps.enabled": "Activar el programa",

@@ -5,6 +5,7 @@ import { reviewRequestQueryKey } from "~/lib/api/review-endpoints";
 import {
   loyaltyPolicyQueryKey,
   stampCardsQueryKey,
+  stampNoticesQueryKey,
   stampProgramQueryKey,
 } from "~/lib/api/reward-endpoints";
 
@@ -93,7 +94,13 @@ const shared: Record<SyncEntity | SyncLiveView, readonly (readonly string[])[]> 
     ["rewards", "promotions"],
     ["creative", "promotions"],
   ],
-  loyalty: [loyaltyPolicyQueryKey, ["rewards", "admin"], stampProgramQueryKey, stampCardsQueryKey],
+  loyalty: [
+    loyaltyPolicyQueryKey,
+    ["rewards", "admin"],
+    stampProgramQueryKey,
+    stampCardsQueryKey,
+    stampNoticesQueryKey,
+  ],
   intake_forms: [intakeAdminQueryKey],
   intake_records: [intakeHistoryQueryKey],
   booking_policy: [["booking-policy"], ["admin", "booking-policy"]],

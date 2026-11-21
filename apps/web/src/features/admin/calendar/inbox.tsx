@@ -6,6 +6,7 @@ import { Button } from "~/components/ui/button";
 import { BellIcon } from "~/components/ui/icons";
 import { Sheet } from "~/components/ui/sheet";
 import { EmptyState, ErrorState, Skeleton, useOnline } from "~/components/ui/states";
+import { StampNotices, useStampNoticeCount } from "~/features/notifications/stamp-notices";
 import { useI18n } from "~/i18n/react";
 import { api } from "~/lib/api/instance";
 import { formatDateLong, formatTime, localDateOf } from "~/lib/format";
@@ -16,24 +17,32 @@ export const calendarInboxQuery = (userId: string, query: CalendarInboxQuery = {
   refetchInterval: 30_000,
 });
 
-export function CalendarInbox({ userId }: { userId: string }) {
+export function CalendarInbox({
+  userId,
+  rewardAccess = false,
+}: {
+  userId: string;
+  rewardAccess?: boolean;
+}) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const count = useQuery(calendarInboxQuery(userId));
+  const rewards = useStampNoticeCount("admin", userId, rewardAccess);
+  const total = (count.data?.total ?? 0) + rewards;
   return (
     <>
       <button
         type="button"
         className="calendar-icon-button calendar-inbox-trigger"
-        aria-label={`${t("calendar.inbox.title")}${count.data?.total ? ` ${Math.min(count.data.total, 99)}${count.data.total > 99 ? "+" : ""}` : ""}`}
+        aria-label={`${t("calendar.inbox.title")}${total ? ` ${Math.min(total, 99)}${total > 99 ? "+" : ""}` : ""}`}
         aria-haspopup="dialog"
         onClick={() => setOpen(true)}
       >
         <BellIcon />
-        {Boolean(count.data?.total) && (
+        {Boolean(total) && (
           <span className="calendar-inbox-count" aria-hidden="true">
-            {Math.min(count.data?.total ?? 0, 99)}
-            {(count.data?.total ?? 0) > 99 ? "+" : ""}
+            {Math.min(total, 99)}
+            {total > 99 ? "+" : ""}
           </span>
         )}
       </button>
@@ -43,9 +52,51 @@ export function CalendarInbox({ userId }: { userId: string }) {
         title={t("calendar.inbox.title")}
         dimBackground={false}
       >
-        {open && <InboxContents userId={userId} onNavigate={() => setOpen(false)} />}
+        {open && (
+          <InboxSections
+            userId={userId}
+            rewardAccess={rewardAccess}
+            onNavigate={() => setOpen(false)}
+          />
+        )}
       </Sheet>
     </>
+  );
+}
+
+function InboxSections({
+  userId,
+  rewardAccess,
+  onNavigate,
+}: {
+  userId: string;
+  rewardAccess: boolean;
+  onNavigate: () => void;
+}) {
+  const { t } = useI18n();
+  const [rewards, setRewards] = useState(false);
+  return (
+    <div className="space-y-4">
+      {rewardAccess && (
+        <div className="flex flex-wrap gap-2">
+          {[false, true].map((value) => (
+            <Button
+              key={String(value)}
+              variant={rewards === value ? "primary" : "secondary"}
+              aria-pressed={rewards === value}
+              onClick={() => setRewards(value)}
+            >
+              {t(value ? "stamps.noticeTitle" : "stamps.noticeBookings")}
+            </Button>
+          ))}
+        </div>
+      )}
+      {rewards && rewardAccess ? (
+        <StampNotices mode="admin" userId={userId} onNavigate={onNavigate} />
+      ) : (
+        <InboxContents userId={userId} onNavigate={onNavigate} />
+      )}
+    </div>
   );
 }
 

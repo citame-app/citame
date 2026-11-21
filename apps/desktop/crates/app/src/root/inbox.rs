@@ -2,7 +2,11 @@ use super::*;
 use sob_core::sync::TransportError;
 use std::sync::Arc;
 
+mod reward_inbox;
+pub(super) use reward_inbox::RewardBadge;
+
 pub(super) struct Inbox {
+    rewards: Option<reward_inbox::RewardInbox>,
     archived: bool,
     requested_page: u32,
     page: Option<CalendarInbox>,
@@ -19,6 +23,11 @@ impl Root {
         status: &SyncStatus,
         cx: &mut Context<Self>,
     ) {
+        self.refresh_reward_badge(status, cx);
+        if matches!(&self.overlay, Overlay::Inbox(inbox) if inbox.rewards.is_some()) {
+            self.refresh_reward_inbox_if_changed(status, cx);
+            return;
+        }
         let Overlay::Inbox(inbox) = &mut self.overlay else {
             return;
         };
@@ -43,6 +52,7 @@ impl Root {
             .then(|| self.svc.store.calendar_inbox_cache(archived).ok().flatten())
             .flatten();
         self.overlay = Overlay::Inbox(Inbox {
+            rewards: None,
             archived,
             requested_page,
             cached: page.is_some(),
@@ -145,6 +155,9 @@ impl Root {
     }
 
     pub(super) fn render_inbox(&self, inbox: &Inbox, cx: &mut Context<Self>) -> gpui::Div {
+        if let Some(rewards) = inbox.rewards.as_ref() {
+            return self.render_reward_inbox(rewards, cx);
+        }
         let show_archived = inbox.archived;
         let page = inbox.requested_page;
         let enabled = !inbox.busy;
@@ -195,6 +208,15 @@ impl Root {
                             },
                             cx.listener(|this, _, _, cx| this.open_inbox(true, 1, cx)),
                         ))
+                        .when(enabled && self.directory_enabled(), |row| {
+                            row.child(self.loyalty_button(
+                                "inbox-rewards",
+                                Key::RewardNoticeTitle,
+                                Kind::Ghost,
+                                Root::open_reward_inbox,
+                                cx,
+                            ))
+                        })
                         .when(enabled, |d| {
                             d.child(self.button(
                                 "inbox-refresh",

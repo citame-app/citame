@@ -1,5 +1,16 @@
 import { sql } from "drizzle-orm";
-import { boolean, check, index, integer, jsonb, pgTable, text, uuid } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  check,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  primaryKey,
+  text,
+  uuid,
+} from "drizzle-orm/pg-core";
+import { user } from "./auth";
 import { clientProfile } from "./client";
 import { checkout } from "./commerce";
 import { createdAt, primaryId, timestamptz, updatedAt } from "./helpers";
@@ -46,6 +57,11 @@ export const stampCard = pgTable(
   },
   (t) => [
     index("stamp_card_client_idx").on(t.clientId, t.createdAt),
+    index("stamp_card_actionable_reward_idx")
+      .on(t.completedAt.desc(), t.id.desc())
+      .where(
+        sql`${t.completedAt} is not null and ${t.redeemedAt} is null and ${t.voidedAt} is null and not ${t.needsReview}`,
+      ),
     check("stamp_card_revision", sql`${t.version} > 0 and ${t.programVersion} > 0`),
     check("stamp_card_count", sql`${t.stamps} between 0 and 15`),
     check(
@@ -71,4 +87,21 @@ export const stampCardEvent = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index("stamp_card_event_card_idx").on(t.cardId)],
+);
+
+export const stampRewardNoticeRead = pgTable(
+  "stamp_reward_notice_read",
+  {
+    cardId: uuid()
+      .notNull()
+      .references(() => stampCard.id, { onDelete: "cascade" }),
+    userId: text()
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    earnedAt: timestamptz().notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.cardId, t.userId] }),
+    index("stamp_reward_notice_user_idx").on(t.userId),
+  ],
 );
