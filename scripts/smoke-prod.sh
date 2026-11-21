@@ -619,13 +619,13 @@ SQL
     fail "native email settings integration failed"
   "${COMPOSE[@]}" start worker || fail "restart the synthetic delivery worker"
   SOB_TEST_UNLINKED_ACCOUNT_EMAIL="smoke-role-review@example.test" \
-    desktop_tests native_unlinked_account_review_works_through_proxy --exact ||
+    desktop_tests native_unlinked_account_review_through_the_proxy --exact ||
     fail "native reviewed account integration failed"
   SOB_TEST_MANAGED_REVIEW="$managed_review_id" SOB_TEST_INVENTORY_PRODUCT="$product_id" \
     SOB_TEST_IMPORTED_WAITLIST="$imported_waitlist_id" \
     desktop_tests --skip native_review_requests --skip native_sends_a_reviewed_email_test \
       --skip native_email_delivery_uses_the_owner_revision \
-      --skip native_unlinked_account_review_works_through_proxy || fail "desktop integration tests failed"
+      --skip native_unlinked_account_review_through_the_proxy || fail "desktop integration tests failed"
 fi
 
 step "the page renders"

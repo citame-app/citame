@@ -77,7 +77,7 @@ fn desktop_opens_cloud_management_with_the_linked_users_web_session_through_the_
 
 #[test]
 #[ignore = "needs the synthetic account and production proxy seeded by smoke-prod.sh"]
-fn native_unlinked_account_review_works_through_proxy() {
+fn native_unlinked_account_review_through_the_proxy() {
     use sob_core::http::AccountRole;
     let device = proxy_device();
     let mut web = Device::sign_in();
