@@ -4,6 +4,7 @@ import {
   issueStampCardSchema,
   permissionsFor,
   stampNoticeQuerySchema,
+  stampNoticeReadResultSchema,
   stampNoticeReadSchema,
   stampProgramInputSchema,
 } from "@sob/contracts";
@@ -52,7 +53,11 @@ function noticeRoutes({ db, config, now = () => new Date() }: AppDeps, mode: "ad
     .post("/read", async (c) => {
       const input = parseOrThrow(stampNoticeReadSchema, await readJson(c));
       ensureGeneration(input.generation, generation);
-      return c.json(await readStampNotice(db, c.get("principal"), mode, input, now()));
+      return c.json(
+        stampNoticeReadResultSchema.parse(
+          await readStampNotice(db, c.get("principal"), mode, input, now()),
+        ),
+      );
     });
 }
 

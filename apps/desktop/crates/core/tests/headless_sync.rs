@@ -168,7 +168,7 @@ fn native_stamp_programme_shares_revision_and_card_terms_through_the_proxy() {
         );
         let acknowledgment = RewardNoticeRead {
             card_id: notice.card_id,
-            earned_at: notice.earned_at,
+            revision: notice.revision,
             generation: inbox.generation,
         };
         device.transport.read_stamp_notice(&acknowledgment).unwrap();

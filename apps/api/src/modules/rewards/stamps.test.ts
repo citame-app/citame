@@ -134,7 +134,7 @@ test("a reward notice is private, read per account, and withdrawn after a refund
     expect(response.status, await response.clone().text()).toBe(200);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     return (await response.json()) as {
-      entries: { cardId: string; earnedAt: string; clientName: string | null }[];
+      entries: { cardId: string; revision: number; clientName: string | null }[];
       unreadCount: number;
     };
   };
@@ -157,7 +157,7 @@ test("a reward notice is private, read per account, and withdrawn after a refund
     unreadCount: 1,
     entries: [{ cardId: notice?.cardId }],
   });
-  const input = { cardId: notice?.cardId, earnedAt: notice?.earnedAt, generation: generation() };
+  const input = { cardId: notice?.cardId, revision: notice?.revision, generation: generation() };
   const read = (by: Actor, url: string, body = input) => call(by, `${url}/read`, "POST", body);
   expect((await read(other, inbox)).status).toBe(404);
   expect((await read(customer, inbox, { ...input, generation: "restored" })).status).toBe(409);

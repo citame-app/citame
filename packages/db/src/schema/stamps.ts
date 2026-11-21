@@ -48,6 +48,8 @@ export const stampCard = pgTable(
     stampExpiryOverridden: boolean().notNull().default(false),
     rewardExpiresAt: timestamptz(),
     completedAt: timestamptz(),
+    rewardNoticeAt: timestamptz(),
+    rewardNoticeRevision: integer().notNull().default(1),
     rewardIssuedAt: timestamptz(),
     redeemedAt: timestamptz(),
     voidedAt: timestamptz(),
@@ -98,7 +100,7 @@ export const stampRewardNoticeRead = pgTable(
     userId: text()
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
-    earnedAt: timestamptz().notNull(),
+    revision: integer().notNull(),
   },
   (t) => [
     primaryKey({ columns: [t.cardId, t.userId] }),

@@ -216,6 +216,10 @@ async function operatorView(tx: Tx, card: Card, rootId: string, program: Program
   return view(card, program, now, active?.id);
 }
 
+function nextRewardNotice(card: Card, now: Date) {
+  return { rewardNoticeAt: now, rewardNoticeRevision: card.rewardNoticeRevision + 1 };
+}
+
 async function enrol(
   tx: Tx,
   clientId: string,
@@ -357,6 +361,8 @@ export async function changeStampCard(
       if (changes.stampExpiresAt?.getTime() !== card.stampExpiresAt?.getTime())
         changes.stampExpiryOverridden = true;
       changes.completedAt = input.stamps === terms.goal ? (card.completedAt ?? now) : null;
+      if (changes.completedAt && !card.completedAt)
+        Object.assign(changes, nextRewardNotice(card, now));
       changes.rewardExpiresAt = changes.completedAt
         ? expires(changes.completedAt, terms.rewardExpiryDays)
         : null;
@@ -441,7 +447,12 @@ async function awardStamp(tx: Tx, clientId: string, award: Award) {
       .limit(1);
     await tx
       .update(stampCard)
-      .set({ needsReview: Boolean(other), version: card.version + 1, updatedAt: award.now })
+      .set({
+        needsReview: Boolean(other),
+        version: card.version + 1,
+        updatedAt: award.now,
+        ...(!other ? nextRewardNotice(card, award.now) : {}),
+      })
       .where(eq(stampCard.id, card.id));
     return;
   }
@@ -477,7 +488,11 @@ async function awardStamp(tx: Tx, clientId: string, award: Award) {
         ? { stampExpiresAt: expires(award.now, terms.stampExpiryDays) }
         : {}),
       ...(complete
-        ? { completedAt: award.now, rewardExpiresAt: expires(award.now, terms.rewardExpiryDays) }
+        ? {
+            completedAt: award.now,
+            rewardExpiresAt: expires(award.now, terms.rewardExpiryDays),
+            ...nextRewardNotice(card, award.now),
+          }
         : {}),
     })
     .where(eq(stampCard.id, card.id));

@@ -1,6 +1,6 @@
 use super::*;
 use crate::loyalty::stamps::{
-    Card, Cards, Command, RewardNoticeRead, RewardNotices,
+    Card, Cards, Command, RewardInboxReply, RewardNoticeRead, RewardNotices,
     programme::{Programme, Review},
 };
 use crate::loyalty::{
@@ -84,6 +84,27 @@ impl HttpTransport {
             ));
         }
         Ok(())
+    }
+
+    pub fn refresh_stamp_notices(
+        &self,
+        page: u32,
+        unread: bool,
+        read: Option<&RewardNoticeRead>,
+    ) -> RewardInboxReply {
+        let read_error = read.and_then(|input| self.read_stamp_notice(input).err());
+        let mut listing = self.stamp_notices(page, unread, false);
+        if page > 1
+            && listing
+                .as_ref()
+                .is_ok_and(|listing| listing.entries.is_empty())
+        {
+            listing = self.stamp_notices(1, unread, false);
+        }
+        RewardInboxReply {
+            listing,
+            read_error,
+        }
     }
 
     pub fn stamp_programme(&self) -> Result<Programme, TransportError> {

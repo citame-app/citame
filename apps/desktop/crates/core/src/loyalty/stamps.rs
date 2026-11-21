@@ -1,6 +1,8 @@
+use crate::sync::TransportError;
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use uuid::Uuid;
 
 pub mod programme;
@@ -264,6 +266,7 @@ pub struct RewardNotice {
     pub card_name: String,
     pub reward_name: String,
     pub earned_at: DateTime<Utc>,
+    pub revision: u32,
     pub reward_expires_at: Option<DateTime<Utc>>,
     pub issued: bool,
     pub read: bool,
@@ -285,5 +288,22 @@ pub struct RewardNotices {
 pub struct RewardNoticeRead {
     pub generation: String,
     pub card_id: Uuid,
-    pub earned_at: DateTime<Utc>,
+    pub revision: u32,
+}
+
+pub const NOTICE_REFRESH_INTERVAL: Duration = Duration::from_secs(20);
+
+pub fn notice_retry_delay(error: Option<&TransportError>) -> Option<Duration> {
+    match error {
+        Some(TransportError::RateLimited(wait)) => Some(
+            wait.unwrap_or(NOTICE_REFRESH_INTERVAL)
+                .max(Duration::from_secs(1)),
+        ),
+        _ => None,
+    }
+}
+
+pub struct RewardInboxReply {
+    pub listing: Result<RewardNotices, TransportError>,
+    pub read_error: Option<TransportError>,
 }

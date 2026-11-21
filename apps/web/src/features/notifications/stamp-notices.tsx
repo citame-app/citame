@@ -142,7 +142,7 @@ export function StampNotices({
                     if (!notice.read && !read.isPending && online)
                       read.mutate({
                         cardId: notice.cardId,
-                        earnedAt: notice.earnedAt,
+                        revision: notice.revision,
                         generation: result.generation,
                       });
                   }}

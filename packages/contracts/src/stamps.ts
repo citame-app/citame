@@ -133,10 +133,11 @@ export type StampNoticeQuery = z.infer<typeof stampNoticeQuerySchema>;
 export const stampNoticeReadSchema = z
   .object({
     cardId: idSchema,
-    earnedAt: instantSchema,
+    revision: version,
     generation: syncGenerationSchema,
   })
   .strict();
+export const stampNoticeReadResultSchema = z.object({ ok: z.literal(true) });
 export type StampNoticeRead = z.infer<typeof stampNoticeReadSchema>;
 
 export const stampNoticeSchema = z.object({
@@ -146,6 +147,7 @@ export const stampNoticeSchema = z.object({
   cardName: z.string(),
   rewardName: z.string(),
   earnedAt: instantSchema,
+  revision: version,
   rewardExpiresAt: instantSchema.nullable(),
   issued: z.boolean(),
   read: z.boolean(),

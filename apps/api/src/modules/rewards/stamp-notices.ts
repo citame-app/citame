@@ -48,7 +48,10 @@ function activeCards(tx: Pick<Tx, "select">, scope: string | undefined, now: Dat
       clientId: sql<string>`${clientProfile.id}`.as("notice_client_id"),
       clientName: clientProfile.name,
       program: stampCard.program,
-      earnedAt: stampCard.completedAt,
+      earnedAt: sql`coalesce(${stampCard.rewardNoticeAt}, ${stampCard.completedAt})`
+        .mapWith(stampCard.completedAt)
+        .as("notice_earned_at"),
+      revision: stampCard.rewardNoticeRevision,
       issuedAt: stampCard.rewardIssuedAt,
       expiresAt: stampCard.rewardExpiresAt,
     })
@@ -76,7 +79,7 @@ export async function listStampNotices(
       const read = and(
         eq(stampRewardNoticeRead.cardId, active.cardId),
         eq(stampRewardNoticeRead.userId, principal.userId),
-        eq(stampRewardNoticeRead.earnedAt, active.earnedAt),
+        eq(stampRewardNoticeRead.revision, active.revision),
       );
       const unread = isNull(stampRewardNoticeRead.cardId);
       const [totals] = await tx
@@ -97,6 +100,7 @@ export async function listStampNotices(
           clientName: active.clientName,
           program: active.program,
           earnedAt: active.earnedAt,
+          revision: active.revision,
           issuedAt: active.issuedAt,
           expiresAt: active.expiresAt,
           receipt: stampRewardNoticeRead.cardId,
@@ -117,6 +121,7 @@ export async function listStampNotices(
           cardName: terms.name,
           rewardName: terms.reward.name,
           earnedAt: row.earnedAt.toISOString(),
+          revision: row.revision,
           rewardExpiresAt: row.expiresAt?.toISOString() ?? null,
           issued: row.issuedAt !== null,
           read: row.receipt !== null,
@@ -136,21 +141,21 @@ export async function readStampNotice(
   now: Date,
 ) {
   const scope = audience(principal, mode);
-  const earnedAt = new Date(input.earnedAt);
+  const revision = input.revision;
   await db.transaction(async (tx) => {
     const active = activeCards(tx, scope, now);
     const [notice] = await tx
       .select({ id: active.cardId })
       .from(active)
-      .where(and(eq(active.cardId, input.cardId), eq(active.earnedAt, earnedAt)));
+      .where(and(eq(active.cardId, input.cardId), eq(active.revision, revision)));
     if (!notice) throw new DomainError("not_found", "Reward notice is no longer available");
     await tx
       .insert(stampRewardNoticeRead)
-      .values({ cardId: notice.id, userId: principal.userId, earnedAt })
+      .values({ cardId: notice.id, userId: principal.userId, revision })
       .onConflictDoUpdate({
         target: [stampRewardNoticeRead.cardId, stampRewardNoticeRead.userId],
-        set: { earnedAt },
-        setWhere: lt(stampRewardNoticeRead.earnedAt, earnedAt),
+        set: { revision },
+        setWhere: lt(stampRewardNoticeRead.revision, revision),
       });
   });
   return { ok: true as const };

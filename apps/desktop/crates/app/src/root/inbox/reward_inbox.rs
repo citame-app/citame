@@ -1,9 +1,9 @@
 use super::*;
 use sob_core::loyalty::{
     LIVE_TOPIC,
-    stamps::{RewardNoticeRead, RewardNotices},
+    stamps::{NOTICE_REFRESH_INTERVAL, RewardNoticeRead, RewardNotices, notice_retry_delay},
 };
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 #[derive(Default)]
 pub(in crate::root) struct RewardBadge {
@@ -28,13 +28,7 @@ pub(super) struct RewardInbox {
 }
 
 fn retry_at(error: Option<&TransportError>) -> Option<Instant> {
-    match error {
-        Some(TransportError::RateLimited(wait)) => Instant::now().checked_add(
-            wait.unwrap_or(Duration::from_secs(20))
-                .max(Duration::from_secs(1)),
-        ),
-        _ => None,
-    }
+    Instant::now().checked_add(notice_retry_delay(error)?)
 }
 
 impl Root {
@@ -97,7 +91,7 @@ impl Root {
                 }
                 let badge = &mut root.reward_badge;
                 badge.request = None;
-                badge.next_read = Instant::now().checked_add(Duration::from_secs(20));
+                badge.next_read = Instant::now().checked_add(NOTICE_REFRESH_INTERVAL);
                 badge.retry = retry_at(result.as_ref().err());
                 let count = match result {
                     Ok(page) => page.unread_count,
@@ -115,33 +109,32 @@ impl Root {
 
     pub(in crate::root) fn inbox_toolbar_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let count = self.reward_badge.count;
-        div()
-            .flex()
-            .items_center()
-            .gap_1()
-            .child(self.button(
-                "calendar-inbox",
-                self.t(Key::CalendarInbox),
-                Kind::Ghost,
-                cx.listener(|root, _, _, cx| root.open_inbox(false, 1, cx)),
-            ))
-            .child(div().min_w(px(24.)).flex().justify_center().when(
-                count > 0 && self.directory_enabled(),
-                |badge| {
-                    badge.child(
-                        div()
-                            .rounded_full()
-                            .px_1()
-                            .text_xs()
-                            .bg(theme::accent_soft())
-                            .child(if count > 99 {
-                                "99+".to_owned()
-                            } else {
-                                count.to_string()
-                            }),
-                    )
-                },
-            ))
+        self.button(
+            "calendar-inbox",
+            self.t(Key::CalendarInbox),
+            Kind::Ghost,
+            cx.listener(|root, _, _, cx| root.open_inbox(false, 1, cx)),
+        )
+        .relative()
+        .when(count > 0 && self.directory_enabled(), |button| {
+            button.child(
+                div()
+                    .absolute()
+                    .top(px(-5.))
+                    .right(px(-5.))
+                    .min_w(px(16.))
+                    .rounded_full()
+                    .px_1()
+                    .text_xs()
+                    .text_center()
+                    .bg(theme::accent_soft())
+                    .child(if count > 99 {
+                        "99+".to_owned()
+                    } else {
+                        count.to_string()
+                    }),
+            )
+        })
     }
 
     pub(super) fn open_reward_inbox(&mut self, cx: &mut Context<Self>) {
@@ -233,22 +226,9 @@ impl Root {
         view.page = page;
         cx.notify();
         cx.spawn(async move |root, cx| {
-            let (result, read_error) = cx
+            let reply = cx
                 .background_executor()
-                .spawn(async move {
-                    let read_error = read
-                        .as_ref()
-                        .and_then(|input| transport.read_stamp_notice(input).err());
-                    let mut result = transport.stamp_notices(page, unread, false);
-                    if page > 1
-                        && result
-                            .as_ref()
-                            .is_ok_and(|listing| listing.entries.is_empty())
-                    {
-                        result = transport.stamp_notices(1, unread, false);
-                    }
-                    (result, read_error)
-                })
+                .spawn(async move { transport.refresh_stamp_notices(page, unread, read.as_ref()) })
                 .await;
             let _ = root.update(cx, |root, cx| {
                 if !Arc::ptr_eq(&root.svc.session, &session) || !root.directory_enabled() {
@@ -261,14 +241,14 @@ impl Root {
                     return;
                 };
                 view.busy = false;
-                view.next_read = Instant::now() + Duration::from_secs(20);
-                view.retry =
-                    retry_at(result.as_ref().err()).or_else(|| retry_at(read_error.as_ref()));
-                match result {
+                view.next_read = Instant::now() + NOTICE_REFRESH_INTERVAL;
+                view.retry = retry_at(reply.listing.as_ref().err())
+                    .or_else(|| retry_at(reply.read_error.as_ref()));
+                match reply.listing {
                     Ok(listing) => {
                         view.page = listing.page;
                         view.listing = Some(listing);
-                        view.error = read_error.map(|_| Key::RewardNoticeReadFailed);
+                        view.error = reply.read_error.map(|_| Key::RewardNoticeReadFailed);
                     }
                     Err(error) => {
                         if matches!(
@@ -313,7 +293,7 @@ impl Root {
                 let client = notice.client_id.zip(notice.client_name.clone());
                 let date = self.date_time_label(notice.earned_at);
                 let generation = listing.generation.clone();
-                let earned_at = notice.earned_at;
+                let notice_revision = notice.revision;
                 list = list.child(
                     div()
                         .flex()
@@ -379,7 +359,7 @@ impl Root {
                                                 Some(RewardNoticeRead {
                                                     generation: generation.clone(),
                                                     card_id: id,
-                                                    earned_at,
+                                                    revision: notice_revision,
                                                 }),
                                                 cx,
                                             )

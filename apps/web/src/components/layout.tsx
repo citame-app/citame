@@ -2,12 +2,13 @@ import { Popover } from "@base-ui/react/popover";
 import { type MeResponse, permissionsFor } from "@sob/contracts";
 import { Link } from "@tanstack/react-router";
 import { CalendarInbox } from "~/features/admin/calendar/inbox";
+import { useStampNoticeCount } from "~/features/notifications/stamp-notices";
 import type { Locale } from "~/i18n";
 import { useI18n } from "~/i18n/react";
 import type { Theme } from "~/lib/theme";
 import { LocaleSwitch, ThemeToggle } from "./shell";
 import { buttonClasses } from "./ui/button";
-import { UserIcon } from "./ui/icons";
+import { BellIcon, UserIcon } from "./ui/icons";
 
 export function SkipLink() {
   const { t } = useI18n();
@@ -44,6 +45,12 @@ export function Header({
 }) {
   const { t } = useI18n();
   const staff = session && session.user.role !== "client";
+  const customer = session?.user.role === "client" && Boolean(session.clientId);
+  const rewards = useStampNoticeCount(
+    "client",
+    session?.user.id ?? "",
+    customer && !calendarMode && !adminMode,
+  );
   const access = session ? permissionsFor(session.user.role, session.accessPreset) : undefined;
   if (adminMode || calendarMode)
     return (
@@ -122,6 +129,24 @@ export function Header({
               userId={session.user.id}
               rewardAccess={Boolean(access?.commerce && access.clients)}
             />
+          )}
+          {customer && (
+            <Link
+              to="/account/notifications"
+              className="calendar-icon-button calendar-inbox-trigger"
+              aria-label={
+                rewards
+                  ? `${t("notify.title")} ${Math.min(rewards, 99)}${rewards > 99 ? "+" : ""}`
+                  : t("notify.title")
+              }
+            >
+              <BellIcon />
+              {rewards > 0 && (
+                <span className="calendar-inbox-count" aria-hidden="true">
+                  {rewards > 99 ? "99+" : rewards}
+                </span>
+              )}
+            </Link>
           )}
           <LocaleSwitch locale={locale} onChange={onLocaleChange} />
           <ThemeToggle initial={theme} onChange={onThemeChange} />

@@ -1,7 +1,11 @@
+ALTER TABLE stamp_card ADD COLUMN reward_notice_at timestamptz;
+--> statement-breakpoint
+ALTER TABLE stamp_card ADD COLUMN reward_notice_revision integer NOT NULL DEFAULT 1;
+--> statement-breakpoint
 CREATE TABLE stamp_reward_notice_read (
   card_id uuid NOT NULL REFERENCES stamp_card (id) ON DELETE CASCADE,
   user_id text NOT NULL REFERENCES "user" (id) ON DELETE CASCADE,
-  earned_at timestamptz NOT NULL,
+  revision integer NOT NULL,
   PRIMARY KEY (card_id, user_id)
 );
 --> statement-breakpoint

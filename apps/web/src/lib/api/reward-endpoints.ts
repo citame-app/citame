@@ -18,6 +18,7 @@ import {
   type StampProgramInput,
   stampCardSchema,
   stampCardsSchema,
+  stampNoticeReadResultSchema,
   stampNoticesSchema,
   stampProgramSchema,
 } from "@sob/contracts";
@@ -38,7 +39,7 @@ export function rewardEndpoints(client: ApiClient) {
     stampNotices: (mode: CommerceMode, query: StampNoticeQuery, signal?: AbortSignal) =>
       client.get(noticePath(mode), stampNoticesSchema, { query, signal }),
     readStampNotice: (mode: CommerceMode, input: StampNoticeRead) =>
-      client.post(`${noticePath(mode)}/read`, input, z.object({ ok: z.literal(true) })),
+      client.post(`${noticePath(mode)}/read`, input, stampNoticeReadResultSchema),
     stampProgram: (signal?: AbortSignal) =>
       client.get("/admin/rewards/stamps/program", stampProgramSchema, { signal }),
     saveStampProgram: (input: StampProgramInput) =>
