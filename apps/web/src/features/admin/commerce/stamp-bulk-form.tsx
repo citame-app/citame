@@ -14,6 +14,12 @@ import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { UnsavedGuard } from "../unsaved-guard";
 
+const scopeLabels = {
+  expired: "stamps.bulkScopeExpired",
+  completed: "stamps.bulkScopeCompleted",
+  all: "stamps.bulkScopeAll",
+} as const satisfies Record<StampBulkScope, string>;
+
 export function StampBulkForm() {
   const { t } = useI18n();
   const queries = useQueryClient();
@@ -101,23 +107,26 @@ export function StampBulkForm() {
         <h3 id={heading} className="text-heading">
           {t(review ? "stamps.bulkReviewTitle" : "stamps.bulkScope")}
         </h3>
-        <SelectField
-          label={t("stamps.bulkScope")}
-          hideLabel
-          disabled={busy || Boolean(review)}
-          value={scope}
-          options={[
-            { value: "expired", label: t("stamps.bulkScopeExpired") },
-            { value: "completed", label: t("stamps.bulkScopeCompleted") },
-            { value: "all", label: t("stamps.bulkScopeAll") },
-          ]}
-          onChange={(value) => {
-            setScope(value as StampBulkScope);
-            apply.reset();
-            prepare.reset();
-            setChanged(false);
-          }}
-        />
+        {review ? (
+          <p className="text-sm font-semibold">{t(scopeLabels[review.scope])}</p>
+        ) : (
+          <SelectField
+            label={t("stamps.bulkScope")}
+            hideLabel
+            disabled={busy}
+            value={scope}
+            options={(["expired", "completed", "all"] as const).map((value) => ({
+              value,
+              label: t(scopeLabels[value]),
+            }))}
+            onChange={(value) => {
+              setScope(value as StampBulkScope);
+              apply.reset();
+              prepare.reset();
+              setChanged(false);
+            }}
+          />
+        )}
         {changed && <p role="status">{t("stamps.bulkStale")}</p>}
         {prepare.isError && <ErrorState error={prepare.error} />}
         {apply.isError && !changed && <ErrorState error={apply.error} />}
