@@ -271,11 +271,19 @@ test("settled families exclude tips and put historical receipts without matching
 });
 
 test("client sales use the current merged identity, professional and settlement period", async () => {
-  const [target, alias] = await t.db
+  const [target, alias, unrelated] = await t.db
     .insert(clientProfile)
-    .values([{ name: "Primary profile" }, { name: "Historical profile" }])
+    .values([
+      { name: "Primary profile" },
+      { name: "Historical profile" },
+      { name: "Other profile" },
+    ])
     .returning();
-  if (!target || !alias) throw new Error("Missing client fixture");
+  if (!target || !alias || !unrelated) throw new Error("Missing client fixture");
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Argentina/Buenos_Aires",
+  });
+  const from = formatter.format(new Date());
   async function customReceipt(clientId: string | undefined, amountCents: number) {
     const response = await call(owner, "/admin/commerce/checkouts", "POST", {
       clientId,
@@ -292,6 +300,7 @@ test("client sales use the current merged identity, professional and settlement 
   const historicPayment = await customReceipt(alias.id, 5000);
   await customReceipt(target.id, 2500);
   await customReceipt(undefined, 4000);
+  await customReceipt(unrelated.id, 2000);
   const refund = await call(
     owner,
     `/admin/commerce/payments/${historicPayment.id}/refunds`,
@@ -310,10 +319,8 @@ test("client sales use the current merged identity, professional and settlement 
     idempotencyKey: key(),
   });
   expect(merged.status).toBe(201);
-  const date = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Argentina/Buenos_Aires",
-  }).format(new Date());
-  const base = `/admin/accounting/sales?from=${date}&to=${date}`;
+  const to = formatter.format(new Date());
+  const base = `/admin/accounting/sales?from=${from}&to=${to}`;
   const path = `${base}&clientId=${alias.id}`;
   const result = await call(owner, path);
   expect(result.status).toBe(200);
@@ -333,7 +340,7 @@ test("client sales use the current merged identity, professional and settlement 
   });
   expect((await call(staff, path)).status).toBe(403);
   expect((await call(owner, `${base}&clientId=${key()}`)).status).toBe(404);
-  expect(await (await call(owner, base)).json()).toMatchObject({ collectedCents: 11500 });
+  expect(await (await call(owner, base)).json()).toMatchObject({ collectedCents: 13500 });
 });
 test("upgrade backfills open receipt attribution and allocations without changing historical totals", async () => {
   const checkout = await sale();

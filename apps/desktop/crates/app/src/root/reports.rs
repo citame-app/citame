@@ -173,6 +173,7 @@ impl Root {
         if let Some(subject) = desk.client_sales.take() {
             self.overlay = Overlay::Directory(subject.directory);
             self.reload_directory();
+            self.load_directory_financial_scope(cx);
             cx.notify();
         }
     }

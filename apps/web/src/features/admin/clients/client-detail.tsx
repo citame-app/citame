@@ -548,7 +548,7 @@ export function ClientDetail({
       )}
       {visited.has("payments") && permissions.commerce && (
         <div hidden={tab !== "payments"}>
-          {permissions.financialReports && !isAlias && (
+          {permissions.financialReports && (
             <Link
               to="/admin/reports"
               search={{ preset: "last30", client: clientId }}

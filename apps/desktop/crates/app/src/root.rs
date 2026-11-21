@@ -762,6 +762,9 @@ impl Root {
         self.refresh_open_report(&status, cx);
         self.refresh_commissions(&status, cx);
         if status.connectivity == Connectivity::Online {
+            if reconnected || self.status.cursor != status.cursor {
+                self.load_directory_financial_scope(cx);
+            }
             self.refresh_register_if_changed(cx);
             self.refresh_inventory(reconnected, cx);
             self.refresh_checkout_if_changed(cx);

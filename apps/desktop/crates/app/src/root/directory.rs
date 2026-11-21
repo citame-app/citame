@@ -14,6 +14,7 @@ pub(super) struct Directory {
     form: Option<Form>,
     history: Vec<Appointment>,
     can_view_financial_reports: bool,
+    financial_scope_request: Option<Arc<()>>,
     pub(super) sales_history: Option<transactions::History>,
     pub(super) intake: Option<intake_record::Desk>,
     controls: Option<controls::Desk>,
@@ -57,7 +58,7 @@ impl Root {
             }
         });
         self.overlay = Overlay::Directory(Box::new(Directory {
-            search: search.clone(),
+            search,
             _search: subscription,
             page: 0,
             contacts: calendar::ClientDirectory::default(),
@@ -66,36 +67,47 @@ impl Root {
             form: None,
             history: vec![],
             can_view_financial_reports: false,
+            financial_scope_request: None,
             sales_history: None,
             intake: None,
             controls: None,
             error: None,
         }));
         self.reload_directory();
-        self.load_directory_financial_scope(search, cx);
+        self.load_directory_financial_scope(cx);
         cx.notify();
     }
 
-    fn load_directory_financial_scope(&self, search: Entity<TextField>, cx: &mut Context<Self>) {
+    pub(super) fn load_directory_financial_scope(&mut self, cx: &mut Context<Self>) {
+        let Overlay::Directory(desk) = &mut self.overlay else {
+            return;
+        };
         let Some(transport) = self.svc.transport() else {
             return;
         };
+        let request = Arc::new(());
+        desk.financial_scope_request = Some(request.clone());
         let session = self.svc.session.clone();
         cx.spawn(async move |root, cx| {
             let allowed = cx
                 .background_executor()
                 .spawn(async move {
+                    // The accounting scope grants team-wide access only with financialReports.
                     transport
                         .commission_scope()
-                        .is_ok_and(|scope| scope.can_choose_staff)
+                        .map(|scope| scope.can_choose_staff)
                 })
                 .await;
             let _ = root.update(cx, |root, cx| {
                 if Arc::ptr_eq(&session, &root.svc.session)
                     && let Overlay::Directory(desk) = &mut root.overlay
-                    && desk.search == search
+                    && desk
+                        .financial_scope_request
+                        .as_ref()
+                        .is_some_and(|current| Arc::ptr_eq(current, &request))
                 {
-                    desk.can_view_financial_reports = allowed;
+                    desk.financial_scope_request = None;
+                    desk.can_view_financial_reports = allowed.unwrap_or(false);
                     cx.notify();
                 }
             });

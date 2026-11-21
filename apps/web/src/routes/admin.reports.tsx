@@ -3,7 +3,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { PageHeading } from "~/components/pages";
 import { AccountingView, SalesReport } from "~/features/admin/commerce/accounting-view";
-import { validateReportsSearch } from "~/features/admin/reports/range";
+import { resolveRange, validateReportsSearch } from "~/features/admin/reports/range";
 import { ReportsView } from "~/features/admin/reports/reports-view";
 import { adminHead } from "~/features/admin/route-head";
 import { useI18n } from "~/i18n/react";
@@ -15,7 +15,7 @@ export const Route = createFileRoute("/admin/reports")({
 });
 
 function ReportsPage() {
-  const { t } = useI18n();
+  const { t, timeZone } = useI18n();
   const { session } = Route.useRouteContext();
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
@@ -26,6 +26,8 @@ function ReportsPage() {
   const permissions = permissionsFor(session?.user.role ?? "client", session?.accessPreset);
   if (!session) return null;
   if (search.client) {
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date());
+    const range = resolveRange(search, today);
     return (
       <div className="view-reports">
         <PageHeading title={t("accounting.clientSales")} />
@@ -36,8 +38,17 @@ function ReportsPage() {
         >
           {t("accounting.allReports")}
         </Link>
-        {permissions.financialReports && permissions.clients ? (
-          <SalesReport key={search.client} clientId={search.client} />
+        {permissions.financialReports && permissions.clients && permissions.commerce ? (
+          <SalesReport
+            key={JSON.stringify([search.client, range.from, range.to, search.staff])}
+            clientId={search.client}
+            filters={{ ...range, staffId: search.staff }}
+            onApply={({ from, to, staffId }) =>
+              void navigate({
+                search: (current) => ({ ...current, preset: "custom", from, to, staff: staffId }),
+              })
+            }
+          />
         ) : (
           <p role="status">{t("accounting.clientReportRestricted")}</p>
         )}

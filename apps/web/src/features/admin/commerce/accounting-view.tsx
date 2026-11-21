@@ -388,16 +388,28 @@ function PayoutForm({
     </form>
   );
 }
-export function SalesReport({ clientId }: { clientId?: string }) {
+type SalesReportFilters = Pick<SalesReportQuery, "from" | "to" | "staffId">;
+
+export function SalesReport({
+  clientId,
+  filters,
+  onApply,
+}: {
+  clientId?: string;
+  filters?: SalesReportFilters;
+  onApply?: (filters: SalesReportFilters) => void;
+}) {
   const { t, locale, timeZone } = useI18n();
   const today = new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date());
-  const initialFrom = clientId ? presetRange("last30", today).from : today;
-  const [from, setFrom] = useState(initialFrom);
-  const [to, setTo] = useState(today);
-  const [professional, setProfessional] = useState("");
-  const [range, setRange] = useState<SalesReportQuery>({
-    from: initialFrom,
+  const initialFilters = filters ?? {
+    from: clientId ? presetRange("last30", today).from : today,
     to: today,
+  };
+  const [from, setFrom] = useState(initialFilters.from);
+  const [to, setTo] = useState(initialFilters.to);
+  const [professional, setProfessional] = useState(initialFilters.staffId ?? "");
+  const [range, setRange] = useState<SalesReportQuery>({
+    ...initialFilters,
     clientId,
   });
   const staff = useQuery(adminStaffQuery);
@@ -429,7 +441,9 @@ export function SalesReport({ clientId }: { clientId?: string }) {
         className="flex flex-wrap items-end gap-3"
         onSubmit={(e) => {
           e.preventDefault();
-          setRange({ from, to, staffId: professional || undefined, clientId });
+          const next = { from, to, staffId: professional || undefined };
+          if (onApply) onApply(next);
+          else setRange({ ...next, clientId });
         }}
       >
         <TextField
