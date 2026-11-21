@@ -21,6 +21,7 @@ pub(super) enum EditorMode {
 
 pub(super) struct Editor {
     preview: bool,
+    from_template: bool,
     generation: String,
     id: String,
     version: Option<u32>,
@@ -182,6 +183,7 @@ impl Editor {
         draft: Draft,
         source: Option<&Campaign>,
         generation: String,
+        from_template: bool,
         cx: &mut Context<Root>,
     ) -> Self {
         Self {
@@ -211,6 +213,7 @@ impl Editor {
             pending: None,
             stale: false,
             preview: false,
+            from_template,
         }
     }
 
@@ -291,21 +294,13 @@ impl Editor {
     }
 }
 
-fn duplicate_name(name: &str, copy: &str) -> String {
-    let suffix = format!(" · {copy}");
-    let mut remaining = 160usize.saturating_sub(suffix.encode_utf16().count());
-    let mut name: String = name
-        .chars()
-        .take_while(|c| {
-            let Some(next) = remaining.checked_sub(c.len_utf16()) else {
-                return false;
-            };
-            remaining = next;
-            true
-        })
-        .collect();
-    name.push_str(&suffix);
-    name
+fn template_name(trigger: Trigger) -> Key {
+    match trigger {
+        Trigger::Manual => Key::MarketingCustomDraft,
+        Trigger::FirstVisit => Key::MarketingFirstVisitDraft,
+        Trigger::Inactive => Key::MarketingInactiveDraft,
+        Trigger::Birthday => Key::MarketingBirthdayDraft,
+    }
 }
 
 fn preview_message(value: &str) -> String {
@@ -341,19 +336,20 @@ impl Root {
             cx.notify();
             return;
         };
+        let from_template = draft_template.is_some();
         let (draft, source) = if let Some(draft) = draft_template {
             (draft, None)
         } else {
             let Some(campaign) = campaign.filter(|c| !edit || c.status == Status::Draft) else {
                 return;
             };
-            let mut draft = Draft::from(campaign);
-            if !edit {
-                draft.name = duplicate_name(&draft.name, copy);
+            if edit {
+                (Draft::from(campaign), Some(campaign))
+            } else {
+                (Draft::duplicate(campaign, copy), None)
             }
-            (draft, edit.then_some(campaign))
         };
-        desk.editor = Some(Editor::new(draft, source, generation, cx));
+        desk.editor = Some(Editor::new(draft, source, generation, from_template, cx));
         desk.choose_template = false;
         desk.error = None;
         desk.review = None;
@@ -365,66 +361,39 @@ impl Root {
     }
 
     fn campaign_template(&self, trigger: Trigger) -> Draft {
-        let (name, subject, body) = match trigger {
-            Trigger::Manual => (
-                Key::MarketingCustomDraft,
-                Key::MarketingCustomSubject,
-                Key::MarketingCustomBody,
-            ),
-            Trigger::FirstVisit => (
-                Key::MarketingFirstVisit,
-                Key::MarketingFirstSubject,
-                Key::MarketingFirstBody,
-            ),
-            Trigger::Inactive => (
-                Key::MarketingInactive,
-                Key::MarketingInactiveSubject,
-                Key::MarketingInactiveBody,
-            ),
-            Trigger::Birthday => (
-                Key::MarketingBirthday,
-                Key::MarketingBirthdaySubject,
-                Key::MarketingBirthdayBody,
-            ),
+        let (subject, body) = match trigger {
+            Trigger::Manual => (Key::MarketingCustomSubject, Key::MarketingCustomBody),
+            Trigger::FirstVisit => (Key::MarketingFirstSubject, Key::MarketingFirstBody),
+            Trigger::Inactive => (Key::MarketingInactiveSubject, Key::MarketingInactiveBody),
+            Trigger::Birthday => (Key::MarketingBirthdaySubject, Key::MarketingBirthdayBody),
         };
-        let inactive = trigger == Trigger::Inactive;
-        Draft {
-            name: self.t(name).into(),
-            channel: Channel::Email,
+        Draft::from_template(
             trigger,
-            subject: self.t(subject).into(),
-            email_body: self.t(body).into(),
-            sms_body: self.t(body).into(),
-            delay_minutes: if trigger == Trigger::FirstVisit {
-                120
-            } else {
-                0
-            },
-            birthday_lead_days: 0,
-            audience: Audience {
-                tags: Vec::new(),
-                inactive_days: inactive.then_some(60),
-                no_future_appointments: inactive,
-            },
-        }
+            self.t(template_name(trigger)),
+            self.t(subject),
+            self.t(body),
+        )
     }
 
-    pub(super) fn campaign_templates(&self, ready: bool, cx: &mut Context<Self>) -> gpui::Div {
+    pub(super) fn campaign_templates(
+        &self,
+        ready: bool,
+        replacing: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         div()
             .flex()
             .flex_col()
             .gap_3()
             .child(self.label(Key::MarketingTemplate))
+            .when(replacing, |body| {
+                body.child(self.t(Key::MarketingTemplateReplace))
+            })
             .when(ready, |body| {
                 body.children(TRIGGERS.into_iter().enumerate().map(|(index, trigger)| {
-                    let label = if trigger == Trigger::Manual {
-                        Key::MarketingCustomDraft
-                    } else {
-                        trigger_key(trigger)
-                    };
                     self.marketing_button(
                         ("campaign-template", index),
-                        label,
+                        template_name(trigger),
                         Kind::Ghost,
                         move |root, cx| root.open_campaign_editor(EditorMode::Create(trigger), cx),
                         cx,
@@ -556,14 +525,14 @@ impl Root {
             })
     }
 
-    fn toggle_campaign_preview(&mut self, cx: &mut Context<Self>) {
+    fn open_campaign_preview(&mut self, cx: &mut Context<Self>) {
         if let Some(editor) = self.marketing_desk().and_then(|desk| desk.editor.as_mut()) {
-            editor.preview = !editor.preview;
+            editor.preview = true;
             cx.notify();
         }
     }
 
-    fn campaign_message_preview(&self, editor: &Editor, cx: &mut Context<Self>) -> gpui::Div {
+    fn campaign_message_preview(&self, editor: &Editor, cx: &App) -> gpui::Div {
         div()
             .flex()
             .flex_col()
@@ -582,13 +551,6 @@ impl Root {
                 body.child(self.label(Key::MarketingSms))
                     .child(preview_message(&message_text(&editor.sms.lines, cx)))
             })
-            .child(self.marketing_button(
-                "close-marketing-preview",
-                Key::Back,
-                Kind::Ghost,
-                Root::toggle_campaign_preview,
-                cx,
-            ))
     }
 
     pub(super) fn render_campaign_editor(
@@ -649,114 +611,128 @@ impl Root {
                 > Message::Email.limit();
         let sms = editor.channel != Channel::Email
             || message_text(&editor.sms.lines, cx).encode_utf16().count() > Message::Sms.limit();
-        body.child(self.label(Key::MarketingCampaignName))
-            .child(editor.name.clone())
-            .child(self.label(Key::MarketingChannel))
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .children(CHANNELS.into_iter().enumerate().map(|(index, channel)| {
-                        self.chip(
-                            ("campaign-channel", index),
-                            self.t(channel_key(channel)),
-                            editor.channel == channel,
-                            cx.listener(move |root, _, _, cx| {
-                                if let Some(editor) =
-                                    root.marketing_desk().and_then(|desk| desk.editor.as_mut())
-                                {
-                                    editor.channel = channel;
-                                    cx.notify();
-                                }
-                            }),
-                        )
-                        .tab_index(0)
-                        .focus(|style| style.border_color(theme::text()))
-                    })),
-            )
-            .child(self.label(Key::MarketingTrigger))
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .children(TRIGGERS.into_iter().enumerate().map(|(index, trigger)| {
-                        self.chip(
-                            ("campaign-trigger", index),
-                            self.t(trigger_key(trigger)),
-                            editor.trigger == trigger,
-                            cx.listener(move |root, _, _, cx| {
-                                if let Some(editor) =
-                                    root.marketing_desk().and_then(|desk| desk.editor.as_mut())
-                                {
-                                    editor.trigger = trigger;
-                                    if trigger == Trigger::Inactive
-                                        && editor.inactive_days.read(cx).text().trim().is_empty()
-                                    {
-                                        editor
-                                            .inactive_days
-                                            .update(cx, |field, cx| field.set_text("60", cx));
-                                    }
-                                    cx.notify();
-                                }
-                            }),
-                        )
-                        .tab_index(0)
-                        .focus(|style| style.border_color(theme::text()))
-                    })),
-            )
-            .when(editor.trigger == Trigger::FirstVisit, |body| {
-                body.child(self.label(Key::MarketingDelayField))
-                    .child(editor.delay.clone())
-            })
-            .when(editor.trigger == Trigger::Birthday, |body| {
-                body.child(self.label(Key::MarketingBirthdayField))
-                    .child(editor.birthday.clone())
-            })
-            .when(email, |body| {
-                body.child(self.label(Key::MarketingSubject))
-                    .child(editor.subject.clone())
-                    .child(self.edit_message(Message::Email, &editor.email.lines, cx))
-            })
-            .when(sms, |body| {
-                body.child(self.edit_message(Message::Sms, &editor.sms.lines, cx))
-            })
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(theme::muted())
-                    .child(self.t(Key::MarketingVariables)),
-            )
-            .child(self.marketing_button(
-                "preview-marketing-message",
-                Key::MarketingMessagePreview,
+        body.when(ready && editor.from_template && !editor.stale, |body| {
+            body.child(self.marketing_button(
+                "change-campaign-template",
+                Key::MarketingChangeTemplate,
                 Kind::Ghost,
-                Root::toggle_campaign_preview,
+                |root, cx| {
+                    if let Some(desk) = root.marketing_desk() {
+                        desk.choose_template = true;
+                        cx.notify();
+                    }
+                },
                 cx,
             ))
-            .child(self.label(Key::MarketingTags))
-            .child(editor.tags.clone())
-            .child(self.label(Key::MarketingInactiveDaysField))
-            .child(editor.inactive_days.clone())
-            .child(
-                self.chip(
-                    "campaign-no-future",
-                    self.t(Key::MarketingNoFuture),
-                    editor.no_future,
-                    cx.listener(|root, _, _, cx| {
-                        if let Some(editor) =
-                            root.marketing_desk().and_then(|desk| desk.editor.as_mut())
-                        {
-                            editor.no_future = !editor.no_future;
-                            cx.notify();
-                        }
-                    }),
-                )
-                .tab_index(0)
-                .focus(|style| style.border_color(theme::text())),
+        })
+        .child(self.label(Key::MarketingCampaignName))
+        .child(editor.name.clone())
+        .child(self.label(Key::MarketingChannel))
+        .child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_2()
+                .children(CHANNELS.into_iter().enumerate().map(|(index, channel)| {
+                    self.chip(
+                        ("campaign-channel", index),
+                        self.t(channel_key(channel)),
+                        editor.channel == channel,
+                        cx.listener(move |root, _, _, cx| {
+                            if let Some(editor) =
+                                root.marketing_desk().and_then(|desk| desk.editor.as_mut())
+                            {
+                                editor.channel = channel;
+                                cx.notify();
+                            }
+                        }),
+                    )
+                    .tab_index(0)
+                    .focus(|style| style.border_color(theme::text()))
+                })),
+        )
+        .child(self.label(Key::MarketingTrigger))
+        .child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_2()
+                .children(TRIGGERS.into_iter().enumerate().map(|(index, trigger)| {
+                    self.chip(
+                        ("campaign-trigger", index),
+                        self.t(trigger_key(trigger)),
+                        editor.trigger == trigger,
+                        cx.listener(move |root, _, _, cx| {
+                            if let Some(editor) =
+                                root.marketing_desk().and_then(|desk| desk.editor.as_mut())
+                            {
+                                editor.trigger = trigger;
+                                if trigger == Trigger::Inactive
+                                    && editor.inactive_days.read(cx).text().trim().is_empty()
+                                {
+                                    editor
+                                        .inactive_days
+                                        .update(cx, |field, cx| field.set_text("60", cx));
+                                }
+                                cx.notify();
+                            }
+                        }),
+                    )
+                    .tab_index(0)
+                    .focus(|style| style.border_color(theme::text()))
+                })),
+        )
+        .when(editor.trigger == Trigger::FirstVisit, |body| {
+            body.child(self.label(Key::MarketingDelayField))
+                .child(editor.delay.clone())
+        })
+        .when(editor.trigger == Trigger::Birthday, |body| {
+            body.child(self.label(Key::MarketingBirthdayField))
+                .child(editor.birthday.clone())
+        })
+        .when(email, |body| {
+            body.child(self.label(Key::MarketingSubject))
+                .child(editor.subject.clone())
+                .child(self.edit_message(Message::Email, &editor.email.lines, cx))
+        })
+        .when(sms, |body| {
+            body.child(self.edit_message(Message::Sms, &editor.sms.lines, cx))
+        })
+        .child(
+            div()
+                .text_sm()
+                .text_color(theme::muted())
+                .child(self.t(Key::MarketingVariables)),
+        )
+        .child(self.marketing_button(
+            "preview-marketing-message",
+            Key::MarketingMessagePreview,
+            Kind::Ghost,
+            Root::open_campaign_preview,
+            cx,
+        ))
+        .child(self.label(Key::MarketingTags))
+        .child(editor.tags.clone())
+        .child(self.label(Key::MarketingInactiveDaysField))
+        .child(editor.inactive_days.clone())
+        .child(
+            self.chip(
+                "campaign-no-future",
+                self.t(Key::MarketingNoFuture),
+                editor.no_future,
+                cx.listener(|root, _, _, cx| {
+                    if let Some(editor) =
+                        root.marketing_desk().and_then(|desk| desk.editor.as_mut())
+                    {
+                        editor.no_future = !editor.no_future;
+                        cx.notify();
+                    }
+                }),
             )
-            .when(ready && !editor.stale, |body| body.child(save))
+            .tab_index(0)
+            .focus(|style| style.border_color(theme::text())),
+        )
+        .when(ready && !editor.stale, |body| body.child(save))
     }
 }
 
@@ -784,11 +760,25 @@ mod tests {
             assert_eq!(editor.trigger, Trigger::Inactive);
             assert_eq!(editor.inactive_days.read(cx).text(), "60");
             assert!(editor.no_future);
-            root.toggle_campaign_preview(cx);
+            desk.choose_template = true;
+            root.dismiss_marketing(cx);
+            let desk = root.marketing_desk().unwrap();
+            assert!(!desk.choose_template);
+            assert_eq!(desk.editor.as_ref().unwrap().trigger, Trigger::Inactive);
+            root.open_campaign_editor(EditorMode::Create(Trigger::FirstVisit), cx);
+            let desk = root.marketing_desk().unwrap();
+            let editor = desk.editor.as_ref().unwrap();
+            let template = editor.packet(cx).unwrap().draft;
+            assert_eq!(template.delay_minutes, 120);
+            assert!(!template.audience.no_future_appointments);
+            editor.subject.update(cx, |field, cx| field.set_text("Local edit", cx));
+
+            root.open_campaign_preview(cx);
             root.dismiss_marketing(cx);
             let desk = root.marketing_desk().unwrap();
             assert!(!desk.confirm_exit);
             assert!(!desk.editor.as_ref().unwrap().preview);
+            assert_eq!(desk.editor.as_ref().unwrap().subject.read(cx).text(), "Local edit");
 
             let generation = root.svc.store.verified_reviewed_generation().unwrap();
             let id = uuid::Uuid::now_v7().to_string();
@@ -800,7 +790,12 @@ mod tests {
                 "counts":{"pending":0,"processing":0,"sent":2,"skipped":0,"failed":0,"unknown":0,"cancelled":0},
             })).unwrap();
             let deliveries = serde_json::from_value(json!({
-                "deliveries": [], "pagination": {"page":1,"pageSize":20,"total":0}
+                "deliveries": [{
+                    "id": uuid::Uuid::now_v7(), "clientName":"Synthetic recipient",
+                    "channel":"email", "status":"sent", "createdAt":"2026-11-17T09:00:00Z",
+                    "sentAt":"2026-11-17T09:00:00Z"
+                }],
+                "pagination": {"page":1,"pageSize":20,"total":1}
             })).unwrap();
             let desk = root.marketing_desk().unwrap();
             desk.editor = None;
@@ -808,24 +803,30 @@ mod tests {
             root.open_campaign_editor(EditorMode::Duplicate, cx);
             let desk = root.marketing_desk().unwrap();
             let packet = desk.editor.as_ref().unwrap().packet(cx).unwrap();
-            assert!(matches!(packet.revision, DraftRevision::Create { id: new_id } if new_id != id));
+            let DraftRevision::Create { id: new_id } = packet.revision else { panic!("Expected new draft"); };
+            assert_ne!(new_id, id);
             assert_eq!(packet.draft.channel, Channel::Optimized);
             assert_eq!(packet.draft.birthday_lead_days, 7);
             assert_eq!(packet.draft.email_body, "First\n\nSecond");
             assert_eq!(packet.draft.audience.tags, vec!["vip"]);
             assert_eq!(desk.detail.as_ref().unwrap().0.version, 5);
+            let mut saved = desk.detail.as_ref().unwrap().0.clone();
+            saved.id = new_id.clone();
+            saved.status = Status::Draft;
+            saved.version = 1;
+            desk.install_write_result(saved, desk.generation.clone(), cx);
+            let (selected, history) = desk.detail.as_ref().unwrap();
+            assert_eq!(selected.id, new_id);
+            assert!(history.deliveries.is_empty());
             assert!(root.svc.store.outbox(5).unwrap().is_empty());
         });
     }
 
     #[test]
-    fn preview_and_copy_keep_templates_and_unicode_intact() {
+    fn preview_replaces_only_the_supported_variables() {
         assert_eq!(
             preview_message("Hi {{first_name}} from {{salon_name}}\n{{booking_url}} {{unknown}}"),
             "Hi Ana from Citame\nhttps://citame.example/book {{unknown}}"
         );
-        let name = duplicate_name(&"🎂".repeat(80), "Copia");
-        assert!(name.ends_with(" · Copia"));
-        assert!(name.encode_utf16().count() <= 160);
     }
 }

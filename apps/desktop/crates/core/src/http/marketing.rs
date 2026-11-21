@@ -112,6 +112,50 @@ pub struct Draft {
     pub audience: Audience,
 }
 
+impl Draft {
+    pub fn from_template(trigger: Trigger, name: &str, subject: &str, message: &str) -> Self {
+        let inactive = trigger == Trigger::Inactive;
+        Self {
+            name: name.into(),
+            channel: Channel::Email,
+            trigger,
+            subject: subject.into(),
+            email_body: message.into(),
+            sms_body: message.into(),
+            delay_minutes: if trigger == Trigger::FirstVisit {
+                120
+            } else {
+                0
+            },
+            birthday_lead_days: 0,
+            audience: Audience {
+                tags: Vec::new(),
+                inactive_days: inactive.then_some(60),
+                no_future_appointments: inactive,
+            },
+        }
+    }
+
+    pub fn duplicate(campaign: &Campaign, copy_label: &str) -> Self {
+        let mut draft = Self::from(campaign);
+        let suffix = format!(" · {copy_label}");
+        let mut remaining = 160usize.saturating_sub(suffix.encode_utf16().count());
+        draft.name = campaign
+            .name
+            .chars()
+            .take_while(|character| {
+                let Some(next) = remaining.checked_sub(character.len_utf16()) else {
+                    return false;
+                };
+                remaining = next;
+                true
+            })
+            .collect();
+        draft.name.push_str(&suffix);
+        draft
+    }
+}
+
 impl From<&Campaign> for Draft {
     fn from(campaign: &Campaign) -> Self {
         Self {

@@ -33,6 +33,32 @@ pub(super) struct Desk {
 }
 
 impl Desk {
+    fn install_write_result(
+        &mut self,
+        campaign: Campaign,
+        generation: Option<String>,
+        cx: &mut Context<Root>,
+    ) {
+        if let Some((current, _)) = &mut self.detail
+            && current.id == campaign.id
+            && self.generation == generation
+        {
+            *current = campaign;
+        } else if campaign.status == Status::Draft {
+            let deliveries = DeliveryPage {
+                deliveries: Vec::new(),
+                pagination: sob_core::http::marketing::Pagination {
+                    page: 1,
+                    page_size: 20,
+                    total: 0,
+                },
+            };
+            self.install_detail(campaign, deliveries, generation, cx);
+        } else {
+            self.detail = None;
+        }
+    }
+
     fn install_detail(
         &mut self,
         campaign: Campaign,
@@ -325,10 +351,7 @@ impl Root {
                         desk.uncertain = false;
                         desk.review = None;
                         let id = campaign.id.clone();
-                        match desk.detail.as_mut() {
-                            Some((current, _)) if current.id == id => *current = campaign,
-                            _ => desk.detail = None,
-                        }
+                        desk.install_write_result(campaign, generation, cx);
                         Some(id)
                     }
                     Err(MutationError::Changed) => {
@@ -504,7 +527,7 @@ impl Root {
     ) -> gpui::Div {
         let ready = self.status.connectivity == Connectivity::Online && !desk.busy;
         let body = if desk.choose_template {
-            self.campaign_templates(ready, cx)
+            self.campaign_templates(ready, desk.editor.is_some(), cx)
         } else if let Some(editor) = &desk.editor {
             self.render_campaign_editor(desk, editor, ready, cx)
         } else if let Some((campaign, deliveries)) = &desk.detail {
@@ -531,10 +554,11 @@ impl Root {
                     "close-marketing",
                     close,
                     Kind::Ghost,
-                    if desk
-                        .editor
-                        .as_ref()
-                        .is_some_and(|editor| !editor.in_preview())
+                    if !desk.choose_template
+                        && desk
+                            .editor
+                            .as_ref()
+                            .is_some_and(|editor| !editor.in_preview())
                     {
                         Root::leave_campaign_editor
                     } else {
