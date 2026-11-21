@@ -88,6 +88,10 @@ const shared: Record<SyncEntity | SyncLiveView, readonly (readonly string[])[]> 
     ["rewards", "promotions"],
     ["creative", "promotions"],
   ],
+  loyalty: [
+    ["rewards", "policy"],
+    ["rewards", "admin"],
+  ],
   intake_forms: [intakeAdminQueryKey],
   intake_records: [intakeHistoryQueryKey],
   booking_policy: [["booking-policy"], ["admin", "booking-policy"]],

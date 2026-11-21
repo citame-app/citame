@@ -12,6 +12,7 @@ export const loyaltyEn = {
   "loyalty.save": "Save points program",
   "loyalty.saved": "Points program saved",
   "loyalty.reload": "Reload current program",
+  "loyalty.policyChanged": "The program changed while you were editing. Reload it before saving.",
   "loyalty.programHelp":
     "Points are earned on settled eligible receipts. Returns reverse earnings; returning used points keeps their original expiry. Gift and pass purchases do not earn points twice.",
   "loyalty.terms_one":
@@ -109,6 +110,7 @@ export const loyaltyEsAR: Record<keyof typeof loyaltyEn, string> = {
   "loyalty.save": "Guardar programa de puntos",
   "loyalty.saved": "Programa de puntos guardado",
   "loyalty.reload": "Recargar programa actual",
+  "loyalty.policyChanged": "El programa cambió mientras editabas. Recárgalo antes de guardar.",
   "loyalty.programHelp":
     "Los puntos se obtienen al liquidar recibos incluidos. Las devoluciones revierten los puntos obtenidos; los puntos usados se devuelven con su caducidad original. Las compras de tarjetas regalo y bonos no generan puntos dos veces.",
   "loyalty.terms_one":

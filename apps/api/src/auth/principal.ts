@@ -137,13 +137,15 @@ export function requireAuth(
           /^\/admin\/marketing\/campaigns(?:\/[\da-f-]+\/(?:queue|cancel))?$/.test(path)) ||
         (method === "PATCH" && /^\/admin\/marketing\/campaigns\/[\da-f-]+$/.test(path));
       const rewardsAllowed =
-        path === "/admin/rewards/promotions"
-          ? method === "GET" || method === "POST"
-          : path.startsWith("/admin/rewards/promotions/")
-            ? method === "PUT"
-            : path.endsWith("/adjustments")
-              ? method === "POST"
-              : method === "GET";
+        path === "/admin/rewards/policy/reviewed"
+          ? method === "GET" || method === "PUT"
+          : path === "/admin/rewards/promotions"
+            ? method === "GET" || method === "POST"
+            : path.startsWith("/admin/rewards/promotions/")
+              ? method === "PUT"
+              : path.endsWith("/adjustments")
+                ? method === "POST"
+                : method === "GET";
       if (
         ((path === "/admin/portfolio" || path.startsWith("/admin/portfolio/")) &&
           !portfolioAllowed) ||

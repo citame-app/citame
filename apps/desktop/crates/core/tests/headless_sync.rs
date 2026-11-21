@@ -65,6 +65,7 @@ fn proxy_device() -> ProxyDevice {
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_loyalty_reads_and_guards_adjustments_through_the_proxy() {
+    use sob_core::loyalty::{LIVE_TOPIC, Policy};
     let mut web = Device::sign_in();
     web.sync();
     let name = format!("Synthetic loyalty {}", uuid::Uuid::now_v7());
@@ -95,19 +96,45 @@ fn native_loyalty_reads_and_guards_adjustments_through_the_proxy() {
 
     let path = "/admin/rewards/policy";
     let prefix = std::env::var("SOB_TEST_REST_PREFIX").unwrap_or_default();
-    let put_policy = |policy: serde_json::Value| -> serde_json::Value {
-        let mut response = ureq::put(&format!("{}{prefix}{path}", web.base))
-            .header("Cookie", &web.cookie)
+    let url = format!("{}{prefix}{path}", web.base);
+    let cookie = web.cookie.clone();
+    let put_policy = |policy: &Policy| -> Policy {
+        let mut response = ureq::put(&url)
+            .header("Cookie", &cookie)
             .content_type("application/json")
-            .send(policy.to_string())
+            .send(serde_json::to_string(policy).unwrap())
             .unwrap();
         serde_json::from_str(&response.body_mut().read_to_string().unwrap()).unwrap()
     };
-    let saved_policy = web.rest_get(path);
-    let mut enabled = saved_policy.clone();
-    enabled["enabled"] = json!(true);
-    let enabled = put_policy(enabled);
+    let prior_marker = web.store.live_view_revision(LIVE_TOPIC).unwrap();
+    let reviewed = device.transport.loyalty_policy().unwrap();
+    assert_eq!(
+        Some(reviewed.generation.as_str()),
+        statement.generation.as_deref()
+    );
+    let mut changed = reviewed.policy.clone();
+    changed.enabled = true;
+    assert!(matches!(
+        device
+            .transport
+            .save_loyalty_policy("old-history", &changed),
+        Err(TransportError::ReplicaGenerationChanged)
+    ));
+    let enabled = device
+        .transport
+        .save_loyalty_policy(&reviewed.generation, &changed)
+        .unwrap();
     let adjusted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        assert_eq!(enabled.policy.version, changed.version + 1);
+        let exact_retry = device
+            .transport
+            .save_loyalty_policy(&reviewed.generation, &changed)
+            .unwrap();
+        assert_eq!(exact_retry.policy.version, enabled.policy.version);
+        assert_eq!(web.rest_get(path)["enabled"], true);
+        web.sync();
+        assert!(web.store.live_view_revision(LIVE_TOPIC).unwrap() > prior_marker);
+
         let current = statement.generation.unwrap();
         let request =
             sob_core::loyalty::Adjustment::prepare(id, current, "25", "Synthetic desk adjustment")
@@ -120,12 +147,21 @@ fn native_loyalty_reads_and_guards_adjustments_through_the_proxy() {
         assert_eq!(after.movements.len(), 1);
         assert_eq!(after.movements[0].id, first.id);
     }));
-    let mut restore = saved_policy;
-    restore["version"] = enabled["version"].clone();
-    put_policy(restore);
+    let mut restore = reviewed.policy;
+    restore.version = enabled.policy.version;
+    let restored = put_policy(&restore);
     if let Err(panic) = adjusted {
         std::panic::resume_unwind(panic);
     }
+    let current = device.transport.loyalty_policy().unwrap();
+    assert_eq!(current.policy.version, restored.version);
+    assert_eq!(current.policy.enabled, restored.enabled);
+    assert!(matches!(
+        device
+            .transport
+            .save_loyalty_policy(&reviewed.generation, &changed),
+        Err(TransportError::BadRequest(_))
+    ));
 }
 
 #[test]

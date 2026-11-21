@@ -1,8 +1,10 @@
 use super::*;
-use sob_core::loyalty::{Adjustment, Statement};
+use sob_core::loyalty::{Adjustment, LIVE_TOPIC, Statement};
 use sob_core::sync::TransportError;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
+
+mod policy;
 
 pub(super) struct Pending {
     session: sob_core::auth::SessionHandle,
@@ -20,6 +22,8 @@ pub(super) struct Desk {
     request: Option<Arc<()>>,
     loading: bool,
     refresh_at: Instant,
+    observed: Option<i64>,
+    policy: Option<policy::Editor>,
     retry: Option<(Instant, Duration)>,
     points: Entity<TextField>,
     reason: Entity<TextField>,
@@ -92,6 +96,8 @@ impl Root {
             request: None,
             loading: false,
             refresh_at: Instant::now(),
+            observed: None,
+            policy: None,
             retry: None,
             points: cx.new(|cx| TextField::new("", false, cx)),
             reason: cx.new(|cx| TextField::new("", false, cx)),
@@ -260,9 +266,14 @@ impl Root {
             cx.notify();
             return;
         }
+        let observed = self.svc.store.live_view_revision(LIVE_TOPIC).ok();
         let Some(desk) = self.loyalty_desk() else {
             return;
         };
+        if desk.policy.is_some() {
+            self.refresh_points_policy(reconnected, observed, cx);
+            return;
+        }
         if desk.rate_limited() {
             return;
         }
@@ -272,7 +283,7 @@ impl Root {
         if desk.selected.is_none()
             || desk.request.is_some()
             || desk.saving
-            || (!reconnected && Instant::now() < desk.refresh_at)
+            || (!reconnected && desk.observed == observed && Instant::now() < desk.refresh_at)
         {
             return;
         }
@@ -292,6 +303,7 @@ impl Root {
             return;
         };
         let session = self.svc.session.clone();
+        let observed = self.svc.store.live_view_revision(LIVE_TOPIC).ok();
         let Some(desk) = self
             .loyalty_desk()
             .filter(|desk| !desk.saving && !desk.rate_limited())
@@ -305,6 +317,7 @@ impl Root {
         let request = Arc::new(());
         let identity = desk.identity.clone();
         desk.request = Some(request.clone());
+        desk.observed = observed;
         desk.loading = !background;
         cx.notify();
         cx.spawn(async move |root, cx| {
@@ -620,6 +633,13 @@ impl Root {
     }
 
     pub(super) fn dismiss_loyalty(&mut self, confirm: bool, cx: &mut Context<Self>) {
+        if self
+            .loyalty_desk()
+            .is_some_and(|desk| desk.policy.is_some())
+        {
+            self.close_points_policy(confirm, cx);
+            return;
+        }
         let Some(desk) = self.loyalty_desk() else {
             return;
         };
@@ -667,6 +687,9 @@ impl Root {
         viewport: gpui::Size<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        if let Some(editor) = &desk.policy {
+            return self.render_points_policy(editor, viewport, cx);
+        }
         let online = self.status.connectivity == Connectivity::Online;
         let ready = online && !desk.loading && !desk.saving && !desk.rate_limited();
         let mut body = div()
@@ -719,6 +742,15 @@ impl Root {
                 });
         } else {
             body = body
+                .when(self.can_configure_points() && ready, |body| {
+                    body.child(self.loyalty_button(
+                        "loyalty-policy",
+                        Key::LoyaltyProgramme,
+                        Kind::Ghost,
+                        Root::open_points_policy,
+                        cx,
+                    ))
+                })
                 .child(
                     div()
                         .flex()

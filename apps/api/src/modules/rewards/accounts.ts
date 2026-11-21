@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { loyaltyClientChoicesSchema, type LoyaltyPolicy, permissionsFor } from "@sob/contracts";
+import { type LoyaltyPolicy, loyaltyClientChoicesSchema, permissionsFor } from "@sob/contracts";
 import { clientProfile, type Database, loyaltyLot, loyaltyMovement, loyaltyProgram } from "@sob/db";
 import { and, asc, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
@@ -38,11 +38,22 @@ export async function getLoyaltyPolicy(db: RewardConnection): Promise<LoyaltyPol
   const [row] = await db.select().from(loyaltyProgram).where(eq(loyaltyProgram.id, 1));
   return row ? { ...row.terms, version: row.version } : { ...DEFAULT_LOYALTY };
 }
-export async function setLoyaltyPolicy(db: Database, input: LoyaltyPolicy, principal: Principal) {
+export async function setLoyaltyPolicy(
+  db: Database,
+  input: LoyaltyPolicy,
+  principal: Principal,
+  allowIdenticalReplay = false,
+) {
   requireRole(principal, "owner");
   return db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('loyalty-policy', 0))`);
     const current = await getLoyaltyPolicy(tx);
+    if (
+      allowIdenticalReplay &&
+      current.version === input.version + 1 &&
+      rewardHash(current) === rewardHash({ ...input, version: current.version })
+    )
+      return current;
     if (current.version !== input.version)
       throw new DomainError(
         "version_conflict",

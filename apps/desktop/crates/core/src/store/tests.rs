@@ -200,13 +200,14 @@ fn review_refresh_advances_the_topic_without_replica_changes() {
 }
 
 #[test]
-fn intake_markers_survive_reopening_the_replica_without_private_rows() {
+fn private_view_markers_survive_reopening_the_replica_without_private_rows() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("replica.sqlite");
     let mut store = Store::open(&path).unwrap();
     let topics = [
         crate::intake::FORM_LIVE_TOPIC,
         crate::intake::RECORD_LIVE_TOPIC,
+        crate::loyalty::LIVE_TOPIC,
     ];
     let refresh = topics.map(str::to_owned);
     store

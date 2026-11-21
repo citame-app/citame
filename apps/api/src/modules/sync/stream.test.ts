@@ -19,6 +19,7 @@ import {
   setupApiTest,
 } from "../../../test/helpers";
 import { mutation, pull, push, uuid } from "../../../test/sync";
+import { DEFAULT_LOYALTY } from "../rewards/accounts";
 
 let t: Awaited<ReturnType<typeof setupApiTest>>;
 let f: Fixtures;
@@ -344,6 +345,55 @@ describe("GET /sync/stream", () => {
       expect(legacy.nextCursor).toBe(optedIn.nextCursor);
       await stream.until((message) => nudges(message).includes(optedIn.headSeq), 2500);
       expect(stream.text).not.toContain("SYNTHETIC_STREAM");
+    } finally {
+      await stream.cancel();
+    }
+  });
+
+  test("loyalty policy and adjustment writes wake subscribed authorized views without row data", async () => {
+    const restricted = await actor(t, "staff", "loyalty-limited@example.test", {
+      staffProfileId: f.anaId,
+    });
+    await t.db
+      .update(staffProfile)
+      .set({ accessPreset: "restricted" })
+      .where(eq(staffProfile.id, f.anaId));
+    const stream = reader(await open(owner));
+    try {
+      await stream.until((message) => nudges(message).length > 0);
+      const since = nudges(stream.text)[0]!;
+      const saved = await json(
+        t.app,
+        "/admin/rewards/policy",
+        "PUT",
+        { ...DEFAULT_LOYALTY, enabled: true },
+        owner.cookie,
+      );
+      expect(saved.status).toBe(200);
+      const policy = await pull(t, owner, { since, loyaltyViews: "1" });
+      expect(policy.refresh).toEqual(["loyalty"]);
+      expect(policy.changes).toEqual([]);
+      expect(policy.nextCursor - since).toBe(1);
+      await stream.until((message) => nudges(message).includes(policy.headSeq), 2500);
+
+      const adjusted = await json(
+        t.app,
+        `/admin/rewards/clients/${f.clientId}/adjustments`,
+        "POST",
+        { points: 43, reason: "Synthetic private loyalty reason", idempotencyKey: uuid() },
+        owner.cookie,
+      );
+      expect(adjusted.status, await adjusted.clone().text()).toBe(201);
+      const delta = { since: policy.nextCursor, loyaltyViews: "1" as const };
+      const balance = await pull(t, owner, delta);
+      expect(balance.refresh).toEqual(["loyalty"]);
+      expect(balance.changes).toEqual([]);
+      expect(balance.nextCursor - policy.nextCursor).toBe(1);
+      expect((await pull(t, owner, { since: delta.since })).refresh).toBeUndefined();
+      expect((await pull(t, restricted, delta)).refresh).toBeUndefined();
+      await stream.until((message) => nudges(message).includes(balance.headSeq), 2500);
+      expect(stream.text).not.toContain("Synthetic private loyalty reason");
+      expect(JSON.stringify(balance)).not.toContain(f.clientId);
     } finally {
       await stream.cancel();
     }

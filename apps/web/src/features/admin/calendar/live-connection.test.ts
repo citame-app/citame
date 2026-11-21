@@ -280,10 +280,14 @@ test("active queries refresh even when the first SSE event never arrives", async
 });
 
 test("reopening SSE refreshes active views after their last marker was already consumed", async () => {
-  const h = harness(async () => ({ ...response(11), changes: [], refresh: ["promotions"] }));
+  const h = harness(async () => ({ ...response(11), changes: [], refresh: ["loyalty"] }));
   h.send(10);
   h.send(11);
-  await waitFor(() => expect(h.onChanges).toHaveBeenCalledWith([], ["promotions"]));
+  await waitFor(() => expect(h.onChanges).toHaveBeenCalledWith([], ["loyalty"]));
+  expect([...liveQueryKeys(["loyalty"])]).toEqual([
+    ["rewards", "policy"],
+    ["rewards", "admin"],
+  ]);
   h.onRefresh.mockClear();
   h.source.onerror?.(new Event("error"));
   h.source.onopen?.(new Event("open"));

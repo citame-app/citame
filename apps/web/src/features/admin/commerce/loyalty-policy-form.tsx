@@ -17,43 +17,57 @@ const toForm = (p: LoyaltyPolicy) => ({
   maximumDiscountBasisPoints: centsInput(p.maximumDiscountBasisPoints),
   expiryDays: p.expiryDays === null ? "" : String(p.expiryDays),
 });
+const policyKey = ["rewards", "policy"] as const;
+
 export function LoyaltyPolicyForm() {
   const query = useQuery({
-    queryKey: ["rewards", "policy"],
+    queryKey: policyKey,
     queryFn: () => api().rewards.policy(),
   });
   if (query.isPending) return <Skeleton className="h-48" />;
-  if (query.isError) return <ErrorState error={query.error} onRetry={() => void query.refetch()} />;
+  if (query.data === undefined)
+    return <ErrorState error={query.error} onRetry={() => void query.refetch()} />;
   return <ProgramEditor initial={query.data} />;
 }
 function ProgramEditor({ initial }: { initial: LoyaltyPolicy }) {
   const { t } = useI18n();
   const online = useOnline();
   const queries = useQueryClient();
-  const [base, setBase] = useState(initial);
-  const [form, setForm] = useState(() => toForm(initial));
+  const [draft, setDraft] = useState<{ base: LoyaltyPolicy; form: ReturnType<typeof toForm> }>();
   const [invalid, setInvalid] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const dirty = JSON.stringify(form) !== JSON.stringify(toForm(base));
-  const reset = (p: LoyaltyPolicy) => {
-    setBase(p);
-    setForm(toForm(p));
+  const [savedVersion, setSavedVersion] = useState<number>();
+  const base = draft?.base ?? initial;
+  const form = draft?.form ?? toForm(initial);
+  const dirty = draft !== undefined;
+  const stale = dirty && base.version !== initial.version;
+  const setForm = (next: typeof form) => {
+    setDraft(
+      JSON.stringify(next) === JSON.stringify(toForm(base)) ? undefined : { base, form: next },
+    );
+    setInvalid(false);
+  };
+  const reset = () => {
+    setDraft(undefined);
     setInvalid(false);
   };
   const save = useMutation({
     mutationFn: (p: LoyaltyPolicy) => api().rewards.savePolicy(p),
     onSuccess: (p) => {
-      reset(p);
-      setSaved(true);
+      queries.setQueryData<LoyaltyPolicy>(policyKey, (current) =>
+        current && current.version > p.version ? current : p,
+      );
+      reset();
+      setSavedVersion(p.version);
       void queries.invalidateQueries({ queryKey: ["rewards"] });
     },
   });
   const reload = useMutation({
     mutationFn: () => api().rewards.policy(),
     onSuccess: (p) => {
-      reset(p);
+      queries.setQueryData(policyKey, p);
+      reset();
       save.reset();
-      setSaved(false);
+      setSavedVersion(undefined);
     },
   });
   const fields = [
@@ -69,7 +83,8 @@ function ProgramEditor({ initial }: { initial: LoyaltyPolicy }) {
       aria-label={t("loyalty.program")}
       onSubmit={(e) => {
         e.preventDefault();
-        setSaved(false);
+        if (!online || !dirty || stale || save.isPending || reload.isPending) return;
+        setSavedVersion(undefined);
         const input = loyaltyPolicyInputSchema.safeParse({
           enabled: form.enabled,
           earnEveryCents: inputCents(form.earnEveryCents),
@@ -94,8 +109,10 @@ function ProgramEditor({ initial }: { initial: LoyaltyPolicy }) {
       <label className="flex min-h-11 items-center gap-3">
         <input
           type="checkbox"
+          name="enabled"
           className="size-5 accent-accent"
           checked={form.enabled}
+          disabled={save.isPending || reload.isPending}
           onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
         />
         {t("loyalty.enabled")}
@@ -104,20 +121,27 @@ function ProgramEditor({ initial }: { initial: LoyaltyPolicy }) {
         {fields.map(([key, label]) => (
           <TextField
             key={key}
+            name={key}
             label={t(label)}
             inputMode={key === "pointsPerStep" || key === "expiryDays" ? "numeric" : "decimal"}
             value={form[key]}
+            disabled={save.isPending || reload.isPending}
             onChange={(e) => setForm({ ...form, [key]: e.target.value })}
           />
         ))}
       </div>
       {(invalid || save.isError || reload.isError) && <p role="alert">{t("loyalty.error")}</p>}
-      {saved && !dirty && <p role="status">{t("loyalty.saved")}</p>}
+      {stale && <p role="status">{t("loyalty.policyChanged")}</p>}
+      {savedVersion === initial.version && !dirty && <p role="status">{t("loyalty.saved")}</p>}
       <div className="flex flex-wrap gap-3">
-        <Button type="submit" disabled={!online || !dirty || save.isPending || reload.isPending}>
+        <Button
+          type="submit"
+          disabled={!online || !dirty || stale || save.isPending || reload.isPending}
+        >
           {t("loyalty.save")}
         </Button>
         <Button
+          type="button"
           variant="secondary"
           disabled={!online || save.isPending || reload.isPending}
           onClick={() => reload.mutate()}

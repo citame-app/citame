@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub const LIVE_TOPIC: &str = "loyalty";
+
 #[derive(Deserialize)]
 pub struct ClientChoice {
     pub id: Uuid,
@@ -9,7 +11,7 @@ pub struct ClientChoice {
     pub email: Option<String>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Policy {
     pub enabled: bool,
@@ -18,6 +20,42 @@ pub struct Policy {
     pub redeem_value_cents: u32,
     pub maximum_discount_basis_points: u32,
     pub expiry_days: Option<u32>,
+    pub version: u32,
+}
+
+impl Policy {
+    pub fn edit(&self, enabled: bool, fields: [&str; 5]) -> Option<Self> {
+        let [earn, points, value, maximum, expiry] = fields.map(str::trim);
+        let whole = |text: &str| {
+            text.bytes()
+                .all(|digit| digit.is_ascii_digit())
+                .then(|| text.parse::<u32>().ok())
+                .flatten()
+        };
+        let amount = crate::billing::parse_reviewed_amount;
+        let expiry_days = if expiry.is_empty() {
+            None
+        } else {
+            Some(whole(expiry).filter(|days| (30..=3650).contains(days))?)
+        };
+        Some(Self {
+            enabled,
+            earn_every_cents: amount(earn).filter(|&cents| cents >= 100)?,
+            points_per_step: whole(points).filter(|count| (1..=100).contains(count))?,
+            redeem_value_cents: amount(value).filter(|cents| (1..=10000).contains(cents))?,
+            maximum_discount_basis_points: amount(maximum)
+                .filter(|basis_points| (1..=10000).contains(basis_points))?,
+            expiry_days,
+            version: self.version,
+        })
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+pub struct ReviewedPolicy {
+    #[serde(flatten)]
+    pub policy: Policy,
+    pub generation: String,
 }
 
 #[derive(Deserialize)]
@@ -93,6 +131,34 @@ pub struct AdjustmentResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn policy_inputs_use_exact_amounts_and_keep_the_reviewed_version() {
+        let policy = Policy {
+            enabled: false,
+            earn_every_cents: 100,
+            points_per_step: 1,
+            redeem_value_cents: 1,
+            maximum_discount_basis_points: 2_000,
+            expiry_days: Some(365),
+            version: 17,
+        };
+        let changed = policy
+            .edit(true, ["1,50", "3", "0,05", "12,75", ""])
+            .unwrap();
+        assert_eq!(changed.earn_every_cents, 150);
+        assert_eq!(changed.redeem_value_cents, 5);
+        assert_eq!(changed.maximum_discount_basis_points, 1_275);
+        assert_eq!(changed.expiry_days, None);
+        assert_eq!(changed.version, 17);
+        assert!(policy.edit(true, ["1", "+3", "0.05", "12", ""]).is_none());
+        assert!(
+            policy
+                .edit(true, ["1", "3", "0.05", "100.01", ""])
+                .is_none()
+        );
+        assert!(policy.edit(true, ["1", "3", "0.05", "10", "29"]).is_none());
+    }
 
     #[test]
     fn adjustments_freeze_a_signed_amount_reason_and_request_key() {

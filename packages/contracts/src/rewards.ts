@@ -14,6 +14,9 @@ export const loyaltyPolicySchema = z.object({
   version: z.number().int().positive(),
 });
 export const loyaltyPolicyInputSchema = loyaltyPolicySchema.strict();
+export const reviewedLoyaltyPolicySchema = loyaltyPolicySchema.extend({
+  generation: syncGenerationSchema,
+});
 export const rewardAdjustmentInputSchema = z
   .object({
     points: z

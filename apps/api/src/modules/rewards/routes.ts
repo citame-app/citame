@@ -5,6 +5,7 @@ import {
   loyaltyPolicyInputSchema,
   permissionsFor,
   promotionInputSchema,
+  reviewedLoyaltyPolicySchema,
   rewardAdjustmentInputSchema,
   rewardChoiceSchema,
 } from "@sob/contracts";
@@ -44,7 +45,18 @@ export function rewardsAdminRoutes({ db, config }: AppDeps) {
     })
     .get("/policy", async (c) => {
       requireRole(c.get("principal"), "owner");
+      c.header("Cache-Control", "private, no-store");
       return c.json(await getLoyaltyPolicy(db));
+    })
+    .get("/policy/reviewed", async (c) => {
+      requireRole(c.get("principal"), "owner");
+      c.header("Cache-Control", "private, no-store");
+      return c.json(
+        reviewedLoyaltyPolicySchema.parse({
+          ...(await getLoyaltyPolicy(db)),
+          generation: config.syncReplicaGeneration,
+        }),
+      );
     })
     .get("/promotions", async (c) => {
       c.header("Cache-Control", "private, no-store");
@@ -81,15 +93,30 @@ export function rewardsAdminRoutes({ db, config }: AppDeps) {
         ),
       );
     })
-    .put("/policy", async (c) =>
-      c.json(
+    .put("/policy", async (c) => {
+      return c.json(
         await setLoyaltyPolicy(
           db,
           parseOrThrow(loyaltyPolicyInputSchema, await readJson(c)),
           c.get("principal"),
         ),
-      ),
-    )
+      );
+    })
+    .put("/policy/reviewed", async (c) => {
+      const principal = c.get("principal");
+      requireRole(principal, "owner");
+      const allowIdenticalReplay = reviewedGeneration(c, config.syncReplicaGeneration);
+      c.header("Cache-Control", "private, no-store");
+      const policy = await setLoyaltyPolicy(
+        db,
+        parseOrThrow(loyaltyPolicyInputSchema, await readJson(c)),
+        principal,
+        allowIdenticalReplay,
+      );
+      return c.json(
+        reviewedLoyaltyPolicySchema.parse({ ...policy, generation: config.syncReplicaGeneration }),
+      );
+    })
     .get("/clients", async (c) => {
       const { search } = parseOrThrow(loyaltyClientSearchSchema, c.req.query());
       c.header("Cache-Control", "private, no-store");

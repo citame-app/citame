@@ -310,6 +310,8 @@ export async function pullChanges(
         (topic.data !== "marketing" || (query.marketingViews === "1" && permissions.editCatalog)) &&
         (topic.data !== "promotions" ||
           (query.promotionViews === "1" && permissions.editCatalog && permissions.commerce)) &&
+        (topic.data !== "loyalty" ||
+          (query.loyaltyViews === "1" && permissions.clients && permissions.commerce)) &&
         (topic.data !== "review_requests" ||
           (query.reviewRequests === "1" && permissions.editCatalog)) &&
         (topic.data !== "intake_forms" ||

@@ -24,6 +24,7 @@ export async function pull(
   if (query.reviewRequests) params.set("reviewRequests", query.reviewRequests);
   if (query.marketingViews) params.set("marketingViews", query.marketingViews);
   if (query.promotionViews) params.set("promotionViews", query.promotionViews);
+  if (query.loyaltyViews) params.set("loyaltyViews", query.loyaltyViews);
   if (query.intakeViews) params.set("intakeViews", query.intakeViews);
   if (query.resourceCatalogue) params.set("resourceCatalogue", query.resourceCatalogue);
   if (query.resourcePools) params.set("resourcePools", query.resourcePools);

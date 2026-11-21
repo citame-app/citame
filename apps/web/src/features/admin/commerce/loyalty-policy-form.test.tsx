@@ -1,5 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderApp } from "../../../../test/render";
 import { LoyaltyPolicyForm } from "./loyalty-policy-form";
 
@@ -51,4 +51,24 @@ test("a stale program response preserves the operator draft", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Save points program" }));
   await screen.findByRole("alert");
   expect(screen.getByLabelText("Discount value per point (EUR)")).toHaveValue("0.15");
+});
+
+test("live policy changes replace clean fields and keep a stale draft until reload", async () => {
+  let current = policy;
+  globalThis.fetch = mock(async () => Response.json(current)) as unknown as typeof fetch;
+  const view = renderApp(<LoyaltyPolicyForm />);
+  const label = "Discount value per point (EUR)";
+  const input = await screen.findByLabelText(label);
+  current = { ...current, redeemValueCents: 7, version: 4 };
+  await act(() => view.queryClient.invalidateQueries({ queryKey: ["rewards", "policy"] }));
+  expect(input).toHaveValue("0.07");
+
+  fireEvent.change(input, { target: { value: "0.11" } });
+  current = { ...current, redeemValueCents: 13, version: 5 };
+  await act(() => view.queryClient.invalidateQueries({ queryKey: ["rewards", "policy"] }));
+  expect(input).toHaveValue("0.11");
+  expect(screen.getByRole("status")).toHaveTextContent("The program changed");
+  expect(screen.getByRole("button", { name: "Save points program" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Reload current program" }));
+  await waitFor(() => expect(input).toHaveValue("0.13"));
 });
