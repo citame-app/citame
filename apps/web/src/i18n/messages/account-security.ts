@@ -44,7 +44,7 @@ export const accountSecurityEn = {
   "auth.reset.meta.description": "Choose a new password for your account.",
   "staff.create.inviteLabel": "Email an invitation so they choose their own password",
   "staff.create.inviteHint": "Recommended. The link works for 3 days and can be used once.",
-  "staff.create.invited": "Invitation sent. They will set their own password.",
+  "staff.create.invited": "Invitation queued. They will set their own password.",
 } as const;
 
 export const accountSecurityEsAR: Record<keyof typeof accountSecurityEn, string> = {
@@ -91,5 +91,5 @@ export const accountSecurityEsAR: Record<keyof typeof accountSecurityEn, string>
   "auth.reset.meta.description": "Elige una contraseña nueva para tu cuenta.",
   "staff.create.inviteLabel": "Enviar una invitación por email para que elijan su contraseña",
   "staff.create.inviteHint": "Recomendado. El enlace funciona 3 días y se puede usar una vez.",
-  "staff.create.invited": "Invitación enviada. Van a elegir su propia contraseña.",
+  "staff.create.invited": "Invitación en cola. Podrán elegir su propia contraseña.",
 };

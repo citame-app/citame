@@ -6,12 +6,19 @@ pub(super) struct Desk {
     identity: Arc<()>,
     selected: Option<String>,
     editor: Option<Editor>,
+    link: Option<LinkDraft>,
     observed: Option<i64>,
     retry_at: Option<Instant>,
     busy: bool,
     needs_reload: bool,
     notice: Option<Key>,
     confirm_back: bool,
+}
+
+struct LinkDraft {
+    reviewed: ReviewedStaffAccess,
+    email: Entity<TextField>,
+    password: Option<Entity<TextField>>,
 }
 
 struct Editor {
@@ -49,6 +56,12 @@ impl Editor {
 enum Request {
     Read,
     Save(ReviewedStaffAccess, AccessPreset),
+    Link {
+        reviewed: ReviewedStaffAccess,
+        name: String,
+        email: String,
+        password: Option<String>,
+    },
 }
 
 impl Root {
@@ -60,6 +73,7 @@ impl Root {
             identity: Arc::new(()),
             selected: None,
             editor: None,
+            link: None,
             observed: None,
             retry_at: None,
             busy: false,
@@ -74,9 +88,10 @@ impl Root {
         let Overlay::StaffAccess(desk) = &mut self.overlay else {
             return false;
         };
-        if !desk.editor.as_ref().is_some_and(Editor::dirty) {
+        if !desk.editor.as_ref().is_some_and(Editor::dirty) && desk.link.is_none() {
             return false;
         }
+        desk.link = None;
         desk.identity = Arc::new(());
         desk.observed = None;
         desk.retry_at = None;
@@ -134,7 +149,16 @@ impl Root {
         if desk.busy {
             return;
         }
-        let saving = matches!(request, Request::Save(_, _));
+        let success_notice = match &request {
+            Request::Read => None,
+            Request::Save(_, _) => Some(Key::AccessSaved),
+            Request::Link { password, .. } => Some(if password.is_some() {
+                Key::AccessAccountLinked
+            } else {
+                Key::AccessInvitationQueued
+            }),
+        };
+        let linking = matches!(request, Request::Link { .. });
         desk.busy = true;
         desk.retry_at = None;
         desk.observed = self.svc.store.staff_directory_revision().ok();
@@ -150,6 +174,17 @@ impl Root {
                         Request::Save(reviewed, preset) => {
                             transport.save_staff_access(&reviewed, preset)
                         }
+                        Request::Link {
+                            reviewed,
+                            name,
+                            email,
+                            password,
+                        } => transport.link_staff_account(
+                            &reviewed,
+                            &name,
+                            &email,
+                            password.as_deref(),
+                        ),
                     }
                 })
                 .await;
@@ -165,26 +200,44 @@ impl Root {
                 }
                 desk.busy = false;
                 match result {
-                    Ok(current) if saving => {
+                    Ok(current) if success_notice.is_some() => {
                         desk.editor = Some(Editor::new(current));
                         desk.needs_reload = false;
-                        desk.notice = Some(Key::AccessSaved);
+                        desk.notice = success_notice;
+                        if linking {
+                            desk.link = None;
+                        }
                         root.svc.wake(Wake::Local);
                     }
                     Ok(current) => {
+                        if current.account_id.is_some() {
+                            desk.link = None;
+                        }
                         if let Some(editor) = &mut desk.editor {
                             editor.receive(current);
                         } else {
                             desk.editor = Some(Editor::new(current));
                         }
                         desk.needs_reload = false;
-                        if desk.notice != Some(Key::AccessSaved) {
+                        if !matches!(
+                            desk.notice,
+                            Some(
+                                Key::AccessSaved
+                                    | Key::AccessAccountLinked
+                                    | Key::AccessInvitationQueued
+                                    | Key::AccessLinkFailed
+                            )
+                        ) {
                             desk.notice = None;
                         }
                     }
                     Err(error) => {
                         desk.needs_reload = true;
-                        desk.notice = Some(Key::AccessFailed);
+                        desk.notice = Some(if linking {
+                            Key::AccessLinkFailed
+                        } else {
+                            Key::AccessFailed
+                        });
                         let delay = match error {
                             TransportError::Offline(_) | TransportError::Server(_) => {
                                 Some(Duration::from_secs(3))
@@ -192,7 +245,7 @@ impl Root {
                             TransportError::RateLimited(delay) => {
                                 Some(delay.unwrap_or(Duration::from_secs(30)))
                             }
-                            _ if saving => Some(Duration::from_secs(1)),
+                            _ if success_notice.is_some() => Some(Duration::from_secs(1)),
                             _ => None,
                         };
                         desk.retry_at = delay.and_then(|delay| Instant::now().checked_add(delay));
@@ -220,6 +273,90 @@ impl Root {
         self.request_staff_access(Request::Save(editor.reviewed.clone(), editor.proposed), cx);
     }
 
+    fn open_account_link(&mut self, cx: &mut Context<Self>) {
+        let label = self.t(Key::AccessLoginEmail);
+        let Overlay::StaffAccess(desk) = &mut self.overlay else {
+            return;
+        };
+        let Some(editor) = &desk.editor else { return };
+        if desk.busy
+            || desk.link.is_some()
+            || desk.needs_reload
+            || editor.latest.account_id.is_some()
+        {
+            return;
+        }
+        let email = cx.new(|cx| TextField::new(label, false, cx));
+        desk.link = Some(LinkDraft {
+            reviewed: editor.latest.clone(),
+            email,
+            password: None,
+        });
+        desk.notice = None;
+        cx.notify();
+    }
+
+    fn toggle_initial_password(&mut self, cx: &mut Context<Self>) {
+        let label = self.t(Key::AccessInitialPassword);
+        let Overlay::StaffAccess(desk) = &mut self.overlay else {
+            return;
+        };
+        let Some(link) = &mut desk.link else { return };
+        if desk.busy {
+            return;
+        }
+        link.password = link
+            .password
+            .is_none()
+            .then(|| cx.new(|cx| TextField::new(label, true, cx)));
+        desk.notice = None;
+        cx.notify();
+    }
+
+    fn submit_account_link(&mut self, cx: &mut Context<Self>) {
+        let Overlay::StaffAccess(desk) = &mut self.overlay else {
+            return;
+        };
+        let (Some(editor), Some(link)) = (&desk.editor, &mut desk.link) else {
+            return;
+        };
+        if desk.busy
+            || desk.needs_reload
+            || desk.confirm_back
+            || editor.dirty()
+            || editor.changed()
+            || editor.latest.account_id.is_some()
+            || link.reviewed != editor.latest
+        {
+            return;
+        }
+        let email = link.email.read(cx).text().trim().to_owned();
+        let password = link
+            .password
+            .as_ref()
+            .map(|field| field.read(cx).text().to_owned());
+        if !email.contains('@')
+            || password
+                .as_ref()
+                .is_some_and(|value| !(8..=128).contains(&value.encode_utf16().count()))
+        {
+            desk.notice = Some(Key::AccessLoginInvalid);
+            cx.notify();
+            return;
+        }
+        let reviewed = editor.reviewed.clone();
+        let name = self.staff_name(&reviewed.access.staff_id).to_string();
+        self.request_staff_access(
+            Request::Link {
+                reviewed,
+                name,
+                email,
+                password,
+            },
+            cx,
+        );
+    }
+
     pub(super) fn close_staff_access(&mut self, cx: &mut Context<Self>) {
         let Overlay::StaffAccess(desk) = &mut self.overlay else {
             return;
@@ -227,7 +364,7 @@ impl Root {
         if desk.busy {
             return;
         }
-        if desk.editor.as_ref().is_some_and(Editor::dirty) {
+        if desk.editor.as_ref().is_some_and(Editor::dirty) || desk.link.is_some() {
             desk.confirm_back = !desk.confirm_back;
         } else if desk.selected.is_some() {
             desk.back();
@@ -446,6 +583,86 @@ impl Root {
                     ))
                 },
             )
+            .when(editor.latest.account_id.is_none(), |body| {
+                let available = online
+                    && !desk.busy
+                    && !desk.needs_reload
+                    && !editor.dirty()
+                    && !editor.changed();
+                body.child(self.render_account_link(desk, &editor.latest, available, cx))
+            })
+    }
+
+    fn render_account_link(
+        &self,
+        desk: &Desk,
+        latest: &ReviewedStaffAccess,
+        available: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .pt_2()
+            .when(desk.link.is_none() && available, |body| {
+                body.child(self.button(
+                    "link-staff-login",
+                    self.t(Key::AccessLinkAccount),
+                    Kind::Ghost,
+                    cx.listener(|root, _, _, cx| root.open_account_link(cx)),
+                ))
+            })
+            .when_some(desk.link.as_ref(), |body, link| {
+                let changed = link.reviewed != *latest;
+                body.child(div().text_sm().child(self.t(Key::AccessLoginEmail)))
+                    .child(link.email.clone())
+                    .when_some(link.password.as_ref(), |body, password| {
+                        body.child(div().text_sm().child(self.t(Key::AccessInitialPassword)))
+                            .child(password.clone())
+                    })
+                    .when(!desk.busy, |body| {
+                        body.child(self.button(
+                            "staff-login-password-mode",
+                            self.t(if link.password.is_some() {
+                                Key::AccessUseInvitation
+                            } else {
+                                Key::AccessUsePassword
+                            }),
+                            Kind::Ghost,
+                            cx.listener(|root, _, _, cx| root.toggle_initial_password(cx)),
+                        ))
+                    })
+                    .when(available && changed, |body| {
+                        body.child(div().text_sm().child(self.t(Key::AccessChanged)))
+                            .child(self.button(
+                                "review-staff-login",
+                                self.t(Key::AccessReview),
+                                Kind::Ghost,
+                                cx.listener(|root, _, _, cx| {
+                                    if let Overlay::StaffAccess(desk) = &mut root.overlay
+                                        && let (Some(link), Some(editor)) =
+                                            (&mut desk.link, &desk.editor)
+                                    {
+                                        link.reviewed = editor.latest.clone();
+                                    }
+                                    cx.notify();
+                                }),
+                            ))
+                    })
+                    .when(available && !changed, |body| {
+                        body.child(self.button(
+                            "submit-staff-login",
+                            self.t(if link.password.is_some() {
+                                Key::AccessLinkAccount
+                            } else {
+                                Key::AccessQueueInvitation
+                            }),
+                            Kind::Primary,
+                            cx.listener(|root, _, _, cx| root.submit_account_link(cx)),
+                        ))
+                    })
+            })
     }
 }
 
@@ -453,6 +670,7 @@ impl Desk {
     fn back(&mut self) {
         self.selected = None;
         self.editor = None;
+        self.link = None;
         self.notice = None;
         self.retry_at = None;
         self.needs_reload = false;
@@ -518,6 +736,7 @@ mod tests {
             editor.proposed = AccessPreset::Restricted;
             root.overlay = Overlay::StaffAccess(Box::new(Desk {
                 identity: Arc::new(()), selected: Some("professional".into()), editor: Some(editor),
+                link: None,
                 observed: Some(1), retry_at: None, busy: true, needs_reload: false,
                 notice: None, confirm_back: false,
             }));

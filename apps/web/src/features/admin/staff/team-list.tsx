@@ -228,6 +228,8 @@ function CreateAccountSheet({
     onError: (error) => {
       if (error instanceof ApiError && error.code === "invalid_state")
         setErrors({ email: t("staff.create.emailTaken") });
+      else if (error instanceof ApiError && error.code === "email_unavailable")
+        toast.error(t("access.emailUnavailable"));
       else toast.error(t(describeProblem(error).messageKey));
     },
   });

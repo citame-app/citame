@@ -12,6 +12,11 @@ export const accessEn = {
   "access.saved": "Access profile saved",
   "access.current": "Current profile: {profile}",
   "access.linkedAccount": "Linked account: {email}",
+  "access.link": "Link login to this calendar",
+  "access.invite": "Queue email invitation",
+  "access.manual": "Set an initial password instead",
+  "access.emailUnavailable":
+    "Ask your administrator to configure email delivery, or set an initial password.",
   "access.changed":
     "Access or the linked account changed. Review the current profile before saving your draft.",
   "access.review": "Review current access",
@@ -36,6 +41,11 @@ export const accessEsAR: Record<keyof typeof accessEn, string> = {
   "access.saved": "Perfil de acceso guardado",
   "access.current": "Perfil actual: {profile}",
   "access.linkedAccount": "Cuenta vinculada: {email}",
+  "access.link": "Vincular cuenta a esta agenda",
+  "access.invite": "Poner invitación en cola",
+  "access.manual": "Establecer una contraseña inicial",
+  "access.emailUnavailable":
+    "Pide a quien administra la instalación que configure el correo o establece una contraseña inicial.",
   "access.changed":
     "Cambió el acceso o la cuenta vinculada. Revisa el perfil actual antes de guardar tu borrador.",
   "access.review": "Revisar acceso actual",

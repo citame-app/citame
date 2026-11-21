@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { idSchema, LIMITS } from "./common";
-import { staffAccessPresetSchema } from "./permissions";
+import { idSchema, LIMITS, syncGenerationSchema } from "./common";
+import { reviewedStaffAccessSchema, staffAccessPresetSchema } from "./permissions";
 
 export const userRoleSchema = z.enum(["owner", "staff", "client"]);
 export type UserRole = z.infer<typeof userRoleSchema>;
@@ -28,13 +28,25 @@ export const passwordSchema = z.string().min(8).max(128);
  * Owner-only: creates a login with the `staff` role and its calendar profile. Without a
  * `password` the person is invited: they receive an email link and choose their own.
  */
-export const createStaffAccountRequestSchema = z.object({
-  email: z.email().max(LIMITS.email),
-  name: z.string().min(1).max(LIMITS.name),
-  password: passwordSchema.optional(),
-  /** Name shown in the booking flow; defaults to `name`. */
-  displayName: z.string().min(1).max(LIMITS.name).optional(),
-});
+export const createStaffAccountRequestSchema = z
+  .strictObject({
+    email: z.email().max(LIMITS.email),
+    name: z.string().min(1).max(LIMITS.name),
+    password: passwordSchema.optional(),
+    /** Name shown in the booking flow; defaults to `name`. */
+    displayName: z.string().min(1).max(LIMITS.name).optional(),
+    existingCalendar: z
+      .strictObject({
+        staffId: idSchema,
+        version: z.number().int().positive(),
+        generation: syncGenerationSchema,
+      })
+      .optional(),
+  })
+  .refine(({ existingCalendar, displayName }) => !existingCalendar || displayName === undefined, {
+    message: "An existing staff calendar keeps its display name",
+    path: ["displayName"],
+  });
 export type CreateStaffAccountRequest = z.infer<typeof createStaffAccountRequestSchema>;
 
 export const staffAccountResponseSchema = z.object({
@@ -44,6 +56,7 @@ export const staffAccountResponseSchema = z.object({
   role: z.literal("staff"),
   /** True when no password was given and an invitation email was queued. */
   invited: z.boolean().default(false),
+  reviewedAccess: reviewedStaffAccessSchema.optional(),
 });
 export type StaffAccountResponse = z.infer<typeof staffAccountResponseSchema>;
 

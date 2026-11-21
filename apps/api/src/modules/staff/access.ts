@@ -10,9 +10,9 @@ import { requireRole } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 export async function getReviewedStaffAccess(
-  db: Database,
+  db: Database | Parameters<Parameters<Database["transaction"]>[0]>[0],
   staffId: string,
-  principal: Principal,
+  principal: Pick<Principal, "role">,
   generation: string,
 ) {
   requireRole(principal, "owner");

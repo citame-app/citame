@@ -6,12 +6,9 @@ import type { Translator } from "~/i18n";
  * Client-side validation built from the shared contracts, so the browser and the API agree on
  * what a valid email, name and password are. Zod's messages are English; the user sees ours.
  */
-const signUpSchema = createStaffAccountRequestSchema
-  .pick({ email: true, name: true })
-  .extend({ password: passwordSchema });
-const signInSchema = createStaffAccountRequestSchema
-  .pick({ email: true })
-  .extend({ password: z.string().min(1) });
+const { email, name } = createStaffAccountRequestSchema.shape;
+const signUpSchema = z.object({ email, name, password: passwordSchema });
+const signInSchema = z.object({ email, password: z.string().min(1) });
 
 export type AuthMode = "sign-in" | "sign-up";
 export type FieldErrors = Partial<Record<string, string>>;

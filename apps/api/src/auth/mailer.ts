@@ -16,6 +16,8 @@ export interface AuthMailRequest {
 }
 
 export interface AuthMailer {
+  readonly enabled: boolean;
+  notifyQueued(): void;
   /** Resolves after durable enqueue; delivery never delays the HTTP response. */
   send(request: AuthMailRequest): Promise<void>;
   flush(): Promise<void>;
@@ -58,6 +60,10 @@ export function createAuthMailer(deps: {
     }
   };
   return {
+    enabled: deps.provider !== null,
+    notifyQueued() {
+      if (deps.provider && !stopped) void kick();
+    },
     async send(request) {
       if (!deps.provider) {
         deps.logger.warn("account email not sent: no email provider is configured");

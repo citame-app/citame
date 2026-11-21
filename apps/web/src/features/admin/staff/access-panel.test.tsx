@@ -26,7 +26,7 @@ test("owner chooses an access profile with the reviewed version", async () => {
         : initial,
     );
   }) as unknown as typeof fetch;
-  renderApp(<AccessPanel staffId={staffId} />);
+  renderApp(<AccessPanel staffId={staffId} staffName="Ana" />);
   fireEvent.change(await screen.findByRole("combobox", { name: "Access profile" }), {
     target: { value: "restricted" },
   });
@@ -57,7 +57,7 @@ test("changing the linked team account keeps the proposed preset and requires re
     }
     return Response.json(current);
   }) as unknown as typeof fetch;
-  const { queryClient } = renderApp(<AccessPanel staffId={staffId} />);
+  const { queryClient } = renderApp(<AccessPanel staffId={staffId} staffName="Ana" />);
   const selector = await screen.findByRole("combobox", { name: "Access profile" });
   fireEvent.change(selector, { target: { value: "restricted" } });
   current = latest;
@@ -83,4 +83,48 @@ test("changing the linked team account keeps the proposed preset and requires re
     ]),
   );
   await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Access profile saved"));
+});
+
+test("invitations link to the reviewed existing calendar and show the linked account", async () => {
+  let current = {
+    ...initial,
+    accountId: null,
+    accountEmail: null,
+    access: { ...initial.access, accountRole: null },
+  } as ReviewedStaffAccess;
+  const writes: unknown[] = [];
+  globalThis.fetch = mock(async (_input, init) => {
+    if (init?.method === "POST") {
+      writes.push(JSON.parse(String(init.body)));
+      current = { ...initial, access: { ...initial.access, version: 2 } };
+      return Response.json(
+        {
+          userId: current.accountId,
+          email: current.accountEmail,
+          staffId,
+          role: "staff",
+          reviewedAccess: current,
+          invited: true,
+        },
+        { status: 201 },
+      );
+    }
+    return Response.json(current);
+  }) as unknown as typeof fetch;
+  renderApp(<AccessPanel staffId={staffId} staffName="Ana" />);
+  fireEvent.change(await screen.findByRole("textbox", { name: "Email" }), {
+    target: { value: initial.accountEmail },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Queue email invitation" }));
+  expect(
+    await screen.findByText("Invitation queued. They will set their own password."),
+  ).toBeInTheDocument();
+  expect(screen.getByText("Linked account: original@example.test")).toBeInTheDocument();
+  expect(writes).toEqual([
+    {
+      name: "Ana",
+      email: initial.accountEmail,
+      existingCalendar: { staffId, version: 1, generation: "initial" },
+    },
+  ]);
 });

@@ -59,9 +59,9 @@ function decrypt(secret: string, row: Row): EmailMessage {
   );
 }
 
-/** Await the database commit, never SMTP. Deduplication and mailbox throttling survive restarts. */
+/** Enqueue in the caller's database transaction when supplied. Delivery runs after commit. */
 export async function enqueueAccountEmail(
-  db: Database,
+  db: Database | Parameters<Parameters<Database["transaction"]>[0]>[0],
   secret: string,
   request: AuthMailRequest,
   options: { now?: Date; throttleSeconds?: number } = {},

@@ -18,6 +18,7 @@ import {
   reviewedSalonSettingsSchema,
   reviewedStaffAccessSchema,
   reviewPrivateSchema,
+  staffAccountResponseSchema,
   startedPaymentSchema,
   syncPullResponseSchema,
 } from "@sob/contracts";
@@ -81,6 +82,46 @@ async function tokens(role: "owner" | "client" | "staff", emailName: string = ro
 
 const request = (path: string, access: unknown) =>
   t.app.request(path, { headers: { authorization: `Bearer ${String(access)}` } });
+
+test("desktop staff provisioning is owner-only and preserves the existing profile", async () => {
+  const owner = await tokens("owner", "provision-staff-owner");
+  const member = await tokens("staff", "provision-staff-member");
+  const [calendar] = await t.db
+    .insert(staffProfile)
+    .values({ displayName: "Imported calendar", accessPreset: "restricted" })
+    .returning();
+  if (!calendar) throw new Error("Missing existing calendar");
+  const path = "/admin/staff-accounts";
+  const body = {
+    email: "provisioned-staff@example.com",
+    name: "Imported calendar",
+    password: "a synthetic passphrase",
+    existingCalendar: {
+      staffId: calendar.id,
+      version: calendar.accessVersion,
+      generation: "initial",
+    },
+  };
+  const post = (access: string, payload: unknown = body) =>
+    t.app.request(path, {
+      method: "POST",
+      headers: { authorization: `Bearer ${access}`, "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  expect((await request(path, owner.access)).status).toBe(403);
+  expect((await post(member.access)).status).toBe(403);
+  expect(
+    (await post(owner.access, { name: body.name, email: body.email, password: body.password }))
+      .status,
+  ).toBe(400);
+  const created = await post(owner.access);
+  expect(created.status).toBe(201);
+  expect(staffAccountResponseSchema.parse(await created.json())).toMatchObject({
+    staffId: calendar.id,
+    invited: false,
+    reviewedAccess: { access: { staffId: calendar.id, preset: "restricted" } },
+  });
+});
 
 test("reviewed team access uses the same owner policy in Desktop and Cloud", async () => {
   const owner = await tokens("owner", "team-access-review-owner");

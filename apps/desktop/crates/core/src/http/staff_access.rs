@@ -58,6 +58,66 @@ impl ReviewedStaffAccess {
 }
 
 impl HttpTransport {
+    pub fn link_staff_account(
+        &self,
+        reviewed: &ReviewedStaffAccess,
+        name: &str,
+        email: &str,
+        password: Option<&str>,
+    ) -> Result<ReviewedStaffAccess, TransportError> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CreatedAccount {
+            user_id: String,
+            staff_id: String,
+            email: String,
+            role: String,
+            invited: bool,
+            reviewed_access: ReviewedStaffAccess,
+        }
+
+        if reviewed.account_id.is_some() {
+            return Err(TransportError::BadRequest("Calendar already linked".into()));
+        }
+        let id = parse_id(&reviewed.access.staff_id)?.to_string();
+        let mut body = serde_json::json!({
+            "name": name,
+            "email": email,
+            "existingCalendar": {
+                "staffId": id,
+                "version": reviewed.access.version,
+                "generation": reviewed.generation,
+            },
+        });
+        if let Some(password) = password {
+            body["password"] = serde_json::json!(password);
+        }
+        let created: CreatedAccount = self.post_json("/admin/staff-accounts", &body)?;
+        if created.staff_id != id
+            || created.role != "staff"
+            || created.invited != password.is_none()
+            || created.user_id.is_empty()
+            || created.email != email.to_lowercase()
+        {
+            return Err(TransportError::Server(
+                "Could not verify the linked account".into(),
+            ));
+        }
+        let current = created.reviewed_access.verify(&id)?;
+        if current.account_id.as_deref() != Some(created.user_id.as_str())
+            || current.account_email.as_deref() != Some(created.email.as_str())
+            || current.access.account_role.as_deref() != Some("staff")
+            || current.access.preset != reviewed.access.preset
+            || current.access.version <= reviewed.access.version
+            || current.generation != reviewed.generation
+        {
+            return Err(TransportError::Server(
+                "Unexpected staff account access".into(),
+            ));
+        }
+        Ok(current)
+    }
+
     pub fn staff_access(&self, staff_id: &str) -> Result<ReviewedStaffAccess, TransportError> {
         let id = parse_id(staff_id)?.to_string();
         let path = format!("/admin/staff/{id}/access/reviewed");

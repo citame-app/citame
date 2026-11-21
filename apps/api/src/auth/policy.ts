@@ -24,7 +24,7 @@ import { ownsClient, type Principal } from "./principal";
 
 const forbidden = (message: string) => new DomainError("forbidden", message);
 
-export function requireRole(principal: Principal, ...roles: UserRole[]): void {
+export function requireRole(principal: Pick<Principal, "role">, ...roles: UserRole[]): void {
   if (!roles.includes(principal.role)) {
     throw forbidden("You do not have permission to perform this action");
   }

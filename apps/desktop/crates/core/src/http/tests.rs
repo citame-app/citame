@@ -71,6 +71,49 @@ fn signed_in(base: &str) -> HttpTransport {
 }
 
 #[test]
+fn linking_staff_checks_the_review_and_uses_the_server_access_version() {
+    let id = "0198f5a0-7b1c-7000-8000-000000000201";
+    let received = serde_json::json!({
+        "staffId": id, "userId": "new-account", "email": "ana@example.test",
+        "role": "staff", "invited": true,
+        "reviewedAccess": {
+            "generation": "restored-centre", "accountId": "new-account",
+            "accountEmail": "ana@example.test",
+            "access": { "staffId": id, "preset": "restricted", "version": 5, "accountRole": "staff" }
+        }
+    });
+    let (base, requests) = serve(vec![http("201 Created", &[], &received.to_string())]);
+    let transport = signed_in(&base);
+    let reviewed = serde_json::from_value(serde_json::json!({
+        "generation": "restored-centre", "accountId": null, "accountEmail": null,
+        "access": { "staffId": id, "preset": "restricted", "version": 3, "accountRole": null }
+    }))
+    .unwrap();
+    let linked = transport
+        .link_staff_account(&reviewed, "Ana", "ana@example.test", None)
+        .unwrap();
+    assert_eq!(linked.access.version, 5);
+    assert!(
+        transport
+            .link_staff_account(&linked, "Ana", "other@example.test", None)
+            .is_err()
+    );
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert!(request.starts_with("POST /admin/staff-accounts HTTP/"));
+    let json: serde_json::Value =
+        serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "name": "Ana", "email": "ana@example.test",
+            "existingCalendar": { "staffId": id, "version": 3, "generation": "restored-centre" }
+        })
+    );
+}
+
+#[test]
 fn waitlist_storage_rejection_is_distinct_from_a_rate_limited_retry() {
     let (base, _) = serve(vec![
         http(

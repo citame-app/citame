@@ -1,5 +1,13 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { accountEmailOutbox, auditLog, clientProfile, user } from "@sob/db";
+import {
+  accountEmailOutbox,
+  auditLog,
+  clientProfile,
+  serviceStaff,
+  staffProfile,
+  user,
+  verification,
+} from "@sob/db";
 import { eq } from "drizzle-orm";
 import {
   actor,
@@ -14,6 +22,7 @@ import {
 } from "../../test/helpers";
 import { expectNoMailTo, linkIn, mailTo, pathOf } from "../../test/mail";
 import { FakeEmailProvider } from "../notifications/providers/fake";
+import { enqueueAccountEmail } from "./outbox";
 
 let t: Awaited<ReturnType<typeof setupApiTest>>;
 let mail: FakeEmailProvider;
@@ -329,25 +338,41 @@ describe("password reset", () => {
 });
 
 describe("staff invitations", () => {
-  test("the owner invites staff without choosing their password", async () => {
+  test("an invited staff login enters the existing calendar with its original assignments", async () => {
     const owner = await actor(t, "owner", "boss@example.com");
+    const [calendar] = await t.db.select().from(staffProfile).where(eq(staffProfile.id, f.anaId));
+    if (!calendar) throw new Error("Missing existing calendar");
+    const assignments = await t.db
+      .select()
+      .from(serviceStaff)
+      .where(eq(serviceStaff.staffId, f.anaId));
     const res = await json(
       t.app,
       "/admin/staff-accounts",
       "POST",
-      { email: "new.stylist@example.com", name: "New Stylist" },
+      {
+        email: "new.stylist@example.com",
+        name: "New Stylist",
+        existingCalendar: {
+          staffId: f.anaId,
+          version: calendar.accessVersion,
+          generation: "initial",
+        },
+      },
       owner.cookie,
     );
     expect(res.status).toBe(201);
     const body = (await res.json()) as { invited: boolean; staffId: string };
     expect(body.invited).toBe(true);
-    expect(body.staffId).toBeTruthy();
+    expect(body.staffId).toBe(f.anaId);
 
     // No sign-in until they set a password: nobody, the owner included, knows one yet.
     expect((await signIn(t.app, "new.stylist@example.com")).res.status).toBe(401);
 
     const message = await mailTo(mail, "new.stylist@example.com");
     expect(message.subject).toContain("invited");
+    // A fresh Valkey namespace after restore must not invalidate the committed invitation.
+    await t.valkey.clear();
     const landing = await t.app.request(pathOf(linkIn(message)), {
       headers: { origin: "http://localhost:3000" },
     });
@@ -360,6 +385,14 @@ describe("staff invitations", () => {
       newPassword: "my own passphrase",
     });
     expect(set.status).toBe(200);
+    expect(
+      (
+        await json(t.app, "/api/auth/reset-password", "POST", {
+          token,
+          newPassword: "a second passphrase",
+        })
+      ).status,
+    ).toBe(400);
 
     const session = await signIn(t.app, "new.stylist@example.com", "my own passphrase");
     expect(session.res.status).toBe(200);
@@ -368,9 +401,15 @@ describe("staff invitations", () => {
       staffId: string;
     };
     expect(me.user.role).toBe("staff");
-    expect(me.staffId).toBe(body.staffId);
+    expect(me.staffId).toBe(f.anaId);
+    expect(await t.db.select().from(serviceStaff).where(eq(serviceStaff.staffId, f.anaId))).toEqual(
+      assignments,
+    );
 
-    const audit = await t.db.select().from(auditLog).where(eq(auditLog.action, "staff.create"));
+    const audit = await t.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "staff.account_linked"));
     expect(JSON.stringify(audit[0]?.metadata)).toContain('"invited":true');
   });
 
@@ -387,6 +426,45 @@ describe("staff invitations", () => {
     expect(((await res.json()) as { invited: boolean }).invited).toBe(false);
     expect((await signIn(t.app, "direct@example.com", "owner picked this")).res.status).toBe(200);
     await expectNoMailTo(mail, "direct@example.com");
+  });
+
+  test("a throttled email rolls back the login, calendar update and verification", async () => {
+    const owner = await actor(t, "owner", "throttled-owner@example.com");
+    const [calendar] = await t.db.select().from(staffProfile).where(eq(staffProfile.id, f.anaId));
+    if (!calendar) throw new Error("Missing existing calendar");
+    const email = "throttled-staff@example.com";
+    await enqueueAccountEmail(t.db, t.config.notifications.signingSecret, {
+      kind: "staff_invite",
+      to: email,
+      locale: "en",
+      expiresInMinutes: 30,
+      url: "http://localhost:3000/reset-password",
+      idempotencyKey: "previous-staff-invitation",
+    });
+    const result = await json(
+      t.app,
+      "/admin/staff-accounts",
+      "POST",
+      {
+        email,
+        name: "Pending staff",
+        existingCalendar: {
+          staffId: calendar.id,
+          version: calendar.accessVersion,
+          generation: "initial",
+        },
+      },
+      owner.cookie,
+    );
+    expect(result.status).toBe(429);
+    expect(await t.db.select().from(user).where(eq(user.email, email))).toHaveLength(0);
+    expect(await t.db.select().from(verification)).toHaveLength(0);
+    const [unchanged] = await t.db
+      .select()
+      .from(staffProfile)
+      .where(eq(staffProfile.id, calendar.id));
+    expect(unchanged?.userId).toBeNull();
+    expect(unchanged?.accessVersion).toBe(calendar.accessVersion);
   });
 
   test("an invitation is refused for an address that already has an account", async () => {

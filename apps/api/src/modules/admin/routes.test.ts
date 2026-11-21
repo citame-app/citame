@@ -49,6 +49,115 @@ async function code(res: Response) {
 }
 
 describe("POST /admin/staff-accounts", () => {
+  test("linking a login uses the reviewed existing calendar and preserves its name and preset", async () => {
+    const [existing] = await t.db
+      .insert(staffProfile)
+      .values({ displayName: "Existing professional", accessPreset: "receptionist" })
+      .returning();
+    if (!existing) throw new Error("Missing existing calendar");
+    const before = await t.db.select().from(staffProfile);
+    const res = await createStaff(owner, {
+      ...newStaff,
+      existingCalendar: {
+        staffId: existing.id,
+        version: existing.accessVersion,
+        generation: "initial",
+      },
+    });
+    expect(res.status).toBe(201);
+    const created = staffAccountResponseSchema.parse(await res.json());
+    expect(created.staffId).toBe(existing.id);
+    const after = await t.db.select().from(staffProfile);
+    expect(after).toHaveLength(before.length);
+    expect(after.find((row) => row.id === existing.id)).toMatchObject({
+      displayName: existing.displayName,
+      active: existing.active,
+      accessPreset: existing.accessPreset,
+      userId: created.userId,
+      accessVersion: existing.accessVersion + 1,
+    });
+  });
+
+  test("a restored centre or a missing email provider leaves the calendar unlinked", async () => {
+    const [existing] = await t.db
+      .insert(staffProfile)
+      .values({ displayName: "Existing professional" })
+      .returning();
+    if (!existing) throw new Error("Missing existing calendar");
+    const reviewed = {
+      staffId: existing.id,
+      version: existing.accessVersion,
+      generation: "initial",
+    };
+    const stale = await createStaff(owner, {
+      ...newStaff,
+      existingCalendar: { ...reviewed, generation: "previous" },
+    });
+    expect(stale.status).toBe(409);
+    expect(await code(stale)).toBe("sync_generation_changed");
+    const misspelled = await createStaff(owner, { ...newStaff, existingCalender: reviewed });
+    expect(misspelled.status).toBe(400);
+    const invite = await createStaff(owner, {
+      email: newStaff.email,
+      name: newStaff.name,
+      existingCalendar: reviewed,
+    });
+    expect(invite.status).toBe(503);
+    expect(await code(invite)).toBe("email_unavailable");
+    expect(await t.db.select().from(user).where(eq(user.email, "nina@example.com"))).toHaveLength(
+      0,
+    );
+    const [unchanged] = await t.db
+      .select()
+      .from(staffProfile)
+      .where(eq(staffProfile.id, existing.id));
+    expect(unchanged?.userId).toBeNull();
+    expect(unchanged?.accessVersion).toBe(existing.accessVersion);
+    const renamed = await json(
+      t.app,
+      `/admin/staff/${existing.id}`,
+      "PATCH",
+      {
+        displayName: "Renamed professional",
+      },
+      owner.cookie,
+    );
+    expect(renamed.status).toBe(200);
+    const oldName = await createStaff(owner, { ...newStaff, existingCalendar: reviewed });
+    expect(await code(oldName)).toBe("version_conflict");
+  });
+
+  test("concurrent owners cannot attach two logins to one calendar", async () => {
+    const [existing] = await t.db
+      .insert(staffProfile)
+      .values({ displayName: "Existing professional" })
+      .returning();
+    if (!existing) throw new Error("Missing existing calendar");
+    const existingCalendar = {
+      staffId: existing.id,
+      version: existing.accessVersion,
+      generation: "initial",
+    };
+    const responses = await Promise.all([
+      createStaff(owner, { ...newStaff, existingCalendar }),
+      createStaff(owner, { ...newStaff, email: "second@example.com", existingCalendar }),
+    ]);
+    expect(responses.map(({ status }) => status).sort()).toEqual([201, 409]);
+    const winner = responses.find(({ status }) => status === 201);
+    const rejected = responses.find(({ status }) => status === 409);
+    if (!winner || !rejected) throw new Error("Missing invitation results");
+    expect(await code(rejected)).toBe("version_conflict");
+    const created = staffAccountResponseSchema.parse(await winner.json());
+    const [linked] = await t.db.select().from(staffProfile).where(eq(staffProfile.id, existing.id));
+    expect(linked?.userId).toBe(created.userId);
+    const accounts = await t.db.select().from(user);
+    expect(
+      accounts
+        .map(({ email }) => email)
+        .filter((email) => ["nina@example.com", "second@example.com"].includes(email)),
+    ).toEqual([created.email]);
+  });
+
   test("the owner creates a staff login with a calendar profile that can sign in", async () => {
     const res = await createStaff(owner, { ...newStaff, displayName: "Nina R." });
     expect(res.status).toBe(201);

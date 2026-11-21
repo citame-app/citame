@@ -1,6 +1,6 @@
 import type { AdminStaff, UpdateStaffRequest } from "@sob/contracts";
 import { type Database, serviceStaff, staffPortrait, staffProfile } from "@sob/db";
-import { and, asc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { DomainError } from "../../errors";
 import { lockCalendars } from "../../tx";
@@ -111,7 +111,7 @@ export async function updateStaff(
 
     const [updated] = await tx
       .update(staffProfile)
-      .set(changes)
+      .set({ ...changes, accessVersion: sql`${staffProfile.accessVersion} + 1` })
       .where(eq(staffProfile.id, id))
       .returning();
     if (!updated) throw new Error("Staff update returned no row");

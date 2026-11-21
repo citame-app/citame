@@ -22,6 +22,7 @@ export const errorCodeSchema = z.enum([
   "slot_unavailable",
   "rate_limited",
   "payment_unavailable",
+  "email_unavailable",
   "internal_error",
 ]);
 
@@ -58,5 +59,6 @@ export const errorStatus = {
   slot_unavailable: 409,
   rate_limited: 429,
   payment_unavailable: 503,
+  email_unavailable: 503,
   internal_error: 500,
 } as const satisfies Record<ErrorCode, number>;

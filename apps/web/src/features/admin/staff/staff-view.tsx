@@ -116,7 +116,9 @@ export function StaffView({
       {permissions.editSchedules && (
         <StaffPortraitEditor key={`portrait-${member.id}`} member={member} />
       )}
-      {permissions.manageAccounts && <AccessPanel staffId={member.id} />}
+      {permissions.manageAccounts && (
+        <AccessPanel staffId={member.id} staffName={member.displayName} />
+      )}
       <CapacityPanel key={member.id} staffId={member.id} editable={permissions.editSchedules} />
       <Tabs
         label={t("staff.tab.label")}

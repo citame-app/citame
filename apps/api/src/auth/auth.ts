@@ -34,7 +34,7 @@ import { desktopResource } from "../oauth/desktop";
 import { type Logger, rootLogger } from "../observability/logger";
 import { desktopBrowserSession } from "./desktop-browser-session";
 import { type AuthMailer, createAuthMailer } from "./mailer";
-import { valkeySecondaryStorage } from "./secondary-storage";
+import { valkeySecondaryStorage, withStaffInvitations } from "./secondary-storage";
 
 export interface AuthDeps {
   db: Database;
@@ -91,7 +91,10 @@ export function createAuth({ db, valkey, config, emailProvider = null, logger }:
         oauthClientAssertion,
       },
     }),
-    secondaryStorage: valkeySecondaryStorage(valkey, config.valkeyKeyPrefix),
+    secondaryStorage: withStaffInvitations(
+      db,
+      valkeySecondaryStorage(valkey, config.valkeyKeyPrefix),
+    ),
     // Required by the OAuth provider: refresh tokens reference the session that granted them.
     // Sessions are still served from Valkey; Postgres only holds the durable copy.
     session: { storeSessionInDatabase: true },

@@ -1,14 +1,17 @@
-import type { UserRole } from "@sob/contracts";
+import type { CreateStaffAccountRequest, StaffAccountResponse, UserRole } from "@sob/contracts";
 import { account, clientProfile, type Database, pgErrorCode, staffProfile, user } from "@sob/db";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { recordAudit } from "../audit";
 import type { AppConfig } from "../config";
 import { DomainError } from "../errors";
+import { getReviewedStaffAccess } from "../modules/staff/access";
 import { assertNoFutureAppointments } from "../modules/staff/guards";
 import { localeFromRequest } from "../notifications/auth-emails";
 import { lockCalendars } from "../tx";
 import { type Auth, INVITE_LINK_SECONDS } from "./auth";
+import { enqueueAccountEmail } from "./outbox";
+import { createStaffInvitation } from "./secondary-storage";
 
 const UNIQUE_VIOLATION = "23505";
 const MIN_PASSWORD = 8;
@@ -111,9 +114,10 @@ async function ensureClientProfile(
  * sign-up path goes through Better Auth and can only ever produce clients.
  */
 export async function createAccount(
-  { auth, db }: AccountDeps,
+  { auth, db }: { auth: Auth; db: Database | Tx },
   input: CreateAccountInput,
   audit?: AuditContext,
+  existingStaff?: { id: string; version: number },
 ): Promise<AccountResult> {
   const invited = input.password === undefined;
   // An invited account gets a random, never-disclosed password: it can only be replaced through
@@ -140,7 +144,9 @@ export async function createAccount(
       });
       const staffId =
         input.role === "staff"
-          ? await ensureStaffProfile(tx, userId, input.displayName ?? input.name)
+          ? existingStaff
+            ? await linkStaffProfile(tx, userId, existingStaff)
+            : await ensureStaffProfile(tx, userId, input.displayName ?? input.name)
           : null;
       const clientId =
         input.role === "client" ? await ensureClientProfile(tx, userId, input.name, email) : null;
@@ -163,33 +169,103 @@ export async function createAccount(
   }
 }
 
-/**
- * Emails an invitation: a single-use link (the same mechanism as a password reset, with a
- * longer lifetime) where the invitee chooses their own password. The owner never sees or
- * transmits a credential.
- */
-export async function sendInvitation(
+async function linkStaffProfile(tx: Tx, userId: string, reviewed: { id: string; version: number }) {
+  const [linked] = await tx
+    .update(staffProfile)
+    .set({ userId, accessVersion: reviewed.version + 1 })
+    .where(
+      and(
+        eq(staffProfile.id, reviewed.id),
+        eq(staffProfile.accessVersion, reviewed.version),
+        isNull(staffProfile.userId),
+        isNull(staffProfile.deletedAt),
+      ),
+    )
+    .returning({ id: staffProfile.id });
+  if (!linked)
+    throw new DomainError("version_conflict", "The staff calendar changed; reload before linking");
+  return linked.id;
+}
+
+export async function provisionStaffAccount(
+  { auth, db }: AccountDeps,
+  config: Pick<AppConfig, "notifications" | "syncReplicaGeneration">,
+  input: CreateStaffAccountRequest,
+  actorUserId: string,
+  request: Request,
+): Promise<StaffAccountResponse> {
+  const { existingCalendar } = input;
+  if (existingCalendar && existingCalendar.generation !== config.syncReplicaGeneration)
+    throw new DomainError(
+      "sync_generation_changed",
+      "The centre was restored; review the calendar",
+    );
+  if (input.password === undefined && !auth.mailer.enabled)
+    throw new DomainError("email_unavailable", "Configure an email provider before inviting staff");
+  const email = normalizeEmail(input.email);
+  const result = await db.transaction(async (tx) => {
+    const [actor] = await tx
+      .select({ role: user.role })
+      .from(user)
+      .where(eq(user.id, actorUserId))
+      .for("share");
+    if (actor?.role !== "owner")
+      throw new DomainError("forbidden", "Only the owner can create staff accounts");
+    const created = await createAccount(
+      { auth, db: tx },
+      { ...input, email, role: "staff" },
+      { actorUserId, action: existingCalendar ? "staff.account_linked" : "staff.create" },
+      existingCalendar
+        ? { id: existingCalendar.staffId, version: existingCalendar.version }
+        : undefined,
+    );
+    if (!created.staffId) throw new Error("Staff account was created without a calendar");
+    if (created.invited)
+      await queueStaffInvitation(tx, auth, config, { userId: created.userId, email }, request);
+    return {
+      userId: created.userId,
+      staffId: created.staffId,
+      email,
+      role: "staff" as const,
+      invited: created.invited,
+      ...(existingCalendar && {
+        reviewedAccess: await getReviewedStaffAccess(
+          tx,
+          created.staffId,
+          actor,
+          config.syncReplicaGeneration,
+        ),
+      }),
+    };
+  });
+  if (result.invited) auth.mailer.notifyQueued();
+  return result;
+}
+
+async function queueStaffInvitation(
+  tx: Tx,
   auth: Auth,
   config: Pick<AppConfig, "notifications">,
   target: { userId: string; email: string },
   request?: Request,
 ): Promise<void> {
   const ctx = await auth.$context;
-  const token = Buffer.from(crypto.getRandomValues(new Uint8Array(24))).toString("base64url");
-  await ctx.internalAdapter.createVerificationValue({
-    value: target.userId,
-    identifier: `reset-password:${token}`,
-    expiresAt: new Date(Date.now() + INVITE_LINK_SECONDS * 1000),
-  });
+  const token = await createStaffInvitation(
+    tx,
+    target.userId,
+    new Date(Date.now() + INVITE_LINK_SECONDS * 1000),
+  );
   const callback = encodeURIComponent("/reset-password?invited=1");
-  await auth.mailer.send({
+  const queued = await enqueueAccountEmail(tx, config.notifications.signingSecret, {
     kind: "staff_invite",
     to: target.email,
     url: `${ctx.baseURL}/reset-password/${token}?callbackURL=${callback}`,
     locale: localeFromRequest(request, config.notifications.defaultLocale),
     expiresInMinutes: INVITE_LINK_SECONDS / 60,
-    idempotencyKey: `staff_invite:${token.slice(0, 16)}`,
+    idempotencyKey: `staff_invite:${target.userId}`,
   });
+  if (queued !== "queued")
+    throw new DomainError("rate_limited", "An invitation was recently queued for this email");
 }
 
 /**

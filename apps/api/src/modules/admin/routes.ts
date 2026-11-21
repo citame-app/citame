@@ -2,12 +2,11 @@ import {
   type ChangeRoleResponse,
   changeRoleRequestSchema,
   createStaffAccountRequestSchema,
-  type StaffAccountResponse,
 } from "@sob/contracts";
 import { Hono } from "hono";
 import { createMiddleware } from "hono/factory";
 import type { AppDeps } from "../../app";
-import { assignRole, createAccount, sendInvitation } from "../../auth/accounts";
+import { assignRole, provisionStaffAccount } from "../../auth/accounts";
 import type { Auth } from "../../auth/auth";
 import { requireRole } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
@@ -30,29 +29,15 @@ export function adminRoutes(deps: AppDeps, auth: Auth) {
       .use("/users/*", ownerOnly)
       .post("/staff-accounts", async (c) => {
         const body = parseOrThrow(createStaffAccountRequestSchema, await readJson(c));
-        const created = await createAccount(
+        if (c.get("desktopRequest") && !body.existingCalendar)
+          throw new DomainError("validation_error", "Review an existing calendar before linking");
+        const response = await provisionStaffAccount(
           { auth, db },
-          {
-            email: body.email,
-            name: body.name,
-            password: body.password,
-            displayName: body.displayName,
-            role: "staff",
-          },
-          { actorUserId: c.get("principal").userId, action: "staff.create" },
+          deps.config,
+          body,
+          c.get("principal").userId,
+          c.req.raw,
         );
-        if (!created.staffId) throw new Error("Staff account was created without a calendar");
-        const email = body.email.trim().toLowerCase();
-        if (created.invited) {
-          await sendInvitation(auth, deps.config, { userId: created.userId, email }, c.req.raw);
-        }
-        const response: StaffAccountResponse = {
-          userId: created.userId,
-          staffId: created.staffId,
-          email,
-          role: "staff",
-          invited: created.invited,
-        };
         return c.json(response, 201);
       })
       .patch("/users/:id/role", async (c) => {

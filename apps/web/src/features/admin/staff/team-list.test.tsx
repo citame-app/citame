@@ -188,7 +188,7 @@ describe("TeamList", () => {
     await waitFor(() => expect(writes).toHaveLength(1));
     expect(writes[0]?.body).toEqual({ email: "nora@example.com", name: "Nora Diaz" });
     expect(
-      await screen.findByText("Invitation sent. They will set their own password."),
+      await screen.findByText("Invitation queued. They will set their own password."),
     ).toBeInTheDocument();
   });
 
