@@ -112,6 +112,22 @@ pub struct Draft {
     pub audience: Audience,
 }
 
+impl From<&Campaign> for Draft {
+    fn from(campaign: &Campaign) -> Self {
+        Self {
+            name: campaign.name.clone(),
+            channel: campaign.channel,
+            trigger: campaign.trigger,
+            subject: campaign.subject.clone(),
+            email_body: campaign.email_body.clone(),
+            sms_body: campaign.sms_body.clone(),
+            delay_minutes: campaign.delay_minutes,
+            birthday_lead_days: campaign.birthday_lead_days,
+            audience: campaign.audience.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Serialize)]
 #[serde(untagged)]
 pub enum DraftRevision {

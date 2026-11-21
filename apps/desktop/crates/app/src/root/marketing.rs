@@ -7,7 +7,7 @@ use sob_core::http::marketing::{
 use sob_core::sync::TransportError;
 
 mod draft;
-use draft::Editor;
+use draft::{Editor, EditorMode};
 
 pub(super) struct Desk {
     identity: Arc<()>,
@@ -23,6 +23,7 @@ pub(super) struct Desk {
     status: Option<Status>,
     action: Option<CampaignAction>,
     editor: Option<Editor>,
+    choose_template: bool,
     uncertain: bool,
     confirm_exit: bool,
     busy: bool,
@@ -131,6 +132,7 @@ impl Root {
             review: None,
             action: None,
             editor: None,
+            choose_template: false,
             search: cx.new(|cx| TextField::new(search, false, cx)),
             applied_search: String::new(),
             schedule: cx.new(|cx| TextField::new(schedule, false, cx)),
@@ -183,6 +185,17 @@ impl Root {
             return;
         };
         if desk.busy {
+            return;
+        }
+        if desk.choose_template {
+            desk.choose_template = false;
+            cx.notify();
+            return;
+        }
+        if let Some(editor) = &mut desk.editor
+            && editor.close_preview()
+        {
+            cx.notify();
             return;
         }
         if desk.editor.is_some() {
@@ -312,8 +325,9 @@ impl Root {
                         desk.uncertain = false;
                         desk.review = None;
                         let id = campaign.id.clone();
-                        if let Some((current, _)) = desk.detail.as_mut() {
-                            *current = campaign;
+                        match desk.detail.as_mut() {
+                            Some((current, _)) if current.id == id => *current = campaign,
+                            _ => desk.detail = None,
                         }
                         Some(id)
                     }
@@ -489,7 +503,9 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let ready = self.status.connectivity == Connectivity::Online && !desk.busy;
-        let body = if let Some(editor) = &desk.editor {
+        let body = if desk.choose_template {
+            self.campaign_templates(ready, cx)
+        } else if let Some(editor) = &desk.editor {
             self.render_campaign_editor(desk, editor, ready, cx)
         } else if let Some((campaign, deliveries)) = &desk.detail {
             self.render_campaign(desk, campaign, deliveries, ready, cx)
@@ -497,7 +513,9 @@ impl Root {
             self.render_campaign_list(desk, ready, cx)
         };
         let footer = div().flex().flex_wrap().gap_2().when(!desk.busy, |row| {
-            let close = if desk.editor.is_some() {
+            let close = if desk.choose_template {
+                Key::Back
+            } else if desk.editor.is_some() {
                 if desk.confirm_exit {
                     Key::MarketingDiscardDraft
                 } else {
@@ -508,17 +526,23 @@ impl Root {
             } else {
                 Key::Close
             };
-            row.child(self.marketing_button(
-                "close-marketing",
-                close,
-                Kind::Ghost,
-                if desk.editor.is_some() {
-                    Root::leave_campaign_editor
-                } else {
-                    Root::dismiss_marketing
-                },
-                cx,
-            ))
+            row.child(
+                self.marketing_button(
+                    "close-marketing",
+                    close,
+                    Kind::Ghost,
+                    if desk
+                        .editor
+                        .as_ref()
+                        .is_some_and(|editor| !editor.in_preview())
+                    {
+                        Root::leave_campaign_editor
+                    } else {
+                        Root::dismiss_marketing
+                    },
+                    cx,
+                ),
+            )
         });
         self.modal_with_height(
             div()
@@ -573,7 +597,12 @@ impl Root {
                     "create-campaign-draft",
                     Key::MarketingCreateDraft,
                     Kind::Primary,
-                    |root, cx| root.open_campaign_editor(false, cx),
+                    |root, cx| {
+                        if let Some(desk) = root.marketing_desk() {
+                            desk.choose_template = true;
+                            cx.notify();
+                        }
+                    },
                     cx,
                 ))
                 .child(div().flex().gap_2().child(desk.search.clone()).child(
@@ -899,13 +928,20 @@ impl Root {
                         },
                         cx,
                     ))
+                    .child(self.marketing_button(
+                        "duplicate-campaign-draft",
+                        Key::MarketingDuplicateDraft,
+                        Kind::Ghost,
+                        |root, cx| root.open_campaign_editor(EditorMode::Duplicate, cx),
+                        cx,
+                    ))
                     .when(campaign.status == Status::Draft, |row| {
                         let id = campaign.id.clone();
                         row.child(self.marketing_button(
                             "edit-campaign-draft",
                             Key::MarketingEditDraft,
                             Kind::Ghost,
-                            |root, cx| root.open_campaign_editor(true, cx),
+                            |root, cx| root.open_campaign_editor(EditorMode::Edit, cx),
                             cx,
                         ))
                         .child(self.marketing_button(
