@@ -160,7 +160,7 @@ impl Store {
         if granted {
             Self::set_meta_at(conn, "inventory_read_access", &Self::generation_at(conn)?)?;
         } else {
-            conn.execute("DELETE FROM meta WHERE key = 'inventory_read_access' OR key GLOB 'purchase_order:*' OR key GLOB 'warehouse:*'", [])?;
+            conn.execute("DELETE FROM meta WHERE key IN ('inventory_read_access', 'inventory_classifications') OR key GLOB 'purchase_order:*' OR key GLOB 'warehouse:*'", [])?;
         }
         Ok(())
     }

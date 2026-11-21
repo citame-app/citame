@@ -1216,6 +1216,15 @@ impl HttpTransport {
         Ok(Some(product))
     }
 
+    pub fn inventory_classifications(
+        &self,
+    ) -> Result<crate::inventory_classifications::ClassificationCatalogue, TransportError> {
+        read_response(
+            self.get(&self.agent, "/admin/inventory/classifications", None)?,
+            false,
+        )
+    }
+
     pub fn inventory_ledger(
         &self,
         query: &LedgerQuery,

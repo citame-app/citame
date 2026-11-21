@@ -90,6 +90,7 @@ pub struct ProductQuery {
     pub activity: ProductActivity,
     pub category: Option<String>,
     pub brand: Option<String>,
+    pub subcategory_id: Option<Uuid>,
     pub resellable: Option<bool>,
     pub low_stock: bool,
     pub sort: ProductSort,
@@ -130,6 +131,9 @@ impl ProductQuery {
         );
         if let Some(category) = &self.category {
             query.append_pair("category", category);
+        }
+        if let Some(subcategory) = self.subcategory_id {
+            query.append_pair("subcategoryId", &subcategory.to_string());
         }
         if let Some(brand) = &self.brand {
             query.append_pair("brand", brand);
@@ -330,6 +334,8 @@ pub struct Product {
     pub barcode: Option<String>,
     pub category: Option<String>,
     pub brand: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classification: Option<crate::inventory_classifications::ClassificationAssignment>,
     pub description: Option<String>,
     pub storage_location: Option<String>,
     pub stock_on_hand: u32,

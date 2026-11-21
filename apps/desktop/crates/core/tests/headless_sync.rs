@@ -5800,3 +5800,100 @@ fn native_stock_adjustment_to_an_empty_warehouse_replays_and_reviews_after_resta
     assert_eq!(secondary.products[0].on_hand, 2);
     assert_eq!(main.products[0].on_hand, 6);
 }
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_classifications_replay_after_restart_and_keep_legacy_product_stock() {
+    use sob_core::inventory_classifications::{Classification, ClassificationKind};
+    use sob_core::product_editor::ProductReview;
+    use uuid::Uuid;
+
+    let desktop = proxy_device();
+    let web = Device::sign_in();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("classification.sqlite");
+    let mut store = Store::open(&path).unwrap();
+    sync::pull_all(&mut store, &*desktop.transport).unwrap();
+    let list = desktop.transport.inventory_classifications().unwrap();
+    let generation = list.generation.clone();
+    store.remember_inventory_classifications(&list).unwrap();
+    let parent = Classification {
+        id: Uuid::now_v7(),
+        kind: ClassificationKind::Category,
+        parent_id: None,
+        name: "Native classification fixture".into(),
+        position: 2,
+        active: true,
+        version: 0,
+    };
+    store
+        .queue_inventory_classification(&generation, parent.clone(), None)
+        .unwrap();
+    drop(store);
+
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(store.pending_inventory_classifications().unwrap().len(), 1);
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*desktop.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let list = desktop.transport.inventory_classifications().unwrap();
+    assert!(list.entries.iter().any(|row| parent.acknowledged_by(row)));
+    store.remember_inventory_classifications(&list).unwrap();
+    let subcategory = Classification {
+        id: Uuid::now_v7(),
+        parent_id: Some(parent.id),
+        name: "Native child".into(),
+        ..parent.clone()
+    };
+    store
+        .queue_inventory_classification(&generation, subcategory.clone(), None)
+        .unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*desktop.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let product_id = web.rest_post(
+        "/admin/inventory/products",
+        json!({
+            "name": "Native classification item", "brand": "Legacy detail",
+            "priceCents": 1500, "openingStock": 5, "idempotencyKey": Uuid::now_v7(),
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let product = desktop.transport.inventory_product(product_id).unwrap();
+    let review = ProductReview::new(&product).unwrap();
+    let mut fields = review.fields.clone();
+    let assignment = fields.classification.get_or_insert_default();
+    assignment.category_id = Some(parent.id);
+    assignment.subcategory_id = Some(subcategory.id);
+    assert!(
+        store
+            .queue_product_edit(&generation, product_id, Some(&review), fields, None)
+            .unwrap()
+    );
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*desktop.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let product = desktop.transport.inventory_product(product_id).unwrap();
+    assert_eq!(product.stock_on_hand, 5);
+    assert_eq!(product.category.as_deref(), Some(parent.name.as_str()));
+    assert_eq!(product.brand.as_deref(), Some("Legacy detail"));
+    assert_eq!(
+        product.classification.unwrap().subcategory_id,
+        Some(subcategory.id)
+    );
+}

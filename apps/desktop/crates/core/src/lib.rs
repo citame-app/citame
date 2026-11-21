@@ -14,6 +14,7 @@ pub mod http;
 pub mod i18n;
 pub mod intake;
 pub mod inventory;
+pub mod inventory_classifications;
 pub mod inventory_documents;
 pub mod model;
 pub mod ops;

@@ -1,5 +1,6 @@
 use crate::billing::parse_reviewed_amount;
 use crate::inventory::{PackageContent, Product, ProductId};
+use crate::inventory_classifications::ClassificationAssignment;
 use crate::{error::*, trim_like_javascript};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,8 @@ pub struct ProductDraft {
     pub barcode: Option<String>,
     pub category: Option<String>,
     pub brand: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classification: Option<ClassificationAssignment>,
     pub description: Option<String>,
     pub storage_location: Option<String>,
     pub unit_label: String,
@@ -40,6 +43,7 @@ impl Default for ProductDraft {
             barcode: None,
             category: None,
             brand: None,
+            classification: None,
             description: None,
             storage_location: None,
             unit_label: "unit".into(),
@@ -64,6 +68,7 @@ impl ProductDraft {
             barcode: product.barcode.clone(),
             category: product.category.clone(),
             brand: product.brand.clone(),
+            classification: product.classification,
             description: product.description.clone(),
             storage_location: product.storage_location.clone(),
             unit_label: product.unit_label.clone(),
@@ -180,6 +185,28 @@ impl ProductDraft {
             fields.remove("sku");
         }
         fields.retain(|name, value| baseline.get(name) != Some(value));
+        if fields.remove("classification").is_some() {
+            let proposed = self.classification.unwrap_or_default();
+            let original = before.classification.unwrap_or_default();
+            let changes = [
+                ("categoryId", proposed.category_id, original.category_id),
+                (
+                    "subcategoryId",
+                    proposed.subcategory_id,
+                    original.subcategory_id,
+                ),
+                ("brandId", proposed.brand_id, original.brand_id),
+            ]
+            .into_iter()
+            .filter(|(_, proposed, original)| proposed != original)
+            .map(|(name, value, _)| (name.to_owned(), serde_json::json!(value)))
+            .collect::<Map<_, _>>();
+            if !changes.is_empty() {
+                fields.remove("category");
+                fields.remove("brand");
+                fields.insert("classification".into(), Value::Object(changes));
+            }
+        }
         if fields.is_empty() {
             return Ok(None);
         }
@@ -191,17 +218,43 @@ impl ProductDraft {
         let mut fields = current.fields()?;
         let baseline = before.fields()?;
         for (name, value) in self.fields()? {
+            if name == "classification" {
+                continue;
+            }
             let approved = baseline.get(&name);
             if approved != Some(&value) && (keep_overlaps || fields.get(&name) == approved) {
                 fields.insert(name, value);
             }
         }
-        Ok(serde_json::from_value(Value::Object(fields))?)
+        let mut rebased: Self = serde_json::from_value(Value::Object(fields))?;
+        if let Some(proposed) = self.classification {
+            let original = before.classification.unwrap_or_default();
+            let mut assignment = current.classification.unwrap_or_default();
+            let original_category = (original.category_id, original.subcategory_id);
+            let proposed_category = (proposed.category_id, proposed.subcategory_id);
+            if proposed_category != original_category
+                && (keep_overlaps
+                    || (assignment.category_id, assignment.subcategory_id) == original_category)
+            {
+                (assignment.category_id, assignment.subcategory_id) = proposed_category;
+            }
+            if proposed.brand_id != original.brand_id
+                && (keep_overlaps || assignment.brand_id == original.brand_id)
+            {
+                assignment.brand_id = proposed.brand_id;
+            }
+            rebased.classification = Some(assignment);
+        }
+        Ok(rebased)
     }
 
     pub(crate) fn creation(&self, id: ProductId) -> Result<Value> {
         let mut fields = self.fields()?;
         fields.remove("active");
+        if self.classification.is_some() {
+            fields.remove("category");
+            fields.remove("brand");
+        }
         if self.sku.is_none() {
             fields.remove("sku");
         }

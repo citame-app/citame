@@ -1,5 +1,6 @@
 use super::*;
 use sob_core::error::CoreError;
+use sob_core::inventory_classifications::{ClassificationAssignment, ClassificationKind};
 use sob_core::product_editor::{CREATE, ProductDraft, ProductProposal, ProductReview, UPDATE};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -117,6 +118,8 @@ pub(super) struct Panel {
     locale: Locale,
     baseline: Option<ProductReview>,
     opened: ProductDraft,
+    assignment: Option<ClassificationAssignment>,
+    managed: bool,
     inputs: Vec<(Input, Entity<TextField>)>,
     description: Vec<Entity<TextField>>,
     net_price: Option<NetPrice>,
@@ -156,6 +159,15 @@ impl Panel {
             barcode: optional(Input::Barcode),
             category: optional(Input::Category),
             brand: optional(Input::Brand),
+            classification: if self.managed {
+                self.assignment
+            } else {
+                self.baseline
+                    .as_ref()
+                    .map_or(self.opened.classification, |review| {
+                        review.fields.classification
+                    })
+            },
             storage_location: optional(Input::Location),
             description: ProductDraft::optional(
                 &self
@@ -206,6 +218,8 @@ impl Panel {
         self.description = description_fields(draft.description.as_deref(), cx);
         self.resellable = draft.resellable;
         self.active = draft.active;
+        self.assignment = draft.classification;
+        self.managed = draft.classification.is_some();
         self.net_price = None;
     }
 
@@ -334,6 +348,10 @@ impl Root {
             net_price: None,
             resellable: draft.resellable,
             active: draft.active,
+            assignment: draft.classification,
+            managed: draft
+                .classification
+                .is_some_and(|assignment| assignment.subcategory_id.is_some()),
             opened: draft,
             needs_review: conflict.is_some(),
             restored: false,
@@ -743,6 +761,97 @@ impl Root {
         });
     }
 
+    fn render_product_classification(&self, form: &Panel, cx: &mut Context<Self>) -> gpui::Div {
+        let list = self.svc.store.inventory_classifications().ok().flatten();
+        let assignment = form.assignment.unwrap_or_default();
+        let body = div().flex().flex_col().gap_2();
+        let Some(list) = list else { return body };
+        let controls = body.child(self.button(
+            "product-classifications-mode",
+            self.t(if form.managed {
+                Key::InventoryClassificationLabels
+            } else {
+                Key::InventoryClassificationAssign
+            }),
+            Kind::Ghost,
+            cx.listener(|root, _, _, cx| {
+                root.edit_product_form(cx, |form, _| {
+                    form.managed = !form.managed;
+                    form.assignment.get_or_insert_default();
+                })
+            }),
+        ));
+        if !form.managed {
+            return controls;
+        }
+        let selected = [
+            (Key::InventoryCategoryFilter, assignment.category_id),
+            (
+                Key::InventoryClassificationSubcategory,
+                assignment.subcategory_id,
+            ),
+            (Key::InventoryBrandFilter, assignment.brand_id),
+        ];
+        controls.children(
+            selected
+                .into_iter()
+                .enumerate()
+                .map(|(field, (name, selected))| {
+                    let entries = list.entries.iter().filter(move |row| {
+                        (row.active || Some(row.id) == selected)
+                            && match field {
+                                0 => {
+                                    row.kind == ClassificationKind::Category
+                                        && row.parent_id.is_none()
+                                }
+                                1 => {
+                                    assignment.category_id.is_some()
+                                        && row.parent_id == assignment.category_id
+                                }
+                                _ => row.kind == ClassificationKind::Brand,
+                            }
+                    });
+                    div().child(self.label(name)).child(
+                        div().flex().flex_wrap().gap_2().children(
+                            std::iter::once((
+                                None,
+                                self.t(Key::InventoryClassificationUnassigned).to_owned(),
+                            ))
+                            .chain(entries.map(|row| (Some(row.id), row.name.clone())))
+                            .enumerate()
+                            .map(|(index, (id, label))| {
+                                self.button(
+                                    ("product-classification-choice", field * 10000 + index),
+                                    label,
+                                    if selected == id {
+                                        Kind::Primary
+                                    } else {
+                                        Kind::Ghost
+                                    },
+                                    cx.listener(move |root, _, _, cx| {
+                                        root.edit_product_form(cx, |form, _| {
+                                            let assignment =
+                                                form.assignment.get_or_insert_default();
+                                            match field {
+                                                0 => {
+                                                    if assignment.category_id != id {
+                                                        assignment.category_id = id;
+                                                        assignment.subcategory_id = None;
+                                                    }
+                                                }
+                                                1 => assignment.subcategory_id = id,
+                                                _ => assignment.brand_id = id,
+                                            }
+                                        })
+                                    }),
+                                )
+                            }),
+                        ),
+                    )
+                }),
+        )
+    }
+
     pub(super) fn render_product_form(&self, form: &Panel, cx: &mut Context<Self>) -> gpui::Div {
         let allowed = self.svc.store.can_queue_product_edits();
         let body = div().flex().flex_col().gap_3().child(
@@ -800,6 +909,7 @@ impl Root {
             .when(form.needs_review, |body| {
                 body.child(self.render_product_review(form, cx))
             });
+        let body = body.child(self.render_product_classification(form, cx));
         body.children(GROUPS.iter().map(|(title, inputs)| {
             div()
                 .rounded_md()
@@ -821,6 +931,8 @@ impl Root {
                             .filter(|(name, _)| {
                                 inputs.contains(name)
                                     && (*name != Input::Opening || form.baseline.is_none())
+                                    && (!form.managed
+                                        || !matches!(name, Input::Category | Input::Brand))
                             })
                             .map(|(name, field)| {
                                 let label = if *name == Input::Price && form.net_price.is_some() {

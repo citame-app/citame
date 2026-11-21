@@ -8,6 +8,7 @@ use sob_core::inventory::{
 use sob_core::sync::TransportError;
 
 mod catalogue;
+mod classifications;
 mod documents;
 mod ledger;
 mod product_form;
@@ -29,6 +30,7 @@ pub(super) struct Desk {
     product_photo: Option<Box<product_photo::Panel>>,
     documents: Option<Box<documents::Panel>>,
     warehouses: Option<Box<warehouses::Panel>>,
+    classifications: Option<Box<classifications::Panel>>,
     stock: Option<stock::Panel>,
     request: Option<Arc<()>>,
     saving: bool,
@@ -85,6 +87,13 @@ impl Desk {
     }
 
     pub(super) fn dismiss_editor(&mut self, cx: &App) -> bool {
+        if let Some(panel) = &mut self.classifications {
+            if panel.dismiss() {
+                self.classifications = None;
+                self.observed_revision = -1;
+            }
+            return true;
+        }
         if let Some(panel) = &mut self.warehouses {
             if panel.dismiss() {
                 self.warehouses = None;
@@ -235,6 +244,7 @@ impl Root {
             product_photo: None,
             documents: None,
             warehouses: None,
+            classifications: None,
             stock: None,
             request: None,
             saving: false,
@@ -282,7 +292,8 @@ impl Root {
     }
 
     pub(super) fn refresh_inventory(&mut self, reconnected: bool, cx: &mut Context<Self>) {
-        if self.refresh_warehouses(reconnected, cx)
+        if self.refresh_classifications(reconnected, cx)
+            || self.refresh_warehouses(reconnected, cx)
             || self.refresh_inventory_documents(reconnected, cx)
         {
             return;
@@ -693,7 +704,8 @@ impl Root {
                     && desk.product_form.is_none()
                     && desk.product_photo.is_none()
                     && desk.documents.is_none()
-                    && desk.warehouses.is_none(),
+                    && desk.warehouses.is_none()
+                    && desk.classifications.is_none(),
                 |header| {
                     header.child(self.button(
                         "inventory-refresh",
@@ -711,7 +723,9 @@ impl Root {
                     cx.listener(|root, _, _, cx| root.dismiss_overlay(cx)),
                 ))
             });
-        let content = if let Some(warehouses) = &desk.warehouses {
+        let content = if let Some(classifications) = &desk.classifications {
+            self.render_classifications(classifications, cx)
+        } else if let Some(warehouses) = &desk.warehouses {
             self.render_warehouses(warehouses, cx)
         } else if let Some(documents) = &desk.documents {
             self.render_inventory_documents(documents, cx)
@@ -805,6 +819,12 @@ impl Root {
                     .flex()
                     .flex_wrap()
                     .gap_2()
+                    .child(self.button(
+                        "inventory-classifications",
+                        self.t(Key::InventoryClassifications),
+                        Kind::Ghost,
+                        cx.listener(|root, _, _, cx| root.open_classifications(cx)),
+                    ))
                     .child(self.button(
                         "inventory-warehouses",
                         self.t(Key::InventoryWarehouses),

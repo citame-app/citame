@@ -533,6 +533,10 @@ impl OutboxEntry {
         {
             fields.remove("_draft");
             fields.remove("_reviewed");
+        } else if self.kind == crate::inventory_classifications::SAVE
+            && let Some(fields) = payload.as_object_mut()
+        {
+            fields.remove("_reviewed");
         }
         WireMutation {
             mutation_id: self.mutation_id.clone(),

@@ -151,6 +151,57 @@ impl Root {
             })
     }
 
+    fn render_subcategory_filter(&self, query: &ProductQuery, cx: &mut Context<Self>) -> gpui::Div {
+        let entries = self
+            .svc
+            .store
+            .inventory_classifications()
+            .ok()
+            .flatten()
+            .map(|list| list.entries)
+            .unwrap_or_default();
+        let children = entries
+            .iter()
+            .filter_map(|row| {
+                let parent = entries
+                    .iter()
+                    .find(|entry| Some(entry.id) == row.parent_id)?;
+                Some((Some(row.id), format!("{} / {}", parent.name, row.name)))
+            })
+            .collect::<Vec<_>>();
+        if children.is_empty() && query.subcategory_id.is_none() {
+            return div();
+        }
+        div()
+            .child(self.label(Key::InventoryClassificationSubcategory))
+            .child(
+                div().flex().flex_wrap().gap_2().children(
+                    std::iter::once((
+                        None,
+                        self.t(Key::InventoryClassificationEverySubcategory)
+                            .to_owned(),
+                    ))
+                    .chain(children)
+                    .enumerate()
+                    .map(|(index, (id, label))| {
+                        self.button(
+                            ("inventory-subcategory-filter", index),
+                            label,
+                            selected(id == query.subcategory_id),
+                            cx.listener(move |root, _, _, cx| {
+                                root.filter_inventory_catalogue(
+                                    |query| {
+                                        query.subcategory_id = id;
+                                    },
+                                    cx,
+                                )
+                            }),
+                        )
+                    }),
+                ),
+            )
+    }
+
     fn render_catalogue_filters(&self, desk: &Desk, cx: &mut Context<Self>) -> gpui::Div {
         let query = &desk.query;
         const ACTIVITY: [(ProductActivity, Key); 3] = [
@@ -251,6 +302,7 @@ impl Root {
                     cx,
                 ))
             })
+            .child(self.render_subcategory_filter(query, cx))
             .child(self.label(Key::InventorySort))
             .child(
                 div()

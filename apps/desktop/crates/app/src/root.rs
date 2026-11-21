@@ -730,6 +730,7 @@ impl Root {
                 && !self.preserve_open_product_photo()
                 && !self.preserve_open_inventory_documents()
                 && !self.preserve_warehouse_panel()
+                && !self.preserve_inventory_classifications()
             {
                 self.overlay = Overlay::None;
             }
@@ -3324,6 +3325,7 @@ impl Root {
                 sob_core::inventory_documents::RECEIVE_STOCK => Key::InventoryReceipts,
                 sob_core::purchase_orders::PURCHASE_ORDER_WRITE => Key::InventoryOrders,
                 sob_core::warehouses::SAVE => Key::InventoryWarehouses,
+                sob_core::inventory_classifications::SAVE => Key::InventoryClassifications,
                 sob_core::warehouses::TRANSFER => Key::InventoryWarehouseTransfer,
                 sob_core::warehouses::ADJUST => Key::InventoryWarehouseAdjust,
                 _ => Key::ConflictOther,
@@ -3610,6 +3612,21 @@ impl Root {
                                     Kind::Primary,
                                     cx.listener(move |root, _, _, cx| {
                                         root.open_warehouse_conflict(&id, cx)
+                                    }),
+                                ))
+                            },
+                        )
+                        .when(
+                            c.kind == sob_core::inventory_classifications::SAVE
+                                && self.svc.store.can_queue_product_edits(),
+                            |row| {
+                                let id = c.mutation_id.clone();
+                                row.child(self.button(
+                                    ("review-classification", i),
+                                    self.t(Key::InventoryDocumentReview),
+                                    Kind::Primary,
+                                    cx.listener(move |root, _, _, cx| {
+                                        root.open_classification_conflict(&id, cx)
                                     }),
                                 ))
                             },

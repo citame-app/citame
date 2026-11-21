@@ -1581,6 +1581,7 @@ impl Store {
                                 | crate::warehouses::SAVE
                                 | crate::warehouses::TRANSFER
                                 | crate::warehouses::ADJUST
+                                | crate::inventory_classifications::SAVE
                         )
                     {
                         Self::set_meta_at(
@@ -1611,6 +1612,7 @@ impl Store {
                                 | crate::warehouses::SAVE
                                 | crate::warehouses::TRANSFER
                                 | crate::warehouses::ADJUST
+                                | crate::inventory_classifications::SAVE
                         )
                     {
                         Self::apply_inventory_access_at(&tx, false)?;
@@ -1727,6 +1729,7 @@ impl Store {
 mod service_assignments;
 pub use service_assignments::{AssignmentSnapshot, AssignmentWork, ServiceAssignment};
 mod combinations;
+mod inventory_classifications;
 mod inventory_documents;
 mod product_editor;
 mod resource_pools;

@@ -120,6 +120,8 @@ If a connection drops with a product already open, you can save one movement per
 
 Open **Warehouses** to see physical and reserved stock by location. Inventory writers can add, rename, archive and reactivate secondary locations and transfer several products at once. Previously loaded pages are available offline. Drafts use the reviewed location and product versions, and saved changes appear as pending until Cloud confirms them. If Cloud reports a conflict, open it from **Sync conflicts** to review current quantities before resubmitting. A transfer that was already recorded keeps its original document ID. To route a new stock receipt or a purchase-order delivery to a secondary location, use **Receiving warehouse**. The selector can refresh the active locations and retains previously loaded locations offline. A receipt remembers the warehouse name in its history even if the location is renamed later. **Adjust stock** records a delivery, internal use or a physical count for a specific product at the selected location. Search by product name or SKU to include products with no stock in a secondary warehouse. Approved adjustments are queued offline and the server checks the reviewed quantity and product version on replay.
 
+Open **Categories and brands** under Inventory to review the current catalogue. Inventory writers can create, archive and reorder entries and choose a parent category. After loading the catalogue, Desktop can queue these changes and product assignments offline. The product editor and the subcategory filter use the same cached entries.
+
 ## Prepare a Linux release locally
 
 ```sh
