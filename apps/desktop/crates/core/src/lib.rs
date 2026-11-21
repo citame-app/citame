@@ -5,6 +5,7 @@ pub mod auth;
 pub mod backoff;
 pub mod billing;
 pub mod booking;
+pub mod booking_links;
 pub mod booking_policy;
 pub mod calendar;
 pub mod combinations;

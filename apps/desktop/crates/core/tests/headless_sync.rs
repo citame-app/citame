@@ -77,6 +77,34 @@ fn desktop_opens_cloud_management_with_the_linked_users_web_session_through_the_
 }
 
 #[test]
+#[ignore = "needs the public web gateway and the synthetic catalogue from smoke-prod.sh"]
+fn native_booking_links_use_the_public_gateway_catalogue() {
+    use sob_core::booking_links::{Selection, qr_png};
+    let device = proxy_device();
+    let catalog = device.transport.public_booking_catalog().unwrap();
+    assert!(!catalog.salon_name.is_empty());
+    let mut selection = Selection::default();
+    let service = catalog
+        .services
+        .iter()
+        .find(|service| !service.is_extra())
+        .unwrap();
+    assert!(selection.toggle(&catalog, service.id, None));
+    selection.staff = Some(selection.eligible(&catalog).next().unwrap().id);
+    let origin = env("SOB_TEST_API_URL");
+    let links = selection.links(&origin, &catalog).unwrap();
+    assert_eq!(links.book.path(), "/book");
+    assert_eq!(links.widget.path(), "/widget");
+    let query = links
+        .book
+        .query_pairs()
+        .collect::<std::collections::HashMap<_, _>>();
+    assert_eq!(query.get("services").unwrap(), &service.id.to_string());
+    assert_eq!(query.len(), 2);
+    assert!(qr_png(&links.book).unwrap().starts_with(b"\x89PNG"));
+}
+
+#[test]
 #[ignore = "needs the synthetic account and production proxy seeded by smoke-prod.sh"]
 fn native_unlinked_account_review_through_the_proxy() {
     use sob_core::http::AccountRole;

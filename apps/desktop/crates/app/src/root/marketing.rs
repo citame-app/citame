@@ -7,7 +7,9 @@ use sob_core::http::marketing::{
 use sob_core::sync::TransportError;
 
 mod draft;
+mod links;
 use draft::{Editor, EditorMode};
+use links::LinkDesk;
 
 pub(super) struct Desk {
     identity: Arc<()>,
@@ -23,6 +25,7 @@ pub(super) struct Desk {
     status: Option<Status>,
     action: Option<CampaignAction>,
     editor: Option<Editor>,
+    links: Option<LinkDesk>,
     choose_template: bool,
     uncertain: bool,
     confirm_exit: bool,
@@ -158,6 +161,7 @@ impl Root {
             review: None,
             action: None,
             editor: None,
+            links: None,
             choose_template: false,
             search: cx.new(|cx| TextField::new(search, false, cx)),
             applied_search: String::new(),
@@ -211,6 +215,10 @@ impl Root {
             return;
         };
         if desk.busy {
+            return;
+        }
+        if desk.links.take().is_some() {
+            cx.notify();
             return;
         }
         if desk.choose_template {
@@ -526,7 +534,9 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let ready = self.status.connectivity == Connectivity::Online && !desk.busy;
-        let body = if desk.choose_template {
+        let body = if let Some(links) = &desk.links {
+            self.render_booking_links(links, ready, cx)
+        } else if desk.choose_template {
             self.campaign_templates(ready, desk.editor.is_some(), cx)
         } else if let Some(editor) = &desk.editor {
             self.render_campaign_editor(desk, editor, ready, cx)
@@ -536,7 +546,7 @@ impl Root {
             self.render_campaign_list(desk, ready, cx)
         };
         let footer = div().flex().flex_wrap().gap_2().when(!desk.busy, |row| {
-            let close = if desk.choose_template {
+            let close = if desk.choose_template || desk.links.is_some() {
                 Key::Back
             } else if desk.editor.is_some() {
                 if desk.confirm_exit {
@@ -617,18 +627,31 @@ impl Root {
         let mut body = div().flex().flex_col().gap_3();
         if ready {
             body = body
-                .child(self.marketing_button(
-                    "create-campaign-draft",
-                    Key::MarketingCreateDraft,
-                    Kind::Primary,
-                    |root, cx| {
-                        if let Some(desk) = root.marketing_desk() {
-                            desk.choose_template = true;
-                            cx.notify();
-                        }
-                    },
-                    cx,
-                ))
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .child(self.marketing_button(
+                            "create-campaign-draft",
+                            Key::MarketingCreateDraft,
+                            Kind::Primary,
+                            |root, cx| {
+                                if let Some(desk) = root.marketing_desk() {
+                                    desk.choose_template = true;
+                                    cx.notify();
+                                }
+                            },
+                            cx,
+                        ))
+                        .child(self.marketing_button(
+                            "marketing-booking-links",
+                            Key::BookingLinkTitle,
+                            Kind::Ghost,
+                            Root::open_booking_links,
+                            cx,
+                        )),
+                )
                 .child(div().flex().gap_2().child(desk.search.clone()).child(
                     self.marketing_button(
                         "search-marketing",
