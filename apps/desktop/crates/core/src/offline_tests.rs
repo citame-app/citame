@@ -66,6 +66,7 @@ fn directory_search_finds_the_active_contact_through_merged_aliases() {
     store.set_meta("client_directory", "allowed").unwrap();
     let mut active = store.clients().unwrap().remove(0);
     active.group_names = Some(vec!["vip".into()]);
+    active.phone = Some("+9 7-5".into());
     let mut previous = active.clone();
     previous.id = "also-known-as".into();
     previous.name = "Previous name".into();
@@ -85,9 +86,16 @@ fn directory_search_finds_the_active_contact_through_merged_aliases() {
     store.apply_page(&changes, 32).unwrap();
 
     let directory = directory_clients(&store).unwrap();
-    for query in ["previous name", "oldest name", "61", "HISTORY@example.test"] {
+    for query in [
+        "previous name",
+        "oldest name",
+        "346",
+        "75",
+        "HISTORY@example.test",
+    ] {
         assert_eq!(search_directory(&directory, query, Some("vip")), [&active]);
     }
+    assert!(search_directory(&directory, "61", Some("vip")).is_empty());
     assert!(search_directory(&directory, "oldest name", Some("archived-group")).is_empty());
     assert!(search_directory(&directory, "archived-group", None).is_empty());
     assert_eq!(directory_groups(&directory.clients).unwrap()["vip"], 1);

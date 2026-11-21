@@ -333,10 +333,19 @@ pub fn known_clients(store: &Store) -> Result<Vec<(String, String)>> {
     Ok(v)
 }
 
+// Keep in sync with CLIENT_IDENTITY_MAX_PROFILES in the shared client-merge contract.
+const CLIENT_IDENTITY_MAX_PROFILES: usize = 20;
+
 #[derive(Default)]
 pub struct ClientDirectory {
     pub clients: Vec<Client>,
     aliases: HashMap<String, Vec<Client>>,
+}
+
+impl ClientDirectory {
+    pub fn find(&self, id: &str) -> Option<&Client> {
+        self.clients.iter().find(|client| client.id == id)
+    }
 }
 
 /// The directory uses the same replica as booking and displays unsynced contact edits.
@@ -360,8 +369,7 @@ pub fn directory_clients(store: &Store) -> Result<ClientDirectory> {
         .iter()
         .map(|alias| {
             let mut id = alias.id.as_str();
-            // Cloud bounds identity chains at 20 profiles.
-            for _ in 0..20 {
+            for _ in 0..CLIENT_IDENTITY_MAX_PROFILES {
                 match parents.get(id) {
                     Some(parent) => id = parent,
                     None => return clients.contains_key(id).then(|| id.to_owned()),
@@ -437,12 +445,12 @@ pub fn search_directory<'a>(
 ) -> Vec<&'a Client> {
     let query = query.trim().to_lowercase();
     let digits: String = query.chars().filter(char::is_ascii_digit).collect();
-    let match_by_digits = digits.len() >= 3
+    let matches_active_digits = digits.len() >= 3
         || (!digits.is_empty()
             && query
                 .chars()
                 .all(|ch| ch.is_ascii_digit() || "+-(). ".contains(ch)));
-    let matches_contact = |client: &Client| {
+    let matches_contact = |client: &Client, match_by_digits| {
         client.name.to_lowercase().contains(&query)
             || client
                 .email
@@ -467,12 +475,13 @@ pub fn search_directory<'a>(
                 return false;
             }
             query.is_empty()
-                || matches_contact(client)
+                || matches_contact(client, matches_active_digits)
                 || groups.iter().any(|name| name.contains(&query))
-                || directory
-                    .aliases
-                    .get(&client.id)
-                    .is_some_and(|aliases| aliases.iter().any(&matches_contact))
+                || directory.aliases.get(&client.id).is_some_and(|aliases| {
+                    aliases
+                        .iter()
+                        .any(|alias| matches_contact(alias, digits.len() >= 3))
+                })
         })
         .collect()
 }

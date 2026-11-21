@@ -17,13 +17,6 @@ pub(super) struct Desk {
     message: Option<Key>,
 }
 
-fn mirrored_revision(clients: &[Client], id: &str) -> Option<u64> {
-    clients
-        .iter()
-        .find(|client| client.id == id)?
-        .controls_version
-}
-
 impl Desk {
     fn change(&self, cx: &App) -> Option<ClientControlsUpdate> {
         let current = self.current.as_ref()?;
@@ -164,7 +157,10 @@ impl Root {
         if desk.busy || desk.must_reload || desk.confirm_back {
             return;
         }
-        let newer_revision = mirrored_revision(&directory.contacts.clients, &desk.client_id)
+        let newer_revision = directory
+            .contacts
+            .find(&desk.client_id)
+            .and_then(|client| client.controls_version)
             .is_some_and(|version| version > current.version);
         if newer_revision {
             if desk.change(cx).is_some() {

@@ -85,12 +85,7 @@ impl Root {
                 intake.subject_visibility(&desk.contacts.clients);
             }
             if let Some(previous) = desk.form.as_ref().and_then(|form| form.previous.as_ref()) {
-                if desk
-                    .contacts
-                    .clients
-                    .iter()
-                    .all(|client| client.id != previous.id)
-                {
+                if desk.contacts.find(&previous.id).is_none() {
                     desk.form = None;
                     desk.controls = None;
                     desk.history.clear();
@@ -115,13 +110,7 @@ impl Root {
         let Overlay::Directory(desk) = &mut self.overlay else {
             return;
         };
-        let previous = id.and_then(|id| {
-            desk.contacts
-                .clients
-                .iter()
-                .find(|client| client.id == id)
-                .cloned()
-        });
+        let previous = id.and_then(|id| desk.contacts.find(id).cloned());
         if id.is_some() && previous.is_none() {
             return;
         }
