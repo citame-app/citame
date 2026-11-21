@@ -1,4 +1,8 @@
 import { expect, test } from "bun:test";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { getReleaseMigrationLedger } from "@sob/db";
 import { verifyPortableBooksyRehearsal } from "./booksy-portable-backup";
 
@@ -162,7 +166,7 @@ function operationalReceipt(move?: typeof operationalWrite) {
     tables: 94,
     archiveArtifactsVerified: 1053,
     portableRestorationVerified: true,
-    day: { date, calendarLines: 26 },
+    day: { date, calendarLines: 26, resourceAssignments: 26 },
     candidate: { calendarLines: 787, staff: 7, services: 187, frozenServices: 817 },
     canCutOver: false,
     operationalCopy: {
@@ -205,6 +209,13 @@ test("an operational write receipt verifies the archived day and live synchroniz
     dayCalendarLines: 26,
     canCutOver: false,
   });
+  expect(
+    verifyPortableBooksyRehearsal(
+      { ...receipt, candidate: { ...receipt.candidate, staff: 8 } },
+      operationalReference,
+      "operational-write",
+    ),
+  ).toMatchObject({ recoveryEvidenceVerified: true });
   for (const reference of [
     { ...operationalReference, date: "2026-11-19" },
     { ...operationalReference, snapshotHash: ciphertext },
@@ -235,6 +246,15 @@ test("the operational verifier requires preservation, permission and replica evi
   for (const partial of [
     { ...receipt, canCutOver: true },
     { ...receipt, day: { ...receipt.day, calendarLines: 25 } },
+    { ...receipt, day: { ...receipt.day, resourceAssignments: 0 } },
+    {
+      ...receipt,
+      day: { ...receipt.day, calendarLines: 0 },
+      operationalCopy: {
+        ...operationalCopy,
+        application: { ...operationalCopy.application, calendarLines: 0, serviceLines: 0 },
+      },
+    },
     { ...receipt, candidate: { ...receipt.candidate, staff: 6 } },
     ...[
       { ...operationalCopy, privateArchiveExcluded: false },
@@ -283,4 +303,38 @@ test("the operator explicitly selects the copy, write or scheduling evidence", (
   expect(() => verifyPortableBooksyRehearsal(write, operationalReference)).toThrow(
     "successful migrated rehearsal",
   );
+});
+
+test("the CLI verifies the selected scope using a private JSON receipt", async () => {
+  const folder = await mkdtemp(join(tmpdir(), "citame-rehearsal-verifier-"));
+  try {
+    const path = join(folder, "receipt.json");
+    const script = fileURLToPath(new URL("./booksy-portable-backup.ts", import.meta.url));
+    await writeFile(path, JSON.stringify(operationalReceipt(operationalWrite)), { mode: 0o600 });
+    const verify = (scope: string) =>
+      Bun.spawnSync([
+        process.execPath,
+        "--no-env-file",
+        script,
+        "verify-rehearsal",
+        path,
+        snapshot,
+        ciphertext,
+        date,
+        scope,
+      ]);
+    const verified = verify("operational-write");
+    expect(verified.exitCode).toBe(0);
+    expect(JSON.parse(verified.stdout.toString())).toMatchObject({
+      recoveryEvidenceVerified: true,
+      rehearsal: "operational-write",
+      canCutOver: false,
+    });
+    expect(verify("operational-copy").exitCode).toBe(1);
+    expect(verify("any").exitCode).toBe(1);
+    await chmod(path, 0o644);
+    expect(verify("operational-write").exitCode).toBe(1);
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
 });

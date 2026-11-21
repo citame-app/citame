@@ -1,10 +1,19 @@
 import { type SyncChange, syncPullResponseSchema } from "@sob/contracts";
 import { appointment, appointmentContext, type Database, service } from "@sob/db";
 import { eq, isNull, sql } from "drizzle-orm";
+import { z } from "zod";
 import type { Principal } from "../../auth/principal";
 import { pullChanges } from "../sync/pull";
 
 type AppointmentChange = Extract<SyncChange, { entity: "appointment"; op: "upsert" }>;
+
+export const recoveredReplicaEvidenceSchema = z.object({
+  calendarLines: z.number().int().nonnegative(),
+  reannouncedCalendarLines: z.number().int().nonnegative(),
+  serviceIndicatorsVerified: z.number().int().nonnegative(),
+  serviceColorsVerified: z.number().int().nonnegative(),
+  reannouncedServiceColors: z.number().int().nonnegative(),
+});
 
 const reviewer: Principal = {
   userId: "booksy-restore-probe",
@@ -140,5 +149,5 @@ export async function rehearseRecoveredReplica(db: Database, originalHead: numbe
     serviceIndicatorsVerified,
     serviceColorsVerified: replica.serviceColors.size,
     reannouncedServiceColors: replay.serviceColors.size,
-  };
+  } satisfies z.infer<typeof recoveredReplicaEvidenceSchema>;
 }

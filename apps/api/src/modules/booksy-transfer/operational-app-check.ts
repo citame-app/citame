@@ -8,6 +8,7 @@ import {
 import type { Database } from "@sob/db";
 import type { RedisClient } from "bun";
 import { sql } from "drizzle-orm";
+import { z } from "zod";
 import { createApp } from "../../app";
 import { createAccount } from "../../auth/accounts";
 import { createAuth } from "../../auth/auth";
@@ -23,10 +24,26 @@ import {
   linkOperationalRehearsalDevice,
   openRehearsalSyncStream,
 } from "./operational-desktop-check";
-import { rehearseNativeCalendarMove } from "./operational-move-check";
+import {
+  operationalMoveEvidenceSchema,
+  rehearseNativeCalendarMove,
+} from "./operational-move-check";
 import { fingerprint } from "./plan";
 
 export class OperationalAppProofError extends Error {}
+
+export const operationalApplicationEvidenceSchema = z.object({
+  ownerSignedIn: z.literal(true),
+  calendarLines: z.number().int().nonnegative(),
+  serviceLines: z.number().int().nonnegative(),
+  staffColumns: z.number().int().positive(),
+  anonymousCalendarDenied: z.literal(true),
+  customerCalendarDenied: z.literal(true),
+  customerBookingPaused: z.literal(true),
+  move: operationalMoveEvidenceSchema
+    .extend({ desktopDeviceLinkedAndRevoked: z.literal(true) })
+    .optional(),
+});
 
 async function profileSnapshot(db: Database, through: number, syntheticId: string | null = null) {
   const [row] = await db.execute<{
@@ -315,7 +332,7 @@ export async function rehearseNativeBooksyApp(
       customerCalendarDenied: true,
       customerBookingPaused: true,
       ...(move ? { move: { ...move, desktopDeviceLinkedAndRevoked: true } } : {}),
-    };
+    } satisfies z.infer<typeof operationalApplicationEvidenceSchema>;
   } finally {
     await app.shutdown();
   }

@@ -17,12 +17,27 @@ import {
   staffReservation,
 } from "@sob/db";
 import { asc, eq, sql } from "drizzle-orm";
+import { z } from "zod";
 import { IMPORTED_STAFF_UNIT_START } from "../availability/staff-reservations";
 import { IMPORTED_RESOURCE_UNIT_START } from "../resources/reservations";
 import { collectDesktopAppointments, openRehearsalSyncStream } from "./operational-desktop-check";
 import { fingerprint } from "./plan";
 
 export class OperationalMoveProofError extends Error {}
+
+export const operationalMoveEvidenceSchema = z.object({
+  movedThroughApi: z.literal(true),
+  staleVersionRejected: z.literal(true),
+  resourceAssignments: z.number().int().positive(),
+  calendarUpdated: z.literal(true),
+  replicaUpdated: z.literal(true),
+  deviceProofRenewed: z.literal(true),
+  desktopLiveChangeReceived: z.literal(true),
+  movedThroughDesktop: z.literal(true),
+  webLiveChangeReceived: z.literal(true),
+  desktopReplayIdempotent: z.literal(true),
+  staleDesktopVersionRejected: z.literal(true),
+});
 
 async function readMoveState(db: Database, id: string) {
   const [[visit], services, context, resources, staff] = await Promise.all([
@@ -373,7 +388,7 @@ export async function rehearseNativeCalendarMove(
         webLiveChangeReceived: true,
         desktopReplayIdempotent: true,
         staleDesktopVersionRejected: true,
-      };
+      } satisfies z.infer<typeof operationalMoveEvidenceSchema>;
     }
   }
   throw new OperationalMoveProofError(

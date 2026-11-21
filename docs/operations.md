@@ -200,6 +200,8 @@ bun src/scripts/booksy-portable-backup.ts verify-rehearsal \
 
 Keep the receipt private and obtain the reference hashes independently. The verifier checks internal consistency and the exact release ledger. Each scope requires its own evidence and preserves `canCutOver: false`.
 
+The local 2026-11-21 rehearsal verified all three receipts for the archived agenda on 2026-11-26 against the same 101-migration ledger. The operational receipts covered 787 imported lines and 26 lines that day. The verifier rejected the write receipt when checked against a different day.
+
 The local rehearsal `release-evidence-recovery.*` verified the 69 migrations up to `0068`. The command accepted that receipt for 2026-11-18 and rejected it for 2026-11-19. It also rejected a previous receipt that lacked the full ledger hash.
 
 The local rehearsals `review-email-ledger-recovery.*` and `next-day-0070-recovery.*` verified all 71 migrations through `0070` against the encrypted candidate backup for 2026-11-18 and 2026-11-19. The disposable databases restored the 94 original tables and verified the 1,053 archived source files. Rollback preserved the contents of all 98 migrated tables after the scheduling rehearsals. Each receipt covers its archived snapshot and date.

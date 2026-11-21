@@ -15,6 +15,7 @@ import { RedisClient } from "bun";
 import { z } from "zod";
 import {
   OperationalAppProofError,
+  operationalApplicationEvidenceSchema,
   rehearseNativeBooksyApp,
 } from "../modules/booksy-transfer/operational-app-check";
 import {
@@ -26,7 +27,10 @@ import { OperationalDesktopProofError } from "../modules/booksy-transfer/operati
 import { OperationalMoveProofError } from "../modules/booksy-transfer/operational-move-check";
 import { inspectNativeBooksy } from "../modules/booksy-transfer/operational-rehearsal";
 import { fingerprint } from "../modules/booksy-transfer/plan";
-import { rehearseRecoveredReplica } from "../modules/booksy-transfer/replica-check";
+import {
+  recoveredReplicaEvidenceSchema,
+  rehearseRecoveredReplica,
+} from "../modules/booksy-transfer/replica-check";
 import { rehearseRestoredSchedule } from "../modules/booksy-transfer/schedule-check";
 import { restoredStockEvidenceSchema } from "../modules/booksy-transfer/stock-check";
 import { privateWrite } from "../modules/booksy-transfer/vault";
@@ -58,7 +62,9 @@ const portableReceipt = z.strictObject({
   tables: size,
 });
 type PortableReceipt = z.infer<typeof portableReceipt>;
-type PortableProbe = "none" | "schedule" | "operational-copy" | "operational-write";
+const rehearsalScope = z.enum(["schedule", "operational-copy", "operational-write"]);
+type RehearsalScope = z.infer<typeof rehearsalScope>;
+type PortableProbe = "none" | RehearsalScope;
 
 const portableProbes = new Map<string, PortableProbe>([
   ["restore", "none"],
@@ -72,7 +78,6 @@ const rehearsalReference = z.object({
   encryptedSha256: sha256,
   date: z.iso.date(),
 });
-const rehearsalScope = z.enum(["schedule", "operational-copy", "operational-write"]);
 const migrationEvidence = z.object({
   applied: size,
   headTimestamp: size,
@@ -113,44 +118,14 @@ const scheduleReceipt = rehearsalBase.extend({
 });
 
 const operationalReceipt = rehearsalBase.extend({
-  day: rehearsalBase.shape.day.extend({ calendarLines: count }),
+  day: rehearsalBase.shape.day.extend({ calendarLines: count, resourceAssignments: count }),
   candidate: z.object({ calendarLines: count, staff: size, services: size, frozenServices: count }),
   operationalCopy: z.object({
     nativeTablesVerified: size,
     nativeTableContentSha256: sha256,
     migrations: migrationEvidence,
-    replica: z.object({
-      calendarLines: count,
-      reannouncedCalendarLines: count,
-      serviceIndicatorsVerified: count,
-      serviceColorsVerified: count,
-      reannouncedServiceColors: count,
-    }),
-    application: z.object({
-      ownerSignedIn: z.literal(true),
-      calendarLines: count,
-      serviceLines: count,
-      staffColumns: size,
-      anonymousCalendarDenied: z.literal(true),
-      customerCalendarDenied: z.literal(true),
-      customerBookingPaused: z.literal(true),
-      move: z
-        .object({
-          movedThroughApi: z.literal(true),
-          staleVersionRejected: z.literal(true),
-          resourceAssignments: size,
-          calendarUpdated: z.literal(true),
-          replicaUpdated: z.literal(true),
-          deviceProofRenewed: z.literal(true),
-          desktopLiveChangeReceived: z.literal(true),
-          movedThroughDesktop: z.literal(true),
-          webLiveChangeReceived: z.literal(true),
-          desktopReplayIdempotent: z.literal(true),
-          staleDesktopVersionRejected: z.literal(true),
-          desktopDeviceLinkedAndRevoked: z.literal(true),
-        })
-        .optional(),
-    }),
+    replica: recoveredReplicaEvidenceSchema,
+    application: operationalApplicationEvidenceSchema,
     privateArchiveExcluded: z.literal(true),
     originalArchiveUnchanged: z.literal(true),
     onlineBookingPaused: z.literal(true),
@@ -196,7 +171,7 @@ function verifyRehearsalBinding(
 export function verifyPortableBooksyRehearsal(
   receipt: unknown,
   reference: z.input<typeof rehearsalReference>,
-  scope: z.infer<typeof rehearsalScope> = "schedule",
+  scope: RehearsalScope = "schedule",
 ) {
   const expected = rehearsalReference.safeParse(reference);
   if (!expected.success)
@@ -209,8 +184,11 @@ export function verifyPortableBooksyRehearsal(
     if (
       (scope === "operational-write") !== Boolean(application.move) ||
       day.calendarLines > candidate.calendarLines ||
+      (application.move &&
+        (day.calendarLines === 0 ||
+          application.move.resourceAssignments > day.resourceAssignments)) ||
       application.calendarLines !== day.calendarLines ||
-      application.staffColumns !== candidate.staff ||
+      application.staffColumns > candidate.staff ||
       application.serviceLines < application.calendarLines ||
       application.serviceLines > candidate.frozenServices ||
       replica.calendarLines !== candidate.calendarLines ||
