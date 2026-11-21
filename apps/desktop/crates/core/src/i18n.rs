@@ -241,6 +241,7 @@ keys! {
     AccessEmailTaken => ("An account already uses this email.", "Ya existe una cuenta con este correo."),
     AccessCreationEmailUnavailable => ("Configure email delivery or choose an initial password.", "Configura el envío de correo o elige una contraseña inicial."),
     AccessCreationInvalid => ("Check the names, email and initial password requirements.", "Revisa los nombres, el correo y los requisitos de la contraseña inicial."),
+    AccessCreationRateLimited => ("Too many requests. Wait before submitting again.", "Demasiadas solicitudes. Espera antes de volver a enviar el alta."),
     AccessLoginEmail => ("Email", "Correo electrónico"),
     AccessInitialPassword => ("Initial password (8–128 characters)", "Contraseña inicial (8–128 caracteres)"),
     AccessUseInvitation => ("Use an email invitation instead", "Usar una invitación por correo"),

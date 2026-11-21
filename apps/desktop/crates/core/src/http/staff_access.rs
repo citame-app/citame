@@ -69,6 +69,18 @@ pub enum StaffAccountError {
     Transport(#[from] TransportError),
 }
 
+/// Fast form checks. The server validates the complete provisioning contract.
+pub fn valid_staff_login(email: &str, password: Option<&str>) -> bool {
+    email.split_once('@').is_some_and(|(local, domain)| {
+        !local.is_empty()
+            && !domain.contains('@')
+            && domain
+                .split_once('.')
+                .is_some_and(|(label, suffix)| !label.is_empty() && !suffix.is_empty())
+    }) && !email.chars().any(char::is_whitespace)
+        && password.is_none_or(|value| (8..=128).contains(&value.encode_utf16().count()))
+}
+
 impl HttpTransport {
     pub fn link_staff_account(
         &self,
@@ -128,6 +140,9 @@ impl HttpTransport {
         email: &str,
         password: Option<&str>,
     ) -> Result<ReviewedStaffAccess, StaffAccountError> {
+        if !valid_staff_login(email, password) {
+            return Err(StaffAccountError::InvalidDetails);
+        }
         if let Some(password) = password {
             body["password"] = serde_json::json!(password);
         }

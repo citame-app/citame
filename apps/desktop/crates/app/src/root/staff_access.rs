@@ -1,5 +1,5 @@
 use super::*;
-use sob_core::http::{AccessPreset, ReviewedStaffAccess, StaffAccountError};
+use sob_core::http::{AccessPreset, ReviewedStaffAccess, StaffAccountError, valid_staff_login};
 use sob_core::sync::TransportError;
 
 pub(super) struct Desk {
@@ -40,17 +40,7 @@ impl Credentials {
             .password
             .as_ref()
             .map(|field| field.read(cx).text().to_owned());
-        (email.split_once('@').is_some_and(|(local, domain)| {
-            !local.is_empty()
-                && !domain.contains('@')
-                && domain
-                    .split_once('.')
-                    .is_some_and(|(label, suffix)| !label.is_empty() && !suffix.is_empty())
-        }) && !email.chars().any(char::is_whitespace)
-            && password
-                .as_ref()
-                .is_none_or(|value| (8..=128).contains(&value.encode_utf16().count())))
-        .then_some((email, password))
+        valid_staff_login(&email, password.as_deref()).then_some((email, password))
     }
 }
 
@@ -318,6 +308,9 @@ impl Root {
                                     Key::AccessCreationEmailUnavailable
                                 }
                                 StaffAccountError::InvalidDetails => Key::AccessCreationInvalid,
+                                StaffAccountError::Transport(TransportError::RateLimited(_)) => {
+                                    Key::AccessCreationRateLimited
+                                }
                                 _ => Key::AccessCreationFailed,
                             });
                             cx.notify();
@@ -409,7 +402,9 @@ impl Root {
             .password
             .is_none()
             .then(|| cx.new(|cx| TextField::new(label, true, cx)));
-        desk.notice = None;
+        if desk.notice != Some(Key::AccessCreationReview) {
+            desk.notice = None;
+        }
         cx.notify();
     }
 
@@ -484,6 +479,7 @@ impl Root {
         if let Overlay::StaffAccess(desk) = &mut self.overlay
             && !desk.busy
             && let Some(draft) = &mut desk.creation
+            && draft.generation != generation
         {
             draft.generation = generation;
             desk.notice = None;
@@ -1031,10 +1027,15 @@ mod tests {
                 );
                 root.status.connectivity = Connectivity::Online;
                 root.open_staff_creation(cx);
+                if let Overlay::StaffAccess(desk) = &mut root.overlay {
+                    desk.notice = Some(Key::AccessCreationReview);
+                }
                 root.toggle_initial_password(cx);
+                root.review_staff_creation(cx);
                 let Overlay::StaffAccess(desk) = &root.overlay else {
                     panic!("No staff desk")
                 };
+                assert_eq!(desk.notice, Some(Key::AccessCreationReview));
                 let draft = desk.creation.as_ref().expect("No creation draft");
                 draft
                     .name
@@ -1060,6 +1061,13 @@ mod tests {
                     draft.credentials.password.as_ref().unwrap().read(cx).text(),
                     ""
                 );
+                draft.credentials.email.update(cx, |field, cx| {
+                    field.set_text("synthetic-staff@example.test", cx);
+                });
+                draft.credentials.password.as_ref().unwrap().update(cx, |field, cx| {
+                    field.set_text("synthetic replacement password", cx);
+                });
+                assert!(draft.credentials.values(cx).is_some());
                 root.submit_staff_creation(cx);
                 assert!(matches!(&root.overlay, Overlay::StaffAccess(desk) if !desk.busy));
                 root.review_staff_creation(cx);
