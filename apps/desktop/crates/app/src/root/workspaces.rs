@@ -238,6 +238,12 @@ impl Root {
                     cx.listener(|root, _, _, cx| root.open_salon_configuration(cx)),
                 ))
                 .child(self.button(
+                    "email-delivery",
+                    self.t(Key::EmailDelivery),
+                    Kind::Ghost,
+                    cx.listener(|root, _, _, cx| root.open_email_delivery(cx)),
+                ))
+                .child(self.button(
                     "booking-policy",
                     self.t(Key::BookingPolicy),
                     Kind::Ghost,

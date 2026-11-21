@@ -901,6 +901,48 @@ fn native_catalogue_edits_reach_web_and_respect_newer_values_through_the_proxy()
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_email_delivery_uses_the_owner_revision_through_the_proxy() {
+    use sob_core::http::email_delivery::{EmailProvider, SaveError, UpdateEmailDelivery};
+
+    let device = proxy_device();
+    let browser = Device::sign_in();
+    let original = device.transport.email_delivery().unwrap();
+    assert_eq!(original.settings, EmailProvider::Inherit);
+    assert!(!original.has_secret);
+    let change = UpdateEmailDelivery {
+        revision: original.revision,
+        settings: EmailProvider::Disabled,
+        secret: None,
+    };
+    let saved = device.transport.save_email_delivery(&change).unwrap();
+    assert_eq!(saved.settings, EmailProvider::Disabled);
+    assert!(!saved.has_secret);
+    let web = browser.rest_get("/admin/email-delivery");
+    assert_eq!(web["settings"], json!({"provider": "disabled"}));
+    assert_eq!(web["revision"], json!(saved.revision));
+    assert!(web.get("secret").is_none());
+    assert!(matches!(
+        device.transport.save_email_delivery(&change),
+        Err(SaveError::Conflict)
+    ));
+    assert!(device.transport.test_email_delivery().is_err());
+
+    let restore = UpdateEmailDelivery {
+        revision: saved.revision,
+        settings: original.settings,
+        secret: None,
+    };
+    let restored = device.transport.save_email_delivery(&restore).unwrap();
+    assert_eq!(restored.settings, EmailProvider::Inherit);
+    device.disconnect_and_check("/api/admin/email-delivery");
+    assert!(matches!(
+        device.transport.email_delivery(),
+        Err(TransportError::Unauthorized)
+    ));
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_policy_changes_reach_cloud_and_reject_old_reviews_through_the_proxy() {
     use sob_core::booking_policy::{LIVE_TOPIC, PolicyWriteError};
 

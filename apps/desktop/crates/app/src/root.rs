@@ -44,6 +44,7 @@ mod checkout;
 mod combinations;
 mod connection;
 mod directory;
+mod email_delivery;
 mod form_admin;
 mod inbox;
 mod intake_editor;
@@ -266,6 +267,7 @@ enum Overlay {
     None,
     Cloud(workspaces::CloudDesk),
     SalonConfiguration(Box<salon_configuration::Desk>),
+    EmailDelivery(Box<email_delivery::Desk>),
     BookingPolicy(Box<booking_policy::Desk>),
     IntakeForms(Box<form_admin::Desk>),
     New(Box<NewForm>),
@@ -748,6 +750,7 @@ impl Root {
         self.refresh_resource_pools(cx);
         self.refresh_combinations(cx);
         if reconnected {
+            self.load_email_delivery_after_reconnect(cx);
             self.refresh_weekly_conflicts_if_ready(cx);
             self.refresh_open_annotations(true, cx);
             self.refresh_private_record(cx);
@@ -2553,6 +2556,7 @@ impl Root {
             }
             Overlay::IntakeForms(_) => self.close_intake_forms(cx),
             Overlay::SalonConfiguration(_) => self.close_salon_configuration(cx),
+            Overlay::EmailDelivery(_) => self.dismiss_email_delivery(cx),
             Overlay::BookingPolicy(_) => self.dismiss_booking_policy(cx),
             Overlay::ServiceAssignments(_) => self.close_service_assignment(cx),
             Overlay::ServiceCatalog(_) => self.close_service_catalog(cx),
@@ -4034,6 +4038,9 @@ impl Render for Root {
                         }
                         Overlay::SalonConfiguration(desk) => {
                             Some(self.render_salon_configuration(desk, window.viewport_size(), cx))
+                        }
+                        Overlay::EmailDelivery(desk) => {
+                            Some(self.render_email_delivery(desk, window.viewport_size(), cx))
                         }
                         Overlay::BookingPolicy(desk) => {
                             Some(self.render_booking_policy(desk, window.viewport_size(), cx))

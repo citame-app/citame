@@ -141,6 +141,8 @@ export function requireAuth(
             (path === "/admin/services/reviewed" || path.endsWith("/resources/reviewed")
               ? "GET"
               : "PUT")) ||
+        (path === "/admin/email-delivery" && method !== "GET" && method !== "PUT") ||
+        (path === "/admin/email-delivery/test" && method !== "POST") ||
         (path === "/admin/settings/desktop" && method !== "GET" && method !== "PUT") ||
         (path === "/admin/settings/booking-policy/reviewed" &&
           method !== "GET" &&

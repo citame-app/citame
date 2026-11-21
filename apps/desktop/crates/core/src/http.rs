@@ -53,6 +53,7 @@ pub struct HttpTransport {
 }
 
 pub mod client_controls;
+pub mod email_delivery;
 mod inventory_documents;
 mod portfolio;
 mod service_catalog;
