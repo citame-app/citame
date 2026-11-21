@@ -157,6 +157,7 @@ jobs:
         env:
           E2E_OWNER_EMAIL: ci-owner@example.com
           E2E_OWNER_PASSWORD: correct horse battery staple
+          E2E_AUTH_SECRET: ${{ env.BETTER_AUTH_SECRET }}
       - name: Checkout and center management on the isolated fixture
         run: bun run --cwd apps/web e2e --output test-results/pos
         env:

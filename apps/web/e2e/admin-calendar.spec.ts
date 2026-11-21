@@ -93,6 +93,9 @@ test.describe("calendar", () => {
     await book(await asOwner(), { date, time: hh(h), client: `Drag ${stamp}` });
     await signInAs(page, OWNER_EMAIL, `/admin/calendar?date=${date}`);
     const block = page.getByRole("button", { name: new RegExp(`${label(h)}.* Drag ${stamp}`) });
+    await block.evaluate((element) =>
+      element.scrollIntoView({ block: "center", inline: "nearest" }),
+    );
     const box = (await block.boundingBox()) as {
       x: number;
       y: number;

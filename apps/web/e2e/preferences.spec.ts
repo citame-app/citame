@@ -8,19 +8,14 @@ test.describe("language", () => {
     await page.goto("/");
     await expect(page.locator("html")).toHaveAttribute("lang", "en");
     await page.getByRole("radio", { name: "Español" }).check({ force: true });
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText(
-      "Tu turno, reservado en un minuto.",
-    );
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Tu salón de belleza.");
     await expect(page.locator("html")).toHaveAttribute("lang", "es-AR");
     await page.reload();
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText(
-      "Tu turno, reservado en un minuto.",
-    );
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Tu salón de belleza.");
     await expect(page.locator("html")).toHaveAttribute("lang", "es-AR");
-    // Prices use the locale's currency formatting (the salon sells in ARS).
-    await expect(page.getByText(/\$\s?15\.000/).first()).toBeVisible();
     await page.goto("/book");
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Elige tus servicios");
+    await expect(page.getByText(/\$\s?15\.000/).first()).toBeVisible();
     await expectNoSeriousA11yViolations(page, "es-AR booking");
   });
 
@@ -33,7 +28,7 @@ test.describe("language", () => {
     await page.goto("/");
     await expect(page.locator("html")).toHaveAttribute("lang", "es-AR");
     await page.getByRole("radio", { name: "English" }).check({ force: true });
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Beauty, booked in a minute.");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Your beauty salon.");
     await context.close();
   });
 });
