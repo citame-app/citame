@@ -10,6 +10,7 @@ import {
   commissionPolicy,
   type Database,
   passRedemption,
+  syncChange,
 } from "@sob/db";
 import { and, count, desc, eq, gte, lt, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
@@ -257,6 +258,9 @@ export async function recordPayout(
       entityId: row.id,
       metadata: { staffId, amountCents: row.amountCents, reference: row.reference },
     });
+    // Order the refresh marker with the existing checkout and cash changes.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('sob.sync_change', 0))`);
+    await tx.insert(syncChange).values({ entity: "live_view", rowId: "commerce", op: "upsert" });
     return payoutView(row);
   });
 }

@@ -29,6 +29,7 @@ use crate::inventory::{
     StockReturnAttempt, StockWriteError,
 };
 use crate::model::*;
+use crate::reports::commissions::{CommissionStatement, CommissionViewer};
 use crate::reports::{
     ClientReport, Outcome, OutcomePage, ReportQuery, ReportSummary, financial::FinancialReport,
 };
@@ -1518,6 +1519,29 @@ impl HttpTransport {
                 &query.financial_path(),
                 Some("application/json"),
             )?,
+            false,
+        )
+    }
+
+    pub fn commission_viewer(&self) -> Result<CommissionViewer, TransportError> {
+        read_response(
+            self.get(&self.agent, "/me", Some("application/json"))?,
+            false,
+        )
+    }
+
+    pub fn commission_statement(
+        &self,
+        staff_id: &str,
+        page: u32,
+        payout_page: u32,
+    ) -> Result<CommissionStatement, TransportError> {
+        let staff_id = parse_id(staff_id)?;
+        let path = format!(
+            "/admin/accounting/staff/{staff_id}/statement?page={page}&payoutPage={payout_page}"
+        );
+        read_response(
+            self.get(&self.agent, &path, Some("application/json"))?,
             false,
         )
     }

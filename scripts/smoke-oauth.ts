@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert";
 import { createHash, generateKeyPairSync, randomBytes, sign } from "node:crypto";
 import {
   appointmentContextSchema,
+  commissionStatementSchema,
   DESKTOP_CLIENT_ID,
   DESKTOP_SIGN_IN_SCOPE,
   desktopDevicesSchema,
@@ -414,13 +415,22 @@ const receptionToken = await reception.renew();
 const officeToken = await office.renew();
 const durableReplica = await desktopRequest("/sync/pull?since=0&limit=500", receptionToken);
 assert.equal(durableReplica.status, 200, "The device token can read the native replica");
-assert(
-  syncPullResponseSchema
-    .parse(await durableReplica.json())
-    .changes.some((row) => row.entity === "appointment" && row.id === bookingId),
-  "The linked device must receive the synthetic booking",
-);
+const replicaChanges = syncPullResponseSchema.parse(await durableReplica.json()).changes;
+const professional = replicaChanges.find((row) => row.entity === "staff" && row.op === "upsert");
+assert(professional, "The linked owner receives professional calendars");
+assert(replicaChanges.some((row) => row.entity === "appointment" && row.id === bookingId));
 assert.equal((await desktopRequest("/mcp", receptionToken)).status, 401);
+
+const commissionPath = `/admin/accounting/staff/${professional.id}/statement?page=1&payoutPage=2`;
+const nativeCommission = await desktopRequest(commissionPath, receptionToken);
+const webCommission = await request(`${origin}/api${commissionPath}`, { headers: { cookie } });
+assert.equal(nativeCommission.status, 200);
+assert.equal(nativeCommission.headers.get("cache-control"), "private, no-store");
+assert.equal(webCommission.status, 200);
+assert.deepEqual(
+  commissionStatementSchema.parse(await nativeCommission.json()),
+  commissionStatementSchema.parse(await webCommission.json()),
+);
 
 const dateFilters = new URLSearchParams({ from: outcomes.date, to: outcomes.date });
 const summaryResponse = await desktopRequest(

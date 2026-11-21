@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
+import { syncPullResponseSchema } from "@sob/contracts";
 import { appointment, appointmentService } from "@sob/db";
 import { type Actor, actor, json, seedFixtures, setupApiTest } from "../../../test/helpers";
 
@@ -141,8 +142,17 @@ test("payout records are idempotent and later refunds carry a negative balance f
     idempotencyKey: key(),
   };
   const path = `/admin/accounting/staff/${staff.staffId}/payouts`;
+  const cursor = syncPullResponseSchema.parse(
+    await (await call(owner, "/sync/pull")).json(),
+  ).nextCursor;
   expect((await call(owner, path, "POST", payout)).status).toBe(201);
+  const refreshPath = `/sync/pull?since=${cursor}`;
+  const changes = syncPullResponseSchema.parse(await (await call(owner, refreshPath)).json());
+  expect(changes.refresh).toContain("commerce");
+  expect(changes.changes).toEqual([]);
   expect((await call(owner, path, "POST", payout)).status).toBe(201);
+  const replay = syncPullResponseSchema.parse(await (await call(owner, refreshPath)).json());
+  expect(replay.nextCursor).toBe(changes.nextCursor);
   expect((await call(owner, path, "POST", { ...payout, amountCents: 2000 })).status).toBe(409);
   expect(
     (await call(owner, path, "POST", { ...payout, idempotencyKey: key(), amountCents: 1 })).status,

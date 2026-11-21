@@ -131,6 +131,7 @@ export function requireAuth(
         ((path === "/admin/portfolio" || path.startsWith("/admin/portfolio/")) &&
           !portfolioAllowed) ||
         (path.startsWith("/admin/clients/") && !clientDetailAllowed) ||
+        (path.startsWith("/admin/accounting/") && method !== "GET") ||
         (path.startsWith("/admin/intake-forms") && !intakeAllowed) ||
         (path === "/admin/intake-forms" && method === "GET" && c.req.query("view") !== "summary") ||
         !DESKTOP_PROXY_ROUTE.test(path) ||
@@ -159,7 +160,6 @@ export function requireAuth(
           "/admin/whatsapp/templates",
           "/admin/commerce/unpaid",
           "/admin/commerce/capabilities",
-          "/admin/accounting/sales",
           "/admin/passes/eligible",
         ].includes(path) &&
           method !== "GET") ||

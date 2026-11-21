@@ -84,6 +84,41 @@ async function tokens(role: "owner" | "client" | "staff", emailName: string = ro
 const request = (path: string, access: unknown) =>
   t.app.request(path, { headers: { authorization: `Bearer ${String(access)}` } });
 
+test("desktop commissions reuse live statement permissions and never expose payout writes", async () => {
+  const owner = await tokens("owner", "commission-owner");
+  const staff = await tokens("staff", "commission-staff");
+  const colleague = await tokens("staff", "commission-colleague");
+  const target = `/admin/accounting/staff/${colleague.who.staffId}`;
+  const path = `${target}/statement?page=2&payoutPage=3`;
+  const own = await request(`/admin/accounting/staff/${staff.who.staffId}/statement`, staff.access);
+  expect(own.status).toBe(200);
+  expect((await request(path, staff.access)).status).toBe(403);
+  const manager = await t.db
+    .update(staffProfile)
+    .set({ accessPreset: "manager" })
+    .where(eq(staffProfile.id, staff.who.staffId ?? ""))
+    .returning();
+  expect(manager).toHaveLength(1);
+  for (const access of [owner.access, staff.access]) {
+    const result = await request(path, access);
+    expect(result.status).toBe(200);
+    expect(result.headers.get("cache-control")).toBe("private, no-store");
+    expect(await result.json()).toMatchObject({
+      staffId: colleague.who.staffId,
+      pagination: { page: 2 },
+      payoutPagination: { page: 3 },
+    });
+    expect(
+      (
+        await t.app.request(`${target}/payouts`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${access}` },
+        })
+      ).status,
+    ).toBe(403);
+  }
+});
+
 test("the desktop proxy permits only reviewed catalogue operations and enforces live permissions", async () => {
   const owner = await tokens("owner", "catalog-standards-owner");
   const manager = await tokens("staff", "catalog-standards-manager");

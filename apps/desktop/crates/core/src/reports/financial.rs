@@ -178,7 +178,7 @@ impl FinancialReport {
     }
 }
 
-fn csv_text(value: &str) -> String {
+pub(super) fn csv_text(value: &str) -> String {
     let prefix = if value.trim_start().starts_with(['=', '+', '-', '@']) {
         "'"
     } else {

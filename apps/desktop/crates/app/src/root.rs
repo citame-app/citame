@@ -39,6 +39,7 @@ mod booking_intake;
 mod booking_policy;
 mod calendar_date;
 mod calendar_overview;
+mod commissions;
 use calendar_overview::CalendarMode;
 mod cash;
 mod checkout;
@@ -294,6 +295,7 @@ enum Overlay {
     Unpaid(Box<unpaid::Desk>),
     Inventory(Box<inventory::Desk>),
     Reports(Box<reports::Desk>),
+    Commissions(Box<commissions::Desk>),
     CalendarDate(calendar_date::DatePicker),
     TeamShifts(Box<team_shifts::Desk>),
     StaffPortraits(Box<staff_portraits::Desk>),
@@ -738,6 +740,7 @@ impl Root {
         }
         self.update_inbox_connectivity(&status, cx);
         self.refresh_open_report(&status, cx);
+        self.refresh_commissions(&status, cx);
         if status.connectivity == Connectivity::Online {
             self.refresh_register_if_changed(cx);
             self.refresh_inventory(reconnected, cx);
@@ -1903,6 +1906,12 @@ impl Root {
                 self.t(Key::Reports),
                 Kind::Ghost,
                 cx.listener(|this, _, _, cx| this.open_reports(cx)),
+            ))
+            .child(self.button(
+                "commissions",
+                self.t(Key::Commissions),
+                Kind::Ghost,
+                cx.listener(|this, _, _, cx| this.open_commissions(cx)),
             ))
             .child(
                 self.button(
@@ -4090,6 +4099,9 @@ impl Render for Root {
                         }
                         Overlay::Reports(desk) => {
                             Some(self.render_reports(desk, window.viewport_size(), cx))
+                        }
+                        Overlay::Commissions(desk) => {
+                            Some(self.render_commissions(desk, window.viewport_size(), cx))
                         }
                         Overlay::CalendarDate(picker) => {
                             Some(self.render_calendar_date(picker, window.viewport_size(), cx))

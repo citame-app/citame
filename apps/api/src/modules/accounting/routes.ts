@@ -40,6 +40,7 @@ export function accountingRoutes(deps: AppDeps) {
     )
     .get("/staff/:id/statement", async (c) => {
       const query = parseOrThrow(pages, c.req.query());
+      c.header("Cache-Control", "private, no-store");
       return c.json(
         await commissionStatement(
           deps.db,

@@ -20,6 +20,11 @@ Duplicate requests with the same key return the existing payout. Concurrent payo
 
 Commission and payout histories paginate independently. CSV export explicitly exports the currently visible commission rows, including original and current adjusted amounts, integer cents, currency and dates. User-entered text is escaped to prevent spreadsheet formula execution.
 
+In Desktop, open **Commissions** to view both histories, the balance and the CSV for the current
+commission page. Owners and managers can select a professional. Other staff with the commerce
+permission see their own statement. Desktop refreshes the view on committed checkout or payout
+changes while connected. Use the web app to edit the rates or record payouts.
+
 ## Financial summary
 
 Dates are inclusive salon-local calendar dates, with a maximum range of 366 days. Collections and completed refunds are grouped by their confirmation time. The settled-sale totals, included tax, tips and known retail costs use full-settlement time. These are different measures: a partial collection can occur before the sale appears in settled totals, and a refund can occur in a later reporting period.
