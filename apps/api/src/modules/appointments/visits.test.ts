@@ -1,7 +1,15 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import { desktopVisitPreviewSchema, intakeRequirementsSchema, visitSchema } from "@sob/contracts";
-import { appointment, appointmentVisit, runMigrations, service, syncChange } from "@sob/db";
+import {
+  appointment,
+  appointmentVisit,
+  migrationsFolder,
+  runMigrations,
+  service,
+  syncChange,
+} from "@sob/db";
 import { asc, eq, gt, sql } from "drizzle-orm";
+import { readMigrationFiles } from "drizzle-orm/migrator";
 import {
   type Actor,
   actor,
@@ -18,7 +26,7 @@ let f: Fixtures;
 let owner: Actor;
 let client: Actor;
 beforeAll(async () => {
-  t = await setupApiTest();
+  t = await setupApiTest({ dbSuffix: "desktop_visits" });
 });
 afterAll(async () => {
   await t.close();
@@ -203,20 +211,39 @@ test("Desktop commits only the reviewed itinerary and never leaves a partially b
   expect(await t.db.select().from(appointmentVisit)).toHaveLength(1);
   expect(await t.db.select().from(appointment)).toHaveLength(3);
 
-  // Recreate the pre-0107 journal on this isolated database, with old visit rows
-  // already present and a replica cursor past their original changes.
+  // Model the exact older journal for the online guard, including when later
+  // migrations ship. Restore the complete suffix before replaying this one data migration.
   const [head] = await t.db
     .select({ seq: sql<number>`max(${syncChange.seq})`.mapWith(Number) })
     .from(syncChange);
   const cursor = head?.seq ?? 0;
   const before = await t.db.select().from(appointment).orderBy(asc(appointment.id));
-  await t.db.execute(
-    sql`delete from drizzle.__drizzle_migrations where created_at = 1795285620000`,
+  const migration = readMigrationFiles({ migrationsFolder }).find(
+    ({ folderMillis }) => folderMillis === 1795285620000,
   );
-  await expect(runMigrations(t.db, { online: true })).rejects.toThrow(
-    "Migration 0107 requires a maintenance upgrade",
-  );
-  await runMigrations(t.db);
+  if (!migration) throw new Error("Missing itinerary migration");
+  const suffix = await t.db.execute<{ id: number; hash: string; timestamp: string }>(sql`
+    delete from drizzle.__drizzle_migrations
+    where created_at >= ${migration.folderMillis}
+    returning id, hash, created_at::text as timestamp
+  `);
+  try {
+    await expect(runMigrations(t.db, { online: true })).rejects.toThrow(
+      "Migration 0107 requires a maintenance upgrade",
+    );
+  } finally {
+    await t.db.transaction(async (tx) => {
+      for (const row of suffix) {
+        await tx.execute(sql`
+          insert into drizzle.__drizzle_migrations (id, hash, created_at)
+          values (${row.id}, ${row.hash}, ${row.timestamp}::bigint)
+        `);
+      }
+    });
+  }
+  await t.db.transaction(async (tx) => {
+    for (const statement of migration.sql) await tx.execute(sql.raw(statement));
+  });
   const announced = await t.db
     .select({ id: syncChange.rowId })
     .from(syncChange)

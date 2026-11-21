@@ -273,7 +273,12 @@ describe("GET /sync/stream", () => {
       const first = await pull(t, owner, { since, reviewRequests: "1" });
       expect(first.refresh).toEqual(["review_requests"]);
       expect(first.changes).toEqual([]);
-      expect(first.nextCursor - since).toBe(1);
+      // The same transaction touches each subscribed view once, even
+      // when an older subscriber filters out the Marketing channel.
+      expect(first.nextCursor - since).toBe(2);
+      const both = await pull(t, owner, { since, reviewRequests: "1", marketingViews: "1" });
+      expect([...(both.refresh ?? [])].sort()).toEqual(["marketing", "review_requests"]);
+      expect(both.nextCursor).toBe(first.nextCursor);
       expect((await pull(t, owner, { since })).refresh).toBeUndefined();
       expect((await pull(t, manager, { since, reviewRequests: "1" })).refresh).toEqual([
         "review_requests",
