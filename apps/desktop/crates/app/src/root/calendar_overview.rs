@@ -1,3 +1,4 @@
+use super::team_calendar::WeekLayout;
 use super::*;
 use chrono::{Days, Months};
 use sob_core::team_shifts::week_start;
@@ -58,12 +59,18 @@ impl CalendarMode {
         self,
         store: &sob_core::store::Store,
         date: NaiveDate,
-        entire_team: bool,
+        week_layout: WeekLayout,
     ) -> sob_core::error::Result<Vec<DayView>> {
         match self {
             Self::Day => Ok(Vec::new()),
-            Self::Week if entire_team => calendar::team_calendar_week(store, date),
-            Self::Week => calendar::week_view(store, date),
+            Self::Week => {
+                let first = week_start(date)
+                    .ok_or_else(|| CoreError::Invalid("Invalid calendar week".into()))?;
+                match week_layout {
+                    WeekLayout::Team => calendar::team_calendar_week(store, first),
+                    WeekLayout::Timeline => calendar::week_view(store, first),
+                }
+            }
             Self::List => calendar::overview_days(store, date, 7),
             Self::Month => {
                 let (first, days) =
@@ -74,13 +81,7 @@ impl CalendarMode {
     }
 }
 
-pub(super) fn parse_calendar_date(input: &str) -> Option<NaiveDate> {
-    let input = input.trim();
-    let date = NaiveDate::parse_from_str(input, "%Y-%m-%d").ok()?;
-    (date.year() > 0 && input.len() == 10 && date.to_string() == input).then_some(date)
-}
-
-fn month_range(date: NaiveDate) -> Option<(NaiveDate, u32)> {
+pub(super) fn month_range(date: NaiveDate) -> Option<(NaiveDate, u32)> {
     let first = date.with_day(1)?;
     let last = first.checked_add_months(Months::new(1))?.pred_opt()?;
     let start = first.checked_sub_days(Days::new(first.weekday().num_days_from_monday().into()))?;
@@ -96,274 +97,19 @@ fn month_range(date: NaiveDate) -> Option<(NaiveDate, u32)> {
     ))
 }
 
-pub(super) struct DatePicker {
-    month: NaiveDate,
-    input: Entity<TextField>,
-    invalid: bool,
-    _subscription: Subscription,
-}
-
 impl Root {
-    pub(super) fn calendar_date_button(&self, cx: &mut Context<Self>) -> Stateful<gpui::Div> {
-        let label = if self.calendar_mode == CalendarMode::Month {
-            format!(
-                "{} {}",
-                i18n::month_short(self.locale, self.date.month()),
-                self.date.year()
-            )
-        } else {
-            i18n::date_label(self.locale, self.date)
-        };
-        self.button(
-            "calendar-date",
-            label,
-            Kind::Ghost,
-            cx.listener(|root, _, window, cx| root.open_calendar_date(window, cx)),
-        )
-        .debug_selector(|| "calendar-date".to_owned())
-        .px_2()
-    }
-
-    fn open_calendar_date(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !matches!(self.overlay, Overlay::None) {
-            return;
-        }
-        let input = cx.new(|cx| {
-            let mut field = TextField::new(self.t(Key::ShiftDatePlaceholder), false, cx);
-            field.set_text(&self.date.to_string(), cx);
-            field
-        });
-        let subscription = cx.subscribe(&input, |root: &mut Root, _, event, cx| match event {
-            FieldEvent::Submit => root.apply_calendar_date(cx),
-            FieldEvent::Changed => {
-                if let Overlay::CalendarDate(picker) = &mut root.overlay
-                    && picker.invalid
-                {
-                    picker.invalid = false;
-                    cx.notify();
-                }
-            }
-            _ => {}
-        });
-        input.read(cx).focus(window);
-        self.overlay = Overlay::CalendarDate(DatePicker {
-            month: self.date.with_day(1).unwrap_or(self.date),
-            input,
-            invalid: false,
-            _subscription: subscription,
-        });
-        cx.notify();
-    }
-
-    fn shift_picker_month(&mut self, direction: i64, cx: &mut Context<Self>) {
-        if let Overlay::CalendarDate(picker) = &mut self.overlay {
-            let month = CalendarMode::Month.shift(picker.month, direction);
-            if (1..=9999).contains(&month.year()) {
-                picker.month = month;
-                cx.notify();
-            }
-        }
-    }
-
-    fn apply_calendar_date(&mut self, cx: &mut Context<Self>) {
-        let Overlay::CalendarDate(picker) = &mut self.overlay else {
-            return;
-        };
-        if let Some(date) = parse_calendar_date(picker.input.read(cx).text()) {
-            self.select_calendar_date(date, cx);
-        } else {
-            picker.invalid = true;
-            cx.notify();
-        }
-    }
-
-    fn select_calendar_date(&mut self, date: NaiveDate, cx: &mut Context<Self>) {
-        if !matches!(self.overlay, Overlay::CalendarDate(_)) {
-            return;
-        }
-        let anchor = if self.calendar_mode == CalendarMode::Week {
-            week_start(date)
-        } else {
-            Some(date)
-        };
-        let Some(anchor) = anchor else {
-            if let Overlay::CalendarDate(picker) = &mut self.overlay {
-                picker.invalid = true;
-                cx.notify();
-            }
-            return;
-        };
-        self.overlay = Overlay::None;
-        self.slot_drag = None;
-        self.pending_local_today = false;
-        self.date = anchor;
-        self.reload(cx);
-    }
-
-    pub(super) fn render_calendar_date(
-        &self,
-        picker: &DatePicker,
-        viewport: gpui::Size<gpui::Pixels>,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
-        let today = self.calendar_now.with_timezone(&self.tz).date_naive();
-        let dates: Vec<_> = month_range(picker.month)
-            .map(|(first, days)| first.iter_days().take(days as usize).collect())
-            .unwrap_or_default();
-        let month = format!(
-            "{} {}",
-            i18n::month_short(self.locale, picker.month.month()),
-            picker.month.year()
-        );
-        let body = div()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .child(
-                div()
-                    .flex()
-                    .justify_between()
-                    .items_center()
-                    .child(
-                        div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(self.t(Key::CalendarJumpDate)),
-                    )
-                    .child(self.button(
-                        "close-calendar-date",
-                        self.t(Key::Close),
-                        Kind::Ghost,
-                        cx.listener(|root, _, _, cx| root.dismiss_overlay(cx)),
-                    )),
-            )
-            .child(
-                div()
-                    .flex()
-                    .justify_between()
-                    .items_center()
-                    .child(self.button(
-                        "calendar-date-prev",
-                        "<",
-                        Kind::Ghost,
-                        cx.listener(|root, _, _, cx| root.shift_picker_month(-1, cx)),
-                    ))
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child(month))
-                    .child(self.button(
-                        "calendar-date-next",
-                        ">",
-                        Kind::Ghost,
-                        cx.listener(|root, _, _, cx| root.shift_picker_month(1, cx)),
-                    )),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .flex()
-                            .gap_1()
-                            .children(dates.iter().take(7).map(|day| {
-                                div()
-                                    .flex_1()
-                                    .text_sm()
-                                    .text_center()
-                                    .text_color(theme::muted())
-                                    .child(i18n::weekday_short(self.locale, day.weekday()))
-                            })),
-                    )
-                    .children(dates.chunks(7).map(|week| {
-                        div().flex().gap_1().children(week.iter().map(|date| {
-                            let date = *date;
-                            if date.year() <= 0 || date.year() > 9999 {
-                                return div().flex_1().into_any_element();
-                            }
-                            self.button(
-                                SharedString::from(format!("calendar-date-pick-{date}")),
-                                date.day().to_string(),
-                                if date == self.date {
-                                    Kind::Primary
-                                } else {
-                                    Kind::Ghost
-                                },
-                                cx.listener(move |root, _, _, cx| {
-                                    root.select_calendar_date(date, cx)
-                                }),
-                            )
-                            .debug_selector(|| format!("calendar-date-pick-{date}"))
-                            .flex_1()
-                            .px_1()
-                            .py_1()
-                            .when(date == today && date != self.date, |day| {
-                                day.text_color(theme::accent())
-                            })
-                            .when(date.month() != picker.month.month(), |day| {
-                                day.opacity(0.65)
-                            })
-                            .into_any_element()
-                        }))
-                    })),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_end()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme::muted())
-                                    .child(self.t(Key::ShiftDate)),
-                            )
-                            .child(
-                                div()
-                                    .debug_selector(|| "calendar-date-input".to_owned())
-                                    .child(picker.input.clone()),
-                            ),
-                    )
-                    .child(self.button(
-                        "calendar-date-submit",
-                        self.t(Key::CalendarJumpDate),
-                        Kind::Primary,
-                        cx.listener(|root, _, _, cx| root.apply_calendar_date(cx)),
-                    )),
-            )
-            .when(picker.invalid, |body| {
-                body.child(
-                    div()
-                        .text_sm()
-                        .text_color(theme::conflict_fg())
-                        .child(self.t(Key::ShiftInvalidDate)),
-                )
-            });
-        self.modal_with_height(
-            body,
-            (viewport.width - px(32.)).clamp(px(280.), px(390.)),
-            (viewport.height - px(32.)).clamp(px(220.), px(540.)),
-            Some(cx),
-        )
-    }
-
     pub(super) fn includes_calendar_staff(&self, id: &str) -> bool {
         self.overview_staff.is_empty() || self.overview_staff.contains(id)
     }
 
     pub(super) fn preferred_calendar_staff(&self) -> Option<&str> {
-        if self.calendar_mode == CalendarMode::Week && !self.week_team {
+        if self.calendar_mode == CalendarMode::Week && !self.team_calendar_visible() {
             return (!self.week_staff_id.is_empty()).then_some(&self.week_staff_id);
         }
         if self.team_calendar_visible() {
             return self
                 .team_calendar_staff()
-                .find(|member| self.includes_calendar_staff(&member.id))
+                .find(|member| self.includes_team_calendar_staff(&member.id))
                 .map(|member| member.id.as_str());
         }
         self.staff
@@ -491,13 +237,17 @@ impl Root {
             )
     }
 
-    pub(super) fn render_calendar_overview(&self, cx: &mut Context<Self>) -> Stateful<gpui::Div> {
-        let today = self.calendar_now.with_timezone(&self.tz).date_naive();
-        let filter = calendar::OverviewFilter::new(
+    pub(super) fn overview_filter(&self, cx: &App) -> calendar::OverviewFilter {
+        calendar::OverviewFilter::new(
             self.overview_search.read(cx).text(),
             self.overview_status,
             self.overview_show_cancelled,
-        );
+        )
+    }
+
+    pub(super) fn render_calendar_overview(&self, cx: &mut Context<Self>) -> Stateful<gpui::Div> {
+        let today = self.calendar_now.with_timezone(&self.tz).date_naive();
+        let filter = self.overview_filter(cx);
         let content = if self.calendar_mode == CalendarMode::Month {
             self.render_month_overview(today, &filter, cx)
         } else {
@@ -562,7 +312,7 @@ impl Root {
         )
     }
 
-    fn open_overview_day(&mut self, day: NaiveDate, cx: &mut Context<Self>) {
+    pub(super) fn open_overview_day(&mut self, day: NaiveDate, cx: &mut Context<Self>) {
         self.pending_local_today = false;
         self.date = day;
         self.set_calendar_mode(CalendarMode::Day, cx);
@@ -839,58 +589,6 @@ mod tests {
             CalendarMode::List.shift(march, 1),
             "2026-03-16".parse().unwrap()
         );
-    }
-
-    #[gpui::test]
-    async fn date_picker_can_jump_by_text_or_day_and_preserves_the_active_calendar(
-        cx: &mut TestAppContext,
-    ) {
-        let (_directory, config) = desk();
-        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
-        cx.simulate_resize(gpui::size(px(1100.), px(780.)));
-        cx.run_until_parked();
-        let date_button = cx.debug_bounds("calendar-date").unwrap();
-        cx.simulate_click(date_button.center(), Default::default());
-        cx.run_until_parked();
-        let march = cx
-            .debug_bounds("calendar-date-pick-2026-03-18")
-            .expect("month grid");
-        cx.simulate_click(march.center(), Default::default());
-        cx.run_until_parked();
-        root.update(cx, |root, cx| {
-            assert_eq!(root.date.to_string(), "2026-03-18");
-            assert!(matches!(root.overlay, Overlay::None));
-            root.set_calendar_mode(CalendarMode::Week, cx);
-            root.week_team = true;
-            root.reload(cx);
-        });
-        cx.run_until_parked();
-        let date_button = cx.debug_bounds("calendar-date").unwrap();
-        cx.simulate_click(date_button.center(), Default::default());
-        cx.run_until_parked();
-        root.update(cx, |root, cx| {
-            let Overlay::CalendarDate(picker) = &root.overlay else {
-                panic!("expected date picker")
-            };
-            picker
-                .input
-                .update(cx, |field, cx| field.set_text("2026-02-30", cx));
-            root.apply_calendar_date(cx);
-            let Overlay::CalendarDate(picker) = &root.overlay else {
-                panic!("invalid date closed the picker")
-            };
-            assert!(picker.invalid);
-            let input = picker.input.clone();
-            input.update(cx, |field, cx| field.set_text("2026-11-19", cx));
-        });
-        cx.simulate_keystrokes("enter");
-        cx.run_until_parked();
-        root.update(cx, |root, _| {
-            assert!(matches!(root.overlay, Overlay::None));
-            assert_eq!(root.date.to_string(), "2026-11-16");
-            assert!(root.team_calendar_visible());
-            assert!(!root.pending_local_today);
-        });
     }
 
     #[gpui::test]

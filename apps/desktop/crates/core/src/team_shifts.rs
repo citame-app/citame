@@ -139,9 +139,9 @@ pub fn team_week(store: &Store, date: NaiveDate) -> Result<TeamWeek> {
                         let absences = staff_blocks
                             .iter()
                             .filter_map(|block| {
-                                let clipped_start = block.time_off.starts_at.max(start);
-                                let clipped_end = block.time_off.ends_at.min(end);
-                                (clipped_start < clipped_end).then_some(Absence {
+                                let (clipped_start, clipped_end) =
+                                    block.interval_within(start, end)?;
+                                Some(Absence {
                                     start: clipped_start,
                                     end: clipped_end,
                                     full_day: clipped_start == start && clipped_end == end,

@@ -36,6 +36,7 @@ mod billing;
 mod blocks;
 mod booking_intake;
 mod booking_policy;
+mod calendar_date;
 mod calendar_overview;
 use calendar_overview::CalendarMode;
 mod cash;
@@ -265,7 +266,7 @@ enum Overlay {
     Unpaid(Box<unpaid::Desk>),
     Inventory(Box<inventory::Desk>),
     Reports(Box<reports::Desk>),
-    CalendarDate(calendar_overview::DatePicker),
+    CalendarDate(calendar_date::DatePicker),
     TeamShifts(Box<team_shifts::Desk>),
     StaffPortraits(Box<staff_portraits::Desk>),
     StaffAccess(Box<staff_access::Desk>),
@@ -320,7 +321,8 @@ pub struct Root {
     horizontal_scroll: scrollbar::Scrollbar,
     vertical_scroll: scrollbar::Scrollbar,
     week_staff_id: String,
-    week_team: bool,
+    week_layout: team_calendar::WeekLayout,
+    week_working_only: bool,
     team_calendar_scroll: gpui::ScrollHandle,
     time_off_scope: String,
     calendar_scope: Option<String>,
@@ -404,7 +406,8 @@ impl Root {
             horizontal_scroll: scrollbar::Scrollbar::default(),
             vertical_scroll: scrollbar::Scrollbar::default(),
             week_staff_id: String::new(),
-            week_team: false,
+            week_layout: team_calendar::WeekLayout::Timeline,
+            week_working_only: false,
             team_calendar_scroll: gpui::ScrollHandle::new(),
             time_off_scope: String::new(),
             calendar_scope: None,
@@ -456,6 +459,10 @@ impl Root {
 
     fn open_start_view(&mut self, view: Option<&str>, window: &mut Window, cx: &mut Context<Self>) {
         match view {
+            Some("team-week") => {
+                self.week_layout = team_calendar::WeekLayout::Team;
+                self.set_calendar_mode(CalendarMode::Week, cx);
+            }
             Some("month") => self.set_calendar_mode(CalendarMode::Month, cx),
             Some("list") => self.set_calendar_mode(CalendarMode::List, cx),
             Some("new") => self.open_new(window, cx),
@@ -582,7 +589,7 @@ impl Root {
             .unwrap_or_else(|| Utc::now().with_timezone(&self.tz).date_naive());
         self.calendar_mode = CalendarMode::Day;
         self.week_staff_id.clear();
-        self.week_team = false;
+        self.week_layout = team_calendar::WeekLayout::Timeline;
         self.overview_staff.clear();
         self.overview_search
             .update(cx, |field, cx| field.set_text("", cx));
@@ -788,14 +795,11 @@ impl Root {
         self.tz = calendar::salon_tz(store).unwrap_or(Tz::UTC);
         if self.pending_local_today && store.salon_settings().ok().flatten().is_some() {
             self.date = Utc::now().with_timezone(&self.tz).date_naive();
-            if self.calendar_mode == CalendarMode::Week {
-                self.date -= Span::days(self.date.weekday().num_days_from_monday().into());
-            }
             self.pending_local_today = false;
         }
         self.period_views = self
             .calendar_mode
-            .period(store, self.date, self.week_team)
+            .period(store, self.date, self.week_layout)
             .unwrap_or_default();
         self.view = if self.calendar_mode == CalendarMode::Day {
             calendar::day_view(store, self.date).ok()
@@ -835,11 +839,8 @@ impl Root {
             .cloned()
             .collect();
         let visible_staff = self.team_calendar_visible().then(|| {
-            self.period_views
-                .first()
-                .into_iter()
-                .flat_map(|day| &day.columns)
-                .map(|column| column.staff.id.as_str())
+            self.team_calendar_staff()
+                .map(|staff| staff.id.clone())
                 .collect::<BTreeSet<_>>()
         });
         self.overview_staff.retain(|id| {
@@ -881,9 +882,6 @@ impl Root {
 
     fn today(&mut self, cx: &mut Context<Self>) {
         self.date = Utc::now().with_timezone(&self.tz).date_naive();
-        if self.calendar_mode == CalendarMode::Week {
-            self.date -= Span::days(self.date.weekday().num_days_from_monday().into());
-        }
         self.reload(cx);
     }
 
@@ -892,17 +890,14 @@ impl Root {
             return;
         }
         self.calendar_mode = mode;
-        if mode == CalendarMode::Week {
-            self.date -= Span::days(self.date.weekday().num_days_from_monday().into());
-        }
         self.reload(cx);
     }
 
     fn set_week_staff(&mut self, id: String, cx: &mut Context<Self>) {
         self.calendar_layout.take();
         self.week_staff_id = id;
-        if self.week_team {
-            self.week_team = false;
+        if self.team_calendar_visible() {
+            self.week_layout = team_calendar::WeekLayout::Timeline;
             self.reload(cx);
         } else {
             cx.notify();
@@ -925,7 +920,7 @@ impl Root {
                 .flat_map(|day| {
                     day.columns
                         .iter()
-                        .filter(|column| self.includes_calendar_staff(&column.staff.id))
+                        .filter(|column| self.includes_team_calendar_staff(&column.staff.id))
                         .map(|column| (day.date, column))
                 })
                 .collect()
@@ -1171,9 +1166,6 @@ impl Root {
     fn finish_new_booking(&mut self, starts_at: DateTime<Utc>, cx: &mut Context<Self>) {
         self.overlay = Overlay::None;
         self.date = starts_at.with_timezone(&self.tz).date_naive();
-        if self.calendar_mode == CalendarMode::Week {
-            self.date -= Span::days(self.date.weekday().num_days_from_monday().into());
-        }
         self.edited(cx);
     }
 
@@ -1704,7 +1696,7 @@ impl Root {
             .append_pair("date", &self.date.to_string())
             .append_pair("view", self.calendar_mode.route_name());
         if self.calendar_mode == CalendarMode::Week
-            && !self.week_team
+            && !self.team_calendar_visible()
             && !self.week_staff_id.is_empty()
         {
             query.append_pair("staff", &self.week_staff_id);
@@ -4403,17 +4395,18 @@ mod tests {
         win.update(cx, |root, _, cx| {
             root.date = "2026-03-11".parse().unwrap();
             root.set_calendar_mode(CalendarMode::Week, cx);
-            assert_eq!(root.date, "2026-03-09".parse::<NaiveDate>().unwrap());
+            assert_eq!(root.date.to_string(), "2026-03-11");
             let columns = root.calendar_columns();
             assert_eq!(columns.len(), 7);
-            assert_eq!(columns[0].0, root.date);
-            assert_eq!(columns[6].0, root.date + Span::days(6));
+            assert_eq!(columns[0].0.to_string(), "2026-03-09");
+            assert_eq!(columns[6].0.to_string(), "2026-03-15");
             root.shift_day(1, cx);
-            assert_eq!(root.date, "2026-03-16".parse::<NaiveDate>().unwrap());
+            assert_eq!(root.date.to_string(), "2026-03-18");
+            assert_eq!(root.calendar_columns()[0].0.to_string(), "2026-03-16");
             root.set_calendar_mode(CalendarMode::Day, cx);
             assert_eq!(root.calendar_columns().len(), 2);
             root.shift_day(-1, cx);
-            assert_eq!(root.date, "2026-03-15".parse::<NaiveDate>().unwrap());
+            assert_eq!(root.date.to_string(), "2026-03-17");
         })
         .unwrap();
     }

@@ -1,8 +1,14 @@
 use super::*;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum WeekLayout {
+    Team,
+    Timeline,
+}
+
 impl Root {
     pub(super) fn team_calendar_visible(&self) -> bool {
-        self.calendar_mode == CalendarMode::Week && self.week_team
+        self.calendar_mode == CalendarMode::Week && self.week_layout == WeekLayout::Team
     }
 
     pub(super) fn team_calendar_staff(&self) -> impl Iterator<Item = &Staff> {
@@ -13,11 +19,28 @@ impl Root {
             .map(|column| &column.staff)
     }
 
-    fn set_team_calendar(&mut self, team: bool, cx: &mut Context<Self>) {
-        if self.week_team == team || !matches!(self.overlay, Overlay::None) {
+    fn can_filter_weekly_roster(&self) -> bool {
+        self.svc
+            .current_session()
+            .is_some_and(|session| session.role == "owner")
+    }
+
+    pub(super) fn includes_team_calendar_staff(&self, id: &str) -> bool {
+        self.includes_calendar_staff(id)
+            && (!self.week_working_only
+                || !self.can_filter_weekly_roster()
+                || self.period_views.iter().any(|day| {
+                    day.columns
+                        .iter()
+                        .any(|column| column.staff.id == id && column.working == Some(true))
+                }))
+    }
+
+    fn set_week_layout(&mut self, layout: WeekLayout, cx: &mut Context<Self>) {
+        if self.week_layout == layout || !matches!(self.overlay, Overlay::None) {
             return;
         }
-        self.week_team = team;
+        self.week_layout = layout;
         self.slot_drag = None;
         self.team_calendar_scroll
             .set_offset(gpui::point(px(0.), px(0.)));
@@ -37,12 +60,12 @@ impl Root {
                 self.button(
                     "week-team",
                     self.t(Key::CalendarWeekTeam),
-                    if self.week_team {
+                    if self.team_calendar_visible() {
                         Kind::Primary
                     } else {
                         Kind::Ghost
                     },
-                    cx.listener(|root, _, _, cx| root.set_team_calendar(true, cx)),
+                    cx.listener(|root, _, _, cx| root.set_week_layout(WeekLayout::Team, cx)),
                 )
                 .debug_selector(|| "week-team".to_owned()),
             )
@@ -50,16 +73,37 @@ impl Root {
                 self.button(
                     "week-timeline",
                     self.t(Key::CalendarWeekTimeline),
-                    if self.week_team {
+                    if self.team_calendar_visible() {
                         Kind::Ghost
                     } else {
                         Kind::Primary
                     },
-                    cx.listener(|root, _, _, cx| root.set_team_calendar(false, cx)),
+                    cx.listener(|root, _, _, cx| root.set_week_layout(WeekLayout::Timeline, cx)),
                 )
                 .debug_selector(|| "week-timeline".to_owned()),
             )
-            .when(!self.week_team, |body| {
+            .when(
+                self.team_calendar_visible() && self.can_filter_weekly_roster(),
+                |body| {
+                    body.child(
+                        self.button(
+                            "team-calendar-working-only",
+                            self.t(Key::CalendarWorkingOnly),
+                            if self.week_working_only {
+                                Kind::Primary
+                            } else {
+                                Kind::Ghost
+                            },
+                            cx.listener(|root, _, _, cx| {
+                                root.week_working_only = !root.week_working_only;
+                                cx.notify();
+                            }),
+                        )
+                        .debug_selector(|| "team-calendar-working-only".to_owned()),
+                    )
+                },
+            )
+            .when(!self.team_calendar_visible(), |body| {
                 body.child(self.staff_chips(
                     &self.staff,
                     "week-staff",
@@ -76,11 +120,11 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let today = self.calendar_now.with_timezone(&self.tz).date_naive();
-        let filter = calendar::OverviewFilter::new(
-            self.overview_search.read(cx).text(),
-            self.overview_status,
-            self.overview_show_cancelled,
-        );
+        let filter = self.overview_filter(cx);
+        let has_staff = self.team_calendar_staff().next().is_some();
+        let has_visible_staff = self
+            .team_calendar_staff()
+            .any(|staff| self.includes_team_calendar_staff(&staff.id));
         let name_width = if viewport < px(700.) {
             px(115.)
         } else {
@@ -154,7 +198,7 @@ impl Root {
                 div().flex().flex_col().children(
                     self.team_calendar_staff()
                         .enumerate()
-                        .filter(|(_, staff)| self.includes_calendar_staff(&staff.id))
+                        .filter(|(_, staff)| self.includes_team_calendar_staff(&staff.id))
                         .map(|(index, staff)| {
                             let id = staff.id.clone();
                             let name = self
@@ -217,14 +261,13 @@ impl Root {
             .when(self.period_views.is_empty(), |body| {
                 body.child(div().p_4().child(self.t(Key::ShiftUnavailable)))
             })
-            .when(
-                !self.period_views.is_empty() && self.team_calendar_staff().next().is_none(),
-                |body| body.child(div().p_4().child(self.t(Key::NoStaff))),
-            )
-            .when(
-                !self.period_views.is_empty() && self.team_calendar_staff().next().is_some(),
-                |body| body.child(headers).child(rows),
-            )
+            .when(!self.period_views.is_empty() && !has_staff, |body| {
+                body.child(div().p_4().child(self.t(Key::NoStaff)))
+            })
+            .when(has_staff && !has_visible_staff, |body| {
+                body.child(div().p_4().child(self.t(Key::CalendarNoMatchingStaff)))
+            })
+            .when(has_visible_staff, |body| body.child(headers).child(rows))
     }
 
     fn render_team_calendar_cell(
@@ -244,7 +287,8 @@ impl Root {
             self.t(Key::CalendarBookedCount),
             &[("n", &rows.len().to_string())],
         );
-        let show = if column.blocks.is_empty() { 4 } else { 3 };
+        let preview_limit = if column.blocks.is_empty() { 4 } else { 3 };
+        let (from, to) = calendar::local_day_range(self.tz, day);
         div()
             .flex()
             .flex_col()
@@ -260,11 +304,10 @@ impl Root {
                         .child(self.t(Key::CalendarDayOff)),
                 )
             })
-            .children(column.blocks.iter().take(1).map(|block| {
+            .children(column.blocks.iter().filter_map(|block| {
                 let record = &block.time_off;
-                let (from, to) = calendar::local_day_range(self.tz, day);
-                let start = self.hhmm(record.starts_at.max(from));
-                let end = record.ends_at.min(to);
+                let (start, end) = block.interval_within(from, to)?;
+                let start = self.hhmm(start);
                 let end_label = if end == to {
                     "24:00".to_owned()
                 } else {
@@ -274,45 +317,47 @@ impl Root {
                     .reason
                     .as_deref()
                     .unwrap_or_else(|| self.t(Key::TimeOff));
-                div()
-                    .rounded_md()
-                    .px_2()
-                    .py_1()
-                    .bg(theme::line_soft())
-                    .text_sm()
-                    .text_color(theme::muted())
-                    .child(
-                        div()
-                            .truncate()
-                            .child(format!("{start}–{end_label} {label}")),
-                    )
-                    .debug_selector(|| format!("team-calendar-block-{day}-{}", record.id))
-                    .when(self.can_manage_block(&column.staff), |row| {
-                        let record = record.clone();
-                        row.child(
-                            self.button(
-                                SharedString::from(format!(
-                                    "team-calendar-edit-block-{day}-{}",
-                                    record.id
-                                )),
-                                self.t(Key::EditTimeOff),
-                                Kind::Ghost,
-                                cx.listener(move |root, _, _, cx| {
-                                    if matches!(root.overlay, Overlay::None) {
-                                        root.open_block(Some(record.clone()), day, cx);
-                                    }
-                                }),
-                            )
-                            .px_1(),
+                Some(
+                    div()
+                        .rounded_md()
+                        .px_2()
+                        .py_1()
+                        .bg(theme::line_soft())
+                        .text_sm()
+                        .text_color(theme::muted())
+                        .child(
+                            div()
+                                .truncate()
+                                .child(format!("{start}–{end_label} {label}")),
                         )
-                    })
-                    .when(block.pending, |block| {
-                        block.child(div().text_xs().child(self.t(Key::PendingBadge)))
-                    })
+                        .debug_selector(|| format!("team-calendar-block-{day}-{}", record.id))
+                        .when(self.can_manage_block(&column.staff), |row| {
+                            let record = record.clone();
+                            row.child(
+                                self.button(
+                                    SharedString::from(format!(
+                                        "team-calendar-edit-block-{day}-{}",
+                                        record.id
+                                    )),
+                                    self.t(Key::EditTimeOff),
+                                    Kind::Ghost,
+                                    cx.listener(move |root, _, _, cx| {
+                                        if matches!(root.overlay, Overlay::None) {
+                                            root.open_block(Some(record.clone()), day, cx);
+                                        }
+                                    }),
+                                )
+                                .px_1(),
+                            )
+                        })
+                        .when(block.pending, |block| {
+                            block.child(div().text_xs().child(self.t(Key::PendingBadge)))
+                        }),
+                )
             }))
             .children(
                 rows.iter()
-                    .take(show)
+                    .take(preview_limit)
                     .map(|item| self.overview_appointment(day, item, cx).flex_none()),
             )
             .child(
@@ -326,9 +371,7 @@ impl Root {
                         }
                         root.overview_staff.clear();
                         root.overview_staff.insert(staff_id.clone());
-                        root.pending_local_today = false;
-                        root.date = day;
-                        root.set_calendar_mode(CalendarMode::List, cx);
+                        root.open_overview_day(day, cx);
                     }),
                 )
                 .debug_selector(|| format!("team-calendar-open-{day}-{}", column.staff.id))
@@ -348,6 +391,7 @@ mod tests {
     const ANA: &str = "01a1d81e-0000-7000-8000-000000000001";
     const BEA: &str = "01a1d81e-0000-7000-8000-000000000002";
     const BLOCK: &str = "a00bd805-72d0-43eb-9461-6fc312bab882";
+    const SECOND_BLOCK: &str = "a00bd805-72d0-43eb-9461-6fc312bab883";
 
     #[gpui::test]
     async fn team_week_shows_the_local_roster_blocks_and_individual_drill_down(
@@ -367,7 +411,8 @@ mod tests {
                 change(21, "working_hours", "ana-tue", json!({"id":"ana-tue","staffId": ANA,"weekday":2,"startTime":"09:00","endTime":"18:00"})),
                 change(22, "date_shift", "ana-closed", json!({"id":"ana-closed","staffId": ANA,"date":"2026-03-10","ranges":[],"version":1,"updatedAt":"2026-03-09T12:00:00Z"})),
                 change(23, "time_off", BLOCK, json!({"id":BLOCK,"staffId":BEA,"startsAt":"2026-03-09T14:00:00Z","endsAt":"2026-03-09T15:00:00Z","reason":"Training","updatedAt":"2026-03-09T12:00:00Z"})),
-            ], 23).unwrap();
+                change(24, "time_off", SECOND_BLOCK, json!({"id":SECOND_BLOCK,"staffId":BEA,"startsAt":"2026-03-09T16:00:00Z","endsAt":"2026-03-09T17:00:00Z","reason":"Practice","updatedAt":"2026-03-09T12:00:00Z"})),
+            ], 24).unwrap();
             root.set_calendar_mode(CalendarMode::Week, cx);
         });
         cx.run_until_parked();
@@ -417,6 +462,19 @@ mod tests {
                 < title_before.left()
         );
 
+        let working = cx.debug_bounds("team-calendar-working-only").unwrap();
+        cx.simulate_click(working.center(), Default::default());
+        cx.run_until_parked();
+        root.update(cx, |root, _| {
+            assert_eq!(root.calendar_columns().len(), 7);
+            assert!(
+                root.calendar_columns()
+                    .iter()
+                    .all(|(_, column)| column.staff.id == ANA)
+            );
+        });
+        cx.simulate_click(working.center(), Default::default());
+        cx.run_until_parked();
         let staff = cx
             .debug_bounds("team-calendar-member-01a1d81e-0000-7000-8000-000000000002")
             .unwrap();
@@ -426,8 +484,27 @@ mod tests {
             assert!(!root.team_calendar_visible());
             assert_eq!(root.week_staff_id, BEA);
             assert_eq!(root.calendar_columns().len(), 7);
+            root.set_week_layout(WeekLayout::Team, cx);
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("team-calendar-block-2026-03-09-a00bd805-72d0-43eb-9461-6fc312bab883")
+                .is_some()
+        );
+        let cell = cx
+            .debug_bounds("team-calendar-open-2026-03-09-01a1d81e-0000-7000-8000-000000000002")
+            .unwrap();
+        cx.simulate_click(cell.center(), Default::default());
+        cx.run_until_parked();
+        root.update(cx, |root, cx| {
+            assert_eq!(root.calendar_mode, CalendarMode::Day);
+            assert_eq!(root.date.to_string(), "2026-03-09");
+            assert_eq!(root.calendar_columns().len(), 1);
+            assert_eq!(root.calendar_columns()[0].1.staff.id, BEA);
+            assert_eq!(root.calendar_columns()[0].1.blocks.len(), 2);
             root.svc.store.set_meta("calendar_scope", ANA).unwrap();
-            root.set_team_calendar(true, cx);
+            root.set_calendar_mode(CalendarMode::Week, cx);
+            root.set_week_layout(WeekLayout::Team, cx);
             assert_eq!(
                 root.team_calendar_staff()
                     .map(|staff| staff.id.as_str())

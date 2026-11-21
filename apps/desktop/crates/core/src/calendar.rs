@@ -108,6 +108,18 @@ pub struct CalendarBlock {
     pub pending: bool,
 }
 
+impl CalendarBlock {
+    pub fn interval_within(
+        &self,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+        let start = self.time_off.starts_at.max(from);
+        let end = self.time_off.ends_at.min(to);
+        (start < end).then_some((start, end))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct DayView {
     pub date: NaiveDate,

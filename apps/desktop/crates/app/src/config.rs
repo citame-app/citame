@@ -19,8 +19,7 @@ pub struct Config {
     pub locale: Locale,
     /// `SOB_START_DATE` (`YYYY-MM-DD`): open the calendar on that day instead of today.
     pub start_date: Option<NaiveDate>,
-    /// `SOB_START_VIEW` (`new`, `details` or `conflicts`): open that dialog at startup. A QA
-    /// convenience for looking at dialogs without clicking through (screenshots, demos).
+    /// `SOB_START_VIEW`: open a selected calendar view or dialog at startup for QA.
     pub start_view: Option<String>,
 }
 

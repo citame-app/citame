@@ -107,6 +107,8 @@ keys! {
     ViewDay => ("Day", "Día"),
     CalendarJumpDate => ("Go to date", "Ir a fecha"),
     CalendarWeekTeam => ("Team week", "Semana de equipo"),
+    CalendarWorkingOnly => ("Working staff only", "Solo profesionales con horario"),
+    CalendarNoMatchingStaff => ("No professionals match these filters.", "Ninguna profesional coincide con los filtros."),
     CalendarWeekTimeline => ("Staff timeline", "Cuadrícula individual"),
     CalendarDayOff => ("No working hours", "Sin horario"),
     ViewWeek => ("Week", "Semana"),
