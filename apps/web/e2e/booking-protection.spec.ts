@@ -23,6 +23,9 @@ for (const scheme of ["light", "dark"] as const) {
           ).ok(),
         ).toBe(true);
         await signInThroughUi(page, fixture.ownerEmail, "/admin/settings");
+        await page
+          .getByRole("link", { name: "Booking deposits & cancellation", exact: true })
+          .click();
         await page.getByLabel("Deposit (% or EUR)", { exact: true }).fill("25");
         await page
           .getByRole("checkbox", { name: "Require a booking deposit", exact: true })
@@ -163,8 +166,12 @@ for (const scheme of ["light", "dark"] as const) {
               data: { version: a.version, status: "cancelled" },
             });
         }
-        const p = await (await owner.get("/api/admin/settings/booking-policy")).json();
-        await owner.put("/api/admin/settings/booking-policy", { data: { ...p, enabled: false } });
+        const path = "/api/admin/settings/booking-policy/reviewed";
+        const current = await owner.get(path);
+        if (current.ok()) {
+          const { generation, policy } = await current.json();
+          await owner.put(path, { data: { generation, policy: { ...policy, enabled: false } } });
+        }
         await owner.dispose();
       }
     });
