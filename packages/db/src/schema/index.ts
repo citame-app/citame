@@ -35,5 +35,6 @@ export * from "./service";
 export * from "./service-combination";
 export * from "./staff";
 export * from "./staff-reservation";
+export * from "./stamps";
 export * from "./sync";
 export * from "./waitlist";

@@ -27,6 +27,7 @@ import { reputationEsAR } from "./reputation";
 import { schedulingEsAR } from "./scheduling";
 import { serviceOptionsEsAR } from "./service-options";
 import { socialEsAR } from "./social";
+import { stampsEsAR } from "./stamps";
 import { timedPromotionsEs } from "./timed-promotions";
 import { timingEs } from "./timing";
 import { waitlistEsAR } from "./waitlist";
@@ -66,6 +67,7 @@ export const esAR: Record<MessageKey, string> = {
   ...clientTransferEsAR,
   ...passesEsAR,
   ...loyaltyEsAR,
+  ...stampsEsAR,
   ...schedulingEsAR,
   ...serviceOptionsEsAR,
   ...waitlistEsAR,

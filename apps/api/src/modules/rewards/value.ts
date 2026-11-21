@@ -19,6 +19,7 @@ import type { Tx } from "../../tx";
 import { getCheckoutInTransaction, saleRow } from "../commerce/service";
 import { releaseCheckoutInventory } from "../inventory/reservations";
 import { getLoyaltyPolicy, lockRewardClient } from "./accounts";
+import { syncCheckoutStamp } from "./stamps";
 
 const floorRatio = (amount: number, part: number, total: number) =>
   total <= 0 ? 0 : Number((BigInt(amount) * BigInt(part)) / BigInt(total));
@@ -100,16 +101,20 @@ async function retainedValue(
   const cashRetained = Math.min(cashRequired, net);
   let eligibleOriginal = 0;
   let eligibleRetained = 0;
+  const serviceRetained = new Map<string, number>();
   for (const line of lines) {
     if (!["service", "product", "custom"].includes(line.kind)) continue;
     const r = byLine.get(line.id);
     const original = r?.allocatedCents ?? line.quantity * line.unitAmountCents - line.discountCents;
     eligibleOriginal += original;
-    eligibleRetained += r
+    const retained = r
       ? r.refundedAt
         ? 0
         : r.allocatedCents
       : floorRatio(original, cashRetained, cashRequired);
+    eligibleRetained += retained;
+    if (line.kind === "service" && line.serviceId)
+      serviceRetained.set(line.serviceId, (serviceRetained.get(line.serviceId) ?? 0) + retained);
   }
   const prepaidOriginal = [...byLine.values()].reduce((sum, r) => sum + r.allocatedCents, 0);
   const prepaidRetained = [...byLine.values()]
@@ -118,6 +123,7 @@ async function retainedValue(
   return {
     eligibleOriginal,
     eligibleRetained,
+    serviceRetained,
     totalOriginal: cashRequired + prepaidOriginal,
     totalRetained: cashRetained + prepaidRetained,
   };
@@ -291,6 +297,13 @@ export async function syncCheckoutRewards(
   }
   const client = await lockRewardClient(tx, sale.clientId, true);
   const value = await retainedValue(tx, sale);
+  await syncCheckoutStamp(
+    tx,
+    { id: sale.id, clientId: sale.clientId, appointmentId: sale.appointmentId },
+    value,
+    initial,
+    now,
+  );
   const [reward] = await tx
     .select()
     .from(checkoutReward)

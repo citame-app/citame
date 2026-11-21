@@ -778,6 +778,13 @@
       "when": 1795295700000,
       "tag": "0110_loyalty_live_view",
       "breakpoints": true
+    },
+    {
+      "idx": 111,
+      "version": "7",
+      "when": 1795298000000,
+      "tag": "0111_stamp_loyalty_cards",
+      "breakpoints": true
     }
   ]
 }

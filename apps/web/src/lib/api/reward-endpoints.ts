@@ -1,8 +1,11 @@
 import {
   type ApplyRewardInput,
+  adminStampCardsSchema,
   type BookingPromotionQuoteRequest,
   bookingPromotionQuoteSchema,
+  type ChangeStampCard,
   checkoutSchema,
+  type IssueStampCard,
   loyaltyStatementSchema,
   type PromotionInput,
   promotionSchema,
@@ -10,6 +13,10 @@ import {
   type RewardChoice,
   reviewedLoyaltyPolicySchema,
   rewardQuoteSchema,
+  type StampProgramInput,
+  stampCardSchema,
+  stampCardsSchema,
+  stampProgramSchema,
 } from "@sob/contracts";
 import { z } from "zod";
 import type { ApiClient } from "./client";
@@ -17,9 +24,23 @@ import type { CommerceMode } from "./commerce-endpoints";
 
 const base = (mode: CommerceMode) => (mode === "admin" ? "/admin/commerce" : "/me");
 export const loyaltyPolicyQueryKey = ["rewards", "policy"] as const;
+export const stampProgramQueryKey = ["rewards", "stamps", "program"] as const;
+export const stampCardsQueryKey = ["rewards", "stamps", "admin"] as const;
 const policyPath = "/admin/rewards/policy/reviewed";
 export function rewardEndpoints(client: ApiClient) {
   return {
+    stampProgram: (signal?: AbortSignal) =>
+      client.get("/admin/rewards/stamps/program", stampProgramSchema, { signal }),
+    saveStampProgram: (input: StampProgramInput) =>
+      client.put("/admin/rewards/stamps/program", input, stampProgramSchema),
+    stampCards: (clientId: string, signal?: AbortSignal) =>
+      client.get(`/admin/rewards/stamps/clients/${clientId}`, adminStampCardsSchema, { signal }),
+    myStampCards: (signal?: AbortSignal) =>
+      client.get("/me/loyalty-cards", stampCardsSchema, { signal }),
+    issueStampCard: (input: IssueStampCard) =>
+      client.post("/admin/rewards/stamps/cards", input, stampCardSchema),
+    changeStampCard: (id: string, input: ChangeStampCard) =>
+      client.post(`/admin/rewards/stamps/cards/${id}`, input, stampCardSchema),
     bookingQuote: (input: BookingPromotionQuoteRequest) =>
       client.post("/appointments/promotion-quote", input, bookingPromotionQuoteSchema),
     policy: (signal?: AbortSignal) =>

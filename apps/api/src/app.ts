@@ -48,6 +48,7 @@ import {
 } from "./modules/reputation/routes";
 import { resourceRoutes } from "./modules/resources/routes";
 import { rewardsAdminRoutes, rewardsClientRoutes } from "./modules/rewards/routes";
+import { stampAdminRoutes, stampClientRoutes } from "./modules/rewards/stamp-routes";
 import { serviceAdminRoutes } from "./modules/services/admin-routes";
 import { servicesRoutes } from "./modules/services/routes";
 import { settingsAdminRoutes } from "./modules/settings/admin-routes";
@@ -369,6 +370,7 @@ export function createApp(input: AppDeps): App {
   app.route("/marketing", marketingPublicRoutes(deps));
   app.route("/me", commerceClientRoutes(deps));
   app.route("/me", rewardsClientRoutes(deps));
+  app.route("/me", stampClientRoutes(deps));
   app.route("/me/waitlist", waitlistClientRoutes(deps));
   app.route("/me/intake", intakeSelfRoutes(deps));
   app.route("/me/reviews", reviewSelfRoutes(deps));
@@ -383,6 +385,7 @@ export function createApp(input: AppDeps): App {
   app.route("/admin/inventory", inventoryRoutes(deps));
   app.route("/admin/accounting", accountingRoutes(deps));
   app.route("/admin/rewards", rewardsAdminRoutes(deps));
+  app.route("/admin/rewards/stamps", stampAdminRoutes(deps));
   const waitlistAdmin = waitlistAdminRoutes(deps);
   app.route("/admin/waitlist/desk", waitlistAdmin);
   app.route("/admin/waitlist", waitlistAdmin);

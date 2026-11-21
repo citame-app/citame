@@ -26,6 +26,7 @@ import { reputationEn } from "./reputation";
 import { schedulingEn } from "./scheduling";
 import { serviceOptionsEn } from "./service-options";
 import { socialEn } from "./social";
+import { stampsEn } from "./stamps";
 import { timedPromotionsEn } from "./timed-promotions";
 import { timingEn } from "./timing";
 import { waitlistEn } from "./waitlist";
@@ -63,6 +64,7 @@ export const en = {
   ...clientTransferEn,
   ...passesEn,
   ...loyaltyEn,
+  ...stampsEn,
   ...schedulingEn,
   ...serviceOptionsEn,
   ...waitlistEn,

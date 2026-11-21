@@ -55,5 +55,6 @@ export * from "./service-pricing";
 export * from "./services";
 export * from "./staff";
 export * from "./staff-capacity";
+export * from "./stamps";
 export * from "./sync";
 export * from "./waitlist";

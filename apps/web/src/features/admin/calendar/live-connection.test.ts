@@ -287,6 +287,8 @@ test("reopening SSE refreshes active views after their last marker was already c
   expect([...liveQueryKeys(["loyalty"])]).toEqual([
     ["rewards", "policy"],
     ["rewards", "admin"],
+    ["rewards", "stamps", "program"],
+    ["rewards", "stamps", "admin"],
   ]);
   h.onRefresh.mockClear();
   h.source.onerror?.(new Event("error"));
