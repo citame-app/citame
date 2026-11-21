@@ -114,6 +114,50 @@ fn linking_staff_checks_the_review_and_uses_the_server_access_version() {
 }
 
 #[test]
+fn creating_staff_keeps_invitation_and_explicit_calendar_intent() {
+    let id = "0198f5a0-7b1c-7000-8000-000000000202";
+    let receipt = serde_json::json!({
+        "staffId": id, "userId": "created-account", "email": "new@example.test",
+        "role": "staff", "invited": true,
+        "reviewedAccess": {
+            "generation": "current", "accountId": "created-account", "accountEmail": "new@example.test",
+            "access": { "staffId": id, "preset": "professional", "version": 1, "accountRole": "staff" }
+        }
+    });
+    let (base, requests) = serve(vec![
+        http(
+            "409 Conflict",
+            &[],
+            r#"{"error":{"code":"invalid_state","message":"Duplicate"}}"#,
+        ),
+        http(
+            "503 Service Unavailable",
+            &[],
+            r#"{"error":{"code":"email_unavailable","message":"No email"}}"#,
+        ),
+        http("201 Created", &[], &receipt.to_string()),
+    ]);
+    let transport = signed_in(&base);
+    let create = || {
+        transport.create_staff_account("current", "New", Some("Calendar"), "new@example.test", None)
+    };
+    assert_eq!(create(), Err(StaffAccountError::EmailTaken));
+    assert_eq!(create(), Err(StaffAccountError::EmailUnavailable));
+    assert_eq!(create().unwrap().access.staff_id, id);
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    let submitted: serde_json::Value =
+        serde_json::from_str(requests[2].split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(
+        submitted,
+        serde_json::json!({
+            "name": "New", "displayName": "Calendar", "email": "new@example.test",
+            "newCalendar": { "generation": "current" }
+        })
+    );
+}
+
+#[test]
 fn waitlist_storage_rejection_is_distinct_from_a_rate_limited_retry() {
     let (base, _) = serve(vec![
         http(

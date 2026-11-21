@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import {
+  DESKTOP_CLIENT_ID,
+  DESKTOP_SIGN_IN_SCOPE,
+  staffAccountResponseSchema,
+} from "@sob/contracts";
+import {
   accountEmailOutbox,
   auditLog,
   clientProfile,
@@ -21,7 +26,9 @@ import {
   signIn,
 } from "../../test/helpers";
 import { expectNoMailTo, linkIn, mailTo, pathOf } from "../../test/mail";
+import { ORIGIN, obtainTokens } from "../../test/oauth";
 import { FakeEmailProvider } from "../notifications/providers/fake";
+import { desktopResource } from "../oauth/desktop";
 import { enqueueAccountEmail } from "./outbox";
 
 let t: Awaited<ReturnType<typeof setupApiTest>>;
@@ -338,6 +345,56 @@ describe("password reset", () => {
 });
 
 describe("staff invitations", () => {
+  test("a Desktop invitation signs the staff member into their newly created calendar", async () => {
+    const owner = await actor(t, "owner", "native-inviter@example.com");
+    const { tokens } = await obtainTokens(t.app, {
+      clientId: DESKTOP_CLIENT_ID,
+      cookie: owner.cookie,
+      scope: `${DESKTOP_SIGN_IN_SCOPE} offline_access`,
+      resource: desktopResource(ORIGIN),
+      redirectUri: "http://127.0.0.1:63281/callback",
+    });
+    const email = "native-staff-invite@example.com";
+    const response = await t.app.request("/admin/staff-accounts", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${tokens.access_token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        email,
+        name: "Invited professional",
+        displayName: "New professional calendar",
+        newCalendar: { generation: t.config.syncReplicaGeneration },
+      }),
+    });
+    expect(response.status).toBe(201);
+    const created = staffAccountResponseSchema.parse(await response.json());
+    expect(created.invited).toBe(true);
+    expect(created.reviewedAccess).toMatchObject({
+      accountId: created.userId,
+      access: { staffId: created.staffId, accountRole: "staff" },
+    });
+    const message = await mailTo(mail, email);
+    const landing = await t.app.request(pathOf(linkIn(message)), { headers: { origin: ORIGIN } });
+    expect(landing.status).toBe(302);
+    const token = new URL(landing.headers.get("location") ?? "", ORIGIN).searchParams.get("token");
+    expect(token).toBeString();
+    const password = "my synthetic staff password";
+    expect(
+      (await json(t.app, "/api/auth/reset-password", "POST", { token, newPassword: password }))
+        .status,
+    ).toBe(200);
+    const session = await signIn(t.app, email, password);
+    expect(session.res.status).toBe(200);
+    expect(await (await json(t.app, "/me", "GET", undefined, session.cookie)).json()).toMatchObject(
+      {
+        user: { role: "staff" },
+        staffId: created.staffId,
+      },
+    );
+  });
+
   test("an invited staff login enters the existing calendar with its original assignments", async () => {
     const owner = await actor(t, "owner", "boss@example.com");
     const [calendar] = await t.db.select().from(staffProfile).where(eq(staffProfile.id, f.anaId));

@@ -73,7 +73,7 @@ pub use service_catalog::{
     ServiceDetails,
 };
 pub use service_catalog_form::{CatalogForm, ServiceField};
-pub use staff_access::{AccessPreset, ReviewedStaffAccess, StaffAccess};
+pub use staff_access::{AccessPreset, ReviewedStaffAccess, StaffAccess, StaffAccountError};
 pub use staff_portraits::{PortraitDirectory, PortraitStaff, PortraitUpdate};
 mod weekly_hours;
 pub use weekly_hours::{WeeklyHours, WeeklyRange, parse_weekly_hours};

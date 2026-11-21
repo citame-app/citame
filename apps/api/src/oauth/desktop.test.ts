@@ -223,6 +223,7 @@ test("a Desktop owner can explicitly create a new staff calendar for the current
     (
       await post({
         ...body,
+        displayName: undefined,
         existingCalendar: {
           staffId: worker.who.staffId,
           version: 1,
@@ -231,6 +232,13 @@ test("a Desktop owner can explicitly create a new staff calendar for the current
       })
     ).status,
   ).toBe(400);
+  const missingEmail = await post({
+    ...body,
+    email: "native-calendar-missing-mail@example.com",
+    password: undefined,
+  });
+  expect(missingEmail.status).toBe(503);
+  expect(await missingEmail.json()).toMatchObject({ error: { code: "email_unavailable" } });
   const cursor = syncPullResponseSchema.parse(
     await (await request("/sync/pull", owner.access)).json(),
   ).headSeq;

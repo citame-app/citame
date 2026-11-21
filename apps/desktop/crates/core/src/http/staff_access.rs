@@ -57,6 +57,18 @@ impl ReviewedStaffAccess {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum StaffAccountError {
+    #[error("An account already uses this email")]
+    EmailTaken,
+    #[error("Staff invitations require an email provider")]
+    EmailUnavailable,
+    #[error("Invalid staff account details")]
+    InvalidDetails,
+    #[error(transparent)]
+    Transport(#[from] TransportError),
+}
+
 impl HttpTransport {
     pub fn link_staff_account(
         &self,
@@ -64,9 +76,9 @@ impl HttpTransport {
         name: &str,
         email: &str,
         password: Option<&str>,
-    ) -> Result<ReviewedStaffAccess, TransportError> {
+    ) -> Result<ReviewedStaffAccess, StaffAccountError> {
         if reviewed.account_id.is_some() {
-            return Err(TransportError::BadRequest("Calendar already linked".into()));
+            return Err(TransportError::BadRequest("Calendar already linked".into()).into());
         }
         let id = parse_id(&reviewed.access.staff_id)?.to_string();
         let body = serde_json::json!({
@@ -83,9 +95,9 @@ impl HttpTransport {
             || current.access.preset != reviewed.access.preset
             || current.access.version <= reviewed.access.version
         {
-            return Err(TransportError::Server(
-                "Unexpected linked staff account access".into(),
-            ));
+            return Err(
+                TransportError::Server("Unexpected linked staff account access".into()).into(),
+            );
         }
         Ok(current)
     }
@@ -97,7 +109,7 @@ impl HttpTransport {
         display_name: Option<&str>,
         email: &str,
         password: Option<&str>,
-    ) -> Result<ReviewedStaffAccess, TransportError> {
+    ) -> Result<ReviewedStaffAccess, StaffAccountError> {
         let mut body = serde_json::json!({
             "name": name,
             "email": email,
@@ -115,30 +127,32 @@ impl HttpTransport {
         generation: &str,
         email: &str,
         password: Option<&str>,
-    ) -> Result<ReviewedStaffAccess, TransportError> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct CreatedAccount {
-            user_id: String,
-            staff_id: String,
-            email: String,
-            role: String,
-            invited: bool,
-            reviewed_access: ReviewedStaffAccess,
-        }
-
+    ) -> Result<ReviewedStaffAccess, StaffAccountError> {
         if let Some(password) = password {
             body["password"] = serde_json::json!(password);
         }
-        let created: CreatedAccount = self.post_json("/admin/staff-accounts", &body)?;
+        let created: CreatedAccount = read_response_with(
+            self.send_json("/admin/staff-accounts", &body)?,
+            |status, retry_after, body| {
+                let error = serde_json::from_str::<serde_json::Value>(body).ok();
+                let code = error
+                    .as_ref()
+                    .and_then(|value| value.pointer("/error/code"))
+                    .and_then(serde_json::Value::as_str);
+                match (status, code) {
+                    (409, Some("invalid_state")) => StaffAccountError::EmailTaken,
+                    (503, Some("email_unavailable")) => StaffAccountError::EmailUnavailable,
+                    (400, Some("validation_error")) => StaffAccountError::InvalidDetails,
+                    _ => classify_status(status, retry_after, body, false).into(),
+                }
+            },
+        )?;
         if created.role != "staff"
             || created.invited != password.is_none()
             || created.user_id.is_empty()
             || created.email != email.to_lowercase()
         {
-            return Err(TransportError::Server(
-                "Could not verify the staff account".into(),
-            ));
+            return Err(TransportError::Server("Could not verify the staff account".into()).into());
         }
         let id = parse_id(&created.staff_id)?.to_string();
         let current = created.reviewed_access.verify(&id)?;
@@ -147,9 +161,7 @@ impl HttpTransport {
             || current.access.account_role.as_deref() != Some("staff")
             || current.generation != generation
         {
-            return Err(TransportError::Server(
-                "Unexpected staff account access".into(),
-            ));
+            return Err(TransportError::Server("Unexpected staff account access".into()).into());
         }
         Ok(current)
     }
@@ -191,4 +203,15 @@ impl HttpTransport {
         }
         Ok(saved)
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatedAccount {
+    user_id: String,
+    staff_id: String,
+    email: String,
+    role: String,
+    invited: bool,
+    reviewed_access: ReviewedStaffAccess,
 }
