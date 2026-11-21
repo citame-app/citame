@@ -1288,6 +1288,18 @@ impl Store {
         )?)
     }
 
+    pub fn client_controls_revision(&self, id: &str) -> Result<Option<u64>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT json_extract(json, '$.controlsVersion') FROM client WHERE id = ?1",
+                [id],
+                |row| row.get::<_, Option<u64>>(0),
+            )
+            .optional()?
+            .flatten())
+    }
+
     pub fn clients(&self) -> Result<Vec<Client>> {
         let mut v: Vec<Client> = self.rows("SELECT json FROM client")?;
         v.sort_by(|a, b| {

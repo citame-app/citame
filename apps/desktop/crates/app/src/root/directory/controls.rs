@@ -215,7 +215,7 @@ impl Root {
         desk.busy = true;
         desk.message = None;
         let id = desk.client_id.clone();
-        let requested_revision = mirrored_revision(&directory.clients, &id);
+        let requested_revision = self.svc.store.client_controls_revision(&id).ok().flatten();
         let identity = desk.identity.clone();
         let session = self.svc.session.clone();
         let saving = change.is_some();
@@ -245,7 +245,12 @@ impl Root {
                     return;
                 };
                 desk.busy = false;
-                let observed_revision = mirrored_revision(&directory.clients, &desk.client_id);
+                let observed_revision = root
+                    .svc
+                    .store
+                    .client_controls_revision(&desk.client_id)
+                    .ok()
+                    .flatten();
                 if let Ok(Some(current)) = result {
                     let retry = desk.apply_response(
                         current,
