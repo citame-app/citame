@@ -18,6 +18,7 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 - Desktop creates and edits rooms, equipment and stations with offline drafts and Cloud's future-reservation checks.
 - Desktop creates, reorders, updates and archives treatment combinations. Offline drafts retain the reviewed version and can be reconciled with changes from Cloud.
 - Desktop filters and sorts the product catalogue with the same options as Cloud, shows filtered stock totals and exports all matching products. Costs remain restricted to authorized accounts.
+- Desktop creates, edits, archives and reactivates inventory products with versioned offline proposals. Only product creation records opening stock.
 - Desktop can create services, variants and add-ons with professional assignments. New services use the persistent synchronization queue and are bookable once acknowledged by the server.
 - Desktop queues edits to existing service details offline. Cloud checks the version before applying the edit, and rejected drafts can be compared and resubmitted from Sync conflicts.
 

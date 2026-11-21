@@ -1150,16 +1150,25 @@ impl HttpTransport {
     }
 
     pub fn inventory_product(&self, id: uuid::Uuid) -> Result<Product, TransportError> {
-        let product: Product = read_response(
-            self.get(&self.agent, &format!("{PRODUCTS_PATH}/{id}"), None)?,
-            false,
-        )?;
+        self.lookup_inventory_product(id)?
+            .ok_or_else(|| TransportError::BadRequest("Product not found".into()))
+    }
+
+    pub fn lookup_inventory_product(
+        &self,
+        id: ProductId,
+    ) -> Result<Option<Product>, TransportError> {
+        let response = self.get(&self.agent, &format!("{PRODUCTS_PATH}/{id}"), None)?;
+        if response.status() == ureq::http::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let product: Product = read_response(response, false)?;
         if product.id != id {
             return Err(TransportError::Server(
                 "Unexpected inventory product".into(),
             ));
         }
-        Ok(product)
+        Ok(Some(product))
     }
 
     pub fn inventory_ledger(
@@ -1914,7 +1923,7 @@ impl HttpTransport {
         let resp = self.get(
             &self.agent,
             &format!(
-                "/sync/pull?since={since}&limit={limit}{catalog}&reviewRequests=1&intakeViews=1&bookingPolicy=1&resourceCatalogue=1{catalogue_snapshots}"
+                "/sync/pull?since={since}&limit={limit}{catalog}&reviewRequests=1&intakeViews=1&bookingPolicy=1&resourceCatalogue=1&inventoryAccess=1{catalogue_snapshots}"
             ),
             None,
         )?;

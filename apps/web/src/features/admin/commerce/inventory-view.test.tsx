@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderApp } from "../../../../test/render";
 import { InventoryView } from "./inventory-view";
 
@@ -124,6 +124,20 @@ test("owner records a stock delivery with a version fence and a reason", async (
     actorUserId: "stock-owner",
   });
   expect(calls[0]?.idempotencyKey).toEqual(expect.any(String));
+});
+
+test("a live inventory refresh preserves an open draft until the operator reviews it", async () => {
+  const { queryClient } = renderApp(<InventoryView role="owner" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Manage product" }));
+  const name = await screen.findByLabelText("Product name");
+  fireEvent.change(name, { target: { value: "Unsaved local name" } });
+  detailProduct = { ...product, version: 5, name: "Published from Desktop" };
+  await act(async () => queryClient.invalidateQueries({ queryKey: ["inventory"] }));
+  expect(name).toHaveValue("Unsaved local name");
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save product" })).toBeDisabled());
+  fireEvent.click(screen.getByRole("button", { name: "Discard drafts and load latest details" }));
+  expect(await screen.findByLabelText("Product name")).toHaveValue("Published from Desktop");
+  expect(calls).toHaveLength(0);
 });
 
 test("a restore keeps the pending adjustment through stock review and protects a catalog draft", async () => {

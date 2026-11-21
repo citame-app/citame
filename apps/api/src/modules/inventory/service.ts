@@ -18,12 +18,14 @@ import {
   pgErrorCode,
   retailProduct,
   retailProductPhoto,
+  staffProfile,
   stockMovement,
+  user,
 } from "@sob/db";
-import { and, asc, count, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, isNull, or, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
-import type { Principal } from "../../auth/principal";
+import { loadPrincipal, type Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
 
@@ -167,13 +169,41 @@ export async function listProducts(db: Database, query: ProductQuery, principal:
     { isolationLevel: "repeatable read", accessMode: "read only" },
   );
 }
-export async function createProduct(db: Database, input: CreateProductInput, principal: Principal) {
+async function requireCurrentInventoryWriter(tx: Tx, id: string) {
+  // Hold the account and profile locks in the order used by staff access changes.
+  const [account] = await tx
+    .select({ role: user.role })
+    .from(user)
+    .where(eq(user.id, id))
+    .for("share");
+  if (!account || account.role === "client")
+    throw new DomainError("forbidden", "Inventory access has changed");
+  if (account.role === "staff") {
+    await tx
+      .select({ id: staffProfile.id })
+      .from(staffProfile)
+      .where(and(eq(staffProfile.userId, id), isNull(staffProfile.deletedAt)))
+      .for("share");
+  }
+  const current = await loadPrincipal(tx, id);
+  if (!current) throw new DomainError("forbidden", "Inventory access has changed");
+  requirePermission(current, "writeInventory");
+  return current;
+}
+
+export async function createProduct(
+  db: Connection,
+  input: CreateProductInput,
+  principal: Principal,
+  requestedProductId?: string,
+) {
   requirePermission(principal, "writeInventory");
   try {
     return await db.transaction(async (tx) => {
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtextextended(${`product:${principal.userId}:${input.idempotencyKey}`}, 0))`,
       );
+      const writer = await requireCurrentInventoryWriter(tx, principal.userId);
       const { packageContent, ...baseInput } = input;
       const requestHash = fingerprint(packageContent ? input : baseInput);
       const [previous] = await tx
@@ -187,13 +217,16 @@ export async function createProduct(db: Database, input: CreateProductInput, pri
         );
       if (previous) {
         replay(previous, requestHash);
-        return productView(previous, principal);
+        if (requestedProductId && previous.id !== requestedProductId)
+          throw new DomainError("invalid_state", "This request belongs to another product");
+        return productView(previous, writer);
       }
       const { openingStock, idempotencyKey, ...fields } = baseInput;
       const [row] = await tx
         .insert(retailProduct)
         .values({
           ...fields,
+          ...(requestedProductId ? { id: requestedProductId } : {}),
           ...packageColumns(packageContent),
           sku: input.sku ?? `SKU-${crypto.randomUUID().toUpperCase()}`,
           costCents: input.costCents ?? null,
@@ -221,7 +254,7 @@ export async function createProduct(db: Database, input: CreateProductInput, pri
         entityId: row.id,
         metadata: { openingStock, sku: row.sku },
       });
-      return productView(row, principal);
+      return productView(row, writer);
     });
   } catch (error) {
     mapWriteError(error);
@@ -236,6 +269,7 @@ export async function updateProduct(
   requirePermission(principal, "writeInventory");
   try {
     return await db.transaction(async (tx) => {
+      const writer = await requireCurrentInventoryWriter(tx, principal.userId);
       const row = await productRow(tx, id, true);
       if (row.version !== input.version)
         throw new DomainError("version_conflict", "Product changed; reload before editing");
@@ -262,7 +296,7 @@ export async function updateProduct(
           ],
         },
       });
-      return productView(updated, principal);
+      return productView(updated, writer);
     });
   } catch (error) {
     mapWriteError(error);

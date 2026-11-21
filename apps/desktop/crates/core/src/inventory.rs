@@ -286,7 +286,7 @@ impl PackageContent {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Product {
     pub id: ProductId,

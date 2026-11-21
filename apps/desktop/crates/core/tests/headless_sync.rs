@@ -1966,6 +1966,114 @@ fn native_moderation_publishes_replies_and_hides_through_the_proxy() {
 
 #[test]
 #[ignore = "needs the synthetic product from the production smoke test"]
+fn native_product_creation_and_edits_resume_without_touching_stock_history() {
+    use sob_core::product_editor::{ProductDraft, ProductProposal, ProductReview};
+
+    let device = proxy_device();
+    let web = Device::sign_in();
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("product-catalogue.sqlite");
+    let mut store = Store::open(&path).unwrap();
+    sync::pull_all(&mut store, &*device.transport).unwrap();
+    assert!(store.can_queue_product_edits());
+    let generation = store.verified_reviewed_generation().unwrap();
+    let id = uuid::Uuid::now_v7();
+    let original = ProductDraft {
+        name: "Native offline product".into(),
+        opening_stock: 7,
+        price_cents: 1290,
+        description: Some("First line\nSecond line".into()),
+        ..Default::default()
+    };
+    assert!(
+        store
+            .queue_product_edit(&generation, id, None, original.clone(), None)
+            .unwrap()
+    );
+    drop(store);
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(store.pending_product_edits().unwrap()[0].fields, original);
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let confirmed = device.transport.inventory_product(id).unwrap();
+    assert_eq!(confirmed.stock_on_hand, 7);
+    assert_eq!(confirmed.description, original.description);
+    store.remember_reviewed_product(&confirmed).unwrap();
+    drop(store);
+    let mut store = Store::open(&path).unwrap();
+    let cached = store.reviewed_products().unwrap().remove(0);
+    assert_eq!(cached.id, id);
+    assert_eq!(cached.stock_on_hand, 7);
+    let review = ProductReview::new(&confirmed).unwrap();
+    let renamed = ProductDraft {
+        name: "Native offline rename".into(),
+        ..review.fields.clone()
+    };
+    assert!(
+        store
+            .queue_product_edit(&generation, id, Some(&review), renamed.clone(), None)
+            .unwrap()
+    );
+    let prefix = std::env::var("SOB_TEST_REST_PREFIX").unwrap_or_default();
+    ureq::patch(&format!(
+        "{}{prefix}/admin/inventory/products/{id}",
+        web.base
+    ))
+    .header("Cookie", &web.cookie)
+    .header("Origin", &web.base)
+    .content_type("application/json")
+    .send(json!({"version":review.version, "brand":"Cloud brand", "priceCents":1500}).to_string())
+    .unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .rejected,
+        1
+    );
+    let conflict = store.conflicts().unwrap().pop().unwrap();
+    let proposal: ProductProposal = serde_json::from_value(conflict.payload).unwrap();
+    let latest = ProductReview::new(&device.transport.inventory_product(id).unwrap()).unwrap();
+    let rebased = proposal
+        .fields
+        .rebase(&proposal.reviewed.unwrap().fields, &latest.fields, false)
+        .unwrap();
+    assert!(
+        store
+            .queue_product_edit(
+                &generation,
+                id,
+                Some(&latest),
+                rebased,
+                Some(&conflict.mutation_id)
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let result = web.rest_get(&format!("/admin/inventory/products/{id}"));
+    assert_eq!(result["name"], renamed.name);
+    assert_eq!(result["brand"], "Cloud brand");
+    assert_eq!(result["priceCents"], 1500);
+    assert_eq!(result["stockOnHand"], 7);
+    let movements = device.transport.inventory_movements(id, 1).unwrap();
+    assert_eq!(movements.pagination.total, 1);
+    assert_eq!(movements.movements[0].kind, StockKind::Opening);
+    assert!(store.conflicts().unwrap().is_empty());
+}
+
+#[test]
+#[ignore = "needs the synthetic product from the production smoke test"]
 fn native_inventory_filters_match_totals_and_the_full_csv_through_the_proxy() {
     use sob_core::inventory::{ProductActivity, ProductPageSize, ProductSort};
 

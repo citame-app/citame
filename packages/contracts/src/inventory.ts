@@ -1,8 +1,7 @@
 import { z } from "zod";
 import { clientPhotoUploadSchema } from "./client-photos";
 import { idempotencyKeySchema, moneyCentsSchema } from "./commerce";
-import { idSchema, instantSchema, pageInfoSchema } from "./common";
-import { syncGenerationSchema } from "./sync";
+import { idSchema, instantSchema, pageInfoSchema, syncGenerationSchema } from "./common";
 
 const quantity = z.number().int().min(0).max(999999999);
 const recordedPackageContent = z.strictObject({

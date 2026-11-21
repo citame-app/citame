@@ -3,6 +3,7 @@ import { appointmentSchema, createAppointmentBaseSchema } from "./appointments";
 import { calendarAppointmentSchema } from "./calendar";
 import { idSchema, instantSchema, LIMITS, localDateSchema, syncGenerationSchema } from "./common";
 import { dateShiftRangesSchema } from "./date-shifts";
+import { createProductSchema, updateProductSchema } from "./inventory";
 import {
   resourceCreateSchema,
   resourceSchema,
@@ -276,6 +277,18 @@ const combinationUpdate = z.object({
   payload: combinationUpdateSchema.extend({ id: idSchema }),
 });
 
+const productCreate = z.object({
+  ...envelope,
+  kind: z.literal("product.create"),
+  payload: createProductSchema.omit({ idempotencyKey: true }).extend({ id: idSchema }),
+});
+
+const productUpdate = z.object({
+  ...envelope,
+  kind: z.literal("product.update"),
+  payload: z.strictObject({ id: idSchema, changes: updateProductSchema }),
+});
+
 const staffUpdate = z.object({
   ...envelope,
   kind: z.literal("staff.update"),
@@ -313,6 +326,8 @@ export const syncMutationSchema = z.discriminatedUnion("kind", [
   resourceUpdate,
   combinationCreate,
   combinationUpdate,
+  productCreate,
+  productUpdate,
   staffUpdate,
   settingsUpdate,
 ]);
@@ -412,6 +427,7 @@ export const syncPullQuerySchema = z.object({
   resourcePools: z.enum(["full", "delta"]).optional(),
   combinationCatalogue: z.literal("1").optional(),
   combinations: z.enum(["full", "delta"]).optional(),
+  inventoryAccess: z.literal("1").optional(),
 });
 export type SyncPullQuery = z.infer<typeof syncPullQuerySchema>;
 
@@ -561,6 +577,7 @@ export const syncPullResponseSchema = z.object({
   clientDirectory: z.boolean().optional(),
   viewerRole: z.enum(["owner", "staff"]).optional(),
   viewerEditCatalogue: z.boolean().optional(),
+  viewerWriteInventory: z.boolean().optional(),
   calendarScope: z.union([z.literal("none"), z.literal("all"), idSchema]).optional(),
 });
 export type SyncPullResponse = z.infer<typeof syncPullResponseSchema>;

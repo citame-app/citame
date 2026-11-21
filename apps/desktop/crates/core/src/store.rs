@@ -139,6 +139,7 @@ struct PullMetadata<'a> {
     catalogue_access: Option<bool>,
     resource_pools: Option<&'a [crate::resource_pools::ManagedPool]>,
     combinations: Option<&'a [crate::combinations::ManagedCombination]>,
+    inventory_access: Option<bool>,
 }
 
 /// What `apply_push_results` did.
@@ -887,6 +888,7 @@ impl Store {
                 catalogue_access: page.viewer_edit_catalogue,
                 resource_pools: page.resource_pools.as_deref(),
                 combinations: page.combinations.as_deref(),
+                inventory_access: page.viewer_write_inventory,
             },
         )
     }
@@ -926,6 +928,9 @@ impl Store {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         Self::ensure_generation(&tx, metadata.generation)?;
+        if let Some(allowed) = metadata.inventory_access {
+            Self::apply_inventory_access_at(&tx, allowed)?;
+        }
         let mut received_pools = false;
         let mut received_combinations = false;
         if let Some(allowed) = metadata.catalogue_access {
@@ -1112,6 +1117,7 @@ impl Store {
             [CATALOG_COLORS_CACHED, SALON_CONFIGURATION_CACHE, SALON_CONFIGURATION_ACK, SALON_CONFIGURATION_UNAVAILABLE],
         )?;
         tx.execute("DELETE FROM local_booking_confirmation", [])?;
+        Self::apply_inventory_access_at(tx, false)?;
         Ok(())
     }
 
@@ -1560,6 +1566,8 @@ impl Store {
                                 | crate::resource_pools::UPDATE
                                 | crate::combinations::CREATE
                                 | crate::combinations::UPDATE
+                                | crate::product_editor::CREATE
+                                | crate::product_editor::UPDATE
                         )
                     {
                         Self::set_meta_at(
@@ -1578,6 +1586,14 @@ impl Store {
                 MutationResult::Rejected {
                     reason, message, ..
                 } => {
+                    if reason == "forbidden"
+                        && matches!(
+                            s.kind.as_str(),
+                            crate::product_editor::CREATE | crate::product_editor::UPDATE
+                        )
+                    {
+                        Self::apply_inventory_access_at(&tx, false)?;
+                    }
                     if reason == "forbidden"
                         && matches!(
                             s.kind.as_str(),
@@ -1689,6 +1705,7 @@ impl Store {
 mod service_assignments;
 pub use service_assignments::{AssignmentSnapshot, AssignmentWork, ServiceAssignment};
 mod combinations;
+mod product_editor;
 mod resource_pools;
 mod resource_requirements;
 mod service_creation;

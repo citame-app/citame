@@ -66,6 +66,57 @@ const createAppt = (overrides: Partial<{ id: string; staffId: string; startsAt: 
 const rows = async <T>(query: ReturnType<typeof sql>) =>
   (await t.db.execute(query)) as unknown as T[];
 
+test("native product creation and versioned editing preserve inventory and apply once", async () => {
+  const id = uuid();
+  const create = {
+    mutationId: mid(),
+    createdAt: new Date().toISOString(),
+    kind: "product.create",
+    payload: { id, name: "Native polish", priceCents: 1290, costCents: 450, openingStock: 7 },
+  };
+  const submit = async (operator: Actor, operation: typeof create | Record<string, unknown>) =>
+    (await push(t, operator, [operation])).body.results[0];
+  expect((await pull(t, owner, { inventoryAccess: "1" })).viewerWriteInventory).toBe(true);
+  expect((await pull(t, ana, { inventoryAccess: "1" })).viewerWriteInventory).toBe(false);
+  expect(await pull(t, owner)).not.toHaveProperty("viewerWriteInventory");
+  expect(await submit(ana, { ...create, mutationId: mid() })).toMatchObject({
+    status: "rejected",
+    reason: "forbidden",
+  });
+  const receipt = await submit(owner, create);
+  expect(receipt).toMatchObject({ status: "applied", appliedSeq: expect.any(Number) });
+  expect(await submit(owner, create)).toMatchObject({ status: "applied", replayed: true });
+  const path = `/admin/inventory/products/${id}`;
+  const read = async () => await (await json(t.app, path, "GET", undefined, owner.cookie)).json();
+  expect(await read()).toMatchObject({ id, stockOnHand: 7, stockReserved: 0, version: 1 });
+  const edit = {
+    ...create,
+    kind: "product.update",
+    mutationId: mid(),
+    payload: { id, changes: { version: 1, name: "Reviewed polish", active: false } },
+  };
+  expect(await submit(owner, edit)).toMatchObject({
+    status: "applied",
+    appliedSeq: expect.any(Number),
+  });
+  expect(await submit(owner, edit)).toMatchObject({ status: "applied", replayed: true });
+  expect(await submit(owner, { ...edit, mutationId: mid() })).toMatchObject({
+    status: "rejected",
+    reason: "conflict",
+  });
+  expect(await read()).toMatchObject({
+    id,
+    name: "Reviewed polish",
+    active: false,
+    stockOnHand: 7,
+    stockReserved: 0,
+    version: 2,
+  });
+  expect(
+    await (await json(t.app, `${path}/movements`, "GET", undefined, owner.cookie)).json(),
+  ).toMatchObject({ movements: [{ kind: "opening", quantityDelta: 7 }], pagination: { total: 1 } });
+});
+
 test("native service creation replays once and keeps its professional assignment", async () => {
   const id = uuid();
   const create = {

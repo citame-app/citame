@@ -73,8 +73,23 @@ export function InventoryView({
     revision: 0,
   });
   const [selected, setSelected] = useState<Product | "new" | null>(null);
+  const selectedProduct = selected === "new" ? null : selected;
+  const selectedId = selectedProduct?.id;
+  const currentProduct = useQuery({
+    queryKey: [
+      "inventory",
+      "product",
+      selectedId,
+      selectedProduct?.inventoryGeneration,
+      selectedProduct?.version,
+      readCosts,
+    ],
+    queryFn: () => api().inventory.get(selectedId ?? ""),
+    enabled: readInventory && Boolean(selectedId),
+    initialData: selectedProduct ?? undefined,
+  });
   const trigger = useRef<HTMLButtonElement | null>(null);
-  const viewedProduct = !writeInventory && selected !== "new" ? selected : null;
+  const viewedProduct = !writeInventory ? (currentProduct.data ?? selectedProduct) : null;
   const showDetail = Boolean(viewedProduct || (writeInventory && selected));
   const open = useMutation({
     mutationFn: (id: string) => api().inventory.get(id),
@@ -115,6 +130,19 @@ export function InventoryView({
   const pagination = products.data?.pagination;
   const totalPages = pagination ? Math.max(1, Math.ceil(pagination.total / pageSize)) : 1;
   if (!readInventory) return null;
+  if (
+    selectedId &&
+    currentProduct.error instanceof ApiError &&
+    [401, 403, 404].includes(currentProduct.error.status)
+  )
+    return (
+      <div className="space-y-4">
+        <Button variant="ghost" onClick={() => setSelected(null)}>
+          {t("inventory.back")}
+        </Button>
+        <ErrorState error={currentProduct.error} />
+      </div>
+    );
   if (selected && writeInventory)
     return (
       <div className="space-y-4">
@@ -128,6 +156,7 @@ export function InventoryView({
               : `${selected.id}-${selected.inventoryGeneration}-${selected.version}`
           }
           product={selected === "new" ? null : selected}
+          latest={currentProduct.data}
           userId={userId}
           onSaved={(product) =>
             setSelected((current) => (current === selected ? product : current))
@@ -540,10 +569,12 @@ const packageFields = {
 
 function ProductEditor({
   product,
+  latest,
   userId,
   onSaved,
 }: {
   product: Product | null;
+  latest?: Product;
   userId?: string;
   onSaved: (product: Product) => void;
 }) {
@@ -648,6 +679,13 @@ function ProductEditor({
     },
     onSuccess: changed,
   });
+  const newerProduct =
+    product &&
+    latest &&
+    (latest.inventoryGeneration !== product.inventoryGeneration || latest.version > product.version)
+      ? latest
+      : null;
+  const saving = save.isPending || archive.isPending;
   const fields = [
     ["name", "inventory.name"],
     ["sku", product ? "inventory.sku" : "pos.skuOptional"],
@@ -668,11 +706,26 @@ function ProductEditor({
   return (
     <div className="space-y-6">
       <UnsavedGuard dirty={dirty} />
+      {newerProduct && (
+        <div className="flex flex-wrap items-center gap-2">
+          <p role="status" className="text-sm text-muted">
+            {t("inventory.detailChanged")}
+          </p>
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={saving}
+            onClick={() => onSaved(newerProduct)}
+          >
+            {t("inventory.discardAndReload")}
+          </Button>
+        </div>
+      )}
       <form
         className="grid gap-4 rounded-xl border border-line bg-surface p-4 sm:grid-cols-2"
         onSubmit={(e) => {
           e.preventDefault();
-          if (save.isPending || archive.isPending || !online) return;
+          if (saving || newerProduct || !online) return;
           if (!values.packageQuantity.trim() && !values.packageUnit.trim()) {
             save.mutate(null);
             return;
@@ -785,13 +838,13 @@ function ProductEditor({
             {t("inventory.error")}
           </p>
         )}
-        <Button type="submit" disabled={!online || save.isPending || archive.isPending}>
+        <Button type="submit" disabled={!online || saving || Boolean(newerProduct)}>
           {t("inventory.save")}
         </Button>
         {product && (
           <Button
             variant="secondary"
-            disabled={!online || archive.isPending || save.isPending}
+            disabled={!online || saving || Boolean(newerProduct)}
             onClick={() => archive.mutate()}
           >
             {t(product.active ? "inventory.archive" : "inventory.restore")}

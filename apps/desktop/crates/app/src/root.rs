@@ -726,6 +726,7 @@ impl Root {
                 && !self.preserve_open_resource_requirements()
                 && !self.preserve_open_resource_pools(generation.as_deref())
                 && !self.preserve_open_combinations(generation.as_deref())
+                && !self.preserve_open_product_form(generation.as_deref())
             {
                 self.overlay = Overlay::None;
             }
@@ -3309,6 +3310,9 @@ impl Root {
                 sob_core::combinations::CREATE | sob_core::combinations::UPDATE => {
                     Key::CombinationManagement
                 }
+                sob_core::product_editor::CREATE | sob_core::product_editor::UPDATE => {
+                    Key::InventoryProductDetails
+                }
                 _ => Key::ConflictOther,
             });
             let when = c
@@ -3502,6 +3506,23 @@ impl Root {
                                     Kind::Primary,
                                     cx.listener(move |root, _, _, cx| {
                                         root.open_combinations(Some(&id), cx)
+                                    }),
+                                ))
+                            },
+                        )
+                        .when(
+                            matches!(
+                                c.kind.as_str(),
+                                sob_core::product_editor::CREATE | sob_core::product_editor::UPDATE
+                            ) && self.svc.store.can_queue_product_edits(),
+                            |row| {
+                                let id = c.mutation_id.clone();
+                                row.child(self.button(
+                                    ("review-product", i),
+                                    self.t(Key::InventoryReviewLatest),
+                                    Kind::Primary,
+                                    cx.listener(move |root, _, _, cx| {
+                                        root.open_product_conflict(&id, cx)
                                     }),
                                 ))
                             },

@@ -9,6 +9,7 @@ use sob_core::sync::TransportError;
 
 mod catalogue;
 mod ledger;
+mod product_form;
 mod stock;
 
 pub(super) struct Desk {
@@ -21,6 +22,7 @@ pub(super) struct Desk {
     ledger: Option<ledger::Panel>,
     product: Option<Product>,
     editor: Option<Editor>,
+    product_form: Option<Box<product_form::Panel>>,
     stock: Option<stock::Panel>,
     request: Option<Arc<()>>,
     saving: bool,
@@ -77,6 +79,13 @@ impl Desk {
     }
 
     pub(super) fn dismiss_editor(&mut self, cx: &App) -> bool {
+        if let Some(form) = &mut self.product_form {
+            if form.dismiss(cx) {
+                self.product_form = None;
+                self.error = None;
+            }
+            return true;
+        }
         if self.stock.is_some() {
             if !self.saving {
                 self.request = None;
@@ -179,6 +188,11 @@ fn text_input(value: &str, placeholder: &'static str, cx: &mut Context<TextField
 
 impl Root {
     pub(super) fn open_inventory(&mut self, cx: &mut Context<Self>) {
+        self.prepare_inventory(cx);
+        self.request_inventory(Action::Catalog(ProductQuery::default(), 1), cx);
+    }
+
+    fn prepare_inventory(&mut self, cx: &mut Context<Self>) {
         let prompt = self.t(Key::InventorySearch);
         let search = cx.new(|cx| TextField::new(prompt, false, cx));
         let subscription = cx.subscribe(&search, |root, _, event, cx| {
@@ -197,6 +211,7 @@ impl Root {
             ledger: None,
             product: None,
             editor: None,
+            product_form: None,
             stock: None,
             request: None,
             saving: false,
@@ -208,7 +223,6 @@ impl Root {
             retry: None,
             backoff: Backoff::default(),
         }));
-        self.request_inventory(Action::Catalog(query, 1), cx);
     }
 
     fn page_inventory(&mut self, next: bool, cx: &mut Context<Self>) {
@@ -231,6 +245,7 @@ impl Root {
     fn reload_inventory(&mut self, cx: &mut Context<Self>) {
         if let Overlay::Inventory(desk) = &self.overlay
             && desk.editor.is_none()
+            && desk.product_form.is_none()
             && desk.stock.is_none()
         {
             self.request_inventory(desk.reload_action(), cx);
@@ -253,6 +268,7 @@ impl Root {
         if self.svc.status().connectivity == Connectivity::Online
             && desk.request.is_none()
             && desk.editor.is_none()
+            && desk.product_form.is_none()
             && (reconnected
                 || match &desk.retry {
                     Some((deadline, _)) => Instant::now() >= *deadline,
@@ -476,6 +492,8 @@ impl Root {
                     Ok(Loaded::Product(mut product)) => {
                         if stale_access {
                             product.cost_cents = None;
+                        } else if product.can_manage {
+                            let _ = root.svc.store.remember_reviewed_product(&product);
                         }
                         if reviewing && product.can_manage {
                             if let Some(editor) = desk.editor.as_mut() {
@@ -632,7 +650,10 @@ impl Root {
                     .child(title.to_owned()),
             )
             .when(
-                ready && desk.editor.is_none() && desk.stock.is_none(),
+                ready
+                    && desk.editor.is_none()
+                    && desk.stock.is_none()
+                    && desk.product_form.is_none(),
                 |header| {
                     header.child(self.button(
                         "inventory-refresh",
@@ -650,12 +671,16 @@ impl Root {
                     cx.listener(|root, _, _, cx| root.dismiss_overlay(cx)),
                 ))
             });
-        let content = match &desk.product {
-            Some(product) => self.render_inventory_product(desk, product, ready, cx),
-            None => match &desk.ledger {
-                Some(panel) => self.render_inventory_ledger(panel, ready, cx),
-                None => self.render_inventory_catalog(desk, ready, cx),
-            },
+        let content = if let Some(form) = &desk.product_form {
+            self.render_product_form(form, cx)
+        } else {
+            match &desk.product {
+                Some(product) => self.render_inventory_product(desk, product, ready, cx),
+                None => match &desk.ledger {
+                    Some(panel) => self.render_inventory_ledger(panel, ready, cx),
+                    None => self.render_inventory_catalog(desk, ready, cx),
+                },
+            }
         };
         let body = div()
             .child(header)
@@ -729,6 +754,7 @@ impl Root {
                     }),
             )
             .child(self.render_catalogue_tools(desk, ready, cx))
+            .child(self.render_product_writes(desk, cx))
             .when_some(desk.catalog.as_ref(), |body, page| {
                 body.when(page.products.is_empty(), |body| {
                     body.child(self.t(Key::InventoryEmpty))
@@ -974,14 +1000,38 @@ impl Root {
                         Kind::Ghost,
                         cx.listener(|root, _, _, cx| root.open_stock_panel(cx)),
                     ))
-                    .when(ready && product.can_manage, |row| {
-                        row.child(self.button(
-                            "inventory-edit-pack",
-                            self.t(Key::InventoryEditContent),
-                            Kind::Primary,
-                            cx.listener(|root, _, _, cx| root.edit_package_content(cx)),
-                        ))
-                    }),
+                    .when(
+                        product.can_manage && self.svc.store.can_queue_product_edits(),
+                        |row| {
+                            row.child(self.button(
+                                "inventory-edit-product",
+                                self.t(Key::InventoryEditProduct),
+                                Kind::Primary,
+                                cx.listener(|root, _, _, cx| root.begin_product_form(true, cx)),
+                            ))
+                            .child(self.button(
+                                "inventory-product-status",
+                                self.t(if product.active {
+                                    Key::InventoryArchiveProduct
+                                } else {
+                                    Key::InventoryReactivateProduct
+                                }),
+                                Kind::Ghost,
+                                cx.listener(|root, _, _, cx| root.queue_product_status(cx)),
+                            ))
+                        },
+                    )
+                    .when(
+                        ready && product.can_manage && !self.svc.store.can_queue_product_edits(),
+                        |row| {
+                            row.child(self.button(
+                                "inventory-edit-pack",
+                                self.t(Key::InventoryEditContent),
+                                Kind::Primary,
+                                cx.listener(|root, _, _, cx| root.edit_package_content(cx)),
+                            ))
+                        },
+                    ),
             )
         })
     }
