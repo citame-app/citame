@@ -1284,6 +1284,61 @@ fn a_replica_for_an_old_role_does_not_accept_the_new_roles_snapshot() {
 }
 
 #[test]
+fn portfolio_requests_require_valid_metadata_and_send_explicit_publication_confirmation() {
+    let id = uuid::Uuid::now_v7();
+    let service_id = uuid::Uuid::now_v7();
+    let draft = serde_json::json!({
+        "id": id, "caption": "Example", "alt": "Example treatment", "serviceId": service_id,
+        "serviceName": "Treatment", "status": "draft", "version": 3,
+    });
+    let (base, seen) = serve(vec![
+        http(
+            "200 OK",
+            &[],
+            &serde_json::json!({"photos": [draft], "limit": 200}).to_string(),
+        ),
+        http(
+            "409 Conflict",
+            &[],
+            r#"{"error":{"code":"version_conflict","message":"Reload"}}"#,
+        ),
+        http(
+            "200 OK",
+            &[],
+            &serde_json::json!({"id": id, "removed": true}).to_string(),
+        ),
+    ]);
+    let transport = signed_in(&base);
+    let photo = transport.portfolio().unwrap().photos.remove(0);
+    assert_eq!(photo.service_id, Some(service_id));
+    let invalid = PortfolioEdit {
+        caption: "Example".into(),
+        alt: "".into(),
+        service_id: None,
+    };
+    assert!(matches!(
+        transport.edit_portfolio_photo(&photo, &invalid),
+        Err(TransportError::BadRequest(_))
+    ));
+    assert!(
+        transport
+            .set_portfolio_publication(&photo, PortfolioPublication::ConfirmedPublish)
+            .is_err()
+    );
+    transport.remove_portfolio_photo(&photo).unwrap();
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert!(requests[1].starts_with(&format!("POST /admin/portfolio/{id}/publish ")));
+    let input: serde_json::Value =
+        serde_json::from_str(requests[1].split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(
+        input,
+        serde_json::json!({"version": 3, "publicationConfirmed": true})
+    );
+    assert!(requests[2].starts_with(&format!("POST /admin/portfolio/{id}/remove ")));
+}
+
+#[test]
 fn staff_portrait_transport_loads_authorized_directory_and_fences_writes() {
     let id = "01a1d81f-2231-75bd-ba65-bc41f42803e9";
     let version = "01a1d81f-2231-75bd-ba65-bc41f4280300";

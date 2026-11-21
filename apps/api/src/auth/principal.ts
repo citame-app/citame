@@ -115,9 +115,19 @@ export function requireAuth(
           : path.endsWith("/publish") || path.endsWith("/archive")
             ? method === "POST"
             : method === "GET" || method === "PUT";
+      const portfolioAllowed =
+        path === "/admin/portfolio"
+          ? method === "GET" || method === "POST"
+          : path.endsWith("/image")
+            ? method === "GET"
+            : /\/(?:publish|unpublish|remove)$/.test(path)
+              ? method === "POST"
+              : method === "PUT";
       const clientIntakeAllowed =
         method === "GET" || (path.endsWith("/intake") && method === "POST");
       if (
+        ((path === "/admin/portfolio" || path.startsWith("/admin/portfolio/")) &&
+          !portfolioAllowed) ||
         (path.startsWith("/admin/clients/") && !clientIntakeAllowed) ||
         (path.startsWith("/admin/intake-forms") && !intakeAllowed) ||
         (path === "/admin/intake-forms" && method === "GET" && c.req.query("view") !== "summary") ||

@@ -53,6 +53,7 @@ pub struct HttpTransport {
 }
 
 mod inventory_documents;
+mod portfolio;
 mod service_catalog;
 mod service_catalog_form;
 mod service_resources;
@@ -60,6 +61,9 @@ mod staff_access;
 mod staff_portraits;
 mod warehouses;
 pub use crate::model::{CatalogPrice, ServiceOption};
+pub use portfolio::{
+    PortfolioEdit, PortfolioList, PortfolioPhoto, PortfolioPublication, PortfolioStatus,
+};
 pub use service_catalog::{
     CatalogService, CatalogWriteError, NewCatalogService, ReviewedCatalog, ServiceCreation,
     ServiceDetails,

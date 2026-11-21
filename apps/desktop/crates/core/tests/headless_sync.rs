@@ -2175,6 +2175,93 @@ fn native_inventory_documents_survive_restart_and_rebase_a_concurrent_cloud_deli
 }
 
 #[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_portfolio_keeps_drafts_private_and_rechecks_publication_versions() {
+    use sob_core::http::{PortfolioEdit, PortfolioPublication, PortfolioStatus};
+    use sob_core::staff_portrait_image::prepare_photo;
+    use uuid::Uuid;
+
+    let desktop = proxy_device();
+    let web = Device::sign_in();
+    let service = desktop
+        .transport
+        .reviewed_catalog()
+        .unwrap()
+        .services
+        .into_iter()
+        .find(|service| service.details.active)
+        .unwrap();
+    let service_id = service.id.parse().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fixture.png");
+    image::RgbImage::from_pixel(64, 32, image::Rgb([120, 64, 90]))
+        .save(&path)
+        .unwrap();
+    let jpeg = prepare_photo(&path).unwrap();
+    let input = PortfolioEdit {
+        caption: "Synthetic treatment".into(),
+        alt: "Synthetic raster".into(),
+        service_id: Some(service_id),
+    };
+    let key = Uuid::now_v7();
+    let photo = desktop
+        .transport
+        .upload_portfolio_photo(key, &input, &jpeg)
+        .unwrap();
+    assert_eq!(photo.status, PortfolioStatus::Draft);
+    assert_eq!(photo.service_id, Some(service_id));
+    assert_eq!(
+        desktop
+            .transport
+            .upload_portfolio_photo(key, &input, &jpeg)
+            .unwrap()
+            .id,
+        photo.id
+    );
+    assert!(
+        !desktop
+            .transport
+            .portfolio_photo(photo.id)
+            .unwrap()
+            .is_empty()
+    );
+    let is_public = || {
+        web.rest_get(&format!("/portfolio?serviceId={service_id}"))["photos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["id"] == json!(photo.id))
+    };
+    assert!(!is_public());
+
+    let published = desktop
+        .transport
+        .set_portfolio_publication(&photo, PortfolioPublication::ConfirmedPublish)
+        .unwrap();
+    assert!(is_public());
+    assert!(
+        desktop
+            .transport
+            .set_portfolio_publication(&photo, PortfolioPublication::Unpublish)
+            .is_err()
+    );
+    let edited = desktop
+        .transport
+        .edit_portfolio_photo(
+            &published,
+            &PortfolioEdit {
+                caption: "Reviewed update".into(),
+                ..input
+            },
+        )
+        .unwrap();
+    assert_eq!(edited.status, PortfolioStatus::Draft);
+    assert!(!is_public());
+    desktop.transport.remove_portfolio_photo(&edited).unwrap();
+    assert!(desktop.transport.portfolio_photo(photo.id).is_err());
+}
+
+#[test]
 #[ignore = "needs the synthetic product from the production smoke test"]
 fn native_product_photo_replays_after_restart_and_checks_the_current_photo_version() {
     use sob_core::product_editor::ProductPhotoProposal;
