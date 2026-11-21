@@ -4161,10 +4161,11 @@ fn an_appointment_created_offline_reaches_the_server_and_other_devices() {
             .any(|i| i.appointment.id == appt && !i.pending)
     );
 
-    // Move then cancel offline on device A, in one batch with consecutive versions.
+    // Move then cancel offline on device A. The cancellation waits for the move receipt.
     ops::reschedule_appointment(&mut a.store, &appt, Some(at + Span::hours(2)), None).unwrap();
     ops::cancel_appointment(&mut a.store, &appt).unwrap();
-    a.sync();
+    let report = a.sync();
+    assert_eq!(report.push.batches, 2);
     assert_eq!(a.store.outbox_len().unwrap(), 0);
     assert!(a.store.conflicts().unwrap().is_empty());
     b.sync();

@@ -1491,7 +1491,7 @@ impl Store {
     pub(crate) fn push_snapshot(&self, limit: usize) -> Result<(String, Vec<OutboxEntry>)> {
         let tx = self.conn.unchecked_transaction()?;
         let generation = Self::generation_at(&tx)?;
-        let batch = if Self::meta_at(&tx, REBUILD_KEY)?.is_none() {
+        let mut batch = if Self::meta_at(&tx, REBUILD_KEY)?.is_none() {
             Self::outbox_at(
                 &tx,
                 limit,
@@ -1503,6 +1503,13 @@ impl Store {
         } else {
             Vec::new()
         };
+        // Predicted versions for the same appointment are valid only after the prior edit applies.
+        let mut appointments = HashSet::new();
+        if let Some(dependent) = batch.iter().position(|entry| {
+            entry.kind.starts_with("appointment.") && !appointments.insert(&entry.entity_id)
+        }) {
+            batch.truncate(dependent);
+        }
         tx.commit()?;
         Ok((generation, batch))
     }
@@ -1689,6 +1696,22 @@ impl Store {
                         ],
                     )?;
                     out.rejected += 1;
+                    if s.kind.starts_with("appointment.") {
+                        let last_sent = sent.last().map_or(s.seq, |entry| entry.seq);
+                        let moved = tx.execute(
+                            "INSERT INTO conflict (mutation_id, kind, entity_id, payload, reason, message, created_at)
+                             SELECT mutation_id, kind, entity_id, payload, 'conflict',
+                                    'Review this edit after an earlier appointment change was rejected', created_at
+                             FROM outbox WHERE seq > ?1 AND entity_id = ?2 AND kind GLOB 'appointment.*'
+                             ORDER BY seq ON CONFLICT(mutation_id) DO NOTHING",
+                            params![last_sent, s.entity_id],
+                        )?;
+                        tx.execute(
+                            "DELETE FROM outbox WHERE seq > ?1 AND entity_id = ?2 AND kind GLOB 'appointment.*'",
+                            params![last_sent, s.entity_id],
+                        )?;
+                        out.rejected += moved;
+                    }
                 }
                 MutationResult::Retry { message, .. } => {
                     tx.execute(

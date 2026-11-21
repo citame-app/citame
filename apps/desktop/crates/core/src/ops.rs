@@ -11,7 +11,8 @@ use crate::calendar::{
 };
 use crate::error::{CoreError, Result};
 use crate::model::{
-    AppointmentService, AppointmentStatus, Client, Service, ServiceOption, TimeOff, WorkWindow,
+    Appointment, AppointmentService, AppointmentStatus, Client, Service, ServiceOption, TimeOff,
+    WorkWindow,
 };
 use crate::store::Store;
 
@@ -447,15 +448,45 @@ pub enum AppointmentEdit<'a> {
     },
 }
 
+pub struct ReviewedAppointment {
+    version: i64,
+    pub starts_at: DateTime<Utc>,
+    ends_at: DateTime<Utc>,
+    pub staff_id: String,
+    status: AppointmentStatus,
+}
+
+impl From<&Appointment> for ReviewedAppointment {
+    fn from(appointment: &Appointment) -> Self {
+        Self {
+            version: appointment.version,
+            starts_at: appointment.starts_at,
+            ends_at: appointment.ends_at,
+            staff_id: appointment.staff_id.clone(),
+            status: appointment.status,
+        }
+    }
+}
+
+impl ReviewedAppointment {
+    pub fn matches(&self, appointment: &Appointment) -> bool {
+        self.version == appointment.version
+            && self.starts_at == appointment.starts_at
+            && self.ends_at == appointment.ends_at
+            && self.staff_id == appointment.staff_id
+            && self.status == appointment.status
+    }
+}
+
 /// Uses the version shown to the operator, including earlier pending local edits.
 pub fn queue_reviewed_appointment_edit(
     store: &mut Store,
     id: &str,
-    reviewed_version: i64,
+    reviewed: &ReviewedAppointment,
     edit: AppointmentEdit<'_>,
 ) -> Result<()> {
     store.write_transaction(|store| {
-        if effective_appointment(store, id)?.is_none_or(|a| a.version != reviewed_version) {
+        if effective_appointment(store, id)?.is_none_or(|a| !reviewed.matches(&a)) {
             return Err(CoreError::AppointmentChanged);
         }
         match edit {

@@ -802,6 +802,43 @@ describe("idempotency", () => {
 });
 
 describe("ordering", () => {
+  test("a rejected appointment edit fences its dependent edits in an older client's batch", async () => {
+    const create = createAppt();
+    const id = create.payload.id;
+    await push(t, owner, [create]);
+    const cloudMove = await json(
+      t.app,
+      `/appointments/${id}`,
+      "PATCH",
+      {
+        version: 1,
+        startsAt: MONDAY_1400,
+      },
+      owner.cookie,
+    );
+    expect(cloudMove.status).toBe(200);
+    const offline = mutation("appointment.reschedule", {
+      id,
+      version: 1,
+      startsAt: "2026-03-09T16:00:00.000Z",
+    });
+    const dependent = mutation("appointment.cancel", { id, version: 2 });
+    const unrelated = createAppt({ staffId: f.beaId });
+    const { body } = await push(t, owner, [offline, dependent, unrelated]);
+    expect(body.results).toEqual([
+      expect.objectContaining({ status: "rejected", reason: "conflict" }),
+      expect.objectContaining({ status: "rejected", reason: "conflict" }),
+      expect.objectContaining({ status: "applied" }),
+    ]);
+    const [row] = await t.db.select().from(appointment).where(eq(appointment.id, id));
+    expect(row).toMatchObject({ version: 2, status: "booked", startsAt: new Date(MONDAY_1400) });
+    expect((await push(t, owner, [dependent])).body.results[0]).toMatchObject({
+      status: "rejected",
+      reason: "conflict",
+      replayed: true,
+    });
+  });
+
   test("mutations in a batch are applied in order (create, then move it)", async () => {
     const create = createAppt();
     const move = mutation("appointment.reschedule", {

@@ -1,4 +1,5 @@
 import {
+  type SyncMutation,
   type SyncMutationResult,
   type SyncPushRequest,
   type SyncPushResponse,
@@ -54,13 +55,14 @@ async function processOne(
   principal: Principal,
   deviceId: string,
   raw: { mutationId: string },
+  parsed: ReturnType<typeof syncMutationSchema.safeParse>,
+  previousAppointmentEditRejected: boolean,
 ): Promise<SyncMutationResult> {
   const { db } = ctx;
   const id = raw.mutationId;
   const existing = await readStored(db, id);
   if (existing) return toResult(existing, principal, true);
 
-  const parsed = syncMutationSchema.safeParse(raw);
   const kind = parsed.success
     ? parsed.data.kind
     : String((raw as { kind?: unknown }).kind ?? "unknown");
@@ -72,13 +74,19 @@ async function processOne(
     );
     if (await readStored(tx, id)) return false;
 
-    if (!parsed.success) {
-      const message = parsed.error.issues
-        .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
-        .join("; ");
-      await tx
-        .insert(syncMutation)
-        .values({ ...entry, status: "rejected", result: { reason: "invalid", message } });
+    if (!parsed.success || previousAppointmentEditRejected) {
+      const result = parsed.success
+        ? {
+            reason: "conflict",
+            message: "Review this edit after an earlier appointment change was rejected",
+          }
+        : {
+            reason: "invalid",
+            message: parsed.error.issues
+              .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
+              .join("; "),
+          };
+      await tx.insert(syncMutation).values({ ...entry, status: "rejected", result });
       return true;
     }
 
@@ -104,6 +112,19 @@ async function processOne(
   return toResult(stored, principal, !created);
 }
 
+function appointmentBasis(mutation: SyncMutation) {
+  switch (mutation.kind) {
+    case "appointment.create":
+      return { id: mutation.payload.id.toLowerCase(), version: 0 };
+    case "appointment.reschedule":
+    case "appointment.cancel":
+    case "appointment.set_status":
+      return { id: mutation.payload.id.toLowerCase(), version: mutation.payload.version };
+    default:
+      return undefined;
+  }
+}
+
 /** Applies a batch in order. A transient failure stops the batch; the rest come back as `retry`. */
 export async function pushMutations(
   ctx: ApplyContext & { db: Database },
@@ -111,6 +132,7 @@ export async function pushMutations(
   request: SyncPushRequest,
 ): Promise<SyncPushResponse> {
   const results: SyncMutationResult[] = [];
+  const rejectedAppointments = new Map<string, number>();
   let failure: string | null = null;
   for (const raw of request.mutations) {
     if (failure !== null) {
@@ -122,7 +144,23 @@ export async function pushMutations(
       continue;
     }
     try {
-      results.push(await processOne(ctx, principal, request.deviceId, raw));
+      const parsed = syncMutationSchema.safeParse(raw);
+      const basis = parsed.success ? appointmentBasis(parsed.data) : undefined;
+      const rejectedVersion = basis ? rejectedAppointments.get(basis.id) : undefined;
+      const result = await processOne(
+        ctx,
+        principal,
+        request.deviceId,
+        raw,
+        parsed,
+        basis !== undefined && rejectedVersion !== undefined && basis.version > rejectedVersion,
+      );
+      if (basis && result.status === "rejected")
+        rejectedAppointments.set(
+          basis.id,
+          Math.min(rejectedVersion ?? basis.version, basis.version),
+        );
+      results.push(result);
     } catch (error) {
       rootLogger.error("sync push: transient failure", { err: error });
       failure = "failed";

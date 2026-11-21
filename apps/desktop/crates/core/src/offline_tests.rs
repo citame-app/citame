@@ -856,6 +856,44 @@ fn queued_edits_of_one_appointment_carry_incrementing_versions() {
 }
 
 #[test]
+fn a_rejected_move_preserves_dependent_appointment_edits_for_review_instead_of_sending_them() {
+    let mut s = seeded();
+    reschedule_appointment(&mut s, EXISTING, Some(at("2026-03-09T17:00:00Z")), None).unwrap();
+    let optimistic = effective_appointment(&s, EXISTING).unwrap().unwrap();
+    let review = ReviewedAppointment::from(&optimistic);
+    cancel_appointment(&mut s, EXISTING).unwrap();
+    let (_, batch) = s.push_snapshot(100).unwrap();
+    assert_eq!(batch.len(), 1);
+    let result = MutationResult::Rejected {
+        mutation_id: batch[0].mutation_id.clone(),
+        reason: "conflict".into(),
+        message: "Cloud appointment changed".into(),
+        replayed: false,
+    };
+    assert_eq!(s.apply_push_results(&batch, &[result]).unwrap().rejected, 2);
+    assert!(s.push_snapshot(100).unwrap().1.is_empty());
+    let conflicts = s.conflicts().unwrap();
+    assert_eq!(conflicts.len(), 2);
+    assert!(
+        conflicts
+            .iter()
+            .any(|edit| edit.kind == "appointment.cancel" && edit.payload["version"] == 4)
+    );
+
+    let mut cloud = s.appointment(EXISTING).unwrap().unwrap();
+    cloud.version = optimistic.version;
+    cloud.starts_at = at("2026-03-09T18:00:00Z");
+    cloud.ends_at = at("2026-03-09T19:00:00Z");
+    s.apply_page(&[up(20, "appointment", EXISTING, json!(cloud))], 20)
+        .unwrap();
+    assert!(matches!(
+        queue_reviewed_appointment_edit(&mut s, EXISTING, &review, AppointmentEdit::Cancel),
+        Err(crate::error::CoreError::AppointmentChanged)
+    ));
+    assert!(s.outbox(10).unwrap().is_empty());
+}
+
+#[test]
 fn cancelling_offline_hides_the_appointment_and_queues_a_cancel() {
     let mut s = seeded();
     cancel_appointment(&mut s, EXISTING).unwrap();
