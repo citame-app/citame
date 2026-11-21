@@ -32,6 +32,21 @@ test("when a moved booking disappears from a refresh its older date is not resur
   expect(projectCalendarIntervals([oldDate], [oldDate, newDate]).size).toBe(0);
 });
 
+test("a filtered sighting preserves a moved booking until a full refresh of its new day", () => {
+  const old = at(12, 18);
+  const moved = at(15, 19);
+  const outsideCoverage = { ...at(16, 20), ref: "outside" };
+  const fullCaptures = new Map([
+    ["2026-11-18", old.at],
+    ["2026-11-19", at(13, 19).at],
+  ]);
+  const project = () =>
+    projectCalendarIntervals([old], [old], [moved, outsideCoverage], fullCaptures);
+  expect([...project().values()]).toEqual([moved]);
+  fullCaptures.set("2026-11-19", at(17, 19).at);
+  expect(project().size).toBe(0);
+});
+
 test("conflicting observations at the same instant fail regardless of input order", () => {
   const first = at(12, 18);
   const second = { ...at(12, 19), at: "2026-11-17T13:00:00+01:00" };

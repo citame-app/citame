@@ -53,16 +53,19 @@ describe("sync_change recording (database triggers)", () => {
     if (!row) throw new Error("insert failed");
     await t.db.execute(sql`update client_profile set name = 'Lu' where id = ${row.id}`);
     await t.db.execute(sql`update client_profile set deleted_at = now() where id = ${row.id}`);
-    await t.db.execute(sql`delete from client_profile where id = ${row.id}`);
     const recorded = await changes();
     expect(recorded.filter((c) => c.entity === "client").map((c) => [c.row_id, c.op])).toEqual([
       [row.id, "upsert"],
       [row.id, "upsert"],
       [row.id, "delete"],
-      [row.id, "delete"],
     ]);
     expect(recorded.filter((c) => c.entity !== "client")).toEqual([
       { seq: expect.any(Number), entity: "live_view", row_id: "intake_records", op: "upsert" },
+    ]);
+    await t.db.execute(sql`delete from client_profile where id = ${row.id}`);
+    expect(await changes()).toEqual([
+      ...recorded,
+      { seq: expect.any(Number), entity: "client", row_id: row.id, op: "delete" },
     ]);
   });
 

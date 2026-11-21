@@ -8,7 +8,7 @@ import {
 } from "@sob/contracts";
 import { z } from "zod";
 import { type CalendarSeen, projectCalendarIntervals } from "./calendar-intervals";
-import { coversBooksyCalendarRequest } from "./calendar-request-scope";
+import { isUnfilteredBooksyCalendarRequest } from "./calendar-request-scope";
 import { prepareObservedBooksy } from "./observed";
 import { sourceUuid } from "./plan";
 
@@ -245,6 +245,7 @@ export async function prepareBooksySourceReadModel(
   const calendars = new Map<string, CalendarCapture>();
   const dailyCalendars = new Map<string, CalendarCapture>();
   const calendarHistory: CalendarCapture[] = [];
+  const filteredCalendarHistory: CalendarCapture[] = [];
   const details = new Map<number, { at: string; data: z.infer<typeof detailSchema> }>();
   let catalog: {
     at: string;
@@ -311,7 +312,10 @@ export async function prepareBooksySourceReadModel(
       throw new Error("Retained source response differs from parsed data");
     if (url.pathname.endsWith("/calendar")) {
       const c = calendarSchema.parse(payload);
-      if (!coversBooksyCalendarRequest(url, c)) continue;
+      if (!isUnfilteredBooksyCalendarRequest(url, c)) {
+        filteredCalendarHistory.push({ at: d.capturedAt, data: c });
+        continue;
+      }
       if (c.resources.length !== c.resources_count)
         throw new Error("Calendar resource pages are incomplete");
       calendarHistory.push({ at: d.capturedAt, data: c });
@@ -536,7 +540,7 @@ export async function prepareBooksySourceReadModel(
       return days >= 0 && days % 7 === 0;
     })
     .sort((a, b) => a.data.start_date.localeCompare(b.data.start_date));
-  const covered = new Set<string>();
+  const lastFullCaptureByDay = new Map<string, string>();
   const selectedBookings: ReturnType<typeof bookingObservations> = [];
   const selectedBlocks: ReturnType<typeof blockObservations> = [];
   const hasFullResourceScope = (data: z.infer<typeof calendarSchema>) =>
@@ -550,8 +554,12 @@ export async function prepareBooksySourceReadModel(
       let day = Temporal.PlainDate.from(c.data.start_date);
       Temporal.PlainDate.compare(day, c.data.end_date) <= 0;
       day = day.add({ days: 1 })
-    )
-      covered.add(day.toString());
+    ) {
+      const date = day.toString();
+      const previous = lastFullCaptureByDay.get(date);
+      if (!previous || Temporal.Instant.compare(c.at, previous) > 0)
+        lastFullCaptureByDay.set(date, c.at);
+    }
     const useWeekly = (row: CalendarSeen<unknown>) => {
       const date = row.start.slice(0, 10);
       const daily = dailyCalendars.get(date);
@@ -567,6 +575,9 @@ export async function prepareBooksySourceReadModel(
     if (!week || Temporal.Instant.compare(daily.at, week.at) <= 0) continue;
     if (!hasFullResourceScope(daily.data))
       throw new Error("Daily refresh does not include the full resource list");
+    const previous = lastFullCaptureByDay.get(day);
+    if (previous && Temporal.Instant.compare(daily.at, previous) > 0)
+      lastFullCaptureByDay.set(day, daily.at);
     const startsOnDay = ({ start }: CalendarSeen<unknown>) => start.slice(0, 10) === day;
     selectedBookings.push(...bookingObservations(daily).filter(startsOnDay));
     selectedBlocks.push(...blockObservations(daily).filter(startsOnDay));
@@ -582,19 +593,24 @@ export async function prepareBooksySourceReadModel(
     Temporal.PlainDate.compare(day, throughDate) <= 0;
     day = day.add({ days: 1 })
   )
-    if (!covered.has(day.toString())) throw new Error(`Calendar interval missing: ${day}`);
+    if (!lastFullCaptureByDay.has(day.toString()))
+      throw new Error(`Calendar interval missing: ${day}`);
   const eligibleHistory = calendarHistory.filter(({ data }) => {
     const { start_date: start, end_date: end } = data;
     const days = Temporal.PlainDate.from(fromDate).until(start).days;
     return (start === end || (days >= 0 && days % 7 === 0)) && hasFullResourceScope(data);
   });
   const insideCapture = (row: CalendarSeen<unknown>, capture: CalendarCapture) =>
-    covered.has(row.start.slice(0, 10)) && startsInCapture(row, capture);
+    lastFullCaptureByDay.has(row.start.slice(0, 10)) && startsInCapture(row, capture);
   const bookings = projectCalendarIntervals(
     selectedBookings,
     eligibleHistory.flatMap((capture) =>
       bookingObservations(capture).filter((row) => insideCapture(row, capture)),
     ),
+    filteredCalendarHistory.flatMap((capture) =>
+      bookingObservations(capture).filter((row) => insideCapture(row, capture)),
+    ),
+    lastFullCaptureByDay,
   );
   const blocks = projectCalendarIntervals(
     selectedBlocks,

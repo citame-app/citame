@@ -8,7 +8,7 @@ const calendarParameters = new Set([
   "version",
 ]);
 
-export function coversBooksyCalendarRequest(
+export function isUnfilteredBooksyCalendarRequest(
   source: URL,
   interval: { start_date: string; end_date: string },
 ): boolean {

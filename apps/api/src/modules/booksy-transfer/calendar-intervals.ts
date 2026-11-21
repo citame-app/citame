@@ -29,9 +29,18 @@ function latestByReference<T>(observations: CalendarSeen<T>[]) {
 export function projectCalendarIntervals<T>(
   selected: CalendarSeen<T>[],
   history: CalendarSeen<T>[],
+  partialSightings: CalendarSeen<T>[] = [],
+  lastFullCaptureByDay: ReadonlyMap<string, string> = new Map(),
 ) {
-  const projected = latestByReference(selected);
-  const latestSeen = latestByReference(history);
+  const inCoverage = partialSightings.filter((row) =>
+    lastFullCaptureByDay.has(row.start.slice(0, 10)),
+  );
+  const afterFullCapture = inCoverage.filter((row) => {
+    const full = lastFullCaptureByDay.get(row.start.slice(0, 10));
+    return full !== undefined && Temporal.Instant.compare(row.at, full) > 0;
+  });
+  const projected = latestByReference([...selected, ...afterFullCapture]);
+  const latestSeen = latestByReference([...history, ...inCoverage]);
   for (const [ref, selected] of projected) {
     const latest = latestSeen.get(ref);
     if (
