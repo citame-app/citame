@@ -157,8 +157,14 @@ test("a live inventory refresh preserves an open draft until the operator review
   fireEvent.click(await screen.findByRole("button", { name: "Manage product" }));
   const name = await screen.findByLabelText("Product name");
   fireEvent.change(name, { target: { value: "Unsaved local name" } });
+  await waitFor(() =>
+    expect(queryClient.isFetching({ queryKey: ["inventory", "product", id] })).toBe(0),
+  );
   detailProduct = { ...product, version: 5, name: "Published from Desktop" };
-  await act(async () => queryClient.invalidateQueries({ queryKey: ["inventory"] }));
+  // Apply the refreshed detail as the query cache would after a commerce event.
+  act(() => {
+    queryClient.setQueriesData({ queryKey: ["inventory", "product", id] }, detailProduct);
+  });
   expect(name).toHaveValue("Unsaved local name");
   await waitFor(() => expect(screen.getByRole("button", { name: "Save product" })).toBeDisabled());
   fireEvent.click(screen.getByRole("button", { name: "Discard drafts and load latest details" }));
