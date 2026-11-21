@@ -264,6 +264,10 @@ mod tests {
         cx.simulate_new_path_selection(|_| Some(revoked.clone()));
         cx.run_until_parked();
         assert!(!revoked.exists());
+        root.update(cx, |root, _| {
+            assert!(matches!(&root.overlay, Overlay::Reports(desk)
+                if desk.export_notice == Some(Key::ReportExportChanged)));
+        });
 
         root.update(cx, |root, cx| {
             let Overlay::Reports(desk) = &mut root.overlay else {

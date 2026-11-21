@@ -95,7 +95,7 @@ fn prompt_csv_export(
                     .update(cx, |root, _| still_allowed(root))
                     .unwrap_or(false) =>
             {
-                None
+                Some(Key::ReportExportChanged)
             }
             Ok(Ok(Some(path))) => {
                 let result = cx

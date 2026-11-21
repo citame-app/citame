@@ -662,6 +662,7 @@ keys! {
     ReportExport => ("Save CSV", "Guardar CSV"),
     ReportExported => ("CSV saved.", "CSV guardado."),
     ReportExportFailed => ("The file could not be saved.", "No se pudo guardar el archivo."),
+    ReportExportChanged => ("The report changed while saving. Review it and export again.", "El informe cambió mientras se guardaba. Revísalo y vuelve a exportar."),
     FinancialReport => ("Financial reports", "Informes económicos"),
     FinancialReportBasis => ("Collections and refunds use their confirmation date. Sales use the date of full settlement. Product costs are recorded at sale.", "Los cobros y devoluciones se cuentan por fecha de confirmación. Las ventas se cuentan cuando se completa el cobro. Los costes se registran al vender."),
     FinancialCollected => ("Collected money", "Dinero cobrado"),
