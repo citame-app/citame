@@ -3,12 +3,12 @@ import {
   idSchema,
   issueStampCardSchema,
   permissionsFor,
+  stampBulkInputSchema,
+  stampBulkScopeSchema,
   stampNoticeQuerySchema,
   stampNoticeReadResultSchema,
   stampNoticeReadSchema,
   stampProgramInputSchema,
-  stampBulkScopeSchema,
-  stampBulkInputSchema,
 } from "@sob/contracts";
 import { Hono } from "hono";
 import type { AppDeps } from "../../app";
