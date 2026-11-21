@@ -5,6 +5,8 @@ use sob_core::reports::{
 };
 use sob_core::sync::TransportError;
 
+mod manage;
+
 const REFRESH: Duration = Duration::from_secs(30);
 const RETRY: Duration = Duration::from_secs(5);
 
@@ -15,6 +17,9 @@ pub(super) struct Desk {
     page: u32,
     payout_page: u32,
     can_choose_staff: bool,
+    can_manage: bool,
+    editor: Option<manage::Edit>,
+    manage_notice: Option<Key>,
     viewer_known: bool,
     statement: Option<CommissionStatement>,
     request: Option<Arc<()>>,
@@ -77,6 +82,7 @@ impl Root {
                 .spawn(async move {
                     let scope = transport.commission_scope()?;
                     let can_choose = scope.can_choose_staff;
+                    let can_manage = scope.can_manage;
                     let target = if can_choose {
                         selected.clone().or(scope.staff_id)
                     } else {
@@ -91,7 +97,7 @@ impl Root {
                         .as_deref()
                         .map(|staff_id| transport.commission_statement(staff_id, page, payout_page))
                         .transpose()?;
-                    Ok((can_choose, target, statement))
+                    Ok((can_choose, can_manage, target, statement))
                 })
                 .await;
             let _ = root.update(cx, |root, cx| {
@@ -110,8 +116,13 @@ impl Root {
                 }
                 desk.request = None;
                 match result {
-                    Ok((can_choose, target, statement)) => {
+                    Ok((can_choose, can_manage, target, statement)) => {
+                        if !can_manage || desk.selected != target {
+                            desk.editor = None;
+                            desk.manage_notice = None;
+                        }
                         desk.can_choose_staff = can_choose;
+                        desk.can_manage = can_manage;
                         desk.viewer_known = true;
                         desk.selected = target;
                         desk.page = statement.as_ref().map_or(1, |data| data.pagination.page);
@@ -126,6 +137,9 @@ impl Root {
                         let (label, delay) = match error {
                             TransportError::Forbidden(_) | TransportError::Unauthorized => {
                                 desk.can_choose_staff = false;
+                                desk.can_manage = false;
+                                desk.editor = None;
+                                desk.manage_notice = None;
                                 (Key::ReportRestricted, REFRESH)
                             }
                             TransportError::Offline(_) => (Key::ReportOffline, RETRY),
@@ -152,6 +166,8 @@ impl Root {
             return;
         }
         desk.selected = Some(id);
+        desk.editor = None;
+        desk.manage_notice = None;
         desk.page = 1;
         desk.payout_page = 1;
         desk.statement = None;
@@ -359,6 +375,7 @@ impl Root {
                         .child(self.t(Key::CommissionNegative)),
                 )
             })
+            .child(self.render_commission_management(desk, cx))
             .child(
                 div()
                     .flex()

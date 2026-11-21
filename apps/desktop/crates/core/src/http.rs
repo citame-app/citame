@@ -29,7 +29,10 @@ use crate::inventory::{
     StockReturnAttempt, StockWriteError,
 };
 use crate::model::*;
-use crate::reports::commissions::{CommissionScope, CommissionStatement};
+use crate::reports::commissions::{
+    CommissionPayoutError, CommissionPolicy, CommissionRateEdit, CommissionScope,
+    CommissionStatement, RecordedCommissionPayout, SavedCommissionPayout,
+};
 use crate::reports::{
     ClientReport, Outcome, OutcomePage, ReportQuery, ReportSummary, financial::FinancialReport,
 };
@@ -1548,6 +1551,72 @@ impl HttpTransport {
             self.get(&self.agent, &path, Some("application/json"))?,
             false,
         )
+    }
+
+    pub fn reviewed_commission_policy(
+        &self,
+        staff_id: uuid::Uuid,
+    ) -> Result<CommissionPolicy, TransportError> {
+        let path = format!("/admin/accounting/staff/{staff_id}/policy/reviewed");
+        read_response(
+            self.get(&self.agent, &path, Some("application/json"))?,
+            false,
+        )
+    }
+
+    pub fn set_reviewed_commission_rates(
+        &self,
+        staff_id: uuid::Uuid,
+        rates: &CommissionRateEdit,
+    ) -> Result<CommissionPolicy, TransportError> {
+        let saved: CommissionPolicy = self.put_json(
+            &format!("/admin/accounting/staff/{staff_id}/policy/reviewed"),
+            rates,
+        )?;
+        if saved.staff_id.parse::<uuid::Uuid>().ok() != Some(staff_id)
+            || saved.generation != rates.generation
+            || saved.service_basis_points != rates.service_basis_points
+            || saved.product_basis_points != rates.product_basis_points
+        {
+            return Err(TransportError::Server(
+                "Unverified commission policy response".into(),
+            ));
+        }
+        Ok(saved)
+    }
+
+    pub fn record_reviewed_commission_payout(
+        &self,
+        payout: &SavedCommissionPayout,
+    ) -> Result<RecordedCommissionPayout, CommissionPayoutError> {
+        let path = format!(
+            "/admin/accounting/staff/{}/payouts/reviewed",
+            payout.staff_id
+        );
+        let response = self.send_json(&path, &payout.review)?;
+        let recorded: RecordedCommissionPayout =
+            read_response_with(response, |status, retry_after, body| {
+                if status == 409
+                    && serde_json::from_str::<serde_json::Value>(body).is_ok_and(|value| {
+                        value
+                            .pointer("/error/code")
+                            .and_then(serde_json::Value::as_str)
+                            == Some("invalid_state")
+                    })
+                {
+                    return CommissionPayoutError::BalanceChanged;
+                }
+                intake_read_error(status, retry_after, body).into()
+            })?;
+        if recorded.staff_id != payout.staff_id
+            || recorded.amount_cents != payout.review.amount_cents
+            || recorded.reference != payout.review.reference
+        {
+            return Err(
+                TransportError::Server("Unverified commission payout response".into()).into(),
+            );
+        }
+        Ok(recorded)
     }
 
     pub fn report_outcomes(

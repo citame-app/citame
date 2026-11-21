@@ -1,7 +1,7 @@
 use std::fmt::Write;
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::financial::{CURRENCY, csv_text};
 
@@ -10,6 +10,59 @@ use super::financial::{CURRENCY, csv_text};
 pub struct CommissionScope {
     pub staff_id: Option<String>,
     pub can_choose_staff: bool,
+    #[serde(default)]
+    pub can_manage: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommissionPolicy {
+    pub staff_id: String,
+    pub generation: String,
+    pub version: Option<u32>,
+    pub service_basis_points: u16,
+    pub product_basis_points: u16,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommissionRateEdit {
+    pub generation: String,
+    pub version: Option<u32>,
+    pub service_basis_points: u16,
+    pub product_basis_points: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommissionPayoutReview {
+    pub actor_user_id: String,
+    pub generation: String,
+    pub amount_cents: u32,
+    pub reference: String,
+    pub idempotency_key: uuid::Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedCommissionPayout {
+    pub staff_id: uuid::Uuid,
+    pub review: CommissionPayoutReview,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordedCommissionPayout {
+    pub staff_id: uuid::Uuid,
+    pub amount_cents: u32,
+    pub reference: String,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CommissionPayoutError {
+    #[error("Commission balance changed")]
+    BalanceChanged,
+    #[error(transparent)]
+    Transport(#[from] crate::sync::TransportError),
 }
 
 #[derive(Debug, Deserialize)]

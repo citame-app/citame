@@ -5,12 +5,15 @@ import {
   idSchema,
   permissionsFor,
   reportQuerySchema,
+  reviewedCommissionPayoutInputSchema,
+  reviewedCommissionRateInputSchema,
 } from "@sob/contracts";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { AppDeps } from "../../app";
 import { requirePermission } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
+import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
 import { commissionStatement, getPolicy, recordPayout, salesReport, setPolicy } from "./service";
 
@@ -19,6 +22,11 @@ const pages = z.object({
   payoutPage: z.coerce.number().int().min(1).max(100000).default(1),
 });
 export function accountingRoutes(deps: AppDeps) {
+  const generation = deps.config.syncReplicaGeneration;
+  const checkGeneration = (reviewed: string) => {
+    if (reviewed !== generation)
+      throw new DomainError("sync_generation_changed", "The database changed since review");
+  };
   return new Hono<AppEnv>()
     .use("*", async (c, next) => {
       requirePermission(c.get("principal"), "commerce");
@@ -27,10 +35,12 @@ export function accountingRoutes(deps: AppDeps) {
     })
     .get("/statement-scope", (c) => {
       const principal = c.get("principal");
+      const permissions = permissionsFor(principal.role, principal.accessPreset);
       return c.json<CommissionScope>(
         {
           staffId: principal.staffId,
-          canChooseStaff: permissionsFor(principal.role, principal.accessPreset).financialReports,
+          canChooseStaff: permissions.financialReports,
+          canManage: permissions.manageCommissions,
         },
         200,
         { "Cache-Control": "private, no-store" },
@@ -41,6 +51,47 @@ export function accountingRoutes(deps: AppDeps) {
         await getPolicy(deps.db, parseOrThrow(idSchema, c.req.param("id")), c.get("principal")),
       ),
     )
+    .get("/staff/:id/policy/reviewed", async (c) => {
+      const principal = c.get("principal");
+      requirePermission(principal, "manageCommissions");
+      const policy = await getPolicy(deps.db, parseOrThrow(idSchema, c.req.param("id")), principal);
+      return c.json({ ...policy, generation }, 200, { "Cache-Control": "private, no-store" });
+    })
+    .put("/staff/:id/policy/reviewed", async (c) => {
+      const { generation: reviewed, ...input } = parseOrThrow(
+        reviewedCommissionRateInputSchema,
+        await readJson(c),
+      );
+      checkGeneration(reviewed);
+      const policy = await setPolicy(
+        deps.db,
+        parseOrThrow(idSchema, c.req.param("id")),
+        input,
+        c.get("principal"),
+      );
+      return c.json({ ...policy, generation }, 200, { "Cache-Control": "private, no-store" });
+    })
+    .post("/staff/:id/payouts/reviewed", async (c) => {
+      const principal = c.get("principal");
+      const {
+        generation: reviewed,
+        actorUserId,
+        ...input
+      } = parseOrThrow(reviewedCommissionPayoutInputSchema, await readJson(c));
+      if (principal.userId !== actorUserId)
+        throw new DomainError(
+          "forbidden",
+          "Only the account that reviewed this payout can record it",
+        );
+      checkGeneration(reviewed);
+      const payout = await recordPayout(
+        deps.db,
+        parseOrThrow(idSchema, c.req.param("id")),
+        input,
+        principal,
+      );
+      return c.json(payout, 201, { "Cache-Control": "private, no-store" });
+    })
     .put("/staff/:id/policy", async (c) =>
       c.json(
         await setPolicy(

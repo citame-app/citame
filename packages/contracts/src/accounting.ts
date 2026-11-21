@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { idempotencyKeySchema, moneyCentsSchema } from "./commerce";
-import { idSchema, instantSchema, pageInfoSchema } from "./common";
+import { idSchema, instantSchema, pageInfoSchema, syncGenerationSchema } from "./common";
 
 const basisPoints = z.number().int().min(0).max(10000);
 const signedMoney = z.number().int().min(-Number.MAX_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER);
@@ -32,9 +32,20 @@ export const commissionPayoutSchema = z.object({
   reference: z.string(),
   createdAt: instantSchema,
 });
+export const reviewedCommissionPolicySchema = commissionPolicySchema.extend({
+  generation: syncGenerationSchema,
+});
+export const reviewedCommissionRateInputSchema = commissionPolicyInputSchema.extend({
+  generation: syncGenerationSchema,
+});
+export const reviewedCommissionPayoutInputSchema = commissionPayoutInputSchema.extend({
+  generation: syncGenerationSchema,
+  actorUserId: z.string().min(1).max(256),
+});
 export const commissionScopeSchema = z.object({
   staffId: idSchema.nullable(),
   canChooseStaff: z.boolean(),
+  canManage: z.boolean(),
 });
 export type CommissionScope = z.infer<typeof commissionScopeSchema>;
 export const commissionStatementSchema = z.object({

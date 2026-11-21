@@ -16,10 +16,15 @@ use crate::billing::SavedBankRefund;
 use crate::error::{CoreError, Result};
 use crate::http::{ReviewedSalonConfiguration, SalonConfigurationWrite};
 use crate::model::*;
+use crate::reports::commissions::SavedCommissionPayout;
 use crate::sync::{CATALOG_COLORS_CACHED, CatalogColors};
 
 fn pending_bank_refund_key(checkout_id: uuid::Uuid, actor_user_id: &str) -> String {
     format!("bank_refund_pending:{checkout_id}:{actor_user_id}")
+}
+
+fn pending_commission_payout_key(staff_id: uuid::Uuid, actor: &str) -> String {
+    format!("commission_payout_pending:{staff_id}:{actor}")
 }
 
 pub(crate) const INITIAL_GENERATION: &str = "initial";
@@ -695,6 +700,41 @@ impl Store {
                 Ok(saved)
             })
             .transpose()
+    }
+
+    pub fn pending_commission_payout(
+        &self,
+        staff_id: uuid::Uuid,
+        actor: &str,
+    ) -> Result<Option<SavedCommissionPayout>> {
+        self.get_meta(&pending_commission_payout_key(staff_id, actor))?
+            .map(|value| {
+                let saved: SavedCommissionPayout = serde_json::from_str(&value)?;
+                if saved.staff_id != staff_id || saved.review.actor_user_id != actor {
+                    return Err(CoreError::Protocol(
+                        "Pending commission payout identity mismatch".into(),
+                    ));
+                }
+                Ok(saved)
+            })
+            .transpose()
+    }
+
+    pub fn reserve_commission_payout(&self, saved: &SavedCommissionPayout) -> Result<bool> {
+        let key = pending_commission_payout_key(saved.staff_id, &saved.review.actor_user_id);
+        Ok(self.conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO NOTHING",
+            params![key, serde_json::to_string(saved)?],
+        )? == 1)
+    }
+
+    pub fn clear_commission_payout(&self, saved: &SavedCommissionPayout) -> Result<()> {
+        let key = pending_commission_payout_key(saved.staff_id, &saved.review.actor_user_id);
+        self.conn.execute(
+            "DELETE FROM meta WHERE key = ?1 AND value = ?2",
+            params![key, serde_json::to_string(saved)?],
+        )?;
+        Ok(())
     }
 
     pub fn reserve_bank_refund(&self, saved: &SavedBankRefund) -> Result<bool> {

@@ -2,6 +2,8 @@ import { strict as assert } from "node:assert";
 import { createHash, generateKeyPairSync, randomBytes, sign } from "node:crypto";
 import {
   appointmentContextSchema,
+  checkoutSchema,
+  commissionPayoutSchema,
   commissionScopeSchema,
   commissionStatementSchema,
   DESKTOP_CLIENT_ID,
@@ -11,6 +13,7 @@ import {
   reportClientsSchema,
   reportOutcomesPageSchema,
   reportSummarySchema,
+  reviewedCommissionPolicySchema,
   salesReportSchema,
   syncPullResponseSchema,
 } from "../packages/contracts/src";
@@ -435,6 +438,92 @@ assert.deepEqual(
   commissionStatementSchema.parse(await nativeCommission.json()),
   commissionStatementSchema.parse(await webCommission.json()),
 );
+const ratesPath = `/admin/accounting/staff/${professional.id}/policy/reviewed`;
+const oldRates = await desktopRequest(ratesPath, receptionToken);
+assert.equal(oldRates.status, 200);
+const rateReview = reviewedCommissionPolicySchema.parse(await oldRates.json());
+const rateEdit = {
+  generation: rateReview.generation,
+  version: rateReview.version,
+  serviceBasisPoints: 1200,
+  productBasisPoints: 800,
+};
+const saveRates = () =>
+  request(`${origin}${ratesPath}`, {
+    method: "PUT",
+    headers: { authorization: `Bearer ${receptionToken}`, "content-type": "application/json" },
+    body: JSON.stringify(rateEdit),
+  });
+const ratesSaved = await saveRates();
+assert.equal(ratesSaved.status, 200);
+assert.equal(
+  reviewedCommissionPolicySchema.parse(await ratesSaved.json()).serviceBasisPoints,
+  1200,
+);
+assert.equal(
+  (await saveRates()).status,
+  409,
+  "A stale rate review cannot overwrite the current policy",
+);
+
+// A simulated external card sale earns a commission. Recording twice must retain one payout.
+const postJson = (path: string, body: unknown, headers: Record<string, string>) =>
+  request(`${origin}${path}`, {
+    method: "POST",
+    headers: { ...jsonHeaders, origin, ...headers },
+    body: JSON.stringify(body),
+  });
+const commissionKey = () => crypto.randomUUID();
+const product = await postJson(
+  "/api/admin/inventory/products",
+  {
+    name: "Synthetic commission retail item",
+    priceCents: 1000,
+    openingStock: 1,
+    idempotencyKey: commissionKey(),
+  },
+  { cookie },
+);
+assert.equal(product.status, 201, await product.clone().text());
+const { id: commissionProduct } = (await product.json()) as { id: string };
+const sale = await postJson(
+  "/api/admin/commerce/checkouts",
+  {
+    staffId: professional.id,
+    lines: [{ kind: "product", productId: commissionProduct, quantity: 1 }],
+    idempotencyKey: commissionKey(),
+  },
+  { cookie },
+);
+assert.equal(sale.status, 201, await sale.clone().text());
+const saleId = checkoutSchema.parse(await sale.json()).id;
+const payment = await postJson(
+  `/api/admin/commerce/checkouts/${saleId}/payments`,
+  {
+    method: "external_card",
+    amountCents: 1000,
+    idempotencyKey: commissionKey(),
+  },
+  { cookie },
+);
+assert.equal(payment.status, 201, await payment.clone().text());
+const payoutPath = `/admin/accounting/staff/${professional.id}/payouts/reviewed`;
+const payout = {
+  generation: rateReview.generation,
+  actorUserId: desktopUser.id,
+  amountCents: 80,
+  reference: "Synthetic payment already made",
+  idempotencyKey: commissionKey(),
+};
+const recordPayout = async () => {
+  const response = await postJson(payoutPath, payout, {
+    authorization: `Bearer ${receptionToken}`,
+  });
+  assert.equal(response.status, 201, await response.clone().text());
+  return commissionPayoutSchema.parse(await response.json());
+};
+const recorded = await recordPayout();
+assert.deepEqual(await recordPayout(), recorded, "Retry returns the original recorded payout");
 
 const dateFilters = new URLSearchParams({ from: outcomes.date, to: outcomes.date });
 const summaryResponse = await desktopRequest(

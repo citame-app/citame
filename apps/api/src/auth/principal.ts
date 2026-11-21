@@ -127,11 +127,16 @@ export function requireAuth(
         method === "GET" ||
         (path.endsWith("/intake") && method === "POST") ||
         (path.endsWith("/controls") && method === "PATCH");
+      const accountingAllowed = path.endsWith("/policy/reviewed")
+        ? method === "GET" || method === "PUT"
+        : path.endsWith("/payouts/reviewed")
+          ? method === "POST"
+          : method === "GET";
       if (
         ((path === "/admin/portfolio" || path.startsWith("/admin/portfolio/")) &&
           !portfolioAllowed) ||
         (path.startsWith("/admin/clients/") && !clientDetailAllowed) ||
-        (path.startsWith("/admin/accounting/") && method !== "GET") ||
+        (path.startsWith("/admin/accounting/") && !accountingAllowed) ||
         (path.startsWith("/admin/intake-forms") && !intakeAllowed) ||
         (path === "/admin/intake-forms" && method === "GET" && c.req.query("view") !== "summary") ||
         !DESKTOP_PROXY_ROUTE.test(path) ||

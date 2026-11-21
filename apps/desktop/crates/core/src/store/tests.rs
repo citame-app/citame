@@ -3,6 +3,54 @@ use serde_json::{Value, json};
 use super::*;
 
 #[test]
+fn reviewed_commission_payout_survives_restart_and_clears_only_the_acknowledged_request() {
+    use crate::reports::commissions::CommissionPayoutReview;
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("replica.sqlite");
+    let saved = SavedCommissionPayout {
+        staff_id: uuid::Uuid::now_v7(),
+        review: CommissionPayoutReview {
+            actor_user_id: "manager".into(),
+            generation: INITIAL_GENERATION.into(),
+            amount_cents: 1200,
+            reference: "External payment reference".into(),
+            idempotency_key: uuid::Uuid::now_v7(),
+        },
+    };
+    let mut another = saved.clone();
+    another.review.idempotency_key = uuid::Uuid::now_v7();
+    assert!(
+        Store::open(&path)
+            .unwrap()
+            .reserve_commission_payout(&saved)
+            .unwrap()
+    );
+    let store = Store::open(&path).unwrap();
+    assert!(!store.reserve_commission_payout(&another).unwrap());
+    assert!(
+        store
+            .pending_commission_payout(saved.staff_id, "other-user")
+            .unwrap()
+            .is_none()
+    );
+    store.clear_commission_payout(&another).unwrap();
+    assert_eq!(
+        store
+            .pending_commission_payout(saved.staff_id, "manager")
+            .unwrap(),
+        Some(saved.clone())
+    );
+    store.clear_commission_payout(&saved).unwrap();
+    assert!(
+        store
+            .pending_commission_payout(saved.staff_id, "manager")
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
 fn saved_salon_settings_survive_restart_and_review_after_a_restore() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("replica.sqlite");

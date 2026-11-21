@@ -84,7 +84,7 @@ async function tokens(role: "owner" | "client" | "staff", emailName: string = ro
 const request = (path: string, access: unknown) =>
   t.app.request(path, { headers: { authorization: `Bearer ${String(access)}` } });
 
-test("desktop commissions reuse live statement permissions and never expose payout writes", async () => {
+test("desktop commissions authorize only reviewed writes and fence versions and generations", async () => {
   const owner = await tokens("owner", "commission-owner");
   const staff = await tokens("staff", "commission-staff");
   const colleague = await tokens("staff", "commission-colleague");
@@ -98,6 +98,15 @@ test("desktop commissions reuse live statement permissions and never expose payo
   const own = await request(`/admin/accounting/staff/${staff.who.staffId}/statement`, staff.access);
   expect(own.status).toBe(200);
   expect((await request(path, staff.access)).status).toBe(403);
+  const policy = `${target}/policy/reviewed`;
+  const payout = `${target}/payouts/reviewed`;
+  const mutate = (url: string, method: string, access: string, input: unknown) =>
+    t.app.request(url, {
+      method,
+      headers: { authorization: `Bearer ${access}`, "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  expect((await request(policy, staff.access)).status).toBe(403);
   const manager = await t.db
     .update(staffProfile)
     .set({ accessPreset: "manager" })
@@ -123,6 +132,32 @@ test("desktop commissions reuse live statement permissions and never expose payo
       ).status,
     ).toBe(403);
   }
+  const review = await request(policy, staff.access);
+  expect(review.status).toBe(200);
+  const initial = (await review.json()) as { generation: string; version: number | null };
+  const rates = {
+    generation: initial.generation,
+    version: initial.version,
+    serviceBasisPoints: 1800,
+    productBasisPoints: 1100,
+  };
+  expect((await mutate(policy, "PUT", staff.access, rates)).status).toBe(200);
+  expect((await mutate(policy, "PUT", staff.access, rates)).status).toBe(409);
+  const payment = {
+    generation: "outdated-generation",
+    actorUserId: staff.who.userId,
+    amountCents: 100,
+    reference: "External synthetic commission payout",
+    idempotencyKey: crypto.randomUUID(),
+  };
+  const stale = await mutate(payout, "POST", staff.access, payment);
+  expect(stale.status).toBe(409);
+  expect(await stale.json()).toMatchObject({ error: { code: "sync_generation_changed" } });
+  const wrongActor = await mutate(payout, "POST", owner.access, {
+    ...payment,
+    generation: initial.generation,
+  });
+  expect(wrongActor.status).toBe(403);
 });
 
 test("the desktop proxy permits only reviewed catalogue operations and enforces live permissions", async () => {
