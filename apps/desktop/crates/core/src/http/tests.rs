@@ -910,13 +910,13 @@ fn an_upgraded_replica_recovers_service_colors_without_rewinding_its_cursor() {
     pull_all(&mut store, &transport).unwrap();
     let requests = seen.lock().unwrap();
     assert!(requests[0].starts_with(
-        "GET /sync/pull?since=42&limit=200&catalogColors=1&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&resourceCatalogue=1&inventoryAccess=1&booksyPaymentReview=1&resourcePools=full&combinations=full "
+        "GET /sync/pull?since=42&limit=200&catalogColors=1&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&resourceCatalogue=1&inventoryAccess=1&booksyPaymentReview=1&clientGroups=1&resourcePools=full&combinations=full "
     ));
     assert!(requests[1].starts_with(
-        "GET /sync/pull?since=42&limit=200&catalogColors=1&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&resourceCatalogue=1&inventoryAccess=1&booksyPaymentReview=1&resourcePools=full&combinations=full "
+        "GET /sync/pull?since=42&limit=200&catalogColors=1&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&resourceCatalogue=1&inventoryAccess=1&booksyPaymentReview=1&clientGroups=1&resourcePools=full&combinations=full "
     ));
     assert!(requests[2].starts_with(
-        "GET /sync/pull?since=42&limit=200&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&resourceCatalogue=1&inventoryAccess=1&booksyPaymentReview=1&resourcePools=delta&combinations=delta "
+        "GET /sync/pull?since=42&limit=200&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&resourceCatalogue=1&inventoryAccess=1&booksyPaymentReview=1&clientGroups=1&resourcePools=delta&combinations=delta "
     ));
 }
 
