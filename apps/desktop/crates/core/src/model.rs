@@ -232,6 +232,8 @@ pub struct Client {
     pub notes: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controls_version: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_names: Option<Vec<String>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -433,6 +435,8 @@ pub struct PullResponse {
     pub time_off_scope: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_directory: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_groups: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar_scope: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -236,6 +236,7 @@ pub fn pull_all(store: &mut Store, transport: &dyn Transport) -> Result<PullRepo
     let mut switched_generation = false;
     let snapshot_complete = store.get_meta("calendar_snapshot_complete")?.is_some();
     let mut request_colors = store.get_meta(CATALOG_COLORS_CACHED)?.is_none();
+    let mut checked_client_groups = false;
     loop {
         let since = store.cursor()?;
         let response = transport.pull_with_catalogue(
@@ -286,6 +287,12 @@ pub fn pull_all(store: &mut Store, transport: &dyn Transport) -> Result<PullRepo
             report.replica_reset = true;
             request_colors = true;
             continue;
+        }
+        if page.client_groups == Some(true) && !checked_client_groups {
+            checked_client_groups = true;
+            if since > 0 && store.rewind_client_groups_if_needed(&generation)? {
+                continue;
+            }
         }
         if page.next_cursor < since {
             return Err(SyncError::Fatal(format!(

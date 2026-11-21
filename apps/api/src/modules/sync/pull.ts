@@ -13,11 +13,23 @@ import {
   timeOff,
   workingHours,
 } from "@sob/db";
-import { and, asc, eq, gt, inArray, isNotNull, isNull, max } from "drizzle-orm";
+import {
+  and,
+  asc,
+  eq,
+  getTableColumns,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  max,
+  sql,
+} from "drizzle-orm";
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { calendarBadges } from "../appointments/context";
 import { loadSnapshots, toAppointment } from "../appointments/service";
+import { groupName } from "../clients/groups";
 import { compatibleBillingReasons } from "../commerce/appointment-billing";
 import { listResources } from "../resources/catalog";
 import { listCombinations } from "../services/combinations";
@@ -53,7 +65,7 @@ async function loadVisible(
   principal: Principal,
   entity: SyncEntity,
   ids: string[],
-  supportsUnknownPayment: boolean,
+  projection: Pick<SyncPullQuery, "booksyPaymentReview" | "clientGroups">,
 ): Promise<Visible> {
   const out: Visible = new Map();
   const put = (id: string, data: unknown) => out.set(id, { entity, id, op: "upsert", data });
@@ -99,7 +111,7 @@ async function loadVisible(
             ? {
                 billingReviewReasons: compatibleBillingReasons(
                   billing.reasons,
-                  supportsUnknownPayment,
+                  projection.booksyPaymentReview === "1",
                 ),
               }
             : {}),
@@ -113,8 +125,14 @@ async function loadVisible(
     }
     case "client": {
       if (!permissions.clients) break;
+      const groupNames = projection.clientGroups
+        ? sql<
+            string[] | null
+          >`array(select distinct ${groupName} from unnest(${clientProfile.tags}) as client_tag(name)
+          where ${groupName} <> '' order by 1)`
+        : sql<string[] | null>`null`;
       const rows = await db
-        .select()
+        .select({ ...getTableColumns(clientProfile), groupNames })
         .from(clientProfile)
         .where(and(inArray(clientProfile.id, ids), isNull(clientProfile.deletedAt)));
       for (const r of rows) {
@@ -126,6 +144,7 @@ async function loadVisible(
           email: r.email,
           notes: r.notes,
           controlsVersion: r.controlsVersion,
+          ...(r.groupNames ? { groupNames: r.groupNames } : {}),
           createdAt: r.createdAt.toISOString(),
           updatedAt: r.updatedAt.toISOString(),
         });
@@ -306,10 +325,7 @@ export async function pullChanges(
   }
   const states = new Map<SyncEntity, Visible>();
   for (const [entity, ids] of idsByEntity) {
-    states.set(
-      entity,
-      await loadVisible(db, principal, entity, ids, query.booksyPaymentReview === "1"),
-    );
+    states.set(entity, await loadVisible(db, principal, entity, ids, query));
   }
 
   const changes: SyncChange[] = [];
@@ -369,6 +385,7 @@ export async function pullChanges(
     headSeq: Math.max(head, nextCursor),
     timeOffScope,
     clientDirectory: permissions.clients,
+    ...(query.clientGroups && permissions.clients ? { clientGroups: true as const } : {}),
     viewerRole: principal.role === "owner" ? "owner" : "staff",
     viewerEditCatalogue: permissions.editCatalog,
     ...(query.portfolio === "1" ? { portfolioUploads: permissions.editCatalog } : {}),

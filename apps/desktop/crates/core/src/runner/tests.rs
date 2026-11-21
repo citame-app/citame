@@ -66,6 +66,7 @@ impl Transport for Scripted {
             refresh: vec![],
             time_off_scope: None,
             client_directory: None,
+            client_groups: None,
             calendar_scope: None,
             viewer_role: None,
             viewer_edit_catalogue: None,

@@ -360,6 +360,7 @@ pub fn directory_clients(store: &Store) -> Result<Vec<Client>> {
                         email: str_of(payload, "email"),
                         notes: str_of(payload, "notes"),
                         controls_version: None,
+                        group_names: Some(Vec::new()),
                         created_at: at.with_timezone(&Utc),
                         updated_at: at.with_timezone(&Utc),
                     });
@@ -384,6 +385,51 @@ pub fn directory_clients(store: &Store) -> Result<Vec<Client>> {
     let mut clients: Vec<_> = clients.into_values().collect();
     clients.sort_by_cached_key(|client| (client.name.to_lowercase(), client.id.clone()));
     Ok(clients)
+}
+
+/// Group counts are usable once the server has supplied groups for every visible profile.
+pub fn directory_groups(clients: &[Client]) -> Option<BTreeMap<&str, usize>> {
+    let mut groups = BTreeMap::new();
+    for client in clients {
+        for name in client.group_names.as_deref()? {
+            *groups.entry(name.as_str()).or_default() += 1;
+        }
+    }
+    Some(groups)
+}
+
+pub fn search_directory<'a>(
+    clients: &'a [Client],
+    query: &str,
+    group: Option<&str>,
+) -> Vec<&'a Client> {
+    let query = query.trim().to_lowercase();
+    let digits: String = query.chars().filter(char::is_ascii_digit).collect();
+    clients
+        .iter()
+        .filter(|client| {
+            let groups = client.group_names.as_deref().unwrap_or_default();
+            if group.is_some_and(|group| !groups.iter().any(|name| name == group)) {
+                return false;
+            }
+            query.is_empty()
+                || client.name.to_lowercase().contains(&query)
+                || client
+                    .email
+                    .as_ref()
+                    .is_some_and(|email| email.to_lowercase().contains(&query))
+                || client.phone.as_ref().is_some_and(|phone| {
+                    phone.contains(&query)
+                        || (digits.len() >= 3
+                            && phone
+                                .chars()
+                                .filter(char::is_ascii_digit)
+                                .collect::<String>()
+                                .contains(&digits))
+                })
+                || groups.iter().any(|name| name.contains(&query))
+        })
+        .collect()
 }
 
 /// An appointment as the user should see it now: mirror state with pending edits applied.

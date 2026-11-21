@@ -9,6 +9,8 @@ pub(super) struct Directory {
     _search: Subscription,
     page: usize,
     clients: Vec<Client>,
+    group_filter: Option<String>,
+    choosing_group: bool,
     form: Option<Form>,
     history: Vec<Appointment>,
     pub(super) intake: Option<intake_record::Desk>,
@@ -28,21 +30,10 @@ impl Directory {
     pub(super) fn has_controls(&self) -> bool {
         self.controls.is_some()
     }
-}
 
-fn phone_digits(value: &str) -> String {
-    value.chars().filter(char::is_ascii_digit).collect()
-}
-
-fn matches_query(client: &Client, query: &str, digits: &str) -> bool {
-    client.name.to_lowercase().contains(query)
-        || client
-            .email
-            .as_ref()
-            .is_some_and(|email| email.to_lowercase().contains(query))
-        || client.phone.as_ref().is_some_and(|phone| {
-            phone.contains(query) || (!digits.is_empty() && phone_digits(phone).contains(digits))
-        })
+    pub(super) fn close_group_picker(&mut self) -> bool {
+        std::mem::take(&mut self.choosing_group)
+    }
 }
 
 impl Root {
@@ -68,6 +59,8 @@ impl Root {
             _search: subscription,
             page: 0,
             clients: vec![],
+            group_filter: None,
+            choosing_group: false,
             form: None,
             history: vec![],
             intake: None,
@@ -347,26 +340,34 @@ impl Root {
             );
         }
 
-        let query = desk.search.read(cx).text().trim().to_lowercase();
-        let digits = if query
-            .chars()
-            .all(|ch| ch.is_ascii_digit() || "+-(). ".contains(ch))
-        {
-            phone_digits(&query)
-        } else {
-            String::new()
-        };
-        let filtered: Vec<_> = desk
-            .clients
-            .iter()
-            .filter(|client| matches_query(client, &query, &digits))
-            .collect();
+        if desk.choosing_group {
+            return self.render_directory_groups(desk, cx);
+        }
+        let filtered = calendar::search_directory(
+            &desk.clients,
+            desk.search.read(cx).text(),
+            desk.group_filter.as_deref(),
+        );
         let pages = filtered.len().div_ceil(PAGE_SIZE).max(1);
         let page = desk.page.min(pages - 1);
         self.modal(
             div()
                 .child(title(Key::ClientDirectory))
                 .child(desk.search.clone())
+                .child(self.directory_button(
+                    "directory-groups",
+                    desk.group_filter.as_ref().map_or_else(
+                        || self.t(Key::DirectoryGroups).to_owned(),
+                        |group| format!("{} · {group}", self.t(Key::DirectoryGroups)),
+                    ),
+                    Kind::Ghost,
+                    cx.listener(|root, _, _, cx| {
+                        if let Overlay::Directory(desk) = &mut root.overlay {
+                            desk.choosing_group = true;
+                            cx.notify();
+                        }
+                    }),
+                ))
                 .when(filtered.is_empty(), |d| {
                     d.child(
                         div()
@@ -488,6 +489,75 @@ impl Root {
             desk.page = page;
             cx.notify();
         }
+    }
+
+    fn select_directory_group(&mut self, group: Option<String>, cx: &mut Context<Self>) {
+        if let Overlay::Directory(desk) = &mut self.overlay {
+            desk.group_filter = group;
+            desk.page = 0;
+            desk.close_group_picker();
+            cx.notify();
+        }
+    }
+
+    fn render_directory_groups(&self, desk: &Directory, cx: &mut Context<Self>) -> gpui::Div {
+        let groups = calendar::directory_groups(&desk.clients);
+        let message = match &groups {
+            None => Some(Key::DirectoryGroupsAwaitSync),
+            Some(groups) if groups.is_empty() => Some(Key::DirectoryGroupsEmpty),
+            Some(_) => None,
+        };
+        let group_choices = div()
+            .id("directory-group-choices")
+            .max_h(px(360.))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(self.directory_button(
+                "directory-all-groups",
+                self.t(Key::DirectoryAllGroups),
+                if desk.group_filter.is_none() {
+                    Kind::Primary
+                } else {
+                    Kind::Ghost
+                },
+                cx.listener(|root, _, _, cx| root.select_directory_group(None, cx)),
+            ))
+            .children(groups.into_iter().flatten().map(|(name, count)| {
+                let group = name.to_owned();
+                self.directory_button(
+                    SharedString::from(format!("directory-group-{name}")),
+                    format!("{name} · {count}"),
+                    if desk.group_filter.as_deref() == Some(name) {
+                        Kind::Primary
+                    } else {
+                        Kind::Ghost
+                    },
+                    cx.listener(move |root, _, _, cx| {
+                        root.select_directory_group(Some(group.clone()), cx)
+                    }),
+                )
+            }));
+        self.modal(
+            div()
+                .child(
+                    div()
+                        .text_lg()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(self.t(Key::DirectoryGroups)),
+                )
+                .when_some(message, |body, message| {
+                    body.child(div().text_sm().child(self.t(message)))
+                })
+                .child(group_choices)
+                .child(div().flex().justify_end().child(self.directory_button(
+                    "directory-groups-back",
+                    self.t(Key::Back),
+                    Kind::Ghost,
+                    cx.listener(|root, _, _, cx| root.dismiss_overlay(cx)),
+                ))),
+        )
     }
 }
 

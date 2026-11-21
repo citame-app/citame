@@ -121,6 +121,11 @@ const MIGRATIONS: &[&str] = &[
           AND reason.value = 'unknown_amount'
       );
     "#,
+    // 7: detect older client projections without scanning the directory on every sync.
+    r#"
+    CREATE INDEX client_missing_group_names ON client(id)
+      WHERE json_type(json, '$.groupNames') IS NULL;
+    "#,
 ];
 
 const MIRROR_TABLES: &[&str] = &[
@@ -807,6 +812,25 @@ impl Store {
             .get_meta("cursor")?
             .and_then(|v| v.parse().ok())
             .unwrap_or(0))
+    }
+
+    /// Replays an older client projection once the connected server can supply group names.
+    pub(crate) fn rewind_client_groups_if_needed(&mut self, generation: &str) -> Result<bool> {
+        let missing: bool = self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM client WHERE json_type(json, '$.groupNames') IS NULL)",
+            [],
+            |row| row.get(0),
+        )?;
+        if !missing {
+            return Ok(false);
+        }
+        self.write_transaction(|store| {
+            Self::ensure_generation(&store.conn, Some(generation))?;
+            Ok(store.conn.execute(
+                "UPDATE meta SET value = '0' WHERE key = 'cursor' AND value <> '0'",
+                [],
+            )? > 0)
+        })
     }
 
     /// Changes when another connection commits to this replica.

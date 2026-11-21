@@ -509,6 +509,7 @@ export const syncPullQuerySchema = z.object({
   combinations: z.enum(["full", "delta"]).optional(),
   inventoryAccess: z.literal("1").optional(),
   booksyPaymentReview: z.literal("1").optional(),
+  clientGroups: z.literal("1").optional(),
 });
 export type SyncPullQuery = z.infer<typeof syncPullQuerySchema>;
 
@@ -520,6 +521,7 @@ export const syncClientSchema = z.object({
   email: z.string().nullable(),
   notes: z.string().nullable(),
   controlsVersion: z.number().int().positive().optional(),
+  groupNames: z.array(z.string().min(1)).optional(),
   createdAt: instantSchema,
   updatedAt: instantSchema,
 });
@@ -659,6 +661,8 @@ export const syncPullResponseSchema = z.object({
   /** Time off the current caller can manage: none, every calendar, or their own staff ID. */
   timeOffScope: z.union([z.literal("none"), z.literal("all"), idSchema]).optional(),
   clientDirectory: z.boolean().optional(),
+  /** Confirms the requested client groups projection for callers with directory access. */
+  clientGroups: z.literal(true).optional(),
   viewerRole: z.enum(["owner", "staff"]).optional(),
   viewerEditCatalogue: z.boolean().optional(),
   portfolioUploads: z.boolean().optional(),

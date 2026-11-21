@@ -82,6 +82,7 @@ fn empty_pull(since: i64, _limit: u32) -> Result<PullResponse, TransportError> {
         refresh: vec![],
         time_off_scope: None,
         client_directory: None,
+        client_groups: None,
         calendar_scope: None,
         viewer_role: None,
         viewer_edit_catalogue: None,
@@ -443,6 +444,7 @@ fn page(from: i64, n: i64, has_more: bool) -> PullResponse {
         has_more,
         refresh: vec![],        time_off_scope: None,
             client_directory: None,
+            client_groups: None,
             calendar_scope: None,
             viewer_role: None,
             viewer_edit_catalogue: None,
@@ -453,6 +455,56 @@ fn page(from: i64, n: i64, has_more: bool) -> PullResponse {
             viewer_read_inventory: None,
         head_seq: 6,
     }
+}
+
+#[test]
+fn legacy_client_groups_wait_for_server_support_before_replay() {
+    let mut store = Store::open_in_memory().unwrap();
+    let legacy = Fake::new(
+        Box::new(applied_all),
+        Box::new(|since, _| {
+            if since == 0 {
+                Ok(page(0, 6, false))
+            } else {
+                empty_pull(since, 0)
+            }
+        }),
+    );
+    pull_all(&mut store, &legacy).unwrap();
+    pull_all(&mut store, &legacy).unwrap();
+    assert_eq!(legacy.log(), ["pull:0", "pull:6"]);
+    assert_eq!(store.cursor().unwrap(), 6);
+    assert!(
+        store
+            .clients()
+            .unwrap()
+            .iter()
+            .all(|client| client.group_names.is_none())
+    );
+
+    let upgraded = Fake::new(
+        Box::new(applied_all),
+        Box::new(|since, _| {
+            let mut response = if since == 0 {
+                page(0, 6, false)
+            } else {
+                empty_pull(since, 0)?
+            };
+            response.client_groups = Some(true);
+            for change in &mut response.changes {
+                change.data.as_mut().unwrap()["groupNames"] = json!(["vip"]);
+            }
+            Ok(response)
+        }),
+    );
+    pull_all(&mut store, &upgraded).unwrap();
+    pull_all(&mut store, &upgraded).unwrap();
+    assert_eq!(upgraded.log(), ["pull:6", "pull:0", "pull:6"]);
+    assert_eq!(store.cursor().unwrap(), 6);
+    assert_eq!(
+        crate::calendar::directory_groups(&store.clients().unwrap()).unwrap()["vip"],
+        6
+    );
 }
 
 #[test]
@@ -504,6 +556,7 @@ fn client_visibility_change_purges_the_previous_replica_and_keeps_the_outbox() {
                 refresh: vec![],
                 time_off_scope: None,
                 client_directory: Some(false),
+                client_groups: None,
                 calendar_scope: Some("staff".into()),
                 viewer_role: None,
                 viewer_edit_catalogue: None,
@@ -562,6 +615,7 @@ fn tombstones_in_a_pull_remove_local_rows() {
                 refresh: vec![],
                 time_off_scope: None,
                 client_directory: None,
+                client_groups: None,
                 calendar_scope: None,
                 viewer_role: None,
                 viewer_edit_catalogue: None,
@@ -638,6 +692,7 @@ fn a_server_that_says_has_more_without_progress_cannot_spin_the_client() {
                 refresh: vec![],
                 time_off_scope: None,
                 client_directory: None,
+                client_groups: None,
                 calendar_scope: None,
                 viewer_role: None,
                 viewer_edit_catalogue: None,
@@ -670,6 +725,7 @@ fn empty_pages_that_still_advance_the_cursor_are_followed() {
                 refresh: vec![],
                 time_off_scope: None,
                 client_directory: None,
+                client_groups: None,
                 calendar_scope: None,
                 viewer_role: None,
                 viewer_edit_catalogue: None,
@@ -818,6 +874,7 @@ fn offline_create_then_reconnect_applies_and_clears_the_pending_flag() {
                 refresh: vec![],
                 time_off_scope: None,
                 client_directory: None,
+                client_groups: None,
                 calendar_scope: None,
                 viewer_role: None,
                 viewer_edit_catalogue: None,

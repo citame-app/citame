@@ -5097,7 +5097,9 @@ fn native_directory_replays_contacts_and_preserves_newer_edits() {
             .is_none()
     );
     second.sync();
-    assert_eq!(read(&second).controls_version, Some(saved.version));
+    let synced_client = read(&second);
+    assert_eq!(synced_client.controls_version, Some(saved.version));
+    assert_eq!(synced_client.group_names, Some(vec!["vip".to_owned()]));
     assert_eq!(
         second
             .transport

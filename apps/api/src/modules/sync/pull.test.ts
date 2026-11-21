@@ -61,6 +61,38 @@ async function book(staffId = f.anaId, startsAt = MONDAY_0900) {
   return (await res.json()) as { id: string; version: number };
 }
 
+test("client group projection uses Cloud normalization and respects directory visibility", async () => {
+  const cursor = await head();
+  const reason = "Private reason absent from the group projection";
+  await t.db
+    .update(clientProfile)
+    .set({ tags: ["  ＶＩＰ  ", "VIP", ""], bookingAccessReason: reason })
+    .where(eq(clientProfile.id, f.clientId));
+  const clientChange = (page: Awaited<ReturnType<typeof pull>>) =>
+    page.changes.find((change) => change.entity === "client" && change.id === f.clientId);
+  const standardPage = await pull(t, owner, { since: cursor });
+  expect(standardPage.clientGroups).toBeUndefined();
+  const standard = clientChange(standardPage);
+  expect(standard?.op).toBe("upsert");
+  expect(standard?.data).not.toHaveProperty("groupNames");
+  for (const who of [owner, ana]) {
+    const page = await pull(t, who, { since: cursor, clientGroups: "1" });
+    expect(page.clientGroups).toBe(true);
+    const projected = clientChange(page);
+    expect(projected?.data).toMatchObject({ groupNames: ["vip"] });
+    expect(projected?.data).not.toHaveProperty("bookingAccess");
+    expect(JSON.stringify(projected)).not.toContain(reason);
+  }
+  await t.db
+    .update(staffProfile)
+    .set({ accessPreset: "restricted" })
+    .where(eq(staffProfile.id, f.anaId));
+  const restricted = await pull(t, ana, { since: cursor, clientGroups: "1" });
+  expect(restricted.clientGroups).toBeUndefined();
+  const hidden = clientChange(restricted);
+  expect(hidden).toMatchObject({ op: "delete", data: null });
+});
+
 test("staff can repair service colors at the head without replaying the log", async () => {
   await t.db
     .update(service)

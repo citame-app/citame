@@ -16,6 +16,45 @@ const LUCIA: &str = "01a1d81e-0000-7000-8000-0000000000c1";
 const EXISTING: &str = "01a1d81e-0000-7000-8000-0000000000e1";
 
 #[test]
+fn directory_groups_backfill_keeps_contacts_and_pending_edits() {
+    let temporary = tempfile::tempdir().unwrap();
+    let file = temporary.path().join("replica.sqlite");
+    let mut replica = Store::open(&file).unwrap();
+    replica.set_meta("client_directory", "allowed").unwrap();
+    let mut client = seeded().clients().unwrap().remove(0);
+    let incoming = |seq, client: &Client| up(seq, "client", &client.id, json!(client));
+    replica.apply_page(&[incoming(19, &client)], 19).unwrap();
+    let id = create_directory_client(&mut replica, "Pending contact", "", "", "").unwrap();
+    drop(replica);
+    let old_schema = rusqlite::Connection::open(&file).unwrap();
+    old_schema
+        .execute_batch("DROP INDEX client_missing_group_names")
+        .unwrap();
+    old_schema.pragma_update(None, "user_version", 6).unwrap();
+    drop(old_schema);
+    let mut replica = Store::open(&file).unwrap();
+    assert_eq!(replica.cursor().unwrap(), 19);
+    let generation = replica.replica_generation().unwrap();
+    assert!(replica.rewind_client_groups_if_needed(&generation).unwrap());
+    assert_eq!(replica.cursor().unwrap(), 0);
+    assert_eq!(replica.outbox_len().unwrap(), 1);
+    let clients = directory_clients(&replica).unwrap();
+    assert!(directory_groups(&clients).is_none());
+    assert_eq!(search_directory(&clients, "pending", None)[0].id, id);
+
+    client.group_names = Some(vec!["vip".into()]);
+    replica.apply_page(&[incoming(19, &client)], 19).unwrap();
+    let clients = directory_clients(&replica).unwrap();
+    assert_eq!(
+        directory_groups(&clients).unwrap(),
+        std::collections::BTreeMap::from([("vip", 1)])
+    );
+    assert_eq!(search_directory(&clients, "VIP", None)[0].id, client.id);
+    assert_eq!(search_directory(&clients, "", Some("vip"))[0].id, client.id);
+    assert!(search_directory(&clients, "%", Some("vip")).is_empty());
+}
+
+#[test]
 fn a_persisted_client_controls_revision_is_read_without_reloading_the_directory() {
     let mut store = seeded();
     assert!(store.client_is_synced(LUCIA).unwrap());

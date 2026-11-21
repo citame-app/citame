@@ -2507,6 +2507,12 @@ impl Root {
     // ---------------------------------------------------------------- render: overlays
 
     fn dismiss_overlay(&mut self, cx: &mut Context<Self>) {
+        if let Overlay::Directory(desk) = &mut self.overlay
+            && desk.close_group_picker()
+        {
+            cx.notify();
+            return;
+        }
         if self.saving_service_annotations() {
             return;
         }
