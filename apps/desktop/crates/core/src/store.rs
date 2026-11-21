@@ -136,6 +136,11 @@ const MIGRATIONS: &[&str] = &[
         ON appointment (json_extract(json, '$.visitGroupId'), starts_at_ms, id)
         WHERE json_extract(json, '$.visitGroupId') IS NOT NULL;
     "#,
+    r#"
+    CREATE INDEX appointment_itinerary
+        ON appointment (json_extract(json, '$.itineraryId'), starts_at_ms, id)
+        WHERE json_extract(json, '$.itineraryId') IS NOT NULL;
+    "#,
 ];
 
 const MIRROR_TABLES: &[&str] = &[
@@ -1545,13 +1550,19 @@ impl Store {
         &self,
         group_id: &str,
         client_id: &str,
+        native: bool,
     ) -> Result<Vec<Appointment>> {
-        let mut stmt = self.conn.prepare_cached(
+        let field = if native {
+            "$.itineraryId"
+        } else {
+            "$.visitGroupId"
+        };
+        let mut stmt = self.conn.prepare_cached(&format!(
             "SELECT json FROM appointment
-             WHERE json_extract(json, '$.visitGroupId') = ?1
+             WHERE json_extract(json, '{field}') = ?1
                AND json_extract(json, '$.clientId') = ?2
              ORDER BY starts_at_ms, id",
-        )?;
+        ))?;
         let rows = stmt
             .query_map([group_id, client_id], |row| row.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;

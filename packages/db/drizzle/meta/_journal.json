@@ -750,6 +750,13 @@
       "when": 1795268629000,
       "tag": "0106_sync_client_email_editability",
       "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1795285620000,
+      "tag": "0107_sync_visit_itineraries",
+      "breakpoints": true
     }
   ]
 }

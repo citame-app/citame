@@ -5455,6 +5455,124 @@ fn native_directory_replays_contacts_and_preserves_newer_edits() {
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_reviews_and_books_the_whole_itinerary_through_the_proxy() {
+    use sob_core::booking::visit::{
+        VisitConfirmation, VisitPartReview, VisitPartSelection, VisitSelection, VisitTerms,
+    };
+    use sob_core::intake::IntakeSelection;
+
+    let mut browser = Device::sign_in();
+    browser.sync();
+    let catalog = catalog(&browser);
+    let currency = browser
+        .store
+        .services()
+        .unwrap()
+        .into_iter()
+        .find(|service| service.id == catalog.haircut)
+        .unwrap()
+        .currency;
+    let next_service = browser.rest_post(
+        "/admin/services",
+        json!({
+            "name": "Synthetic itinerary treatment", "durationMinutes": 30, "priceCents": 2100,
+            "currency": currency, "staffIds": [catalog.other_staff],
+        }),
+    );
+    let next_service = next_service["id"].as_str().unwrap();
+    let client = ops::create_client(&mut browser.store, "Synthetic itinerary guest", None).unwrap();
+    browser.sync();
+    let device = proxy_device();
+    let note = format!("Synthetic itinerary {}", uuid::Uuid::now_v7());
+    let (reviewed, starts) = (0..16)
+        .find_map(|_| {
+            let starts = free_slot(&browser, &catalog.staff);
+            let visit = VisitTerms::prepare(
+                &browser.store,
+                VisitSelection {
+                    client_id: client.clone(),
+                    starts_at: starts,
+                    notes: Some(note.clone()),
+                    parts: vec![
+                        VisitPartSelection {
+                            staff_id: catalog.staff.clone(),
+                            service_ids: vec![catalog.haircut.clone()],
+                        },
+                        VisitPartSelection {
+                            staff_id: catalog.other_staff.clone(),
+                            service_ids: vec![next_service.to_owned()],
+                        },
+                    ],
+                },
+            )
+            .unwrap();
+            let selection = visit
+                .parts()
+                .iter()
+                .map(|part| VisitPartReview {
+                    intake_hash: device
+                        .transport
+                        .direct_booking_requirements(part)
+                        .unwrap()
+                        .review_hash,
+                    intake: IntakeSelection::default(),
+                    protection_waiver_reason: None,
+                })
+                .collect();
+            let packet = visit.packet(selection).unwrap();
+            let preview = device.transport.preview_visit(&packet).unwrap();
+            packet
+                .confirmable(&preview)
+                .ok()
+                .map(|confirmed| (confirmed, starts))
+        })
+        .expect("a free multi-professional itinerary");
+    let notice_head = browser.store.booking_notice_head().unwrap();
+    reviewed.mark_local_dispatch(&mut browser.store).unwrap();
+    assert_eq!(
+        device.transport.create_reviewed_visit(&reviewed).unwrap(),
+        VisitConfirmation::Booked(starts)
+    );
+    assert_eq!(
+        device.transport.create_reviewed_visit(&reviewed).unwrap(),
+        VisitConfirmation::Booked(starts)
+    );
+    browser.sync();
+    let appointments = browser
+        .store
+        .appointments_between(
+            starts.timestamp_millis(),
+            (starts + Span::hours(4)).timestamp_millis(),
+        )
+        .unwrap()
+        .into_iter()
+        .filter(|a| a.notes.as_deref() == Some(note.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(appointments.len(), 2);
+    assert_eq!(appointments[0].staff_id, catalog.staff);
+    assert_eq!(appointments[1].staff_id, catalog.other_staff);
+    assert_eq!(appointments[0].ends_at, appointments[1].starts_at);
+    assert!(appointments.iter().all(|a| a.client_id == client));
+    assert!(appointments[0].itinerary_id.is_some());
+    assert_eq!(appointments[0].itinerary_id, appointments[1].itinerary_id);
+    assert_eq!(
+        sob_core::calendar::related_visit_appointments(&browser.store, &appointments[0]).unwrap()
+            [0]
+        .id,
+        appointments[1].id
+    );
+    assert!(
+        browser
+            .store
+            .booking_notices_after(notice_head)
+            .unwrap()
+            .iter()
+            .all(|(_, notice)| appointments.iter().all(|a| a.id != notice.id))
+    );
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_reviews_a_recurring_series_and_retries_the_same_request_through_the_proxy() {
     use sob_core::booking::{
         BookingAttempt, BookingConfirmation, BookingTerms, Cadence, Recurrence,

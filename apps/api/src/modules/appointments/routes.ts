@@ -13,6 +13,8 @@ import {
   desktopBookingRequestSchema,
   desktopSeriesCreateSchema,
   desktopSeriesInputSchema,
+  desktopVisitCreateSchema,
+  desktopVisitInputSchema,
   idSchema,
   updateAppointmentRequestSchema,
   visitCreateSchema,
@@ -50,7 +52,7 @@ import {
   loadSnapshots,
   updateAppointment,
 } from "./service";
-import { createVisit, getVisit } from "./visits";
+import { createVisit, getVisit, previewDesktopVisit } from "./visits";
 
 /** Mounted behind `requireAuth`, so every handler can rely on `c.get("principal")`. */
 export function appointmentsRoutes({
@@ -234,6 +236,18 @@ export function appointmentsRoutes({
           201,
         ),
       )
+      .post("/desktop-visits/preview", async (c) => {
+        const input = parseOrThrow(desktopVisitInputSchema, await readJson(c));
+        assertDesktopGeneration(input.desktopGeneration);
+        return c.json(await previewDesktopVisit(db, input, c.get("principal"), now()), 200, {
+          "Cache-Control": "private, no-store",
+        });
+      })
+      .post("/desktop-visits", async (c) => {
+        const { reviewHash, ...input } = parseOrThrow(desktopVisitCreateSchema, await readJson(c));
+        assertDesktopGeneration(input.desktopGeneration);
+        return c.json(await createVisit(db, input, c.get("principal"), now(), reviewHash), 201);
+      })
       .get("/visits/:id", async (c) =>
         c.json(await getVisit(db, parseOrThrow(idSchema, c.req.param("id")), c.get("principal"))),
       )

@@ -17,6 +17,7 @@ use crate::billing::{
     PassRefundQuote, PaymentAttempt, ReceiptTender, RefundAttempt, RefundTender, SavedBankRefund,
     SavedBankRefundStatus, WalkInSale,
 };
+use crate::booking::visit::{ReviewedVisit, VisitConfirmation, VisitPacket, VisitPreview};
 use crate::booking::{
     BookingAttempt, BookingConfirmation, BookingError, BookingTerms, ReviewedBooking,
     ReviewedSeries, SeriesPacket, SeriesPreview,
@@ -1942,6 +1943,29 @@ impl HttpTransport {
         let response = self.send_json("/appointments/desktop-series", packet)?;
         let series: Series = read_response_with(response, classify_booking_error)?;
         packet.confirm(&series.appointments)
+    }
+
+    pub fn preview_visit(&self, packet: &VisitPacket) -> Result<VisitPreview, BookingError> {
+        let response = self.send_json("/appointments/desktop-visits/preview", packet)?;
+        let preview: VisitPreview = read_response_with(response, classify_booking_error)?;
+        if !packet.matches_preview(&preview) {
+            return Err(TransportError::Server("Unexpected visit preview".into()).into());
+        }
+        Ok(preview)
+    }
+
+    pub fn create_reviewed_visit(
+        &self,
+        packet: &ReviewedVisit,
+    ) -> Result<VisitConfirmation, BookingError> {
+        #[derive(serde::Deserialize)]
+        struct Visit {
+            id: String,
+            appointments: Vec<Appointment>,
+        }
+        let response = self.send_json("/appointments/desktop-visits", packet)?;
+        let visit: Visit = read_response_with(response, classify_booking_error)?;
+        packet.acknowledge(&visit.id, &visit.appointments)
     }
 
     fn post_json<T: serde::de::DeserializeOwned>(

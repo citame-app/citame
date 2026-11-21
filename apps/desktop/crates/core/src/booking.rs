@@ -10,6 +10,7 @@ use crate::model::AppointmentService;
 use crate::ops::{NewAppointment, reviewed_service_terms, validate_contact};
 use crate::store::Store;
 use crate::sync::TransportError;
+pub mod visit;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -218,6 +219,10 @@ impl BookingTerms {
 
     pub fn service_ids(&self) -> &[String] {
         &self.fields.service_ids
+    }
+
+    pub fn staff_id(&self) -> &str {
+        &self.fields.staff_id
     }
     pub fn client_id(&self) -> Option<&str> {
         match &self.fields.client {

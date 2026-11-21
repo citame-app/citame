@@ -249,6 +249,7 @@ fn overlay_calendar_outbox(
                     Appointment {
                         id: e.entity_id.clone(),
                         visit_group_id: None,
+                        itinerary_id: None,
                         staff_id,
                         client_id: str_of(p, "clientId").unwrap_or_default(),
                         client_name: None,
@@ -520,7 +521,12 @@ pub fn related_visit_appointments(
     store: &Store,
     current: &Appointment,
 ) -> Result<Vec<Appointment>> {
-    let Some(group_id) = current.visit_group_id.as_deref() else {
+    let native = current.itinerary_id.is_some();
+    let Some(group_id) = current
+        .itinerary_id
+        .as_ref()
+        .or(current.visit_group_id.as_ref())
+    else {
         return Ok(Vec::new());
     };
     store.read_snapshot(|store| {
@@ -531,7 +537,7 @@ pub fn related_visit_appointments(
                 .is_none_or(|staff| staff == "all" || staff == appointment.staff_id)
         };
         let mut group: HashMap<_, _> = store
-            .appointments_in_visit_group(group_id, &current.client_id)?
+            .appointments_in_visit_group(group_id, &current.client_id, native)?
             .into_iter()
             .filter(|a| a.id != current.id && in_scope(a))
             .map(|a| (a.id.clone(), a))
@@ -549,7 +555,11 @@ pub fn related_visit_appointments(
             .into_values()
             .filter(|a| {
                 a.client_id == current.client_id
-                    && a.visit_group_id.as_deref() == Some(group_id)
+                    && (if native {
+                        a.itinerary_id.as_ref()
+                    } else {
+                        a.visit_group_id.as_ref()
+                    }) == Some(group_id)
                     && in_scope(a)
             })
             .collect();

@@ -55,6 +55,7 @@ export const appointmentSchema = z.object({
     .optional(),
   id: idSchema,
   visitGroupId: idSchema.optional(),
+  itineraryId: idSchema.optional(),
   staffId: idSchema,
   clientId: idSchema,
   startsAt: instantSchema,

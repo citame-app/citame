@@ -145,6 +145,8 @@ export function requireAuth(
             "/appointments/desktop-booking",
             "/appointments/desktop-series",
             "/appointments/desktop-series/preview",
+            "/appointments/desktop-visits",
+            "/appointments/desktop-visits/preview",
           ].includes(path)) ||
         (path === "/admin/staff-accounts" && method !== "POST") ||
         (path === "/admin/accounts/lookup" && method !== "POST") ||

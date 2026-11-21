@@ -176,6 +176,8 @@ pub struct Appointment {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visit_group_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub itinerary_id: Option<String>,
     pub staff_id: String,
     pub client_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

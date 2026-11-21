@@ -175,6 +175,9 @@ impl Root {
             Overlay::Waitlist(desk) => desk.editable_intake(),
             Overlay::Directory(desk) => desk.intake.as_mut()?.editable(),
             Overlay::New(form) => {
+                if let Some(review) = &mut form.visit_review {
+                    return review.editable_forms();
+                }
                 let review = form.intake.as_mut()?;
                 (!review.busy
                     && review.submitted.is_none()
@@ -194,7 +197,13 @@ impl Root {
                     record.error = Some(key);
                 }
             }
-            Overlay::New(form) => form.error = Some(key),
+            Overlay::New(form) => {
+                if let Some(review) = &mut form.visit_review {
+                    review.show_error(key);
+                } else {
+                    form.error = Some(key);
+                }
+            }
             _ => {}
         }
     }

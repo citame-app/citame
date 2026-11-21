@@ -2,6 +2,7 @@ import type { SyncChange, SyncEntity, SyncPullQuery, SyncPullResponse } from "@s
 import { permissionsFor, type SyncLiveView, syncLiveViewSchema } from "@sob/contracts";
 import {
   appointment,
+  appointmentVisitPart,
   clientProfile,
   type Database,
   dateShift,
@@ -77,9 +78,14 @@ async function loadVisible(
   switch (entity) {
     case "appointment": {
       const rows = await db
-        .select({ row: appointment, clientName: clientProfile.name })
+        .select({
+          row: appointment,
+          clientName: clientProfile.name,
+          itineraryId: appointmentVisitPart.visitId,
+        })
         .from(appointment)
         .innerJoin(clientProfile, eq(clientProfile.id, appointment.clientId))
+        .leftJoin(appointmentVisitPart, eq(appointmentVisitPart.appointmentId, appointment.id))
         .where(and(inArray(appointment.id, ids), isNull(appointment.deletedAt)));
       const visible = rows.filter(({ row }) => ownCalendar(row.staffId));
       const snapshots = await loadSnapshots(
@@ -92,11 +98,12 @@ async function loadVisible(
         [...snapshots.values()].flat(),
         { includeBilling: permissions.commerce },
       );
-      for (const { row, clientName } of visible) {
+      for (const { row, clientName, itineraryId } of visible) {
         const billing = badges.get(row.id);
         put(row.id, {
           ...toAppointment(row, snapshots.get(row.id) ?? []),
           clientName,
+          ...(itineraryId ? { itineraryId } : {}),
           ...(billing?.badges.some(
             (badge) =>
               badge.requested ||

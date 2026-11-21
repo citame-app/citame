@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { appointmentSchema, createAppointmentBaseSchema } from "./appointments";
-import { idSchema, instantSchema, LIMITS, localDateSchema } from "./common";
+import { idSchema, instantSchema, LIMITS, localDateSchema, syncGenerationSchema } from "./common";
 
 const visitPartSchema = createAppointmentBaseSchema.omit({
   id: true,
@@ -27,6 +27,47 @@ export const visitCreateSchema = z
     { message: "Choose up to 24 distinct services in the visit" },
   );
 export type VisitCreate = z.infer<typeof visitCreateSchema>;
+const desktopVisitPartSchema = visitPartSchema
+  .extend({
+    id: idSchema,
+    serviceQuotes: createAppointmentBaseSchema.shape.serviceQuotes.unwrap(),
+    intakeReviewHash: createAppointmentBaseSchema.shape.intakeReviewHash.unwrap(),
+  })
+  .strict();
+export const desktopVisitInputSchema = visitCreateSchema
+  .safeExtend({
+    clientId: idSchema,
+    desktopGeneration: syncGenerationSchema,
+    parts: z.array(desktopVisitPartSchema).min(2).max(8),
+  })
+  .refine((visit) => new Set(visit.parts.map((part) => part.id)).size === visit.parts.length, {
+    path: ["parts"],
+    message: "Choose a different appointment ID for each step",
+  });
+export const desktopVisitCreateSchema = desktopVisitInputSchema.safeExtend({
+  reviewHash: z.string().regex(/^[a-f0-9]{64}$/),
+});
+export type DesktopVisitInput = z.infer<typeof desktopVisitInputSchema>;
+export type DesktopVisitCreate = z.infer<typeof desktopVisitCreateSchema>;
+export const desktopVisitPreviewSchema = z.object({
+  reviewHash: z.string(),
+  timezone: z.string(),
+  currency: z.string(),
+  depositEnabled: z.boolean(),
+  parts: z
+    .array(
+      z.object({
+        id: idSchema,
+        startsAt: instantSchema,
+        endsAt: instantSchema,
+        priceCents: z.number().int().nonnegative(),
+        available: z.boolean(),
+      }),
+    )
+    .min(2)
+    .max(8),
+});
+export type DesktopVisitPreview = z.infer<typeof desktopVisitPreviewSchema>;
 export const visitSchema = z.object({
   id: idSchema,
   appointments: z.array(appointmentSchema).min(2).max(8),

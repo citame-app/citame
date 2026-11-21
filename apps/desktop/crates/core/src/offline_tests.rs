@@ -28,7 +28,7 @@ fn directory_groups_backfill_keeps_contacts_and_pending_edits() {
     drop(replica);
     let old_schema = rusqlite::Connection::open(&file).unwrap();
     old_schema
-        .execute_batch("DROP INDEX client_missing_group_names; DROP INDEX appointment_visit_group")
+        .execute_batch("DROP INDEX client_missing_group_names; DROP INDEX appointment_visit_group; DROP INDEX appointment_itinerary")
         .unwrap();
     old_schema.pragma_update(None, "user_version", 6).unwrap();
     drop(old_schema);

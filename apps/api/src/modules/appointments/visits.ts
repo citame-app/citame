@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import {
+  type DesktopVisitInput,
+  type DesktopVisitPreview,
   permissionsFor,
   type Visit,
   type VisitAvailability,
@@ -9,16 +11,22 @@ import {
 import { appointment, appointmentVisit, appointmentVisitPart, type Database } from "@sob/db";
 import { asc, eq, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
-import { authorizeAppointmentCreate } from "../../auth/policy";
+import { authorizeAppointmentCreate, requirePermission } from "../../auth/policy";
 import { loadPrincipal, ownsClient, type Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { lockCalendars, lockScheduling, type Tx } from "../../tx";
 import { totalBlockMinutes } from "../availability/compute";
 import { findAvailability } from "../availability/service";
+import { serviceWorkWindows } from "../availability/work-windows";
+import { getBookingPolicy } from "../booking-protection/policy";
 import { protectionView } from "../booking-protection/value";
+import { prepareBookingIntake } from "../clients/intake-booking";
+import { filterResourceAvailability } from "../resources/reservations";
 import { assertOnlineServices, getBookableServices } from "../services/service";
+import { getSalonSettings } from "../settings/service";
+import { staffQualifiedFor } from "../staff/service";
 import { loadBookingPrices } from "./pricing";
-import { createAppointment, loadSnapshots, toAppointment } from "./service";
+import { assertBookable, createAppointment, loadSnapshots, toAppointment } from "./service";
 
 function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical);
@@ -54,6 +62,7 @@ async function readVisit(db: Database | Tx, id: string, p: Principal): Promise<V
   for (const { booking } of rows)
     appointments.push({
       ...toAppointment(booking, snapshots.get(booking.id) ?? []),
+      itineraryId: id,
       protection: await protectionView(db, booking.id),
       ...(prices.has(booking.id) ? { bookingPrice: prices.get(booking.id) } : {}),
     });
@@ -70,20 +79,23 @@ export async function getVisit(db: Database, id: string, p: Principal) {
 
 export async function createVisit(
   db: Database,
-  input: VisitCreate,
+  input: VisitCreate | DesktopVisitInput,
   principal: Principal,
   now: Date,
+  reviewHash?: string,
 ): Promise<Visit> {
   return db.transaction(async (tx) => {
     await lockScheduling(tx);
     const p = await loadPrincipal(tx, principal.userId);
     if (!p) throw new DomainError("forbidden", "Account unavailable");
+    const desktop = "desktopGeneration" in input;
+    if (desktop) requirePermission(p, "editCalendar");
     if (p.role === "client" && input.clientId !== undefined)
       throw new DomainError("forbidden", "Customers book only for themselves");
     const clientId = p.role === "client" ? p.clientId : input.clientId;
     if (!clientId) throw new DomainError("validation_error", "Choose a customer");
     const requestHash = createHash("sha256")
-      .update(JSON.stringify(canonical({ ...input, clientId })))
+      .update(JSON.stringify(canonical({ ...input, clientId, ...(desktop ? { reviewHash } : {}) })))
       .digest("hex");
     const [prior] = await tx
       .select()
@@ -104,6 +116,15 @@ export async function createVisit(
     if (new Set(all.map((s) => s.currency)).size !== 1)
       throw new DomainError("validation_error", "A visit must use one currency");
     await lockCalendars(tx, [...new Set(input.parts.map((part) => part.staffId))].sort());
+    if (desktop) {
+      // Match the policy that was shown before any part can make a change.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('booking-policy',0))`);
+      const reviewed = await reviewDesktopVisit(tx, input, p, now);
+      if (reviewed.reviewHash !== reviewHash)
+        throw new DomainError("version_conflict", "The visit terms changed; review again");
+      if (reviewed.parts.some((part) => !part.available))
+        throw new DomainError("slot_taken", "At least one step of the visit is unavailable");
+    }
     await tx
       .insert(appointmentVisit)
       .values({ id: input.id, clientId, createdBy: p.userId, requestHash });
@@ -119,7 +140,7 @@ export async function createVisit(
         tx,
         request,
         { userId: p.userId, role: p.role },
-        { now, sequentialContinuation: position > 0 },
+        { now, sequentialContinuation: position > 0, desktopReviewed: desktop },
       );
       await tx
         .insert(appointmentVisitPart)
@@ -134,6 +155,97 @@ export async function createVisit(
       metadata: { count: input.parts.length },
     });
     return readVisit(tx, input.id, p);
+  });
+}
+
+async function reviewDesktopVisit(
+  tx: Tx,
+  input: DesktopVisitInput,
+  principal: Principal,
+  now: Date,
+): Promise<DesktopVisitPreview> {
+  requirePermission(principal, "editCalendar");
+  const settings = await getSalonSettings(tx);
+  const policy = await getBookingPolicy(tx);
+  const parts: DesktopVisitPreview["parts"] = [];
+  const currencies = new Set<string>();
+  let startsAt = new Date(input.startsAt);
+  for (const part of input.parts) {
+    const request = authorizeAppointmentCreate(principal, {
+      ...part,
+      clientId: input.clientId,
+      startsAt: startsAt.toISOString(),
+    });
+    const services = await getBookableServices(tx, part.serviceIds, part.serviceQuotes);
+    for (const service of services) currencies.add(service.currency);
+    if (!(await staffQualifiedFor(tx, part.serviceIds)).includes(part.staffId))
+      throw new DomainError("validation_error", "The professional does not perform these services");
+    await prepareBookingIntake(tx, request, input.clientId, principal.userId, now, services, true);
+    const endsAt = new Date(startsAt.getTime() + totalBlockMinutes(services) * 60000);
+    let available = true;
+    try {
+      await assertBookable(tx, {
+        staffId: part.staffId,
+        startsAt,
+        endsAt,
+        settings,
+        now,
+        override: false,
+        workWindows: serviceWorkWindows(services),
+        preview: true,
+      });
+      available =
+        (await filterResourceAvailability(tx, services, [{ startsAt, endsAt }], now)).length > 0;
+    } catch (error) {
+      if (
+        !(error instanceof DomainError) ||
+        !["slot_unavailable", "slot_taken"].includes(error.code)
+      )
+        throw error;
+      available = false;
+    }
+    parts.push({
+      id: part.id,
+      startsAt: startsAt.toISOString(),
+      endsAt: endsAt.toISOString(),
+      priceCents: services.reduce((price, service) => price + service.priceCents, 0),
+      available,
+    });
+    startsAt = endsAt;
+  }
+  const [currency] = currencies;
+  if (!currency || currencies.size !== 1)
+    throw new DomainError("validation_error", "A visit must use one currency");
+  const reviewHash = createHash("sha256")
+    .update(
+      JSON.stringify(
+        canonical({
+          input,
+          timezone: settings.timezone,
+          policy,
+          terms: parts.map(({ available: _, ...terms }) => terms),
+        }),
+      ),
+    )
+    .digest("hex");
+  return {
+    reviewHash,
+    timezone: settings.timezone,
+    currency,
+    depositEnabled: policy.enabled,
+    parts,
+  };
+}
+
+export function previewDesktopVisit(
+  db: Database,
+  input: DesktopVisitInput,
+  principal: Principal,
+  now: Date,
+) {
+  return db.transaction((tx) => reviewDesktopVisit(tx, input, principal, now), {
+    isolationLevel: "repeatable read",
+    accessMode: "read only",
   });
 }
 

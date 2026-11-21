@@ -40,6 +40,7 @@ mod booking_policy;
 mod calendar_date;
 mod calendar_overview;
 mod commissions;
+mod visit_booking;
 mod visit_group;
 use calendar_overview::CalendarMode;
 mod cash;
@@ -236,6 +237,9 @@ struct NewForm {
     notes: Entity<TextField>,
     recurrence: Option<sob_core::booking::Recurrence>,
     series_override: bool,
+    visit_parts: Vec<sob_core::booking::visit::VisitPartSelection>,
+    visit_quotes: std::collections::BTreeMap<String, String>,
+    visit_review: Option<Box<visit_booking::VisitDesk>>,
     intake: Option<booking_intake::BookingReview>,
     error: Option<Key>,
 }
@@ -1077,6 +1081,9 @@ impl Root {
             notes,
             recurrence: None,
             series_override: false,
+            visit_parts: Vec::new(),
+            visit_quotes: Default::default(),
+            visit_review: None,
             intake: None,
             error: None,
         }));
@@ -1096,6 +1103,10 @@ impl Root {
     }
 
     fn book(&mut self, cx: &mut Context<Self>) {
+        if matches!(&self.overlay, Overlay::New(form) if !form.visit_parts.is_empty()) {
+            self.review_grouped_visit(cx);
+            return;
+        }
         let Overlay::New(form) = &mut self.overlay else {
             return;
         };
@@ -2564,6 +2575,14 @@ impl Root {
             {
                 return;
             }
+            Overlay::New(form)
+                if form
+                    .visit_review
+                    .as_ref()
+                    .is_some_and(|review| review.blocks_dismissal()) =>
+            {
+                return;
+            }
             Overlay::WalkIn(sale) if !sale.can_dismiss() => return,
             Overlay::WalkInReceipt(review) if !review.can_go_back() => return,
             Overlay::WalkIn(_) | Overlay::WalkInReceipt(_) => {
@@ -2736,6 +2755,9 @@ impl Root {
         viewport: gpui::Size<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        if let Some(review) = &f.visit_review {
+            return self.render_visit_review(review, viewport, cx);
+        }
         if let Some(review) = &f.intake {
             return self.render_booking_intake(f, review, viewport, cx);
         }
@@ -2882,7 +2904,12 @@ impl Root {
                     }),
             )
             .child(f.notes.clone())
-            .child(self.render_recurrence(f.recurrence, f.series_override, cx));
+            .when(f.visit_parts.is_empty(), |fields| {
+                fields.child(self.render_recurrence(f.recurrence, f.series_override, cx))
+            })
+            .when(!f.visit_parts.is_empty(), |fields| {
+                fields.child(self.render_visit_parts(f, cx))
+            });
 
         let performed: std::collections::HashSet<_> =
             ops::performed_services(&self.svc.store, staff)
@@ -2897,6 +2924,10 @@ impl Root {
                 service.active
                     && performed.contains(&service.id)
                     && service.name.to_lowercase().contains(&search)
+                    && !f
+                        .visit_parts
+                        .iter()
+                        .any(|part| part.service_ids.contains(&service.id))
                     && (f.services.contains(&service.id)
                         || ops::validate_catalogue_selection(
                             &self.services,
@@ -2932,6 +2963,17 @@ impl Root {
                     .child(self.t(Key::Services)),
             )
             .child(f.service_search.clone())
+            .when(
+                f.recurrence.is_none() && !f.services.is_empty() && f.visit_parts.len() < 7,
+                |list| {
+                    list.child(self.button(
+                        "visit-add-step",
+                        self.t(Key::VisitAddStep),
+                        Kind::Ghost,
+                        cx.listener(|root, _, _, cx| root.add_visit_part(cx)),
+                    ))
+                },
+            )
             .when(offered.is_empty(), |section| {
                 section.child(
                     div()
@@ -2992,7 +3034,9 @@ impl Root {
                     ))
                     .child(self.button(
                         "new-book",
-                        self.t(if f.recurrence.is_some() {
+                        self.t(if !f.visit_parts.is_empty() {
+                            Key::VisitReview
+                        } else if f.recurrence.is_some() {
                             Key::SeriesReview
                         } else {
                             Key::Book
@@ -4191,8 +4235,10 @@ impl Render for Root {
             .text_color(theme::text())
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 if event.keystroke.key == "tab"
-                    && (matches!(this.overlay, Overlay::Directory(_) | Overlay::Details(_))
-                        || this.checkout_review_mut().is_some())
+                    && (matches!(
+                        this.overlay,
+                        Overlay::Directory(_) | Overlay::Details(_) | Overlay::New(_)
+                    ) || this.checkout_review_mut().is_some())
                 {
                     if event.keystroke.modifiers.shift {
                         window.focus_prev();

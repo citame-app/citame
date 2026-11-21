@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
+import { desktopVisitPreviewSchema, intakeRequirementsSchema, visitSchema } from "@sob/contracts";
 import { appointment, appointmentVisit } from "@sob/db";
 import {
   type Actor,
@@ -9,6 +10,7 @@ import {
   seedFixtures,
   setupApiTest,
 } from "../../../test/helpers";
+import { getBookableServices } from "../services/service";
 
 let t: Awaited<ReturnType<typeof setupApiTest>>;
 let f: Fixtures;
@@ -107,6 +109,91 @@ test("pausing online booking blocks new public visits and preserves staff bookin
   ]);
   const staff = await book(owner, { ...next, clientId: f.clientId });
   expect(staff.status, await staff.clone().text()).toBe(201);
+});
+
+test("Desktop commits only the reviewed itinerary and never leaves a partially booked visit", async () => {
+  const path = "/appointments/desktop-visits";
+  const base = packet();
+  const parts = await Promise.all(
+    base.parts.map(async (part) => {
+      const requirements = intakeRequirementsSchema.parse(
+        await (
+          await json(
+            t.app,
+            `/intake/requirements?serviceIds=${part.serviceIds.join(",")}&clientId=${f.clientId}`,
+            "GET",
+            undefined,
+            owner.cookie,
+          )
+        ).json(),
+      );
+      const services = await getBookableServices(t.db, part.serviceIds);
+      return {
+        requirements,
+        part: {
+          ...part,
+          id: crypto.randomUUID(),
+          serviceQuotes: Object.fromEntries(services.map((s) => [s.id, s.quoteHash])),
+          intakeReviewHash: requirements.reviewHash,
+        },
+      };
+    }),
+  );
+  const input = {
+    ...base,
+    clientId: f.clientId,
+    desktopGeneration: parts[0]?.requirements.desktopGeneration,
+    parts: parts.map(({ part }) => part),
+  };
+  const preview = (body: unknown, who = owner) =>
+    json(t.app, `${path}/preview`, "POST", body, who.cookie);
+  const save = (body: unknown) => json(t.app, path, "POST", body, owner.cookie);
+  expect((await preview(input, client)).status).toBe(403);
+  expect((await preview({ ...input, desktopGeneration: "restored-history" })).status).toBe(409);
+  const readReview = async (body: typeof input) => {
+    const response = await preview(body);
+    expect(response.status, await response.clone().text()).toBe(200);
+    return desktopVisitPreviewSchema.parse(await response.json());
+  };
+  const first = await readReview(input);
+  expect(first.parts.every((part) => part.available)).toBe(true);
+  expect(first.parts[1]?.startsAt).toBe(first.parts[0]?.endsAt);
+  expect(await t.db.select().from(appointment)).toHaveLength(0);
+  expect((await save({ ...input, reviewHash: "0".repeat(64) })).status).toBe(409);
+  expect(
+    (
+      await json(
+        t.app,
+        "/appointments",
+        "POST",
+        {
+          staffId: f.anaId,
+          serviceIds: [f.colorId],
+          startsAt: first.parts[1]?.startsAt,
+          clientId: f.clientId,
+        },
+        owner.cookie,
+      )
+    ).status,
+  ).toBe(201);
+  const blocked = await save({ ...input, reviewHash: first.reviewHash });
+  expect(blocked.status, await blocked.clone().text()).toBe(409);
+  expect(await blocked.json()).toMatchObject({ error: { code: "slot_taken" } });
+  expect(await t.db.select().from(appointmentVisit)).toHaveLength(0);
+  expect(await t.db.select().from(appointment)).toHaveLength(1);
+
+  const next = { ...input, startsAt: "2026-03-16T12:00:00.000Z" };
+  const second = await readReview(next);
+  const request = { ...next, reviewHash: second.reviewHash };
+  const committed = await save(request);
+  expect(committed.status, await committed.clone().text()).toBe(201);
+  const visit = visitSchema.parse(await committed.json());
+  expect(visit.appointments.map((appointment) => appointment.id)).toEqual(
+    input.parts.map((part) => part.id),
+  );
+  expect((await save(request)).status).toBe(201);
+  expect(await t.db.select().from(appointmentVisit)).toHaveLength(1);
+  expect(await t.db.select().from(appointment)).toHaveLength(3);
 });
 
 test("availability resolves the hand-off and concurrent duplicate confirmations create one visit", async () => {
