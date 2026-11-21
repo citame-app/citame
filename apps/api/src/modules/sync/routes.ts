@@ -48,7 +48,7 @@ export function syncRoutes(
         const response = await pullChanges(db, c.get("principal"), query);
         metrics?.syncPull.inc();
         metrics?.syncPullChanges.inc({}, response.changes.length);
-        return c.json({ ...response, generation });
+        return c.json({ ...response, generation }, 200, { "Cache-Control": "private, no-store" });
       })
       // Server-sent events: a nudge carries only the head seq; the client then calls /sync/pull.
       .get("/stream", streamLimit, (c) => {

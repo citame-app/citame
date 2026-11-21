@@ -171,6 +171,10 @@ export function appointmentsRoutes({
     };
   return (
     new Hono<AppEnv>()
+      .use("*", async (c, next) => {
+        c.header("Cache-Control", "private, no-store");
+        await next();
+      })
       .post("/booksy-context/preview", async (c) =>
         c.json(
           await previewBooksyContext(

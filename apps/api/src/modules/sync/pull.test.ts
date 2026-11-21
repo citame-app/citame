@@ -82,6 +82,7 @@ test("client group projection uses Cloud normalization and respects directory vi
     expect(projected?.data).toMatchObject({ groupNames: ["vip"] });
     const raw = await call(who, "GET", `/sync/pull?since=${cursor}&clientGroups=1`);
     expect(raw.status).toBe(200);
+    expect(raw.headers.get("cache-control")).toBe("private, no-store");
     const body = (await raw.json()) as Awaited<ReturnType<typeof pull>>;
     const rawClient = clientChange(body);
     expect(rawClient?.data).toMatchObject({ groupNames: ["vip"] });

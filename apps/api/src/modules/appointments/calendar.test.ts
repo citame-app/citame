@@ -41,6 +41,7 @@ const call = (who: Actor | null, query = WEEK) =>
 const calendar = async (who: Actor, query = WEEK) => {
   const res = await call(who, query);
   expect(res.status).toBe(200);
+  expect(res.headers.get("cache-control")).toBe("private, no-store");
   return calendarResponseSchema.parse(await res.json());
 };
 

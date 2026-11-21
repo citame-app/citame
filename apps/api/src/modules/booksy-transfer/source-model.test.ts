@@ -1168,6 +1168,7 @@ test("consultation calendar exposes flags without private text and only the owne
     .route("/", booksySourceRoutes(t.db, model));
   const result = await app.request("/calendar?from=2026-11-18T00:00:00Z&to=2026-11-19T00:00:00Z");
   expect(result.status).toBe(200);
+  expect(result.headers.get("cache-control")).toBe("private, no-store");
   const text = await result.text();
   expect(text).not.toContain("PRIVATE");
   expect(text).not.toContain("CLIENT COMMENT");
@@ -1176,6 +1177,7 @@ test("consultation calendar exposes flags without private text and only the owne
   expect(calendar.importSnapshot?.readOnly).toBe(true);
   const detail = await app.request(`/${model.appointments[0]!.id}/context`);
   expect(detail.status).toBe(200);
+  expect(detail.headers.get("cache-control")).toBe("private, no-store");
   const context = (await detail.json()) as { rows: { internalNote: string }[] };
   expect(context.rows[0]!.internalNote).toBe("PRIVATE\u0000 note");
   expect(

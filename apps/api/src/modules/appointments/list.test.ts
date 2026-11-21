@@ -41,6 +41,7 @@ const RANGE = "from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z";
 const list = async (who: Actor, query = "") => {
   const res = await json(t.app, `/appointments?${RANGE}${query}`, "GET", undefined, who.cookie);
   expect(res.status).toBe(200);
+  expect(res.headers.get("cache-control")).toBe("private, no-store");
   return listAppointmentsResponseSchema.parse(await res.json());
 };
 

@@ -31,6 +31,7 @@ export function booksySourceRoutes(db: Database, model: BooksySourceReadModel) {
   return new Hono<AppEnv>()
     .use("*", async (c, next) => {
       requireRole(c.get("principal"), "owner");
+      c.header("Cache-Control", "private, no-store");
       await next();
     })
     .get("/calendar", async (c) => {
