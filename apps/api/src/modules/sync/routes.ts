@@ -66,7 +66,7 @@ export function syncRoutes(
             lastSent = seq;
             return stream.writeSSE({
               event: "change",
-              data: JSON.stringify({ seq }),
+              data: JSON.stringify({ seq, generation }),
               id: String(seq),
             });
           };

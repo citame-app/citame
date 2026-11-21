@@ -71,6 +71,7 @@ const shared: Record<SyncEntity | SyncLiveView, readonly (readonly string[])[]> 
   review_requests: [reviewRequestQueryKey, moderation],
   intake_forms: [intakeAdminQueryKey],
   intake_records: [intakeHistoryQueryKey],
+  booking_policy: [["booking-policy"], ["admin", "booking-policy"]],
 };
 
 export function liveQueryKeys(changes?: Iterable<SyncEntity | SyncLiveView>) {

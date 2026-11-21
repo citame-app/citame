@@ -124,6 +124,9 @@ export function requireAuth(
         !DESKTOP_PROXY_ROUTE.test(path) ||
         (path === "/appointments/desktop-booking" && method !== "POST") ||
         (path === "/admin/settings/desktop" && method !== "GET" && method !== "PUT") ||
+        (path === "/admin/settings/booking-policy/reviewed" &&
+          method !== "GET" &&
+          method !== "PUT") ||
         ([
           "/me",
           "/me/desktop-workspaces",

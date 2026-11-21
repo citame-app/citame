@@ -946,6 +946,7 @@ impl Store {
                         | crate::reviews::LIVE_TOPIC
                         | crate::intake::FORM_LIVE_TOPIC
                         | crate::intake::RECORD_LIVE_TOPIC
+                        | crate::booking_policy::LIVE_TOPIC
                 ) {
                     tx.execute(
                         "INSERT INTO meta (key, value) VALUES (?1, ?2)

@@ -35,6 +35,7 @@ mod appointment_badges;
 mod billing;
 mod blocks;
 mod booking_intake;
+mod booking_policy;
 mod cash;
 mod checkout;
 mod connection;
@@ -240,6 +241,7 @@ enum Overlay {
     None,
     Cloud(workspaces::CloudDesk),
     SalonConfiguration(Box<salon_configuration::Desk>),
+    BookingPolicy(Box<booking_policy::Desk>),
     IntakeForms(Box<form_admin::Desk>),
     New(Box<NewForm>),
     Slot(slots::SelectedSlot),
@@ -677,6 +679,7 @@ impl Root {
         }
         self.refresh_unpaid_if_changed(reconnected, cx);
         self.refresh_salon_configuration(reconnected, cx);
+        self.refresh_booking_policy(reconnected, cx);
         if reconnected {
             self.refresh_weekly_conflicts_if_ready(cx);
             self.refresh_open_annotations(true, cx);
@@ -698,7 +701,7 @@ impl Root {
         if (self.calendar_scope.is_some() && self.calendar_scope != scope)
             || self.replica_generation != generation
         {
-            if !self.preserve_open_salon_draft(cx) {
+            if !self.preserve_open_salon_draft(cx) && !self.preserve_open_booking_policy_draft(cx) {
                 self.overlay = Overlay::None;
             }
             self.notices.clear();
@@ -2358,6 +2361,7 @@ impl Root {
             }
             Overlay::IntakeForms(_) => self.close_intake_forms(cx),
             Overlay::SalonConfiguration(_) => self.close_salon_configuration(cx),
+            Overlay::BookingPolicy(_) => self.dismiss_booking_policy(cx),
             Overlay::Directory(desk) if desk.intake.is_some() => self.back_record(cx),
             Overlay::ReviewModeration(desk) => {
                 if !desk.dismiss_editor(cx) {
@@ -3543,6 +3547,9 @@ impl Render for Root {
                         }
                         Overlay::SalonConfiguration(desk) => {
                             Some(self.render_salon_configuration(desk, window.viewport_size(), cx))
+                        }
+                        Overlay::BookingPolicy(desk) => {
+                            Some(self.render_booking_policy(desk, window.viewport_size(), cx))
                         }
                         Overlay::IntakeForms(desk) => {
                             Some(self.render_intake_forms(desk, window.viewport_size(), cx))

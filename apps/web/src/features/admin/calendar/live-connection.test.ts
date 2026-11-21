@@ -9,7 +9,10 @@ const cleanups: (() => void)[] = [];
 afterEach(() => {
   for (const cleanup of cleanups.splice(0)) cleanup();
 });
-function liveSource(): LiveSource & { readyState: number; send: (seq: number) => void } {
+function liveSource(): LiveSource & {
+  readyState: number;
+  send: (seq: number, generation?: string) => void;
+} {
   let listener: (event: MessageEvent<string>) => void = () => {};
   return {
     readyState: 0,
@@ -19,7 +22,8 @@ function liveSource(): LiveSource & { readyState: number; send: (seq: number) =>
       listener = fn;
     },
     close: mock(),
-    send: (seq) => listener(new MessageEvent("change", { data: JSON.stringify({ seq }) })),
+    send: (seq, generation) =>
+      listener(new MessageEvent("change", { data: JSON.stringify({ seq, generation }) })),
   };
 }
 function harness(
@@ -102,6 +106,23 @@ test("a nudge received during an in-flight pull is not lost", async () => {
   resolve(response(11));
   await waitFor(() => expect(h.onChanges).toHaveBeenCalledTimes(2));
   expect(pull.mock.calls.map(([since]) => since)).toEqual([10, 11]);
+});
+
+test("a restored generation discards an old in-flight page even when its cursor is higher", async () => {
+  const current = Promise.withResolvers<SyncPullResponse>();
+  const pull = mock((since: number) =>
+    since === 10 ? current.promise : Promise.resolve({ ...response(4), generation: "restored" }),
+  );
+  const h = harness(pull);
+  h.send(10, "initial");
+  h.send(11, "initial");
+  h.send(3, "restored");
+  h.send(4, "restored");
+  current.resolve({ ...response(11), generation: "initial" });
+  await waitFor(() => expect(h.onChanges).toHaveBeenCalledWith([change(4)], []));
+  expect(h.onChanges).toHaveBeenCalledTimes(1);
+  expect(h.onRefresh).toHaveBeenCalledTimes(2);
+  expect(pull.mock.calls.map(([since]) => since)).toEqual([10, 3]);
 });
 
 test("a failed pull retries from the same cursor and closing aborts outstanding requests", async () => {

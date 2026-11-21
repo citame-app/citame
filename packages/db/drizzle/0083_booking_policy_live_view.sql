@@ -1,0 +1,2 @@
+CREATE CONSTRAINT TRIGGER sync_booking_policy_view AFTER INSERT OR UPDATE OR DELETE ON booking_policy
+DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_record_live_view('booking_policy');

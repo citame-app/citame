@@ -15,6 +15,8 @@ export const bookingProtectionEn = {
   "protection.error":
     "Could not save. Check the values and reload the current policy if it changed.",
   "protection.reload": "Reload current policy",
+  "protection.policyChanged":
+    "The booking policy changed. Reload it to review your draft before saving.",
   "protection.help":
     "New bookings keep their accepted policy. Fees are capped at the paid deposit; no extra automatic charge is made. Active services must use EUR. Configure online payments before requiring customer deposits.",
   "protection.accept": "I accept this deposit and cancellation policy.",
@@ -64,6 +66,8 @@ export const bookingProtectionEsAR: Record<keyof typeof bookingProtectionEn, str
   "protection.error":
     "No pudimos guardar. Revisa los valores y recarga la política actual si ha cambiado.",
   "protection.reload": "Recargar política actual",
+  "protection.policyChanged":
+    "Cambió la política de reservas. Recárgala para revisar tu borrador antes de guardar.",
   "protection.help":
     "Cada reserva conserva la política aceptada. Las penalizaciones se limitan a la señal pagada; no se cobra nada adicional automáticamente. Los servicios activos deben usar EUR. Configura el pago online antes de exigir señales a clientes.",
   "protection.accept": "Acepto esta política de señal y cancelación.",

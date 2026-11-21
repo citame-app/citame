@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { idSchema, instantSchema } from "./common";
+import { idSchema, instantSchema, syncGenerationSchema } from "./common";
 
 export const bookingPolicyTermsSchema = z.object({
   enabled: z.boolean(),
@@ -20,6 +20,16 @@ export const bookingPolicyInputSchema = bookingPolicySchema
     path: ["depositValue"],
     message: "Percentage cannot exceed 100%",
   });
+export const reviewedBookingPolicySchema = z.object({
+  generation: syncGenerationSchema,
+  policy: bookingPolicySchema,
+});
+export type ReviewedBookingPolicy = z.infer<typeof reviewedBookingPolicySchema>;
+
+export const reviewedBookingPolicyInputSchema = z.strictObject({
+  generation: syncGenerationSchema,
+  policy: bookingPolicyInputSchema,
+});
 export const bookingProtectionSchema = z.object({
   checkoutId: idSchema,
   state: z.enum(["pending", "confirmed", "waived", "completed", "cancelled", "expired", "no_show"]),

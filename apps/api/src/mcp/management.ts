@@ -1242,21 +1242,21 @@ export function registerManagementTools(
   );
   add(
     "get_booking_policy",
-    "Read deposit and cancellation rules and their current version.",
+    "Read deposit and cancellation rules with the generation and version needed to review a change.",
     { scope: "operations:read", owner: true },
     "GET",
     empty,
-    C.bookingPolicySchema,
-    () => ({ path: "/settings/booking-policy" }),
+    C.reviewedBookingPolicySchema,
+    () => ({ path: "/settings/booking-policy/reviewed" }),
   );
   add(
     "update_booking_policy",
     "Change the versioned deposit or cancellation policy for future bookings. Confirm the terms with the owner.",
     { ...settings, destructive: true },
     "PUT",
-    z.strictObject({ body: C.bookingPolicyInputSchema }),
-    C.bookingPolicySchema,
-    ({ body }) => ({ path: "/settings/booking-policy", body }),
+    z.strictObject({ body: C.reviewedBookingPolicyInputSchema }),
+    C.reviewedBookingPolicySchema,
+    ({ body }) => ({ path: "/settings/booking-policy/reviewed", body }),
   );
   add(
     "get_centre_settings",

@@ -18,6 +18,7 @@ use crate::billing::{
     SavedBankRefundStatus, WalkInSale,
 };
 use crate::booking::{BookingError, BookingTerms, ReviewedBooking};
+use crate::booking_policy::{PolicyWriteError, ReviewedBookingPolicy};
 use crate::intake::{
     AdminForm, AdminFormSummary, AdminForms, FormWrite, FormWriteError, IntakeRequirements,
     recovered_form,
@@ -1481,6 +1482,34 @@ impl HttpTransport {
         )
     }
 
+    pub fn booking_policy(&self) -> Result<ReviewedBookingPolicy, TransportError> {
+        read_response(
+            self.get(&self.agent, "/admin/settings/booking-policy/reviewed", None)?,
+            false,
+        )
+    }
+
+    pub fn write_booking_policy(
+        &self,
+        reviewed: &ReviewedBookingPolicy,
+    ) -> Result<ReviewedBookingPolicy, PolicyWriteError> {
+        let response = self.send_put_json("/admin/settings/booking-policy/reviewed", reviewed)?;
+        read_response_with(response, |status, retry_after, body| {
+            let parsed = serde_json::from_str::<serde_json::Value>(body).ok();
+            let code = parsed
+                .as_ref()
+                .and_then(|value| value.pointer("/error/code"))
+                .and_then(serde_json::Value::as_str);
+            match (status, code) {
+                (409, Some("version_conflict" | "sync_generation_changed")) => {
+                    PolicyWriteError::Conflict
+                }
+                (409, Some("invalid_state")) => PolicyWriteError::MixedCurrencies,
+                _ => classify_status(status, retry_after, body, false).into(),
+            }
+        })
+    }
+
     pub fn accept_waitlist_offer(
         &self,
         id: &str,
@@ -1824,7 +1853,7 @@ impl HttpTransport {
         let resp = self.get(
             &self.agent,
             &format!(
-                "/sync/pull?since={since}&limit={limit}{catalog}&reviewRequests=1&intakeViews=1"
+                "/sync/pull?since={since}&limit={limit}{catalog}&reviewRequests=1&intakeViews=1&bookingPolicy=1"
             ),
             None,
         )?;

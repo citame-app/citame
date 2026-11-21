@@ -1,4 +1,4 @@
-import type { BookingPolicy } from "@sob/contracts";
+import type { BookingPolicy, ReviewedBookingPolicy } from "@sob/contracts";
 import { bookingPolicy, type Database, service } from "@sob/db";
 import { and, eq, isNull, ne, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
@@ -22,8 +22,20 @@ export async function getBookingPolicy(db: Database | Tx): Promise<BookingPolicy
   const [row] = await db.select().from(bookingPolicy).where(eq(bookingPolicy.id, 1));
   return row ? { ...row.terms, version: row.version } : { ...DEFAULT_BOOKING_POLICY };
 }
-export async function setBookingPolicy(db: Database, input: BookingPolicy, principal: Principal) {
+
+export async function publishBookingPolicy(
+  db: Database,
+  reviewed: ReviewedBookingPolicy,
+  principal: Principal,
+  generation: string,
+): Promise<ReviewedBookingPolicy> {
   requireRole(principal, "owner");
+  if (reviewed.generation !== generation) {
+    throw new DomainError("sync_generation_changed", "Review booking protection after the restore");
+  }
+  return { generation, policy: await setBookingPolicy(db, reviewed.policy, principal) };
+}
+async function setBookingPolicy(db: Database, input: BookingPolicy, principal: Principal) {
   return db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('booking-policy', 0))`);
     const current = await getBookingPolicy(tx);

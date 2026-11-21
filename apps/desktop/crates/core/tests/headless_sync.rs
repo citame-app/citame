@@ -77,6 +77,47 @@ fn desktop_opens_cloud_management_with_the_linked_users_web_session_through_the_
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_policy_changes_reach_cloud_and_reject_old_reviews_through_the_proxy() {
+    use sob_core::booking_policy::{LIVE_TOPIC, PolicyWriteError};
+
+    let device = proxy_device();
+    let mut browser = Device::sign_in();
+    browser.sync();
+    let revision = browser.store.live_view_revision(LIVE_TOPIC).unwrap();
+    let original = device.transport.booking_policy().unwrap();
+    let mut draft = original.clone();
+    draft.policy.hold_minutes = if original.policy.hold_minutes == 25 {
+        20
+    } else {
+        25
+    };
+    let saved = device.transport.write_booking_policy(&draft).unwrap();
+    assert_eq!(saved.policy.version, original.policy.version + 1);
+    assert_eq!(
+        browser.rest_get("/admin/settings/booking-policy/reviewed")["policy"]["holdMinutes"],
+        json!(draft.policy.hold_minutes)
+    );
+    browser.sync();
+    assert!(browser.store.live_view_revision(LIVE_TOPIC).unwrap() > revision);
+    assert!(matches!(
+        device.transport.write_booking_policy(&draft),
+        Err(PolicyWriteError::Conflict)
+    ));
+    let mut undo = original;
+    undo.policy.version = saved.policy.version;
+    assert_eq!(
+        device
+            .transport
+            .write_booking_policy(&undo)
+            .unwrap()
+            .policy
+            .hold_minutes,
+        undo.policy.hold_minutes
+    );
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_salon_settings_resume_after_restart_and_preserve_cloud_changes_through_the_proxy() {
     let device = proxy_device();
     let browser = Device::sign_in();

@@ -201,6 +201,12 @@ impl Root {
                     Kind::Ghost,
                     cx.listener(|root, _, _, cx| root.open_salon_configuration(cx)),
                 ))
+                .child(self.button(
+                    "booking-policy",
+                    self.t(Key::BookingPolicy),
+                    Kind::Ghost,
+                    cx.listener(|root, _, _, cx| root.open_booking_policy(cx)),
+                ))
             })
             .when(online && desk.opening.is_none(), |view| {
                 let links = div()

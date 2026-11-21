@@ -14,6 +14,7 @@ import {
   intakeSubmissionSchema,
   intakeSubmissionsSchema,
   listServicesResponseSchema,
+  reviewedBookingPolicySchema,
   reviewedSalonSettingsSchema,
   reviewPrivateSchema,
   startedPaymentSchema,
@@ -79,6 +80,68 @@ async function tokens(role: "owner" | "client" | "staff", emailName: string = ro
 
 const request = (path: string, access: unknown) =>
   t.app.request(path, { headers: { authorization: `Bearer ${String(access)}` } });
+
+test("native booking protection shares the Cloud policy and only opted-in replicas see refreshes", async () => {
+  const owner = await tokens("owner", "booking-policy-desktop-owner");
+  const staff = await tokens("staff", "booking-policy-desktop-staff");
+  const path = "/admin/settings/booking-policy/reviewed";
+  const original = reviewedBookingPolicySchema.parse(
+    await (await request(path, owner.access)).json(),
+  );
+  const put = (body: unknown, token = owner.access) =>
+    t.app.request(path, {
+      method: "PUT",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  const cursor = syncPullResponseSchema.parse(
+    await (await request("/sync/pull", owner.access)).json(),
+  ).headSeq;
+  const edited = {
+    ...original,
+    policy: { ...original.policy, holdMinutes: original.policy.holdMinutes === 25 ? 20 : 25 },
+  };
+  expect((await t.app.request(path)).status).toBe(401);
+  expect((await request(path, staff.access)).status).toBe(403);
+  expect((await put(edited, staff.access)).status).toBe(403);
+  const staleGeneration = await put({ ...edited, generation: "restored-test-history" });
+  expect(staleGeneration.status).toBe(409);
+  expect(await staleGeneration.json()).toMatchObject({
+    error: { code: "sync_generation_changed" },
+  });
+  const saved = await put(edited);
+  expect(saved.status).toBe(200);
+  const version = reviewedBookingPolicySchema.parse(await saved.json()).policy.version;
+  try {
+    expect(version).toBe(original.policy.version + 1);
+    expect(
+      await (
+        await json(t.app, "/admin/settings/booking-policy", "GET", undefined, owner.who.cookie)
+      ).json(),
+    ).toMatchObject({ ...edited.policy, version });
+    const stale = await put(edited);
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toMatchObject({ error: { code: "version_conflict" } });
+    const refresh = async (query: string) =>
+      syncPullResponseSchema.parse(
+        await (await request(`/sync/pull?since=${cursor}${query}`, owner.access)).json(),
+      );
+    expect((await refresh("")).refresh ?? []).not.toContain("booking_policy");
+    expect((await refresh("&bookingPolicy=1")).refresh).toContain("booking_policy");
+  } finally {
+    expect(
+      (
+        await json(
+          t.app,
+          "/admin/settings/booking-policy",
+          "PUT",
+          { ...original.policy, version },
+          owner.who.cookie,
+        )
+      ).status,
+    ).toBe(200);
+  }
+});
 
 test("desktop owner settings share Cloud changes and reject stale edits atomically", async () => {
   const path = "/admin/settings/desktop";

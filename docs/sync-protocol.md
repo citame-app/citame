@@ -163,6 +163,7 @@ Rejections are final and stored: resending the same `mutationId` returns the sam
 - `catalogColors=1` (optional, staff and owners): also return `catalogColors`, a map from service IDs to configured colors. It includes inactive services and excludes deleted services. An empty map means there are no configured colors. Desktop installations request it on upgrade even at the current cursor and record completion after repairing the local service projection.
 - `reviewRequests=1` (optional): ask for the `review_requests` refresh topic. The server requires the caller's current `editCatalog` permission. Clients that omit the flag still advance their cursor past these notices.
 - `intakeViews=1` (optional): enable `intake_forms` for callers with `deleteClients` and `intake_records` for callers with `clients`. Older clients advance past these notices without receiving the new topic values.
+- `bookingPolicy=1` (optional): enable the payload-free `booking_policy` refresh topic. Read the public policy or the owner-only reviewed policy after receiving a notice. Both owner clients use `GET /admin/settings/booking-policy/reviewed` to retrieve the current sync generation and policy. Publish with `PUT /admin/settings/booking-policy/reviewed` using that generation and policy version. The legacy version-only PUT is accepted only in the initial generation.
 
 ```json
 {

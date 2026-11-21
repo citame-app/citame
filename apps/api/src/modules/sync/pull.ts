@@ -269,7 +269,8 @@ export async function pullChanges(
           (query.reviewRequests === "1" && permissions.editCatalog)) &&
         (topic.data !== "intake_forms" ||
           (query.intakeViews === "1" && permissions.deleteClients)) &&
-        (topic.data !== "intake_records" || (query.intakeViews === "1" && permissions.clients))
+        (topic.data !== "intake_records" || (query.intakeViews === "1" && permissions.clients)) &&
+        (topic.data !== "booking_policy" || query.bookingPolicy === "1")
       )
         refresh.add(topic.data);
       continue;

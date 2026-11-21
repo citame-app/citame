@@ -310,6 +310,7 @@ export const syncPullQuerySchema = z.object({
   catalogColors: z.literal("1").optional(),
   reviewRequests: z.literal("1").optional(),
   intakeViews: z.literal("1").optional(),
+  bookingPolicy: z.literal("1").optional(),
 });
 export type SyncPullQuery = z.infer<typeof syncPullQuerySchema>;
 
@@ -432,6 +433,7 @@ export const syncLiveViewSchema = z.enum([
   "review_requests",
   "intake_forms",
   "intake_records",
+  "booking_policy",
 ]);
 export type SyncLiveView = z.infer<typeof syncLiveViewSchema>;
 
@@ -457,5 +459,8 @@ export const syncPullResponseSchema = z.object({
 export type SyncPullResponse = z.infer<typeof syncPullResponseSchema>;
 
 /** Payload of the `change` event on `GET /sync/stream`: "something new exists, pull". */
-export const syncNudgeSchema = z.object({ seq: z.number().int().min(0) });
+export const syncNudgeSchema = z.object({
+  seq: z.number().int().min(0),
+  generation: syncGenerationSchema.optional(),
+});
 export type SyncNudge = z.infer<typeof syncNudgeSchema>;

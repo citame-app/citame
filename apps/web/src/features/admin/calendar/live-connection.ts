@@ -31,6 +31,8 @@ export function connectCalendarLive(options: {
   let source = options.open();
   let cursor: number | null = null;
   let targetSeq = 0;
+  let generation: string | undefined;
+  let history = 0;
   let running = false;
   let stopped = false;
   let forcePull = false;
@@ -38,17 +40,32 @@ export function connectCalendarLive(options: {
   let networkAvailable = true;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
+  function baseline(seq: number, nextGeneration?: string) {
+    generation = nextGeneration;
+    cursor = targetSeq = seq;
+    history++;
+    options.onRefresh();
+  }
+
   async function drain(force = false) {
     if (stopped || cursor === null) return;
     forcePull ||= force;
     if (running || !networkAvailable || retryTimer !== undefined) return;
     running = true;
+    let requestedHistory = history;
     try {
       while (!stopped && networkAvailable && (forcePull || cursor < targetSeq)) {
         forcePull = false;
         const previous: number = cursor;
+        requestedHistory = history;
         const response = await options.pull(previous, abort.signal);
         if (stopped) return;
+        if (requestedHistory !== history) continue;
+        if (generation && response.generation && generation !== response.generation) {
+          baseline(response.headSeq, response.generation);
+          continue;
+        }
+        generation ??= response.generation;
         const fresh = response.changes.filter((change) => change.seq > previous);
         if (fresh.length || response.refresh?.length)
           options.onChanges(fresh, response.refresh ?? []);
@@ -58,6 +75,10 @@ export function connectCalendarLive(options: {
         if (cursor === previous && !forcePull) break; // Empty or filtered pages must never spin.
       }
     } catch (error) {
+      if (requestedHistory !== history) {
+        queueMicrotask(() => void drain());
+        return;
+      }
       if (!stopped) {
         options.onConnection(false);
         if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
@@ -101,12 +122,12 @@ export function connectCalendarLive(options: {
       }
       const parsed = syncNudgeSchema.safeParse(payload);
       if (!parsed.success) return;
-      if (cursor === null) {
-        cursor = parsed.data.seq;
-        targetSeq = cursor;
-        options.onRefresh(); // Reconcile the initial-load/stream handshake race without old toasts.
+      const { seq, generation: nextGeneration } = parsed.data;
+      if (cursor === null || (generation && nextGeneration && generation !== nextGeneration)) {
+        baseline(seq, nextGeneration); // Reconcile without replaying historical notices.
       } else {
-        targetSeq = Math.max(targetSeq, parsed.data.seq);
+        generation ??= nextGeneration;
+        targetSeq = Math.max(targetSeq, seq);
         void drain();
       }
     });

@@ -198,6 +198,28 @@ test("owner read tools expose bounded summaries, and a read-only grant cannot wr
   }
 });
 
+test("MCP booking protection uses the reviewed policy generation and version", async () => {
+  const owner = await actor(t, "owner", "policy-owner@example.com");
+  const token = (await tokenFor(t, owner, "operations:read settings:write")).tokens.access_token;
+  const read = await callTool(t.app, token, "get_booking_policy", {});
+  expect(read.isError, read.text).toBe(false);
+  const current = read.data?.data;
+  expect(current?.generation).toBeString();
+  expect(current?.policy.version).toBeGreaterThan(0);
+  const reviewed = {
+    generation: current?.generation,
+    policy: { ...current?.policy, holdMinutes: 24 },
+  };
+  const saved = await callTool(t.app, token, "update_booking_policy", { body: reviewed });
+  expect(saved.isError, saved.text).toBe(false);
+  expect(saved.data?.data).toMatchObject({
+    generation: current?.generation,
+    policy: { holdMinutes: 24, version: current?.policy.version + 1 },
+  });
+  const stale = await callTool(t.app, token, "update_booking_policy", { body: reviewed });
+  expect(stale.data?.error?.code).toBe("version_conflict");
+});
+
 test("waitlist offers retain calendar access checks, reviewed terms and safe replay", async () => {
   const owner = await actor(t, "owner", "offer-owner@example.com");
   const bea = await actor(t, "staff", "offer-bea@example.com", {

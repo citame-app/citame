@@ -1,5 +1,7 @@
 import {
   bookingPolicyInputSchema,
+  initialSyncGeneration,
+  reviewedBookingPolicyInputSchema,
   reviewedSalonSettingsRequestSchema,
   updateSalonSettingsRequestSchema,
 } from "@sob/contracts";
@@ -8,7 +10,7 @@ import type { AppDeps } from "../../app";
 import { requireRole } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
-import { getBookingPolicy, setBookingPolicy } from "../booking-protection/policy";
+import { getBookingPolicy, publishBookingPolicy } from "../booking-protection/policy";
 import {
   getSalonSettings,
   toOwnerSettings,
@@ -25,13 +27,31 @@ export function settingsAdminRoutes({ db, config }: AppDeps) {
       return c.json(await getBookingPolicy(db));
     })
     .put("/booking-policy", async (c) => {
+      const principal = c.get("principal");
+      requireRole(principal, "owner");
+      const policy = parseOrThrow(bookingPolicyInputSchema, await readJson(c));
+      const saved = await publishBookingPolicy(
+        db,
+        { generation: initialSyncGeneration, policy },
+        principal,
+        config.syncReplicaGeneration,
+      );
+      return c.json(saved.policy);
+    })
+    .get("/booking-policy/reviewed", async (c) => {
       requireRole(c.get("principal"), "owner");
+      c.header("Cache-Control", "private, no-store");
+      return c.json({
+        generation: config.syncReplicaGeneration,
+        policy: await getBookingPolicy(db),
+      });
+    })
+    .put("/booking-policy/reviewed", async (c) => {
+      const principal = c.get("principal");
+      requireRole(principal, "owner");
+      const reviewed = parseOrThrow(reviewedBookingPolicyInputSchema, await readJson(c));
       return c.json(
-        await setBookingPolicy(
-          db,
-          parseOrThrow(bookingPolicyInputSchema, await readJson(c)),
-          c.get("principal"),
-        ),
+        await publishBookingPolicy(db, reviewed, principal, config.syncReplicaGeneration),
       );
     })
     .get("/", async (c) => {
