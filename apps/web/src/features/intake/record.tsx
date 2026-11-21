@@ -9,6 +9,7 @@ import { useToast } from "~/components/ui/toast";
 import { CatalogChoices } from "~/features/booking/catalog-choices";
 import { useI18n } from "~/i18n/react";
 import { api } from "~/lib/api/instance";
+import { intakeHistoryQueryKey } from "~/lib/api/intake-endpoints";
 import { servicesQuery } from "~/lib/queries";
 import { BookingForms, useBookingForms } from "./booking-forms";
 import { IntakeQuestions } from "./questions";
@@ -23,8 +24,8 @@ export function IntakeRecord({
   const { t, locale, timeZone } = useI18n();
   const [before, setBefore] = useState<string>();
   const history = useQuery({
-    queryKey: ["intake", "history", clientId ?? "self", before],
-    queryFn: () => api().intake.history(clientId, before),
+    queryKey: [...intakeHistoryQueryKey, clientId ?? "self", before],
+    queryFn: ({ signal }) => api().intake.history(clientId, before, signal),
   });
   const [responseId, setResponseId] = useState<string>();
   const [recording, setRecording] = useState(false);

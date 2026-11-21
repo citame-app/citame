@@ -14,6 +14,7 @@ import { ErrorState, Skeleton, useOnline } from "~/components/ui/states";
 import { useToast } from "~/components/ui/toast";
 import { useI18n } from "~/i18n/react";
 import { api } from "~/lib/api/instance";
+import { intakeAdminQueryKey } from "~/lib/api/intake-endpoints";
 import { servicesQuery } from "~/lib/queries";
 import { IntakeQuestions } from "./questions";
 
@@ -56,7 +57,10 @@ export function IntakeAdmin({ onDirtyChange }: { onDirtyChange?: (dirty: boolean
   const { t } = useI18n();
   const online = useOnline();
   const toast = useToast();
-  const forms = useQuery({ queryKey: ["intake", "admin"], queryFn: () => api().intake.forms() });
+  const forms = useQuery({
+    queryKey: intakeAdminQueryKey,
+    queryFn: ({ signal }) => api().intake.forms(signal),
+  });
   const services = useQuery(servicesQuery);
   const [current, setCurrent] = useState<IntakeAdminForm | null>(null);
   const [draft, setDraft] = useState<IntakeDefinition | null>(null);
@@ -67,6 +71,10 @@ export function IntakeAdmin({ onDirtyChange }: { onDirtyChange?: (dirty: boolean
   const [invalid, setInvalid] = useState(false);
   const dirty =
     Boolean(draft) && (!current || JSON.stringify(draft) !== JSON.stringify(current.draft));
+  const newerVersion = Boolean(
+    current &&
+      forms.data?.forms.some((form) => form.id === current.id && form.version > current.version),
+  );
   const save = useMutation({
     mutationFn: () => {
       const parsed = intakeDefinitionSchema.safeParse(draft);
@@ -196,6 +204,7 @@ export function IntakeAdmin({ onDirtyChange }: { onDirtyChange?: (dirty: boolean
           className="space-y-6"
           onSubmit={(event) => {
             event.preventDefault();
+            if (newerVersion) return;
             const parsed = intakeDefinitionSchema.safeParse(draft);
             setInvalid(!parsed.success);
             if (parsed.success) save.mutate();
@@ -207,6 +216,11 @@ export function IntakeAdmin({ onDirtyChange }: { onDirtyChange?: (dirty: boolean
               {current.published
                 ? ` · ${t("intake.version", { number: current.published.number })}`
                 : ""}
+            </p>
+          )}
+          {newerVersion && (
+            <p role="status" className="text-sm">
+              {t("intake.newerDraft")}
             </p>
           )}
           <fieldset disabled={busy} className="min-w-0 space-y-4">
@@ -444,12 +458,16 @@ export function IntakeAdmin({ onDirtyChange }: { onDirtyChange?: (dirty: boolean
           )}
           {failure && <ErrorState error={failure} />}
           <div className="flex flex-wrap gap-3">
-            <Button type="submit" loading={save.isPending} disabled={!online || !dirty || busy}>
+            <Button
+              type="submit"
+              loading={save.isPending}
+              disabled={!online || !dirty || busy || newerVersion}
+            >
               {t("intake.save")}
             </Button>
             <Button
               variant="secondary"
-              disabled={!online || !current || dirty || busy}
+              disabled={!online || !current || dirty || busy || newerVersion}
               onClick={() => setReview(true)}
             >
               {t("intake.publish")}
@@ -457,7 +475,7 @@ export function IntakeAdmin({ onDirtyChange }: { onDirtyChange?: (dirty: boolean
             {current?.active && (
               <Button
                 variant="ghost"
-                disabled={!online || dirty || busy}
+                disabled={!online || dirty || busy || newerVersion}
                 onClick={() => setArchiving(true)}
               >
                 {t("intake.archive")}
@@ -499,12 +517,14 @@ export function IntakeAdmin({ onDirtyChange }: { onDirtyChange?: (dirty: boolean
         confirmLabel={t("intake.publishConfirm")}
         cancelLabel={t("admin.cancel")}
         pending={publish.isPending}
+        confirmDisabled={newerVersion}
         onConfirm={() => publish.mutate()}
       >
         <div className="mt-4 max-h-[45dvh] space-y-4 overflow-y-auto break-words">
           <h3 className="font-semibold">{draft?.title}</h3>
           <p className="whitespace-pre-wrap">{draft?.description}</p>
           {draft && <IntakeQuestions definition={draft} answers={{}} readOnly />}
+          {newerVersion && <p role="status">{t("intake.newerDraft")}</p>}
           {publish.isError && <ErrorState error={publish.error} />}
         </div>
       </ConfirmDialog>
@@ -516,8 +536,10 @@ export function IntakeAdmin({ onDirtyChange }: { onDirtyChange?: (dirty: boolean
         confirmLabel={t("intake.archive")}
         cancelLabel={t("admin.cancel")}
         pending={archive.isPending}
+        confirmDisabled={newerVersion}
         onConfirm={() => archive.mutate()}
       >
+        {newerVersion && <p role="status">{t("intake.newerDraft")}</p>}
         {archive.isError && <ErrorState error={archive.error} />}
       </ConfirmDialog>
       <ConfirmDialog

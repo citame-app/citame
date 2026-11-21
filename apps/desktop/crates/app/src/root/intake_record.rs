@@ -1,9 +1,10 @@
 use super::intake_editor::IntakeDraft;
+use super::intake_live::LiveRefresh;
 use super::*;
 use gpui::{Pixels, Size};
 use sob_core::intake::{
-    Answer, MAX_RECORD_SERVICES, QuestionKind, RecordError, RecordResponse, RecordedResponse,
-    RecordingCatalog, RequiredForm, ResponseHistory, ResponseSource,
+    Answer, MAX_RECORD_SERVICES, QuestionKind, RECORD_LIVE_TOPIC, RecordError, RecordResponse,
+    RecordedResponse, RecordingCatalog, RequiredForm, ResponseHistory, ResponseSource,
 };
 
 pub(super) struct Desk {
@@ -17,6 +18,8 @@ pub(super) struct Desk {
     revision_changed: bool,
     refresh_forms_after_discard: bool,
     request: Option<Arc<()>>,
+    background_refresh: bool,
+    live: LiveRefresh,
     denied: bool,
     pending: Option<RecordResponse>,
     discard: bool,
@@ -40,6 +43,7 @@ struct Chooser {
 
 enum Request {
     History(Option<String>),
+    LiveHistory(Option<String>),
     Detail(String),
     Catalog,
     Forms(Vec<String>),
@@ -55,6 +59,16 @@ enum Reply {
 }
 
 impl Desk {
+    fn blocking_request(&self) -> bool {
+        self.request.is_some() && !self.background_refresh
+    }
+
+    fn cancel_background_refresh(&mut self) {
+        if std::mem::take(&mut self.background_refresh) {
+            self.request = None;
+        }
+    }
+
     fn invalidate_history(&mut self) {
         self.history = None;
         self.before = None;
@@ -113,6 +127,13 @@ impl Desk {
             }
             RecordError::Capacity => Key::RecordCapacity,
             RecordError::Invalid => Key::RecordInvalid,
+            RecordError::RateLimited(_) => {
+                if submitting {
+                    Key::RecordUnconfirmed
+                } else {
+                    Key::FormRateLimited
+                }
+            }
             RecordError::Retry if submitting => Key::RecordUnconfirmed,
             RecordError::Retry => Key::RecordLoadError,
         });
@@ -143,6 +164,8 @@ impl Root {
             revision_changed: false,
             refresh_forms_after_discard: false,
             request: None,
+            background_refresh: false,
+            live: LiveRefresh::default(),
             denied: false,
             pending: None,
             discard: false,
@@ -159,9 +182,10 @@ impl Root {
         let Some(desk) = &mut directory.intake else {
             return;
         };
-        if desk.request.is_some() {
+        if desk.blocking_request() {
             return;
         }
+        desk.cancel_background_refresh();
         if std::mem::take(&mut desk.discard) {
             desk.refresh_forms_after_discard = false;
             cx.notify();
@@ -227,7 +251,8 @@ impl Root {
         let Some(desk) = self.record_desk() else {
             return;
         };
-        if desk.denied || desk.subject_missing || desk.request.is_some() || desk.history.is_none() {
+        if desk.denied || desk.subject_missing || desk.blocking_request() || desk.history.is_none()
+        {
             return;
         }
         if let Some(chooser) = &desk.chooser
@@ -240,6 +265,7 @@ impl Root {
             self.request_record(Request::Forms(services), cx);
             return;
         }
+        desk.cancel_background_refresh();
         let search = cx.new(|cx| TextField::new(label, false, cx));
         cx.observe(&search, |_, _, cx| cx.notify()).detach();
         desk.page = Page::Choose;
@@ -334,12 +360,36 @@ impl Root {
         };
         // Replies from the previous connection cannot reinstall an old private view.
         desk.request = None;
+        desk.background_refresh = false;
+        desk.live = LiveRefresh::default();
         desk.page = Page::History;
         desk.invalidate_history();
         self.request_record(request, cx);
     }
 
+    pub(super) fn refresh_live_intake_history(&mut self, cx: &mut Context<Self>) {
+        if !matches!(&self.overlay, Overlay::Directory(desk) if desk.intake.is_some()) {
+            return;
+        }
+        let Ok(revision) = self.svc.store.live_view_revision(RECORD_LIVE_TOPIC) else {
+            return;
+        };
+        let Some(desk) = self.record_desk() else {
+            return;
+        };
+        if !desk.subject_missing
+            && !desk.denied
+            && desk.request.is_none()
+            && matches!(desk.page, Page::History)
+            && desk.live.needs_refresh(revision, Instant::now())
+        {
+            let before = desk.before.clone();
+            self.request_record(Request::LiveHistory(before), cx);
+        }
+    }
+
     fn request_record(&mut self, request: Request, cx: &mut Context<Self>) {
+        let revision = self.svc.store.live_view_revision(RECORD_LIVE_TOPIC).ok();
         let transport = self
             .svc
             .transport()
@@ -348,7 +398,7 @@ impl Root {
         let Some(desk) = self.record_desk() else {
             return;
         };
-        if desk.request.is_some()
+        if desk.blocking_request()
             || desk.discard
             || (desk.subject_missing
                 && (!matches!(request, Request::Submit(_)) || desk.pending.is_none()))
@@ -356,6 +406,7 @@ impl Root {
             cx.notify();
             return;
         }
+        desk.cancel_background_refresh();
         if let Some(chooser) = &mut desk.chooser {
             match request {
                 Request::Catalog => {
@@ -374,6 +425,9 @@ impl Root {
         let client = desk.client_id.clone();
         let identity = Arc::new(());
         desk.request = Some(identity.clone());
+        desk.background_refresh =
+            matches!(request, Request::LiveHistory(_)) && desk.history.is_some();
+        let refreshing_history = matches!(request, Request::LiveHistory(_) | Request::History(_));
         desk.error = None;
         if let Request::Submit(packet) = &request {
             desk.pending = Some(packet.clone());
@@ -386,7 +440,7 @@ impl Root {
                 .background_executor()
                 .spawn(async move {
                     match request {
-                        Request::History(before) => transport
+                        Request::History(before) | Request::LiveHistory(before) => transport
                             .client_response_history(&client, before.as_deref())
                             .map(|history| Reply::History(before, history)),
                         Request::Detail(id) => transport
@@ -420,9 +474,19 @@ impl Root {
                     return;
                 }
                 desk.request = None;
+                desk.background_refresh = false;
                 if desk.subject_missing && !submitting {
                     cx.notify();
                     return;
+                }
+                if refreshing_history {
+                    match &reply {
+                        Err(RecordError::RateLimited(after)) => {
+                            desk.live.defer(Instant::now(), *after)
+                        }
+                        Err(RecordError::Retry) => desk.live.defer(Instant::now(), None),
+                        _ => desk.live.acknowledge(revision),
+                    }
                 }
                 match reply {
                     Ok(Reply::History(before, history)) => {
@@ -458,7 +522,7 @@ impl Root {
                         root.request_record(Request::History(None), cx);
                     }
                     Err(error) => {
-                        if error != RecordError::Retry {
+                        if !matches!(error, RecordError::Retry | RecordError::RateLimited(_)) {
                             desk.pending = None;
                         }
                         if loading_forms
@@ -485,7 +549,7 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let online = self.status.connectivity == Connectivity::Online;
-        let busy = desk.request.is_some();
+        let busy = desk.blocking_request();
         let (scroll_id, content) = if busy {
             ("record-loading", div().child(self.t(Key::FormWorking)))
         } else if desk.discard {

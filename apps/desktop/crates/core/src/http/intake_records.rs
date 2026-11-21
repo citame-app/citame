@@ -93,6 +93,15 @@ fn read_private_response<T: serde::de::DeserializeOwned>(
     mut response: ureq::http::Response<ureq::Body>,
 ) -> Result<T, RecordError> {
     let status = response.status().as_u16();
+    if status == 429 {
+        let after = response
+            .headers()
+            .get("retry-after")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|text| text.trim().parse::<u64>().ok())
+            .map(std::time::Duration::from_secs);
+        return Err(RecordError::RateLimited(after));
+    }
     let body = response
         .body_mut()
         .read_to_string()

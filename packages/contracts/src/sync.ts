@@ -304,6 +304,7 @@ export const syncPullQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(SYNC_PULL_LIMIT_MAX).default(SYNC_PULL_LIMIT_DEFAULT),
   catalogColors: z.literal("1").optional(),
   reviewRequests: z.literal("1").optional(),
+  intakeViews: z.literal("1").optional(),
 });
 export type SyncPullQuery = z.infer<typeof syncPullQuerySchema>;
 
@@ -416,7 +417,14 @@ const tombstoneSchema = z.object({
 export const syncChangeSchema = z.union([upsertChangeSchema, tombstoneSchema]);
 export type SyncChange = z.infer<typeof syncChangeSchema>;
 
-export const syncLiveViewSchema = z.enum(["commerce", "waitlist", "inbox", "review_requests"]);
+export const syncLiveViewSchema = z.enum([
+  "commerce",
+  "waitlist",
+  "inbox",
+  "review_requests",
+  "intake_forms",
+  "intake_records",
+]);
 export type SyncLiveView = z.infer<typeof syncLiveViewSchema>;
 
 export const syncPullResponseSchema = z.object({

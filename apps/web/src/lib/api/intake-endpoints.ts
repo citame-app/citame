@@ -8,9 +8,13 @@ import {
   intakeSubmissionsSchema,
 } from "@sob/contracts";
 import type { ApiClient } from "./client";
+export const intakeAdminQueryKey = ["intake", "admin"] as const;
+export const intakeHistoryQueryKey = ["intake", "history"] as const;
+
 export function intakeEndpoints(client: ApiClient) {
   return {
-    forms: () => client.get("/admin/intake-forms", intakeFormsSchema),
+    forms: (signal?: AbortSignal) =>
+      client.get("/admin/intake-forms", intakeFormsSchema, { signal }),
     create: (input: { idempotencyKey: string; definition: IntakeDefinition }) =>
       client.post("/admin/intake-forms", input, intakeAdminFormSchema),
     save: (id: string, version: number, definition: IntakeDefinition) =>
@@ -23,11 +27,11 @@ export function intakeEndpoints(client: ApiClient) {
       client.get("/intake/requirements", intakeRequirementsSchema, {
         query: { serviceIds: serviceIds.join(","), clientId },
       }),
-    history: (clientId?: string, before?: string) =>
+    history: (clientId?: string, before?: string, signal?: AbortSignal) =>
       client.get(
         clientId ? `/admin/clients/${clientId}/intake` : "/me/intake",
         intakeSubmissionsSchema,
-        { query: { before } },
+        { query: { before }, signal },
       ),
     response: (id: string) => client.get(`/intake/submissions/${id}`, intakeSubmissionSchema),
     submit: (input: IntakeSubmissionInput, clientId?: string) =>

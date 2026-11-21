@@ -1,7 +1,8 @@
+use super::intake_live::LiveRefresh;
 use super::*;
 use sob_core::intake::{
-    AdminForm, AdminFormSummary, Choice, FormDefinition, FormKind, FormWrite, FormWriteError,
-    Question, QuestionKind,
+    AdminForm, AdminFormSummary, Choice, FORM_LIVE_TOPIC, FormDefinition, FormKind, FormWrite,
+    FormWriteError, Question, QuestionKind,
 };
 use sob_core::sync::TransportError;
 use std::{cell::Cell, rc::Rc};
@@ -14,6 +15,9 @@ pub(super) struct Desk {
     forms: Vec<AdminFormSummary>,
     editor: Option<Editor>,
     request: Option<Arc<()>>,
+    background_refresh: bool,
+    live_read_failed: bool,
+    live: LiveRefresh,
     retry: Option<FormWrite>,
     confirm: Option<Confirm>,
     error: Option<Key>,
@@ -24,6 +28,7 @@ pub(super) struct Desk {
 
 enum FormRead {
     Directory,
+    LiveDirectory,
     Detail(String),
 }
 
@@ -85,7 +90,7 @@ impl Lines {
         cx.observe(&field, |_, _, cx| cx.notify()).detach();
         cx.subscribe(&field, |root, input, event, cx| {
             if let Overlay::IntakeForms(desk) = &mut root.overlay
-                && desk.request.is_none()
+                && !desk.blocking_request()
                 && desk.retry.is_none()
                 && desk.confirm.is_none()
                 && let Some(editor) = &mut desk.editor
@@ -553,6 +558,9 @@ impl Root {
             forms: Vec::new(),
             editor: None,
             request: None,
+            background_refresh: false,
+            live_read_failed: false,
+            live: LiveRefresh::default(),
             retry: None,
             confirm: None,
             error: None,
@@ -567,9 +575,10 @@ impl Root {
         let Overlay::IntakeForms(desk) = &mut self.overlay else {
             return;
         };
-        if desk.request.is_some() {
+        if desk.blocking_request() {
             return;
         }
+        desk.cancel_background_refresh();
         if desk.confirm.take().is_some() {
             cx.notify();
             return;
@@ -586,13 +595,33 @@ impl Root {
         self.read_intake_forms(FormRead::Directory, cx);
     }
 
-    fn read_intake_forms(&mut self, read: FormRead, cx: &mut Context<Self>) {
+    pub(super) fn refresh_live_intake_forms(&mut self, reconnected: bool, cx: &mut Context<Self>) {
+        if !matches!(self.overlay, Overlay::IntakeForms(_)) {
+            return;
+        }
+        let Ok(revision) = self.svc.store.live_view_revision(FORM_LIVE_TOPIC) else {
+            return;
+        };
         let Overlay::IntakeForms(desk) = &mut self.overlay else {
             return;
         };
-        if desk.request.is_some() {
+        if reconnected {
+            desk.live = LiveRefresh::default();
+        }
+        if desk.request.is_none() && desk.live.needs_refresh(revision, Instant::now()) {
+            self.read_intake_forms(FormRead::LiveDirectory, cx);
+        }
+    }
+
+    fn read_intake_forms(&mut self, read: FormRead, cx: &mut Context<Self>) {
+        let revision = self.svc.store.live_view_revision(FORM_LIVE_TOPIC).ok();
+        let Overlay::IntakeForms(desk) = &mut self.overlay else {
+            return;
+        };
+        if desk.blocking_request() {
             return;
         }
+        desk.cancel_background_refresh();
         let Some(transport) = self
             .svc
             .transport()
@@ -604,9 +633,14 @@ impl Root {
         };
         let request = Arc::new(());
         desk.request = Some(request.clone());
-        desk.confirm = None;
-        desk.error = None;
-        desk.notice = None;
+        let background = matches!(read, FormRead::LiveDirectory) && desk.loaded;
+        desk.background_refresh = background;
+        let refreshing_directory = matches!(read, FormRead::Directory | FormRead::LiveDirectory);
+        if !desk.background_refresh {
+            desk.confirm = None;
+            desk.error = None;
+            desk.notice = None;
+        }
         let session = self.svc.session.clone();
         cx.notify();
         cx.spawn(async move |view, cx| {
@@ -614,7 +648,9 @@ impl Root {
                 .background_executor()
                 .spawn(async move {
                     match read {
-                        FormRead::Directory => transport.intake_forms().map(FormData::Directory),
+                        FormRead::Directory | FormRead::LiveDirectory => {
+                            transport.intake_forms().map(FormData::Directory)
+                        }
                         FormRead::Detail(id) => transport
                             .intake_form(&id)
                             .map(Box::new)
@@ -626,9 +662,21 @@ impl Root {
                 let Some(desk) = root.active_form_request(&session, &request) else {
                     return;
                 };
+                if refreshing_directory {
+                    match &result {
+                        Err(TransportError::RateLimited(after)) => {
+                            desk.live.defer(Instant::now(), *after)
+                        }
+                        Err(TransportError::Offline(_) | TransportError::Server(_)) => {
+                            desk.live.defer(Instant::now(), None)
+                        }
+                        _ => desk.live.acknowledge(revision),
+                    }
+                }
                 match result {
                     Ok(FormData::Directory(forms)) => {
                         desk.loaded = true;
+                        desk.live_read_failed = false;
                         desk.forms = forms;
                         desk.denied = false;
                     }
@@ -640,6 +688,7 @@ impl Root {
                         }
                         desk.editor = Some(Editor::new(Some(*form), cx));
                     }
+                    Err(error) if background && !denied(&error) => desk.live_read_failed = true,
                     Err(error) => desk.read_error(error),
                 }
                 cx.notify();
@@ -682,6 +731,10 @@ impl Root {
         let Overlay::IntakeForms(desk) = &mut self.overlay else {
             return;
         };
+        if desk.blocking_request() {
+            return;
+        }
+        desk.cancel_background_refresh();
         let Some(confirm) = desk.confirm.take() else {
             return;
         };
@@ -700,6 +753,10 @@ impl Root {
                 }
             }
             Confirm::Publish | Confirm::Archive => {
+                if desk.newer_version() {
+                    cx.notify();
+                    return;
+                }
                 let Some(editor) = &desk.editor else {
                     return;
                 };
@@ -745,6 +802,7 @@ impl Root {
             return None;
         }
         desk.request = None;
+        desk.background_refresh = false;
         Some(desk)
     }
 
@@ -752,9 +810,11 @@ impl Root {
         let Overlay::IntakeForms(desk) = &mut self.overlay else {
             return;
         };
-        if desk.request.is_some() || desk.denied {
+        if desk.blocking_request() || desk.denied || (desk.retry.is_none() && desk.newer_version())
+        {
             return;
         }
+        desk.cancel_background_refresh();
         let Some(transport) = self
             .svc
             .transport()
@@ -828,7 +888,7 @@ impl Root {
 
     fn form_edit(&mut self, action: Edit, cx: &mut Context<Self>) {
         if let Overlay::IntakeForms(desk) = &mut self.overlay
-            && desk.request.is_none()
+            && !desk.blocking_request()
             && desk.retry.is_none()
             && desk.confirm.is_none()
             && let Some(editor) = &mut desk.editor
@@ -841,6 +901,30 @@ impl Root {
 }
 
 impl Desk {
+    fn blocking_request(&self) -> bool {
+        self.request.is_some() && !self.background_refresh
+    }
+
+    fn cancel_background_refresh(&mut self) {
+        if std::mem::take(&mut self.background_refresh) {
+            self.request = None;
+        }
+    }
+
+    fn newer_version(&self) -> bool {
+        self.editor
+            .as_ref()
+            .and_then(|editor| editor.base.as_ref())
+            .is_some_and(|base| {
+                self.forms.iter().any(|summary| {
+                    summary.id == base.id
+                        && summary
+                            .version
+                            .is_some_and(|version| version > base.version)
+                })
+            })
+    }
+
     fn read_error(&mut self, error: TransportError) {
         if denied(&error) {
             self.denied = true;

@@ -47,6 +47,7 @@ export function CalendarLiveProvider({ children }: { children: ReactNode }) {
             });
           } else if (
             queryKey[0] === "staff" ||
+            queryKey[0] === "intake" ||
             (queryKey[0] === "admin" && queryKey[1] === "staff")
           ) {
             // A pending first load can otherwise reuse a response started before the event.

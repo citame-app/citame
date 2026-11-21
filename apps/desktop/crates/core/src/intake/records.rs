@@ -82,6 +82,7 @@ pub enum RecordError {
     Changed,
     Capacity,
     Invalid,
+    RateLimited(Option<std::time::Duration>),
     Retry,
 }
 

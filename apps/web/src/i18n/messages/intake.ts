@@ -22,6 +22,8 @@ export const intakeEn = {
   "intake.yes": "Yes",
   "intake.no": "No",
   "intake.version": "Version {number}",
+  "intake.newerDraft":
+    "A newer version is available. Reload to review it before saving or publishing.",
   "intake.refresh": "Reload current forms",
   "intake.changed":
     "The required forms changed. Review the current version and confirm your answers again.",
@@ -115,6 +117,8 @@ export const intakeEsAR: Record<keyof typeof intakeEn, string> = {
   "intake.yes": "Sí",
   "intake.no": "No",
   "intake.version": "Versión {number}",
+  "intake.newerDraft":
+    "Hay una versión más reciente. Recárgala y revísala antes de guardar o publicar.",
   "intake.refresh": "Recargar formularios actuales",
   "intake.changed":
     "Los formularios obligatorios han cambiado. Revisa la versión actual y confirma de nuevo tus respuestas.",

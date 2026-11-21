@@ -268,7 +268,10 @@ export async function pullChanges(
         topic.success &&
         (topic.data !== "commerce" || permissions.commerce || permissions.manageCash) &&
         (topic.data !== "review_requests" ||
-          (query.reviewRequests === "1" && permissions.editCatalog))
+          (query.reviewRequests === "1" && permissions.editCatalog)) &&
+        (topic.data !== "intake_forms" ||
+          (query.intakeViews === "1" && permissions.deleteClients)) &&
+        (topic.data !== "intake_records" || (query.intakeViews === "1" && permissions.clients))
       )
         refresh.add(topic.data);
       continue;

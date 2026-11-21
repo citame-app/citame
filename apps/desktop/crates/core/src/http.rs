@@ -1813,7 +1813,9 @@ impl HttpTransport {
         };
         let resp = self.get(
             &self.agent,
-            &format!("/sync/pull?since={since}&limit={limit}{catalog}&reviewRequests=1"),
+            &format!(
+                "/sync/pull?since={since}&limit={limit}{catalog}&reviewRequests=1&intakeViews=1"
+            ),
             None,
         )?;
         let result: CatalogPull = read_response(resp, true)?;

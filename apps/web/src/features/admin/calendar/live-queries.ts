@@ -1,5 +1,6 @@
 import type { SyncEntity, SyncLiveView } from "@sob/contracts";
 import { teamShiftWeekKey } from "~/lib/admin-queries";
+import { intakeAdminQueryKey, intakeHistoryQueryKey } from "~/lib/api/intake-endpoints";
 import { reviewRequestQueryKey } from "~/lib/api/review-endpoints";
 
 const calendar = [["admin", "calendar"], ["availability"]] as const;
@@ -68,6 +69,8 @@ const shared: Record<SyncEntity | SyncLiveView, readonly (readonly string[])[]> 
   waitlist: [["waitlist"]],
   inbox: [["calendar-inbox"]],
   review_requests: [reviewRequestQueryKey, moderation],
+  intake_forms: [intakeAdminQueryKey],
+  intake_records: [intakeHistoryQueryKey],
 };
 
 export function liveQueryKeys(changes?: Iterable<SyncEntity | SyncLiveView>) {

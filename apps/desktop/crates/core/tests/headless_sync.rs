@@ -158,7 +158,8 @@ fn native_administers_a_form_through_the_proxy() {
 #[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_records_and_reads_private_intake_through_the_proxy() {
     use sob_core::intake::{
-        FormDefinition, FormWrite, RecordError, RecordResponse, ResponseSource,
+        FORM_LIVE_TOPIC, FormDefinition, FormWrite, RECORD_LIVE_TOPIC, RecordError, RecordResponse,
+        ResponseSource,
     };
     let mut browser = Device::sign_in();
     browser.sync();
@@ -169,6 +170,28 @@ fn native_records_and_reads_private_intake_through_the_proxy() {
     browser.sync();
     let device = proxy_device();
     let transport = &device.transport;
+    let replica_dir = tempfile::tempdir().unwrap();
+    let path = replica_dir.path().join("intake.sqlite");
+    let status: SharedStatus = Default::default();
+    let runner = SyncRunner::spawn(RunnerCore::new(
+        Store::open(&path).unwrap(),
+        device.transport.clone(),
+        status.clone(),
+    ));
+    let live = Arc::new(AtomicBool::new(false));
+    let stop = Arc::new(AtomicBool::new(false));
+    let listener = spawn_stream_listener(
+        device.transport.clone(),
+        runner.sender(),
+        live.clone(),
+        stop.clone(),
+    );
+    wait(Duration::from_secs(10), "the native intake stream", || {
+        status.lock().unwrap().connectivity == Connectivity::Online && live.load(Ordering::SeqCst)
+    });
+    let replica = Store::open(&path).unwrap();
+    let initial_form_revision = replica.live_view_revision(FORM_LIVE_TOPIC).unwrap();
+    let initial_response_revision = replica.live_view_revision(RECORD_LIVE_TOPIC).unwrap();
     let question = uuid::Uuid::now_v7().to_string();
     let definition: FormDefinition = serde_json::from_value(json!({
         "title": "Synthetic frozen response history",
@@ -204,6 +227,11 @@ fn native_records_and_reads_private_intake_through_the_proxy() {
             None,
         )
         .unwrap();
+    wait(
+        Duration::from_secs(5),
+        "the form publication marker",
+        || replica.live_view_revision(FORM_LIVE_TOPIC).unwrap() > initial_form_revision,
+    );
     assert!(
         transport
             .client_recording_catalog(&client)
@@ -232,15 +260,6 @@ fn native_records_and_reads_private_intake_through_the_proxy() {
     let packet = RecordResponse::new(&client, response).unwrap();
     transport.record_client_response(&packet).unwrap();
     transport.record_client_response(&packet).unwrap();
-    transport
-        .write_intake_form(
-            &FormWrite::Archive {
-                id: published.id,
-                version: published.version,
-            },
-            None,
-        )
-        .unwrap();
     let history = transport.client_response_history(&client, None).unwrap();
     assert_eq!(history.submissions.len(), 1);
     let summary = &history.submissions[0];
@@ -259,6 +278,52 @@ fn native_records_and_reads_private_intake_through_the_proxy() {
     ));
     let cloud = browser.rest_get(&format!("/intake/submissions/{}", summary.id));
     assert_eq!(cloud["answers"][&question], false);
+    wait(Duration::from_secs(5), "the native response marker", || {
+        replica.live_view_revision(RECORD_LIVE_TOPIC).unwrap() > initial_response_revision
+    });
+    let before_web = replica.live_view_revision(RECORD_LIVE_TOPIC).unwrap();
+    let web = browser.rest_post(
+        &format!("/admin/clients/{client}/intake"),
+        json!({
+            "idempotencyKey": uuid::Uuid::now_v7(),
+            "revisionId": required.id,
+            "confirmation": true,
+            "answers": { (&question): true }
+        }),
+    );
+    wait(
+        Duration::from_secs(5),
+        "the web response marker reaching another native session",
+        || replica.live_view_revision(RECORD_LIVE_TOPIC).unwrap() > before_web,
+    );
+    assert!(
+        transport
+            .client_response_history(&client, None)
+            .unwrap()
+            .submissions
+            .iter()
+            .any(|entry| entry.id == web["id"])
+    );
+    transport
+        .write_intake_form(
+            &FormWrite::Archive {
+                id: published.id,
+                version: published.version,
+            },
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        transport
+            .client_recorded_response(&client, &summary.id)
+            .unwrap()
+            .revision
+            .id,
+        required.id
+    );
+    stop.store(true, Ordering::SeqCst);
+    listener.join().unwrap();
+    runner.stop();
     browser.sync();
     assert!(browser.store.outbox(20).unwrap().is_empty());
 }

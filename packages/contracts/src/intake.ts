@@ -237,6 +237,7 @@ export const intakeFormSummariesSchema = z.object({
         id: idSchema,
         title: title.max(120),
         active: z.boolean(),
+        version: z.number().int().positive(),
         publishedNumber: z.number().int().positive().nullable(),
       }),
     )

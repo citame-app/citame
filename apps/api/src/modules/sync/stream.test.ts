@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { intakeAdminFormSchema, intakeSubmissionSchema } from "@sob/contracts";
 import {
   appointment,
   cashSession,
@@ -297,6 +298,98 @@ describe("GET /sync/stream", () => {
       expect(sent.refresh).toEqual(["review_requests"]);
       expect(sent.changes).toEqual([]);
       await stream.until((message) => nudges(message).includes(sent.headSeq), 2500);
+    } finally {
+      await stream.cancel();
+    }
+  });
+
+  test("intake writes wake authorized compatible clients without carrying private content", async () => {
+    const professional = await actor(t, "staff", "intake-professional@example.test", {
+      staffProfileId: f.anaId,
+    });
+    const restricted = await actor(t, "staff", "intake-restricted@example.test", {
+      staffProfileId: f.beaId,
+    });
+    await t.db
+      .update(staffProfile)
+      .set({ accessPreset: "restricted" })
+      .where(eq(staffProfile.id, f.beaId));
+    const stream = reader(await open(owner));
+    try {
+      await stream.until((text) => nudges(text).length > 0);
+      const [since] = nudges(stream.text);
+      if (since === undefined) throw new Error("Missing initial sync cursor");
+      const field = uuid();
+      const privateText = "Synthetic confidential note";
+      const form = intakeAdminFormSchema.parse(
+        await (
+          await json(
+            t.app,
+            "/admin/intake-forms",
+            "POST",
+            {
+              idempotencyKey: uuid(),
+              definition: {
+                title: "Synthetic private form",
+                allowTeamResponses: true,
+                fields: [{ id: field, label: "Notes", kind: "text" }],
+              },
+            },
+            owner.cookie,
+          )
+        ).json(),
+      );
+      const published = intakeAdminFormSchema.parse(
+        await (
+          await json(
+            t.app,
+            `/admin/intake-forms/${form.id}/publish`,
+            "POST",
+            { version: form.version },
+            owner.cookie,
+          )
+        ).json(),
+      );
+      expect(published.published).not.toBeNull();
+      const forms = await pull(t, owner, { since, intakeViews: "1" });
+      expect(forms.refresh).toEqual(["intake_forms"]);
+      expect(forms.changes).toEqual([]);
+      expect((await pull(t, professional, { since, intakeViews: "1" })).refresh).toBeUndefined();
+      expect((await pull(t, owner, { since })).refresh).toBeUndefined();
+      await stream.until((text) => nudges(text).includes(forms.headSeq));
+
+      const packet = {
+        idempotencyKey: uuid(),
+        confirmation: true,
+        revisionId: published.published?.id,
+        answers: { [field]: privateText },
+      };
+      const path = `/admin/clients/${f.clientId}/intake`;
+      const record = intakeSubmissionSchema.parse(
+        await (await json(t.app, path, "POST", packet, owner.cookie)).json(),
+      );
+      const views = await pull(t, owner, { since: forms.nextCursor, intakeViews: "1" });
+      expect(views.refresh).toEqual(["intake_records"]);
+      expect(views.changes).toEqual([]);
+      expect(JSON.stringify(views)).not.toContain(privateText);
+      expect(JSON.stringify(views)).not.toContain(record.id);
+      const allowed = await pull(t, professional, { since: forms.nextCursor, intakeViews: "1" });
+      expect(allowed.refresh).toEqual(["intake_records"]);
+      const denied = await pull(t, restricted, { since: forms.nextCursor, intakeViews: "1" });
+      expect(denied.refresh).toBeUndefined();
+      expect(denied.nextCursor).toBe(views.nextCursor);
+      expect((await pull(t, owner, { since: forms.nextCursor })).refresh).toBeUndefined();
+      await stream.until((text) => nudges(text).includes(views.headSeq));
+      expect(stream.text).not.toContain(privateText);
+      expect(stream.text).not.toContain(record.id);
+
+      const replay = intakeSubmissionSchema.parse(
+        await (await json(t.app, path, "POST", packet, owner.cookie)).json(),
+      );
+      expect(replay.id).toBe(record.id);
+      expect((await pull(t, owner, { since: views.nextCursor, intakeViews: "1" })).headSeq).toBe(
+        views.headSeq,
+      );
     } finally {
       await stream.cancel();
     }

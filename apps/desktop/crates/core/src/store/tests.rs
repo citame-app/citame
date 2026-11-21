@@ -24,6 +24,28 @@ fn review_refresh_advances_the_topic_without_replica_changes() {
 }
 
 #[test]
+fn intake_markers_survive_reopening_the_replica_without_private_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("replica.sqlite");
+    let mut store = Store::open(&path).unwrap();
+    let topics = [
+        crate::intake::FORM_LIVE_TOPIC,
+        crate::intake::RECORD_LIVE_TOPIC,
+    ];
+    let refresh = topics.map(str::to_owned);
+    store
+        .apply_sync_page(&[], 5, false, false, &refresh, None)
+        .unwrap();
+    drop(store);
+    let reopened = Store::open(&path).unwrap();
+    for topic in topics {
+        assert_eq!(reopened.live_view_revision(topic).unwrap(), 5);
+    }
+    assert!(reopened.clients().unwrap().is_empty());
+    assert!(reopened.outbox(20).unwrap().is_empty());
+}
+
+#[test]
 fn staff_directory_revision_advances_only_for_new_staff_rows() {
     let mut store = Store::open_in_memory().unwrap();
     let change = staff_change(3, "manager", "Manager");

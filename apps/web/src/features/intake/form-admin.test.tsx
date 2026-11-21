@@ -1,5 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderApp } from "../../../test/render";
 import { IntakeAdmin } from "./form-admin";
 
@@ -110,4 +110,44 @@ test("a stale draft remains intact until an explicit reload fetches the latest v
   await waitFor(() =>
     expect(screen.getByLabelText("Form title")).toHaveValue("Colleague's saved title"),
   );
+});
+
+test("a live newer form version leaves the dirty form visible and prevents a stale write", async () => {
+  const id = "0198f5a0-7b1c-7000-8000-000000000003";
+  const original = {
+    id,
+    version: 1,
+    active: false,
+    draft: {
+      title: "Original",
+      description: "",
+      kind: "intake",
+      requiredAtBooking: false,
+      allowTeamResponses: false,
+      allServices: true,
+      serviceIds: [],
+      fields: [
+        { id, label: "Preferences", help: "", required: false, kind: "text", maxLength: 120 },
+      ],
+    },
+    published: null,
+    updatedAt: "2026-03-02T12:00:00.000Z",
+  };
+  const fetch = mock(async (input: RequestInfo | URL) =>
+    Response.json(
+      String(input).includes("intake-forms") ? { forms: [original] } : { services: [] },
+    ),
+  );
+  globalThis.fetch = fetch as unknown as typeof globalThis.fetch;
+  const { queryClient } = renderApp(<IntakeAdmin />);
+  fireEvent.change(await screen.findByLabelText("Edit form"), { target: { value: id } });
+  fireEvent.change(screen.getByLabelText("Form title"), { target: { value: "Unsaved title" } });
+  await act(async () => {
+    queryClient.setQueryData(["intake", "admin"], {
+      forms: [{ ...original, version: 2, draft: { ...original.draft, title: "New cloud title" } }],
+    });
+  });
+  await screen.findByText(/A newer version is available/);
+  expect(screen.getByLabelText("Form title")).toHaveValue("Unsaved title");
+  expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();
 });

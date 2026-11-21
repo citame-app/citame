@@ -290,7 +290,15 @@ test("desktop form administration uses live permissions and versioned, immutable
   expect(summary.status).toBe(200);
   expect(summary.headers.get("cache-control")).toBe("private, no-store");
   expect(intakeFormSummariesSchema.parse(await summary.json())).toEqual({
-    forms: [{ id: draft.id, title: definition.title, active: false, publishedNumber: null }],
+    forms: [
+      {
+        id: draft.id,
+        title: definition.title,
+        active: false,
+        version: draft.version,
+        publishedNumber: null,
+      },
+    ],
   });
   expect((await desktop(summaryPath, "GET", undefined, staff.access)).status).toBe(403);
   expect((await desktop(path, "GET", undefined, staff.access)).status).toBe(403);
@@ -429,6 +437,9 @@ test("desktop private response history stays bound to the reviewed client and im
   expect(older.submissions).toHaveLength(1);
   expect(older.nextCursor).toBeNull();
 
+  const beforeMergeCursor = syncPullResponseSchema.parse(
+    await (await request("/sync/pull", staff.access)).json(),
+  ).headSeq;
   const merge = { sourceId: source.id, targetId: survivor.id };
   const preview = await json(
     t.app,
@@ -458,6 +469,17 @@ test("desktop private response history stays bound to the reviewed client and im
   expect(
     (await post(record(source.id), { ...packet, idempotencyKey: crypto.randomUUID() })).status,
   ).toBe(409);
+  const mergedFeed = syncPullResponseSchema.parse(
+    await (
+      await request(`/sync/pull?since=${beforeMergeCursor}&intakeViews=1`, staff.access)
+    ).json(),
+  );
+  expect(mergedFeed.refresh).toContain("intake_records");
+  const mergedHistory = intakeSubmissionsSchema.parse(
+    await (await request(record(survivor.id), staff.access)).json(),
+  );
+  expect(mergedHistory.submissions).toHaveLength(20);
+  expect(JSON.stringify(mergedFeed)).not.toContain(saved.id);
   expect((await request(`${record(foreign.id)}/${saved.id}`, staff.access)).status).toBe(404);
   expect(
     (await post(`${record(survivor.id)}/${saved.id}`, {}, staff.access, "DELETE")).status,

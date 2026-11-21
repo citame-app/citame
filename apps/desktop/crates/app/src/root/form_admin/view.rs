@@ -8,6 +8,8 @@ impl Root {
         viewport: Size<Pixels>,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        let busy = desk.blocking_request();
+        let newer_version = desk.newer_version();
         let body = div()
             .child(
                 div()
@@ -15,21 +17,26 @@ impl Root {
                     .font_weight(FontWeight::BOLD)
                     .child(self.t(Key::FormAdmin)),
             )
-            .when_some(desk.error, |body, error| {
-                body.child(
-                    div()
-                        .text_sm()
-                        .text_color(theme::conflict_fg())
-                        .child(self.t(error)),
-                )
-            })
+            .when_some(
+                desk.error
+                    .or(desk.live_read_failed.then_some(Key::FormLoadError)),
+                |body, error| {
+                    body.child(
+                        div()
+                            .text_sm()
+                            .text_color(theme::conflict_fg())
+                            .child(self.t(error)),
+                    )
+                },
+            )
             .when_some(desk.notice, |body, notice| {
                 body.child(div().text_sm().child(self.t(notice)))
             })
-            .when(desk.request.is_some(), |body| {
-                body.child(self.t(Key::FormWorking))
+            .when(newer_version, |body| {
+                body.child(div().text_sm().child(self.t(Key::FormConflict)))
             })
-            .when(desk.request.is_none(), |body| {
+            .when(busy, |body| body.child(self.t(Key::FormWorking)))
+            .when(!busy, |body| {
                 let content = if let Some(confirm) = desk.confirm {
                     self.render_form_confirmation(desk, confirm, cx)
                 } else if let Some(action) = &desk.retry {
@@ -48,7 +55,7 @@ impl Root {
                             }),
                         ))
                 } else if let Some(editor) = &desk.editor {
-                    self.render_form_editor(editor, cx)
+                    self.render_form_editor(editor, newer_version, cx)
                 } else {
                     self.render_form_list(desk, cx)
                 };
@@ -69,7 +76,7 @@ impl Root {
                         .child(content),
                 )
             })
-            .when(desk.request.is_none(), |body| {
+            .when(!busy, |body| {
                 body.child(
                     div().flex_shrink_0().flex().gap_2().child(
                         self.button(
@@ -165,7 +172,7 @@ impl Root {
         let Overlay::IntakeForms(desk) = &mut self.overlay else {
             return;
         };
-        if desk.denied || desk.request.is_some() || !desk.loaded {
+        if desk.denied || desk.blocking_request() || !desk.loaded {
             return;
         }
         if let Some(index) = index {
@@ -175,13 +182,19 @@ impl Root {
             }
             return;
         }
+        desk.cancel_background_refresh();
         desk.editor = Some(Editor::new(None, cx));
         desk.notice = None;
         desk.error = None;
         cx.notify();
     }
 
-    fn render_form_editor(&self, editor: &Editor, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_form_editor(
+        &self,
+        editor: &Editor,
+        newer_version: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let dirty = editor.dirty(cx);
         let waiver = editor.kind == FormKind::Waiver;
         div()
@@ -235,7 +248,7 @@ impl Root {
                     .flex()
                     .flex_wrap()
                     .gap_2()
-                    .when(dirty, |row| {
+                    .when(dirty && !newer_version, |row| {
                         row.child(self.button(
                             "form-save",
                             self.t(Key::FormSave),
@@ -244,7 +257,9 @@ impl Root {
                         ))
                     })
                     .when(
-                        editor.base.as_ref().is_some_and(AdminForm::can_publish) && !dirty,
+                        editor.base.as_ref().is_some_and(AdminForm::can_publish)
+                            && !dirty
+                            && !newer_version,
                         |row| {
                             row.child(self.form_confirm_button(
                                 "form-review",
@@ -255,7 +270,9 @@ impl Root {
                         },
                     )
                     .when(
-                        editor.base.as_ref().is_some_and(|base| base.active) && !dirty,
+                        editor.base.as_ref().is_some_and(|base| base.active)
+                            && !dirty
+                            && !newer_version,
                         |row| {
                             row.child(self.form_confirm_button(
                                 "form-archive",
@@ -289,7 +306,7 @@ impl Root {
             Kind::Ghost,
             cx.listener(move |root, _, _, cx| {
                 if let Overlay::IntakeForms(desk) = &mut root.overlay
-                    && desk.request.is_none()
+                    && !desk.blocking_request()
                 {
                     desk.confirm = Some(confirm);
                     cx.notify();
@@ -693,16 +710,21 @@ impl Root {
                         )
                 },
             )
-            .child(self.button(
-                "form-confirm-action",
-                self.t(action),
-                if matches!(confirm, Confirm::Archive | Confirm::Close) {
-                    Kind::Danger
-                } else {
-                    Kind::Primary
+            .when(
+                !desk.newer_version() || !matches!(confirm, Confirm::Archive | Confirm::Publish),
+                |body| {
+                    body.child(self.button(
+                        "form-confirm-action",
+                        self.t(action),
+                        if matches!(confirm, Confirm::Archive | Confirm::Close) {
+                            Kind::Danger
+                        } else {
+                            Kind::Primary
+                        },
+                        cx.listener(|root, _, _, cx| root.confirm_intake_action(cx)),
+                    ))
                 },
-                cx.listener(|root, _, _, cx| root.confirm_intake_action(cx)),
-            ))
+            )
     }
 
     fn form_question_preview(&self, question: &Question) -> gpui::Div {

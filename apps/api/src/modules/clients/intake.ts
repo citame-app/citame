@@ -99,6 +99,7 @@ export async function listIntakeFormSummaries(db: Database, p: Principal) {
       title: sql<string>`(case when jsonb_typeof(${intakeForm.draft}) = 'string'
         then (${intakeForm.draft} #>> '{}')::jsonb else ${intakeForm.draft} end)->>'title'`,
       active: intakeForm.active,
+      version: intakeForm.version,
       publishedNumber: intakeRevision.number,
     })
     .from(intakeForm)

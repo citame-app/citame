@@ -42,6 +42,7 @@ mod directory;
 mod form_admin;
 mod inbox;
 mod intake_editor;
+mod intake_live;
 mod intake_record;
 mod inventory;
 mod notices;
@@ -677,6 +678,10 @@ impl Root {
             self.refresh_weekly_conflicts_if_ready(cx);
             self.refresh_open_annotations(true, cx);
             self.refresh_private_record(cx);
+        }
+        if self.status.connectivity == Connectivity::Online {
+            self.refresh_live_intake_forms(reconnected, cx);
+            self.refresh_live_intake_history(cx);
         }
     }
 

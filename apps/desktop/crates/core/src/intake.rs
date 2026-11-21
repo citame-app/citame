@@ -4,6 +4,9 @@ mod records;
 pub use record_catalog::*;
 pub use records::*;
 
+pub const FORM_LIVE_TOPIC: &str = "intake_forms";
+pub const RECORD_LIVE_TOPIC: &str = "intake_records";
+
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -73,6 +76,7 @@ pub struct AdminFormSummary {
     pub id: String,
     pub title: String,
     pub active: bool,
+    pub version: Option<u32>,
     pub published_number: Option<u32>,
 }
 
@@ -82,6 +86,7 @@ impl From<&AdminForm> for AdminFormSummary {
             id: form.id.clone(),
             title: form.draft.title.clone(),
             active: form.active,
+            version: Some(form.version),
             published_number: form.published.as_ref().map(|revision| revision.number),
         }
     }

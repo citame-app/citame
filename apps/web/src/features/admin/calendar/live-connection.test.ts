@@ -158,6 +158,23 @@ test("a review request marker refreshes the invitation list without invalidating
   ]);
 });
 
+test("intake nudges target directories and histories without replacing answers being edited", async () => {
+  const h = harness(async () => ({
+    ...response(11),
+    changes: [],
+    refresh: ["intake_forms", "intake_records"],
+  }));
+  h.send(10);
+  h.send(11);
+  await waitFor(() =>
+    expect(h.onChanges).toHaveBeenCalledWith([], ["intake_forms", "intake_records"]),
+  );
+  expect([...liveQueryKeys(["intake_forms", "intake_records"])]).toEqual([
+    ["intake", "admin"],
+    ["intake", "history"],
+  ]);
+});
+
 test("an SSE reconnect reconciles even when there is no new nudge", async () => {
   const pull = mock(async () => response(11));
   const h = harness(pull);
