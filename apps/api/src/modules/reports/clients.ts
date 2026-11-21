@@ -7,7 +7,7 @@ import type { Database } from "@sob/db";
 import { sql } from "drizzle-orm";
 import { groupName } from "../clients/groups";
 import { storedValuePaymentMethods } from "../commerce/money";
-import { recordedCheckoutMovements } from "../commerce/report-movements";
+import { checkoutReportScope, recordedCheckoutMovements } from "../commerce/report-movements";
 import { reportDateScope } from "./service";
 
 /** Completed visits and net recorded collections for the selected salon-local period. */
@@ -75,7 +75,7 @@ export function reportClients(db: Database, query: ReportQuery): Promise<ReportC
       }>(sql`
         with by_record as (
           select client_id, sum(case when refund then -amount else amount end) as cents
-          from (${recordedCheckoutMovements(fromAt, toAt, query.staffId)}) movements
+          from (${recordedCheckoutMovements(fromAt, toAt, checkoutReportScope(query.staffId))}) movements
           where client_id is not null and method not in (${storedValueMethods})
           group by client_id
         ), ranked as (

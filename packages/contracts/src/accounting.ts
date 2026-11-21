@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { idempotencyKeySchema, moneyCentsSchema } from "./commerce";
 import { idSchema, instantSchema, pageInfoSchema, syncGenerationSchema } from "./common";
+import { reportQuerySchema } from "./reports";
 
 const basisPoints = z.number().int().min(0).max(10000);
 const signedMoney = z.number().int().min(-Number.MAX_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER);
@@ -88,10 +89,15 @@ export const salesFamilyTotalSchema = z.object({
   taxCents: signedMoney,
 });
 export type SalesFamilyTotal = z.infer<typeof salesFamilyTotalSchema>;
+export const salesReportQuerySchema = reportQuerySchema.safeExtend({
+  clientId: idSchema.optional(),
+});
+export type SalesReportQuery = z.infer<typeof salesReportQuerySchema>;
 export const salesReportSchema = z.object({
   from: z.string(),
   to: z.string(),
   timezone: z.string(),
+  client: z.object({ id: idSchema, name: z.string() }).optional(),
   collectedCents: aggregateMoney,
   refundedCents: aggregateMoney,
   netCollectedCents: signedMoney,

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderApp } from "../../../../test/render";
-import { AccountingView, CommissionPanel } from "./accounting-view";
+import { AccountingView, CommissionPanel, SalesReport } from "./accounting-view";
 
 const realFetch = globalThis.fetch;
 const id = "0198f5a0-7b1c-7000-8000-000000000100";
@@ -127,4 +127,12 @@ test("financial reports apply the professional filter and export the visible fam
     click.mockRestore();
     create.mockRestore();
   }
+});
+
+test("a client report rejects a server response with no client scope", async () => {
+  renderApp(<SalesReport clientId={id} />);
+  await screen.findByRole("alert");
+  expect(salesQueries.at(-1)?.get("clientId")).toBe(id);
+  expect(screen.queryByRole("table", { name: "Settled amounts by sale family" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Export financial summary (CSV)" })).toBeNull();
 });

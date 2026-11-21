@@ -26,8 +26,11 @@ impl ReportQuery {
         self.url("/admin/reports/clients", false, &[])
     }
 
-    pub(crate) fn financial_path(&self) -> String {
-        self.url("/admin/accounting/sales", false, &[])
+    pub(crate) fn financial_path(&self, client_id: Option<&str>) -> String {
+        match client_id {
+            Some(id) => self.url("/admin/accounting/sales", false, &[("clientId", id)]),
+            None => self.url("/admin/accounting/sales", false, &[]),
+        }
     }
 
     pub(crate) fn outcome_path(&self, status: Outcome, page: u32) -> String {

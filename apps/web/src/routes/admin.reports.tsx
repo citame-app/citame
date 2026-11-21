@@ -1,8 +1,8 @@
 import { permissionsFor } from "@sob/contracts";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { PageHeading } from "~/components/pages";
-import { AccountingView } from "~/features/admin/commerce/accounting-view";
+import { AccountingView, SalesReport } from "~/features/admin/commerce/accounting-view";
 import { validateReportsSearch } from "~/features/admin/reports/range";
 import { ReportsView } from "~/features/admin/reports/reports-view";
 import { adminHead } from "~/features/admin/route-head";
@@ -25,6 +25,25 @@ function ReportsPage() {
   const [visited, setVisited] = useState(() => new Set<string>(["overview"]));
   const permissions = permissionsFor(session?.user.role ?? "client", session?.accessPreset);
   if (!session) return null;
+  if (search.client) {
+    return (
+      <div className="view-reports">
+        <PageHeading title={t("accounting.clientSales")} />
+        <Link
+          to="/admin/reports"
+          search={{ preset: "last30" }}
+          className="inline-flex min-h-11 items-center text-sm font-medium text-accent-text hover:underline"
+        >
+          {t("accounting.allReports")}
+        </Link>
+        {permissions.financialReports && permissions.clients ? (
+          <SalesReport key={search.client} clientId={search.client} />
+        ) : (
+          <p role="status">{t("accounting.clientReportRestricted")}</p>
+        )}
+      </div>
+    );
+  }
   const all = permissions.allCalendars;
   return (
     <div className="view-reports">

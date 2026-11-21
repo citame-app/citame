@@ -1,5 +1,5 @@
 import { type SalesFamilyTotal, salesFamilySchema } from "@sob/contracts";
-import { sql } from "drizzle-orm";
+import { type SQL, sql } from "drizzle-orm";
 import type { Tx } from "../../tx";
 
 const familyOrder = sql.join(
@@ -17,8 +17,7 @@ const lineFamilies = sql.join(
 export const redeemedAtSettlement = sql`(pr.refunded_at is null or pr.refunded_at > c.fulfilled_at)`;
 
 /** Amounts at settlement, excluding tips. Older receipts can lack a reliable split by line. */
-export async function settledSales(tx: Tx, fromAt: Date, toAt: Date, staffId: string | undefined) {
-  const staff = staffId ? sql`and c.staff_id = ${staffId}` : sql``;
+export async function settledSales(tx: Tx, fromAt: Date, toAt: Date, scope: SQL) {
   const rows = await tx.execute<{
     family: SalesFamilyTotal["family"] | null;
     amount: string | number;
@@ -28,7 +27,7 @@ export async function settledSales(tx: Tx, fromAt: Date, toAt: Date, staffId: st
     with receipts as (
       select c.id, c.subtotal_cents, c.discount_cents, c.tax_cents, c.total_cents, c.tip_cents, c.fulfilled_at
       from checkout c
-      where c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt} ${staff}
+      where c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt} ${scope}
     ), line_values as (
       select l.checkout_id,
         case when l.kind in (${lineFamilies})

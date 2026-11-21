@@ -144,4 +144,23 @@ test("client collections report shows and exports net payments", async ({ page }
   const csv = await readFile(await download.path(), "utf8");
   expect(csv).toMatch(/^client,net_cents,currency\r\n/);
   expect(csv).toContain(`${clientName},10000,EUR\r\n`);
+
+  await page.goto(`/admin/clients/${clientId}`);
+  await page.getByRole("button", { name: "Payments", exact: true }).click();
+  await page.getByRole("link", { name: "Client sales report" }).click();
+  await expect(page).toHaveURL(new RegExp(`client=${clientId}`));
+  await expect(page.getByRole("heading", { name: clientName })).toBeVisible();
+  const byFamily = page.getByRole("table", { name: "Settled amounts by sale family" });
+  const saleRow = byFamily.getByRole("row").filter({ hasText: "Custom items" });
+  await expect(saleRow.getByRole("cell").first()).toHaveText("€123.45");
+  await expectNoHorizontalScroll(page);
+  const exportingSales = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export financial summary (CSV)" }).click();
+  const scopedDownload = await exportingSales;
+  expect(scopedDownload.suggestedFilename()).toContain(`client-sales-${clientId}-`);
+  const salesCsv = await readFile(await scopedDownload.path(), "utf8");
+  expect(salesCsv).toContain(`"client_id","${clientId}"`);
+  expect(salesCsv).toContain('"custom","12345","0","EUR"');
+  await page.getByRole("link", { name: "Back to client profile" }).click();
+  await expect(page.getByRole("heading", { name: clientName })).toBeVisible();
 });

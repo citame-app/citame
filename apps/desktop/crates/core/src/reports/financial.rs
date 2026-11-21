@@ -13,6 +13,7 @@ pub struct FinancialReport {
     pub from: NaiveDate,
     pub to: NaiveDate,
     pub timezone: String,
+    pub client: Option<FinancialClient>,
     pub collected_cents: i64,
     pub refunded_cents: i64,
     pub net_collected_cents: i64,
@@ -42,6 +43,12 @@ pub struct FinancialReport {
     pub settled_by_family: Option<Vec<SalesFamilyTotal>>,
     pub methods: Vec<FinancialMethod>,
     pub cash_sessions: Vec<FinancialSession>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FinancialClient {
+    pub id: uuid::Uuid,
+    pub name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,6 +108,13 @@ pub struct FinancialSession {
 }
 
 impl FinancialReport {
+    pub fn csv_filename(&self) -> String {
+        match &self.client {
+            Some(client) => format!("client-sales-{}-{}-{}.csv", client.id, self.from, self.to),
+            None => format!("financial-summary-{}-{}.csv", self.from, self.to),
+        }
+    }
+
     pub fn metrics(&self) -> [(&'static str, Key, i64); 16] {
         [
             ("collected", Key::FinancialCollected, self.collected_cents),
@@ -171,9 +185,11 @@ impl FinancialReport {
     }
 
     pub fn to_csv(&self) -> String {
-        let mut csv = String::from(
-            "\u{feff}\"from\",\"to\",\"timezone\",\"metric\",\"amount_cents\",\"currency\"\r\n",
-        );
+        let mut csv = String::from("\u{feff}");
+        if let Some(client) = &self.client {
+            let _ = write!(csv, "\"client_id\",\"{}\"\r\n\r\n", client.id);
+        }
+        csv.push_str("\"from\",\"to\",\"timezone\",\"metric\",\"amount_cents\",\"currency\"\r\n");
         let timezone = csv_text(&self.timezone);
         for (metric, _, cents) in self.metrics() {
             let _ = write!(

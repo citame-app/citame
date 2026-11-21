@@ -78,6 +78,10 @@ Strict TDD in three layers, test first for every unit: pure logic (`bun test`: n
 
 Cloud and Desktop use the same client report and export the ten highest positive net collections in EUR. The calculation uses recorded external payments and completed refunds in the selected salon-local dates and the checkout's staff scope. It groups historical checkouts under the current client identity after merges. Anonymous sales, deleted client profiles and redemptions of stored value are outside the ranking. The report requires financial and client directory permissions.
 
+### Client sales by family
+
+The client profile opens a scoped financial report in Cloud and Desktop. The existing financial report endpoint accepts a client identifier and resolves it to the current profile within the reporting snapshot. Date and professional filters apply to the same checkout ledger and settlement calculations as the centre report. Scoped exports identify the client and keep the settled family, included tax, external collections and refunds distinct. Cash register sessions remain available in the centre report. The client view requires financial report and client directory permissions.
+
 ## Consequences
 
 - Two new runtime dependencies in `apps/web`: `@tanstack/react-table` 9.3.1 and `recharts` 3.10.1 (plus `react-is` 19.3.1, a Recharts peer).

@@ -3,15 +3,22 @@ import { useId } from "react";
 import { useI18n } from "~/i18n/react";
 import { formatMoney } from "~/lib/format";
 
-export function SalesFamilies({ rows }: { rows: SalesFamilyTotal[] }) {
+export function SalesFamilies({
+  rows,
+  headingLevel = "h4",
+}: {
+  rows: SalesFamilyTotal[];
+  headingLevel?: "h3" | "h4";
+}) {
   const { t, locale } = useI18n();
   const heading = useId();
   const basis = useId();
+  const Heading = headingLevel;
   return (
     <div className="space-y-2">
-      <h4 id={heading} className="font-semibold">
+      <Heading id={heading} className="font-semibold">
         {t("accounting.families.title")}
-      </h4>
+      </Heading>
       <p id={basis} className="max-w-prose text-sm text-muted">
         {t("accounting.families.basis")}
       </p>

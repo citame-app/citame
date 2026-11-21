@@ -990,6 +990,8 @@ keys! {
     ReportExportFailed => ("The file could not be saved.", "No se pudo guardar el archivo."),
     ReportExportChanged => ("The report changed while saving. Review it and export again.", "El informe cambió mientras se guardaba. Revísalo y vuelve a exportar."),
     FinancialReport => ("Financial reports", "Informes económicos"),
+    ClientSalesReport => ("Client sales report", "Informe de ventas del cliente"),
+    ReportBackToClient => ("Back to client profile", "Volver a la ficha del cliente"),
     FinancialReportBasis => ("Collections and refunds use their confirmation date. Sales use the date of full settlement. Product costs are recorded at sale.", "Los cobros y devoluciones se cuentan por fecha de confirmación. Las ventas se cuentan cuando se completa el cobro. Los costes se registran al vender."),
     FinancialCollected => ("Collected money", "Dinero cobrado"),
     FinancialRefunded => ("Refunds completed", "Devoluciones completadas"),

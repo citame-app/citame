@@ -4,6 +4,7 @@ import {
   commissionPayoutSchema,
   commissionPolicySchema,
   commissionStatementSchema,
+  type SalesReportQuery,
   salesReportSchema,
 } from "@sob/contracts";
 import type { ApiClient } from "./client";
@@ -19,7 +20,10 @@ export function accountingEndpoints(client: ApiClient) {
       }),
     payout: (id: string, body: CommissionPayoutInput) =>
       client.post(`/admin/accounting/staff/${id}/payouts`, body, commissionPayoutSchema),
-    sales: (query: { from: string; to: string; staffId?: string }) =>
-      client.get("/admin/accounting/sales", salesReportSchema, { query }),
+    sales: async (query: SalesReportQuery) => {
+      const report = await client.get("/admin/accounting/sales", salesReportSchema, { query });
+      if (query.clientId && !report.client) throw new Error("Missing client scope in sales report");
+      return report;
+    },
   };
 }

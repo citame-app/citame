@@ -27,6 +27,11 @@ enum ReportMode {
     Outcome(Outcome),
 }
 
+struct ClientSalesScope {
+    client_id: String,
+    directory: Box<directory::Directory>,
+}
+
 impl ReportMode {
     fn uses_summary(self) -> bool {
         matches!(self, Self::Overview | Self::Outcome(_))
@@ -77,6 +82,7 @@ pub(super) struct Desk {
     summary: Option<ReportSummary>,
     mode: ReportMode,
     can_view_financial_reports: bool,
+    client_sales: Option<ClientSalesScope>,
     client_report: Option<ClientReport>,
     financial_report: Option<FinancialReport>,
     group: Group,
@@ -107,6 +113,26 @@ impl Root {
     }
 
     pub(super) fn open_reports(&mut self, cx: &mut Context<Self>) {
+        self.show_reports(None, cx);
+    }
+
+    pub(super) fn open_client_sales(
+        &mut self,
+        client_id: String,
+        directory: Box<directory::Directory>,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_reports(
+            Some(ClientSalesScope {
+                client_id,
+                directory,
+            }),
+            cx,
+        );
+    }
+
+    fn show_reports(&mut self, client_sales: Option<ClientSalesScope>, cx: &mut Context<Self>) {
+        let scoped = client_sales.is_some();
         let today = Utc::now().with_timezone(&self.tz).date_naive();
         let from = (today - Span::days(29)).to_string();
         let to = today.to_string();
@@ -118,8 +144,13 @@ impl Root {
             currency: None,
             submitted: None,
             summary: None,
-            mode: ReportMode::Overview,
-            can_view_financial_reports: false,
+            mode: if scoped {
+                ReportMode::Financial
+            } else {
+                ReportMode::Overview
+            },
+            can_view_financial_reports: scoped,
+            client_sales,
             client_report: None,
             financial_report: None,
             group: Group::Day,
@@ -133,6 +164,17 @@ impl Root {
             outcomes: outcomes::Desk::default(),
         }));
         self.submit_report(cx);
+    }
+
+    fn return_to_report_client(&mut self, cx: &mut Context<Self>) {
+        let Overlay::Reports(desk) = &mut self.overlay else {
+            return;
+        };
+        if let Some(subject) = desk.client_sales.take() {
+            self.overlay = Overlay::Directory(subject.directory);
+            self.reload_directory();
+            cx.notify();
+        }
     }
 
     fn submit_report(&mut self, cx: &mut Context<Self>) {
@@ -199,6 +241,10 @@ impl Root {
         let request = Arc::new(());
         let session = self.svc.session.clone();
         let mode = desk.mode;
+        let client_id = desk
+            .client_sales
+            .as_ref()
+            .map(|scope| scope.client_id.clone());
         desk.request = Some(request.clone());
         desk.error = None;
         desk.retry_at = None;
@@ -212,9 +258,11 @@ impl Root {
                         ReportMode::Clients => {
                             transport.report_clients(&query).map(ReportData::Clients)
                         }
-                        ReportMode::Financial => transport
-                            .financial_report(&query)
-                            .map(|report| ReportData::Financial(Box::new(report))),
+                        ReportMode::Financial => match client_id {
+                            Some(id) => transport.client_financial_report(&query, &id),
+                            None => transport.financial_report(&query),
+                        }
+                        .map(|report| ReportData::Financial(Box::new(report))),
                         ReportMode::Overview | ReportMode::Outcome(_) => transport
                             .report_summary(&query)
                             .map(|summary| ReportData::Summary(Box::new(summary))),
@@ -328,10 +376,7 @@ impl Root {
                 let Some(report) = desk.financial_report.as_ref() else {
                     return;
                 };
-                (
-                    format!("financial-summary-{}-{}.csv", report.from, report.to),
-                    report.to_csv(),
-                )
+                (report.csv_filename(), report.to_csv())
             }
             ReportMode::Overview => {
                 let Some(report) = desk.summary.as_ref() else {
@@ -420,23 +465,39 @@ impl Root {
                     .flex_wrap()
                     .items_center()
                     .justify_between()
-                    .child(
-                        div()
-                            .text_lg()
-                            .font_weight(FontWeight::BOLD)
-                            .child(self.t(Key::Reports)),
-                    )
+                    .child(div().text_lg().font_weight(FontWeight::BOLD).child(self.t(
+                        if desk.client_sales.is_some() {
+                            Key::ClientSalesReport
+                        } else {
+                            Key::Reports
+                        },
+                    )))
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(self.button(
-                                "commissions",
-                                self.t(Key::Commissions),
-                                Kind::Ghost,
-                                cx.listener(|root, _, _, cx| root.open_commissions(cx)),
-                            ))
+                            .when(desk.client_sales.is_none(), |view| {
+                                view.child(self.button(
+                                    "commissions",
+                                    self.t(Key::Commissions),
+                                    Kind::Ghost,
+                                    cx.listener(|root, _, _, cx| root.open_commissions(cx)),
+                                ))
+                            })
+                            .when(desk.client_sales.is_some(), |view| {
+                                view.child(
+                                    self.button(
+                                        "reports-back-to-client",
+                                        self.t(Key::ReportBackToClient),
+                                        Kind::Ghost,
+                                        cx.listener(|root, _, _, cx| {
+                                            root.return_to_report_client(cx)
+                                        }),
+                                    )
+                                    .debug_selector(|| "reports-back-to-client".to_owned()),
+                                )
+                            })
                             .child(self.button(
                                 "reports-close",
                                 self.t(Key::Close),
@@ -524,7 +585,8 @@ impl Root {
                         )
                     })
                     .when(
-                        desk.summary.is_some() || !desk.mode.uses_summary(),
+                        desk.client_sales.is_none()
+                            && (desk.summary.is_some() || !desk.mode.uses_summary()),
                         |view| view.child(self.render_report_mode(desk, cx)),
                     )
                     .when(desk.mode == ReportMode::Clients, |view| {

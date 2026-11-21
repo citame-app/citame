@@ -33,6 +33,11 @@ export const accountingEn = {
   "accounting.emptyHelp":
     "Attributed, fully paid catalog services and products earn the configured commission.",
   "accounting.sales": "Sales and collections",
+  "accounting.clientSales": "Client sales report",
+  "accounting.allReports": "All reports",
+  "accounting.backToClient": "Back to client profile",
+  "accounting.clientReportRestricted":
+    "You do not have permission to view this client’s sales report.",
   "accounting.allStaff": "Entire team",
   "accounting.cashTeam": "Cash register history is available for the entire team.",
   "accounting.families.title": "Settled amounts by sale family",
@@ -104,6 +109,11 @@ export const accountingEsAR: Record<keyof typeof accountingEn, string> = {
   "accounting.emptyHelp":
     "Los servicios y productos del catálogo, asignados a un profesional y cobrados por completo, generan la comisión configurada.",
   "accounting.sales": "Ventas y cobros",
+  "accounting.clientSales": "Informe de ventas del cliente",
+  "accounting.allReports": "Todos los informes",
+  "accounting.backToClient": "Volver a la ficha del cliente",
+  "accounting.clientReportRestricted":
+    "No tienes permiso para consultar las ventas de este cliente.",
   "accounting.allStaff": "Todo el equipo",
   "accounting.cashTeam": "El historial de caja está disponible para todo el equipo.",
   "accounting.families.title": "Importes liquidados por familia de venta",

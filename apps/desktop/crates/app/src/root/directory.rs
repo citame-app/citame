@@ -13,6 +13,7 @@ pub(super) struct Directory {
     choosing_group: bool,
     form: Option<Form>,
     history: Vec<Appointment>,
+    can_view_financial_reports: bool,
     pub(super) sales_history: Option<transactions::History>,
     pub(super) intake: Option<intake_record::Desk>,
     controls: Option<controls::Desk>,
@@ -56,7 +57,7 @@ impl Root {
             }
         });
         self.overlay = Overlay::Directory(Box::new(Directory {
-            search,
+            search: search.clone(),
             _search: subscription,
             page: 0,
             contacts: calendar::ClientDirectory::default(),
@@ -64,13 +65,42 @@ impl Root {
             choosing_group: false,
             form: None,
             history: vec![],
+            can_view_financial_reports: false,
             sales_history: None,
             intake: None,
             controls: None,
             error: None,
         }));
         self.reload_directory();
+        self.load_directory_financial_scope(search, cx);
         cx.notify();
+    }
+
+    fn load_directory_financial_scope(&self, search: Entity<TextField>, cx: &mut Context<Self>) {
+        let Some(transport) = self.svc.transport() else {
+            return;
+        };
+        let session = self.svc.session.clone();
+        cx.spawn(async move |root, cx| {
+            let allowed = cx
+                .background_executor()
+                .spawn(async move {
+                    transport
+                        .commission_scope()
+                        .is_ok_and(|scope| scope.can_choose_staff)
+                })
+                .await;
+            let _ = root.update(cx, |root, cx| {
+                if Arc::ptr_eq(&session, &root.svc.session)
+                    && let Overlay::Directory(desk) = &mut root.overlay
+                    && desk.search == search
+                {
+                    desk.can_view_financial_reports = allowed;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     pub(super) fn reload_directory(&mut self) {
@@ -170,6 +200,27 @@ impl Root {
         }
         self.load_sales_history(transactions::HistoryLoad::ApplyFilters, cx);
         cx.notify();
+    }
+
+    fn open_directory_client_sales(&mut self, cx: &mut Context<Self>) {
+        if !self.directory_enabled() {
+            return;
+        }
+        let Overlay::Directory(desk) = &self.overlay else {
+            return;
+        };
+        let Some(client) = desk.form.as_ref().and_then(|form| form.previous.as_ref()) else {
+            return;
+        };
+        if !desk.can_view_financial_reports
+            || !self.svc.store.client_is_synced(&client.id).unwrap_or(false)
+        {
+            return;
+        }
+        let client_id = client.id.clone();
+        if let Overlay::Directory(directory) = std::mem::replace(&mut self.overlay, Overlay::None) {
+            self.open_client_sales(client_id, directory, cx);
+        }
     }
 
     fn save_directory_client(&mut self, cx: &mut Context<Self>) {
@@ -315,6 +366,24 @@ impl Root {
                                             }),
                                         )
                                         .debug_selector(|| "directory-transactions".to_owned()),
+                                    )
+                                    .when(
+                                        desk.can_view_financial_reports,
+                                        |body| {
+                                            body.child(
+                                                self.directory_button(
+                                                    "directory-client-sales",
+                                                    self.t(Key::ClientSalesReport),
+                                                    Kind::Ghost,
+                                                    cx.listener(|root, _, _, cx| {
+                                                        root.open_directory_client_sales(cx);
+                                                    }),
+                                                )
+                                                .debug_selector(|| {
+                                                    "directory-client-sales".to_owned()
+                                                }),
+                                            )
+                                        },
                                     )
                                 },
                             )
@@ -691,6 +760,68 @@ mod tests {
         });
     }
     use gpui::TestAppContext;
+
+    #[gpui::test]
+    async fn financial_access_opens_a_scoped_report_and_keeps_the_client_draft(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, config) = super::super::tests::desk();
+        let (entity, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        cx.simulate_resize(gpui::size(px(780.), px(860.)));
+        entity.update(cx, |root, cx| {
+            root.svc.stop_sync();
+            root.status.connectivity = Connectivity::Offline;
+            root.svc
+                .store
+                .set_meta("client_directory", "allowed")
+                .unwrap();
+            root.open_directory(cx);
+            let Overlay::Directory(desk) = &root.overlay else {
+                panic!("missing directory");
+            };
+            let id = desk
+                .contacts
+                .clients
+                .iter()
+                .find(|client| client.name == "Lucia")
+                .unwrap()
+                .id
+                .clone();
+            root.directory_form(Some(&id), cx);
+            root.open_directory_client_sales(cx);
+            let Overlay::Directory(desk) = &mut root.overlay else {
+                panic!("opened without financial access");
+            };
+            desk.can_view_financial_reports = true;
+            desk.form.as_ref().unwrap().name.update(cx, |field, cx| {
+                field.set_text("Unsubmitted client edit", cx);
+            });
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let action = cx
+            .debug_bounds("directory-client-sales")
+            .expect("client sales action");
+        cx.simulate_click(action.center(), Default::default());
+        cx.run_until_parked();
+        entity.read_with(cx, |root, _| {
+            assert!(matches!(root.overlay, Overlay::Reports(_)))
+        });
+        let back = cx
+            .debug_bounds("reports-back-to-client")
+            .expect("return to client action");
+        cx.simulate_click(back.center(), Default::default());
+        cx.run_until_parked();
+        entity.read_with(cx, |root, cx| {
+            let Overlay::Directory(desk) = &root.overlay else {
+                panic!("missing client profile");
+            };
+            assert_eq!(
+                desk.form.as_ref().unwrap().name.read(cx).text(),
+                "Unsubmitted client edit"
+            );
+        });
+    }
 
     #[gpui::test]
     async fn choosing_a_client_group_resets_the_search_and_page(cx: &mut TestAppContext) {

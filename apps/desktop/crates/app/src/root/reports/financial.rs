@@ -27,6 +27,14 @@ impl Root {
             .flex()
             .flex_col()
             .gap_3()
+            .when_some(report.client.as_ref(), |view, client| {
+                view.child(
+                    div()
+                        .text_lg()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(client.name.clone()),
+                )
+            })
             .child(
                 div()
                     .flex()
@@ -141,28 +149,33 @@ impl Root {
                     )
                 }))
             })
-            .child(
-                div()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(self.t(Key::FinancialCashHistory)),
-            )
-            .when(report.cash_sessions.is_empty(), |view| {
-                let label = if desk
-                    .submitted
-                    .as_ref()
-                    .is_some_and(|query| query.staff_id.is_some())
-                {
-                    Key::FinancialCashUnfiltered
-                } else {
-                    Key::FinancialNoSessions
-                };
+            .when(report.client.is_none(), |view| {
                 view.child(
                     div()
-                        .text_sm()
-                        .text_color(theme::muted())
-                        .child(self.t(label)),
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(self.t(Key::FinancialCashHistory)),
                 )
             })
+            .when(
+                report.client.is_none() && report.cash_sessions.is_empty(),
+                |view| {
+                    let label = if desk
+                        .submitted
+                        .as_ref()
+                        .is_some_and(|query| query.staff_id.is_some())
+                    {
+                        Key::FinancialCashUnfiltered
+                    } else {
+                        Key::FinancialNoSessions
+                    };
+                    view.child(
+                        div()
+                            .text_sm()
+                            .text_color(theme::muted())
+                            .child(self.t(label)),
+                    )
+                },
+            )
             .children(
                 report
                     .cash_sessions

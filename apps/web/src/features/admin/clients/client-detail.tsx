@@ -548,6 +548,15 @@ export function ClientDetail({
       )}
       {visited.has("payments") && permissions.commerce && (
         <div hidden={tab !== "payments"}>
+          {permissions.financialReports && !isAlias && (
+            <Link
+              to="/admin/reports"
+              search={{ preset: "last30", client: clientId }}
+              className="inline-flex min-h-11 items-center text-sm font-medium text-accent-text hover:underline"
+            >
+              {t("accounting.clientSales")}
+            </Link>
+          )}
           <Transactions clientId={clientId} onOpen={setReceipt} />
         </div>
       )}

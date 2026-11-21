@@ -4,9 +4,9 @@ import {
   commissionPolicyInputSchema,
   idSchema,
   permissionsFor,
-  reportQuerySchema,
   reviewedCommissionPayoutInputSchema,
   reviewedCommissionRateInputSchema,
+  salesReportQuerySchema,
 } from "@sob/contracts";
 import { Hono } from "hono";
 import { z } from "zod";
@@ -145,7 +145,7 @@ export function accountingRoutes(deps: AppDeps) {
       return c.json(
         await salesReport(
           deps.db,
-          parseOrThrow(reportQuerySchema, c.req.query()),
+          parseOrThrow(salesReportQuerySchema, c.req.query()),
           c.get("principal"),
         ),
       );

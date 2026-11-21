@@ -4,7 +4,7 @@ import {
   reviewedCommissionPolicySchema,
   syncPullResponseSchema,
 } from "@sob/contracts";
-import { appointment, appointmentService } from "@sob/db";
+import { appointment, appointmentService, clientProfile } from "@sob/db";
 import { type Actor, actor, json, seedFixtures, setupApiTest } from "../../../test/helpers";
 
 let t: Awaited<ReturnType<typeof setupApiTest>>;
@@ -268,6 +268,72 @@ test("settled families exclude tips and put historical receipts without matching
     soldCents: 9500,
     settledByFamily: [{ family: "unallocated", amountCents: 9000, taxCents: 0 }],
   });
+});
+
+test("client sales use the current merged identity, professional and settlement period", async () => {
+  const [target, alias] = await t.db
+    .insert(clientProfile)
+    .values([{ name: "Primary profile" }, { name: "Historical profile" }])
+    .returning();
+  if (!target || !alias) throw new Error("Missing client fixture");
+  async function customReceipt(clientId: string | undefined, amountCents: number) {
+    const response = await call(owner, "/admin/commerce/checkouts", "POST", {
+      clientId,
+      staffId: staff.staffId,
+      lines: [
+        { kind: "custom", description: "Fixture sale", quantity: 1, unitAmountCents: amountCents },
+      ],
+      idempotencyKey: key(),
+    });
+    expect(response.status).toBe(201);
+    const { id } = (await response.json()) as { id: string };
+    return settle(id, amountCents);
+  }
+  const historicPayment = await customReceipt(alias.id, 5000);
+  await customReceipt(target.id, 2500);
+  await customReceipt(undefined, 4000);
+  const refund = await call(
+    owner,
+    `/admin/commerce/payments/${historicPayment.id}/refunds`,
+    "POST",
+    { amountCents: 1000, reason: "Fixture refund", idempotencyKey: key() },
+  );
+  expect(refund.status).toBe(201);
+  const pair = { sourceId: alias.id, targetId: target.id };
+  const preview = await call(owner, "/admin/clients/merge/preview", "POST", pair);
+  expect(preview.status).toBe(200);
+  const { reviewHash } = (await preview.json()) as { reviewHash: string };
+  const merged = await call(owner, "/admin/clients/merge", "POST", {
+    ...pair,
+    confirmedSamePerson: true,
+    reviewHash,
+    idempotencyKey: key(),
+  });
+  expect(merged.status).toBe(201);
+  const date = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Argentina/Buenos_Aires",
+  }).format(new Date());
+  const base = `/admin/accounting/sales?from=${date}&to=${date}`;
+  const path = `${base}&clientId=${alias.id}`;
+  const result = await call(owner, path);
+  expect(result.status).toBe(200);
+  expect(result.headers.get("cache-control")).toBe("private, no-store");
+  expect(await result.json()).toMatchObject({
+    client: { id: target.id, name: target.name },
+    collectedCents: 7500,
+    refundedCents: 1000,
+    netCollectedCents: 6500,
+    settledByFamily: [{ family: "custom", amountCents: 7500, taxCents: 0 }],
+    cashSessions: [],
+  });
+  expect(await (await call(owner, `${path}&staffId=${other.staffId}`)).json()).toMatchObject({
+    collectedCents: 0,
+    refundedCents: 0,
+    settledByFamily: [],
+  });
+  expect((await call(staff, path)).status).toBe(403);
+  expect((await call(owner, `${base}&clientId=${key()}`)).status).toBe(404);
+  expect(await (await call(owner, base)).json()).toMatchObject({ collectedCents: 11500 });
 });
 test("upgrade backfills open receipt attribution and allocations without changing historical totals", async () => {
   const checkout = await sale();

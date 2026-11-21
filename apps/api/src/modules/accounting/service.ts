@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import type { CommissionPayoutInput, CommissionPolicyInput, ReportQuery } from "@sob/contracts";
+import type {
+  CommissionPayoutInput,
+  CommissionPolicyInput,
+  SalesReportQuery,
+} from "@sob/contracts";
 import { permissionsFor } from "@sob/contracts";
 import {
   cashSession,
@@ -13,12 +17,13 @@ import {
 } from "@sob/db";
 import { and, count, desc, eq, gte, lt, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
-import { requirePermission } from "../../auth/policy";
+import { authorizeClientAccess, requirePermission } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
+import { clientRoot } from "../../client-identity";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
 import { multiplyDivide, storedValuePaymentMethods } from "../commerce/money";
-import { recordedCheckoutMovements } from "../commerce/report-movements";
+import { checkoutReportScope, recordedCheckoutMovements } from "../commerce/report-movements";
 import { getSalonSettings } from "../settings/service";
 import { requireStaff } from "../staff/admin";
 import { redeemedAtSettlement, settledSales } from "./settled-families";
@@ -310,8 +315,9 @@ export async function recordPayout(
     return payoutView(row);
   });
 }
-export async function salesReport(db: Database, query: ReportQuery, principal: Principal) {
+export async function salesReport(db: Database, query: SalesReportQuery, principal: Principal) {
   requirePermission(principal, "financialReports");
+  if (query.clientId) authorizeClientAccess(principal);
   const settings = await getSalonSettings(db);
   const timezone = settings.timezone;
   const fromAt = new Date(
@@ -322,7 +328,8 @@ export async function salesReport(db: Database, query: ReportQuery, principal: P
   );
   return db.transaction(
     async (tx) => {
-      const staff = query.staffId ? sql`and c.staff_id = ${query.staffId}` : sql``;
+      const client = query.clientId ? await clientRoot(tx, query.clientId) : null;
+      const scope = checkoutReportScope(query.staffId, client?.id);
       const movements = await tx.execute<{
         method: string;
         collected: string | number;
@@ -331,16 +338,16 @@ export async function salesReport(db: Database, query: ReportQuery, principal: P
         select method::text,
           coalesce(sum(amount) filter (where not refund), 0)::bigint as collected,
           coalesce(sum(amount) filter (where refund), 0)::bigint as refunded
-        from (${recordedCheckoutMovements(fromAt, toAt, query.staffId)}) movements
+        from (${recordedCheckoutMovements(fromAt, toAt, scope)}) movements
         group by method::text
         order by method::text
       `);
-      const sales = await settledSales(tx, fromAt, toAt, query.staffId);
+      const sales = await settledSales(tx, fromAt, toAt, scope);
       const [costs] = await tx.execute<{ cost: string | number; unknown: number }>(
-        sql`select coalesce(sum(l.quantity * l.unit_cost_cents::bigint),0)::bigint as cost, count(*) filter (where l.unit_cost_cents is null)::int as unknown from checkout_line l join checkout c on c.id = l.checkout_id where l.kind = 'product' and c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt} ${staff}`,
+        sql`select coalesce(sum(l.quantity * l.unit_cost_cents::bigint),0)::bigint as cost, count(*) filter (where l.unit_cost_cents is null)::int as unknown from checkout_line l join checkout c on c.id = l.checkout_id where l.kind = 'product' and c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt} ${scope}`,
       );
       const [giftIssued] = await tx.execute<{ amount: string | number }>(
-        sql`select coalesce(sum(m.amount_cents),0)::bigint as amount from gift_card_movement m join checkout c on c.id = m.checkout_id where m.kind = 'activation' and m.created_at >= ${fromAt} and m.created_at < ${toAt} ${staff}`,
+        sql`select coalesce(sum(m.amount_cents),0)::bigint as amount from gift_card_movement m join checkout c on c.id = m.checkout_id where m.kind = 'activation' and m.created_at >= ${fromAt} and m.created_at < ${toAt} ${scope}`,
       );
       const [prepaid] = await tx.execute<{
         applied: string | number;
@@ -348,20 +355,21 @@ export async function salesReport(db: Database, query: ReportQuery, principal: P
       }>(sql`select
  coalesce(sum(pr.allocated_cents) filter (where c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt} and ${redeemedAtSettlement}),0)::bigint as applied,
  coalesce(sum(pr.allocated_cents) filter (where pr.refunded_at > c.fulfilled_at and pr.refunded_at >= ${fromAt} and pr.refunded_at < ${toAt}),0)::bigint as returned
- from pass_redemption pr join checkout c on c.id=pr.checkout_id where true ${staff}`);
+ from pass_redemption pr join checkout c on c.id=pr.checkout_id where true ${scope}`);
       const [fees] = await tx.execute<{ amount: string | number }>(
-        sql`select coalesce(sum(l.unit_amount_cents),0)::bigint as amount from checkout_line l join checkout c on c.id=l.checkout_id join pass_period pp on pp.id=l.pass_period_id join pass_contract pc on pc.id=pp.contract_id where pc.included_uses=0 and c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt} ${staff}`,
+        sql`select coalesce(sum(l.unit_amount_cents),0)::bigint as amount from checkout_line l join checkout c on c.id=l.checkout_id join pass_period pp on pp.id=l.pass_period_id join pass_contract pc on pc.id=pp.contract_id where pc.included_uses=0 and c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt} ${scope}`,
       );
       const [bookingFees] = await tx.execute<{ amount: string | number }>(
-        sql`select coalesce(sum(m.amount_cents),0)::bigint as amount from booking_fee_movement m join checkout c on c.id=m.checkout_id where m.created_at >= ${fromAt} and m.created_at < ${toAt} ${staff}`,
+        sql`select coalesce(sum(m.amount_cents),0)::bigint as amount from booking_fee_movement m join checkout c on c.id=m.checkout_id where m.created_at >= ${fromAt} and m.created_at < ${toAt} ${scope}`,
       );
-      const sessions = query.staffId
-        ? []
-        : await tx
-            .select()
-            .from(cashSession)
-            .where(and(gte(cashSession.openedAt, fromAt), lt(cashSession.openedAt, toAt)))
-            .orderBy(desc(cashSession.openedAt));
+      const sessions =
+        query.staffId || client
+          ? []
+          : await tx
+              .select()
+              .from(cashSession)
+              .where(and(gte(cashSession.openedAt, fromAt), lt(cashSession.openedAt, toAt)))
+              .orderBy(desc(cashSession.openedAt));
       const methods = movements.map(({ method, collected, refunded }) => ({
         method,
         collectedCents: Number(collected),
@@ -377,6 +385,7 @@ export async function salesReport(db: Database, query: ReportQuery, principal: P
         from: query.from,
         to: query.to,
         timezone,
+        ...(client ? { client: { id: client.id, name: client.name } } : {}),
         collectedCents,
         refundedCents,
         netCollectedCents: collectedCents - refundedCents,

@@ -1543,10 +1543,33 @@ impl HttpTransport {
     }
 
     pub fn financial_report(&self, query: &ReportQuery) -> Result<FinancialReport, TransportError> {
+        self.read_financial_report(query, None)
+    }
+
+    pub fn client_financial_report(
+        &self,
+        query: &ReportQuery,
+        client_id: &str,
+    ) -> Result<FinancialReport, TransportError> {
+        let id = parse_id(client_id)?.to_string();
+        let report = self.read_financial_report(query, Some(&id))?;
+        if report.client.is_none() {
+            return Err(TransportError::BadRequest(
+                "Missing client scope in sales report".into(),
+            ));
+        }
+        Ok(report)
+    }
+
+    fn read_financial_report(
+        &self,
+        query: &ReportQuery,
+        client_id: Option<&str>,
+    ) -> Result<FinancialReport, TransportError> {
         read_response(
             self.get(
                 &self.agent,
-                &query.financial_path(),
+                &query.financial_path(client_id),
                 Some("application/json"),
             )?,
             false,

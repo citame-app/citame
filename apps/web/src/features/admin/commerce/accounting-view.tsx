@@ -1,5 +1,6 @@
-import type { UserRole } from "@sob/contracts";
+import type { SalesReportQuery, UserRole } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { Button } from "~/components/ui/button";
 import { TextField } from "~/components/ui/field";
@@ -9,6 +10,7 @@ import { useI18n } from "~/i18n/react";
 import { adminStaffQuery } from "~/lib/admin-queries";
 import { api } from "~/lib/api/instance";
 import { formatMoney } from "~/lib/format";
+import { presetRange } from "../reports/logic";
 import { downloadCsv } from "./csv";
 import { centsInput, inputCents } from "./money";
 import { SalesFamilies } from "./sales-families";
@@ -386,15 +388,17 @@ function PayoutForm({
     </form>
   );
 }
-function SalesReport() {
+export function SalesReport({ clientId }: { clientId?: string }) {
   const { t, locale, timeZone } = useI18n();
   const today = new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date());
-  const [from, setFrom] = useState(today);
+  const initialFrom = clientId ? presetRange("last30", today).from : today;
+  const [from, setFrom] = useState(initialFrom);
   const [to, setTo] = useState(today);
   const [professional, setProfessional] = useState("");
-  const [range, setRange] = useState<{ from: string; to: string; staffId?: string }>({
-    from: today,
+  const [range, setRange] = useState<SalesReportQuery>({
+    from: initialFrom,
     to: today,
+    clientId,
   });
   const staff = useQuery(adminStaffQuery);
   const report = useQuery({
@@ -406,13 +410,26 @@ function SalesReport() {
   const money = (value: number) => formatMoney(value, "EUR", locale);
   return (
     <section className="space-y-4" aria-label={t("accounting.sales")}>
-      <h3 className="text-heading">{t("accounting.sales")}</h3>
+      {clientId ? (
+        <h2 className="text-heading">{report.data?.client?.name ?? t("accounting.sales")}</h2>
+      ) : (
+        <h3 className="text-heading">{t("accounting.sales")}</h3>
+      )}
+      {report.data?.client && (
+        <Link
+          to="/admin/clients/$id"
+          params={{ id: report.data.client.id }}
+          className="inline-flex min-h-11 items-center text-sm font-medium text-accent-text hover:underline"
+        >
+          {t("accounting.backToClient")}
+        </Link>
+      )}
       <p className="text-sm text-muted">{t("accounting.reportHelp")}</p>
       <form
         className="flex flex-wrap items-end gap-3"
         onSubmit={(e) => {
           e.preventDefault();
-          setRange({ from, to, staffId: professional || undefined });
+          setRange({ from, to, staffId: professional || undefined, clientId });
         }}
       >
         <TextField
@@ -459,6 +476,7 @@ function SalesReport() {
             onClick={() =>
               downloadCsv(
                 [
+                  ...(report.data.client ? [["client_id", report.data.client.id], []] : []),
                   ["from", "to", "timezone", "metric", "amount_cents", "currency"],
                   ...Object.entries({
                     collected: report.data.collectedCents,
@@ -527,7 +545,9 @@ function SalesReport() {
                       ]
                     : []),
                 ],
-                `financial-summary-${report.data.from}-${report.data.to}.csv`,
+                report.data.client
+                  ? `client-sales-${report.data.client.id}-${report.data.from}-${report.data.to}.csv`
+                  : `financial-summary-${report.data.from}-${report.data.to}.csv`,
               )
             }
           >
@@ -561,7 +581,12 @@ function SalesReport() {
           <p className="text-sm text-muted">
             {t("accounting.unknown", { count: report.data.unknownCostLines })}
           </p>
-          {report.data.settledByFamily && <SalesFamilies rows={report.data.settledByFamily} />}
+          {report.data.settledByFamily && (
+            <SalesFamilies
+              rows={report.data.settledByFamily}
+              headingLevel={clientId ? "h3" : "h4"}
+            />
+          )}
           <ul className="divide-y divide-line">
             {report.data.methods.map((method) => (
               <li key={method.method} className="flex flex-wrap justify-between gap-3 py-2">
@@ -575,8 +600,10 @@ function SalesReport() {
               </li>
             ))}
           </ul>
-          <h4 className="font-semibold">{t("accounting.cashHistory")}</h4>
-          {range.staffId && <p className="text-sm text-muted">{t("accounting.cashTeam")}</p>}
+          {!clientId && <h4 className="font-semibold">{t("accounting.cashHistory")}</h4>}
+          {!clientId && range.staffId && (
+            <p className="text-sm text-muted">{t("accounting.cashTeam")}</p>
+          )}
           <ul className="divide-y divide-line">
             {report.data.cashSessions.map((session) => (
               <li key={session.id} className="flex flex-wrap justify-between gap-3 py-3">

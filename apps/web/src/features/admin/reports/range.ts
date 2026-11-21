@@ -7,6 +7,7 @@ export interface ReportsSearch {
   to?: string;
   staff?: string;
   currency?: string;
+  client?: string;
 }
 
 export function validateReportsSearch(raw: Record<string, unknown>): ReportsSearch {
@@ -15,11 +16,13 @@ export function validateReportsSearch(raw: Record<string, unknown>): ReportsSear
   const from = localDateSchema.safeParse(raw.from);
   const to = localDateSchema.safeParse(raw.to);
   const staff = idSchema.safeParse(raw.staff);
+  const client = idSchema.safeParse(raw.client);
   return {
     preset,
     ...(preset === "custom" && from.success ? { from: from.data } : {}),
     ...(preset === "custom" && to.success ? { to: to.data } : {}),
     ...(staff.success ? { staff: staff.data } : {}),
+    ...(client.success ? { client: client.data } : {}),
     ...(typeof raw.currency === "string" && /^[A-Z]{3}$/.test(raw.currency)
       ? { currency: raw.currency }
       : {}),
