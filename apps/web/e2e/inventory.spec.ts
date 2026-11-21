@@ -4,6 +4,82 @@ import { asOwner, expectNoHorizontalScroll, OWNER_EMAIL, signInAs } from "./admi
 import { expectNoSeriousA11yViolations, PASSWORD } from "./helpers";
 import { addCatalogProduct, reviewReceipt } from "./pos-helpers";
 
+test("a numbered stock receipt survives an interrupted response without recording the delivery twice", async ({
+  page,
+}) => {
+  const owner = await asOwner();
+  const tag = crypto.randomUUID();
+  const products = [`Cream ${tag}`, `Serum ${tag}`];
+  const productIds = new Map<string, string>();
+  try {
+    for (const name of products) {
+      const created = await owner.post("/api/admin/inventory/products", {
+        data: { name, priceCents: 2000, openingStock: 0, idempotencyKey: crypto.randomUUID() },
+      });
+      expect(created.status(), await created.text()).toBe(201);
+      productIds.set(name, (await created.json()).id);
+    }
+    await signInAs(page, OWNER_EMAIL, "/admin/commerce?view=inventory");
+    await page.getByRole("button", { name: "Suppliers", exact: true }).click();
+    await page.getByRole("button", { name: "New supplier", exact: true }).click();
+    const supplier = `Care Lab ${tag}`;
+    await page.getByLabel("Supplier name").fill(supplier);
+    await page.getByLabel("Supplier email").fill("orders@example.org");
+    await page.getByRole("button", { name: "Save supplier", exact: true }).click();
+    await expect(page.getByRole("button", { name: supplier, exact: true })).toBeVisible();
+
+    await page.getByRole("button", { name: "Stock receipts", exact: true }).click();
+    await page.getByRole("button", { name: "New stock receipt" }).click();
+    await page.getByLabel("Search suppliers").fill(supplier);
+    await page
+      .getByLabel("Supplier", { exact: true })
+      .selectOption({ label: `${supplier} · orders@example.org` });
+    await page.getByLabel("Supplier invoice reference").fill(`INV-${tag}`);
+    for (const name of products) {
+      await page.getByLabel("Search products", { exact: true }).fill(name);
+      await page.getByLabel("Add a product", { exact: true }).selectOption(productIds.get(name)!);
+      await page
+        .getByRole("group", { name: new RegExp(name) })
+        .getByLabel("Quantity")
+        .fill("2");
+    }
+    const attempts: unknown[] = [];
+    await page.context().route("**/api/admin/inventory/receipts", async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      attempts.push(route.request().postDataJSON());
+      if (attempts.length > 1) return route.continue();
+      const committed = await route.fetch();
+      expect(committed.status(), await committed.text()).toBe(201);
+      await route.abort("failed");
+    });
+    await page.getByRole("button", { name: "Record stock receipt" }).click();
+    await expect(page.getByRole("button", { name: "Retry the same stock receipt" })).toBeEnabled();
+    const url = page.url();
+    const context = page.context();
+    await page.close();
+    const resumed = await context.newPage();
+    await resumed.goto(url);
+    await expect(
+      resumed.getByRole("button", { name: "Stock receipts", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await resumed.getByRole("button", { name: "New stock receipt" }).click();
+    await resumed.getByRole("button", { name: "Retry the same stock receipt" }).click();
+    await expect(resumed.getByRole("heading", { name: /Stock receipt #\d+/ })).toBeVisible();
+    await expect(resumed).toHaveURL(/inventoryTab=receipts.*receipt=/);
+    await expect(resumed.getByText(`INV-${tag}`, { exact: false })).toBeVisible();
+    expect(attempts).toHaveLength(2);
+    expect(attempts[1]).toEqual(attempts[0]);
+    const stock = await owner.get(`/api/admin/inventory/products?search=${tag}`);
+    expect(stock.status()).toBe(200);
+    expect(
+      (await stock.json()).products.map((item: { stockOnHand: number }) => item.stockOnHand),
+    ).toEqual([2, 2]);
+    await expectNoHorizontalScroll(resumed);
+  } finally {
+    await owner.dispose();
+  }
+});
+
 test("stock movement pages stay in place until the operator loads the latest entries", async ({
   page,
 }) => {

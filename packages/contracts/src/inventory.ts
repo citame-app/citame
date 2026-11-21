@@ -190,6 +190,7 @@ export const stockMovementSchema = z.object({
   reason: z.string(),
   unitCostCents: moneyCentsSchema.nullable().optional(),
   checkoutLineId: idSchema.nullable(),
+  receiptId: idSchema.optional(),
   createdAt: instantSchema,
 });
 export const stockMovementListSchema = z.object({

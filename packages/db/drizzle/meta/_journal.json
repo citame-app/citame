@@ -638,6 +638,13 @@
       "when": 1795213487918,
       "tag": "0090_product_photo_live_view",
       "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1795213487919,
+      "tag": "0091_inventory_suppliers_and_receipts",
+      "breakpoints": true
     }
   ]
 }

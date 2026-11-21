@@ -8,7 +8,11 @@ import {
   stockLedgerFiltersSchema,
   stockLedgerQuerySchema,
   stockMovementInputSchema,
+  stockReceiptInputSchema,
+  stockReceiptQuerySchema,
   stockReturnSchema,
+  supplierInputSchema,
+  supplierQuerySchema,
   updatePackageContentSchema,
   updateProductSchema,
 } from "@sob/contracts";
@@ -19,6 +23,14 @@ import type { AppEnv } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
 import { exportStockLedger, inventoryFacets, stockLedger } from "./ledger";
 import { readProductPhoto, saveProductPhoto } from "./photo";
+import {
+  getStockReceipt,
+  getSupplier,
+  listStockReceipts,
+  listSuppliers,
+  receiveStockDocument,
+  saveSupplier,
+} from "./receipts";
 import { exportInventory, inventoryReport } from "./report";
 import {
   createProduct,
@@ -39,6 +51,69 @@ export function inventoryRoutes(deps: AppDeps) {
       await next();
     })
     .get("/facets", async (c) => c.json(await inventoryFacets(deps.db, c.get("principal"))))
+    .get("/suppliers", async (c) =>
+      c.json(
+        await listSuppliers(
+          deps.db,
+          parseOrThrow(supplierQuerySchema, c.req.query()),
+          c.get("principal"),
+          generation,
+        ),
+        200,
+        { "Cache-Control": "private, no-store" },
+      ),
+    )
+    .get("/suppliers/:id", async (c) =>
+      c.json(
+        await getSupplier(deps.db, parseOrThrow(idSchema, c.req.param("id")), c.get("principal")),
+        200,
+        { "Cache-Control": "private, no-store" },
+      ),
+    )
+    .put("/suppliers/:id", async (c) =>
+      c.json(
+        await saveSupplier(
+          deps.db,
+          parseOrThrow(idSchema, c.req.param("id")),
+          parseOrThrow(supplierInputSchema, await readJson(c)),
+          c.get("principal"),
+          generation,
+        ),
+      ),
+    )
+    .get("/receipts", async (c) =>
+      c.json(
+        await listStockReceipts(
+          deps.db,
+          parseOrThrow(stockReceiptQuerySchema, c.req.query()),
+          c.get("principal"),
+        ),
+        200,
+        { "Cache-Control": "private, no-store" },
+      ),
+    )
+    .get("/receipts/:id", async (c) =>
+      c.json(
+        await getStockReceipt(
+          deps.db,
+          parseOrThrow(idSchema, c.req.param("id")),
+          c.get("principal"),
+        ),
+        200,
+        { "Cache-Control": "private, no-store" },
+      ),
+    )
+    .post("/receipts", async (c) =>
+      c.json(
+        await receiveStockDocument(
+          deps.db,
+          parseOrThrow(stockReceiptInputSchema, await readJson(c)),
+          c.get("principal"),
+          generation,
+        ),
+        201,
+      ),
+    )
     .get("/products/report", async (c) =>
       c.json(
         await inventoryReport(

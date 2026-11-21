@@ -32,6 +32,7 @@ export * from "./errors";
 export * from "./gift-cards";
 export * from "./intake";
 export * from "./inventory";
+export * from "./inventory-receipts";
 export * from "./marketing";
 export * from "./mcp";
 export * from "./notifications";

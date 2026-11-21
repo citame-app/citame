@@ -12,8 +12,16 @@ import {
   type StockLedgerFilters,
   type StockLedgerQuery,
   type StockMovementInput,
+  type StockReceiptInput,
+  type StockReceiptQuery,
   type StockReturnInput,
   stockLedgerSchema,
+  stockReceiptListSchema,
+  stockReceiptSchema,
+  type SupplierInput,
+  type SupplierQuery,
+  supplierListSchema,
+  supplierSchema,
   type UpdateProductInput,
 } from "@sob/contracts";
 import type { ApiClient } from "./client";
@@ -42,6 +50,18 @@ export const stockLedgerExportHref = (filters: Partial<StockLedgerFilters>) =>
 
 export function inventoryEndpoints(client: ApiClient) {
   return {
+    suppliers: ({ active, ...query }: Partial<SupplierQuery> = {}) =>
+      client.get("/admin/inventory/suppliers", supplierListSchema, {
+        query: { ...query, active: active === undefined ? undefined : String(active) },
+      }),
+    supplier: (id: string) => client.get(`/admin/inventory/suppliers/${id}`, supplierSchema),
+    saveSupplier: (id: string, body: SupplierInput) =>
+      client.put(`/admin/inventory/suppliers/${id}`, body, supplierSchema),
+    receipts: (query: Partial<StockReceiptQuery> = {}) =>
+      client.get("/admin/inventory/receipts", stockReceiptListSchema, { query }),
+    receipt: (id: string) => client.get(`/admin/inventory/receipts/${id}`, stockReceiptSchema),
+    receive: (body: StockReceiptInput) =>
+      client.post("/admin/inventory/receipts", body, stockReceiptSchema),
     facets: () => client.get("/admin/inventory/facets", inventoryFacetsSchema),
     ledger: (query: Partial<StockLedgerQuery> = {}, signal?: AbortSignal) =>
       client.get("/admin/inventory/movements", stockLedgerSchema, { query, signal }),

@@ -113,6 +113,7 @@ export async function stockLedger(
           quantityDelta: row.quantityDelta,
           reason: row.reason,
           checkoutLineId: row.checkoutLineId,
+          ...(row.receiptId ? { receiptId: row.receiptId } : {}),
           createdAt: row.createdAt.toISOString(),
           productName,
           sku,

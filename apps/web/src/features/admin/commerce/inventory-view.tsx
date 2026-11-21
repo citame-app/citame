@@ -24,6 +24,9 @@ import { useInventoryLiveRevision } from "../calendar/live-provider";
 import { UnsavedGuard } from "../unsaved-guard";
 import { useDebounced } from "../use-debounced";
 import { centsInput, inputCents } from "./money";
+import { InventoryReceipts } from "./inventory-receipts";
+import { InventorySuppliers } from "./inventory-suppliers";
+import { type InventoryNavigation, inventoryTabs } from "./inventory-navigation";
 import { ProductPhoto, ProductPhotoEditor } from "./product-photo";
 import { StockAdjustment } from "./stock-adjustment";
 
@@ -42,10 +45,14 @@ export function InventoryView({
   role,
   accessPreset,
   userId,
+  navigation,
+  onNavigation,
 }: {
   role: UserRole;
   userId?: string;
   accessPreset?: StaffAccessPreset | null;
+  navigation?: InventoryNavigation;
+  onNavigation?: (navigation: InventoryNavigation, replace?: boolean) => void;
 }) {
   const { t, locale } = useI18n();
   const { readInventory, writeInventory, readCosts } = permissionsFor(role, accessPreset);
@@ -55,7 +62,6 @@ export function InventoryView({
   const [brand, setBrand] = useState("");
   const [resellable, setResellable] = useState("");
   const [active, setActive] = useState<"active" | "inactive" | "all">("active");
-  const [lowStock, setLowStock] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [sort, setSort] = useState<ProductSort>("name_asc");
@@ -64,7 +70,17 @@ export function InventoryView({
     queryFn: () => api().inventory.facets(),
     enabled: readInventory,
   });
-  const [section, setSection] = useState<"products" | "movements" | "stock">("products");
+  const [localNavigation, setLocalNavigation] = useState<InventoryNavigation>({});
+  const activeNavigation = navigation ?? localNavigation;
+  const go = onNavigation ?? setLocalNavigation;
+  const section = activeNavigation.inventoryTab ?? "products";
+  const [inventoryEditor, setInventoryEditor] = useState(false);
+  const receiptId = activeNavigation.receipt ?? null;
+  const currentSection = section === "suppliers" && !writeInventory ? "products" : section;
+  const [stockFilter, setStockFilter] = useState<{ section: string; lowOnly: boolean }>();
+  const lowStock =
+    stockFilter?.section === currentSection ? stockFilter.lowOnly : currentSection === "stock";
+  const catalogueVisible = currentSection === "products" || currentSection === "stock";
   const [ledgerView, setLedgerView] = useState<LedgerView>({
     search: "",
     kind: undefined,
@@ -120,12 +136,12 @@ export function InventoryView({
     queryKey: ["inventory", catalog, readCosts],
     queryFn: () => api().inventory.list(catalog),
     placeholderData: keepPreviousData,
-    enabled: readInventory && !showDetail && section !== "movements",
+    enabled: readInventory && !showDetail && catalogueVisible,
   });
   const report = useQuery({
     queryKey: ["inventory", "report", filters, readCosts],
     queryFn: () => api().inventory.report(filters),
-    enabled: readInventory && !showDetail && section !== "movements",
+    enabled: readInventory && !showDetail && catalogueVisible,
   });
   const pagination = products.data?.pagination;
   const totalPages = pagination ? Math.max(1, Math.ceil(pagination.total / pageSize)) : 1;
@@ -175,40 +191,65 @@ export function InventoryView({
           <h2 className="text-heading">{t("inventory.title")}</h2>
           <p className="text-muted">{t("inventory.lead")}</p>
         </div>
-        {writeInventory && (
+        {writeInventory && catalogueVisible && (
           <Button disabled={open.isPending} onClick={() => setSelected("new")}>
             {t("inventory.new")}
           </Button>
         )}
       </div>
       <nav className="commerce-section-nav" aria-label={t("inventory.title")}>
-        {(["products", "movements", "stock"] as const).map((value) => (
-          <button
-            type="button"
-            key={value}
-            aria-pressed={section === value}
-            disabled={open.isPending}
-            onClick={() => {
-              setSection(value);
-              open.reset();
-              setPage(1);
-              setLowStock(value === "stock");
-            }}
-          >
-            {t(
-              value === "products"
-                ? "pos.inventoryOverview"
-                : value === "movements"
-                  ? "pos.stockLedger"
-                  : "pos.stockCount",
-            )}
-          </button>
-        ))}
+        {inventoryTabs
+          .filter((value) => value !== "suppliers" || writeInventory)
+          .map((value) => (
+            <button
+              type="button"
+              key={value}
+              aria-pressed={currentSection === value}
+              disabled={open.isPending || (inventoryEditor && writeInventory)}
+              onClick={() => {
+                go({ inventoryTab: value });
+                setInventoryEditor(false);
+                open.reset();
+                setPage(1);
+                setStockFilter(undefined);
+              }}
+            >
+              {t(
+                value === "products"
+                  ? "pos.inventoryOverview"
+                  : value === "movements"
+                    ? "pos.stockLedger"
+                    : value === "stock"
+                      ? "pos.stockCount"
+                      : value === "receipts"
+                        ? "inventory.receipts.title"
+                        : "inventory.suppliers.title",
+              )}
+            </button>
+          ))}
       </nav>
       {open.isError && <ErrorState error={open.error} />}
-      {section === "movements" ? (
+      {currentSection === "receipts" ? (
+        <InventoryReceipts
+          canWrite={writeInventory}
+          readCosts={readCosts}
+          userId={userId}
+          picked={receiptId}
+          onPick={(id) => go({ ...activeNavigation, receipt: id ?? undefined })}
+          onEditingChange={setInventoryEditor}
+          page={activeNavigation.inventoryPage ?? 1}
+          onPageChange={(inventoryPage) => go({ ...activeNavigation, inventoryPage })}
+        />
+      ) : currentSection === "suppliers" && writeInventory ? (
+        <InventorySuppliers
+          onEditingChange={setInventoryEditor}
+          navigation={activeNavigation}
+          onNavigation={go}
+        />
+      ) : currentSection === "movements" ? (
         <StockLedger
           onOpen={openProduct}
+          onReceipt={(id) => go({ inventoryTab: "receipts", receipt: id })}
           canManage={writeInventory}
           opening={open.isPending}
           view={ledgerView}
@@ -280,7 +321,7 @@ export function InventoryView({
                 type="checkbox"
                 checked={lowStock}
                 onChange={(e) => {
-                  setLowStock(e.target.checked);
+                  setStockFilter({ section: currentSection, lowOnly: e.target.checked });
                   setPage(1);
                 }}
               />
@@ -930,12 +971,14 @@ function StockHistory({ product }: { product: Product }) {
 
 function StockLedger({
   onOpen,
+  onReceipt,
   canManage,
   opening,
   view,
   setView,
 }: {
   onOpen: (id: string, button: HTMLButtonElement) => void;
+  onReceipt: (id: string) => void;
   canManage: boolean;
   opening: boolean;
   view: LedgerView;
@@ -1065,6 +1108,16 @@ function StockLedger({
                   {row.quantityDelta > 0 ? "+" : ""}
                   {row.quantityDelta}
                 </strong>
+                {row.receiptId && (
+                  <Button
+                    variant="ghost"
+                    onClick={() => {
+                      if (row.receiptId) onReceipt(row.receiptId);
+                    }}
+                  >
+                    {t("inventory.receipts.view")}
+                  </Button>
+                )}
                 <Button
                   variant="secondary"
                   disabled={opening}

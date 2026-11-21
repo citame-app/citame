@@ -53,6 +53,23 @@ beforeEach(() => {
       return Response.json(path.endsWith("/movements") ? { ...product, version: 5 } : product);
     }
     if (path.endsWith("/facets")) return Response.json({ categories: [], brands: [] });
+    if (path.endsWith("/receipts"))
+      return Response.json({
+        receipts: [
+          {
+            id,
+            number: 19,
+            receivedOn: "2026-03-09",
+            supplierId: null,
+            supplierName: null,
+            invoiceReference: "Reference",
+            notes: null,
+            lineCount: 1,
+            createdAt: "2026-03-09T12:00:00.000Z",
+          },
+        ],
+        pagination: { page: 1, pageSize: 20, total: 1 },
+      });
     if (path.endsWith(`/products/${id}`)) return Response.json(detailProduct);
     if (path.endsWith("/movements"))
       return Response.json({
@@ -84,6 +101,14 @@ test("inventory separates available and reserved stock and staff have no editing
   expect(screen.getByText("Reserved: 2")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "New product" })).toBeNull();
   expect(screen.queryByText(/7[.,]00/)).toBeNull();
+});
+
+test("inventory readers can inspect receipt history and cannot open the editors", async () => {
+  renderApp(<InventoryView role="staff" accessPreset="receptionist" userId="receipt-reader" />);
+  fireEvent.click(screen.getByRole("button", { name: /^Stock receipts$/ }));
+  expect((await screen.findAllByText("Stock receipt #19")).length).toBeGreaterThan(0);
+  expect(screen.queryByRole("button", { name: "New stock receipt" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Suppliers$/ })).toBeNull();
 });
 
 test("reception can inspect a product and its history, then return to the same search", async () => {

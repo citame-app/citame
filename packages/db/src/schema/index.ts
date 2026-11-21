@@ -18,6 +18,7 @@ export * from "./gift-card-ledger";
 export * from "./intake";
 export * from "./inventory";
 export * from "./inventory-product";
+export * from "./inventory-receipt";
 export * from "./marketing";
 export * from "./notification";
 export * from "./oauth";

@@ -14,6 +14,7 @@ import { AccountingView } from "./accounting-view";
 import { CheckoutPanel } from "./checkout-panel";
 import { invalidateCommerce } from "./invalidate";
 import { InventoryView } from "./inventory-view";
+import type { InventoryNavigation } from "./inventory-navigation";
 import { inputCents } from "./money";
 import { PointOfSale } from "./point-of-sale";
 import { RewardsView } from "./rewards-view";
@@ -37,6 +38,8 @@ export function CommerceView({
   onViewChange,
   checkoutId,
   onCheckoutChange,
+  inventoryNavigation,
+  onInventoryNavigation,
 }: {
   role: UserRole;
   userId?: string;
@@ -45,6 +48,8 @@ export function CommerceView({
   onViewChange?: (view: CommerceViewName) => void;
   checkoutId?: string;
   onCheckoutChange?: (id: string | null) => void;
+  inventoryNavigation?: InventoryNavigation;
+  onInventoryNavigation?: (navigation: InventoryNavigation, replace?: boolean) => void;
 }) {
   const { t } = useI18n();
   const permissions = permissionsFor(role, accessPreset);
@@ -114,7 +119,13 @@ export function CommerceView({
       {active === "transactions" && <Transactions onOpen={(id) => open(id)} />}
       {active === "cash" && permissions.manageCash && <CashRegister role="owner" />}
       {active === "inventory" && permissions.readInventory && (
-        <InventoryView role={role} accessPreset={accessPreset} userId={userId} />
+        <InventoryView
+          role={role}
+          accessPreset={accessPreset}
+          userId={userId}
+          navigation={inventoryNavigation}
+          onNavigation={onInventoryNavigation}
+        />
       )}
       {active === "accounting" && (
         <AccountingView role={permissions.financialReports ? "owner" : role} />

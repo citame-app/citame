@@ -37,11 +37,11 @@ function packageColumns(content: PackageContent | null | undefined) {
     packageContentUnit: content?.unit ?? null,
   };
 }
-const fingerprint = (input: Record<string, unknown>) => {
+export const fingerprint = (input: Record<string, unknown>) => {
   const { idempotencyKey: _, ...value } = input;
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 };
-function replay(row: { requestHash: string }, expected: string) {
+export function replay(row: { requestHash: string }, expected: string) {
   if (row.requestHash !== expected)
     throw new DomainError("invalid_state", "Idempotency key belongs to another inventory request");
 }
@@ -308,6 +308,7 @@ export async function moveStock(
   reviewed: StockMovementInput,
   principal: Principal,
   executingGeneration: string,
+  receiptId?: string,
 ) {
   requirePermission(principal, "writeInventory");
   const { generation: reviewedGeneration, actorUserId, ...input } = reviewed;
@@ -356,6 +357,7 @@ export async function moveStock(
     if (!updated) throw new Error("Stock update failed");
     await tx.insert(stockMovement).values({
       productId: id,
+      receiptId,
       quantityDelta: delta,
       kind: input.kind,
       reason: input.reason,
@@ -407,6 +409,7 @@ export async function listMovements(
             ? { unitCostCents: row.unitCostCents }
             : {}),
           checkoutLineId: row.checkoutLineId,
+          ...(row.receiptId ? { receiptId: row.receiptId } : {}),
           createdAt: row.createdAt.toISOString(),
         })),
         pagination: { page, pageSize, total: total?.n ?? 0 },

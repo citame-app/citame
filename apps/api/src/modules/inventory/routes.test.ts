@@ -4,12 +4,17 @@ import {
   productPhotoVersionSchema,
   productSchema,
   stockLedgerSchema,
+  stockReceiptInputSchema,
+  stockReceiptSchema,
+  supplierSchema,
 } from "@sob/contracts";
 import { retailProduct } from "@sob/db";
 import { eq, sql } from "drizzle-orm";
 import sharp from "sharp";
 import { type Actor, actor, json, seedFixtures, setupApiTest } from "../../../test/helpers";
 import { mid, pull, push } from "../../../test/sync";
+import { loadPrincipal } from "../../auth/principal";
+import { receiveStockDocument } from "./receipts";
 
 let t: Awaited<ReturnType<typeof setupApiTest>>;
 let owner: Actor;
@@ -79,6 +84,115 @@ test("owner creates catalog stock, staff see availability but not costs, clients
       })
     ).status,
   ).toBe(403);
+});
+
+test("numbered receipts atomically receive reviewed lines and replay without adding stock twice", async () => {
+  const first = await product();
+  const second = await product({ sku: "CREAM", openingStock: 1, name: "Cream" });
+  const supplierId = crypto.randomUUID();
+  const supplierPath = `/admin/inventory/suppliers/${supplierId}`;
+  const supplier = {
+    name: "Care Supplies",
+    email: "account@example.org",
+    phone: null,
+    taxId: "SUP123",
+    notes: null,
+    active: true,
+    version: 0,
+    generation: first.inventoryGeneration,
+  };
+  expect((await call(staff, supplierPath, "PUT", supplier)).status).toBe(403);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await call(owner, supplierPath, "PUT", supplier);
+    expect(result.status).toBe(200);
+    expect(supplierSchema.parse(await result.json())).toMatchObject({ id: supplierId, version: 1 });
+  }
+  const base = "/admin/inventory/receipts";
+  const input = {
+    receivedOn: "2026-01-30",
+    supplierId,
+    invoiceReference: "INV-42",
+    notes: null,
+    idempotencyKey: crypto.randomUUID(),
+    generation: first.inventoryGeneration,
+    actorUserId: owner.userId,
+    lines: [
+      { productId: first.id.toUpperCase(), quantity: 3, version: first.version },
+      { productId: second.id, quantity: 7, version: second.version },
+    ],
+  };
+  expect((await call(client, base)).status).toBe(403);
+  expect((await call(staff, "/admin/inventory/suppliers")).status).toBe(403);
+  expect((await call(staff, base, "POST", input)).status).toBe(403);
+  expect((await call(owner, base, "POST", { ...input, generation: "restored" })).status).toBe(409);
+  expect(
+    (
+      await call(owner, base, "POST", {
+        ...input,
+        lines: [input.lines[0], { ...input.lines[0], productId: first.id }],
+      })
+    ).status,
+  ).toBe(400);
+  const overflow = {
+    ...input,
+    lines: [input.lines[0], { ...input.lines[1], quantity: 999999999 }],
+  };
+  expect((await call(owner, base, "POST", overflow)).status).toBe(409);
+  const firstPath = `/admin/inventory/products/${first.id}`;
+  expect(await (await call(owner, firstPath)).json()).toMatchObject({ stockOnHand: 5, version: 1 });
+  expect(await (await call(owner, base)).json()).toMatchObject({ receipts: [] });
+
+  const results = await Promise.all([
+    call(owner, base, "POST", input),
+    call(owner, base, "POST", input),
+  ]);
+  for (const result of results) expect(result.status, await result.clone().text()).toBe(201);
+  const receipt = stockReceiptSchema.parse(await results[0]!.json());
+  const principal = await loadPrincipal(t.db, owner.userId);
+  if (!principal) throw new Error("Missing inventory fixture owner");
+  expect(
+    await receiveStockDocument(t.db, stockReceiptInputSchema.parse(input), principal, "restored"),
+  ).toEqual(receipt);
+  expect(stockReceiptSchema.parse(await results[1]!.json())).toEqual(receipt);
+  expect(receipt).toMatchObject({
+    supplierId,
+    supplierName: "Care Supplies",
+    invoiceReference: "INV-42",
+    lineCount: 2,
+  });
+  expect(await (await call(owner, firstPath)).json()).toMatchObject({ stockOnHand: 8, version: 2 });
+  const movements = stockLedgerSchema.parse(
+    await (await call(owner, "/admin/inventory/movements?kind=receive")).json(),
+  );
+  expect(movements.movements).toHaveLength(2);
+  expect(movements.movements.every((move) => move.receiptId === receipt.id)).toBe(true);
+  expect((await call(owner, base, "POST", { ...input, notes: "Different request" })).status).toBe(
+    409,
+  );
+  expect(
+    (await call(owner, base, "POST", { ...input, idempotencyKey: crypto.randomUUID() })).status,
+  ).toBe(409);
+
+  expect(
+    (
+      await call(owner, supplierPath, "PUT", {
+        ...supplier,
+        name: "Care Supply Group",
+        active: false,
+        version: 1,
+      })
+    ).status,
+  ).toBe(200);
+  expect(
+    (await call(owner, supplierPath, "PUT", { ...supplier, name: "Stale change", version: 1 }))
+      .status,
+  ).toBe(409);
+  expect((await call(owner, base, "POST", input)).status).toBe(201);
+  const staffReceipt = stockReceiptSchema.parse(
+    await (await call(staff, `${base}/${receipt.id}`)).json(),
+  );
+  expect(staffReceipt.supplierName).toBe("Care Supplies");
+  expect(staffReceipt.lines.every((line) => line.unitCostCents === undefined)).toBe(true);
 });
 
 test("product photos are private, normalized and protected against stale writes", async () => {

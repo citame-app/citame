@@ -16,6 +16,7 @@ Redsys is a server-only adapter, disabled until configured. Checkout totals and 
 - Voided appointment checkouts remain in history; a partial unique index permits a replacement active checkout for that appointment. Opening an existing receipt does not overwrite its staff-approved discount.
 - Returns and internal consumption are explicit stock movements. A refund does not automatically mean a product was physically returned. Returns against a sold line cannot exceed the sold quantity and are idempotent. Product deactivation preserves history and existing reservations.
 - Inventory adjustments cannot reduce physical stock below reserved stock. Prices/costs on an existing checkout are snapshots. Monetary values and stock base units are integers; there is no implicit exchange-rate conversion.
+- A numbered stock receipt records a completed delivery. It locks products in ID order, verifies the reviewed versions, and writes every movement in one transaction. The receipt keeps its supplier name and product details at receipt time. Later catalogue and supplier edits preserve that history. Receipt numbers can have gaps after rolled-back writes. Retrying the same actor and request returns the existing receipt.
 
 ## Following blocks
 
