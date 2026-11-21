@@ -165,6 +165,7 @@ export const promotionSchema = promotionInputSchema.safeExtend({
   usedCount: z.number().int().nonnegative().default(0),
 });
 export type LoyaltyPolicy = z.infer<typeof loyaltyPolicySchema>;
+export type ReviewedLoyaltyPolicy = z.infer<typeof reviewedLoyaltyPolicySchema>;
 export type RewardChoice = z.infer<typeof rewardChoiceSchema>;
 export type ApplyRewardInput = z.infer<typeof applyRewardInputSchema>;
 export type PromotionInput = z.infer<typeof promotionInputSchema>;

@@ -72,6 +72,7 @@ export interface RequestOptions {
   query?: Record<string, string | number | undefined>;
   signal?: AbortSignal;
   cache?: RequestCache;
+  reviewedGeneration?: string;
 }
 
 function toApiError(status: number, body: unknown, retryAfter: string | null): ApiError {
@@ -124,6 +125,8 @@ export function createApiClient(options: ApiClientOptions) {
     const headers = new Headers(options.headers?.());
     headers.set("accept", "application/json");
     if (body !== undefined) headers.set("content-type", "application/json");
+    if (requestOptions.reviewedGeneration !== undefined)
+      headers.set("x-citame-generation", requestOptions.reviewedGeneration);
 
     let response: Response;
     try {

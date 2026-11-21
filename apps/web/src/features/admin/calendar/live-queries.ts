@@ -2,6 +2,7 @@ import type { SyncEntity, SyncLiveView } from "@sob/contracts";
 import { teamShiftWeekKey } from "~/lib/admin-queries";
 import { intakeAdminQueryKey, intakeHistoryQueryKey } from "~/lib/api/intake-endpoints";
 import { reviewRequestQueryKey } from "~/lib/api/review-endpoints";
+import { loyaltyPolicyQueryKey } from "~/lib/api/reward-endpoints";
 
 const calendar = [["admin", "calendar"], ["availability"]] as const;
 const moderation = ["reviews", "admin"] as const;
@@ -88,10 +89,7 @@ const shared: Record<SyncEntity | SyncLiveView, readonly (readonly string[])[]> 
     ["rewards", "promotions"],
     ["creative", "promotions"],
   ],
-  loyalty: [
-    ["rewards", "policy"],
-    ["rewards", "admin"],
-  ],
+  loyalty: [loyaltyPolicyQueryKey, ["rewards", "admin"]],
   intake_forms: [intakeAdminQueryKey],
   intake_records: [intakeHistoryQueryKey],
   booking_policy: [["booking-policy"], ["admin", "booking-policy"]],

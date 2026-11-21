@@ -1,5 +1,5 @@
 use super::*;
-use sob_core::loyalty::{Policy, ReviewedPolicy};
+use sob_core::loyalty::{Policy, PolicyFields, ReviewedPolicy};
 use sob_core::reports::decimal_amount;
 
 const FIELD_LABELS: [Key; 5] = [
@@ -23,6 +23,12 @@ pub(super) struct Editor {
     observed: Option<i64>,
     refresh_at: Instant,
     retry_at: Option<Instant>,
+}
+
+enum PolicyRequest {
+    Refresh,
+    Reload,
+    Save(ReviewedPolicy),
 }
 
 fn policy_values(policy: &Policy) -> [String; 5] {
@@ -98,6 +104,31 @@ impl Root {
         self.loyalty_desk()?.policy.as_mut()
     }
 
+    pub(in crate::root) fn preserve_open_points_policy(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.can_configure_points() {
+            return false;
+        }
+        let Some(desk) = self.loyalty_desk() else {
+            return false;
+        };
+        let Some(editor) = &mut desk.policy else {
+            return false;
+        };
+        desk.results.clear();
+        desk.selected = None;
+        desk.statement = None;
+        desk.request = None;
+        desk.loading = false;
+        for field in [&desk.search, &desk.points, &desk.reason] {
+            field.update(cx, |field, cx| field.clear(cx));
+        }
+        editor.identity = Arc::new(());
+        editor.busy = false;
+        editor.current = None;
+        editor.refresh_at = Instant::now();
+        true
+    }
+
     pub(super) fn open_points_policy(&mut self, cx: &mut Context<Self>) {
         if !self.can_configure_points() {
             return;
@@ -122,7 +153,7 @@ impl Root {
             refresh_at: Instant::now(),
             retry_at: None,
         });
-        self.request_points_policy(None, false, cx);
+        self.request_points_policy(PolicyRequest::Refresh, cx);
     }
 
     pub(super) fn refresh_points_policy(
@@ -132,10 +163,8 @@ impl Root {
         cx: &mut Context<Self>,
     ) {
         if !self.can_configure_points() {
-            if let Some(desk) = self.loyalty_desk() {
-                desk.policy = None;
-                cx.notify();
-            }
+            self.overlay = Overlay::None;
+            cx.notify();
             return;
         }
         let Some(editor) = self.points_policy() else {
@@ -150,16 +179,11 @@ impl Root {
         if !editor.busy
             && (reconnected || observed != editor.observed || Instant::now() >= editor.refresh_at)
         {
-            self.request_points_policy(None, false, cx);
+            self.request_points_policy(PolicyRequest::Refresh, cx);
         }
     }
 
-    fn request_points_policy(
-        &mut self,
-        save: Option<ReviewedPolicy>,
-        replace: bool,
-        cx: &mut Context<Self>,
-    ) {
+    fn request_points_policy(&mut self, request: PolicyRequest, cx: &mut Context<Self>) {
         let Some(transport) = self.svc.transport().filter(|_| {
             self.can_configure_points() && self.status.connectivity == Connectivity::Online
         }) else {
@@ -174,7 +198,8 @@ impl Root {
             return;
         };
         let identity = editor.identity.clone();
-        let writing = save.is_some();
+        let writing = matches!(request, PolicyRequest::Save(_));
+        let replace = matches!(request, PolicyRequest::Reload);
         editor.busy = true;
         editor.observed = observed;
         editor.refresh_at = Instant::now() + Duration::from_secs(15);
@@ -186,11 +211,13 @@ impl Root {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    match save {
-                        Some(review) => {
+                    match request {
+                        PolicyRequest::Save(review) => {
                             transport.save_loyalty_policy(&review.generation, &review.policy)
                         }
-                        None => transport.loyalty_policy(),
+                        PolicyRequest::Refresh | PolicyRequest::Reload => {
+                            transport.loyalty_policy()
+                        }
                     }
                 })
                 .await;
@@ -263,7 +290,20 @@ impl Root {
         let Some(base) = &editor.base else {
             return;
         };
-        let fields = editor.fields.each_ref().map(|field| field.read(cx).text());
+        let [
+            earn_amount,
+            points_per_step,
+            redeem_value,
+            maximum_discount,
+            expiry_days,
+        ] = editor.fields.each_ref().map(|field| field.read(cx).text());
+        let fields = PolicyFields {
+            earn_amount,
+            points_per_step,
+            redeem_value,
+            maximum_discount,
+            expiry_days,
+        };
         let Some(policy) = base.policy.edit(editor.enabled, fields) else {
             editor.feedback = Some(Key::LoyaltyProgrammeInvalid);
             cx.notify();
@@ -280,13 +320,17 @@ impl Root {
     }
 
     fn save_points_policy(&mut self, cx: &mut Context<Self>) {
-        if let Some(editor) = self.points_policy().filter(|editor| editor.can_save()) {
-            let review = editor.review.clone();
-            self.request_points_policy(review, false, cx);
+        if let Some(review) = self
+            .points_policy()
+            .filter(|editor| editor.can_save())
+            .and_then(|editor| editor.review.clone())
+        {
+            self.request_points_policy(PolicyRequest::Save(review), cx);
         }
     }
 
     pub(super) fn close_points_policy(&mut self, confirm: bool, cx: &mut Context<Self>) {
+        let directory = self.directory_enabled();
         let Some(editor) = self.points_policy() else {
             return;
         };
@@ -297,6 +341,8 @@ impl Root {
             editor.confirm_exit = false;
         } else if editor.dirty(cx) && !editor.confirm_exit {
             editor.confirm_exit = true;
+        } else if !directory {
+            self.overlay = Overlay::None;
         } else if let Some(desk) = self.loyalty_desk() {
             desk.policy = None;
         }
@@ -431,7 +477,7 @@ impl Root {
                             "reload-points-policy",
                             Key::LoyaltyProgrammeReload,
                             Kind::Ghost,
-                            |root, cx| root.request_points_policy(None, true, cx),
+                            |root, cx| root.request_points_policy(PolicyRequest::Reload, cx),
                             cx,
                         ))
                     },
@@ -453,5 +499,64 @@ impl Root {
             (viewport.height - px(24.)).clamp(px(0.), px(720.)),
             None,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[gpui::test]
+    async fn restoring_the_replica_fences_a_review_without_discarding_it(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_directory, window) = crate::root::tests::open(cx);
+        window
+            .update(cx, |root, _, cx| {
+                root.svc.stop_sync();
+                root.svc
+                    .store
+                    .set_meta("client_directory", "allowed")
+                    .unwrap();
+                root.status.connectivity = Connectivity::Offline;
+                root.open_loyalty(cx);
+                root.open_points_policy(cx);
+                let current = ReviewedPolicy {
+                    generation: "old-generation".into(),
+                    policy: Policy {
+                        enabled: false,
+                        earn_every_cents: 100,
+                        points_per_step: 1,
+                        redeem_value_cents: 1,
+                        maximum_discount_basis_points: 2_000,
+                        expiry_days: Some(365),
+                        version: 2,
+                    },
+                };
+                let editor = root.points_policy().unwrap();
+                editor.replace(current, cx);
+                editor.enabled = true;
+                root.review_points_policy(cx);
+                assert!(root.points_policy().unwrap().can_save());
+
+                let desk = root.loyalty_desk().unwrap();
+                desk.search
+                    .update(cx, |field, cx| field.set_text("Private search", cx));
+                desk.results.push((Uuid::now_v7(), "Private client".into()));
+                root.replica_generation = Some("old-generation".into());
+                root.reload(cx);
+                let desk = root.loyalty_desk().unwrap();
+                assert!(desk.search.read(cx).text().is_empty());
+                assert!(desk.results.is_empty());
+                let editor = root.points_policy().unwrap();
+                assert!(editor.review.as_ref().unwrap().policy.enabled);
+                assert!(editor.stale());
+                assert!(!editor.can_save());
+
+                root.svc.session.write().unwrap().as_mut().unwrap().role = "staff".into();
+                root.refresh_loyalty(false, cx);
+                assert!(matches!(root.overlay, Overlay::None));
+            })
+            .unwrap();
     }
 }

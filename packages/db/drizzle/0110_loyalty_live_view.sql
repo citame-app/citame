@@ -3,6 +3,13 @@ AFTER INSERT OR UPDATE OR DELETE ON loyalty_program
 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
 EXECUTE FUNCTION sync_record_live_view('loyalty');
 --> statement-breakpoint
+CREATE CONSTRAINT TRIGGER sync_loyalty_identity
+AFTER UPDATE ON client_profile
+DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+WHEN (OLD.merged_into_id IS DISTINCT FROM NEW.merged_into_id OR
+      OLD.deleted_at IS DISTINCT FROM NEW.deleted_at)
+EXECUTE FUNCTION sync_record_live_view('loyalty');
+--> statement-breakpoint
 CREATE CONSTRAINT TRIGGER sync_loyalty_lot
 AFTER INSERT OR UPDATE OR DELETE ON loyalty_lot
 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW

@@ -3,12 +3,12 @@ import {
   type BookingPromotionQuoteRequest,
   bookingPromotionQuoteSchema,
   checkoutSchema,
-  type LoyaltyPolicy,
-  loyaltyPolicySchema,
   loyaltyStatementSchema,
   type PromotionInput,
   promotionSchema,
+  type ReviewedLoyaltyPolicy,
   type RewardChoice,
+  reviewedLoyaltyPolicySchema,
   rewardQuoteSchema,
 } from "@sob/contracts";
 import { z } from "zod";
@@ -16,13 +16,18 @@ import type { ApiClient } from "./client";
 import type { CommerceMode } from "./commerce-endpoints";
 
 const base = (mode: CommerceMode) => (mode === "admin" ? "/admin/commerce" : "/me");
+export const loyaltyPolicyQueryKey = ["rewards", "policy"] as const;
+const policyPath = "/admin/rewards/policy/reviewed";
 export function rewardEndpoints(client: ApiClient) {
   return {
     bookingQuote: (input: BookingPromotionQuoteRequest) =>
       client.post("/appointments/promotion-quote", input, bookingPromotionQuoteSchema),
-    policy: () => client.get("/admin/rewards/policy", loyaltyPolicySchema),
-    savePolicy: (input: LoyaltyPolicy) =>
-      client.put("/admin/rewards/policy", input, loyaltyPolicySchema),
+    policy: (signal?: AbortSignal) =>
+      client.get(policyPath, reviewedLoyaltyPolicySchema, { signal }),
+    savePolicy: ({ generation, ...input }: ReviewedLoyaltyPolicy) =>
+      client.put(policyPath, input, reviewedLoyaltyPolicySchema, {
+        reviewedGeneration: generation,
+      }),
     statement: (mode: CommerceMode, clientId?: string, page = 1) =>
       client.get(
         mode === "client" ? "/me/rewards" : `/admin/rewards/clients/${clientId}`,

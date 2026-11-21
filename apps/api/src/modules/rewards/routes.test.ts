@@ -86,6 +86,32 @@ test("rewards start disabled and a customer cannot change the current program", 
   await enable();
   expect((await call(owner, "/admin/rewards/policy", "PUT", policy)).status).toBe(409);
 });
+
+test("reviewed program writes require the active generation and accept only an exact replay", async () => {
+  const path = "/admin/rewards/policy/reviewed";
+  const reviewed = await call(owner, path);
+  expect(reviewed.headers.get("cache-control")).toBe("private, no-store");
+  const { generation } = (await reviewed.json()) as { generation: string };
+  const save = (body: typeof policy, reviewedGeneration?: string) =>
+    t.app.request(path, {
+      method: "PUT",
+      headers: {
+        cookie: owner.cookie,
+        "content-type": "application/json",
+        ...(reviewedGeneration ? { "x-citame-generation": reviewedGeneration } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+  expect((await call(client, path)).status).toBe(403);
+  expect((await save(policy)).status).toBe(409);
+  expect((await save(policy, "old-generation")).status).toBe(409);
+  const changed = await save(policy, generation);
+  expect(changed.status, await changed.clone().text()).toBe(200);
+  const result = await changed.json();
+  expect(result).toMatchObject({ generation, enabled: true, version: 2 });
+  expect(await (await save(policy, generation)).json()).toEqual(result);
+  expect((await save({ ...policy, pointsPerStep: 3 }, generation)).status).toBe(409);
+});
 test("manual credits are owner-controlled, audited, idempotent and private to their customer", async () => {
   await enable();
   const credit = {

@@ -23,27 +23,38 @@ pub struct Policy {
     pub version: u32,
 }
 
+#[derive(Clone, Copy)]
+pub struct PolicyFields<'a> {
+    pub earn_amount: &'a str,
+    pub points_per_step: &'a str,
+    pub redeem_value: &'a str,
+    pub maximum_discount: &'a str,
+    pub expiry_days: &'a str,
+}
+
 impl Policy {
-    pub fn edit(&self, enabled: bool, fields: [&str; 5]) -> Option<Self> {
-        let [earn, points, value, maximum, expiry] = fields.map(str::trim);
+    pub fn edit(&self, enabled: bool, fields: PolicyFields<'_>) -> Option<Self> {
         let whole = |text: &str| {
+            let text = text.trim();
             text.bytes()
                 .all(|digit| digit.is_ascii_digit())
                 .then(|| text.parse::<u32>().ok())
                 .flatten()
         };
         let amount = crate::billing::parse_reviewed_amount;
-        let expiry_days = if expiry.is_empty() {
+        let expiry_days = if fields.expiry_days.trim().is_empty() {
             None
         } else {
-            Some(whole(expiry).filter(|days| (30..=3650).contains(days))?)
+            Some(whole(fields.expiry_days).filter(|days| (30..=3650).contains(days))?)
         };
         Some(Self {
             enabled,
-            earn_every_cents: amount(earn).filter(|&cents| cents >= 100)?,
-            points_per_step: whole(points).filter(|count| (1..=100).contains(count))?,
-            redeem_value_cents: amount(value).filter(|cents| (1..=10000).contains(cents))?,
-            maximum_discount_basis_points: amount(maximum)
+            earn_every_cents: amount(fields.earn_amount).filter(|&cents| cents >= 100)?,
+            points_per_step: whole(fields.points_per_step)
+                .filter(|count| (1..=100).contains(count))?,
+            redeem_value_cents: amount(fields.redeem_value)
+                .filter(|cents| (1..=10000).contains(cents))?,
+            maximum_discount_basis_points: amount(fields.maximum_discount)
                 .filter(|basis_points| (1..=10000).contains(basis_points))?,
             expiry_days,
             version: self.version,
@@ -143,21 +154,52 @@ mod tests {
             expiry_days: Some(365),
             version: 17,
         };
-        let changed = policy
-            .edit(true, ["1,50", "3", "0,05", "12,75", ""])
-            .unwrap();
+        let fields = PolicyFields {
+            earn_amount: "1,50",
+            points_per_step: "3",
+            redeem_value: "0,05",
+            maximum_discount: "12,75",
+            expiry_days: "",
+        };
+        let changed = policy.edit(true, fields).unwrap();
         assert_eq!(changed.earn_every_cents, 150);
         assert_eq!(changed.redeem_value_cents, 5);
         assert_eq!(changed.maximum_discount_basis_points, 1_275);
         assert_eq!(changed.expiry_days, None);
         assert_eq!(changed.version, 17);
-        assert!(policy.edit(true, ["1", "+3", "0.05", "12", ""]).is_none());
         assert!(
             policy
-                .edit(true, ["1", "3", "0.05", "100.01", ""])
+                .edit(
+                    true,
+                    PolicyFields {
+                        points_per_step: "+3",
+                        ..fields
+                    }
+                )
                 .is_none()
         );
-        assert!(policy.edit(true, ["1", "3", "0.05", "10", "29"]).is_none());
+        assert!(
+            policy
+                .edit(
+                    true,
+                    PolicyFields {
+                        maximum_discount: "100.01",
+                        ..fields
+                    }
+                )
+                .is_none()
+        );
+        assert!(
+            policy
+                .edit(
+                    true,
+                    PolicyFields {
+                        expiry_days: "29",
+                        ..fields
+                    }
+                )
+                .is_none()
+        );
     }
 
     #[test]

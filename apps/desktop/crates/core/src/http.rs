@@ -1052,8 +1052,20 @@ impl HttpTransport {
         path: &str,
         input: &impl serde::Serialize,
     ) -> Result<ureq::http::Response<ureq::Body>, TransportError> {
+        self.send_put_json_with_headers(path, input, &[])
+    }
+
+    fn send_put_json_with_headers(
+        &self,
+        path: &str,
+        input: &impl serde::Serialize,
+        extra_headers: &[(&str, &str)],
+    ) -> Result<ureq::http::Response<ureq::Body>, TransportError> {
         let mut request = self.agent.put(&format!("{}{path}", self.base_url));
         for (name, value) in self.headers()? {
+            request = request.header(name, value);
+        }
+        for &(name, value) in extra_headers {
             request = request.header(name, value);
         }
         let body = serde_json::to_string(input)

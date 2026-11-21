@@ -817,6 +817,7 @@ impl Root {
                 && !self.preserve_open_inventory_documents()
                 && !self.preserve_warehouse_panel()
                 && !self.preserve_inventory_classifications()
+                && !self.preserve_open_points_policy(cx)
             {
                 self.overlay = Overlay::None;
             }

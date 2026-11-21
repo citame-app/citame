@@ -28,9 +28,9 @@ import { listPromotions, savePromotion } from "./promotions";
 import { returnCheckoutPoints } from "./value";
 
 const pageSchema = z.coerce.number().int().min(1).max(100000).default(1);
-function reviewedGeneration(c: Context<AppEnv>, current: string) {
+function reviewedGeneration(c: Context<AppEnv>, current: string, required = false) {
   const generation = c.req.header("x-citame-generation");
-  if ((c.get("desktopRequest") || generation !== undefined) && generation !== current)
+  if ((required || c.get("desktopRequest") || generation !== undefined) && generation !== current)
     throw new DomainError(
       "sync_generation_changed",
       "Review the current rewards data on the restored server",
@@ -105,13 +105,13 @@ export function rewardsAdminRoutes({ db, config }: AppDeps) {
     .put("/policy/reviewed", async (c) => {
       const principal = c.get("principal");
       requireRole(principal, "owner");
-      const allowIdenticalReplay = reviewedGeneration(c, config.syncReplicaGeneration);
+      reviewedGeneration(c, config.syncReplicaGeneration, true);
       c.header("Cache-Control", "private, no-store");
       const policy = await setLoyaltyPolicy(
         db,
         parseOrThrow(loyaltyPolicyInputSchema, await readJson(c)),
         principal,
-        allowIdenticalReplay,
+        true,
       );
       return c.json(
         reviewedLoyaltyPolicySchema.parse({ ...policy, generation: config.syncReplicaGeneration }),

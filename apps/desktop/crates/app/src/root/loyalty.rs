@@ -261,19 +261,22 @@ impl Root {
         if !matches!(self.overlay, Overlay::Loyalty(_)) {
             return;
         }
+        let observed = self.svc.store.live_view_revision(LIVE_TOPIC).ok();
+        if self
+            .loyalty_desk()
+            .is_some_and(|desk| desk.policy.is_some())
+        {
+            self.refresh_points_policy(reconnected, observed, cx);
+            return;
+        }
         if !self.directory_enabled() {
             self.overlay = Overlay::None;
             cx.notify();
             return;
         }
-        let observed = self.svc.store.live_view_revision(LIVE_TOPIC).ok();
         let Some(desk) = self.loyalty_desk() else {
             return;
         };
-        if desk.policy.is_some() {
-            self.refresh_points_policy(reconnected, observed, cx);
-            return;
-        }
         if desk.rate_limited() {
             return;
         }
