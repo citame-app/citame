@@ -77,6 +77,7 @@ test("a linked Desktop updates the shared controls and the replica carries only 
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
   const current = await desktop(ownerToken, "GET");
+  const before = await pullAll(t, owner);
   expect(current.status).toBe(200);
   expect(current.headers.get("cache-control")).toBe("private, no-store");
   expect((await desktop(ownerToken, "DELETE")).status).toBe(403);
@@ -96,6 +97,10 @@ test("a linked Desktop updates the shared controls and the replica carries only 
     (delta) => delta.entity === "client" && delta.op === "upsert" && delta.id === client.clientId,
   );
   expect(contact?.data).toMatchObject({ controlsVersion: 2 });
+  const previousContact = before.changes.find(
+    (delta) => delta.entity === "client" && delta.op === "upsert" && delta.id === client.clientId,
+  );
+  expect(contact?.data).toEqual({ ...previousContact?.data, controlsVersion: 2 });
   expect(contact?.data).not.toHaveProperty("tags");
   expect(JSON.stringify(contact)).not.toContain(change.reason);
 });

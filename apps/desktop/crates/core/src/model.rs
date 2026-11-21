@@ -236,6 +236,20 @@ pub struct Client {
     pub updated_at: DateTime<Utc>,
 }
 
+impl Client {
+    /// Tags and booking access have a separate revision from the contact fields.
+    pub(crate) fn same_contact(&self, reviewed: &Self) -> bool {
+        self.id == reviewed.id
+            && self.merged_into_id == reviewed.merged_into_id
+            && self.name == reviewed.name
+            && self.phone == reviewed.phone
+            && self.email == reviewed.email
+            && self.notes == reviewed.notes
+            && self.created_at == reviewed.created_at
+            && self.updated_at == reviewed.updated_at
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CatalogPrice {

@@ -1253,7 +1253,6 @@ keys! {
     ClientControlCurrentTags => ("Current tags", "Etiquetas actuales"),
     ClientControlTagsHint => ("Separate tags with commas. Maximum 20 tags.", "Separa las etiquetas con comas. Máximo 20 etiquetas."),
     ClientControlReason => ("Private reason for changing booking access", "Motivo privado del cambio de acceso a reservas"),
-    ClientControlReasonRequired => ("Enter a reason with at least three characters.", "Escribe un motivo de al menos tres caracteres."),
     ClientControlNormal => ("Normal booking access", "Acceso normal a reservas"),
     ClientControlTrusted => ("Trusted client", "Cliente de confianza"),
     ClientControlBlocked => ("Booking blocked", "Reservas bloqueadas"),

@@ -53,6 +53,7 @@ export async function updateClientControls(
           ? { bookingAccess: input.bookingAccess, bookingAccessReason: input.reason }
           : {}),
         controlsVersion: current.controlsVersion + 1,
+        updatedAt: current.updatedAt,
       })
       .where(eq(clientProfile.id, id))
       .returning();

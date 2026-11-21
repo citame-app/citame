@@ -17,6 +17,13 @@ pub(super) struct Desk {
     message: Option<Key>,
 }
 
+fn mirrored_revision(clients: &[Client], id: &str) -> Option<u64> {
+    clients
+        .iter()
+        .find(|client| client.id == id)?
+        .controls_version
+}
+
 impl Desk {
     fn change(&self, cx: &App) -> Option<ClientControlsUpdate> {
         let current = self.current.as_ref()?;
@@ -42,8 +49,8 @@ impl Desk {
         })
     }
 
-    fn receive(&mut self, current: ClientControls, keep_draft: bool, cx: &mut App) {
-        let change = keep_draft.then(|| self.change(cx)).flatten();
+    fn apply_snapshot(&mut self, current: ClientControls, preserve_draft: bool, cx: &mut App) {
+        let change = preserve_draft.then(|| self.change(cx)).flatten();
         if change.as_ref().is_none_or(|change| change.tags.is_none()) {
             self.tags
                 .update(cx, |field, cx| field.set_text(&current.tags.join(", "), cx));
@@ -76,6 +83,9 @@ impl Root {
         else {
             return;
         };
+        if !self.svc.store.client_is_synced(&client.id).unwrap_or(false) {
+            return;
+        }
         let tags = cx.new(|cx| TextField::new(tags_label, false, cx));
         let reason = cx.new(|cx| TextField::new(reason_label, false, cx));
         let changes = [&tags, &reason].map(|field| {
@@ -117,6 +127,7 @@ impl Root {
                 directory.controls = None;
             }
             cx.notify();
+            self.refresh_client_controls(cx);
         }
     }
 
@@ -131,11 +142,7 @@ impl Root {
         if desk.busy || desk.must_reload || desk.confirm_back {
             return;
         }
-        let newer_revision = directory
-            .clients
-            .iter()
-            .find(|client| client.id == desk.client_id)
-            .and_then(|client| client.controls_version)
+        let newer_revision = mirrored_revision(&directory.clients, &desk.client_id)
             .is_some_and(|version| version > current.version);
         if newer_revision {
             if desk.change(cx).is_some() {
@@ -160,19 +167,6 @@ impl Root {
         else {
             return;
         };
-        if change
-            .reason
-            .as_ref()
-            .is_some_and(|reason| reason.encode_utf16().count() < 3)
-        {
-            if let Overlay::Directory(directory) = &mut self.overlay
-                && let Some(desk) = &mut directory.controls
-            {
-                desk.message = Some(Key::ClientControlReasonRequired);
-                cx.notify();
-            }
-            return;
-        }
         self.request_client_controls(Some(change), cx);
     }
 
@@ -199,6 +193,7 @@ impl Root {
         desk.busy = true;
         desk.message = None;
         let id = desk.client_id.clone();
+        let requested_revision = mirrored_revision(&directory.clients, &id);
         let identity = desk.identity.clone();
         let session = self.svc.session.clone();
         let saving = change.is_some();
@@ -228,10 +223,19 @@ impl Root {
                     return;
                 };
                 desk.busy = false;
+                let observed_revision = mirrored_revision(&directory.clients, &desk.client_id);
+                let loaded = matches!(result, Ok(Some(_)));
                 desk.message = match result {
                     Ok(Some(current)) => {
-                        desk.receive(current, !saving, cx);
-                        saving.then_some(Key::ClientControlSaved)
+                        let behind =
+                            observed_revision.is_some_and(|version| current.version < version);
+                        desk.apply_snapshot(current, !saving, cx);
+                        if behind && !saving && observed_revision == requested_revision {
+                            desk.must_reload = true;
+                            Some(Key::ClientControlChanged)
+                        } else {
+                            saving.then_some(Key::ClientControlSaved)
+                        }
                     }
                     Ok(None) => {
                         desk.must_reload = true;
@@ -255,7 +259,7 @@ impl Root {
                     Err(_) => Some(Key::ClientControlUnavailable),
                 };
                 cx.notify();
-                if saving && desk.message == Some(Key::ClientControlSaved) {
+                if loaded {
                     root.refresh_client_controls(cx);
                 }
             });
@@ -376,6 +380,7 @@ impl Root {
                                 {
                                     desk.confirm_back = false;
                                     cx.notify();
+                                    root.refresh_client_controls(cx);
                                 }
                             }),
                         ))
@@ -473,18 +478,21 @@ mod tests {
                         .notes
                         .update(cx, |field, cx| field.set_text("Unsaved contact notes", cx));
                     let desk = directory.controls.as_mut().unwrap();
-                    desk.receive(snapshot(1, BookingAccess::Normal), false, cx);
+                    desk.apply_snapshot(snapshot(1, BookingAccess::Normal), false, cx);
                     desk.tags
                         .update(cx, |field, cx| field.set_text("colour", cx));
                     directory.clients[0].controls_version = Some(2);
                 }
+                root.back_client_controls(cx);
                 root.refresh_client_controls(cx);
+                assert!(matches!(&root.overlay, Overlay::Directory(directory) if directory.controls.as_ref().is_some_and(|desk| desk.confirm_back && !desk.must_reload)));
+                root.back_client_controls(cx);
                 let Overlay::Directory(directory) = &mut root.overlay else {
                     panic!("missing directory")
                 };
                 let desk = directory.controls.as_mut().unwrap();
                 assert!(desk.must_reload);
-                desk.receive(snapshot(2, BookingAccess::Blocked), true, cx);
+                desk.apply_snapshot(snapshot(2, BookingAccess::Blocked), true, cx);
                 let change = desk.change(cx).unwrap();
                 assert_eq!(change.version, 2);
                 assert_eq!(change.tags.unwrap(), vec!["colour"]);

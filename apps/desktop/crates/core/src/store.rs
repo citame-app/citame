@@ -1280,6 +1280,14 @@ impl Store {
         Ok(v)
     }
 
+    pub fn client_is_synced(&self, id: &str) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM client WHERE id = ?1)",
+            [id],
+            |row| row.get(0),
+        )?)
+    }
+
     pub fn clients(&self) -> Result<Vec<Client>> {
         let mut v: Vec<Client> = self.rows("SELECT json FROM client")?;
         v.sort_by(|a, b| {

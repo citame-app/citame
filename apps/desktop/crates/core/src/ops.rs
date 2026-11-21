@@ -711,16 +711,10 @@ pub fn update_directory_client(
             "Wait for this contact to sync before editing it again".into(),
         ));
     }
-    let latest = store
-        .clients()?
-        .into_iter()
-        .find(|client| client.id == *id)
-        .map(|mut client| {
-            // Tags and booking access use their own version and cannot overwrite this contact edit.
-            client.controls_version = expected.controls_version;
-            client
-        });
-    if latest.as_ref() != Some(expected) || expected.merged_into_id.is_some() {
+    let latest = store.clients()?.into_iter().find(|client| client.id == *id);
+    if latest.is_none_or(|client| !client.same_contact(expected))
+        || expected.merged_into_id.is_some()
+    {
         return Err(CoreError::Invalid(
             "The contact changed. Reopen its latest version.".into(),
         ));

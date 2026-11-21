@@ -261,12 +261,17 @@ impl Root {
                                     root.open_intake_record(subject.clone(), cx);
                                 }),
                             ))
-                            .child(self.directory_button(
-                                "directory-controls",
-                                self.t(Key::ClientControls),
-                                Kind::Ghost,
-                                cx.listener(|root, _, _, cx| root.open_client_controls(cx)),
-                            ))
+                            .when(
+                                self.svc.store.client_is_synced(&client.id).unwrap_or(false),
+                                |body| {
+                                    body.child(self.directory_button(
+                                        "directory-controls",
+                                        self.t(Key::ClientControls),
+                                        Kind::Ghost,
+                                        cx.listener(|root, _, _, cx| root.open_client_controls(cx)),
+                                    ))
+                                },
+                            )
                         })
                         .when_some(desk.error.as_ref(), |d, error| {
                             d.child(
