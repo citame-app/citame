@@ -18,6 +18,8 @@ import {
   setupApiTest,
 } from "../../../test/helpers";
 
+import { pull } from "../../../test/sync";
+
 let t: Awaited<ReturnType<typeof setupApiTest>>;
 let f: Fixtures;
 let owner: Actor;
@@ -253,13 +255,18 @@ test("a coupon has current terms, dates, per-customer/global limits and concurre
       expectedDiscountCents: 1000,
       idempotencyKey: key(),
     });
+  const initial = await pull(t, owner);
   const outcomes = await Promise.all([apply(a.id), apply(b.id)]);
   expect(outcomes.map((r) => r.status).sort()).toEqual([200, 409]);
+  const held = await pull(t, owner, { since: initial.headSeq, promotionViews: "1" });
+  expect(held.refresh).toContain("promotions");
   const used = outcomes[0]?.status === 200 ? a.id : b.id;
   const unused = used === a.id ? b.id : a.id;
   expect((await call(owner, `/admin/commerce/checkouts/${used}/void`, "POST", {})).status).toBe(
     200,
   );
+  const released = await pull(t, owner, { since: held.headSeq, promotionViews: "1" });
+  expect(released.refresh).toContain("promotions");
   expect((await apply(unused)).status).toBe(200);
 });
 

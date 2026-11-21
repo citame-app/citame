@@ -764,6 +764,13 @@
       "when": 1795289100000,
       "tag": "0108_marketing_live_view",
       "breakpoints": true
+    },
+    {
+      "idx": 109,
+      "version": "7",
+      "when": 1795289834000,
+      "tag": "0109_promotion_live_view",
+      "breakpoints": true
     }
   ]
 }

@@ -80,7 +80,7 @@ fn desktop_opens_cloud_management_with_the_linked_users_web_session_through_the_
 #[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_manages_timed_promotions_through_the_proxy() {
     use sob_core::promotions::{
-        Discount, Eligible, PromotionWriteError, SavePromotion, Terms, Timing,
+        Discount, Eligible, LIVE_TOPIC, PromotionWriteError, SavePromotion, Terms, Timing,
     };
     let mut browser = Device::sign_in();
     browser.sync();
@@ -120,7 +120,11 @@ fn native_manages_timed_promotions_through_the_proxy() {
         ))
     ));
     save.generation = generation;
+    let previous = browser.store.live_view_revision(LIVE_TOPIC).unwrap();
     let created = device.transport.save_promotion(&save).unwrap();
+    browser.sync();
+    let published = browser.store.live_view_revision(LIVE_TOPIC).unwrap();
+    assert!(published > previous);
     assert_eq!(created.terms, save.terms);
     assert_eq!(
         device.transport.save_promotion(&save).unwrap().id,
@@ -130,6 +134,8 @@ fn native_manages_timed_promotions_through_the_proxy() {
     save.terms.active = false;
     let edited = device.transport.save_promotion(&save).unwrap();
     assert_eq!(edited.version, created.version + 1);
+    browser.sync();
+    assert!(browser.store.live_view_revision(LIVE_TOPIC).unwrap() > published);
     assert_eq!(
         device.transport.save_promotion(&save).unwrap().version,
         edited.version

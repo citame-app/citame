@@ -84,6 +84,10 @@ const shared: Record<SyncEntity | SyncLiveView, readonly (readonly string[])[]> 
   review_requests: [reviewRequestQueryKey, moderation],
   portfolio: [["portfolio"]],
   marketing: [["marketing"]],
+  promotions: [
+    ["rewards", "promotions"],
+    ["creative", "promotions"],
+  ],
   intake_forms: [intakeAdminQueryKey],
   intake_records: [intakeHistoryQueryKey],
   booking_policy: [["booking-policy"], ["admin", "booking-policy"]],

@@ -308,6 +308,47 @@ describe("GET /sync/stream", () => {
     }
   });
 
+  test("promotion changes wake permitted clients without including discount details", async () => {
+    const receptionist = await actor(t, "staff", "promo-reception@example.test", {
+      staffProfileId: f.anaId,
+    });
+    await t.db
+      .update(staffProfile)
+      .set({ accessPreset: "receptionist" })
+      .where(eq(staffProfile.id, f.anaId));
+    const stream = reader(await open(owner));
+    try {
+      await stream.until((message) => nudges(message).length > 0);
+      const since = nudges(stream.text)[0]!;
+      const created = await json(
+        t.app,
+        "/admin/rewards/promotions",
+        "POST",
+        {
+          code: "SYNTHETIC_STREAM",
+          name: "Synthetic private promotion",
+          kind: "fixed",
+          value: 1200,
+        },
+        owner.cookie,
+      );
+      expect(created.status, await created.clone().text()).toBe(201);
+      const optedIn = await pull(t, owner, { since, promotionViews: "1" });
+      expect(optedIn.refresh).toEqual(["promotions"]);
+      expect(optedIn.changes).toEqual([]);
+      expect(JSON.stringify(optedIn)).not.toContain("SYNTHETIC_STREAM");
+      const legacy = await pull(t, owner, { since, marketingViews: "1" });
+      const limited = await pull(t, receptionist, { since, promotionViews: "1" });
+      expect(legacy.refresh).toBeUndefined();
+      expect(limited.refresh).toBeUndefined();
+      expect(legacy.nextCursor).toBe(optedIn.nextCursor);
+      await stream.until((message) => nudges(message).includes(optedIn.headSeq), 2500);
+      expect(stream.text).not.toContain("SYNTHETIC_STREAM");
+    } finally {
+      await stream.cancel();
+    }
+  });
+
   test("intake writes wake authorized compatible clients without carrying private content", async () => {
     const professional = await actor(t, "staff", "intake-professional@example.test", {
       staffProfileId: f.anaId,

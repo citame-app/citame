@@ -210,6 +210,13 @@ test("an email delivery marker refreshes only the owner email settings query", a
   expect([...liveQueryKeys(["email_delivery"])]).toEqual([["admin", "email-delivery"]]);
 });
 
+test("promotion invalidation refreshes offers and their creative sources", () => {
+  expect([...liveQueryKeys(["promotions"])]).toEqual([
+    ["rewards", "promotions"],
+    ["creative", "promotions"],
+  ]);
+});
+
 test("marketing invalidation refreshes the campaign views", () => {
   expect([...liveQueryKeys(["marketing"])]).toEqual([["marketing"]]);
 });

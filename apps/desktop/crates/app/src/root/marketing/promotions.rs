@@ -2,8 +2,8 @@ use super::*;
 use sob_core::billing::parse_reviewed_amount;
 use sob_core::promotions::PromotionWriteError;
 use sob_core::promotions::{
-    Discount, Eligible, Promotion, PromotionsPage, SavePromotion, Terms, Timing, local_input,
-    parse_instant, parse_minute,
+    Discount, Eligible, LIVE_TOPIC, Promotion, PromotionsPage, SavePromotion, Terms, Timing,
+    local_input, parse_instant, parse_minute,
 };
 use sob_core::reports::decimal_amount;
 use std::collections::BTreeSet;
@@ -45,6 +45,8 @@ pub(super) struct PromoDesk {
     loading: bool,
     saving: bool,
     refresh_after: Instant,
+    observed: Option<i64>,
+    retry_after: Option<Instant>,
     error: Option<Key>,
     saved: bool,
     confirm_exit: bool,
@@ -226,6 +228,8 @@ impl Root {
             loading: false,
             saving: false,
             refresh_after: Instant::now(),
+            observed: None,
+            retry_after: None,
             error: None,
             saved: false,
             confirm_exit: false,
@@ -235,10 +239,16 @@ impl Root {
     }
 
     pub(super) fn refresh_promotions(&mut self, reconnected: bool, cx: &mut Context<Self>) {
+        let observed = self.svc.store.live_view_revision(LIVE_TOPIC).ok();
+        let now = Instant::now();
         let Some(desk) = self.promotion_desk() else {
             return;
         };
-        if desk.saving || desk.loading || (!reconnected && Instant::now() < desk.refresh_after) {
+        if desk.saving
+            || desk.loading
+            || desk.retry_after.is_some_and(|retry| retry > now)
+            || (!reconnected && desk.observed == observed && now < desk.refresh_after)
+        {
             return;
         }
         let page = desk.list.as_ref().map_or(1, |list| list.pagination.page);
@@ -254,6 +264,7 @@ impl Root {
             return;
         };
         let generation = self.svc.store.verified_reviewed_generation().ok();
+        let observed = self.svc.store.live_view_revision(LIVE_TOPIC).ok();
         let session = self.svc.session.clone();
         let Some(desk) = self
             .promotion_desk()
@@ -297,10 +308,14 @@ impl Root {
                 desk.refresh_after = Instant::now() + Duration::from_secs(10);
                 match result {
                     Ok(list) => {
+                        desk.observed = observed;
+                        desk.retry_after = None;
                         desk.list = Some(list);
                         desk.generation = generation;
                     }
                     Err(TransportError::Forbidden(_) | TransportError::Unauthorized) => {
+                        desk.observed = observed;
+                        desk.retry_after = None;
                         desk.list = None;
                         desk.editor = None;
                         desk.generation = None;
@@ -308,6 +323,7 @@ impl Root {
                         desk.error = Some(Key::PromoLoadFailed);
                     }
                     Err(_) => {
+                        desk.retry_after = Some(Instant::now() + Duration::from_secs(3));
                         desk.list = None;
                         desk.generation = None;
                         if desk.editor.is_none() {
