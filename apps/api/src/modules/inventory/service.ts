@@ -29,6 +29,11 @@ import { loadPrincipal, type Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
 
+import {
+  classificationFields,
+  hasClassificationChanges,
+  lockInventoryClassification,
+} from "./classification-fields";
 import { movementView } from "./movement-view";
 import {
   lockActiveWarehouses,
@@ -73,6 +78,15 @@ export function productView(
     description: row.description,
     category: row.category,
     brand: row.brand,
+    ...(row.categoryId || row.subcategoryId || row.brandId
+      ? {
+          classification: {
+            categoryId: row.categoryId,
+            subcategoryId: row.subcategoryId,
+            brandId: row.brandId,
+          },
+        }
+      : {}),
     resellable: row.resellable,
     targetStock: row.targetStock,
     currency: "EUR",
@@ -127,6 +141,9 @@ export function productFilter(query: ProductFilters) {
   return and(
     query.category ? eq(retailProduct.category, query.category) : undefined,
     query.brand ? eq(retailProduct.brand, query.brand) : undefined,
+    query.categoryId ? eq(retailProduct.categoryId, query.categoryId) : undefined,
+    query.subcategoryId ? eq(retailProduct.subcategoryId, query.subcategoryId) : undefined,
+    query.brandId ? eq(retailProduct.brandId, query.brandId) : undefined,
     query.resellable === undefined ? undefined : eq(retailProduct.resellable, query.resellable),
     query.active === "all" ? undefined : eq(retailProduct.active, query.active === "active"),
     query.search
@@ -234,11 +251,14 @@ export async function createProduct(
           throw new DomainError("invalid_state", "This request belongs to another product");
         return productView(previous, writer);
       }
-      const { openingStock, idempotencyKey, ...fields } = baseInput;
+      if (hasClassificationChanges(input)) await lockInventoryClassification(tx);
+      const { openingStock, idempotencyKey, classification: _, ...fields } = baseInput;
+      const assignment = await classificationFields(tx, input);
       const [row] = await tx
         .insert(retailProduct)
         .values({
           ...fields,
+          ...assignment,
           ...(requestedProductId ? { id: requestedProductId } : {}),
           ...packageColumns(packageContent),
           sku: input.sku ?? `SKU-${crypto.randomUUID().toUpperCase()}`,
@@ -283,14 +303,17 @@ export async function updateProduct(
   try {
     return await db.transaction(async (tx) => {
       const writer = await requireCurrentInventoryWriter(tx, principal.userId);
+      if (hasClassificationChanges(input)) await lockInventoryClassification(tx);
       const row = await productRow(tx, id, true);
       if (row.version !== input.version)
         throw new DomainError("version_conflict", "Product changed; reload before editing");
-      const { version: _, packageContent, ...fields } = input;
+      const { version: _, packageContent, classification, ...fields } = input;
+      const assignment = await classificationFields(tx, input, row);
       const [updated] = await tx
         .update(retailProduct)
         .set({
           ...fields,
+          ...assignment,
           ...(packageContent === undefined ? {} : packageColumns(packageContent)),
           version: row.version + 1,
         })
@@ -305,6 +328,7 @@ export async function updateProduct(
         metadata: {
           fields: [
             ...Object.keys(fields),
+            ...(classification ? ["classification"] : []),
             ...(packageContent === undefined ? [] : ["packageContent"]),
           ],
         },

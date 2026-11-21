@@ -13,6 +13,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { user } from "./auth";
 import { createdAt, primaryId, updatedAt } from "./helpers";
+import { inventoryClassification } from "./inventory-classification";
 
 export const retailProduct = pgTable(
   "retail_product",
@@ -24,6 +25,9 @@ export const retailProduct = pgTable(
     description: text(),
     category: text(),
     brand: text(),
+    categoryId: uuid().references(() => inventoryClassification.id),
+    subcategoryId: uuid().references(() => inventoryClassification.id),
+    brandId: uuid().references(() => inventoryClassification.id),
     resellable: boolean().notNull().default(true),
     targetStock: integer(),
     priceCents: integer().notNull(),
@@ -49,6 +53,9 @@ export const retailProduct = pgTable(
   (t) => [
     unique("retail_product_actor_idempotency_unique").on(t.createdBy, t.idempotencyKey),
     index("retail_product_name_idx").on(t.name),
+    index("retail_product_category_id_idx").on(t.categoryId),
+    index("retail_product_subcategory_id_idx").on(t.subcategoryId),
+    index("retail_product_brand_id_idx").on(t.brandId),
     check(
       "retail_product_stock_valid",
       sql`${t.stockOnHand} between 0 and 999999999 and ${t.stockReserved} between 0 and ${t.stockOnHand} and ${t.lowStockThreshold} between 0 and 999999999 and ${t.version} > 0`,

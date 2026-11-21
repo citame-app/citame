@@ -1,5 +1,8 @@
 import {
   type CreateProductInput,
+  type InventoryClassificationInput,
+  inventoryClassificationListSchema,
+  inventoryClassificationSchema,
   inventoryFacetsSchema,
   inventoryReportSchema,
   type ProductPhotoInput,
@@ -63,6 +66,10 @@ export const stockLedgerExportHref = (filters: Partial<StockLedgerFilters>) =>
 
 export function inventoryEndpoints(client: ApiClient) {
   return {
+    classifications: () =>
+      client.get("/admin/inventory/classifications", inventoryClassificationListSchema),
+    saveClassification: (id: string, body: InventoryClassificationInput) =>
+      client.put(`/admin/inventory/classifications/${id}`, body, inventoryClassificationSchema),
     warehouses: () => client.get("/admin/inventory/warehouses", warehouseListSchema),
     warehouseStock: (
       query: Partial<WarehouseStockQuery> & Pick<WarehouseStockQuery, "warehouseId">,

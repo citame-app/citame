@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import {
   checkoutSchema,
+  inventoryClassificationListSchema,
   productListSchema,
   productPhotoVersionSchema,
   productSchema,
@@ -1215,4 +1216,102 @@ test("sync replays only the exact reviewed stock count and preserves its physica
   expect(movement).not.toHaveProperty("unitCostCents");
   const current = await call(owner, `/admin/inventory/products/${item.id}`);
   expect(productSchema.parse(await current.json()).stockOnHand).toBe(3);
+});
+
+test("reviewed classifications preserve existing labels, product stock and historical assignments", async () => {
+  const legacy = await product({ category: "Imported Hair", brand: "Imported Brand" });
+  const root = "/admin/inventory/classifications";
+  const initial = inventoryClassificationListSchema.parse(await (await call(staff, root)).json());
+  const parent = initial.entries.find((entry: { name: string }) => entry.name === "Imported Hair");
+  const maker = initial.entries.find((entry: { name: string }) => entry.name === "Imported Brand");
+  if (!parent || !maker) throw new Error("Product labels were not indexed");
+  const childId = crypto.randomUUID();
+  const newParentId = crypto.randomUUID();
+  const generation = initial.generation;
+  const fields = {
+    kind: "category",
+    name: "Colour",
+    active: true,
+    position: 0,
+    generation,
+    version: 0,
+  };
+  expect((await call(client, root)).status).toBe(403);
+  expect(
+    (await call(staff, `${root}/${childId}`, "PUT", { ...fields, parentId: parent.id })).status,
+  ).toBe(403);
+  expect(
+    (await call(owner, `${root}/${childId}`, "PUT", { ...fields, parentId: maker.id })).status,
+  ).toBe(409);
+  expect(
+    (
+      await call(owner, `${root}/${newParentId}`, "PUT", {
+        ...fields,
+        name: "Care",
+        parentId: null,
+      })
+    ).status,
+  ).toBe(200);
+  const payload = {
+    id: childId,
+    kind: "category",
+    name: "Colour",
+    active: true,
+    position: 0,
+    version: 0,
+    parentId: parent.id,
+  };
+  const save = {
+    kind: "inventory.classification_save",
+    mutationId: mid(),
+    createdAt: new Date().toISOString(),
+    payload,
+  };
+  expect((await push(t, owner, [save])).body.results[0]).toMatchObject({
+    status: "applied",
+    appliedSeq: expect.any(Number),
+  });
+  const assignment = { categoryId: parent.id, subcategoryId: childId, brandId: maker.id };
+  const path = `/admin/inventory/products/${legacy.id}`;
+  const placed = await call(owner, path, "PATCH", {
+    version: legacy.version,
+    classification: assignment,
+  });
+  expect(placed.status).toBe(200);
+  expect(productSchema.parse(await placed.json())).toMatchObject({
+    classification: assignment,
+    category: "Imported Hair",
+    stockOnHand: 5,
+  });
+  const moved = await call(owner, `${root}/${childId}`, "PUT", {
+    ...fields,
+    version: 1,
+    parentId: newParentId,
+  });
+  expect(moved.status).toBe(200);
+  const relocated = productSchema.parse(await (await call(owner, path)).json());
+  expect(relocated).toMatchObject({
+    classification: { ...assignment, categoryId: newParentId },
+    category: "Care",
+    stockOnHand: 5,
+    version: legacy.version + 2,
+  });
+  expect(
+    (await call(owner, path, "PATCH", { version: legacy.version + 1, name: "Stale change" }))
+      .status,
+  ).toBe(409);
+  const filtered = productListSchema.parse(
+    await (await call(owner, `/admin/inventory/products?subcategoryId=${childId}`)).json(),
+  );
+  expect(filtered.products.map((row) => row.id)).toEqual([legacy.id]);
+  const preserved = await call(owner, path, "PATCH", {
+    version: relocated.version,
+    name: "Legacy edit",
+    category: "Care",
+    brand: "Imported Brand",
+  });
+  expect(preserved.status).toBe(200);
+  expect(productSchema.parse(await preserved.json()).classification).toMatchObject({
+    subcategoryId: childId,
+  });
 });

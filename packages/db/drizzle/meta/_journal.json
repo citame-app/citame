@@ -694,6 +694,13 @@
       "when": 1795213487926,
       "tag": "0098_inventory_adjustment_review",
       "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1795242011000,
+      "tag": "0099_inventory_classification",
+      "breakpoints": true
     }
   ]
 }

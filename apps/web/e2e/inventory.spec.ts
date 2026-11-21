@@ -621,3 +621,48 @@ test("reception can inspect product history from the catalog and ledger with rea
     await owner.dispose();
   }
 });
+
+test("inventory categories, subcategories and brands can be assigned and filtered", async ({
+  page,
+}) => {
+  const suffix = crypto.randomUUID().slice(0, 8);
+  const parent = `Care ${suffix}`;
+  const child = `Colour ${suffix}`;
+  const brand = `Lab ${suffix}`;
+  const product = `Serum ${suffix}`;
+  await signInAs(page, OWNER_EMAIL, "/admin/commerce?view=inventory&inventoryTab=classifications");
+  const newCategory = page.getByRole("button", { name: "New category", exact: true });
+  const editor = page.getByRole("form", { name: "Edit classification" });
+  const submit = editor.getByRole("button", { name: "Save classification", exact: true });
+  await newCategory.click();
+  await editor.getByLabel("Name", { exact: true }).fill(parent);
+  await submit.click();
+  await expect(page.getByText(parent, { exact: true })).toBeVisible();
+  await newCategory.click();
+  await editor.getByLabel("Name", { exact: true }).fill(child);
+  await editor.getByLabel("Parent category", { exact: true }).selectOption({ label: parent });
+  await submit.click();
+  await expect(page.getByText(child, { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "New brand", exact: true }).click();
+  await editor.getByLabel("Name", { exact: true }).fill(brand);
+  await submit.click();
+  await expect(page.getByText(brand, { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Product catalog", exact: true }).click();
+  await page.getByRole("button", { name: "New product", exact: true }).click();
+  await page.getByLabel("Product name", { exact: true }).fill(product);
+  await page.getByLabel("Price (EUR)", { exact: true }).fill("15");
+  await page.getByRole("button", { name: "Assign from catalogue", exact: true }).click();
+  const choices = page.getByRole("group", { name: "Categories and brands" });
+  await choices.getByLabel("Category", { exact: true }).selectOption({ label: parent });
+  await choices.getByLabel("Subcategory", { exact: true }).selectOption({ label: child });
+  await choices.getByLabel("Brand", { exact: true }).selectOption({ label: brand });
+  await page.getByRole("button", { name: "Save product", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Edit product", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Back to inventory", exact: true }).click();
+  await page
+    .getByLabel("Subcategory", { exact: true })
+    .selectOption({ label: `${parent} / ${child}` });
+  await expect(page.getByText(product, { exact: true })).toBeVisible();
+  await expectNoHorizontalScroll(page);
+});

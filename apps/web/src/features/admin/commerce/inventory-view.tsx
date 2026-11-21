@@ -1,4 +1,5 @@
 import {
+  type InventoryClassificationAssignment,
   type PackageContent,
   type Product,
   type ProductSort,
@@ -31,6 +32,11 @@ import { formatMoney } from "~/lib/format";
 import { useInventoryLiveRevision } from "../calendar/live-provider";
 import { UnsavedGuard } from "../unsaved-guard";
 import { useDebounced } from "../use-debounced";
+import {
+  InventoryClassifications,
+  ProductClassificationFields,
+  useInventoryClassifications,
+} from "./inventory-classifications";
 import { type InventoryNavigation, inventoryTabs } from "./inventory-navigation";
 import { InventoryOrders } from "./inventory-orders";
 import { InventoryReceipts } from "./inventory-receipts";
@@ -75,6 +81,8 @@ export function InventoryView({
   const term = useDebounced(search.trim(), 200);
   const [category, setCategory] = useState("");
   const [brand, setBrand] = useState("");
+  const [subcategory, setSubcategory] = useState("");
+  const classifications = useInventoryClassifications(readInventory);
   const [resellable, setResellable] = useState("");
   const [active, setActive] = useState<"active" | "inactive" | "all">("active");
   const [page, setPage] = useState(1);
@@ -144,6 +152,7 @@ export function InventoryView({
     lowStock,
     category: category || undefined,
     brand: brand || undefined,
+    subcategoryId: subcategory || undefined,
     resellable: resellable ? resellable === "true" : undefined,
   };
   const catalog = { ...filters, sort, page, pageSize };
@@ -242,7 +251,9 @@ export function InventoryView({
                           ? "inventory.orders.title"
                           : value === "warehouses"
                             ? "inventory.warehouse.title"
-                            : "inventory.suppliers.title",
+                            : value === "classifications"
+                              ? "inventory.classification.title"
+                              : "inventory.suppliers.title",
               )}
             </button>
           ))}
@@ -278,6 +289,8 @@ export function InventoryView({
             onEditingChange={setInventoryEditor}
           />
         </Suspense>
+      ) : currentSection === "classifications" ? (
+        <InventoryClassifications canWrite={writeInventory} onEditingChange={setInventoryEditor} />
       ) : currentSection === "suppliers" && writeInventory ? (
         <InventorySuppliers
           onEditingChange={setInventoryEditor}
@@ -317,6 +330,26 @@ export function InventoryView({
                 setPage(1);
               }}
             />
+            {classifications.data?.entries.some((entry) => entry.parentId) && (
+              <SelectField
+                name="subcategoryId"
+                label={t("inventory.classification.subcategory")}
+                value={subcategory}
+                options={[
+                  { value: "", label: t("inventory.classification.allSubcategories") },
+                  ...classifications.data.entries
+                    .filter((entry) => entry.parentId)
+                    .map((entry) => ({
+                      value: entry.id,
+                      label: `${classifications.data.entries.find((parent) => parent.id === entry.parentId)?.name ?? ""} / ${entry.name}`,
+                    })),
+                ]}
+                onChange={(value) => {
+                  setSubcategory(value);
+                  setPage(1);
+                }}
+              />
+            )}
             <SelectField
               label={t("pos.brand")}
               value={brand}
@@ -687,6 +720,13 @@ function ProductEditor({
       : "",
   );
   const [resellable, setResellable] = useState(product?.resellable ?? true);
+  const catalogue = useInventoryClassifications();
+  const [catalogueMode, setCatalogueMode] = useState(
+    Boolean(product?.classification?.subcategoryId),
+  );
+  const [assignment, setAssignment] = useState<InventoryClassificationAssignment>(
+    product?.classification ?? { categoryId: null, subcategoryId: null, brandId: null },
+  );
   const [dirty, setDirty] = useState(false);
   const catalogDirty = useRef(false);
   const markCatalogDirty = () => {
@@ -729,8 +769,9 @@ function ProductEditor({
       const input = {
         name: values.name.trim(),
         ...(values.sku.trim() ? { sku: values.sku.trim() } : {}),
-        category: values.category.trim() || null,
-        brand: values.brand.trim() || null,
+        ...(catalogueMode
+          ? { classification: assignment }
+          : { category: values.category.trim() || null, brand: values.brand.trim() || null }),
         description: values.description.trim() || null,
         targetStock,
         resellable,
@@ -828,7 +869,36 @@ function ProductEditor({
         <h3 className="font-semibold sm:col-span-2">
           {t(product ? "inventory.edit" : "inventory.new")}
         </h3>
+        {catalogue.data && (
+          <div className="sm:col-span-2">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                markCatalogDirty();
+                setCatalogueMode(!catalogueMode);
+              }}
+            >
+              {t(
+                catalogueMode
+                  ? "inventory.classification.useLabels"
+                  : "inventory.classification.useCatalogue",
+              )}
+            </Button>
+          </div>
+        )}
+        {catalogueMode && catalogue.data && (
+          <ProductClassificationFields
+            entries={catalogue.data.entries}
+            value={assignment}
+            onChange={(value) => {
+              markCatalogDirty();
+              setAssignment(value);
+            }}
+          />
+        )}
         {fields.map(([field, label]) => {
+          if (catalogueMode && (field === "category" || field === "brand")) return null;
           const packField =
             field === "packageQuantity" || field === "packageUnit"
               ? packageFields[field]

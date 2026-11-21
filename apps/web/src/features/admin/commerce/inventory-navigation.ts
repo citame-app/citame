@@ -8,6 +8,7 @@ export const inventoryTabs = [
   "suppliers",
   "orders",
   "warehouses",
+  "classifications",
 ] as const;
 export type InventoryTab = (typeof inventoryTabs)[number];
 export type SupplierStatus = "all" | "active" | "inactive";

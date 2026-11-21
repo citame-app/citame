@@ -29,6 +29,7 @@ import {
   updateAppointment,
 } from "../appointments/service";
 import { updateClient } from "../clients/admin";
+import { saveInventoryClassification } from "../inventory/classifications";
 import { writePurchaseOrder } from "../inventory/orders";
 import { saveProductPhoto } from "../inventory/photo";
 import { receiveStockDocument, saveSupplier } from "../inventory/receipts";
@@ -368,6 +369,17 @@ export async function applyMutation(
         principal,
         ctx.generation,
         { movementId: id, reviewedOnHand },
+      );
+      return;
+    }
+    case "inventory.classification_save": {
+      const { id, ...input } = mutation.payload;
+      await saveInventoryClassification(
+        db,
+        id,
+        { ...input, generation: ctx.generation },
+        principal,
+        ctx.generation,
       );
       return;
     }

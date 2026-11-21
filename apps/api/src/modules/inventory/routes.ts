@@ -1,6 +1,7 @@
 import {
   createProductSchema,
   idSchema,
+  inventoryClassificationInputSchema,
   productExportQuerySchema,
   productFiltersSchema,
   productPhotoInputSchema,
@@ -26,6 +27,7 @@ import type { AppDeps } from "../../app";
 import { requirePermission } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
+import { listInventoryClassifications, saveInventoryClassification } from "./classifications";
 import { exportStockLedger, inventoryFacets, stockLedger } from "./ledger";
 import { getPurchaseOrder, listPurchaseOrders, writePurchaseOrder } from "./orders";
 import { readProductPhoto, saveProductPhoto } from "./photo";
@@ -65,6 +67,22 @@ export function inventoryRoutes(deps: AppDeps) {
         requirePermission(c.get("principal"), "writeInventory");
       await next();
     })
+    .get("/classifications", async (c) =>
+      c.json(await listInventoryClassifications(deps.db, c.get("principal"), generation), 200, {
+        "Cache-Control": "private, no-store",
+      }),
+    )
+    .put("/classifications/:id", async (c) =>
+      c.json(
+        await saveInventoryClassification(
+          deps.db,
+          parseOrThrow(idSchema, c.req.param("id")).toLowerCase(),
+          parseOrThrow(inventoryClassificationInputSchema, await readJson(c)),
+          c.get("principal"),
+          generation,
+        ),
+      ),
+    )
     .get("/warehouses", async (c) =>
       c.json(await listWarehouses(deps.db, c.get("principal"), generation), 200, {
         "Cache-Control": "private, no-store",

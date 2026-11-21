@@ -89,6 +89,7 @@ describe("route mapping", () => {
       "/admin/reviews/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/reply",
       "/admin/inventory/products?search=repair",
       "/admin/inventory/facets",
+      "/admin/inventory/classifications",
       "/admin/inventory/warehouses",
       "/admin/inventory/warehouse-stock?warehouseId=main",
       "/admin/inventory/stock-adjustments/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
