@@ -1,8 +1,9 @@
 use super::*;
 use review::Proposal;
+use sob_core::inventory::StockKind;
 use sob_core::warehouses::{
-    RecordedWarehouseTransfer, TransferLine, Warehouse, WarehouseBalance, WarehouseEdit,
-    WarehouseList, WarehouseStock, WarehouseTransfer,
+    RecordedWarehouseTransfer, TransferLine, Warehouse, WarehouseAdjustment, WarehouseBalance,
+    WarehouseEdit, WarehouseList, WarehouseLocation, WarehouseStock, WarehouseTransfer,
 };
 use uuid::Uuid;
 
@@ -19,6 +20,7 @@ struct PickedLine {
 }
 
 enum Draft {
+    Adjustment(AdjustmentEditor),
     Location {
         warehouse: WarehouseEdit,
         name: Entity<TextField>,
@@ -389,6 +391,11 @@ impl Root {
                     .store
                     .queue_warehouse_edit(&generation, edit, replaces.as_deref())
             }
+            Proposal::Adjustment(adjustment) => self.svc.store.queue_warehouse_adjustment(
+                &generation,
+                adjustment,
+                replaces.as_deref(),
+            ),
             Proposal::Transfer(transfer) => {
                 self.svc
                     .store
@@ -424,6 +431,8 @@ impl Root {
     }
 }
 
+use adjustments::AdjustmentEditor;
+mod adjustments;
 mod review;
 mod view;
 

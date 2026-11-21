@@ -111,10 +111,9 @@ export const inventoryReportSchema = z.object({
     })
     .optional(),
 });
-const movementFields = {
-  warehouseId: z
-    .union([z.literal("main"), idSchema.transform((id) => id.toLowerCase())])
-    .optional(),
+const movementLocation = z.union([z.literal("main"), idSchema.transform((id) => id.toLowerCase())]);
+const movementFields = z.strictObject({
+  warehouseId: movementLocation.optional(),
   quantity,
   reason: z
     .string()
@@ -122,20 +121,31 @@ const movementFields = {
     .min(3)
     .max(300)
     .refine((value) => !value.includes("\u0000")),
-  version: z.number().int().positive(),
+  version: z.number().int().positive().max(2147483646),
+});
+const movementReviewFields = movementFields.extend({
   idempotencyKey: idempotencyKeySchema,
   generation: syncGenerationSchema,
   actorUserId: z.string().min(1).max(200).optional(),
-};
+});
 export const stockMovementInputSchema = z.discriminatedUnion("kind", [
-  z
-    .object({ ...movementFields, kind: z.literal("receive"), quantity: quantity.positive() })
-    .strict(),
-  z
-    .object({ ...movementFields, kind: z.literal("consume"), quantity: quantity.positive() })
-    .strict(),
-  z.object({ ...movementFields, kind: z.literal("count") }).strict(),
+  movementReviewFields.extend({ kind: z.literal("receive"), quantity: quantity.positive() }),
+  movementReviewFields.extend({ kind: z.literal("consume"), quantity: quantity.positive() }),
+  movementReviewFields.extend({ kind: z.literal("count") }),
 ]);
+
+const movementProposalFields = movementFields.extend({
+  id: idSchema.transform((id) => id.toLowerCase()),
+  productId: idSchema.transform((id) => id.toLowerCase()),
+  warehouseId: movementLocation,
+  reviewedOnHand: quantity,
+});
+export const stockMovementSyncPayloadSchema = z.discriminatedUnion("kind", [
+  movementProposalFields.extend({ kind: z.literal("receive"), quantity: quantity.positive() }),
+  movementProposalFields.extend({ kind: z.literal("consume"), quantity: quantity.positive() }),
+  movementProposalFields.extend({ kind: z.literal("count") }),
+]);
+
 export const stockReturnSchema = z
   .object({
     checkoutLineId: idSchema,

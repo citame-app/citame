@@ -3325,6 +3325,7 @@ impl Root {
                 sob_core::purchase_orders::PURCHASE_ORDER_WRITE => Key::InventoryOrders,
                 sob_core::warehouses::SAVE => Key::InventoryWarehouses,
                 sob_core::warehouses::TRANSFER => Key::InventoryWarehouseTransfer,
+                sob_core::warehouses::ADJUST => Key::InventoryWarehouseAdjust,
                 _ => Key::ConflictOther,
             });
             let when = c
@@ -3578,7 +3579,9 @@ impl Root {
                         .when(
                             matches!(
                                 c.kind.as_str(),
-                                sob_core::warehouses::SAVE | sob_core::warehouses::TRANSFER
+                                sob_core::warehouses::SAVE
+                                    | sob_core::warehouses::TRANSFER
+                                    | sob_core::warehouses::ADJUST
                             ) && self.svc.store.can_queue_product_edits()
                                 && self.status.connectivity == Connectivity::Online,
                             |row| {

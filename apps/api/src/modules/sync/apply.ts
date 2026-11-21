@@ -32,7 +32,7 @@ import { updateClient } from "../clients/admin";
 import { writePurchaseOrder } from "../inventory/orders";
 import { saveProductPhoto } from "../inventory/photo";
 import { receiveStockDocument, saveSupplier } from "../inventory/receipts";
-import { createProduct, updateProduct } from "../inventory/service";
+import { createProduct, moveStock, updateProduct } from "../inventory/service";
 import { saveWarehouse, transferStock } from "../inventory/warehouses";
 import { createResource, setServiceResources, updateResource } from "../resources/catalog";
 import {
@@ -356,6 +356,18 @@ export async function applyMutation(
         { ...input, generation: ctx.generation },
         principal,
         ctx.generation,
+      );
+      return;
+    }
+    case "warehouse.adjust": {
+      const { id, productId, reviewedOnHand, ...input } = mutation.payload;
+      await moveStock(
+        db,
+        productId,
+        { ...input, generation: ctx.generation, idempotencyKey: id },
+        principal,
+        ctx.generation,
+        { movementId: id, reviewedOnHand },
       );
       return;
     }

@@ -41,6 +41,7 @@ import { exportInventory, inventoryReport } from "./report";
 import {
   createProduct,
   getProduct,
+  getStockAdjustment,
   listMovements,
   listProducts,
   moveStock,
@@ -112,6 +113,17 @@ export function inventoryRoutes(deps: AppDeps) {
           c.get("principal"),
           generation,
         ),
+      ),
+    )
+    .get("/stock-adjustments/:id", async (c) =>
+      c.json(
+        await getStockAdjustment(
+          deps.db,
+          parseOrThrow(idSchema, c.req.param("id")).toLowerCase(),
+          c.get("principal"),
+        ),
+        200,
+        { "Cache-Control": "private, no-store" },
       ),
     )
     .get("/facets", async (c) => c.json(await inventoryFacets(deps.db, c.get("principal"))))

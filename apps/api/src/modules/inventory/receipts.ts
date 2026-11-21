@@ -293,7 +293,7 @@ export async function receiveStockDocument(
         },
         current,
         generation,
-        receipt.id,
+        { receiptId: receipt.id },
       );
     }
     if (delivery) await recordOrderDelivery(tx, delivery, new Date());

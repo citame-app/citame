@@ -1,3 +1,4 @@
+use super::adjustments::adjustment_label;
 use super::*;
 use sob_core::warehouses::PendingWarehouseChange;
 
@@ -104,6 +105,9 @@ impl Root {
                         }
                     }),
                 ));
+        }
+        if let Some(Draft::Adjustment(form)) = &panel.draft {
+            return body.child(self.render_adjustment(form, panel, can_write, cx));
         }
         if let Some(Draft::Location { warehouse, name }) = &panel.draft {
             let active = warehouse.active;
@@ -331,6 +335,12 @@ impl Root {
                     .map(|entry| {
                         let details = match entry {
                             PendingWarehouseChange::Edit(edit) => edit.name,
+                            PendingWarehouseChange::Adjustment(adjustment) => format!(
+                                "{} · {} · {}",
+                                self.t(adjustment_label(adjustment.kind)),
+                                adjustment.quantity,
+                                adjustment.reason,
+                            ),
                             PendingWarehouseChange::Transfer(transfer) => {
                                 let units = transfer
                                     .lines
@@ -360,8 +370,25 @@ impl Root {
                     }),
             );
         }
+        let can_adjust = can_write
+            && panel.draft.is_none()
+            && panel
+                .stock
+                .as_ref()
+                .is_some_and(|stock| stock.warehouse.active);
         let transfer = matches!(panel.draft, Some(Draft::Transfer { .. }));
-        body.child(
+        body.when(
+            panel.query.location.is_some() && panel.draft.is_none(),
+            |body| {
+                body.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .child(self.t(Key::InventoryWarehouseSearchStock)),
+                )
+            },
+        )
+        .child(
             div()
                 .flex()
                 .gap_2()
@@ -408,6 +435,19 @@ impl Root {
                         product.reserved,
                         self.t(Key::InventoryWarehouseReserved),
                     )))
+                    .when(can_adjust, |row| {
+                        row.child(self.button(
+                            ("warehouse-adjust-stock", index),
+                            self.t(Key::InventoryWarehouseAdjust),
+                            Kind::Ghost,
+                            cx.listener({
+                                let balance = balance.clone();
+                                move |root, _, _, cx| {
+                                    root.start_warehouse_adjustment(balance.clone(), cx)
+                                }
+                            }),
+                        ))
+                    })
                     .when(transfer && available > 0, |row| {
                         row.child(self.button(
                             ("warehouse-add-line", index),

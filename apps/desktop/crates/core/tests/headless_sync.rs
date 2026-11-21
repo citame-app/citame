@@ -5598,3 +5598,174 @@ fn native_warehouse_transfers_survive_restart_and_reject_stale_stock() {
         .unwrap();
     assert_eq!(secondary.products[0].on_hand, 11);
 }
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_stock_adjustment_to_an_empty_warehouse_replays_and_reviews_after_restart() {
+    use sob_core::warehouses::{WarehouseAdjustment, WarehouseEdit, WarehouseLocation};
+    use uuid::Uuid;
+
+    let desktop = proxy_device();
+    let web = Device::sign_in();
+    let name = "ADJUST-BOX";
+    let product = web.rest_post(
+        "/admin/inventory/products",
+        json!({
+            "name": "Native warehouse adjustment fixture", "sku": name, "priceCents": 100,
+            "openingStock": 6, "idempotencyKey": Uuid::now_v7(),
+        }),
+    );
+    let product_id: Uuid = product["id"].as_str().unwrap().parse().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("adjustments.sqlite");
+    let mut store = Store::open(&path).unwrap();
+    sync::pull_all(&mut store, &*desktop.transport).unwrap();
+    let generation = store.verified_reviewed_generation().unwrap();
+    let list = desktop.transport.inventory_warehouses().unwrap();
+    store.cache_warehouse_list(&list).unwrap();
+    let warehouse = Uuid::now_v7();
+    store
+        .queue_warehouse_edit(
+            &generation,
+            WarehouseEdit {
+                id: warehouse,
+                name: "Warehouse for physical count".into(),
+                active: true,
+                version: 0,
+            },
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*desktop.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let list = desktop.transport.inventory_warehouses().unwrap();
+    let empty = desktop
+        .transport
+        .inventory_warehouse_stock(Some(warehouse), name, 1)
+        .unwrap();
+    assert_eq!(empty.products.len(), 1);
+    let balance = &empty.products[0];
+    assert_eq!(balance.on_hand, 0);
+    store.cache_warehouses(&list, &empty, name).unwrap();
+    let received = WarehouseAdjustment {
+        id: Uuid::now_v7(),
+        warehouse_id: WarehouseLocation(Some(warehouse)),
+        product_id,
+        kind: StockKind::Receive,
+        quantity: 5,
+        version: balance.version,
+        reviewed_on_hand: balance.on_hand,
+        reason: "Offline stock intake".into(),
+    };
+    store
+        .queue_warehouse_adjustment(&generation, received.clone(), None)
+        .unwrap();
+    drop(store);
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*desktop.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let movement = desktop
+        .transport
+        .inventory_recorded_adjustment(received.id)
+        .unwrap()
+        .unwrap();
+    assert!(received.matches(&movement));
+    let initial = desktop
+        .transport
+        .warehouse_product(Some(warehouse), product_id)
+        .unwrap();
+    assert_eq!(initial.products[0].on_hand, 5);
+    store
+        .cache_warehouse_review(&list, std::slice::from_ref(&initial))
+        .unwrap();
+    let mut counted = WarehouseAdjustment {
+        id: Uuid::now_v7(),
+        kind: StockKind::Count,
+        quantity: 2,
+        version: initial.products[0].version,
+        reviewed_on_hand: 5,
+        reason: "Physical count".into(),
+        ..received
+    };
+    store
+        .queue_warehouse_adjustment(&generation, counted.clone(), None)
+        .unwrap();
+    web.rest_post(
+        &format!("/admin/inventory/products/{product_id}/movements"),
+        json!({
+            "kind": "consume", "quantity": 1, "reason": "Concurrent use",
+            "warehouseId": warehouse, "version": counted.version,
+            "generation": generation, "idempotencyKey": Uuid::now_v7(),
+        }),
+    );
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*desktop.transport)
+            .unwrap()
+            .push
+            .rejected,
+        1
+    );
+    assert!(
+        desktop
+            .transport
+            .inventory_recorded_adjustment(counted.id)
+            .unwrap()
+            .is_none()
+    );
+    let conflict = store
+        .conflicts()
+        .unwrap()
+        .into_iter()
+        .find(|row| row.entity_id == counted.id.to_string())
+        .unwrap();
+    assert_eq!(conflict.reason, "conflict");
+    let refreshed = desktop
+        .transport
+        .warehouse_product(Some(warehouse), product_id)
+        .unwrap();
+    assert_eq!(refreshed.products[0].on_hand, 4);
+    counted.version = refreshed.products[0].version;
+    counted.reviewed_on_hand = refreshed.products[0].on_hand;
+    store.cache_warehouse_review(&list, &[refreshed]).unwrap();
+    store
+        .queue_warehouse_adjustment(&generation, counted.clone(), Some(&conflict.mutation_id))
+        .unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*desktop.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let movement = desktop
+        .transport
+        .inventory_recorded_adjustment(counted.id)
+        .unwrap()
+        .unwrap();
+    assert!(counted.matches(&movement));
+    let different_count = WarehouseAdjustment {
+        quantity: 3,
+        ..counted
+    };
+    assert!(!different_count.matches(&movement));
+    let secondary = desktop
+        .transport
+        .warehouse_product(Some(warehouse), product_id)
+        .unwrap();
+    let main = desktop
+        .transport
+        .warehouse_product(None, product_id)
+        .unwrap();
+    assert_eq!(secondary.products[0].on_hand, 2);
+    assert_eq!(main.products[0].on_hand, 6);
+}

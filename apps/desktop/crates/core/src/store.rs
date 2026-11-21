@@ -1580,6 +1580,7 @@ impl Store {
                                 | crate::purchase_orders::PURCHASE_ORDER_WRITE
                                 | crate::warehouses::SAVE
                                 | crate::warehouses::TRANSFER
+                                | crate::warehouses::ADJUST
                         )
                     {
                         Self::set_meta_at(
@@ -1609,6 +1610,7 @@ impl Store {
                                 | crate::purchase_orders::PURCHASE_ORDER_WRITE
                                 | crate::warehouses::SAVE
                                 | crate::warehouses::TRANSFER
+                                | crate::warehouses::ADJUST
                         )
                     {
                         Self::apply_inventory_access_at(&tx, false)?;

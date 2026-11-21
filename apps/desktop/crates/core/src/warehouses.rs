@@ -153,4 +153,91 @@ impl RecordedWarehouseTransfer {
 pub enum PendingWarehouseChange {
     Edit(WarehouseEdit),
     Transfer(WarehouseTransfer),
+    Adjustment(WarehouseAdjustment),
+}
+
+pub const ADJUST: &str = "warehouse.adjust";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct WarehouseLocation(pub Option<Uuid>);
+
+impl TryFrom<String> for WarehouseLocation {
+    type Error = uuid::Error;
+
+    fn try_from(key: String) -> Result<Self, Self::Error> {
+        if key == "main" {
+            return Ok(Self(None));
+        }
+        Ok(Self(Some(key.parse()?)))
+    }
+}
+
+impl From<WarehouseLocation> for String {
+    fn from(location: WarehouseLocation) -> Self {
+        location_key(location.0)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WarehouseAdjustment {
+    pub id: Uuid,
+    pub warehouse_id: WarehouseLocation,
+    pub product_id: Uuid,
+    pub kind: crate::inventory::StockKind,
+    pub quantity: u32,
+    pub version: u32,
+    pub reviewed_on_hand: u32,
+    pub reason: String,
+}
+
+impl WarehouseAdjustment {
+    pub(crate) fn normalize(&mut self) -> bool {
+        use crate::inventory::StockKind;
+        self.reason = crate::trim_like_javascript(&self.reason).to_owned();
+        let allowed_kind = match self.kind {
+            StockKind::Receive | StockKind::Consume => self.quantity > 0,
+            StockKind::Count => true,
+            _ => false,
+        };
+        allowed_kind
+            && self.quantity <= 999_999_999
+            && (3..=300).contains(&self.reason.encode_utf16().count())
+            && !self.reason.contains('\0')
+    }
+
+    pub(crate) fn fits(&self, balance: &WarehouseBalance) -> bool {
+        use crate::inventory::StockKind;
+        self.product_id == balance.product_id
+            && self.version == balance.version
+            && self.reviewed_on_hand == balance.on_hand
+            && match self.kind {
+                StockKind::Receive => balance
+                    .on_hand
+                    .checked_add(self.quantity)
+                    .is_some_and(|next| next <= 999_999_999),
+                StockKind::Consume => balance.available() >= self.quantity,
+                StockKind::Count => self.quantity >= balance.reserved,
+                _ => false,
+            }
+    }
+
+    pub fn matches(&self, row: &crate::inventory::StockMovement) -> bool {
+        use crate::inventory::StockKind;
+        row.id == self.id
+            && row.product_id == self.product_id
+            && row.warehouse_id == self.warehouse_id.0
+            && row.kind == self.kind
+            && row.reason == self.reason
+            && match self.kind {
+                StockKind::Receive => row.quantity_delta == i64::from(self.quantity),
+                StockKind::Consume => row.quantity_delta == -i64::from(self.quantity),
+                StockKind::Count => {
+                    row.quantity_delta
+                        == i64::from(self.quantity) - i64::from(self.reviewed_on_hand)
+                }
+                _ => false,
+            }
+    }
 }

@@ -1,7 +1,8 @@
 use super::*;
 use crate::warehouses::{
-    PendingWarehouseChange, RecordedWarehouseTransfer, SAVE, TRANSFER, WarehouseBalance,
-    WarehouseEdit, WarehouseList, WarehouseStock, WarehouseTransfer, location_key,
+    ADJUST, PendingWarehouseChange, RecordedWarehouseTransfer, SAVE, TRANSFER, WarehouseAdjustment,
+    WarehouseBalance, WarehouseEdit, WarehouseList, WarehouseStock, WarehouseTransfer,
+    location_key,
 };
 use serde::de::DeserializeOwned;
 use uuid::Uuid;
@@ -27,21 +28,17 @@ impl Store {
         }
         let mut statement = self
             .conn
-            .prepare("SELECT kind, payload FROM outbox WHERE kind IN (?1, ?2) ORDER BY seq")?;
-        let rows = statement.query_map(params![SAVE, TRANSFER], |row| {
+            .prepare("SELECT kind, payload FROM outbox WHERE kind IN (?1, ?2, ?3) ORDER BY seq")?;
+        let rows = statement.query_map(params![SAVE, TRANSFER, ADJUST], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?;
         rows.map(|row| {
             let (kind, payload) = row?;
-            if kind == SAVE {
-                Ok(PendingWarehouseChange::Edit(serde_json::from_str(
-                    &payload,
-                )?))
-            } else {
-                Ok(PendingWarehouseChange::Transfer(serde_json::from_str(
-                    &payload,
-                )?))
-            }
+            Ok(match kind.as_str() {
+                SAVE => PendingWarehouseChange::Edit(serde_json::from_str(&payload)?),
+                TRANSFER => PendingWarehouseChange::Transfer(serde_json::from_str(&payload)?),
+                _ => PendingWarehouseChange::Adjustment(serde_json::from_str(&payload)?),
+            })
         })
         .collect()
     }
@@ -208,29 +205,107 @@ impl Store {
                 }
             }
             for line in &transfer.lines {
-                let current = store.read_warehouse_cache::<WarehouseBalance>(
-                    &balance_key(transfer.source_id, line.product_id),
-                )?;
-                if !current.is_some_and(|row| row.version == line.version && row.available() >= line.quantity) {
+                let current = store.read_warehouse_cache::<WarehouseBalance>(&balance_key(
+                    transfer.source_id,
+                    line.product_id,
+                ))?;
+                if !current.is_some_and(|row| {
+                    row.version == line.version && row.available() >= line.quantity
+                }) {
                     return Err(CoreError::CatalogueVersionChanged);
                 }
-                if store.conn.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM outbox, json_each(outbox.payload, '$.lines') AS line
-                     WHERE outbox.kind IN (?1, 'stock.receipt') AND json_extract(line.value, '$.productId') = ?2)",
-                    params![TRANSFER, line.product_id.to_string()],
-                    |row| row.get::<_, bool>(0),
-                )? {
+                if store.has_pending_location_stock(line.product_id)? {
                     return Err(CoreError::CatalogueEditPending);
                 }
             }
             if let Some(previous) = replaces {
-                store.conflict(previous)?
+                store
+                    .conflict(previous)?
                     .filter(|row| row.kind == TRANSFER && row.entity_id == transfer.id.to_string())
                     .ok_or_else(|| CoreError::NotFound("warehouse proposal".into()))?;
                 store.resolve_conflict(previous, "resubmitted")?;
             }
-            store.enqueue(TRANSFER, &transfer.id.to_string(), serde_json::to_value(transfer)?)?;
+            store.enqueue(
+                TRANSFER,
+                &transfer.id.to_string(),
+                serde_json::to_value(transfer)?,
+            )?;
             Ok(())
+        })
+    }
+
+    pub(crate) fn has_pending_location_stock(&self, product: Uuid) -> Result<bool> {
+        Ok(self.pending_stock(product)?.is_some() || self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM outbox WHERE kind = ?1 AND json_extract(payload, '$.productId') = ?3
+             UNION ALL SELECT 1 FROM outbox, json_each(outbox.payload, '$.lines') AS line
+             WHERE outbox.kind IN (?2, 'stock.receipt') AND json_extract(line.value, '$.productId') = ?3)",
+            params![ADJUST, TRANSFER, product.to_string()],
+            |row| row.get(0),
+        )?)
+    }
+
+    pub fn queue_warehouse_adjustment(
+        &mut self,
+        generation: &str,
+        mut adjustment: WarehouseAdjustment,
+        replaces: Option<&str>,
+    ) -> Result<()> {
+        if !adjustment.normalize() {
+            return Err(CoreError::Invalid("Invalid stock adjustment".into()));
+        }
+        self.write_transaction(|store| {
+            let list = store.warehouses_for_write(generation)?;
+            let location = adjustment.warehouse_id.0;
+            if !list
+                .warehouses
+                .iter()
+                .any(|row| row.id == location && row.active)
+                || !store
+                    .read_warehouse_cache::<WarehouseBalance>(&balance_key(
+                        location,
+                        adjustment.product_id,
+                    ))?
+                    .is_some_and(|balance| adjustment.fits(&balance))
+            {
+                return Err(CoreError::CatalogueVersionChanged);
+            }
+            if store.has_pending_location_stock(adjustment.product_id)? {
+                return Err(CoreError::CatalogueEditPending);
+            }
+            let id = adjustment.id.to_string();
+            if let Some(previous) = replaces {
+                store
+                    .conflict(previous)?
+                    .filter(|row| row.kind == ADJUST && row.entity_id == id)
+                    .ok_or_else(|| CoreError::NotFound("stock adjustment".into()))?;
+                store.resolve_conflict(previous, "resubmitted")?;
+            }
+            store.enqueue(ADJUST, &id, serde_json::to_value(adjustment)?)?;
+            Ok(())
+        })
+    }
+
+    pub fn finish_warehouse_adjustment_review(
+        &mut self,
+        generation: &str,
+        conflict: &str,
+        recorded: &crate::inventory::StockMovement,
+    ) -> Result<()> {
+        self.write_transaction(|store| {
+            if store.verified_reviewed_generation()? != generation
+                || !store.can_read_cached_orders()
+            {
+                return Err(CoreError::CalendarGenerationChanged);
+            }
+            let row = store
+                .conflict(conflict)?
+                .filter(|row| row.kind == ADJUST)
+                .ok_or_else(|| CoreError::NotFound("stock adjustment".into()))?;
+            let proposal: WarehouseAdjustment = serde_json::from_value(row.payload)?;
+            if !proposal.matches(recorded) {
+                return Err(CoreError::CatalogueVersionChanged);
+            }
+            store.resolve_conflict(conflict, "recorded")
         })
     }
 

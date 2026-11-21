@@ -22,7 +22,7 @@ import {
   stockMovement,
   user,
 } from "@sob/db";
-import { and, asc, count, desc, eq, ilike, isNull, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
 import { loadPrincipal, type Principal } from "../../auth/principal";
@@ -321,7 +321,7 @@ export async function moveStock(
   reviewed: StockMovementInput,
   principal: Principal,
   executingGeneration: string,
-  receiptId?: string,
+  document: { receiptId?: string; movementId?: string; reviewedOnHand?: number } = {},
 ) {
   requirePermission(principal, "writeInventory");
   const { generation: reviewedGeneration, actorUserId, ...input } = reviewed;
@@ -333,6 +333,7 @@ export async function moveStock(
       "Refresh inventory before recording a movement",
     );
   return db.transaction(async (tx) => {
+    const current = await requireCurrentInventoryWriter(tx, principal.userId);
     const row = await productRow(tx, id, true);
     const requestHash = fingerprint(input);
     const [previous] = await tx
@@ -345,8 +346,10 @@ export async function moveStock(
         ),
       );
     if (previous) {
+      if (document.movementId && previous.id !== document.movementId)
+        throw new DomainError("invalid_state", "Stock movement identifier is already in use");
       replay(previous, requestHash);
-      return productView(row, principal);
+      return productView(row, current);
     }
     if (row.version !== input.version)
       throw new DomainError("version_conflict", "Stock changed; reload before adjusting");
@@ -356,6 +359,11 @@ export async function moveStock(
     const locationOnHand = warehouseId
       ? await readWarehouseQuantity(tx, id, warehouseId)
       : row.stockOnHand - row.stockAllocated;
+    if (document.reviewedOnHand !== undefined && document.reviewedOnHand !== locationOnHand)
+      throw new DomainError(
+        "version_conflict",
+        "The warehouse balance changed; review the adjustment",
+      );
     const warehouseName = warehouseId
       ? (await lockActiveWarehouses(tx, [warehouseId])).get(warehouseId)
       : undefined;
@@ -382,8 +390,9 @@ export async function moveStock(
     if (!updated) throw new Error("Stock update failed");
     if (warehouseId && delta > 0) await writeWarehouseQuantity(tx, id, warehouseId, nextAtLocation);
     await tx.insert(stockMovement).values({
+      ...(document.movementId ? { id: document.movementId } : {}),
       productId: id,
-      receiptId,
+      receiptId: document.receiptId,
       warehouseId,
       warehouseName,
       quantityDelta: delta,
@@ -392,10 +401,10 @@ export async function moveStock(
       unitCostCents: row.costCents,
       idempotencyKey: input.idempotencyKey,
       requestHash,
-      createdBy: principal.userId,
+      createdBy: current.userId,
     });
     await recordAudit(tx, {
-      actorUserId: principal.userId,
+      actorUserId: current.userId,
       action: "inventory.stock_moved",
       entity: "retail_product",
       entityId: id,
@@ -403,10 +412,28 @@ export async function moveStock(
     });
     return productView(
       warehouseId ? { ...updated, stockAllocated: row.stockAllocated + delta } : updated,
-      principal,
+      current,
     );
   });
 }
+export async function getStockAdjustment(db: Database, id: string, principal: Principal) {
+  requirePermission(principal, "readInventory");
+  const [row] = await db
+    .select()
+    .from(stockMovement)
+    .where(
+      and(
+        eq(stockMovement.id, id),
+        inArray(stockMovement.kind, ["receive", "consume", "count"]),
+        isNull(stockMovement.receiptId),
+        isNull(stockMovement.checkoutLineId),
+        isNull(stockMovement.transferId),
+      ),
+    );
+  if (!row) throw new DomainError("not_found", "Stock adjustment not found");
+  return movementView(row, permissionsFor(principal.role, principal.accessPreset).readCosts);
+}
+
 export async function listMovements(
   db: Database,
   id: string,

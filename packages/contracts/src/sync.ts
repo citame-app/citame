@@ -3,7 +3,12 @@ import { appointmentSchema, createAppointmentBaseSchema } from "./appointments";
 import { calendarAppointmentSchema } from "./calendar";
 import { idSchema, instantSchema, LIMITS, localDateSchema, syncGenerationSchema } from "./common";
 import { dateShiftRangesSchema } from "./date-shifts";
-import { createProductSchema, productPhotoInputSchema, updateProductSchema } from "./inventory";
+import {
+  createProductSchema,
+  productPhotoInputSchema,
+  stockMovementSyncPayloadSchema,
+  updateProductSchema,
+} from "./inventory";
 import { purchaseOrderSyncPayloadSchema } from "./inventory-orders";
 import { stockReceiptInputSchema, supplierInputSchema } from "./inventory-receipts";
 import { stockTransferSyncPayloadSchema, warehouseInputSchema } from "./inventory-warehouses";
@@ -332,6 +337,12 @@ const warehouseTransfer = z.object({
   payload: stockTransferSyncPayloadSchema,
 });
 
+const warehouseAdjustment = z.object({
+  ...envelope,
+  kind: z.literal("warehouse.adjust"),
+  payload: stockMovementSyncPayloadSchema,
+});
+
 const staffUpdate = z.object({
   ...envelope,
   kind: z.literal("staff.update"),
@@ -377,6 +388,7 @@ export const syncMutationSchema = z.discriminatedUnion("kind", [
   purchaseOrderWrite,
   warehouseSave,
   warehouseTransfer,
+  warehouseAdjustment,
   staffUpdate,
   settingsUpdate,
 ]);

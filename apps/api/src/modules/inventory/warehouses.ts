@@ -123,7 +123,7 @@ export async function warehouseInventory(
   requirePermission(principal, "readInventory");
   return db.transaction(
     async (tx) => {
-      const { page, pageSize, search, warehouseId, productId, availableOnly } = query;
+      const { page, pageSize, search, warehouseId, productId, availableOnly, includeEmpty } = query;
       const term = `%${search.replace(/[\\%_]/g, "\\$&")}%`;
       const [warehouse] =
         warehouseId === "main"
@@ -137,7 +137,7 @@ export async function warehouseInventory(
       const where = and(
         productId
           ? eq(retailProduct.id, productId)
-          : warehouse.id === null
+          : warehouse.id === null || (includeEmpty && !availableOnly)
             ? undefined
             : gt(warehouseStock.quantity, 0),
         availableOnly && warehouse.id === null

@@ -458,6 +458,11 @@ impl Store {
                             "The delivery date cannot be in the future".into(),
                         ));
                     }
+                    for line in &receipt.lines {
+                        if store.has_pending_location_stock(line.product_id)? {
+                            return Err(CoreError::CatalogueEditPending);
+                        }
+                    }
                     let products = store.reviewed_products()?;
                     let valid = receipt.lines.iter().all(|line| {
                         products.iter().any(|product| {

@@ -1,21 +1,28 @@
 use super::*;
 use sob_core::http::HttpTransport;
-use sob_core::warehouses::{SAVE, TRANSFER};
+use sob_core::warehouses::{ADJUST, SAVE, TRANSFER};
 
 pub(super) enum Proposal {
     Location(WarehouseEdit),
+    Adjustment(WarehouseAdjustment),
     Transfer(WarehouseTransfer),
+}
+
+enum RecordedChange {
+    Transfer(RecordedWarehouseTransfer),
+    Adjustment(sob_core::inventory::StockMovement),
 }
 
 struct Review {
     list: WarehouseList,
     balances: Vec<WarehouseStock>,
-    recorded: Option<RecordedWarehouseTransfer>,
+    recorded: Option<RecordedChange>,
 }
 
 impl Proposal {
     pub(super) fn from_draft(draft: &Draft, cx: &App) -> Option<Self> {
         match draft {
+            Draft::Adjustment(form) => form.proposal(cx).map(Self::Adjustment),
             Draft::Location { warehouse, name } => {
                 let mut edit = warehouse.clone();
                 edit.name = name.read(cx).text().to_owned();
@@ -53,6 +60,18 @@ impl Proposal {
         let list = transport.inventory_warehouses()?;
         let (recorded, balances) = match self {
             Self::Location(_) => (None, Vec::new()),
+            Self::Adjustment(adjustment) => {
+                let recorded = transport.inventory_recorded_adjustment(adjustment.id)?;
+                let balances = if recorded.is_some() {
+                    Vec::new()
+                } else {
+                    vec![
+                        transport
+                            .warehouse_product(adjustment.warehouse_id.0, adjustment.product_id)?,
+                    ]
+                };
+                (recorded.map(RecordedChange::Adjustment), balances)
+            }
             Self::Transfer(transfer) => {
                 let recorded = transport.inventory_recorded_transfer(transfer.id)?;
                 let balances = if recorded.is_some() {
@@ -66,7 +85,7 @@ impl Proposal {
                         })
                         .collect::<Result<_, _>>()?
                 };
-                (recorded, balances)
+                (recorded.map(RecordedChange::Transfer), balances)
             }
         };
         Ok(Review {
@@ -160,6 +179,9 @@ impl Root {
             return;
         }
         let proposal = match conflict.kind.as_str() {
+            ADJUST => serde_json::from_value(conflict.payload)
+                .ok()
+                .map(Proposal::Adjustment),
             SAVE => serde_json::from_value(conflict.payload)
                 .ok()
                 .map(Proposal::Location),
@@ -277,20 +299,35 @@ impl Root {
     ) {
         let generation = review.list.generation.clone();
         if let Some(recorded) = review.recorded {
-            let confirmed = match replaces.as_deref() {
-                Some(id) => self
-                    .svc
-                    .store
-                    .finish_warehouse_transfer_review(&generation, id, &recorded)
-                    .is_ok(),
-                None => {
-                    matches!(proposal, Proposal::Transfer(ref transfer) if recorded.matches(transfer))
+            let (confirmed, notice) = match (recorded, proposal) {
+                (RecordedChange::Transfer(recorded), Proposal::Transfer(transfer)) => {
+                    let confirmed = match replaces.as_deref() {
+                        Some(id) => self
+                            .svc
+                            .store
+                            .finish_warehouse_transfer_review(&generation, id, &recorded)
+                            .is_ok(),
+                        None => recorded.matches(&transfer),
+                    };
+                    (confirmed, Key::InventoryWarehouseRecorded)
                 }
+                (RecordedChange::Adjustment(recorded), Proposal::Adjustment(adjustment)) => {
+                    let confirmed = match replaces.as_deref() {
+                        Some(id) => self
+                            .svc
+                            .store
+                            .finish_warehouse_adjustment_review(&generation, id, &recorded)
+                            .is_ok(),
+                        None => adjustment.matches(&recorded),
+                    };
+                    (confirmed, Key::InventoryWarehouseAdjustRecorded)
+                }
+                _ => (false, Key::InventoryWarehouseChanged),
             };
             self.reload(cx);
             if let Some(panel) = self.warehouse_panel() {
                 panel.notice = Some(if confirmed {
-                    Key::InventoryWarehouseRecorded
+                    notice
                 } else {
                     Key::InventoryWarehouseChanged
                 });
@@ -309,6 +346,19 @@ impl Root {
             return;
         };
         let draft = match proposal {
+            Proposal::Adjustment(adjustment) => {
+                let Some(balance) = review
+                    .balances
+                    .iter()
+                    .flat_map(|page| &page.products)
+                    .find(|balance| balance.product_id == adjustment.product_id)
+                else {
+                    panel.notice = Some(Key::InventoryWarehouseChanged);
+                    return;
+                };
+                panel.query.location = adjustment.warehouse_id.0;
+                Draft::Adjustment(AdjustmentEditor::reviewed(adjustment, balance.clone(), cx))
+            }
             Proposal::Location(mut edit) => {
                 edit.version = review
                     .list

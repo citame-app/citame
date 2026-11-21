@@ -91,6 +91,7 @@ describe("route mapping", () => {
       "/admin/inventory/facets",
       "/admin/inventory/warehouses",
       "/admin/inventory/warehouse-stock?warehouseId=main",
+      "/admin/inventory/stock-adjustments/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
       "/admin/inventory/transfers/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
       "/admin/inventory/suppliers?search=A%26B&page=2",
       "/admin/inventory/suppliers/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",

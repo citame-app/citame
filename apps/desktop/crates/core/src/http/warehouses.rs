@@ -49,6 +49,27 @@ impl HttpTransport {
         Ok(Some(document))
     }
 
+    pub fn inventory_recorded_adjustment(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<crate::inventory::StockMovement>, TransportError> {
+        let response = self.get(
+            &self.agent,
+            &format!("/admin/inventory/stock-adjustments/{id}"),
+            None,
+        )?;
+        if response.status().as_u16() == 404 {
+            return Ok(None);
+        }
+        let movement: crate::inventory::StockMovement = read_response(response, false)?;
+        if movement.id != id {
+            return Err(TransportError::Server(
+                "Unexpected stock adjustment acknowledgement".into(),
+            ));
+        }
+        Ok(Some(movement))
+    }
+
     fn read_location_stock(
         &self,
         warehouse_id: Option<Uuid>,
@@ -63,6 +84,8 @@ impl HttpTransport {
             .append_pair("page", &page.to_string());
         if let Some(id) = product_id {
             query.append_pair("productId", &id.to_string());
+        } else if warehouse_id.is_some() && !search.is_empty() {
+            query.append_pair("includeEmpty", "1");
         }
         let query = query.finish();
         let result: WarehouseStock = read_response(

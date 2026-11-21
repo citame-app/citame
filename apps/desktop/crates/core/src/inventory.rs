@@ -366,6 +366,7 @@ pub struct StockMovement {
     pub quantity_delta: i64,
     pub reason: String,
     pub receipt_id: Option<Uuid>,
+    pub warehouse_id: Option<Uuid>,
     pub warehouse_name: Option<String>,
     pub transfer_id: Option<Uuid>,
     pub created_at: chrono::DateTime<chrono::Utc>,
