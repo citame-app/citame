@@ -45,7 +45,7 @@ export function AccountingView({
           <ErrorState error={staff.error} onRetry={() => void staff.refetch()} />
         ) : (
           <SelectField
-            label={t("accounting.staff")}
+            label={t("accounting.commissionStaff")}
             value={selected}
             options={[
               { value: "", label: t("accounting.pick") },

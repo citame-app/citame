@@ -47,7 +47,7 @@ for (const scheme of ["light", "dark"] as const) {
         .click();
       await page
         .getByRole("region", { name: "Financial reports & commissions", exact: true })
-        .getByLabel("Professional", { exact: true })
+        .getByLabel("Professional for commissions", { exact: true })
         .selectOption(staffId);
       await page.getByLabel("Service commission (%)", { exact: true }).fill("25");
       await page.getByLabel("Product commission (%)", { exact: true }).fill("10");
@@ -76,7 +76,7 @@ for (const scheme of ["light", "dark"] as const) {
         .click();
       await page
         .getByRole("region", { name: "Financial reports & commissions", exact: true })
-        .getByLabel("Professional", { exact: true })
+        .getByLabel("Professional for commissions", { exact: true })
         .selectOption(staffId);
       const panel = page.getByRole("region", { name: "Commissions", exact: true });
       await expect(
