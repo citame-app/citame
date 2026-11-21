@@ -679,6 +679,13 @@ impl Root {
                             Kind::Ghost,
                             Root::open_booking_links,
                             cx,
+                        ))
+                        .child(self.marketing_button(
+                            "marketing-promotions",
+                            Key::PromoTitle,
+                            Kind::Ghost,
+                            Root::open_promotions,
+                            cx,
                         )),
                 )
                 .child(div().flex().gap_2().child(desk.search.clone()).child(
@@ -954,13 +961,6 @@ impl Root {
                                 Kind::Primary
                             },
                             Root::execute_marketing_action,
-                            cx,
-                        ))
-                        .child(self.marketing_button(
-                            "marketing-promotions",
-                            Key::PromoTitle,
-                            Kind::Ghost,
-                            Root::open_promotions,
                             cx,
                         ))
                     })

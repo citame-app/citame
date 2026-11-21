@@ -69,6 +69,14 @@ pub struct SavePromotion {
     pub terms: Terms,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum PromotionWriteError {
+    #[error("promotion changed")]
+    Conflict,
+    #[error(transparent)]
+    Transport(#[from] crate::sync::TransportError),
+}
+
 impl Terms {
     pub fn valid(&self) -> bool {
         let code = self.code.as_bytes();

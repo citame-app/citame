@@ -70,7 +70,6 @@ export async function savePromotion(
   allowIdenticalReplay = false,
 ) {
   requirePermission(principal, "editCatalog");
-  if (input.serviceIds.length) await getServicesByIds(db, input.serviceIds);
   const { version, code, name, ...raw } = input;
   const terms = {
     ...raw,
@@ -98,6 +97,7 @@ export async function savePromotion(
           return promotionView(current);
         if (current.version !== version)
           throw new DomainError("version_conflict", "Promotion changed; review the current terms");
+        if (input.serviceIds.length) await getServicesByIds(tx, input.serviceIds);
         [row] = await tx
           .update(promotion)
           .set({ code, name, terms, version: current.version + 1 })
@@ -121,6 +121,7 @@ export async function savePromotion(
             );
           return promotionView(existing);
         }
+        if (input.serviceIds.length) await getServicesByIds(tx, input.serviceIds);
         [row] = await tx
           .insert(promotion)
           .values({ code, name, terms, createdBy: principal.userId })

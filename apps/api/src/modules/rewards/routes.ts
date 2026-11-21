@@ -59,14 +59,14 @@ export function rewardsAdminRoutes({ db, config }: AppDeps) {
       );
     })
     .put("/promotions/:id", async (c) => {
-      const reviewed = promotionGeneration(c, config.syncReplicaGeneration);
+      const allowIdenticalReplay = promotionGeneration(c, config.syncReplicaGeneration);
       return c.json(
         await savePromotion(
           db,
           parseOrThrow(idSchema, c.req.param("id")),
           parseOrThrow(promotionInputSchema, await readJson(c)),
           c.get("principal"),
-          reviewed,
+          allowIdenticalReplay,
         ),
       );
     })

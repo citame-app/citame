@@ -291,6 +291,46 @@ test("promotion retries preserve the same code and time ranges use instants rath
   ).toBe(400);
 });
 
+test("desktop can confirm the exact promotion save after its scoped service was disabled", async () => {
+  const path = "/admin/rewards/promotions";
+  const body = {
+    code: "VISIBLE_SCOPE",
+    name: "Reviewed service promotion",
+    kind: "fixed",
+    value: 500,
+    serviceIds: [f.haircutId],
+  };
+  const save = (
+    pathname: string,
+    method: string,
+    payload: unknown,
+    generation = t.config.syncReplicaGeneration,
+  ) =>
+    t.app.request(pathname, {
+      method,
+      headers: {
+        origin: "http://localhost:3000",
+        cookie: owner.cookie,
+        "content-type": "application/json",
+        "x-citame-generation": generation,
+      },
+      body: JSON.stringify(payload),
+    });
+  const created = await save(path, "POST", body);
+  expect(created.status, await created.clone().text()).toBe(201);
+  const original = (await created.json()) as { id: string; version: number };
+  const detail = `${path}/${original.id}`;
+  const edit = { ...body, value: 600, version: original.version };
+  expect((await save(detail, "PUT", edit)).status).toBe(200);
+  await t.db.update(service).set({ active: false }).where(eq(service.id, f.haircutId));
+  const replay = await save(detail, "PUT", edit);
+  expect(replay.status, await replay.clone().text()).toBe(200);
+  expect(await replay.json()).toMatchObject({ version: original.version + 1, value: 600 });
+  expect((await save(detail, "PUT", edit, "old-replica")).status).toBe(409);
+  const fresh = await save(detail, "PUT", { ...edit, value: 700, version: original.version + 1 });
+  expect(fresh.status).toBe(404);
+});
+
 test("fully point-funded receipts have an explicit manager return without a fictitious cash refund", async () => {
   const p = await call(owner, "/admin/rewards/policy", "PUT", {
     ...policy,

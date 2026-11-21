@@ -1,5 +1,6 @@
 use super::*;
 use sob_core::billing::parse_reviewed_amount;
+use sob_core::promotions::PromotionWriteError;
 use sob_core::promotions::{
     Discount, Eligible, Promotion, PromotionsPage, SavePromotion, Terms, Timing, local_input,
     parse_instant, parse_minute,
@@ -8,6 +9,16 @@ use sob_core::reports::decimal_amount;
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
+
+const DAYS: [chrono::Weekday; 7] = [
+    chrono::Weekday::Mon,
+    chrono::Weekday::Tue,
+    chrono::Weekday::Wed,
+    chrono::Weekday::Thu,
+    chrono::Weekday::Fri,
+    chrono::Weekday::Sat,
+    chrono::Weekday::Sun,
+];
 
 const FIELDS: [Key; 12] = [
     Key::PromoName,
@@ -41,6 +52,8 @@ pub(super) struct PromoDesk {
 
 struct Editor {
     initial: Option<Promotion>,
+    time_zone: chrono_tz::Tz,
+    generation: String,
     fields: [Entity<TextField>; 12],
     kind: Discount,
     active: bool,
@@ -85,6 +98,7 @@ impl Editor {
     fn new(
         initial: Option<Promotion>,
         tz: chrono_tz::Tz,
+        generation: String,
         service_placeholder: &'static str,
         cx: &mut Context<Root>,
     ) -> Self {
@@ -137,12 +151,14 @@ impl Editor {
                 .unwrap_or_default(),
             service_search,
             initial,
+            time_zone: tz,
+            generation,
             pending: None,
             stale: false,
         }
     }
 
-    fn submission(&self, generation: String, tz: chrono_tz::Tz, cx: &App) -> Option<SavePromotion> {
+    fn submission(&self, generation: String, cx: &App) -> Option<SavePromotion> {
         let field = |index: usize| self.fields[index].read(cx).text().trim();
         let initial = self.initial.as_ref();
         let timing = if self.timed {
@@ -167,8 +183,16 @@ impl Editor {
             maximum_discount_cents: optional_amount(field(4))?,
             usage_limit: optional_number(field(5))?,
             per_client_limit: optional_number(field(6))?,
-            starts_at: parse_instant(tz, field(7), initial.and_then(|p| p.terms.starts_at))?,
-            ends_at: parse_instant(tz, field(8), initial.and_then(|p| p.terms.ends_at))?,
+            starts_at: parse_instant(
+                self.time_zone,
+                field(7),
+                initial.and_then(|p| p.terms.starts_at),
+            )?,
+            ends_at: parse_instant(
+                self.time_zone,
+                field(8),
+                initial.and_then(|p| p.terms.ends_at),
+            )?,
             eligible_kinds: self.kinds.iter().copied().collect(),
             service_ids: self.service_ids.iter().copied().collect(),
             active: self.active,
@@ -214,10 +238,7 @@ impl Root {
         let Some(desk) = self.promotion_desk() else {
             return;
         };
-        if desk.editor.is_some()
-            || desk.loading
-            || (!reconnected && Instant::now() < desk.refresh_after)
-        {
+        if desk.saving || desk.loading || (!reconnected && Instant::now() < desk.refresh_after) {
             return;
         }
         let page = desk.list.as_ref().map_or(1, |list| list.pagination.page);
@@ -234,7 +255,10 @@ impl Root {
         };
         let generation = self.svc.store.verified_reviewed_generation().ok();
         let session = self.svc.session.clone();
-        let Some(desk) = self.promotion_desk().filter(|desk| !desk.loading) else {
+        let Some(desk) = self
+            .promotion_desk()
+            .filter(|desk| !desk.loading && !desk.saving)
+        else {
             return;
         };
         if use_search {
@@ -248,7 +272,9 @@ impl Root {
             return;
         }
         desk.loading = true;
-        desk.error = None;
+        if desk.editor.is_none() {
+            desk.error = None;
+        }
         let identity = desk.identity.clone();
         cx.notify();
         cx.spawn(async move |root, cx| {
@@ -274,10 +300,19 @@ impl Root {
                         desk.list = Some(list);
                         desk.generation = generation;
                     }
+                    Err(TransportError::Forbidden(_) | TransportError::Unauthorized) => {
+                        desk.list = None;
+                        desk.editor = None;
+                        desk.generation = None;
+                        desk.confirm_exit = false;
+                        desk.error = Some(Key::PromoLoadFailed);
+                    }
                     Err(_) => {
                         desk.list = None;
                         desk.generation = None;
-                        desk.error = Some(Key::PromoLoadFailed);
+                        if desk.editor.is_none() {
+                            desk.error = Some(Key::PromoLoadFailed);
+                        }
                     }
                 }
                 cx.notify();
@@ -293,11 +328,13 @@ impl Root {
         let Some(desk) = self.promotion_desk().filter(|desk| !desk.loading) else {
             return;
         };
-        if generation.is_none() || desk.generation != generation {
-            desk.error = Some(Key::BookingIntakeRestore);
+        let Some(generation) =
+            generation.filter(|generation| desk.generation.as_ref() == Some(generation))
+        else {
+            desk.error = Some(Key::PromoRestore);
             cx.notify();
             return;
-        }
+        };
         let initial = id
             .and_then(|id| {
                 desk.list
@@ -308,7 +345,13 @@ impl Root {
         if id.is_some() && initial.is_none() {
             return;
         }
-        desk.editor = Some(Editor::new(initial, zone, service_placeholder, cx));
+        desk.editor = Some(Editor::new(
+            initial,
+            zone,
+            generation,
+            service_placeholder,
+            cx,
+        ));
         desk.saved = false;
         desk.error = None;
         cx.notify();
@@ -327,24 +370,30 @@ impl Root {
         let zone = self.tz;
         let Some(desk) = self
             .promotion_desk()
-            .filter(|d| !d.saving && !d.confirm_exit)
+            .filter(|d| !d.loading && !d.saving && !d.confirm_exit)
         else {
             return;
         };
         let Some(editor) = desk.editor.as_mut().filter(|editor| !editor.stale) else {
             return;
         };
-        let Some(generation) = generation.filter(|g| desk.generation.as_ref() == Some(g)) else {
+        if editor.time_zone != zone && editor.pending.is_none() {
+            editor.stale = true;
+            desk.error = Some(Key::PromoTimeZoneChanged);
+            cx.notify();
+            return;
+        }
+        let Some(generation) = generation.filter(|g| &editor.generation == g) else {
             editor.stale = true;
             editor.pending = None;
-            desk.error = Some(Key::BookingIntakeRestore);
+            desk.error = Some(Key::PromoRestore);
             cx.notify();
             return;
         };
         let Some(packet) = editor
             .pending
             .clone()
-            .or_else(|| editor.submission(generation, zone, cx))
+            .or_else(|| editor.submission(generation, cx))
         else {
             desk.error = Some(Key::PromoInvalid);
             cx.notify();
@@ -383,16 +432,25 @@ impl Root {
                             return;
                         };
                         desk.error = Some(match error {
-                            TransportError::ReplicaGenerationChanged => {
+                            PromotionWriteError::Conflict => {
                                 editor.pending = None;
                                 editor.stale = true;
-                                Key::BookingIntakeRestore
+                                Key::PromoConflict
                             }
-                            TransportError::Offline(_)
-                            | TransportError::Server(_)
-                            | TransportError::Unauthorized
-                            | TransportError::RateLimited(_) => Key::MarketingUnconfirmed,
-                            TransportError::Forbidden(_) => {
+                            PromotionWriteError::Transport(
+                                TransportError::ReplicaGenerationChanged,
+                            ) => {
+                                editor.pending = None;
+                                editor.stale = true;
+                                Key::PromoRestore
+                            }
+                            PromotionWriteError::Transport(
+                                TransportError::Offline(_)
+                                | TransportError::Server(_)
+                                | TransportError::Unauthorized
+                                | TransportError::RateLimited(_),
+                            ) => Key::PromoUnconfirmed,
+                            PromotionWriteError::Transport(TransportError::Forbidden(_)) => {
                                 desk.editor = None;
                                 desk.list = None;
                                 Key::PromoLoadFailed
@@ -513,12 +571,25 @@ impl Root {
                 ))
                 .when(!terms.active, |card| card.child(self.t(Key::PromoInactive)))
                 .when_some(terms.timing.as_ref(), |card, timing| {
+                    let days = timing
+                        .weekdays
+                        .iter()
+                        .filter_map(|day| {
+                            day.checked_sub(1)
+                                .and_then(|index| DAYS.get(usize::from(index)))
+                        })
+                        .map(|day| i18n::weekday_short(self.locale, *day))
+                        .collect::<Vec<_>>()
+                        .join(", ");
                     card.child(format!(
-                        "{} · {}–{}",
-                        self.t(Key::PromoTimed),
+                        "{days} · {}–{} · {}",
                         clock_label(timing.start_minute),
-                        clock_label(timing.end_minute)
+                        clock_label(timing.end_minute),
+                        self.tz
                     ))
+                    .when_some(timing.last_minute_hours, |card, hours| {
+                        card.child(format!("{} · {hours}", self.t(Key::PromoLead)))
+                    })
                 })
                 .when(ready, |card| {
                     card.child(self.marketing_button(
@@ -591,7 +662,7 @@ impl Root {
         if desk.confirm_exit {
             return div()
                 .child(self.t(if editor.pending.is_some() {
-                    Key::MarketingExitCheck
+                    Key::PromoExitCheck
                 } else {
                     Key::MarketingDiscardWarning
                 }))
@@ -681,19 +752,10 @@ impl Root {
                 cx,
             ))
             .when(editor.timed, |body| {
-                let days = [
-                    chrono::Weekday::Mon,
-                    chrono::Weekday::Tue,
-                    chrono::Weekday::Wed,
-                    chrono::Weekday::Thu,
-                    chrono::Weekday::Fri,
-                    chrono::Weekday::Sat,
-                    chrono::Weekday::Sun,
-                ];
                 body.child(self.label(Key::PromoDays))
-                    .child(self.tz.to_string())
+                    .child(editor.time_zone.to_string())
                     .child(div().flex().flex_wrap().gap_2().children(
-                        days.into_iter().enumerate().map(|(index, day)| {
+                        DAYS.into_iter().enumerate().map(|(index, day)| {
                             let n = index as u8 + 1;
                             self.promo_toggle(
                                 ("promo-day", index),
@@ -795,5 +857,36 @@ impl Root {
 fn flip<T: Ord + Copy>(values: &mut BTreeSet<T>, value: T) {
     if !values.remove(&value) {
         values.insert(value);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[gpui::test]
+    async fn promotions_open_from_marketing_without_a_campaign(cx: &mut gpui::TestAppContext) {
+        let (_directory, config) = crate::root::tests::desk();
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let mut root = Root::new(config, window, cx);
+            root.svc.stop_sync();
+            root.status.connectivity = Connectivity::Offline;
+            root.open_marketing(cx);
+            root.status.connectivity = Connectivity::Online;
+            root
+        });
+        cx.simulate_resize(gpui::size(px(1100.), px(720.)));
+        cx.run_until_parked();
+        let link = cx.debug_bounds("marketing-promotions").unwrap().center();
+        cx.simulate_click(link, Default::default());
+        cx.run_until_parked();
+        root.update(cx, |root, _| {
+            assert!(root.promotion_desk().is_some());
+            assert!(root.svc.store.outbox(5).unwrap().is_empty());
+        });
+        let back = cx.debug_bounds("back-from-promotions").unwrap().center();
+        cx.simulate_click(back, Default::default());
+        cx.run_until_parked();
+        root.update(cx, |root, _| assert!(root.promotion_desk().is_none()));
     }
 }

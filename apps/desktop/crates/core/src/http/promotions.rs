@@ -1,5 +1,5 @@
 use super::*;
-use crate::promotions::{Promotion, PromotionsPage, SavePromotion};
+use crate::promotions::{Promotion, PromotionWriteError, PromotionsPage, SavePromotion};
 
 const PATH: &str = "/admin/rewards/promotions";
 
@@ -19,7 +19,7 @@ impl HttpTransport {
         )
     }
 
-    pub fn save_promotion(&self, save: &SavePromotion) -> Result<Promotion, TransportError> {
+    pub fn save_promotion(&self, save: &SavePromotion) -> Result<Promotion, PromotionWriteError> {
         #[derive(serde::Serialize)]
         struct Payload<'a> {
             version: Option<u32>,
@@ -44,6 +44,19 @@ impl HttpTransport {
             .content_type("application/json")
             .send(body)
             .map_err(|error| TransportError::Offline(error.to_string()))?;
-        read_response_with(response, review_transport_error)
+        read_response_with(response, |status, retry_after, body| {
+            if status == 409
+                && serde_json::from_str::<serde_json::Value>(body)
+                    .ok()
+                    .as_ref()
+                    .and_then(|value| value.pointer("/error/code"))
+                    .and_then(|code| code.as_str())
+                    == Some("version_conflict")
+            {
+                PromotionWriteError::Conflict
+            } else {
+                review_transport_error(status, retry_after, body).into()
+            }
+        })
     }
 }
