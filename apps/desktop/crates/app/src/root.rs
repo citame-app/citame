@@ -3,7 +3,7 @@
 //! only renders and forwards user intent.
 
 use std::cell::OnceCell;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -36,6 +36,8 @@ mod billing;
 mod blocks;
 mod booking_intake;
 mod booking_policy;
+mod calendar_overview;
+use calendar_overview::CalendarMode;
 mod cash;
 mod checkout;
 mod combinations;
@@ -304,8 +306,9 @@ pub struct Root {
     calendar_now: DateTime<Utc>,
     tz: Tz,
     view: Option<DayView>,
-    week_mode: bool,
-    week_views: Vec<DayView>,
+    calendar_mode: CalendarMode,
+    period_views: Vec<DayView>,
+    overview_staff: BTreeSet<String>,
     calendar_layout: OnceCell<CalendarLayout>,
     slot_drag: Option<slots::SlotDrag>,
     horizontal_scroll: scrollbar::Scrollbar,
@@ -379,8 +382,9 @@ impl Root {
             calendar_now: Utc::now(),
             tz,
             view: None,
-            week_mode: false,
-            week_views: vec![],
+            calendar_mode: CalendarMode::Day,
+            period_views: vec![],
+            overview_staff: BTreeSet::new(),
             calendar_layout: OnceCell::new(),
             slot_drag: None,
             horizontal_scroll: scrollbar::Scrollbar::default(),
@@ -436,6 +440,8 @@ impl Root {
 
     fn open_start_view(&mut self, view: Option<&str>, window: &mut Window, cx: &mut Context<Self>) {
         match view {
+            Some("month") => self.set_calendar_mode(CalendarMode::Month, cx),
+            Some("list") => self.set_calendar_mode(CalendarMode::List, cx),
             Some("new") => self.open_new(window, cx),
             Some("block") => self.open_block(None, self.date, cx),
             Some("reports") => self.open_reports(cx),
@@ -558,8 +564,9 @@ impl Root {
             .config
             .start_date
             .unwrap_or_else(|| Utc::now().with_timezone(&self.tz).date_naive());
-        self.week_mode = false;
+        self.calendar_mode = CalendarMode::Day;
         self.week_staff_id.clear();
+        self.overview_staff.clear();
         self.notices.clear();
         self.notice_cursor = self.svc.store.booking_notice_head().unwrap_or_default();
         if let Err(e) = self.svc.start_sync() {
@@ -760,12 +767,24 @@ impl Root {
         self.tz = calendar::salon_tz(store).unwrap_or(Tz::UTC);
         if self.pending_local_today && store.salon_settings().ok().flatten().is_some() {
             self.date = Utc::now().with_timezone(&self.tz).date_naive();
-            if self.week_mode {
+            if self.calendar_mode == CalendarMode::Week {
                 self.date -= Span::days(self.date.weekday().num_days_from_monday().into());
             }
             self.pending_local_today = false;
         }
-        self.view = calendar::day_view(store, self.date).ok();
+        self.period_views = self
+            .calendar_mode
+            .period(store, self.date)
+            .unwrap_or_default();
+        self.view = if self.calendar_mode == CalendarMode::Day {
+            calendar::day_view(store, self.date).ok()
+        } else {
+            self.period_views
+                .iter()
+                .find(|day| day.date == self.date)
+                .cloned()
+        };
+
         if !self.view.as_ref().is_some_and(|view| {
             view.columns
                 .iter()
@@ -778,11 +797,6 @@ impl Root {
                 .map(|col| col.staff.id.clone())
                 .unwrap_or_default();
         }
-        self.week_views = if self.week_mode {
-            calendar::week_view(store, self.date).unwrap_or_default()
-        } else {
-            vec![]
-        };
         self.status = self.svc.status();
         self.summary = calendar::sync_summary(store).unwrap_or_default();
         self.conflicts = store.conflicts().unwrap_or_default();
@@ -799,6 +813,8 @@ impl Root {
             .filter(|member| member.active)
             .cloned()
             .collect();
+        self.overview_staff
+            .retain(|id| self.staff.iter().any(|member| &member.id == id));
         let catalogue = store.services().unwrap_or_default();
         self.service_colors = catalogue
             .iter()
@@ -826,21 +842,24 @@ impl Root {
 
     fn shift_day(&mut self, days: i64, cx: &mut Context<Self>) {
         self.pending_local_today = false;
-        self.date += Span::days(days * if self.week_mode { 7 } else { 1 });
+        self.date = self.calendar_mode.shift(self.date, days);
         self.reload(cx);
     }
 
     fn today(&mut self, cx: &mut Context<Self>) {
         self.date = Utc::now().with_timezone(&self.tz).date_naive();
-        if self.week_mode {
+        if self.calendar_mode == CalendarMode::Week {
             self.date -= Span::days(self.date.weekday().num_days_from_monday().into());
         }
         self.reload(cx);
     }
 
-    fn set_week(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        self.week_mode = enabled;
-        if enabled {
+    fn set_calendar_mode(&mut self, mode: CalendarMode, cx: &mut Context<Self>) {
+        if self.calendar_mode == mode {
+            return;
+        }
+        self.calendar_mode = mode;
+        if mode == CalendarMode::Week {
             self.date -= Span::days(self.date.weekday().num_days_from_monday().into());
         }
         self.reload(cx);
@@ -862,8 +881,8 @@ impl Root {
     }
 
     fn calendar_columns(&self) -> Vec<(NaiveDate, &calendar::StaffColumn)> {
-        if self.week_mode {
-            self.week_views
+        if self.calendar_mode == CalendarMode::Week {
+            self.period_views
                 .iter()
                 .filter_map(|view| {
                     view.columns
@@ -1089,7 +1108,7 @@ impl Root {
     fn finish_new_booking(&mut self, starts_at: DateTime<Utc>, cx: &mut Context<Self>) {
         self.overlay = Overlay::None;
         self.date = starts_at.with_timezone(&self.tz).date_naive();
-        if self.week_mode {
+        if self.calendar_mode == CalendarMode::Week {
             self.date -= Span::days(self.date.weekday().num_days_from_monday().into());
         }
         self.edited(cx);
@@ -1620,9 +1639,19 @@ impl Root {
         let mut query = link.query_pairs_mut();
         query
             .append_pair("date", &self.date.to_string())
-            .append_pair("view", if self.week_mode { "week" } else { "day" });
-        if self.week_mode && !self.week_staff_id.is_empty() {
+            .append_pair("view", self.calendar_mode.route_name());
+        if self.calendar_mode == CalendarMode::Week && !self.week_staff_id.is_empty() {
             query.append_pair("staff", &self.week_staff_id);
+        } else if self.calendar_mode.is_overview() && !self.overview_staff.is_empty() {
+            query.append_pair(
+                "staff",
+                &self
+                    .overview_staff
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
         }
         drop(query);
         Some(link)
@@ -1675,29 +1704,31 @@ impl Root {
                             .ml_2()
                             .text_base()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(SharedString::from(i18n::date_label(self.locale, self.date))),
+                            .child(SharedString::from(
+                                if self.calendar_mode == CalendarMode::Month {
+                                    format!(
+                                        "{} {}",
+                                        i18n::month_short(self.locale, self.date.month()),
+                                        self.date.year()
+                                    )
+                                } else {
+                                    i18n::date_label(self.locale, self.date)
+                                },
+                            )),
                     ),
             )
-            .child(self.button(
-                "view-day",
-                self.t(Key::ViewDay),
-                if self.week_mode {
-                    Kind::Ghost
-                } else {
-                    Kind::Primary
-                },
-                cx.listener(|this, _, _, cx| this.set_week(false, cx)),
-            ))
-            .child(self.button(
-                "view-week",
-                self.t(Key::ViewWeek),
-                if self.week_mode {
-                    Kind::Primary
-                } else {
-                    Kind::Ghost
-                },
-                cx.listener(|this, _, _, cx| this.set_week(true, cx)),
-            ))
+            .children(CalendarMode::ALL.map(|mode| {
+                self.button(
+                    mode.button_id(),
+                    self.t(mode.label()),
+                    if self.calendar_mode == mode {
+                        Kind::Primary
+                    } else {
+                        Kind::Ghost
+                    },
+                    cx.listener(move |this, _, _, cx| this.set_calendar_mode(mode, cx)),
+                )
+            }))
             .when(self.cloud_calendar_url().is_some(), |d| {
                 d.child(
                     self.button(
@@ -1871,6 +1902,22 @@ impl Root {
         (first, last.max(first + 1))
     }
 
+    fn calendar_item_colors(&self, item: &CalendarItem) -> (gpui::Rgba, gpui::Rgba) {
+        if item.conflict {
+            (theme::conflict_bg(), theme::conflict_fg())
+        } else if item.pending {
+            (theme::pending_bg(), theme::warn())
+        } else if let Some(service) = item.appointment.services.first() {
+            let color = service
+                .service_id
+                .as_ref()
+                .and_then(|id| self.service_colors.get(id));
+            theme::service_color(color.map(String::as_str), &service.name)
+        } else {
+            (theme::accent_soft(), theme::accent())
+        }
+    }
+
     fn render_block(
         &self,
         item: &CalendarItem,
@@ -1882,19 +1929,7 @@ impl Root {
     ) -> gpui::AnyElement {
         let a = &item.appointment;
         let top = start - first_hour as f32 * HOUR_PX;
-        let (bg, edge) = if item.conflict {
-            (theme::conflict_bg(), theme::conflict_fg())
-        } else if item.pending {
-            (theme::pending_bg(), theme::warn())
-        } else if let Some(service) = a.services.first() {
-            let color = service
-                .service_id
-                .as_ref()
-                .and_then(|id| self.service_colors.get(id));
-            theme::service_color(color.map(String::as_str), &service.name)
-        } else {
-            (theme::accent_soft(), theme::accent())
-        };
+        let (bg, edge) = self.calendar_item_colors(item);
         let id = a.id.clone();
         let services = a
             .services
@@ -2015,8 +2050,8 @@ impl Root {
             columns_width,
             columns: layouts,
         } = self.calendar_layout.get_or_init(|| {
-            let (first, last) = if self.week_mode {
-                self.week_views
+            let (first, last) = if self.calendar_mode == CalendarMode::Week {
+                self.period_views
                     .iter()
                     .map(|view| self.visible_hours(view))
                     .fold((8, 20), |(a, b), (c, d)| (a.min(c), b.max(d)))
@@ -2230,15 +2265,17 @@ impl Root {
                     .border_l_1()
                     .border_color(theme::line())
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(SharedString::from(if self.week_mode {
-                        format!(
-                            "{} {}",
-                            i18n::weekday_short(self.locale, date.weekday()),
-                            date.format("%d/%m")
-                        )
-                    } else {
-                        col.staff.display_name.clone()
-                    }))
+                    .child(SharedString::from(
+                        if self.calendar_mode == CalendarMode::Week {
+                            format!(
+                                "{} {}",
+                                i18n::weekday_short(self.locale, date.weekday()),
+                                date.format("%d/%m")
+                            )
+                        } else {
+                            col.staff.display_name.clone()
+                        },
+                    ))
                     .when(col.staff.max_concurrent > 1, |d| {
                         d.child(div().ml_1().text_xs().text_color(theme::muted()).child(
                             SharedString::from(i18n::fill(
@@ -3931,7 +3968,7 @@ impl Render for Root {
                     base.flex()
                         .flex_col()
                         .child(self.render_header(cx))
-                        .when(self.week_mode, |d| {
+                        .when(self.calendar_mode == CalendarMode::Week, |d| {
                             d.child(
                                 div()
                                     .px_4()
@@ -3946,7 +3983,14 @@ impl Render for Root {
                                     )),
                             )
                         })
-                        .child(self.render_calendar(window.viewport_size().height, cx))
+                        .when(self.calendar_mode.is_overview(), |frame| {
+                            frame
+                                .child(self.render_overview_filter(cx))
+                                .child(self.render_calendar_overview(cx))
+                        })
+                        .when(!self.calendar_mode.is_overview(), |frame| {
+                            frame.child(self.render_calendar(window.viewport_size().height, cx))
+                        })
                         .when(!self.notices.is_empty(), |d| {
                             d.child(self.render_notices(cx))
                         })
@@ -4171,7 +4215,7 @@ mod tests {
                         root.date
                     )
                 );
-                root.set_week(true, cx);
+                root.set_calendar_mode(CalendarMode::Week, cx);
                 let link = root.cloud_calendar_url().unwrap();
                 let query: std::collections::HashMap<_, _> = link.query_pairs().collect();
                 assert_eq!(query["date"], root.date.to_string());
@@ -4188,12 +4232,12 @@ mod tests {
             let appointment = root.svc.store.appointment(EXISTING).unwrap().unwrap();
             let day = appointment.starts_at.with_timezone(&root.tz).date_naive();
             root.date = day + Span::days(7);
-            root.week_mode = true;
+            root.calendar_mode = CalendarMode::Week;
             root.notices
                 .push((appointment, Instant::now() + Duration::from_secs(12)));
             root.show_notice(EXISTING, cx);
             assert_eq!(root.date, day);
-            assert!(!root.week_mode);
+            assert_eq!(root.calendar_mode, CalendarMode::Day);
             assert!(root.notices.is_empty());
             assert!(matches!(&root.overlay, Overlay::Details(details) if details.id == EXISTING));
         })
@@ -4296,7 +4340,7 @@ mod tests {
         let (_d, win) = open(cx);
         win.update(cx, |root, _, cx| {
             root.date = "2026-03-11".parse().unwrap();
-            root.set_week(true, cx);
+            root.set_calendar_mode(CalendarMode::Week, cx);
             assert_eq!(root.date, "2026-03-09".parse::<NaiveDate>().unwrap());
             let columns = root.calendar_columns();
             assert_eq!(columns.len(), 7);
@@ -4304,7 +4348,7 @@ mod tests {
             assert_eq!(columns[6].0, root.date + Span::days(6));
             root.shift_day(1, cx);
             assert_eq!(root.date, "2026-03-16".parse::<NaiveDate>().unwrap());
-            root.set_week(false, cx);
+            root.set_calendar_mode(CalendarMode::Day, cx);
             assert_eq!(root.calendar_columns().len(), 2);
             root.shift_day(-1, cx);
             assert_eq!(root.date, "2026-03-15".parse::<NaiveDate>().unwrap());
@@ -4712,7 +4756,9 @@ mod tests {
                 - earlier.top())
                 >= px(14.)
         );
-        root.update(cx, |root, cx| root.set_week(true, cx));
+        root.update(cx, |root, cx| {
+            root.set_calendar_mode(CalendarMode::Week, cx)
+        });
         cx.run_until_parked();
         assert!(cx.debug_bounds("calendar-now-line-2026-03-09-0").is_some());
         assert!(cx.debug_bounds("calendar-now-line-2026-03-10-1").is_none());
@@ -4802,7 +4848,9 @@ mod tests {
     async fn a_narrow_week_calendar_scrolls_headers_and_days_together(cx: &mut TestAppContext) {
         let (_dir, config) = desk();
         let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
-        root.update(cx, |root, cx| root.set_week(true, cx));
+        root.update(cx, |root, cx| {
+            root.set_calendar_mode(CalendarMode::Week, cx)
+        });
         cx.simulate_resize(gpui::size(px(800.), px(700.)));
         cx.run_until_parked();
         let before = cx.debug_bounds("calendar-head-6").expect("Sunday heading");
@@ -4831,7 +4879,7 @@ mod tests {
     async fn week_view_changes_staff_without_mixing_their_calendars(cx: &mut TestAppContext) {
         let (_d, win) = open(cx);
         win.update(cx, |root, _, cx| {
-            root.set_week(true, cx);
+            root.set_calendar_mode(CalendarMode::Week, cx);
             assert!(
                 root.calendar_columns()
                     .iter()

@@ -151,7 +151,7 @@ impl Root {
         day: NaiveDate,
         cx: &mut Context<Self>,
     ) {
-        let preferred = if self.week_mode {
+        let preferred = if self.calendar_mode == CalendarMode::Week {
             Some(self.week_staff_id.as_str())
         } else {
             None

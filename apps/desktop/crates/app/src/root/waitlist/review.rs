@@ -212,7 +212,7 @@ impl Root {
         cx: &mut Context<Self>,
     ) {
         self.overlay = Overlay::None;
-        self.week_mode = false;
+        self.calendar_mode = CalendarMode::Day;
         self.pending_local_today = false;
         self.date = appointment.starts_at.with_timezone(&self.tz).date_naive();
         self.svc.wake(Wake::Manual);

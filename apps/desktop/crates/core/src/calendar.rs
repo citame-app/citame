@@ -6,7 +6,7 @@ use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
 use chrono_tz::{GapInfo, Tz};
 use serde_json::Value;
 
-use crate::error::Result;
+use crate::error::{CoreError, Result};
 use crate::model::*;
 use crate::store::Store;
 
@@ -115,7 +115,7 @@ fn overlay(
     map: &mut HashMap<String, Appointment>,
     client_names: &mut HashMap<String, String>,
 ) -> Result<HashSet<String>> {
-    let outbox = store.outbox(usize::MAX)?;
+    let outbox = store.calendar_outbox()?;
     let mut pending = HashSet::new();
     if outbox.is_empty() {
         return Ok(pending);
@@ -285,7 +285,7 @@ pub fn directory_clients(store: &Store) -> Result<Vec<Client>> {
         .filter(|client| client.merged_into_id.is_none())
         .map(|client| (client.id.clone(), client))
         .collect();
-    for entry in store.outbox(usize::MAX)? {
+    for entry in store.calendar_outbox()? {
         let payload = &entry.payload;
         match entry.kind.as_str() {
             "client.create" => {
@@ -375,7 +375,7 @@ pub fn effective_time_off(
             )
         })
         .collect();
-    for entry in store.outbox(usize::MAX)? {
+    for entry in store.calendar_outbox()? {
         let p = &entry.payload;
         match entry.kind.as_str() {
             "time_off.create" | "time_off.update" => {
@@ -421,71 +421,118 @@ pub fn effective_time_off(
 }
 
 pub fn day_view(store: &Store, date: NaiveDate) -> Result<DayView> {
-    let tz = salon_tz(store)?;
-    let (from, to) = local_day_range(tz, date);
-    let mut map: HashMap<String, Appointment> = store
-        .appointments_between(from.timestamp_millis(), to.timestamp_millis())?
-        .into_iter()
-        .map(|a| (a.id.clone(), a))
-        .collect();
-    let mut names = client_names(store)?;
-    let pending = overlay(store, &mut map, &mut names)?;
-    let conflicts: HashSet<String> = store
-        .conflicts()?
-        .into_iter()
-        .map(|c| c.entity_id)
-        .collect();
-
-    let mut columns: Vec<StaffColumn> = store
-        .staff()?
-        .into_iter()
-        .map(|staff| StaffColumn {
-            staff,
-            items: vec![],
-            blocks: vec![],
-        })
-        .collect();
-    let mut appts: Vec<Appointment> = map
-        .into_values()
-        .filter(|a| {
-            a.status != AppointmentStatus::Cancelled && a.starts_at < to && a.ends_at > from
-        })
-        .collect();
-    appts.sort_by(|a, b| a.starts_at.cmp(&b.starts_at).then(a.id.cmp(&b.id)));
-    for a in appts {
-        if let Some(col) = columns.iter_mut().find(|c| c.staff.id == a.staff_id) {
-            col.items.push(CalendarItem {
-                client_name: names
-                    .get(&a.client_id)
-                    .cloned()
-                    .or_else(|| a.client_name.clone())
-                    .unwrap_or_else(|| "Unknown client".into()),
-                pending: pending.contains(&a.id),
-                conflict: conflicts.contains(&a.id),
-                appointment: a,
-            });
-        }
-    }
-    for block in effective_time_off(store, from, to)? {
-        if let Some(col) = columns
-            .iter_mut()
-            .find(|c| c.staff.id == block.time_off.staff_id)
-        {
-            col.blocks.push(block);
-        }
-    }
-    Ok(DayView {
-        date,
-        timezone: tz.name().to_owned(),
-        columns,
-    })
+    let mut days = calendar_period(store, date, 1, false)?;
+    Ok(days.remove(0))
 }
 
 /// Seven consecutive days starting at `first_day`.
 pub fn week_view(store: &Store, first_day: NaiveDate) -> Result<Vec<DayView>> {
-    (0..7)
-        .map(|i| day_view(store, first_day + Duration::days(i)))
-        .collect()
+    calendar_period(store, first_day, 7, false)
+}
+
+/// Chronological days for the month and list views, including cancelled appointments.
+pub fn overview_days(store: &Store, first_day: NaiveDate, days: u32) -> Result<Vec<DayView>> {
+    calendar_period(store, first_day, days, true)
+}
+
+fn calendar_period(
+    store: &Store,
+    first_day: NaiveDate,
+    days: u32,
+    include_cancelled: bool,
+) -> Result<Vec<DayView>> {
+    if days == 0 {
+        return Ok(Vec::new());
+    }
+    let tz = salon_tz(store)?;
+    if days > 42 {
+        return Err(CoreError::Invalid("Calendar period exceeds 42 days".into()));
+    }
+    let dates: Vec<_> = (0..days)
+        .map(|offset| first_day.checked_add_signed(Duration::days(i64::from(offset))))
+        .collect::<Option<_>>()
+        .ok_or_else(|| CoreError::Invalid("Invalid calendar period".into()))?;
+    let bounds: Vec<_> = dates
+        .iter()
+        .map(|date| local_day_range(tz, *date))
+        .collect();
+    let from = bounds[0].0;
+    let to = bounds[bounds.len() - 1].1;
+    let mut appointments: HashMap<String, Appointment> = store
+        .appointments_between(from.timestamp_millis(), to.timestamp_millis())?
+        .into_iter()
+        .map(|appointment| (appointment.id.clone(), appointment))
+        .collect();
+    let mut names = client_names(store)?;
+    let pending = overlay(store, &mut appointments, &mut names)?;
+    let conflicts = store.conflicted_appointment_ids()?;
+    let mut appointments: Vec<_> = appointments
+        .into_values()
+        .filter(|appointment| {
+            (include_cancelled || appointment.status != AppointmentStatus::Cancelled)
+                && appointment.starts_at < to
+                && appointment.ends_at > from
+        })
+        .collect();
+    appointments.sort_by(|a, b| a.starts_at.cmp(&b.starts_at).then(a.id.cmp(&b.id)));
+
+    let staff = store.staff()?;
+    let column_index: HashMap<_, _> = staff
+        .iter()
+        .enumerate()
+        .map(|(index, staff)| (staff.id.as_str(), index))
+        .collect();
+    let empty_columns: Vec<_> = staff
+        .iter()
+        .cloned()
+        .map(|staff| StaffColumn {
+            staff,
+            items: Vec::new(),
+            blocks: Vec::new(),
+        })
+        .collect();
+    let mut views: Vec<_> = dates
+        .into_iter()
+        .map(|date| DayView {
+            date,
+            timezone: tz.name().to_owned(),
+            columns: empty_columns.clone(),
+        })
+        .collect();
+
+    for appointment in appointments {
+        let Some(&column) = column_index.get(appointment.staff_id.as_str()) else {
+            continue;
+        };
+        let start = appointment.starts_at;
+        let end = appointment.ends_at;
+        let item = CalendarItem {
+            client_name: names
+                .get(&appointment.client_id)
+                .cloned()
+                .or_else(|| appointment.client_name.clone())
+                .unwrap_or_else(|| "Unknown client".into()),
+            pending: pending.contains(&appointment.id),
+            conflict: conflicts.contains(&appointment.id),
+            appointment,
+        };
+        let first = bounds.partition_point(|(_, day_end)| *day_end <= start);
+        let last = bounds.partition_point(|(day_start, _)| *day_start < end);
+        for view in &mut views[first..last.max(first)] {
+            view.columns[column].items.push(item.clone());
+        }
+    }
+    for block in effective_time_off(store, from, to)? {
+        let Some(&column) = column_index.get(block.time_off.staff_id.as_str()) else {
+            continue;
+        };
+        let first = bounds.partition_point(|(_, day_end)| *day_end <= block.time_off.starts_at);
+        let last = bounds.partition_point(|(day_start, _)| *day_start < block.time_off.ends_at);
+        for view in &mut views[first..last.max(first)] {
+            view.columns[column].blocks.push(block.clone());
+        }
+    }
+    Ok(views)
 }
 
 pub fn sync_summary(store: &Store) -> Result<SyncSummary> {

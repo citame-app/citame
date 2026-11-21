@@ -34,7 +34,7 @@ impl Root {
             return;
         };
         self.pending_local_today = false;
-        self.week_mode = false;
+        self.calendar_mode = CalendarMode::Day;
         self.date = appointment.starts_at.with_timezone(&self.tz).date_naive();
         self.reload(cx);
         self.open_details(id, cx);

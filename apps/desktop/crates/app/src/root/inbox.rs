@@ -288,7 +288,7 @@ impl Root {
                                             Kind::Ghost,
                                             cx.listener(move |this, _, _, cx| {
                                                 this.overlay = Overlay::None;
-                                                this.week_mode = false;
+                                                this.calendar_mode = CalendarMode::Day;
                                                 this.pending_local_today = false;
                                                 this.date =
                                                     starts.with_timezone(&this.tz).date_naive();

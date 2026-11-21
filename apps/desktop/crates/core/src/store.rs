@@ -4,6 +4,7 @@
 //! are layered on top at read time (see `calendar`), so a pull can never clobber a pending edit
 //! and a rejection never leaves a phantom row behind.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use chrono::{SecondsFormat, Utc};
@@ -1457,6 +1458,25 @@ impl Store {
 
     pub fn outbox(&self, limit: usize) -> Result<Vec<OutboxEntry>> {
         Self::outbox_at(&self.conn, limit, None, false)
+    }
+
+    pub(crate) fn calendar_outbox(&self) -> Result<Vec<OutboxEntry>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {OUTBOX_COLS} FROM outbox WHERE kind GLOB 'appointment.*'
+               OR kind GLOB 'client.*' OR kind GLOB 'time_off.*' ORDER BY seq"
+        ))?;
+        Ok(stmt
+            .query_map([], outbox_from_row)?
+            .collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub(crate) fn conflicted_appointment_ids(&self) -> Result<HashSet<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT entity_id FROM conflict WHERE kind GLOB 'appointment.*' AND resolved_at IS NULL"
+        )?;
+        Ok(stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?)
     }
 
     pub(crate) fn push_snapshot(&self, limit: usize) -> Result<(String, Vec<OutboxEntry>)> {

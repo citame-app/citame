@@ -151,7 +151,7 @@ impl Root {
             return;
         }
         self.overlay = Overlay::None;
-        self.week_mode = true;
+        self.calendar_mode = CalendarMode::Week;
         self.date = week;
         self.week_staff_id = staff_id.to_owned();
         self.pending_local_today = false;
@@ -865,14 +865,14 @@ mod tests {
         cx.simulate_click(control.center(), Default::default());
         cx.run_until_parked();
         entity.update(cx, |root, _| {
-            assert!(!root.week_mode);
+            assert_eq!(root.calendar_mode, CalendarMode::Day);
             assert!(matches!(root.overlay, Overlay::TeamShifts(_)));
         });
         let own = cx.debug_bounds("team-shifts-row-0").unwrap();
         cx.simulate_click(own.center(), Default::default());
         cx.run_until_parked();
         entity.update(cx, |root, _| {
-            assert!(root.week_mode);
+            assert_eq!(root.calendar_mode, CalendarMode::Week);
             assert_eq!(root.week_staff_id, first_id);
             assert!(matches!(root.overlay, Overlay::None));
         });

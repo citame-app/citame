@@ -1,0 +1,567 @@
+use super::*;
+use chrono::{Days, Months};
+use std::collections::BTreeMap;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CalendarMode {
+    Day,
+    Week,
+    Month,
+    List,
+}
+
+impl CalendarMode {
+    pub(super) const ALL: [Self; 4] = [Self::Day, Self::Week, Self::Month, Self::List];
+
+    pub(super) fn is_overview(self) -> bool {
+        matches!(self, Self::Month | Self::List)
+    }
+
+    pub(super) fn route_name(self) -> &'static str {
+        match self {
+            Self::Day => "day",
+            Self::Week => "week",
+            Self::Month => "month",
+            Self::List => "list",
+        }
+    }
+
+    pub(super) fn button_id(self) -> &'static str {
+        match self {
+            Self::Day => "view-day",
+            Self::Week => "view-week",
+            Self::Month => "view-month",
+            Self::List => "view-list",
+        }
+    }
+
+    pub(super) fn label(self) -> Key {
+        match self {
+            Self::Day => Key::ViewDay,
+            Self::Week => Key::ViewWeek,
+            Self::Month => Key::ViewMonth,
+            Self::List => Key::ViewList,
+        }
+    }
+
+    pub(super) fn shift(self, date: NaiveDate, direction: i64) -> NaiveDate {
+        match self {
+            Self::Month if direction < 0 => date.checked_sub_months(Months::new(1)),
+            Self::Month => date.checked_add_months(Months::new(1)),
+            Self::Week | Self::List => date.checked_add_signed(Span::days(7 * direction)),
+            Self::Day => date.checked_add_signed(Span::days(direction)),
+        }
+        .unwrap_or(date)
+    }
+
+    pub(super) fn period(
+        self,
+        store: &sob_core::store::Store,
+        date: NaiveDate,
+    ) -> sob_core::error::Result<Vec<DayView>> {
+        match self {
+            Self::Day => Ok(Vec::new()),
+            Self::Week => calendar::week_view(store, date),
+            Self::List => calendar::overview_days(store, date, 7),
+            Self::Month => {
+                let (first, days) =
+                    month_range(date).ok_or_else(|| CoreError::Invalid("Invalid month".into()))?;
+                calendar::overview_days(store, first, days)
+            }
+        }
+    }
+}
+
+fn month_range(date: NaiveDate) -> Option<(NaiveDate, u32)> {
+    let first = date.with_day(1)?;
+    let last = first.checked_add_months(Months::new(1))?.pred_opt()?;
+    let start = first.checked_sub_days(Days::new(first.weekday().num_days_from_monday().into()))?;
+    let end = last.checked_add_days(Days::new(
+        7 - u64::from(last.weekday().num_days_from_monday()),
+    ))?;
+    Some((
+        start,
+        end.signed_duration_since(start)
+            .num_days()
+            .try_into()
+            .ok()?,
+    ))
+}
+
+impl Root {
+    pub(super) fn render_overview_filter(&self, cx: &mut Context<Self>) -> gpui::Div {
+        div()
+            .flex()
+            .flex_wrap()
+            .gap_2()
+            .px_4()
+            .py_2()
+            .bg(theme::panel())
+            .child(self.button(
+                "overview-all-staff",
+                self.t(Key::CalendarAllStaff),
+                if self.overview_staff.is_empty() {
+                    Kind::Primary
+                } else {
+                    Kind::Ghost
+                },
+                cx.listener(|root, _, _, cx| {
+                    root.overview_staff.clear();
+                    cx.notify();
+                }),
+            ))
+            .children(self.staff.iter().map(|member| {
+                let id = member.id.clone();
+                self.button(
+                    SharedString::from(format!("overview-staff-{id}")),
+                    member.display_name.clone(),
+                    if self.overview_staff.contains(&id) {
+                        Kind::Primary
+                    } else {
+                        Kind::Ghost
+                    },
+                    cx.listener(move |root, _, _, cx| {
+                        if !root.overview_staff.remove(&id) {
+                            root.overview_staff.insert(id.clone());
+                        }
+                        cx.notify();
+                    }),
+                )
+            }))
+    }
+
+    pub(super) fn render_calendar_overview(&self, cx: &mut Context<Self>) -> Stateful<gpui::Div> {
+        let today = self.calendar_now.with_timezone(&self.tz).date_naive();
+        let content = if self.calendar_mode == CalendarMode::Month {
+            self.render_month_overview(today, cx)
+        } else {
+            self.render_list_overview(today, cx)
+        };
+        div()
+            .id(SharedString::from(format!(
+                "calendar-overview-{}-{}",
+                self.calendar_mode.route_name(),
+                self.date
+            )))
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .overflow_scroll()
+            .bg(theme::panel())
+            .child(content)
+    }
+
+    fn overview_items<'a>(&self, day: &'a DayView) -> Vec<(&'a Staff, &'a CalendarItem)> {
+        let mut rows = Vec::new();
+        for column in &day.columns {
+            if self.overview_staff.is_empty() || self.overview_staff.contains(&column.staff.id) {
+                rows.extend(column.items.iter().map(|item| (&column.staff, item)));
+            }
+        }
+        rows.sort_by(|(_, a), (_, b)| {
+            a.appointment
+                .starts_at
+                .cmp(&b.appointment.starts_at)
+                .then(a.appointment.id.cmp(&b.appointment.id))
+        });
+        rows
+    }
+
+    fn overview_day_button(
+        &self,
+        day: NaiveDate,
+        label: String,
+        emphasis: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        self.button(
+            SharedString::from(format!("overview-day-{day}")),
+            label,
+            if emphasis { Kind::Primary } else { Kind::Ghost },
+            cx.listener(move |root, _, _, cx| {
+                if matches!(root.overlay, Overlay::None) {
+                    root.open_overview_day(day, cx);
+                }
+            }),
+        )
+    }
+
+    fn open_overview_day(&mut self, day: NaiveDate, cx: &mut Context<Self>) {
+        self.pending_local_today = false;
+        self.date = day;
+        self.set_calendar_mode(CalendarMode::Day, cx);
+    }
+
+    fn render_month_overview(&self, today: NaiveDate, cx: &mut Context<Self>) -> gpui::Div {
+        div()
+            .min_w(px(875.))
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex()
+                    .border_b_1()
+                    .border_color(theme::line())
+                    .children(self.period_views.iter().take(7).map(|day| {
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .px_3()
+                            .py_2()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(i18n::weekday_short(self.locale, day.date.weekday()))
+                    })),
+            )
+            .children(self.period_views.chunks(7).map(|week| {
+                div()
+                    .flex()
+                    .border_b_1()
+                    .border_color(theme::line())
+                    .children(week.iter().map(|day| {
+                        let date = day.date;
+                        let rows = self.overview_items(day);
+                        let day_label = if date == today {
+                            self.t(Key::Today).to_owned()
+                        } else {
+                            date.day().to_string()
+                        };
+                        let count = i18n::fill(
+                            self.t(Key::CalendarBookedCount),
+                            &[("n", &rows.len().to_string())],
+                        );
+                        let count_label = if rows.len() > 3 {
+                            i18n::fill(
+                                self.t(Key::CalendarShowDay),
+                                &[("n", &rows.len().to_string())],
+                            )
+                        } else {
+                            count
+                        };
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .min_h(px(187.))
+                            .flex()
+                            .flex_col()
+                            .border_r_1()
+                            .border_color(theme::line())
+                            .px_2()
+                            .py_2()
+                            .gap_1()
+                            .when(date.month() != self.date.month(), |cell| {
+                                cell.bg(theme::line_soft())
+                            })
+                            .child(self.overview_day_button(date, day_label, date == today, cx))
+                            .children(
+                                rows.iter()
+                                    .take(3)
+                                    .map(|(_, item)| self.overview_appointment(date, item, cx)),
+                            )
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("overview-count-{date}")))
+                                    .text_xs()
+                                    .text_color(theme::muted())
+                                    .cursor_pointer()
+                                    .hover(|style| style.text_color(theme::accent()))
+                                    .on_click(cx.listener(move |root, _, _, cx| {
+                                        if matches!(root.overlay, Overlay::None) {
+                                            root.open_overview_day(date, cx);
+                                        }
+                                    }))
+                                    .child(count_label),
+                            )
+                    }))
+            }))
+    }
+
+    fn render_list_overview(&self, today: NaiveDate, cx: &mut Context<Self>) -> gpui::Div {
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p_4()
+            .children(self.period_views.iter().map(|day| {
+                let rows = self.overview_items(day);
+                let mut totals = BTreeMap::<&str, i64>::new();
+                for (_, item) in &rows {
+                    if item.appointment.status != AppointmentStatus::Cancelled {
+                        for service in &item.appointment.services {
+                            *totals.entry(&service.currency).or_default() += service.price_cents;
+                        }
+                    }
+                }
+                let scheduled = totals
+                    .iter()
+                    .map(|(currency, amount)| i18n::amount_label(self.locale, *amount, currency))
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                let date = day.date;
+                let count = i18n::fill(
+                    self.t(Key::CalendarBookedCount),
+                    &[("n", &rows.len().to_string())],
+                );
+                div()
+                    .flex()
+                    .flex_col()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme::line())
+                    .p_3()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .items_center()
+                            .justify_between()
+                            .gap_2()
+                            .child(self.overview_day_button(
+                                date,
+                                i18n::date_label(self.locale, date),
+                                date == today,
+                                cx,
+                            ))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_wrap()
+                                    .items_center()
+                                    .gap_3()
+                                    .text_sm()
+                                    .child(count)
+                                    .when(!scheduled.is_empty(), |summary| {
+                                        summary.child(format!(
+                                            "{} · {scheduled}",
+                                            self.t(Key::CalendarScheduledValue)
+                                        ))
+                                    }),
+                            ),
+                    )
+                    .when(rows.is_empty(), |body| {
+                        body.child(
+                            div()
+                                .px_2()
+                                .py_3()
+                                .text_sm()
+                                .text_color(theme::muted())
+                                .child(self.t(Key::CalendarEmptyDay)),
+                        )
+                    })
+                    .children(rows.into_iter().map(|(staff, item)| {
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(self.overview_appointment(date, item, cx))
+                            .child(
+                                div()
+                                    .w(px(128.))
+                                    .flex_none()
+                                    .text_sm()
+                                    .text_color(theme::muted())
+                                    .truncate()
+                                    .child(staff.display_name.clone()),
+                            )
+                    }))
+            }))
+    }
+
+    fn overview_appointment(
+        &self,
+        day: NaiveDate,
+        item: &CalendarItem,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let appointment = &item.appointment;
+        let id = appointment.id.clone();
+        let status = match appointment.status {
+            AppointmentStatus::Booked => None,
+            AppointmentStatus::Cancelled => Some(Key::CalendarCancelled),
+            AppointmentStatus::Completed => Some(Key::Completed),
+            AppointmentStatus::NoShow => Some(Key::NoShow),
+        };
+        let (background, border) = self.calendar_item_colors(item);
+        let services = appointment
+            .services
+            .iter()
+            .map(|service| service.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let title = format!("{} · {services}", item.client_name);
+        let times = format!(
+            "{}–{}",
+            self.hhmm(appointment.starts_at),
+            self.hhmm(appointment.ends_at)
+        );
+        div()
+            .id(SharedString::from(format!("overview-{day}-{id}")))
+            .debug_selector(|| format!("overview-appointment-{day}-{id}"))
+            .flex_1()
+            .min_w_0()
+            .w_full()
+            .rounded_md()
+            .border_l_4()
+            .border_color(border)
+            .bg(background)
+            .px_2()
+            .py_1()
+            .text_xs()
+            .cursor_pointer()
+            .hover(|style| style.opacity(0.85))
+            .on_click(cx.listener(move |root, _, _, cx| {
+                if matches!(root.overlay, Overlay::None) {
+                    root.open_details(&id, cx);
+                }
+            }))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_1()
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child(times))
+                    .when_some(status, |row, status| row.child(self.t(status)))
+                    .children(
+                        appointment_badges::calendar(item)
+                            .into_iter()
+                            .flatten()
+                            .map(|badge| badge.chip(self.t(badge.1), true)),
+                    ),
+            )
+            .child(div().truncate().text_color(theme::text()).child(title))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::root::tests::{EXISTING, desk, open};
+    use gpui::TestAppContext;
+
+    #[test]
+    fn months_follow_complete_local_weeks_and_clamp_month_end_navigation() {
+        let march = "2026-03-09".parse().unwrap();
+        assert_eq!(
+            month_range(march),
+            Some(("2026-02-23".parse().unwrap(), 42))
+        );
+        let february = "2027-02-01".parse().unwrap();
+        assert_eq!(month_range(february), Some((february, 28)));
+        assert_eq!(
+            CalendarMode::Month.shift("2026-01-31".parse().unwrap(), 1),
+            "2026-02-28".parse().unwrap()
+        );
+        assert_eq!(
+            CalendarMode::List.shift(march, 1),
+            "2026-03-16".parse().unwrap()
+        );
+    }
+
+    #[gpui::test]
+    async fn overview_modes_open_local_appointments_and_preserve_the_cloud_route(
+        cx: &mut TestAppContext,
+    ) {
+        let (_directory, config) = desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        cx.simulate_resize(gpui::size(px(1100.), px(880.)));
+        let date: NaiveDate = "2026-03-09".parse().unwrap();
+        let selector = format!("overview-appointment-{date}-{EXISTING}");
+        for mode in [CalendarMode::Month, CalendarMode::List] {
+            root.update(cx, |root, cx| root.set_calendar_mode(mode, cx));
+            cx.run_until_parked();
+            let card = cx
+                .debug_bounds(&selector)
+                .expect("the local booking is visible");
+            cx.simulate_click(card.center(), Default::default());
+            cx.run_until_parked();
+            root.update(cx, |root, _| {
+                assert!(
+                    matches!(&root.overlay, Overlay::Details(details) if details.id == EXISTING)
+                );
+                root.close_appointment_details(false);
+                let search: HashMap<_, _> = root
+                    .cloud_calendar_url()
+                    .unwrap()
+                    .query_pairs()
+                    .into_owned()
+                    .collect();
+                assert_eq!(search["view"], mode.route_name());
+                assert_eq!(search["date"], date.to_string());
+            });
+        }
+        root.update(cx, |root, cx| {
+            let other = root
+                .staff
+                .iter()
+                .find(|member| member.display_name == "Bea")
+                .unwrap()
+                .id
+                .clone();
+            root.overview_staff.insert(other.clone());
+            let day = root
+                .period_views
+                .iter()
+                .find(|day| day.date == date)
+                .unwrap();
+            assert!(root.overview_items(day).is_empty());
+            assert!(
+                root.cloud_calendar_url()
+                    .unwrap()
+                    .query_pairs()
+                    .any(|(key, value)| key == "staff" && value == other)
+            );
+            root.open_overview_day(date, cx);
+            assert_eq!(root.calendar_mode, CalendarMode::Day);
+        });
+    }
+
+    #[gpui::test]
+    async fn overview_preserves_local_midnight_overlap_and_day_mode_rules(cx: &mut TestAppContext) {
+        let (_directory, window) = open(cx);
+        window
+            .update(cx, |root, _, cx| {
+                let before: NaiveDate = "2026-03-08".parse().unwrap();
+                let after = before.succ_opt().unwrap();
+                let store = &mut root.svc.store;
+                let mut appointment = store.appointment(EXISTING).unwrap().unwrap();
+                appointment.starts_at = "2026-03-09T02:00:00Z".parse().unwrap();
+                appointment.ends_at = "2026-03-09T04:00:00Z".parse().unwrap();
+                appointment.status = AppointmentStatus::Cancelled;
+                store
+                    .apply_page(
+                        &[RawChange {
+                            seq: 20,
+                            entity: "appointment".into(),
+                            id: EXISTING.into(),
+                            op: "upsert".into(),
+                            data: Some(serde_json::to_value(appointment).unwrap()),
+                        }],
+                        20,
+                    )
+                    .unwrap();
+                let overview = calendar::overview_days(store, before, 2).unwrap();
+                for day in overview {
+                    assert_eq!(
+                        day.columns
+                            .iter()
+                            .map(|column| column.items.len())
+                            .sum::<usize>(),
+                        1
+                    );
+                }
+                assert!(
+                    calendar::day_view(store, before)
+                        .unwrap()
+                        .columns
+                        .iter()
+                        .all(|column| column.items.is_empty())
+                );
+                root.date = after;
+                root.set_calendar_mode(CalendarMode::List, cx);
+                assert_eq!(root.overview_items(&root.period_views[0]).len(), 1);
+            })
+            .unwrap();
+    }
+}
