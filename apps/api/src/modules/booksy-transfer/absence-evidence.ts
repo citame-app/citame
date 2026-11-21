@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { coversBooksyCalendarRequest } from "./calendar-request-scope";
 import { fingerprint } from "./plan";
 import type { BooksySourceReadModel } from "./source-read-model";
 
@@ -113,6 +114,7 @@ export function collectBookingAbsences(
         throw new Error("Retained calendar evidence has a reversed interval");
       const resources = new Set(observed.resources.map((row) => String(row.id)));
       const fullScope =
+        coversBooksyCalendarRequest(source, observed) &&
         observed.resources_count === observed.resources.length &&
         resources.size === observed.resources.length &&
         expectedResources.size > 0 &&

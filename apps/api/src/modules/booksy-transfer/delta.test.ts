@@ -125,10 +125,14 @@ test("missing lines retain dated evidence and an incomplete calendar cannot esta
     resources: resourceIds.map((id) => ({ id })),
     bookings,
   });
-  put("calendar", 10, data([10, 20], { "1": { id: 1 } }));
+
+  const calendar = "calendar?start_date=2026-11-18&end_date=2026-11-24";
+  const full = `${calendar}&include_unconfirmed=true`;
+  put(full, 10, data([10, 20], { "1": { id: 1 } }));
   put("appointments/1/", 11, { appointment: { appointment_uid: 1, status: "A" } });
-  put("calendar", 12, data([10, 20], {}));
-  put("calendar", 13, data([10], {}));
+  put(full, 12, data([10, 20], {}));
+  put(full, 13, data([10], {}));
+  put(`${calendar}&include_unconfirmed=false`, 14, data([10, 20], {}));
   expect(collector.result()).toEqual([
     {
       itemRef: "1",

@@ -60,7 +60,13 @@ test("a cutover window distinguishes full, stale, partial and out-of-snapshot da
     },
     { from: "2026-11-22", to: "2026-11-26", atOrAfter: "2026-11-18T13:13:00+01:00" },
   );
-  function inspect(date: string, capturedAt: string, resourceIds: number[], sha: string) {
+  function inspect(
+    date: string,
+    capturedAt: string,
+    resourceIds: number[],
+    sha: string,
+    query = `?start_date=${date}&end_date=${date}&include_unconfirmed=true`,
+  ) {
     const body = {
       start_date: date,
       end_date: date,
@@ -73,7 +79,7 @@ test("a cutover window distinguishes full, stale, partial and out-of-snapshot da
         kind: "booksy-api-response",
         businessId: model.businessId,
         capturedAt,
-        source: `https://es.booksy.com/core/v2/business_api/me/businesses/${model.businessId}/calendar`,
+        source: `https://es.booksy.com/core/v2/business_api/me/businesses/${model.businessId}/calendar${query}`,
         data: { body: JSON.stringify(body), data: body },
       },
       sha,
@@ -81,7 +87,44 @@ test("a cutover window distinguishes full, stale, partial and out-of-snapshot da
   }
   inspect("2026-11-23", "2026-11-17T23:00:00Z", [10], "a".repeat(64));
   inspect("2026-11-23", "2026-11-18T12:14:00Z", [20], "b".repeat(64));
-  inspect("2026-11-24", "2026-11-18T12:13:00Z", [10], "c".repeat(64));
+  inspect("2026-11-23", "2026-11-18T12:19:00Z", [10], "2".repeat(64), "");
+  const range = "?start_date=2026-11-23&end_date=2026-11-23";
+  inspect(
+    "2026-11-23",
+    "2026-11-18T12:15:00Z",
+    [10],
+    "e".repeat(64),
+    `${range}&include_unconfirmed=false`,
+  );
+  inspect(
+    "2026-11-23",
+    "2026-11-18T12:16:00Z",
+    [10],
+    "f".repeat(64),
+    `${range}&include_unconfirmed=true&status=confirmed`,
+  );
+  inspect(
+    "2026-11-23",
+    "2026-11-18T12:17:00Z",
+    [10],
+    "0".repeat(64),
+    `${range}&include_unconfirmed=true&include_unconfirmed=false`,
+  );
+  inspect(
+    "2026-11-23",
+    "2026-11-18T12:18:00Z",
+    [10],
+    "1".repeat(64),
+    "?start_date=2026-11-22&end_date=2026-11-23&include_unconfirmed=true",
+  );
+
+  inspect(
+    "2026-11-24",
+    "2026-11-18T12:13:00Z",
+    [10],
+    "c".repeat(64),
+    "?start_date=2026-11-24&end_date=2026-11-24&include_unconfirmed=true&resources_per_page=100&version=2",
+  );
   inspect("2026-11-26", "2026-11-18T12:14:00Z", [10], "d".repeat(64));
   expect(audit.result()).toMatchObject({
     daysRequested: 5,
@@ -275,7 +318,7 @@ test("the offline commands accept only private hash-linked inputs and print coun
       resources: [{ id: 10 }],
       bookings: { [absentRef]: { id: Number(absentRef) } },
     };
-    const source = `https://es.booksy.com/core/v2/business_api/me/businesses/${model.businessId}/calendar`;
+    const source = `https://es.booksy.com/core/v2/business_api/me/businesses/${model.businessId}/calendar?start_date=${capture.start_date}&end_date=${capture.end_date}&include_unconfirmed=true`;
     const capturedAt = "2026-11-18T12:20:00Z";
     const original = JSON.stringify({
       kind: "booksy-api-response",

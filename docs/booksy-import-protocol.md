@@ -436,7 +436,7 @@ API_INTERNAL_URL=http://127.0.0.1:4301 bunx --no-install vite dev \
   --host 127.0.0.1 --port 4276 --strictPort
 ```
 
-El flujo de captura autenticada es **GET-only**, restringido al centro, con respeto a los límites del proveedor. Las credenciales de Booksy permanecen en memoria del navegador y no forman parte del archivo ni del repositorio. Nunca ejecutar el importador contra la demo reiniciable ni usar la conexión de desarrollo predeterminada.
+El flujo de captura autenticada es **GET-only**, restringido al centro, con respeto a los límites del proveedor. Conserva la URL de petición, incluidas las fechas e `include_unconfirmed=true`. Una respuesta filtrada puede aportar evidencia de una reserva concreta. La sustitución de un día en el snapshot exige una petición sin filtros adicionales y el conjunto completo de profesionales y recursos. Las credenciales de Booksy permanecen en memoria del navegador y no forman parte del archivo ni del repositorio. Nunca ejecutar el importador contra la demo reiniciable ni usar la conexión de desarrollo predeterminada.
 
 `booksy-prepare-full.ts` es determinista respecto a los originales. Repetir la misma proyección/snapshot verifica los IDs y campos existentes sin duplicar. Para una revisión distinta del mismo día, crear otra base aislada en el contenedor propio:
 

@@ -8,6 +8,7 @@ import {
 } from "@sob/contracts";
 import { z } from "zod";
 import { type CalendarSeen, projectCalendarIntervals } from "./calendar-intervals";
+import { coversBooksyCalendarRequest } from "./calendar-request-scope";
 import { prepareObservedBooksy } from "./observed";
 import { sourceUuid } from "./plan";
 
@@ -310,6 +311,7 @@ export async function prepareBooksySourceReadModel(
       throw new Error("Retained source response differs from parsed data");
     if (url.pathname.endsWith("/calendar")) {
       const c = calendarSchema.parse(payload);
+      if (!coversBooksyCalendarRequest(url, c)) continue;
       if (c.resources.length !== c.resources_count)
         throw new Error("Calendar resource pages are incomplete");
       calendarHistory.push({ at: d.capturedAt, data: c });
