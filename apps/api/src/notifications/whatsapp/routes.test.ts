@@ -347,3 +347,29 @@ test("saving automation rules after a note change does not schedule a second rem
     1,
   );
 });
+
+test("a reviewed WhatsApp write cannot replace automation saved in another session", async () => {
+  expect((await connect()).status).toBe(200);
+  const desk = await json(t.app, "/admin/whatsapp/desk", "GET", undefined, owner.cookie);
+  const { connection } = (await desk.json()) as { connection: { revision: string } };
+  expect(connection.revision).toMatch(/^[a-f0-9]{64}$/);
+  const save = (kind: string) =>
+    json(
+      t.app,
+      "/admin/whatsapp/rules/reviewed",
+      "PATCH",
+      {
+        revision: connection.revision,
+        rules: [{ kind, templateId: "678901", variables: ["time"] }],
+      },
+      owner.cookie,
+    );
+  const results = await Promise.all([save("reminder_24h"), save("reminder_2h")]);
+  expect(results.map((result) => result.status).sort()).toEqual([200, 409]);
+  const rejected = results.find((r) => r.status === 409);
+  expect(await rejected?.json()).toMatchObject({ error: { code: "version_conflict" } });
+  const committed = results.find((r) => r.status === 200);
+  const saved = whatsappSettingsSchema.parse(await committed?.json());
+  expect(saved.connection?.rules).toHaveLength(1);
+  expect((await save("confirmation")).status).toBe(409);
+});

@@ -5,12 +5,15 @@ import { Button } from "~/components/ui/button";
 import { SelectField } from "~/components/ui/select-field";
 import { ErrorState, Skeleton } from "~/components/ui/states";
 import { useI18n } from "~/i18n/react";
+import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
+import { UnsavedGuard } from "../unsaved-guard";
 import { loadFacebookSdk, startMetaSignup } from "./meta-signup";
 
-const settingsKey = ["admin", "whatsapp"] as const;
-const deliveriesKey = [...settingsKey, "deliveries"] as const;
-const templatesKey = [...settingsKey, "templates"] as const;
+const whatsappKey = ["admin", "whatsapp"] as const;
+const settingsKey = [...whatsappKey, "connection"] as const;
+const deliveriesKey = [...whatsappKey, "deliveries"] as const;
+const templatesKey = [...whatsappKey, "templates"] as const;
 const events = whatsappKindSchema.options;
 const fields = whatsappVariableSchema.options;
 type Variable = WhatsAppRule["variables"][number];
@@ -49,6 +52,9 @@ const words = {
     choose: "Choose a field",
     save: "Save automations",
     saved: "Automations saved",
+    changed: "Another session changed these automations. Reload the saved settings before saving.",
+    reload: "Discard draft and reload",
+    unavailable: "Connect to an up-to-date Citame server to save automations.",
     preview: "Preview with sample data",
     noTemplates: "Add a text utility template in WhatsApp Manager and wait for Meta to approve it.",
     deliveries: "Recent activity",
@@ -114,6 +120,10 @@ const words = {
     choose: "Elige un dato",
     save: "Guardar automatizaciones",
     saved: "Automatizaciones guardadas",
+    changed:
+      "Otra sesión cambió estas automatizaciones. Recarga los ajustes guardados antes de guardar.",
+    reload: "Descartar borrador y recargar",
+    unavailable: "Conéctate a un servidor de Citame actualizado para guardar las automatizaciones.",
     preview: "Vista previa con datos de ejemplo",
     noTemplates:
       "Crea una plantilla de utilidad de texto en WhatsApp Manager y espera la aprobación de Meta.",
@@ -158,13 +168,17 @@ const sample: Record<Variable, string> = {
   preferences: "https://citame.example/notifications",
 };
 type Draft = Partial<Record<WhatsAppRule["kind"], { templateId: string; variables: string[] }>>;
+type ReviewedDraft = { revision: string; baseline: WhatsAppRule[]; selections: Draft };
 
 export function WhatsAppSettings() {
   const { locale } = useI18n();
   const copy = locale.startsWith("es") ? words.es : words.en;
   const queryClient = useQueryClient();
   const endpoints = api().admin.whatsapp;
-  const status = useQuery({ queryKey: settingsKey, queryFn: endpoints.get });
+  const status = useQuery({
+    queryKey: settingsKey,
+    queryFn: ({ signal }) => endpoints.get(signal),
+  });
   const connection = status.data?.connection;
   const setup = status.data?.setup;
   const templates = useQuery({
@@ -178,7 +192,7 @@ export function WhatsAppSettings() {
     enabled: Boolean(connection),
     refetchInterval: 30000,
   });
-  const [draft, setDraft] = useState<Draft>({});
+  const [editor, setEditor] = useState<ReviewedDraft | null>(null);
   const [pin, setPin] = useState("");
   const [sdk, setSdk] = useState<"idle" | "loading" | "ready" | "failed">("idle");
   const [popup, setPopup] = useState(false);
@@ -187,9 +201,9 @@ export function WhatsAppSettings() {
   const [confirm, setConfirm] = useState(false);
   const cleanup = useRef<(() => void) | undefined>(undefined);
   useEffect(() => () => cleanup.current?.(), []);
-  useEffect(() => {
-    setDraft(Object.fromEntries((connection?.rules ?? []).map((rule) => [rule.kind, rule])));
-  }, [connection]);
+  const draft: Draft =
+    editor?.selections ??
+    Object.fromEntries((connection?.rules ?? []).map((rule) => [rule.kind, rule]));
 
   const connect = useMutation({
     mutationFn: endpoints.connect,
@@ -212,8 +226,12 @@ export function WhatsAppSettings() {
   });
   const save = useMutation({
     mutationFn: endpoints.save,
-    onSuccess: (result) => {
-      queryClient.setQueryData(settingsKey, result);
+    onSuccess: (result, submitted) => {
+      queryClient.setQueryData<typeof result>(settingsKey, (current) =>
+        !current || current.connection?.revision === submitted.revision ? result : current,
+      );
+      setEditor(null);
+      void queryClient.invalidateQueries({ queryKey: settingsKey });
       void queryClient.invalidateQueries({ queryKey: deliveriesKey });
     },
   });
@@ -231,14 +249,17 @@ export function WhatsAppSettings() {
       variables.some((value) => !fields.includes(value)),
   );
   const savedRules = events.flatMap((kind) =>
-    (connection?.rules ?? []).filter((item) => item.kind === kind),
+    (editor?.baseline ?? connection?.rules ?? []).filter((item) => item.kind === kind),
   );
   const dirty = JSON.stringify(rules) !== JSON.stringify(savedRules);
+  const stale =
+    Boolean(dirty && editor && editor.revision !== connection?.revision) ||
+    (save.error instanceof ApiError && save.error.code === "version_conflict");
   const expired = Boolean(
     connection?.expiresAt && new Date(connection.expiresAt).getTime() <= Date.now(),
   );
 
-  if (status.isError)
+  if (status.isError && !status.data)
     return <ErrorState error={status.error} onRetry={() => void status.refetch()} />;
   if (!status.data) return <Skeleton className="h-64" />;
 
@@ -278,6 +299,7 @@ export function WhatsAppSettings() {
 
   return (
     <div className="space-y-6">
+      <UnsavedGuard dirty={dirty} preserveOnSearchChange />
       <section className="space-y-4 rounded-xl border border-line bg-surface p-5">
         <h2 className="text-heading">
           {connection ? (connection.coexistence ? copy.existing : copy.cloud) : copy.connect}
@@ -378,12 +400,14 @@ export function WhatsAppSettings() {
         )}
       </section>
 
-      {connection && setup && !expired && (
+      {((connection && setup && !expired) || dirty) && (
         <form
           className="space-y-4"
           onSubmit={(event) => {
             event.preventDefault();
-            if (!invalid && dirty) save.mutate(rules);
+            if (!invalid && dirty && !stale && !save.isPending && editor) {
+              save.mutate({ revision: editor.revision, rules });
+            }
           }}
         >
           <section className="space-y-3">
@@ -415,8 +439,15 @@ export function WhatsAppSettings() {
             const selection = draft[kind];
             const template = findTemplate(selection?.templateId);
             const unavailable = !template && selection?.templateId;
-            const setRule = (value: Draft[typeof kind]) =>
-              setDraft((current) => ({ ...current, [kind]: value }));
+            const setRule = (value: Draft[typeof kind]) => {
+              const revision = connection?.revision;
+              if (!revision || save.isPending || stale) return;
+              setEditor((current) => ({
+                revision: current?.revision ?? revision,
+                baseline: current?.baseline ?? connection.rules,
+                selections: { ...(current?.selections ?? draft), [kind]: value },
+              }));
+            };
             return (
               <section
                 key={kind}
@@ -425,6 +456,7 @@ export function WhatsAppSettings() {
                 <h3 className="font-semibold">{copy.events[eventIndex]}</h3>
                 <SelectField
                   label={copy.template}
+                  disabled={!connection?.revision || stale || save.isPending}
                   value={selection?.templateId ?? ""}
                   options={[
                     { label: copy.off, value: "" },
@@ -485,17 +517,39 @@ export function WhatsAppSettings() {
               </section>
             );
           })}
-          {save.error && (
+          {(save.error || stale) && (
             <p role="alert" className="text-danger-fg">
-              {save.error.message}
+              {stale ? copy.changed : save.error?.message}
             </p>
+          )}
+          {stale && (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={async () => {
+                const result = await status.refetch();
+                if (result.isSuccess) {
+                  setEditor(null);
+                  save.reset();
+                }
+              }}
+            >
+              {copy.reload}
+            </Button>
+          )}
+          {!connection?.revision && !stale && (
+            <p className="text-sm text-muted">{copy.unavailable}</p>
           )}
           {save.isSuccess && !dirty && (
             <p role="status" className="text-sm">
               {copy.saved}
             </p>
           )}
-          <Button type="submit" disabled={invalid || !dirty} loading={save.isPending}>
+          <Button
+            type="submit"
+            disabled={invalid || !dirty || stale || !connection?.revision}
+            loading={save.isPending}
+          >
             {copy.save}
           </Button>
         </form>

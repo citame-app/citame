@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import {
   type WhatsAppRule,
   type WhatsAppTemplate,
   whatsappDeliveriesSchema,
   whatsappDeskSchema,
+  whatsappKindSchema,
   whatsappRuleSchema,
   whatsappTemplateSchema,
 } from "@sob/contracts";
@@ -11,16 +13,26 @@ import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import type { NotificationConfig } from "../../config";
 import { DomainError } from "../../errors";
+import { lockScheduling } from "../../tx";
+import { backfillWhatsAppReminders } from "../outbox";
 import { createMeta, tokenCipher } from "./meta";
 
 const savedRule = whatsappRuleSchema.extend({ template: whatsappTemplateSchema });
 const savedRules = z.array(savedRule);
 type SavedRule = z.infer<typeof savedRule>;
 
-export async function readConnection(db: Pick<Database, "select">, lock?: "share") {
+export async function readConnection(db: Pick<Database, "select">, lock?: "share" | "update") {
   const query = db.select().from(whatsappConnection).where(eq(whatsappConnection.id, 1));
   const [connection] = await (lock ? query.for(lock) : query);
   return connection;
+}
+
+type ConnectedSender = NonNullable<Awaited<ReturnType<typeof readConnection>>>;
+
+function senderRevision(connection: ConnectedSender) {
+  return createHash("sha256")
+    .update(JSON.stringify([connection.encryptedToken, connection.rules]))
+    .digest("hex");
 }
 
 export function activeRules(connection: Awaited<ReturnType<typeof readConnection>>, now: Date) {
@@ -45,6 +57,7 @@ export function whatsappSettings(
     connection: connection
       ? {
           phone: connection.phone,
+          revision: senderRevision(connection),
           coexistence: connection.coexistence,
           rules: savedRules
             .parse(connection.rules)
@@ -81,6 +94,7 @@ export async function whatsappDesk(db: Database, config: NotificationConfig) {
     connection: connection
       ? {
           phone: connection.phone,
+          revision: senderRevision(connection),
           coexistence: connection.coexistence,
           expiresAt: connection.expiresAt?.toISOString() ?? null,
           rules: savedRules
@@ -98,6 +112,56 @@ export async function whatsappDesk(db: Database, config: NotificationConfig) {
       ...delivery,
       uncertain: !delivery.delivery && lastError === "whatsapp_delivery_unknown",
     })),
+  });
+}
+
+export async function updateWhatsAppRules(
+  db: Database,
+  config: NotificationConfig,
+  rules: WhatsAppRule[],
+  now: Date,
+  request?: typeof fetch,
+  reviewedRevision?: string,
+) {
+  const connection = await readConnection(db);
+  if (!connection)
+    throw new DomainError("invalid_state", "Conecte un número para guardar automatizaciones.");
+  const loadedRevision = senderRevision(connection);
+  const changed = () =>
+    new DomainError(
+      "version_conflict",
+      "Las automatizaciones cambiaron. Cargue los ajustes actuales.",
+    );
+  if (reviewedRevision && reviewedRevision !== loadedRevision) throw changed();
+  const mapped = rules.length
+    ? mapRules(rules, await listTemplates(config, connection, request))
+    : [];
+  return db.transaction(async (tx) => {
+    await lockScheduling(tx);
+    const current = await readConnection(tx, "update");
+    if (!current || senderRevision(current) !== loadedRevision) throw changed();
+    const [updated] = await tx
+      .update(whatsappConnection)
+      .set({ rules: mapped })
+      .where(eq(whatsappConnection.id, 1))
+      .returning();
+    if (!updated) throw changed();
+    const enabled = new Set(rules.map(({ kind }) => kind));
+    const disabled = whatsappKindSchema.options.filter((kind) => !enabled.has(kind));
+    if (disabled.length)
+      await tx
+        .update(reminder)
+        .set({ status: "cancelled", lockedUntil: null, lastError: "whatsapp_rule_disabled" })
+        .where(
+          and(
+            eq(reminder.channel, "whatsapp"),
+            inArray(reminder.kind, disabled),
+            inArray(reminder.status, ["pending", "processing"]),
+            isNull(reminder.whatsappDispatchAt),
+          ),
+        );
+    await backfillWhatsAppReminders(tx, now, enabled);
+    return updated;
   });
 }
 

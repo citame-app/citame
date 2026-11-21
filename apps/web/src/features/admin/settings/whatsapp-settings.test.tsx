@@ -11,7 +11,14 @@ afterEach(() => {
 test("previews a professional and time and saves the chosen reminder mapping", async () => {
   const patches: unknown[] = [];
   const setup = { appId: "123456", configId: "234567", version: "v27.0" };
-  const connection = { phone: "+34 600 000 000", coexistence: true, expiresAt: null, rules: [] };
+  const revision = "a".repeat(64);
+  const connection = {
+    revision,
+    phone: "+34 600 000 000",
+    coexistence: true,
+    expiresAt: null,
+    rules: [],
+  };
   globalThis.fetch = mock(async (input: URL | string, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
     if (url.pathname.endsWith("/deliveries")) return Response.json([]);
@@ -27,9 +34,12 @@ test("previews a professional and time and saves the chosen reminder mapping", a
         },
       ]);
     if (init?.method === "PATCH") {
-      const rules = JSON.parse(String(init.body));
-      patches.push(rules);
-      return Response.json({ setup, connection: { ...connection, rules } });
+      const patch = JSON.parse(String(init.body));
+      patches.push(patch);
+      return Response.json({
+        setup,
+        connection: { ...connection, revision: "b".repeat(64), rules: patch.rules },
+      });
     }
     return Response.json({ setup, connection });
   }) as unknown as typeof fetch;
@@ -47,7 +57,10 @@ test("previews a professional and time and saves the chosen reminder mapping", a
   fireEvent.click(screen.getByRole("button", { name: "Save automations" }));
   await waitFor(() =>
     expect(patches).toEqual([
-      [{ kind: "reminder_24h", templateId: "345678", variables: ["time", "staff"] }],
+      {
+        revision,
+        rules: [{ kind: "reminder_24h", templateId: "345678", variables: ["time", "staff"] }],
+      },
     ]),
   );
 });

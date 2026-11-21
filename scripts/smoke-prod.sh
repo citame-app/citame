@@ -602,8 +602,8 @@ SQL
 INSERT INTO whatsapp_connection (waba_id, phone_id, phone, coexistence, encrypted_token, rules)
 VALUES ('111110', '111111', '+34 611 000 000', true, 'synthetic-non-credential',
   '[{"kind":"confirmation","templateId":"111112","variables":[],"template":{"id":"111112","name":"smoke_confirmation","language":"es_ES","body":"Synthetic","parameters":[],"named":false}}]'::jsonb);
-INSERT INTO reminder (appointment_id, kind, channel, appointment_version, scheduled_for, status, whatsapp_delivery)
-SELECT id, 'confirmation', 'whatsapp', version, now(), 'sent', 'read'
+INSERT INTO reminder (id, appointment_id, kind, channel, appointment_version, scheduled_for, status, whatsapp_delivery)
+SELECT uuidv7(), id, 'confirmation', 'whatsapp', version, now(), 'sent', 'read'
 FROM appointment WHERE id = :'booking_id'::uuid;
 SQL
   # Suspend the worker while replacing the synthetic SMTP configuration with a mock credential.

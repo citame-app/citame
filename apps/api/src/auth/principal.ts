@@ -141,6 +141,7 @@ export function requireAuth(
             (path === "/admin/services/reviewed" || path.endsWith("/resources/reviewed")
               ? "GET"
               : "PUT")) ||
+        (path === "/admin/whatsapp/rules/reviewed" && method !== "PATCH") ||
         (path === "/admin/email-delivery" && method !== "GET" && method !== "PUT") ||
         (path === "/admin/email-delivery/test-reviewed" && method !== "POST") ||
         (path === "/admin/settings/desktop" && method !== "GET" && method !== "PUT") ||
@@ -151,6 +152,7 @@ export function requireAuth(
           "/me",
           "/me/desktop-workspaces",
           "/admin/whatsapp/desk",
+          "/admin/whatsapp/templates",
           "/admin/commerce/unpaid",
           "/admin/commerce/capabilities",
           "/admin/passes/eligible",

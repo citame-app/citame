@@ -729,6 +729,13 @@
       "when": 1795258520000,
       "tag": "0103_whatsapp_desk_live_view",
       "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1795258521000,
+      "tag": "0104_whatsapp_settings_live_view",
+      "breakpoints": true
     }
   ]
 }

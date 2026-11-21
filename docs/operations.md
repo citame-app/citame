@@ -254,6 +254,8 @@ Migration `0102_email_delivery_live_view` adds an owner-only email settings inva
 
 Migration `0103_whatsapp_desk_live_view` adds owner-only invalidation for connected sender and delivery status. Roll out all API replicas before relying on the new topic. Reconnect open clients after a mixed-version rollout or rollback because old readers skip unknown topics. The marker contains no sender or delivery data.
 
+Migration `0104_whatsapp_settings_live_view` separates connection invalidation from delivery invalidation so open web forms can refresh saved settings while preserving their reviewed drafts. Updated clients submit the opaque sender revision to the reviewed rules endpoint. The service checks it before contacting Meta and again after locking the current connection.
+
 Migration `0064_whatsapp_dispatch_sender` adds nullable sender identifiers to existing reminders. Deploy the API and worker after migrating. Unattributed historical sends retain their delivery state and can receive updates when the existing provider message ID matches the connected sender.
 
 On a single-replica installation, the gateway can return a brief error while Compose replaces a service. An API replica reports itself unready during `SHUTDOWN_GRACE_MS`. For rolling upgrades, an external load balancer or orchestrator must honor readiness and keep a healthy replica available.

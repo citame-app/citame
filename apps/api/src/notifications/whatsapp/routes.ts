@@ -1,5 +1,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { whatsappCompleteSchema, whatsappKindSchema, whatsappRulesSchema } from "@sob/contracts";
+import {
+  whatsappCompleteSchema,
+  whatsappReviewedRulesSchema,
+  whatsappRulesSchema,
+} from "@sob/contracts";
 import { reminder, whatsappConnection } from "@sob/db";
 import { and, eq, exists, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { Hono } from "hono";
@@ -11,14 +15,13 @@ import type { AppEnv } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
 import { lockScheduling } from "../../tx";
-import { backfillWhatsAppReminders } from "../outbox";
 import { createMeta, tokenCipher } from "./meta";
 import {
   disableWhatsApp,
   listDeliveries,
   listTemplates,
-  mapRules,
   readConnection,
+  updateWhatsAppRules,
   whatsappDesk,
   whatsappSettings,
 } from "./service";
@@ -126,47 +129,21 @@ export function whatsappAdminRoutes({
         connection ? await listTemplates(notifications, connection, whatsappFetch) : [],
       );
     })
-    .patch("/rules", async (c) => {
+    .patch("/rules", bodyLimit({ maxSize: 8192 }), async (c) => {
       const rules = parseOrThrow(whatsappRulesSchema, await readJson(c));
-      const connection = await readConnection(db);
-      if (!connection)
-        throw new DomainError("invalid_state", "Conecte un número para guardar automatizaciones.");
-      const mapped = rules.length
-        ? mapRules(rules, await listTemplates(notifications, connection, whatsappFetch))
-        : [];
-      const saved = await db.transaction(async (tx) => {
-        await lockScheduling(tx);
-        const [updated] = await tx
-          .update(whatsappConnection)
-          .set({ rules: mapped })
-          .where(
-            and(
-              eq(whatsappConnection.id, 1),
-              eq(whatsappConnection.encryptedToken, connection.encryptedToken),
-            ),
-          )
-          .returning();
-        if (updated) {
-          const enabled = new Set(rules.map(({ kind }) => kind));
-          const disabled = whatsappKindSchema.options.filter((kind) => !enabled.has(kind));
-          if (disabled.length)
-            await tx
-              .update(reminder)
-              .set({ status: "cancelled", lockedUntil: null, lastError: "whatsapp_rule_disabled" })
-              .where(
-                and(
-                  eq(reminder.channel, "whatsapp"),
-                  inArray(reminder.kind, disabled),
-                  inArray(reminder.status, ["pending", "processing"]),
-                  isNull(reminder.whatsappDispatchAt),
-                ),
-              );
-          await backfillWhatsAppReminders(tx, now(), enabled);
-        }
-        return updated;
-      });
-      if (!saved)
-        throw new DomainError("invalid_state", "La conexión cambió. Vuelva a abrir los ajustes.");
+      const saved = await updateWhatsAppRules(db, notifications, rules, now(), whatsappFetch);
+      return c.json(whatsappSettings(notifications, saved));
+    })
+    .patch("/rules/reviewed", bodyLimit({ maxSize: 8192 }), async (c) => {
+      const { revision, rules } = parseOrThrow(whatsappReviewedRulesSchema, await readJson(c));
+      const saved = await updateWhatsAppRules(
+        db,
+        notifications,
+        rules,
+        now(),
+        whatsappFetch,
+        revision,
+      );
       return c.json(whatsappSettings(notifications, saved));
     })
     .delete("/", async (c) => {

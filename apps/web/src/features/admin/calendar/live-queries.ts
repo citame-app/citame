@@ -86,6 +86,7 @@ const shared: Record<SyncEntity | SyncLiveView, readonly (readonly string[])[]> 
   booking_policy: [["booking-policy"], ["admin", "booking-policy"]],
   email_delivery: [["admin", "email-delivery"]],
   whatsapp_desk: [["admin", "whatsapp", "deliveries"]],
+  whatsapp_settings: [["admin", "whatsapp", "connection"]],
   resource_catalogue: [...calendar, ["appointments"], ["admin", "resources"]],
   service_combinations: [["combinations"]],
 };

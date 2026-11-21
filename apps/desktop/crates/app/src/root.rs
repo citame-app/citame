@@ -2560,7 +2560,7 @@ impl Root {
             Overlay::IntakeForms(_) => self.close_intake_forms(cx),
             Overlay::SalonConfiguration(_) => self.close_salon_configuration(cx),
             Overlay::EmailDelivery(_) => self.dismiss_email_delivery(cx),
-            Overlay::Whatsapp(_) => self.open_web_management(cx),
+            Overlay::Whatsapp(_) => self.close_whatsapp_desk(cx),
             Overlay::BookingPolicy(_) => self.dismiss_booking_policy(cx),
             Overlay::ServiceAssignments(_) => self.close_service_assignment(cx),
             Overlay::ServiceCatalog(_) => self.close_service_catalog(cx),

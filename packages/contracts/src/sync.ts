@@ -642,6 +642,7 @@ export const syncLiveViewSchema = z.enum([
   "booking_policy",
   "email_delivery",
   "whatsapp_desk",
+  "whatsapp_settings",
   "resource_catalogue",
   "service_combinations",
 ]);

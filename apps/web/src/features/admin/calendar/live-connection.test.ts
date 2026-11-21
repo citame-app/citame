@@ -218,6 +218,14 @@ test("a WhatsApp marker refreshes deliveries and leaves the rule editor query al
   expect([...liveQueryKeys(["whatsapp_desk"])]).toEqual([["admin", "whatsapp", "deliveries"]]);
 });
 
+test("a WhatsApp settings marker refreshes only the saved connection and rules", async () => {
+  const h = harness(async () => ({ ...response(11), changes: [], refresh: ["whatsapp_settings"] }));
+  h.send(10);
+  h.send(11);
+  await waitFor(() => expect(h.onChanges).toHaveBeenCalledWith([], ["whatsapp_settings"]));
+  expect([...liveQueryKeys(["whatsapp_settings"])]).toEqual([["admin", "whatsapp", "connection"]]);
+});
+
 test("a portfolio marker refreshes the gallery without refetching the calendar", async () => {
   const h = harness(async () => ({ ...response(11), changes: [], refresh: ["portfolio"] }));
   h.send(10);

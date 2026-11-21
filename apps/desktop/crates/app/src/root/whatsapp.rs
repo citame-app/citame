@@ -1,18 +1,23 @@
 use super::*;
+
+mod automations;
 use sob_core::auth::BrowserWorkspace;
 use sob_core::http::whatsapp::{
-    Connection, Delivery, Event, LIVE_TOPIC, Status as DeliveryStatus, Variable, WhatsAppDesk,
+    Connection, Delivery, DeskRefresh, Event, LIVE_TOPIC, Status as DeliveryStatus, Variable,
+    WhatsAppDesk,
 };
-use sob_core::sync::TransportError;
 use std::time::Instant;
 
 pub(super) struct Desk {
     identity: Arc<()>,
     snapshot: Option<WhatsAppDesk>,
-    observed: Option<i64>,
-    retry_after: Option<Instant>,
+    refresh: DeskRefresh,
     loading: bool,
     error: bool,
+    editor: Option<automations::Editor>,
+    editing_request: bool,
+    editor_message: Option<Key>,
+    confirm_discard: bool,
 }
 
 fn event_key(event: Event) -> Key {
@@ -61,48 +66,59 @@ impl Root {
         self.overlay = Overlay::Whatsapp(Box::new(Desk {
             identity: Arc::new(()),
             snapshot: None,
-            observed: None,
-            retry_after: None,
+            refresh: DeskRefresh::default(),
             loading: false,
             error: false,
+            editor: None,
+            editing_request: false,
+            editor_message: None,
+            confirm_discard: false,
         }));
-        self.load_whatsapp_desk(cx);
+        self.load_whatsapp_desk(true, cx);
+        cx.notify();
+    }
+
+    pub(super) fn close_whatsapp_desk(&mut self, cx: &mut Context<Self>) {
+        let Overlay::Whatsapp(desk) = &mut self.overlay else {
+            return;
+        };
+        if desk.editing_request {
+            return;
+        }
+        if desk.confirm_discard {
+            desk.confirm_discard = false;
+        } else if let Some(editor) = &desk.editor {
+            if editor.dirty() {
+                desk.confirm_discard = true;
+            } else {
+                desk.editor = None;
+                desk.editor_message = None;
+            }
+        } else {
+            self.open_web_management(cx);
+        }
         cx.notify();
     }
 
     pub(super) fn refresh_whatsapp_desk(&mut self, reconnected: bool, cx: &mut Context<Self>) {
-        let Overlay::Whatsapp(desk) = &self.overlay else {
-            return;
-        };
-        if self.status.connectivity != Connectivity::Online || desk.loading {
-            return;
-        }
-        let current = self.svc.store.live_view_revision(LIVE_TOPIC).ok();
-        let changed = current != desk.observed;
-        let due = desk
-            .retry_after
-            .is_some_and(|waiting| Instant::now() >= waiting);
-        if reconnected || due || (changed && desk.retry_after.is_none()) {
-            self.load_whatsapp_desk(cx);
-        }
+        self.load_whatsapp_desk(reconnected, cx);
     }
 
-    fn load_whatsapp_desk(&mut self, cx: &mut Context<Self>) {
+    fn load_whatsapp_desk(&mut self, requested: bool, cx: &mut Context<Self>) {
         if self.status.connectivity != Connectivity::Online {
+            return;
+        }
+        let Overlay::Whatsapp(desk) = &mut self.overlay else {
+            return;
+        };
+        let cursor = self.svc.store.live_view_revision(LIVE_TOPIC).ok();
+        if desk.loading || !desk.refresh.ready(cursor, requested, Instant::now()) {
             return;
         }
         let Some(transport) = self.svc.transport() else {
             return;
         };
-        let Overlay::Whatsapp(desk) = &mut self.overlay else {
-            return;
-        };
-        if desk.loading {
-            return;
-        }
         desk.loading = true;
-        desk.retry_after = None;
-        let cursor = self.svc.store.live_view_revision(LIVE_TOPIC).ok();
         let identity = desk.identity.clone();
         let session = self.svc.session.clone();
         cx.notify();
@@ -125,20 +141,13 @@ impl Root {
                 desk.error = result.is_err();
                 match result {
                     Ok(snapshot) => {
-                        desk.observed = cursor;
+                        desk.refresh.applied(cursor);
                         desk.snapshot = Some(snapshot);
                     }
-                    Err(TransportError::Offline(_) | TransportError::Server(_)) => {
-                        desk.retry_after = Some(Instant::now() + std::time::Duration::from_secs(3));
-                    }
-                    Err(TransportError::RateLimited(delay)) => {
-                        desk.retry_after = Instant::now()
-                            .checked_add(delay.unwrap_or(std::time::Duration::from_secs(3)));
-                        desk.observed = cursor;
-                    }
-                    Err(_) => {
-                        desk.observed = cursor;
-                        desk.snapshot = None;
+                    Err(error) => {
+                        if !desk.refresh.failed(cursor, &error, Instant::now()) {
+                            desk.snapshot = None;
+                        }
                     }
                 }
                 cx.notify();
@@ -233,46 +242,89 @@ impl Root {
             .when(desk.loading && desk.snapshot.is_none(), |body| {
                 body.child(self.t(Key::EmailDeliveryWorking))
             })
-            .when_some(desk.snapshot.as_ref(), |body, snapshot| {
-                body.when_some(snapshot.connection.as_ref(), |body, connection| {
-                    body.child(self.render_whatsapp_connection(connection))
-                })
-                .when(!snapshot.configured, |body| {
-                    body.child(self.t(Key::WhatsappNotConfigured))
-                })
-                .when(
-                    snapshot.configured && snapshot.connection.is_none(),
-                    |body| body.child(self.t(Key::WhatsappNotConnected)),
-                )
-                .child(
-                    div()
-                        .pt_2()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(self.t(Key::WhatsappDeliveries)),
-                )
-                .when(snapshot.deliveries.is_empty(), |body| {
-                    body.child(self.t(Key::WhatsappNoDeliveries))
-                })
-                .children(snapshot.deliveries.iter().map(|delivery| {
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .justify_between()
-                        .gap_2()
-                        .py_1()
-                        .child(div().text_sm().child(format!(
-                            "{} · {}",
-                            self.t(event_key(delivery.kind)),
-                            self.date_time_label(delivery.scheduled_for)
-                        )))
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(self.t(delivery_key(delivery))),
-                        )
-                }))
+            .when(
+                online
+                    && desk.editor.is_none()
+                    && !desk.editing_request
+                    && desk.snapshot.as_ref().is_some_and(|snapshot| {
+                        snapshot.configured
+                            && snapshot.connection.as_ref().is_some_and(|connection| {
+                                connection
+                                    .expires_at
+                                    .is_none_or(|expires| expires > Utc::now())
+                            })
+                    }),
+                |body| body.child(self.whatsapp_automation_button(cx)),
+            )
+            .when_some(
+                desk.snapshot.as_ref().filter(|_| desk.editor.is_none()),
+                |body, snapshot| {
+                    body.when_some(snapshot.connection.as_ref(), |body, connection| {
+                        body.child(self.render_whatsapp_connection(connection))
+                    })
+                    .when(!snapshot.configured, |body| {
+                        body.child(self.t(Key::WhatsappNotConfigured))
+                    })
+                    .when(
+                        snapshot.configured && snapshot.connection.is_none(),
+                        |body| body.child(self.t(Key::WhatsappNotConnected)),
+                    )
+                    .child(
+                        div()
+                            .pt_2()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(self.t(Key::WhatsappDeliveries)),
+                    )
+                    .when(snapshot.deliveries.is_empty(), |body| {
+                        body.child(self.t(Key::WhatsappNoDeliveries))
+                    })
+                    .children(snapshot.deliveries.iter().map(|delivery| {
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .justify_between()
+                            .gap_2()
+                            .py_1()
+                            .child(div().text_sm().child(format!(
+                                "{} · {}",
+                                self.t(event_key(delivery.kind)),
+                                self.date_time_label(delivery.scheduled_for)
+                            )))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(self.t(delivery_key(delivery))),
+                            )
+                    }))
+                },
+            )
+            .when_some(desk.editor_message, |body, message| {
+                body.child(self.t(message))
             })
+            .when(desk.editing_request, |body| {
+                body.child(self.t(Key::EmailDeliveryWorking))
+            })
+            .when(desk.confirm_discard, |body| {
+                body.child(self.t(Key::SalonConfirmDiscard))
+                    .child(self.button(
+                        "whatsapp-discard-confirm",
+                        self.t(Key::ReviewDiscard),
+                        Kind::Primary,
+                        cx.listener(|root, _, _, cx| {
+                            if let Overlay::Whatsapp(desk) = &mut root.overlay {
+                                desk.editor = None;
+                                desk.editor_message = None;
+                                desk.confirm_discard = false;
+                                cx.notify();
+                            }
+                        }),
+                    ))
+            })
+            .when_some(
+                desk.editor.as_ref().filter(|_| !desk.confirm_discard),
+                |body, editor| body.child(self.render_whatsapp_automations(desk, editor, cx)),
+            )
             .child(
                 div()
                     .flex()
@@ -282,25 +334,28 @@ impl Root {
                         "whatsapp-back",
                         self.t(Key::Back),
                         Kind::Ghost,
-                        cx.listener(|root, _, _, cx| root.open_web_management(cx)),
+                        cx.listener(|root, _, _, cx| root.close_whatsapp_desk(cx)),
                     ))
-                    .when(online, |row| {
-                        row.child(self.button(
-                            "whatsapp-reload",
-                            self.t(Key::WhatsappRefresh),
-                            Kind::Ghost,
-                            cx.listener(|root, _, _, cx| root.load_whatsapp_desk(cx)),
-                        ))
-                        .child(self.button(
-                            "whatsapp-web",
-                            self.t(Key::WhatsappOpenWeb),
-                            Kind::Primary,
-                            cx.listener(|root, _, _, cx| {
-                                root.open_web_management(cx);
-                                root.open_web_workspace(Some(BrowserWorkspace::Whatsapp), cx);
-                            }),
-                        ))
-                    }),
+                    .when(
+                        online && desk.editor.is_none() && !desk.editing_request,
+                        |row| {
+                            row.child(self.button(
+                                "whatsapp-reload",
+                                self.t(Key::WhatsappRefresh),
+                                Kind::Ghost,
+                                cx.listener(|root, _, _, cx| root.load_whatsapp_desk(true, cx)),
+                            ))
+                            .child(self.button(
+                                "whatsapp-web",
+                                self.t(Key::WhatsappOpenWeb),
+                                Kind::Primary,
+                                cx.listener(|root, _, _, cx| {
+                                    root.open_web_management(cx);
+                                    root.open_web_workspace(Some(BrowserWorkspace::Whatsapp), cx);
+                                }),
+                            ))
+                        },
+                    ),
             );
         self.modal_with_height(
             div().min_h_0().child(content),

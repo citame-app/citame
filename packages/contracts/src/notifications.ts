@@ -130,6 +130,12 @@ export const whatsappRulesSchema = z
     (rules) => new Set(rules.map(({ kind }) => kind)).size === rules.length,
     "Choose one WhatsApp template per event",
   );
+const whatsappRevision = z.string().regex(/^[a-f0-9]{64}$/);
+export const whatsappReviewedRulesSchema = z.strictObject({
+  revision: whatsappRevision,
+  rules: whatsappRulesSchema,
+});
+export type WhatsAppReviewedRules = z.infer<typeof whatsappReviewedRulesSchema>;
 export const whatsappCompleteSchema = z
   .object({
     code: z.string().min(8).max(4096),
@@ -157,6 +163,7 @@ export const whatsappSettingsSchema = z.object({
   connection: z
     .object({
       phone: z.string(),
+      revision: whatsappRevision.optional(),
       coexistence: z.boolean(),
       rules: whatsappRulesSchema,
       expiresAt: instantSchema.nullable(),
@@ -182,6 +189,7 @@ export const whatsappDeskSchema = z.object({
   connection: whatsappSettingsSchema.shape.connection
     .unwrap()
     .extend({
+      revision: whatsappRevision,
       rules: z.array(whatsappRuleSchema.extend({ templateName: z.string(), language: z.string() })),
     })
     .nullable(),
