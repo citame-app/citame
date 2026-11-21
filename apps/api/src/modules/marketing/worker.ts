@@ -194,13 +194,19 @@ export function createMarketingWorker(options: {
         await finish(row, { status: "skipped", reason: "review_eligibility_changed" });
         return;
       }
-      const client = await clientRoot(db, row.clientId);
+      const { client, permission } = await db.transaction(
+        async (tx) => {
+          const client = await clientRoot(tx, row.clientId);
+          const permission = client.id === row.clientId ? await consentFor(tx, client.id) : null;
+          return { client, permission };
+        },
+        { isolationLevel: "repeatable read", accessMode: "read only" },
+      );
       if (client.id !== row.clientId) {
         await finish(row, { status: "skipped", reason: "client_identity_changed" });
         return;
       }
-      const permission = await consentFor(db, client.id);
-      if (!permission[row.channel].enabled) {
+      if (!permission?.[row.channel].enabled) {
         await finish(row, { status: "skipped", reason: "marketing_permission_withdrawn" });
         return;
       }

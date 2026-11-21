@@ -1501,6 +1501,7 @@ keys! {
     DirectoryEdit => ("Edit contact", "Editar contacto"),
     DirectorySave => ("Save contact", "Guardar contacto"),
     DirectoryNotes => ("Internal notes", "Notas internas"),
+    DirectoryEmailHelp => ("Confirm the address for appointment messages. Record marketing permission again after a change.", "Confirma la dirección para los avisos de citas. Si cambia, vuelve a registrar el consentimiento para campañas."),
     DirectoryHistory => ("Recent visits on this device", "Últimas citas en este dispositivo"),
     DirectoryNoVisits => ("No synced visits", "No hay citas sincronizadas"),
     NoMatchingClients => ("No matching clients", "No hay clientes que coincidan"),

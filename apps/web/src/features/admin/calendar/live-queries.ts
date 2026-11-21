@@ -28,6 +28,7 @@ const shared: Record<SyncEntity | SyncLiveView, readonly (readonly string[])[]> 
   ],
   client: [
     reviewRequestQueryKey,
+    ["marketing-consent", "admin"],
     ["admin", "clients"],
     ["admin", "client"],
     ["admin", "calendar"],

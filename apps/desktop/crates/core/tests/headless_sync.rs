@@ -5363,28 +5363,39 @@ fn native_directory_replays_contacts_and_preserves_newer_edits() {
     second.sync();
     let original = read(&second);
     let first_snapshot = read(&first);
+    assert!(first_snapshot.email_editable);
     ops::update_directory_client(
         &mut first.store,
         &first_snapshot,
         "Reviewed name",
         "",
+        Some("reviewed-contact@example.test"),
         "Saved by first device",
     )
     .unwrap();
     assert_eq!(read(&first).name, "Reviewed name");
     assert!(read(&first).phone.is_none());
+    assert_eq!(
+        read(&first).email.as_deref(),
+        Some("reviewed-contact@example.test")
+    );
     first.sync();
     ops::update_directory_client(
         &mut second.store,
         &original,
         "Stale name",
         "12345",
+        Some("stale-contact@example.test"),
         "Saved by second device",
     )
     .unwrap();
     second.sync();
     assert_eq!(read(&second).name, "Reviewed name");
     assert!(read(&second).phone.is_none());
+    assert_eq!(
+        read(&second).email.as_deref(),
+        Some("reviewed-contact@example.test")
+    );
     assert!(second.store.conflicts().unwrap().iter().any(|conflict| {
         conflict.entity_id == id
             && conflict.kind == "client.update"
@@ -5429,11 +5440,13 @@ fn native_directory_replays_contacts_and_preserves_newer_edits() {
         &reviewed_contact,
         "Contact after controls",
         "",
+        Some(""),
         "Unchanged booking access",
     )
     .unwrap();
     second.sync();
     assert_eq!(read(&second).name, "Contact after controls");
+    assert!(read(&second).email.is_none());
     assert_eq!(
         second.transport.client_controls(&id).unwrap().version,
         saved.version

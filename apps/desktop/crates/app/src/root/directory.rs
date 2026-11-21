@@ -183,7 +183,8 @@ impl Root {
         let phone = form.phone.read(cx).text();
         let notes = form.notes.read(cx).text();
         let result = if let Some(previous) = &form.previous {
-            ops::update_directory_client(&mut self.svc.store, previous, name, phone, notes)
+            let email = previous.email_editable.then(|| form.email.read(cx).text());
+            ops::update_directory_client(&mut self.svc.store, previous, name, phone, email, notes)
         } else {
             ops::create_directory_client(
                 &mut self.svc.store,
@@ -267,11 +268,19 @@ impl Root {
                         }))
                         .child(self.directory_field(Key::ClientName, form.name.clone()))
                         .child(self.directory_field(Key::ClientPhone, form.phone.clone()))
-                        .when(form.previous.is_none(), |d| {
-                            d.child(self.directory_field(Key::Email, form.email.clone()))
-                        })
+                        .when(
+                            form.previous.as_ref().is_none_or(|c| c.email_editable),
+                            |d| d.child(self.directory_field(Key::Email, form.email.clone())),
+                        )
+                        .when(
+                            form.previous.as_ref().is_some_and(|c| c.email_editable),
+                            |d| d.child(self.label(Key::DirectoryEmailHelp)),
+                        )
                         .when_some(
-                            form.previous.as_ref().and_then(|c| c.email.clone()),
+                            form.previous
+                                .as_ref()
+                                .filter(|c| !c.email_editable)
+                                .and_then(|c| c.email.clone()),
                             |d, email| {
                                 d.child(div().text_sm().text_color(theme::muted()).child(email))
                             },

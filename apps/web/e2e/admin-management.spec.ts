@@ -98,6 +98,24 @@ for (const scheme of ["light", "dark"] as const) {
         .fill("Synthetic browser test: explicit permission");
       await page.getByRole("button", { name: "Save changes", exact: true }).first().click();
       await expect(page.getByText("Marketing preference saved", { exact: true })).toBeVisible();
+      await page.getByRole("button", { name: "Profile", exact: true }).click();
+      const email = page.getByLabel("Contact email", { exact: true });
+      await email.fill(`corrected-${unique}@example.com`);
+      const contactForm = page.getByRole("form", { name: "Contact", exact: true });
+      const emailSaved = page.waitForResponse(
+        (response) =>
+          response.request().method() === "PATCH" && response.url().includes("/api/admin/clients/"),
+      );
+      await contactForm.getByRole("button", { name: "Save changes", exact: true }).click();
+      expect((await emailSaved).ok()).toBe(true);
+      await expect(
+        contactForm.getByRole("button", { name: "Save changes", exact: true }),
+      ).toBeDisabled();
+      await page.reload();
+      await page.getByRole("button", { name: "Profile", exact: true }).click();
+      await expect(email).toHaveValue(`corrected-${unique}@example.com`);
+      await page.getByRole("button", { name: "Marketing consent", exact: true }).click();
+      await expect(permission).not.toBeChecked();
       await expectNoHorizontalScroll(page);
       await expectNoSeriousA11yViolations(page, `Client ${scheme}`);
       await page.goto("/admin/clients");

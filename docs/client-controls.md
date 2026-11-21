@@ -15,3 +15,11 @@ In Desktop, open a synced client from **Clients** and select **Client tags & boo
 **Clients → Client groups** lists normalized tags and their counts using the same normalization as Cloud. Choose a group to filter the local directory. Search matches its group names and contact fields, including the names, phone numbers and email addresses of merged aliases. These searches work offline after synchronization. Results and group counts use the active contact. Choose **All clients** to clear the group. A previously linked device refreshes its group data after upgrading and connecting to a server that supports client groups, while retaining the existing contacts and queued edits.
 
 Migration `0016` adds the controls to client profiles with safe defaults, leaving existing clients with normal access. The optional `controlsVersion` field is compatible with existing sync clients. Shared server-side booking checks enforce the block when offline work reconnects.
+
+## Contact email
+
+Web and Desktop can change or clear the email of an active standalone contact after reviewing the
+current contact revision. Desktop queues the change offline and surfaces a conflict if the reviewed
+revision becomes stale. A linked account keeps control of its sign-in email. Changing a contact
+email withdraws existing email marketing permission. Appointment messages resolve the current
+contact, and SMS marketing permission is independent. The edit never establishes an account link.

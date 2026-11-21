@@ -29,6 +29,7 @@ import type { Principal } from "../../auth/principal";
 import { clientIdentityIds, clientRoot, requireClientRoot } from "../../client-identity";
 import { DomainError } from "../../errors";
 import { listClientAppointments } from "../appointments/service";
+import { withdrawContactEmailConsent } from "../marketing/consent";
 import { groupName } from "./groups";
 
 export interface AdminActor {
@@ -167,6 +168,7 @@ export async function getAdminClient(
       name: clientProfile.name,
       phone: clientProfile.phone,
       email: clientProfile.email,
+      emailEditable: sql<boolean>`${clientProfile.userId} is null and ${clientProfile.mergedIntoId} is null`,
       notes: clientProfile.notes,
       tags: clientProfile.tags,
       contactDetails: clientProfile.contactDetails,
@@ -185,6 +187,7 @@ export async function getAdminClient(
     name: row.name,
     phone: row.phone,
     email: row.email,
+    emailEditable: row.emailEditable,
     notes: row.notes,
     tags: row.tags,
     contactDetails: row.contactDetails,
@@ -226,7 +229,7 @@ export async function getClientDetail(db: Database, id: string): Promise<ClientD
   );
 }
 
-type Editable = "name" | "phone" | "notes" | "contactDetails" | "detailsVersion";
+type Editable = "name" | "phone" | "email" | "notes" | "contactDetails" | "detailsVersion";
 
 /** Changes only what differs; the audit entry lists field names, never the values (notes are private). */
 export async function updateClient(
@@ -248,6 +251,16 @@ export async function updateClient(
     if (expectedUpdatedAt && Date.parse(expectedUpdatedAt) !== current.updatedAt.getTime())
       throw new DomainError("version_conflict", "The client changed since this device reviewed it");
     const changes: Partial<Pick<typeof clientProfile.$inferInsert, Editable>> = {};
+    if (input.emailChange) {
+      if (current.userId !== null)
+        throw new DomainError("forbidden", "The account owner controls this email address");
+      if (Date.parse(input.emailChange.expectedUpdatedAt) !== current.updatedAt.getTime())
+        throw new DomainError(
+          "version_conflict",
+          "The contact changed; reload before editing its email",
+        );
+      if (input.emailChange.email !== current.email) changes.email = input.emailChange.email;
+    }
     if (input.name !== undefined && input.name !== current.name) {
       changes.name = input.name;
       if (
@@ -270,6 +283,7 @@ export async function updateClient(
     const changed = Object.keys(changes).sort();
     if (changed.length > 0) {
       await tx.update(clientProfile).set(changes).where(eq(clientProfile.id, id));
+      if (changes.email !== undefined) await withdrawContactEmailConsent(tx, id, actor.userId);
       await recordAudit(tx, {
         actorUserId: actor.userId,
         action: "client.update",

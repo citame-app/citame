@@ -1,4 +1,6 @@
 import {
+  clientEmailChangeSchema,
+  LIMITS,
   permissionsFor,
   phoneSchema,
   type StaffAccessPreset,
@@ -67,6 +69,12 @@ export function ClientDetail({
   const query = useQuery(clientDetailQuery(clientId));
   const staff = useQuery(adminStaffQuery);
   const [form, setForm] = useState({ name: "", phone: "", notes: "" });
+  const [emailDraft, setEmailDraft] = useState<{
+    clientId: string;
+    value: string;
+    expectedUpdatedAt: string;
+  } | null>(null);
+  const emailInput = useRef<HTMLInputElement>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [metaDraft, setMetaDraft] = useState(() => contactDraft());
   const [metaBase, setMetaBase] = useState(() => ({ id: "", version: 1, draft: contactDraft() }));
@@ -80,6 +88,11 @@ export function ClientDetail({
   const [mergeDirty, setMergeDirty] = useState(false);
 
   const client = query.data?.client;
+  const reviewedEmail = emailDraft?.clientId === clientId ? emailDraft : null;
+  const emailValue = reviewedEmail?.value ?? client?.email ?? "";
+  const emailDirty = Boolean(reviewedEmail && emailValue.trim() !== (client?.email ?? ""));
+  const staleEmail =
+    emailDirty && (!client?.emailEditable || reviewedEmail?.expectedUpdatedAt !== client.updatedAt);
   const previousContact = useRef<{ id: string; name: string; phone: string; notes: string } | null>(
     null,
   );
@@ -117,22 +130,34 @@ export function ClientDetail({
   const dirty =
     Boolean(client) &&
     (detailsDirty ||
+      emailDirty ||
       form.name !== (client?.name ?? "") ||
       form.phone !== (client?.phone ?? "") ||
       form.notes !== (client?.notes ?? ""));
 
   const save = useMutation({
     mutationFn: (changes: UpdateClientRequest) => api().admin.clients.update(clientId, changes),
-    onSuccess: (saved) => {
+    onSuccess: (saved, changes) => {
       const draft = contactDraft(saved.contactDetails);
       setMetaDraft(draft);
       setMetaBase({ id: saved.id, version: saved.detailsVersion ?? 1, draft });
+      if (changes.emailChange) {
+        queryClient.setQueryData(clientDetailQuery(saved.id).queryKey, (current) =>
+          current ? { ...current, client: saved } : current,
+        );
+        setEmailDraft((current) => (current?.clientId === saved.id ? null : current));
+        void queryClient.invalidateQueries({ queryKey: ["marketing-consent", "admin", saved.id] });
+      }
       toast.success(t("clients.detail.saved"));
       void queryClient.invalidateQueries({ queryKey: ["admin", "client", clientId] });
       void queryClient.invalidateQueries({ queryKey: ["admin", "clients"] });
     },
-    onError: (error) =>
-      toast.error(`${t("clients.detail.saveFailed")}. ${t(describeProblem(error).messageKey)}`),
+    onError: (error, changes) => {
+      if (changes.emailChange && error instanceof ApiError && error.code === "version_conflict") {
+        void queryClient.invalidateQueries({ queryKey: clientDetailQuery(clientId).queryKey });
+      }
+      toast.error(`${t("clients.detail.saveFailed")}. ${t(describeProblem(error).messageKey)}`);
+    },
   });
 
   const remove = useMutation({
@@ -179,6 +204,18 @@ export function ClientDetail({
       else if (!phoneSchema.safeParse(form.phone).success) found.phone = t("clients.error.phone");
       else next.phone = form.phone.trim();
     }
+    if (emailDirty && reviewedEmail && client.emailEditable && !staleEmail) {
+      const parsed = clientEmailChangeSchema.safeParse({
+        email: emailValue.trim() || null,
+        expectedUpdatedAt: reviewedEmail.expectedUpdatedAt,
+      });
+      if (parsed.success && !emailInput.current?.validity.typeMismatch)
+        next.emailChange = parsed.data;
+      else {
+        found.email = t("clients.detail.emailInvalid");
+        if (!found.name && !found.phone) emailInput.current?.focus();
+      }
+    }
     if (form.notes !== (client.notes ?? ""))
       next.notes = form.notes.trim() === "" ? null : form.notes;
     if (detailsDirty) {
@@ -192,7 +229,12 @@ export function ClientDetail({
       }
     }
     setErrors(found);
-    if (!staleDetails && Object.keys(found).length === 0 && Object.keys(next).length > 0)
+    if (
+      !staleDetails &&
+      !staleEmail &&
+      Object.keys(found).length === 0 &&
+      Object.keys(next).length > 0
+    )
       save.mutate(next);
   }
 
@@ -338,7 +380,52 @@ export function ClientDetail({
               }}
               error={errors.phone}
             />
-            <TextField label={t("clients.detail.email")} value={client.email ?? ""} readOnly />
+            {client.emailEditable ? (
+              <TextField
+                ref={emailInput}
+                label={t("clients.detail.contactEmail")}
+                hint={t("clients.detail.contactEmailHelp")}
+                type="email"
+                name="contact-email"
+                autoComplete="off"
+                maxLength={LIMITS.email}
+                value={emailValue}
+                readOnly={save.isPending}
+                error={errors.email}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setEmailDraft(
+                    value === (client.email ?? "")
+                      ? null
+                      : {
+                          clientId,
+                          value,
+                          expectedUpdatedAt: reviewedEmail?.expectedUpdatedAt ?? client.updatedAt,
+                        },
+                  );
+                  setErrors(({ email: _cleared, ...rest }) => rest);
+                }}
+              />
+            ) : (
+              <TextField label={t("clients.detail.email")} value={client.email ?? ""} readOnly />
+            )}
+            {staleEmail && (
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm text-danger-fg" role="status">
+                  {t("clients.detail.emailStale")}
+                </p>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => {
+                    setEmailDraft(null);
+                    setErrors(({ email: _cleared, ...rest }) => rest);
+                  }}
+                >
+                  {t("clients.detail.useCurrentEmail")}
+                </Button>
+              </div>
+            )}
             <TextAreaField
               label={t("clients.detail.notes")}
               hint={t("clients.detail.notes.hint")}
@@ -387,7 +474,11 @@ export function ClientDetail({
               </div>
             )}
             <div className="flex flex-wrap items-center gap-3">
-              <Button type="submit" disabled={!dirty || staleDetails} loading={save.isPending}>
+              <Button
+                type="submit"
+                disabled={!dirty || staleDetails || staleEmail}
+                loading={save.isPending}
+              >
                 {t("admin.save")}
               </Button>
               {dirty && <span className="text-sm text-warning-fg">{t("admin.unsaved.badge")}</span>}

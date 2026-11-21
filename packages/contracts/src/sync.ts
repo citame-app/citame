@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { appointmentSchema, createAppointmentBaseSchema } from "./appointments";
 import { calendarAppointmentSchema } from "./calendar";
+import { clientEmailChangeSchema } from "./clients";
 import { idSchema, instantSchema, LIMITS, localDateSchema, syncGenerationSchema } from "./common";
 import { dateShiftRangesSchema } from "./date-shifts";
 import {
@@ -151,6 +152,7 @@ const clientUpdate = z.object({
     .object({
       id: idSchema,
       expectedUpdatedAt: instantSchema.optional(),
+      emailChange: clientEmailChangeSchema.optional(),
       name: z.string().trim().min(1).max(LIMITS.name).optional(),
       phone: z.string().trim().min(3).max(LIMITS.phone).nullable().optional(),
       notes: z.string().max(LIMITS.notes).nullable().optional(),
@@ -522,6 +524,7 @@ export const syncClientSchema = z.object({
   name: z.string(),
   phone: z.string().nullable(),
   email: z.string().nullable(),
+  emailEditable: z.boolean().optional(),
   notes: z.string().nullable(),
   controlsVersion: z.number().int().positive().optional(),
   groupNames: z.array(z.string().min(1)).optional(),

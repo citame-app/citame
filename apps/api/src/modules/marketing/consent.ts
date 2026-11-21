@@ -159,3 +159,23 @@ export async function unsubscribeMarketing(
     return { unsubscribed: true as const };
   });
 }
+
+/** The caller must hold the active client profile lock used for consent edits. */
+export async function withdrawContactEmailConsent(tx: Tx, clientId: string, actorId: string) {
+  await tx
+    .update(marketingConsent)
+    .set({
+      enabled: false,
+      source: "Contact email changed",
+      version: sql`${marketingConsent.version}+1`,
+      recordedBy: actorId,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(marketingConsent.clientId, clientId),
+        eq(marketingConsent.channel, "email"),
+        eq(marketingConsent.enabled, true),
+      ),
+    );
+}

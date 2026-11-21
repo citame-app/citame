@@ -229,6 +229,8 @@ pub struct Client {
     pub name: String,
     pub phone: Option<String>,
     pub email: Option<String>,
+    #[serde(default)]
+    pub email_editable: bool,
     pub notes: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controls_version: Option<u64>,
@@ -246,6 +248,7 @@ impl Client {
             && self.name == reviewed.name
             && self.phone == reviewed.phone
             && self.email == reviewed.email
+            && self.email_editable == reviewed.email_editable
             && self.notes == reviewed.notes
             && self.created_at == reviewed.created_at
             && self.updated_at == reviewed.updated_at

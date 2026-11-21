@@ -620,6 +620,12 @@ pub fn create_directory_client(
     notes: &str,
 ) -> Result<String> {
     require_directory(store)?;
+    let email = validate_directory_email(email)?;
+    check_len("notes", notes, MAX_NOTES)?;
+    enqueue_client(store, name, Some(phone), email, Some(notes))
+}
+
+fn validate_directory_email(email: &str) -> Result<Option<&str>> {
     let email = email.trim();
     check_len("email", email, 254)?;
     if !email.is_empty()
@@ -630,8 +636,7 @@ pub fn create_directory_client(
     {
         return Err(CoreError::Invalid("Enter a valid email address".into()));
     }
-    check_len("notes", notes, MAX_NOTES)?;
-    enqueue_client(store, name, Some(phone), Some(email), Some(notes))
+    Ok((!email.is_empty()).then_some(email))
 }
 
 fn require_directory(store: &Store) -> Result<()> {
@@ -691,6 +696,7 @@ pub fn update_directory_client(
     expected: &Client,
     name: &str,
     phone: &str,
+    email: Option<&str>,
     notes: &str,
 ) -> Result<()> {
     require_directory(store)?;
@@ -725,6 +731,18 @@ pub fn update_directory_client(
     }
     if phone != expected.phone.as_deref() {
         body["phone"] = json!(phone);
+    }
+    if let Some(raw) = email
+        && raw != expected.email.as_deref().unwrap_or_default()
+        && (!raw.trim().is_empty()).then_some(raw.trim()) != expected.email.as_deref()
+    {
+        if !expected.email_editable {
+            return Err(CoreError::Invalid("This contact email is read-only".into()));
+        }
+        body["emailChange"] = json!({
+            "email": validate_directory_email(raw)?,
+            "expectedUpdatedAt": iso(expected.updated_at),
+        });
     }
     if notes != expected.notes.as_deref() {
         body["notes"] = json!(notes);

@@ -86,7 +86,15 @@ beforeEach(() => {
       if (init?.method === "PATCH") {
         const body = JSON.parse(String(init.body));
         patches.push(body);
-        detail = { ...detail, client: { ...detail.client, ...body } };
+        const { emailChange, ...fields } = body;
+        detail = {
+          ...detail,
+          client: {
+            ...detail.client,
+            ...fields,
+            ...(emailChange ? { email: emailChange.email, updatedAt: NOW.toISOString() } : {}),
+          },
+        };
         return json(detail.client);
       }
       if (init?.method === "DELETE") {
@@ -114,6 +122,54 @@ const open = (role: "owner" | "staff" = "owner", onDeleted: () => void = () => {
   );
 
 describe("ClientDetail", () => {
+  test("edits a standalone email with its reviewed revision and defers validation until save", async () => {
+    detail.client.emailEditable = true;
+    open();
+    const email = await screen.findByLabelText("Contact email");
+    const submit = screen.getByRole("button", { name: "Save changes" });
+    fireEvent.change(email, { target: { value: "invalid" } });
+    expect(screen.queryByText("Enter a valid email address.")).toBeNull();
+    fireEvent.click(submit);
+    expect(await screen.findByText("Enter a valid email address.")).toBeVisible();
+    expect(patches).toHaveLength(0);
+    fireEvent.change(email, { target: { value: "corrected@example.org" } });
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(patches).toEqual([
+        {
+          emailChange: {
+            email: "corrected@example.org",
+            expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+      ]),
+    );
+    await waitFor(() => expect(submit).toBeDisabled());
+    expect(email).toHaveValue("corrected@example.org");
+    fireEvent.change(email, { target: { value: "" } });
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(patches[1]).toEqual({
+        emailChange: { email: null, expectedUpdatedAt: NOW.toISOString() },
+      }),
+    );
+  });
+
+  test("keeps an email draft when the reviewed revision changes until the operator resets it", async () => {
+    detail.client.emailEditable = true;
+    const { queryClient } = open();
+    const email = await screen.findByLabelText("Contact email");
+    fireEvent.change(email, { target: { value: "draft@example.org" } });
+    detail.client = { ...detail.client, email: "server@example.org", updatedAt: NOW.toISOString() };
+    await act(() => queryClient.invalidateQueries({ queryKey: ["admin", "client", CLIENT] }));
+    const reset = await screen.findByRole("button", { name: "Use current email" });
+    expect(email).toHaveValue("draft@example.org");
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    fireEvent.click(reset);
+    expect(email).toHaveValue("server@example.org");
+    expect(patches).toHaveLength(0);
+  });
+
   test("shows the contact form prefilled, with the email read-only", async () => {
     open();
     expect(await screen.findByRole("heading", { name: "Lucia Perez" })).toBeInTheDocument();

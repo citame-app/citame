@@ -6,7 +6,7 @@ import {
   errorResponseSchema,
   listClientsResponseSchema,
 } from "@sob/contracts";
-import { auditLog, clientProfile } from "@sob/db";
+import { auditLog, clientProfile, marketingConsent } from "@sob/db";
 import { asc, eq } from "drizzle-orm";
 import {
   type Actor,
@@ -205,6 +205,59 @@ describe("GET /admin/clients/:id", () => {
 });
 
 describe("PATCH /admin/clients/:id", () => {
+  test("changes only a standalone contact email and withdraws consent for the previous address", async () => {
+    const detail = async (id: string) =>
+      clientDetailResponseSchema.parse(
+        await (await call(owner, "GET", `/admin/clients/${id}`)).json(),
+      ).client;
+    const before = await detail(marta);
+    expect(before.emailEditable).toBe(true);
+    await t.db.insert(marketingConsent).values(
+      (["email", "sms"] as const).map((channel) => ({
+        clientId: marta,
+        channel,
+        enabled: true,
+        source: "Synthetic consent",
+        version: 1,
+      })),
+    );
+    const path = `/admin/clients/${marta}`;
+    const reviewed = (email: string | null, expectedUpdatedAt = before.updatedAt) => ({
+      emailChange: { email, expectedUpdatedAt },
+    });
+    const changed = await call(ana, "PATCH", path, reviewed("corrected@example.org"));
+    expect(changed.status).toBe(200);
+    const saved = adminClientSchema.parse(await changed.json());
+    expect(saved.email).toBe("corrected@example.org");
+    const [contact] = await t.db.select().from(clientProfile).where(eq(clientProfile.id, marta));
+    expect(contact?.userId).toBeNull();
+    expect(
+      await t.db.select().from(marketingConsent).where(eq(marketingConsent.clientId, marta)),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ channel: "email", enabled: false, version: 2 }),
+        expect.objectContaining({ channel: "sms", enabled: true, version: 1 }),
+      ]),
+    );
+    expect((await audit("client.update")).at(-1)?.metadata).toEqual({ changed: ["email"] });
+    expect((await call(owner, "PATCH", path, reviewed("stale@example.org"))).status).toBe(409);
+    const cleared = await call(owner, "PATCH", path, reviewed(null, saved.updatedAt));
+    expect(adminClientSchema.parse(await cleared.json()).email).toBeNull();
+    const linked = await detail(client.clientId!);
+    expect(linked.emailEditable).toBe(false);
+    expect(
+      (
+        await call(
+          owner,
+          "PATCH",
+          `/admin/clients/${linked.id}`,
+          reviewed("elsewhere@example.org", linked.updatedAt),
+        )
+      ).status,
+    ).toBe(403);
+    expect((await detail(linked.id)).email).toBe(linked.email);
+  });
+
   test("updates name, phone and notes, audits only the changed field names", async () => {
     const res = await call(owner, "PATCH", `/admin/clients/${marta}`, {
       name: "Marta G.",

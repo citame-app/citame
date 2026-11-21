@@ -398,6 +398,7 @@ pub fn directory_clients(store: &Store) -> Result<ClientDirectory> {
                         name,
                         phone: str_of(payload, "phone"),
                         email: str_of(payload, "email"),
+                        email_editable: false,
                         notes: str_of(payload, "notes"),
                         controls_version: None,
                         group_names: Some(Vec::new()),
@@ -413,6 +414,9 @@ pub fn directory_clients(store: &Store) -> Result<ClientDirectory> {
                     }
                     if payload.get("phone").is_some() {
                         client.phone = str_of(payload, "phone");
+                    }
+                    if let Some(email) = payload.pointer("/emailChange/email") {
+                        client.email = email.as_str().map(str::to_owned);
                     }
                     if payload.get("notes").is_some() {
                         client.notes = str_of(payload, "notes");

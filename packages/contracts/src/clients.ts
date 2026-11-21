@@ -33,6 +33,7 @@ export const adminClientSchema = z.object({
   name: z.string(),
   phone: z.string().nullable(),
   email: z.string().nullable(),
+  emailEditable: z.boolean().optional(),
   notes: z.string().nullable(),
   tags: z.array(z.string()).optional(),
   contactDetails: clientContactDetailsSchema.optional(),
@@ -74,9 +75,17 @@ export const clientDetailResponseSchema = z.object({
 });
 export type ClientDetailResponse = z.infer<typeof clientDetailResponseSchema>;
 
-/** Identity (email, login link) is deliberately not editable here. */
+export const clientEmailChangeSchema = z
+  .object({
+    email: z.string().trim().pipe(z.email().max(LIMITS.email)).nullable(),
+    expectedUpdatedAt: instantSchema,
+  })
+  .strict();
+
+/** Account email remains controlled by the account owner. */
 export const updateClientRequestSchema = z
   .object({
+    emailChange: clientEmailChangeSchema.optional(),
     contactDetails: clientContactDetailsSchema.optional(),
     detailsVersion: z.number().int().positive().optional(),
     name: z.string().trim().min(1).max(LIMITS.name),

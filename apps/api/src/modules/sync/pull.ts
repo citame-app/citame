@@ -142,6 +142,7 @@ async function loadVisible(
           name: r.name,
           phone: r.phone,
           email: r.email,
+          emailEditable: r.userId === null && r.mergedIntoId === null,
           notes: r.notes,
           controlsVersion: r.controlsVersion,
           ...(r.groupNames ? { groupNames: r.groupNames } : {}),

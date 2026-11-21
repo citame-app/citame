@@ -22,6 +22,13 @@ export const clientsEn = {
   "clients.detail.name": "Full name",
   "clients.detail.phone": "Phone",
   "clients.detail.email": "Email (read only)",
+  "clients.detail.contactEmail": "Contact email",
+  "clients.detail.contactEmailHelp":
+    "Used for appointment messages. Record permission again before sending marketing to a changed address.",
+  "clients.detail.emailInvalid": "Enter a valid email address.",
+  "clients.detail.emailStale":
+    "The contact changed. Use the current email before editing it again.",
+  "clients.detail.useCurrentEmail": "Use current email",
   "clients.detail.notes": "Private notes",
   "clients.detail.notes.hint":
     "Only the team sees these. Allergies, preferences, anything worth remembering.",
@@ -69,6 +76,13 @@ export const clientsEsAR: Record<keyof typeof clientsEn, string> = {
   "clients.detail.name": "Nombre completo",
   "clients.detail.phone": "Teléfono",
   "clients.detail.email": "Correo (solo lectura)",
+  "clients.detail.contactEmail": "Correo de contacto",
+  "clients.detail.contactEmailHelp":
+    "Se usa para los avisos de citas. Si cambia, vuelve a registrar el consentimiento antes de enviar campañas.",
+  "clients.detail.emailInvalid": "Introduce una dirección de correo válida.",
+  "clients.detail.emailStale":
+    "El contacto ha cambiado. Usa el correo actual antes de volver a editarlo.",
+  "clients.detail.useCurrentEmail": "Usar el correo actual",
   "clients.detail.notes": "Notas privadas",
   "clients.detail.notes.hint":
     "Solo las ve el equipo. Alergias, preferencias, cualquier cosa que valga la pena recordar.",
