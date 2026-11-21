@@ -1,6 +1,7 @@
 export const notificationsEn = {
   "account.nav.notifications": "Notifications",
   "notify.title": "Notifications",
+  "notify.preferencesTitle": "Contact preferences",
   "notify.lead": "Choose how the salon contacts you about your appointments.",
   "notify.language": "Language of messages",
   "notify.language.default": "Salon default",
@@ -50,6 +51,7 @@ export const notificationsEn = {
 export const notificationsEsAR: Record<keyof typeof notificationsEn, string> = {
   "account.nav.notifications": "Notificaciones",
   "notify.title": "Notificaciones",
+  "notify.preferencesTitle": "Preferencias de contacto",
   "notify.lead": "Elige cómo te contacta el salón por tus turnos.",
   "notify.language": "Idioma de los mensajes",
   "notify.language.default": "El del salón",

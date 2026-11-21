@@ -27,10 +27,12 @@ export function useStampNoticeCount(mode: CommerceMode, userId: string, enabled:
 export function StampNotices({
   mode,
   userId,
+  headingLevel = 3,
   onNavigate,
 }: {
   mode: CommerceMode;
   userId: string;
+  headingLevel?: 2 | 3;
   onNavigate?: () => void;
 }) {
   const { t, locale, timeZone } = useI18n();
@@ -54,11 +56,12 @@ export function StampNotices({
     },
   });
   const result = query.data;
+  const Heading = headingLevel === 2 ? "h2" : "h3";
   return (
     <section aria-labelledby={id} className="space-y-3">
-      <h3 id={id} ref={heading} tabIndex={-1} className="text-heading">
+      <Heading id={id} ref={heading} tabIndex={-1} className="text-heading">
         {t("stamps.noticeTitle")}
-      </h3>
+      </Heading>
       <div className="flex flex-wrap gap-2">
         {[false, true].map((value) => (
           <Button

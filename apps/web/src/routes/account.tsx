@@ -86,7 +86,7 @@ function AccountLayout() {
               <Link to="/account/notifications" className={tabClass}>
                 {t("account.nav.notifications")}
                 <span
-                  className="ml-2 min-w-6 rounded-full bg-accent-soft px-1 text-center text-xs tabular-nums"
+                  className="ml-2 min-w-6 rounded-full bg-accent-soft px-1 text-center text-xs text-accent-soft-fg tabular-nums"
                   style={{ visibility: notices ? "visible" : "hidden" }}
                 >
                   {notices > 99 ? "99+" : notices}
