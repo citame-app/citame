@@ -501,10 +501,13 @@ test("desktop photo writes are private, replay safely and emit a commerce refres
   expect(created).toMatchObject({
     version: item.version,
     stockOnHand: item.stockOnHand,
-    photoVersion: expect.any(String),
   });
-  const imagePath = `${path}/photo/${created.photoVersion}`;
-  expect((await call(staff, imagePath)).headers.get("cache-control")).toBe("private, no-store");
+  const photoVersion = productPhotoVersionSchema.parse({ version: created.photoVersion }).version;
+  if (!photoVersion) throw new Error("Stock photo was not attached to the product");
+  const imagePath = `${path}/photo/${photoVersion}`;
+  const image = await call(staff, imagePath);
+  expect(image.status, image.ok ? undefined : await image.clone().text()).toBe(200);
+  expect(image.headers.get("cache-control")).toBe("private, no-store");
   expect((await call(client, imagePath)).status).toBe(403);
   expect((await push(t, owner, [{ ...create, mutationId: mid() }])).body.results[0]).toMatchObject({
     status: "rejected",
@@ -515,7 +518,7 @@ test("desktop photo writes are private, replay safely and emit a commerce refres
     mutationId: mid(),
     payload: {
       id: item.id,
-      version: created.photoVersion,
+      version: photoVersion,
       imageBase64: null,
     },
   };
