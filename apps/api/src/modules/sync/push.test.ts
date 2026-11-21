@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { desktopSalonSettingsSchema } from "@sob/contracts";
+import {
+  adminServiceSchema,
+  desktopSalonSettingsSchema,
+  listAdminServicesResponseSchema,
+  serviceSchema,
+} from "@sob/contracts";
 import {
   appointment,
   clientProfile,
@@ -615,6 +620,84 @@ describe("other last-writer-wins entities and tombstones", () => {
     );
     const { body } = await push(t, owner, [stale]);
     expect(body.results[0]).toMatchObject({ status: "rejected", reason: "conflict" });
+  });
+
+  test("reviewed service assignments sync without erasing a concurrent team edit", async () => {
+    const assign = (reviewedStaffIds: string[], staffIds: string[]) =>
+      mutation("service.staff_replace", { id: f.haircutId, reviewedStaffIds, staffIds });
+    const read = async () => {
+      const response = await call(owner, "GET", "/admin/services");
+      expect(response.status).toBe(200);
+      const { services } = listAdminServicesResponseSchema.parse(await response.json());
+      const saved = services.find((row) => row.id === f.haircutId);
+      if (!saved) throw new Error("Missing fixture service");
+      return saved.staffIds;
+    };
+    const initial = [f.beaId, f.anaId];
+    const queued = assign(initial, [f.anaId]);
+    const cursor = (await pull(t, owner)).headSeq;
+    expect((await push(t, ana, [assign(initial, [f.anaId])])).body.results[0]).toMatchObject({
+      status: "rejected",
+      reason: "forbidden",
+    });
+    expect((await push(t, owner, [queued])).body.results[0]).toMatchObject({ status: "applied" });
+    expect(await read()).toEqual([f.anaId]);
+    expect((await pull(t, ana, { since: cursor })).changes).toContainEqual(
+      expect.objectContaining({ entity: "service_staff", op: "delete" }),
+    );
+    expect((await push(t, owner, [queued])).body.results[0]).toMatchObject({
+      status: "applied",
+      replayed: true,
+    });
+    expect((await push(t, owner, [assign(initial, [])])).body.results[0]).toMatchObject({
+      status: "rejected",
+      reason: "conflict",
+    });
+    expect(await read()).toEqual([f.anaId]);
+    await t.db.update(staffProfile).set({ active: false }).where(eq(staffProfile.id, f.anaId));
+    expect(
+      (await push(t, owner, [assign([f.anaId], [f.anaId, f.beaId])])).body.results[0],
+    ).toMatchObject({
+      status: "applied",
+    });
+    expect(new Set(await read())).toEqual(new Set(initial));
+  });
+
+  test("a reviewed variant can be booked after its queued assignment without changing the quote", async () => {
+    const created = await call(owner, "POST", "/admin/services", {
+      name: "Extended haircut",
+      durationMinutes: 45,
+      priceCents: 12500,
+      currency: "ARS",
+      staffIds: [f.beaId],
+      catalog: { kind: "variant", parentServiceId: f.haircutId, optionLabel: "Extended" },
+    });
+    expect(created.status).toBe(201);
+    const variant = adminServiceSchema.parse(await created.json());
+    const variants = (await pullAll(t, owner)).changes;
+    const reviewed = serviceSchema.parse(
+      variants.find((entry) => entry.entity === "service" && entry.id === variant.id)?.data,
+    );
+    if (!reviewed.quoteHash) throw new Error("Missing reviewed variant quote");
+    const startsAt = MONDAY_0900;
+    const id = uuid();
+    const result = await push(t, owner, [
+      mutation("service.staff_replace", {
+        id: variant.id,
+        reviewedStaffIds: [f.beaId],
+        staffIds: [f.anaId],
+      }),
+      mutation("appointment.create", {
+        id,
+        staffId: f.anaId,
+        clientId: f.clientId,
+        serviceIds: [variant.id],
+        serviceQuotes: { [variant.id]: reviewed.quoteHash },
+        startsAt,
+      }),
+    ]);
+    expect(result.body.results.map((entry) => entry.status)).toEqual(["applied", "applied"]);
+    expect(await t.db.select().from(appointment).where(eq(appointment.id, id))).toHaveLength(1);
   });
 
   test("a reviewed settings edit replays safely and cannot overwrite a newer Cloud revision", async () => {

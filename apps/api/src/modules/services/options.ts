@@ -42,7 +42,11 @@ export async function catalogMetadata(
   }
   return result;
 }
-export function publicService(row: CatalogRow, catalog?: ServiceCatalog): Service {
+export function publicService(
+  row: CatalogRow,
+  catalog?: ServiceCatalog,
+  quoteFormat: "terms" | "legacy" = "terms",
+): Service {
   const fields = {
     id: row.id,
     name: row.name,
@@ -68,7 +72,12 @@ export function publicService(row: CatalogRow, catalog?: ServiceCatalog): Servic
     currency: row.currency,
     ...(catalog ? { catalog } : {}),
   };
-  const quoteHash = createHash("sha256").update(JSON.stringify(fields)).digest("hex");
+  let quotedFields: typeof fields | object = fields;
+  if (catalog && quoteFormat === "terms") {
+    const { version: _revision, ...terms } = catalog;
+    quotedFields = { ...fields, catalog: terms };
+  }
+  const quoteHash = createHash("sha256").update(JSON.stringify(quotedFields)).digest("hex");
   return {
     ...fields,
     quoteHash,

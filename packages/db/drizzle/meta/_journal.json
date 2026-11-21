@@ -589,6 +589,13 @@
       "when": 1795213487911,
       "tag": "0083_booking_policy_live_view",
       "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1795213487912,
+      "tag": "0084_refresh_service_option_quotes",
+      "breakpoints": true
     }
   ]
 }

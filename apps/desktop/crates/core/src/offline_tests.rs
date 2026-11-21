@@ -50,8 +50,159 @@ fn up(seq: i64, entity: &str, id: &str, data: serde_json::Value) -> RawChange {
 
 const T0: &str = "2026-03-01T10:00:00.000Z";
 
+#[test]
+fn service_assignment_survives_restart_and_requires_review_on_a_changed_team() {
+    use crate::store::{AssignmentWork, ServiceAssignment};
+
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("replica.sqlite");
+    let mut store = Store::open(&path).unwrap();
+    seed(&mut store);
+    let link = |seq, id, staff| {
+        up(
+            seq,
+            "service_staff",
+            id,
+            json!({"id": id, "serviceId": CUT, "staffId": staff}),
+        )
+    };
+    store.apply_page(&[link(8, "ana-cut", ANA)], 8).unwrap();
+    let baseline = store.service_assignment(CUT).unwrap();
+    let change = ServiceAssignment {
+        id: CUT.into(),
+        reviewed_staff_ids: baseline.staff_ids.clone(),
+        staff_ids: [BEA.into()].into(),
+    };
+    store
+        .queue_service_assignment(&baseline.generation, &change, None)
+        .unwrap();
+    assert!(
+        store
+            .queue_service_assignment(&baseline.generation, &change, None)
+            .is_err()
+    );
+    drop(store);
+
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(
+        store.service_assignment(CUT).unwrap().work,
+        AssignmentWork::Pending(change.clone())
+    );
+    assert!(performed_services(&store, ANA).unwrap().is_empty());
+    assert_eq!(performed_services(&store, BEA).unwrap(), vec![CUT]);
+    let queued = store.outbox(1).unwrap();
+    let rejected = MutationResult::Rejected {
+        mutation_id: queued[0].mutation_id.clone(),
+        reason: "conflict".into(),
+        message: "changed".into(),
+        replayed: false,
+    };
+    store.apply_push_results(&queued, &[rejected]).unwrap();
+    store.apply_page(&[link(9, "bea-cut", BEA)], 9).unwrap();
+    let refreshed = store.service_assignment(CUT).unwrap();
+    let AssignmentWork::Conflict {
+        id,
+        change: rejected,
+    } = refreshed.work
+    else {
+        panic!("expected saved proposal");
+    };
+    assert_eq!(change, rejected);
+    assert!(
+        store
+            .queue_service_assignment(&refreshed.generation, &change, Some(&id))
+            .is_err()
+    );
+    let reviewed = ServiceAssignment {
+        staff_ids: change.proposed_on(&refreshed.staff_ids),
+        reviewed_staff_ids: refreshed.staff_ids,
+        ..change
+    };
+    store
+        .queue_service_assignment(&refreshed.generation, &reviewed, Some(&id))
+        .unwrap();
+    assert!(store.conflicts().unwrap().is_empty());
+    assert_eq!(
+        store.service_assignment(CUT).unwrap().work,
+        AssignmentWork::Pending(reviewed)
+    );
+}
+
+#[test]
+fn a_confirmed_empty_team_is_unavailable_and_pending_changes_can_be_revised_offline() {
+    use crate::store::ServiceAssignment;
+
+    let mut store = seeded();
+    store.set_meta("calendar_snapshot_complete", "1").unwrap();
+    assert!(performed_services(&store, ANA).unwrap().is_empty());
+    assert!(create_appointment(&mut store, new_appt("2026-03-10T15:00:00Z")).is_err());
+    let base = store.service_assignment(CUT).unwrap();
+    let first = ServiceAssignment {
+        id: CUT.into(),
+        reviewed_staff_ids: base.staff_ids,
+        staff_ids: [ANA.into()].into(),
+    };
+    store
+        .queue_service_assignment(&base.generation, &first, None)
+        .unwrap();
+    assert_eq!(performed_services(&store, ANA).unwrap(), vec![CUT]);
+    let latest = store.service_assignment(CUT).unwrap();
+    let second = ServiceAssignment {
+        id: CUT.into(),
+        reviewed_staff_ids: latest.reviewed_team().clone(),
+        staff_ids: [BEA.into()].into(),
+    };
+    store
+        .queue_service_assignment(&latest.generation, &second, None)
+        .unwrap();
+    assert!(performed_services(&store, ANA).unwrap().is_empty());
+    assert_eq!(performed_services(&store, BEA).unwrap(), vec![CUT]);
+    let mut booking = new_appt("2026-03-10T15:00:00Z");
+    booking.service_ids = vec![CUT.into()];
+    let booking_id = create_appointment(&mut store, booking).unwrap();
+    assert!(reschedule_appointment(&mut store, &booking_id, None, Some(ANA)).is_err());
+    let queue = store.outbox(10).unwrap();
+    assert_eq!(
+        queue
+            .iter()
+            .map(|entry| entry.kind.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "service.staff_replace",
+            "service.staff_replace",
+            "appointment.create"
+        ]
+    );
+    let prior = &queue[..2];
+    let rejected = prior
+        .iter()
+        .map(|entry| MutationResult::Rejected {
+            mutation_id: entry.mutation_id.clone(),
+            reason: "conflict".into(),
+            message: "Cloud team changed".into(),
+            replayed: false,
+        })
+        .collect::<Vec<_>>();
+    store.apply_push_results(prior, &rejected).unwrap();
+    let selected = store
+        .review_service_assignment(CUT, Some(&prior[1].mutation_id))
+        .unwrap();
+    assert_eq!(
+        selected.work,
+        crate::store::AssignmentWork::Conflict {
+            id: prior[1].mutation_id.clone(),
+            change: second,
+        }
+    );
+}
+
 fn seeded() -> Store {
     let mut s = Store::open_in_memory().unwrap();
+    seed(&mut s);
+    s
+}
+
+fn seed(s: &mut Store) {
     let changes = vec![
         up(
             1,
@@ -103,7 +254,6 @@ fn seeded() -> Store {
         ),
     ];
     s.apply_page(&changes, 7).unwrap();
-    s
 }
 
 fn new_appt(start: &str) -> NewAppointment {

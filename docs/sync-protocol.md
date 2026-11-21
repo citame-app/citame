@@ -117,6 +117,7 @@ A malformed envelope (no `deviceId`, empty or more than 100 mutations, an elemen
 | `time_off.update`        | `id`, `staffId`, any of `startsAt`, `endsAt`, `reason`                                                                                                      | same                         | LWW                  |
 | `time_off.delete`        | `id`, `staffId`                                                                                                                                             | same                         | LWW                  |
 | `service.update`         | `id`, any catalog field or `active`                                                                                                                         | owner                        | LWW                  |
+| `service.staff_replace`  | `id`, `reviewedStaffIds`, `staffIds`. The server compares the current team with the reviewed set before replacing assignments.                            | owner                        | exact team set       |
 | `staff.update`           | `id`, `displayName?`, `active?`                                                                                                                             | owner                        | LWW                  |
 | `settings.update`        | `{ expectedRevision, changes }` with the edited salon settings fields. Legacy clients may send a flat settings patch.                                      | owner                        | revision or legacy LWW |
 

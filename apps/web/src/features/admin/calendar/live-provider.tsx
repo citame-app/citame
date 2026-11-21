@@ -50,7 +50,9 @@ export function CalendarLiveProvider({ children }: { children: ReactNode }) {
             queryKey[0] === "intake" ||
             queryKey[0] === "booking-policy" ||
             (queryKey[0] === "admin" &&
-              (queryKey[1] === "staff" || queryKey[1] === "booking-policy"))
+              (queryKey[1] === "staff" ||
+                queryKey[1] === "services" ||
+                queryKey[1] === "booking-policy"))
           ) {
             // A pending first load can otherwise reuse a response started before the event.
             void queryClient.cancelQueries({ queryKey }).then(() => {

@@ -19,6 +19,7 @@ type Svc = {
   currency: string;
   active: boolean;
   staffIds: string[];
+  version?: number;
 };
 let services: Svc[];
 let calls: { method: string; path: string; body: unknown }[];
@@ -292,6 +293,44 @@ describe("ServicesView", () => {
       path: `/api/admin/services/${CUT}/configuration`,
       body: { version: 1, service: { priceCents: 1_600_000 }, staffIds: [ANA, BEA] },
     });
+  });
+
+  test("assignment refresh updates a clean team and preserves a busy editor's draft", async () => {
+    const { queryClient } = open();
+    const replaceTeam = async (staffIds: string[], version: number) => {
+      services = services.map((row) => (row.id === CUT ? { ...row, staffIds, version } : row));
+      await queryClient.invalidateQueries({ queryKey: ["admin", "services"] });
+    };
+    fireEvent.click(
+      within(await screen.findByRole("table", { name: "Services" })).getByRole("button", {
+        name: "Haircut",
+      }),
+    );
+    const dialog = within(await screen.findByRole("dialog", { name: "Edit service" }));
+    const ana = dialog.getByRole("checkbox", { name: "Ana" });
+    const bea = dialog.getByRole("checkbox", { name: "Bea" });
+    const price = dialog.getByLabelText("Price");
+    fireEvent.change(price, { target: { value: "16000" } });
+    expect(bea).toBeChecked();
+    await replaceTeam([ANA], 2);
+    await waitFor(() => expect(bea).not.toBeChecked());
+    expect(price).toHaveValue("16000");
+    fireEvent.click(ana);
+    await replaceTeam([ANA, BEA], 3);
+    await dialog.findByRole("status");
+    const save = dialog.getByRole("button", { name: "Save changes" });
+    expect(save).toBeDisabled();
+    fireEvent.click(dialog.getByRole("button", { name: "Review updated assignments" }));
+    expect(ana).not.toBeChecked();
+    expect(bea).toBeChecked();
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(writes()[0]?.body).toMatchObject({
+        version: 3,
+        staffIds: [BEA],
+        service: { priceCents: 1_600_000 },
+      }),
+    );
   });
 
   test("closing a dirty form asks before discarding", async () => {

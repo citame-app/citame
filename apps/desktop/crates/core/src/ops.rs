@@ -1,6 +1,6 @@
 //! User actions. Each one writes to the outbox first; the calendar shows it as pending at once.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde_json::{Map, Value, json};
@@ -214,18 +214,34 @@ pub enum Resolution {
     Dismiss,
 }
 
-/// Services a staff member performs, per the synced `service_staff` links. Empty links (nothing
-/// synced yet) mean "unknown", reported as every service so the server stays the judge.
+/// Apply queued assignments before a later booking enters the same ordered outbox.
 pub fn performed_services(store: &Store, staff_id: &str) -> Result<Vec<String>> {
     let links = store.service_staff()?;
-    if links.is_empty() {
-        return Ok(store.services()?.into_iter().map(|s| s.id).collect());
+    let mut performed: BTreeSet<String> =
+        if links.is_empty() && store.get_meta("calendar_snapshot_complete")?.is_none() {
+            store.services()?.into_iter().map(|s| s.id).collect()
+        } else {
+            links
+                .into_iter()
+                .filter(|l| l.staff_id == staff_id)
+                .map(|l| l.service_id)
+                .collect()
+        };
+    for change in store.pending_service_assignments()? {
+        match (
+            change.reviewed_staff_ids.contains(staff_id),
+            change.staff_ids.contains(staff_id),
+        ) {
+            (false, true) => {
+                performed.insert(change.id);
+            }
+            (true, false) => {
+                performed.remove(&change.id);
+            }
+            _ => {}
+        }
     }
-    Ok(links
-        .into_iter()
-        .filter(|l| l.staff_id == staff_id)
-        .map(|l| l.service_id)
-        .collect())
+    Ok(performed.into_iter().collect())
 }
 
 /// Returns the new appointment id.
@@ -380,9 +396,23 @@ fn queue_reschedule(
     }
     let current = editable(store, id)?;
     let start = starts_at.unwrap_or(current.starts_at);
+    let target = staff_id.unwrap_or(&current.staff_id);
+    if target != current.staff_id || start != current.starts_at {
+        let assigned = performed_services(store, target)?;
+        if current
+            .services
+            .iter()
+            .filter_map(|service| service.service_id.as_ref())
+            .any(|id| !assigned.contains(id))
+        {
+            return Err(CoreError::Invalid(
+                "This staff member does not perform every service in the appointment".into(),
+            ));
+        }
+    }
     ensure_local_slot(
         store,
-        staff_id.unwrap_or(&current.staff_id),
+        target,
         (start, start + (current.ends_at - current.starts_at)),
         current.work_windows.as_deref().unwrap_or_default(),
         Some(id),

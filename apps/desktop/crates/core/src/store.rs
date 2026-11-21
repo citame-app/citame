@@ -917,6 +917,7 @@ impl Store {
             )?;
             tx.execute("DELETE FROM meta WHERE key = ?1", [SALON_CONFIGURATION_ACK])?;
         }
+        Self::retire_confirmed_assignments(&tx, next_cursor)?;
         if complete {
             tx.execute(
                 "INSERT OR IGNORE INTO meta (key,value) VALUES ('calendar_snapshot_complete','1')",
@@ -1003,6 +1004,7 @@ impl Store {
             [RESTORED_HISTORY],
         )?;
         tx.execute("DELETE FROM outbox", [])?;
+        tx.execute("DELETE FROM meta WHERE key GLOB 'assignment_ack:*'", [])?;
         tx.execute("DELETE FROM booking_notice", [])?;
         Self::clear_replica(&tx)?;
         tx.execute(
@@ -1350,7 +1352,7 @@ impl Store {
     }
 
     pub fn outbox(&self, limit: usize) -> Result<Vec<OutboxEntry>> {
-        Self::outbox_at(&self.conn, limit, None)
+        Self::outbox_at(&self.conn, limit, None, false)
     }
 
     pub(crate) fn push_snapshot(&self, limit: usize) -> Result<(String, Vec<OutboxEntry>)> {
@@ -1363,6 +1365,7 @@ impl Store {
                 Self::salon_configuration_ack(&tx)?
                     .as_ref()
                     .map(|ack| ack.mutation_id.as_str()),
+                true,
             )?
         } else {
             Vec::new()
@@ -1371,12 +1374,20 @@ impl Store {
         Ok((generation, batch))
     }
 
-    fn outbox_at(conn: &Connection, limit: usize, skip: Option<&str>) -> Result<Vec<OutboxEntry>> {
+    fn outbox_at(
+        conn: &Connection,
+        limit: usize,
+        skip: Option<&str>,
+        for_push: bool,
+    ) -> Result<Vec<OutboxEntry>> {
         let mut stmt = conn.prepare(&format!(
-            "SELECT {OUTBOX_COLS} FROM outbox WHERE ?2 IS NULL OR mutation_id != ?2 ORDER BY seq LIMIT ?1"
+            "SELECT {OUTBOX_COLS} FROM outbox
+             WHERE (?2 IS NULL OR mutation_id != ?2)
+               AND (NOT ?3 OR NOT EXISTS (SELECT 1 FROM meta WHERE key = 'assignment_ack:' || mutation_id))
+             ORDER BY seq LIMIT ?1"
         ))?;
         Ok(stmt
-            .query_map(params![limit as i64, skip], outbox_from_row)?
+            .query_map(params![limit as i64, skip, for_push], outbox_from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
@@ -1448,6 +1459,14 @@ impl Store {
                             &tx,
                             SALON_CONFIGURATION_ACK,
                             &serde_json::to_string(&ack)?,
+                        )?;
+                    } else if let Some(through) = response_head
+                        && s.kind == service_assignments::KIND
+                    {
+                        Self::set_meta_at(
+                            &tx,
+                            &format!("assignment_ack:{}", s.mutation_id),
+                            &through.max(applied_seq.unwrap_or(0)).to_string(),
                         )?;
                     } else {
                         tx.execute(
@@ -1552,6 +1571,9 @@ impl Store {
         Ok(())
     }
 }
+
+mod service_assignments;
+pub use service_assignments::{AssignmentSnapshot, AssignmentWork, ServiceAssignment};
 
 #[cfg(test)]
 mod tests;

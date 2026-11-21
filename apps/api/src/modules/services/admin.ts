@@ -18,7 +18,7 @@ import {
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { DomainError } from "../../errors";
-import { lockScheduling, type Tx } from "../../tx";
+import { lockCalendars, lockScheduling, type Tx } from "../../tx";
 import { catalogMetadata, catalogTargets } from "./options";
 
 type CatalogConnection = Database | Tx;
@@ -359,29 +359,46 @@ export async function setServiceStaff(
   id: string,
   request: SetServiceStaffRequest,
   actor: AdminActor,
+  reviewedStaffIds?: readonly string[],
 ): Promise<AdminService> {
   return db.transaction(async (tx) => {
     await lockScheduling(tx);
     const current = await requireService(tx, id);
     const desired = [...new Set(request.staffIds)];
+    const existing = await tx.select().from(serviceStaff).where(eq(serviceStaff.serviceId, id));
+    const assigned = new Set(
+      existing.filter((link) => !link.deletedAt).map((link) => link.staffId),
+    );
+    if (
+      reviewedStaffIds &&
+      (assigned.size !== reviewedStaffIds.length ||
+        reviewedStaffIds.some((id) => !assigned.has(id)))
+    ) {
+      throw new DomainError(
+        "version_conflict",
+        "Service assignments changed; review the current team",
+      );
+    }
 
-    if (desired.length > 0) {
+    // A reviewed edit can preserve links to staff who are already assigned and inactive.
+    const checked = reviewedStaffIds ? desired.filter((id) => !assigned.has(id)) : desired;
+    if (checked.length > 0) {
+      if (reviewedStaffIds) await lockCalendars(tx, checked);
       const found = await tx
         .select({ id: staffProfile.id })
         .from(staffProfile)
         .where(
           and(
-            inArray(staffProfile.id, desired),
+            inArray(staffProfile.id, checked),
             eq(staffProfile.active, true),
             isNull(staffProfile.deletedAt),
           ),
         );
       const known = new Set(found.map((s) => s.id));
-      const missing = desired.find((staffId) => !known.has(staffId));
+      const missing = checked.find((staffId) => !known.has(staffId));
       if (missing) throw new DomainError("not_found", `Staff member ${missing} not found`);
     }
 
-    const existing = await tx.select().from(serviceStaff).where(eq(serviceStaff.serviceId, id));
     const byStaff = new Map(existing.map((link) => [link.staffId, link]));
     const added: string[] = [];
     const removed: string[] = [];
@@ -493,8 +510,15 @@ export async function updateServiceConfiguration(
       );
     if (input.catalog && input.catalog.version !== input.version)
       throw new DomainError("validation_error", "Review all service options at the same revision");
+    const reviewedStaffIds = (await loadStaffIds(tx, [id])).get(id) ?? [];
     await updateService(tx, id, input.service, actor);
-    let saved = await setServiceStaff(tx, id, { staffIds: input.staffIds }, actor);
+    let saved = await setServiceStaff(
+      tx,
+      id,
+      { staffIds: input.staffIds },
+      actor,
+      reviewedStaffIds,
+    );
     if (input.catalog)
       saved = await updateServiceCatalog(
         tx,

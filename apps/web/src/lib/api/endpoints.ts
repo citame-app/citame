@@ -303,7 +303,8 @@ export function createEndpoints(client: ApiClient) {
       services: {
         configure: (id: string, request: ServiceConfiguration) =>
           client.put(`/admin/services/${id}/configuration`, request, adminServiceSchema),
-        list: () => client.get("/admin/services", listAdminServicesResponseSchema),
+        list: (signal?: AbortSignal) =>
+          client.get("/admin/services", listAdminServicesResponseSchema, { signal }),
         create: (request: CreateServiceRequest) =>
           client.post("/admin/services", request, adminServiceSchema),
         update: (id: string, request: UpdateServiceRequest) =>

@@ -207,6 +207,12 @@ impl Root {
                     Kind::Ghost,
                     cx.listener(|root, _, _, cx| root.open_booking_policy(cx)),
                 ))
+                .child(self.button(
+                    "service-assignments",
+                    self.t(Key::ServiceAssignments),
+                    Kind::Ghost,
+                    cx.listener(|root, _, _, cx| root.open_service_assignments(None, cx)),
+                ))
             })
             .when(online && desk.opening.is_none(), |view| {
                 let links = div()

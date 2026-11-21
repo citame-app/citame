@@ -80,6 +80,10 @@ export async function getServicesByIds(
   db: Pick<Database, "select">,
   ids: string[],
 ): Promise<ServiceRow[]> {
+  return (await readServiceTerms(db, ids)).map(({ row, catalog }) => publicService(row, catalog));
+}
+
+async function readServiceTerms(db: Pick<Database, "select">, ids: string[]) {
   const unique = [...new Set(ids)];
   const rows = await activeCatalogRows(
     db,
@@ -93,7 +97,7 @@ export async function getServicesByIds(
   const result = unique.map((id) => {
     const row = byId.get(id);
     if (!row) throw new DomainError("not_found", `Service ${id} not found`);
-    return publicService(row, metadata.get(id));
+    return { row, catalog: metadata.get(id) };
   });
   return result;
 }
@@ -104,11 +108,19 @@ export async function getBookableServices(
   ids: string[],
   expectedQuotes?: Record<string, string>,
 ) {
-  const rows = await getServicesByIds(db, ids);
+  const terms = await readServiceTerms(db, ids);
+  const rows = terms.map(({ row, catalog }) => publicService(row, catalog));
   if (
     expectedQuotes &&
     (Object.keys(expectedQuotes).length !== rows.length ||
-      rows.some((s) => expectedQuotes[s.id] !== s.quoteHash))
+      rows.some((s, index) => {
+        if (expectedQuotes[s.id] === s.quoteHash) return false;
+        const option = terms[index];
+        return (
+          !option?.catalog ||
+          expectedQuotes[s.id] !== publicService(option.row, option.catalog, "legacy").quoteHash
+        );
+      }))
   )
     throw new DomainError(
       "version_conflict",

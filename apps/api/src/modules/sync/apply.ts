@@ -29,7 +29,7 @@ import {
   updateAppointment,
 } from "../appointments/service";
 import { updateClient } from "../clients/admin";
-import { updateService } from "../services/admin";
+import { setServiceStaff, updateService } from "../services/admin";
 import { getSalonSettings, updateReviewedSettings, updateSalonSettings } from "../settings/service";
 import { requireStaff, updateStaff } from "../staff/admin";
 import { createTimeOff, deleteTimeOff, updateTimeOff } from "../staff/schedule";
@@ -226,6 +226,12 @@ export async function applyMutation(
       assertNewer(current.updatedAt, at);
       await updateService(db, id, changes, actor);
       await db.update(service).set({ updatedAt: at }).where(eq(service.id, id));
+      return;
+    }
+    case "service.staff_replace": {
+      authorizeServiceAdmin(principal);
+      const { id, reviewedStaffIds, staffIds } = mutation.payload;
+      await setServiceStaff(db, id, { staffIds }, actor, reviewedStaffIds);
       return;
     }
     case "staff.update": {

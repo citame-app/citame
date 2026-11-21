@@ -97,6 +97,13 @@ export const servicesEn = {
   "services.field.currency": "Currency (3 letters)",
   "services.field.staff": "Who performs it",
   "services.field.staff.none": "Add team members first to assign them.",
+  "services.field.staff.changed":
+    "Service assignments changed. Review the updated team before saving your draft.",
+  "services.field.staff.review": "Review updated assignments",
+  "services.field.staff.serviceChanged":
+    "The service details and assignments changed. Review the current team and reload the service before saving.",
+  "services.field.staff.discardReload": "Discard draft and reload service",
+  "services.field.staff.reload": "Reload service",
   "services.error.required": "This field is required",
   "services.error.positive": "Enter a whole number greater than zero",
   "services.error.nonNegative": "Enter zero or a positive whole number",
@@ -221,6 +228,13 @@ export const servicesEsAR: Record<keyof typeof servicesEn, string> = {
   "services.field.currency": "Moneda (3 letras)",
   "services.field.staff": "Quién lo realiza",
   "services.field.staff.none": "Primero agrega integrantes del equipo para asignarlos.",
+  "services.field.staff.changed":
+    "Han cambiado las asignaciones del servicio. Revisa el equipo actualizado antes de guardar tu borrador.",
+  "services.field.staff.review": "Revisar asignaciones actualizadas",
+  "services.field.staff.serviceChanged":
+    "Han cambiado los detalles y las asignaciones del servicio. Revisa el equipo actual y vuelve a cargar el servicio antes de guardar.",
+  "services.field.staff.discardReload": "Descartar borrador y recargar servicio",
+  "services.field.staff.reload": "Recargar servicio",
   "services.error.required": "Este campo es obligatorio",
   "services.error.positive": "Ingresa un número entero mayor que cero",
   "services.error.nonNegative": "Ingresa cero o un número entero positivo",

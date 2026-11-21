@@ -9,7 +9,11 @@ import {
   salonResponseSchema,
   updateSalonSettingsRequestSchema,
 } from "./salon";
-import { serviceSchema, updateServiceRequestSchema } from "./services";
+import {
+  serviceSchema,
+  setServiceStaffRequestSchema,
+  updateServiceRequestSchema,
+} from "./services";
 import { timeOfDaySchema, timeOffSchema, weekdaySchema } from "./staff";
 
 /**
@@ -187,6 +191,14 @@ const serviceUpdate = z.object({
     .refine(oneChange, { message: "Provide at least one change", path: ["name"] }),
 });
 
+const serviceStaffReplace = z.object({
+  ...envelope,
+  kind: z.literal("service.staff_replace"),
+  payload: setServiceStaffRequestSchema
+    .extend({ id: idSchema, reviewedStaffIds: setServiceStaffRequestSchema.shape.staffIds })
+    .strict(),
+});
+
 const staffUpdate = z.object({
   ...envelope,
   kind: z.literal("staff.update"),
@@ -216,6 +228,7 @@ export const syncMutationSchema = z.discriminatedUnion("kind", [
   timeOffUpdate,
   timeOffDelete,
   serviceUpdate,
+  serviceStaffReplace,
   staffUpdate,
   settingsUpdate,
 ]);

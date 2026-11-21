@@ -43,7 +43,7 @@ export const calendarWaitlistQuery = (
 
 export const adminServicesQuery = queryOptions({
   queryKey: ["admin", "services"],
-  queryFn: async () => (await api().admin.services.list()).services,
+  queryFn: async ({ signal }) => (await api().admin.services.list(signal)).services,
   staleTime: 30_000,
 });
 

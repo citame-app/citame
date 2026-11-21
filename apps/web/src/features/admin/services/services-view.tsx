@@ -337,6 +337,21 @@ export function ServicesView({ initialServiceId }: { initialServiceId?: string }
   );
 }
 
+function serviceVersion(service: AdminService) {
+  return service.version ?? service.catalog?.version ?? 1;
+}
+
+function withoutStaffRevision({
+  staffIds: _staff,
+  version: _version,
+  catalog,
+  ...fields
+}: AdminService) {
+  if (!catalog) return JSON.stringify(fields);
+  const { version: _catalogRevision, ...terms } = catalog;
+  return JSON.stringify({ ...fields, catalog: terms });
+}
+
 function ServiceSheet({
   service,
   onClose,
@@ -381,6 +396,10 @@ function ServiceSheet({
   );
   const [values, setValues] = useState<ServiceFormValues>(initial);
   const [staffIds, setStaffIds] = useState<string[]>(initialStaff);
+  const [reviewedTeam, setReviewedTeam] = useState(() => ({
+    version: service ? serviceVersion(service) : 1,
+    ids: initialStaff,
+  }));
   const [errors, setErrors] = useState<ServiceFormErrors>({});
   const [catalogKind, setCatalogKind] = useState<"service" | "variant" | "addon">(
     service?.catalog?.kind ?? draft?.kind ?? "service",
@@ -448,6 +467,7 @@ function ServiceSheet({
   const [photosDirty, setPhotosDirty] = useState(false);
   const [discarding, setDiscarding] = useState(false);
   const [open, setOpen] = useState(true);
+  const staffDirty = JSON.stringify([...staffIds].sort()) !== JSON.stringify(reviewedTeam.ids);
   const dirty =
     photosDirty ||
     metadataDirty ||
@@ -455,7 +475,7 @@ function ServiceSheet({
     processingDirty ||
     JSON.stringify(presentation) !== JSON.stringify(defaults) ||
     JSON.stringify(values) !== JSON.stringify(initial) ||
-    JSON.stringify([...staffIds].sort()) !== JSON.stringify(initialStaff);
+    staffDirty;
 
   useEffect(() => {
     if (!open) onClose();
@@ -511,7 +531,7 @@ function ServiceSheet({
           staffIds,
           ...(draft ? { catalog: serviceCatalogCreateSchema.parse(draft) } : {}),
         });
-      const revision = service.version ?? service.catalog?.version ?? 1;
+      const revision = reviewedTeam.version;
       const options =
         catalogKind === "service"
           ? undefined
@@ -536,7 +556,38 @@ function ServiceSheet({
       toast.error(`${t("services.saveFailed")}. ${t(describeProblem(error).messageKey)}`),
   });
 
+  const latest = service ? catalog.find((row) => row.id === service.id) : undefined;
+  const liveTeam =
+    latest && serviceVersion(latest) !== reviewedTeam.version
+      ? { version: serviceVersion(latest), ids: [...latest.staffIds].sort() }
+      : undefined;
+  const updatedTeam =
+    liveTeam && service && latest && withoutStaffRevision(latest) === withoutStaffRevision(service)
+      ? liveTeam
+      : undefined;
+  const changedServiceAndTeam =
+    liveTeam && !updatedTeam && JSON.stringify(liveTeam.ids) !== JSON.stringify(reviewedTeam.ids);
+
+  if (updatedTeam && !staffDirty && open && !save.isPending && !reload.isPending) {
+    setReviewedTeam(updatedTeam);
+    setStaffIds(updatedTeam.ids);
+  }
+
+  function reviewUpdatedTeam() {
+    if (!updatedTeam) return;
+    const retained = updatedTeam.ids.filter(
+      (id) => !reviewedTeam.ids.includes(id) || staffIds.includes(id),
+    );
+    const added = staffIds.filter((id) => !reviewedTeam.ids.includes(id));
+    setStaffIds([...new Set([...retained, ...added])]);
+    setReviewedTeam(updatedTeam);
+  }
+
   function submit() {
+    if (updatedTeam || changedServiceAndTeam) {
+      staffSection.current?.focus();
+      return;
+    }
     const found = validateServiceForm(
       priceType === "variable" || priceType === "free" ? { ...values, price: "0" } : values,
       { allowZeroDuration: catalogKind === "addon" },
@@ -618,7 +669,13 @@ function ServiceSheet({
             >
               {t("admin.cancel")}
             </Button>
-            <Button loading={save.isPending} disabled={service !== null && !dirty} onClick={submit}>
+            <Button
+              loading={save.isPending}
+              disabled={
+                Boolean(updatedTeam || changedServiceAndTeam) || (service !== null && !dirty)
+              }
+              onClick={submit}
+            >
               {t(service ? "admin.save" : "admin.create")}
             </Button>
           </div>
@@ -1025,6 +1082,35 @@ function ServiceSheet({
             </fieldset>
             <fieldset ref={staffSection} tabIndex={-1} className="space-y-1">
               <legend className="mb-1 text-sm font-medium">{t("services.field.staff")}</legend>
+              {updatedTeam && (
+                <div className="space-y-2 rounded-md border border-line p-3">
+                  <p role="status" className="text-sm">
+                    {t("services.field.staff.changed")}
+                  </p>
+                  <Button type="button" variant="secondary" onClick={reviewUpdatedTeam}>
+                    {t("services.field.staff.review")}
+                  </Button>
+                </div>
+              )}
+              {changedServiceAndTeam && (
+                <div className="space-y-2 rounded-md border border-line p-3">
+                  <p role="status" className="text-sm">
+                    {t("services.field.staff.serviceChanged")}
+                  </p>
+                  <ul className="text-sm">
+                    {(staff.data ?? [])
+                      .filter((member) => liveTeam.ids.includes(member.id))
+                      .map((member) => (
+                        <li key={member.id}>{member.displayName}</li>
+                      ))}
+                  </ul>
+                  <Button type="button" variant="secondary" onClick={() => reload.mutate()}>
+                    {t(
+                      dirty ? "services.field.staff.discardReload" : "services.field.staff.reload",
+                    )}
+                  </Button>
+                </div>
+              )}
               {activeStaff.length === 0 && (
                 <p className="text-sm text-muted">{t("services.field.staff.none")}</p>
               )}

@@ -36,7 +36,7 @@ use sob_core::model::*;
 use sob_core::ops::{self, NewAppointment, Resolution};
 use sob_core::reviews::{EmailStatus, ModerationCommand, ReviewStatus};
 use sob_core::runner::{Connectivity, RunnerCore, SharedStatus, SyncRunner};
-use sob_core::store::{SalonConfigurationWork, Store};
+use sob_core::store::{AssignmentWork, SalonConfigurationWork, ServiceAssignment, Store};
 use sob_core::sync::{self, Transport, TransportError};
 use sob_core::waitlist::{
     AcceptOffer, WaitlistPage, WaitlistPolicy, WaitlistRequest, WaitlistState,
@@ -113,6 +113,165 @@ fn native_policy_changes_reach_cloud_and_reject_old_reviews_through_the_proxy() 
             .policy
             .hold_minutes,
         undo.policy.hold_minutes
+    );
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_service_assignments_replay_and_keep_concurrent_cloud_changes_through_the_proxy() {
+    let device = proxy_device();
+    let browser = Device::sign_in();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("assignments.sqlite");
+    let mut store = Store::open(&path).unwrap();
+    sync::pull_all(&mut store, &*device.transport).unwrap();
+    let staff = store.staff().unwrap();
+    let first = staff[0].id.clone();
+    let second = staff[1].id.clone();
+    let service = browser.rest_post(
+        "/admin/services",
+        json!({"name": "Synthetic shared service", "durationMinutes": 20,
+               "priceCents": 500, "currency": "EUR", "staffIds": [&first]}),
+    );
+    let id = service["id"].as_str().unwrap();
+    sync::pull_all(&mut store, &*device.transport).unwrap();
+
+    let base = store.service_assignment(id).unwrap();
+    let draft = ServiceAssignment {
+        id: id.into(),
+        reviewed_staff_ids: base.staff_ids,
+        staff_ids: [second.clone()].into(),
+    };
+    store
+        .queue_service_assignment(&base.generation, &draft, None)
+        .unwrap();
+    drop(store);
+
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(
+        sync::push_outbox(&mut store, &*device.transport)
+            .unwrap()
+            .applied,
+        1
+    );
+    drop(store);
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(
+        store.service_assignment(id).unwrap().work,
+        AssignmentWork::Pending(draft)
+    );
+    assert_eq!(
+        sync::push_outbox(&mut store, &*device.transport)
+            .unwrap()
+            .applied,
+        0
+    );
+    let cloud = browser.rest_get("/admin/services");
+    let changed = cloud["services"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == id)
+        .unwrap();
+    assert_eq!(changed["staffIds"], json!([&second]));
+    sync::pull_all(&mut store, &*device.transport).unwrap();
+    let saved = store.service_assignment(id).unwrap();
+    assert_eq!(saved.work, AssignmentWork::Idle);
+    assert_eq!(saved.staff_ids, [second.clone()].into());
+    store
+        .queue_service_assignment(
+            &saved.generation,
+            &ServiceAssignment {
+                id: id.into(),
+                reviewed_staff_ids: saved.staff_ids,
+                staff_ids: Default::default(),
+            },
+            None,
+        )
+        .unwrap();
+
+    let connected_path = directory.path().join("connected.sqlite");
+    let connected_replica = Store::open(&connected_path).unwrap();
+    let status: SharedStatus = Default::default();
+    let runner = SyncRunner::spawn(RunnerCore::new(
+        Store::open(&connected_path).unwrap(),
+        device.transport.clone(),
+        status.clone(),
+    ));
+    let live = Arc::new(AtomicBool::new(false));
+    let stop = Arc::new(AtomicBool::new(false));
+    let listener = spawn_stream_listener(
+        device.transport.clone(),
+        runner.sender(),
+        live.clone(),
+        stop.clone(),
+    );
+    wait(
+        Duration::from_secs(10),
+        "the native assignment stream",
+        || {
+            status.lock().unwrap().connectivity == Connectivity::Online
+                && live.load(Ordering::SeqCst)
+        },
+    );
+    let prefix = std::env::var("SOB_TEST_REST_PREFIX").unwrap_or_default();
+    ureq::put(&format!(
+        "{}{prefix}/admin/services/{id}/staff",
+        browser.base
+    ))
+    .header("Cookie", &browser.cookie)
+    .header("Origin", &browser.base)
+    .content_type("application/json")
+    .send(json!({"staffIds": [&first, &second]}).to_string())
+    .unwrap();
+    let web_team = [first.clone(), second.clone()].into();
+    wait(
+        Duration::from_secs(4),
+        "web assignment edit in Desktop",
+        || {
+            connected_replica
+                .service_assignment(id)
+                .is_ok_and(|view| view.staff_ids == web_team)
+        },
+    );
+    stop.store(true, Ordering::SeqCst);
+    runner.stop();
+    drop(listener);
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .rejected,
+        1
+    );
+    let current = store.service_assignment(id).unwrap();
+    let AssignmentWork::Conflict {
+        id: mutation,
+        change,
+    } = current.work
+    else {
+        panic!("expected a retained assignment edit");
+    };
+    assert_eq!(current.staff_ids, web_team);
+    let reviewed = ServiceAssignment {
+        staff_ids: change.proposed_on(&current.staff_ids),
+        reviewed_staff_ids: current.staff_ids,
+        ..change
+    };
+    assert_eq!(reviewed.staff_ids, [first].into());
+    store
+        .queue_service_assignment(&current.generation, &reviewed, Some(&mutation))
+        .unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    assert_eq!(
+        store.service_assignment(id).unwrap().staff_ids,
+        reviewed.staff_ids
     );
 }
 

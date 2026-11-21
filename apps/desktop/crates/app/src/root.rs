@@ -52,6 +52,7 @@ mod review_moderation;
 mod reviews;
 mod salon_configuration;
 mod scrollbar;
+mod service_assignments;
 mod settlement;
 mod slots;
 mod staff_portraits;
@@ -258,6 +259,7 @@ enum Overlay {
     Reports(Box<reports::Desk>),
     TeamShifts(Box<team_shifts::Desk>),
     StaffPortraits(Box<staff_portraits::Desk>),
+    ServiceAssignments(Box<service_assignments::Desk>),
     Reviews(Box<reviews::Desk>),
     ReviewModeration(Box<review_moderation::Desk>),
     Waitlist(Box<waitlist::Desk>),
@@ -701,7 +703,10 @@ impl Root {
         if (self.calendar_scope.is_some() && self.calendar_scope != scope)
             || self.replica_generation != generation
         {
-            if !self.preserve_open_salon_draft(cx) && !self.preserve_open_booking_policy_draft(cx) {
+            if !self.preserve_open_salon_draft(cx)
+                && !self.preserve_open_booking_policy_draft(cx)
+                && !self.preserve_open_assignment_draft()
+            {
                 self.overlay = Overlay::None;
             }
             self.notices.clear();
@@ -779,6 +784,7 @@ impl Root {
                     .map(|color| (service.id.clone(), color.clone()))
             })
             .collect();
+        self.refresh_service_assignments(&catalogue);
         self.services = catalogue.into_iter().filter(|s| s.active).collect();
         self.reload_directory();
         self.reload_team_shifts();
@@ -2362,6 +2368,7 @@ impl Root {
             Overlay::IntakeForms(_) => self.close_intake_forms(cx),
             Overlay::SalonConfiguration(_) => self.close_salon_configuration(cx),
             Overlay::BookingPolicy(_) => self.dismiss_booking_policy(cx),
+            Overlay::ServiceAssignments(_) => self.close_service_assignment(cx),
             Overlay::Directory(desk) if desk.intake.is_some() => self.back_record(cx),
             Overlay::ReviewModeration(desk) => {
                 if !desk.dismiss_editor(cx) {
@@ -3256,6 +3263,7 @@ impl Root {
                 "appointment.cancel" => Key::ConflictCancel,
                 "time_off.create" | "time_off.update" | "time_off.delete" => Key::TimeOff,
                 "settings.update" => Key::SalonConfiguration,
+                "service.staff_replace" => Key::ServiceAssignments,
                 _ => Key::ConflictOther,
             });
             let when = c
@@ -3322,26 +3330,44 @@ impl Root {
                                 ))
                             },
                         )
-                        .when(c.requires_restored_review(), |row| {
-                            let details = serde_json::json!({
-                                "kind": c.kind,
-                                "createdAt": c.created_at,
-                                "entityId": c.entity_id,
-                                "payload": c.payload,
-                            });
-                            row.child(self.button(
-                                ("c-copy", i),
-                                self.t(Key::ConflictCopyChange),
-                                Kind::Ghost,
-                                move |_, _, cx| {
-                                    if let Ok(text) = serde_json::to_string_pretty(&details) {
-                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                            text,
-                                        ));
-                                    }
-                                },
-                            ))
-                        })
+                        .when(
+                            c.requires_restored_review() || c.kind == "service.staff_replace",
+                            |row| {
+                                let details = serde_json::json!({
+                                    "kind": c.kind,
+                                    "createdAt": c.created_at,
+                                    "entityId": c.entity_id,
+                                    "payload": c.payload,
+                                });
+                                row.child(self.button(
+                                    ("c-copy", i),
+                                    self.t(Key::ConflictCopyChange),
+                                    Kind::Ghost,
+                                    move |_, _, cx| {
+                                        if let Ok(text) = serde_json::to_string_pretty(&details) {
+                                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                                text,
+                                            ));
+                                        }
+                                    },
+                                ))
+                            },
+                        )
+                        .when(
+                            c.kind == "service.staff_replace" && self.can_configure_salon(),
+                            |row| {
+                                let id = c.entity_id.clone();
+                                let mutation_id = c.mutation_id.clone();
+                                row.child(self.button(
+                                    ("c-service-assignments", i),
+                                    self.t(Key::AssignmentReview),
+                                    Kind::Primary,
+                                    cx.listener(move |root, _, _, cx| {
+                                        root.open_service_assignments(Some((&id, &mutation_id)), cx)
+                                    }),
+                                ))
+                            },
+                        )
                         .child(self.button(
                             ("c-dismiss", i),
                             self.t(Key::ConflictDismiss),
@@ -3584,6 +3610,9 @@ impl Render for Root {
                         }
                         Overlay::StaffPortraits(desk) => {
                             Some(self.render_staff_portraits(desk, window.viewport_size(), cx))
+                        }
+                        Overlay::ServiceAssignments(desk) => {
+                            Some(self.render_service_assignments(desk, window.viewport_size(), cx))
                         }
                         Overlay::Reviews(desk) => {
                             Some(self.render_review_requests(desk, window.viewport_size(), cx))
