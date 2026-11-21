@@ -831,8 +831,8 @@ export async function startPayment(
         );
       const mandateRequested = Boolean(
         recurring &&
-        input.method === "redsys_card" &&
-        (await needsCardMandate(tx, sale, input.amountCents, principal)),
+          input.method === "redsys_card" &&
+          (await needsCardMandate(tx, sale, input.amountCents, principal)),
       );
       for (let attempt = 0; attempt < 3; attempt++) {
         const order = bank ? `${randomInt(1000, 10000)}${randomBytes(4).toString("hex")}` : null;

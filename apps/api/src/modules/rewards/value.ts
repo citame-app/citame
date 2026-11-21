@@ -132,13 +132,14 @@ export async function canReturnCheckoutPoints(
   > | null,
   loaded?: CheckoutValueRows,
 ) {
-  return Boolean(
-    reward?.kind === "points" &&
-    reward.state === "applied" &&
-    reward.returnedPoints < reward.pointsUsed &&
-    sale.fulfilledAt &&
-    (await retainedValue(tx, sale, loaded)).totalRetained === 0,
-  );
+  if (
+    reward?.kind !== "points" ||
+    reward.state !== "applied" ||
+    reward.returnedPoints >= reward.pointsUsed ||
+    !sale.fulfilledAt
+  )
+    return false;
+  return (await retainedValue(tx, sale, loaded)).totalRetained === 0;
 }
 /** Return oldest allocations first so repeated partial returns are monotonic and cent-exact. */
 async function restoreRedemption(
