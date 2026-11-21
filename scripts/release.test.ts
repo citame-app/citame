@@ -450,6 +450,7 @@ test.each([
     cwd: root,
     env: {
       PATH: `${root}:${process.env.PATH}`,
+      TMPDIR: root,
       TAG: "v0.1.0",
       GITHUB_REPOSITORY: "test/repo",
       RELEASE_TAG: "v0.1.0",
