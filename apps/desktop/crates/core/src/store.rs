@@ -1200,6 +1200,7 @@ impl Store {
                         | crate::booking_policy::LIVE_TOPIC
                         | crate::http::email_delivery::LIVE_TOPIC
                         | crate::http::marketing::LIVE_TOPIC
+                        | crate::promotions::LIVE_TOPIC
                         | crate::http::whatsapp::LIVE_TOPIC
                         | crate::service_resources::LIVE_TOPIC
                 ) {
