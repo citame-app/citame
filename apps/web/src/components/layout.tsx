@@ -151,7 +151,7 @@ export function Footer({ salonName, timeZone }: { salonName: string; timeZone: s
       <div className="wrap editorial-wrap">
         <div className="footer-columns grid gap-6 py-10 sm:grid-cols-2">
           <div>
-            <Link to="/" className="font-display text-2xl">
+            <Link to="/" className="inline-flex min-h-11 items-center font-display text-2xl">
               {salonName}
             </Link>
             <p className="mt-3 max-w-xs text-sm text-muted">{t("footer.tagline")}</p>

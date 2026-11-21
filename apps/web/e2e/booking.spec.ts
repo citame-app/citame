@@ -114,25 +114,41 @@ test.describe("public booking flow", () => {
     expect(overflow).toBeLessThanOrEqual(0);
   });
 
-  test("a service that nobody performs together with another is explained", async ({ page }) => {
+  test("services with no common professional can be scheduled as a team visit", async ({
+    page,
+  }) => {
     await page.goto("/book");
     await page.getByRole("checkbox", { name: /Haircut/ }).check();
     await page.getByRole("checkbox", { name: /Manicure/ }).check();
     await page.getByRole("button", { name: "Continue" }).click();
-    await expect(page.getByText("No one offers all of these services together")).toBeVisible();
-    await page.getByRole("link", { name: "Back to services" }).click();
+    await expect(page.getByRole("radio", { name: "Any available professional" })).toHaveCount(0);
+    await expect(page.getByRole("radio", { name: /Several professionals/ })).toBeVisible();
+    await pickProfessional(page, "Several professionals");
+    await expect(page).toHaveURL((url) => url.pathname === "/book/time");
+    await page.getByRole("link", { name: "Services", exact: true }).click();
     await expect(page.getByRole("checkbox", { name: /Haircut/ })).toBeChecked();
+    await expect(page.getByRole("checkbox", { name: /Manicure/ })).toBeChecked();
   });
 
   test("touch targets on the booking flow are at least 44px", async ({ page }) => {
     await page.goto("/book");
     const small = await page.evaluate(() => {
       const offenders: string[] = [];
-      const targets = document.querySelectorAll("button, a[href], label, select, summary");
+      const targets = document.querySelectorAll(
+        'button, a[href], label, select, summary, input:not([type="checkbox"], [type="radio"], [type="hidden"])',
+      );
       for (const el of targets) {
         const rect = el.getBoundingClientRect();
         if (rect.width === 0 || rect.height === 0) continue;
         if (el.getAttribute("href")?.startsWith("#")) continue; // skip link: only visible on focus
+        if (
+          el instanceof HTMLLabelElement &&
+          !(
+            el.control instanceof HTMLInputElement &&
+            ["checkbox", "radio"].includes(el.control.type)
+          )
+        )
+          continue;
         // Inline links inside running text are exempt (WCAG 2.5.8 inline exception).
         if (el.tagName === "A" && el.closest("p, li") && getComputedStyle(el).display === "inline")
           continue;
