@@ -119,6 +119,8 @@ keys! {
     CalendarEmptyDay => ("No appointments", "Sin citas"),
     CalendarScheduledValue => ("Scheduled value", "Importe previsto"),
     CalendarCancelled => ("Cancelled", "Cancelada"),
+    CalendarRelatedVisit => ("Other appointments in this visit", "Otras citas de esta visita"),
+    CalendarRelatedVisitEdit => ("Finish editing this appointment to open another.", "Termina de editar esta cita para abrir otra."),
     ViewDay => ("Day", "Día"),
     CalendarJumpDate => ("Go to date", "Ir a fecha"),
     CalendarWeekTeam => ("Team week", "Semana de equipo"),

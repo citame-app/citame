@@ -500,6 +500,32 @@ pub fn effective_appointment(store: &Store, id: &str) -> Result<Option<Appointme
     Ok(map.remove(id))
 }
 
+/// Other parts of the same visit from the current account's mirror, including local moves.
+pub fn related_visit_appointments(
+    store: &Store,
+    current: &Appointment,
+) -> Result<Vec<Appointment>> {
+    let Some(group_id) = current.visit_group_id.as_deref() else {
+        return Ok(Vec::new());
+    };
+    let mut group = store
+        .appointments_in_visit_group(group_id, &current.client_id)?
+        .into_iter()
+        .map(|a| (a.id.clone(), a))
+        .collect();
+    overlay(store, &mut group, &mut HashMap::new())?;
+    let mut related: Vec<_> = group
+        .into_values()
+        .filter(|a| {
+            a.id != current.id
+                && a.client_id == current.client_id
+                && a.visit_group_id.as_deref() == Some(group_id)
+        })
+        .collect();
+    related.sort_by(|a, b| (a.starts_at, &a.id).cmp(&(b.starts_at, &b.id)));
+    Ok(related)
+}
+
 pub(crate) fn effective_appointments_between(
     store: &Store,
     from: DateTime<Utc>,

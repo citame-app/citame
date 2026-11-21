@@ -40,6 +40,7 @@ mod booking_policy;
 mod calendar_date;
 mod calendar_overview;
 mod commissions;
+mod visit_group;
 use calendar_overview::CalendarMode;
 mod cash;
 mod checkout;
@@ -3301,6 +3302,7 @@ impl Root {
             })
             .when_some(current.as_ref(), |body, appointment| {
                 body.child(self.render_annotations(appointment, d.annotations.as_ref(), cx))
+                    .children(self.render_related_visit(appointment, d, cx))
             })
             .when(
                 !pending

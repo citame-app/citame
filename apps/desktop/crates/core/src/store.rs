@@ -131,6 +131,11 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX client_missing_group_names ON client(id)
       WHERE json_type(json, '$.groupNames') IS NULL;
     "#,
+    r#"
+    CREATE INDEX appointment_visit_group
+        ON appointment (json_extract(json, '$.visitGroupId'), starts_at_ms, id)
+        WHERE json_extract(json, '$.visitGroupId') IS NOT NULL;
+    "#,
 ];
 
 const MIRROR_TABLES: &[&str] = &[
@@ -1530,6 +1535,25 @@ impl Store {
         )?;
         let rows = stmt
             .query_map([id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.iter()
+            .map(|row| Ok(serde_json::from_str(row)?))
+            .collect()
+    }
+
+    pub(crate) fn appointments_in_visit_group(
+        &self,
+        group_id: &str,
+        client_id: &str,
+    ) -> Result<Vec<Appointment>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT json FROM appointment
+             WHERE json_extract(json, '$.visitGroupId') = ?1
+               AND json_extract(json, '$.clientId') = ?2
+             ORDER BY starts_at_ms, id",
+        )?;
+        let rows = stmt
+            .query_map([group_id, client_id], |row| row.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.iter()
             .map(|row| Ok(serde_json::from_str(row)?))

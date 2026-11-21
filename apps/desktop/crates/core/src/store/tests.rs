@@ -960,3 +960,35 @@ fn dated_shift_migration_keeps_an_existing_replica_cursor_and_outbox() {
     assert_eq!(store.outbox_len().unwrap(), 1);
     assert!(store.date_shifts().unwrap().is_empty());
 }
+
+#[test]
+fn visit_group_reads_only_related_cached_appointments_with_current_outcomes() {
+    let mut store = Store::open_in_memory().unwrap();
+    let mut current = appt_change(1, A1, 1);
+    current.data.as_mut().unwrap()["visitGroupId"] = json!("group");
+    let mut sibling = appt_change(2, A2, 1);
+    let data = sibling.data.as_mut().unwrap();
+    data["visitGroupId"] = json!("group");
+    data["startsAt"] = json!("2026-03-10T12:00:00.000Z");
+    data["endsAt"] = json!("2026-03-10T13:00:00.000Z");
+    data["status"] = json!("cancelled");
+    let mut unrelated = appt_change(3, "different-client", 1);
+    let data = unrelated.data.as_mut().unwrap();
+    data["clientId"] = json!("other");
+    data["visitGroupId"] = json!("group");
+    store.apply_page(&[current, sibling, unrelated], 3).unwrap();
+
+    let current = store.appointment(A1).unwrap().unwrap();
+    let group = crate::calendar::related_visit_appointments(&store, &current).unwrap();
+    assert_eq!(group.len(), 1);
+    assert_eq!(group[0].id, A2);
+    assert_eq!(group[0].status, crate::model::AppointmentStatus::Cancelled);
+    store
+        .apply_page(&[tombstone(4, "appointment", A2)], 4)
+        .unwrap();
+    assert!(
+        crate::calendar::related_visit_appointments(&store, &current)
+            .unwrap()
+            .is_empty()
+    );
+}
