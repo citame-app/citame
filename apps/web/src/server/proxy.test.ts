@@ -45,6 +45,8 @@ describe("route mapping", () => {
       "/sync/push",
       "/sync/stream",
       "/appointments/desktop-booking",
+      "/appointments/desktop-series/preview",
+      "/appointments/desktop-series",
       "/appointments/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/context",
       "/admin/staff/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/date-shifts?from=2026-11-20&to=2026-11-20",
       "/admin/staff/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/date-shifts/preview",

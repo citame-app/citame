@@ -41,6 +41,17 @@ The response includes the current `clientDirectory` permission and `calendarScop
 
 `viewerRole` carries the current staff or owner role. A desktop profile with a different saved role returns to sign-in so it can open the replica for the new role. It keeps the previous profile’s pending edits. A server response denying sync also returns the app to sign-in. A network outage keeps the offline profile open.
 
+## Reviewed recurring bookings
+
+Reviewed desktop series use `POST /appointments/desktop-series/preview` and
+`POST /appointments/desktop-series` through the authenticated gateway. These are online
+operations. Both calls carry the current desktop generation, service quotes and intake review
+hash. The commit adds the series review hash, its idempotency key and one client-generated
+appointment ID per date. SQLite records the IDs against the same generation before dispatch.
+The server commits the complete series together. Each appointment then arrives in the ordinary
+pull feed. The originating device suppresses its own incoming-booking notices. Private intake
+answers stay in the open review and do not enter the outbox.
+
 ## POST /sync/push
 
 Request:

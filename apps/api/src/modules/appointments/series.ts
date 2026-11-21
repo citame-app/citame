@@ -195,11 +195,12 @@ export async function createAppointmentSeries(
   request: AppointmentSeriesCreate,
   principal: Principal,
   now: Date,
-  options: { desktopReviewed?: boolean } = {},
+  options: { appointmentIds?: readonly string[] } = {},
 ) {
   const { reviewHash, idempotencyKey, ...fields } = request;
   const input = appointmentSeriesInputSchema.parse(fields);
-  const requestHash = hash({ input, reviewHash });
+  const { appointmentIds } = options;
+  const requestHash = hash({ input, reviewHash, ...(appointmentIds ? { appointmentIds } : {}) });
   return db.transaction(async (tx) => {
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtextextended(${`appointment-series:${principal.userId}:${idempotencyKey}`},0))`,
@@ -252,13 +253,13 @@ export async function createAppointmentSeries(
         "At least one recurring visit is unavailable; no appointments were created",
       );
     const appointments = [];
-    for (const occurrence of preview.occurrences) {
+    for (const [index, occurrence] of preview.occurrences.entries()) {
       const { cadence: _cadence, interval: _interval, count: _count, ...booking } = input;
       const next = await createAppointment(
         tx,
-        { ...booking, startsAt: occurrence.startsAt },
+        { ...booking, id: appointmentIds?.[index], startsAt: occurrence.startsAt },
         { userId: principal.userId, role: principal.role },
-        { now, ...options },
+        { now, desktopReviewed: Boolean(appointmentIds) },
       );
       appointments.push(next);
       // Resolve an inline client only once, even when it has no phone or email.

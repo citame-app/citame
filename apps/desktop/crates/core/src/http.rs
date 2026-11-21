@@ -18,7 +18,8 @@ use crate::billing::{
     SavedBankRefundStatus, WalkInSale,
 };
 use crate::booking::{
-    BookingError, BookingTerms, ReviewedBooking, ReviewedSeries, SeriesPacket, SeriesPreview,
+    BookingAttempt, BookingError, BookingTerms, ReviewedBooking, ReviewedSeries, SeriesPacket,
+    SeriesPreview,
 };
 use crate::booking_policy::{PolicyWriteError, ReviewedBookingPolicy};
 use crate::intake::{
@@ -1847,6 +1848,10 @@ impl HttpTransport {
     ) -> Result<(IntakeRequirements, bool), TransportError> {
         let requirements =
             self.intake_booking_requirements(&entry.service_ids, Some(&entry.client_id))?;
+        Ok((requirements, self.can_waive_deposit()?))
+    }
+
+    pub fn can_waive_deposit(&self) -> Result<bool, TransportError> {
         #[derive(serde::Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Viewer {
@@ -1858,9 +1863,7 @@ impl HttpTransport {
             role: String,
         }
         let viewer: Viewer = read_response(self.get(&self.agent, "/me", None)?, false)?;
-        let waiver =
-            viewer.user.role == "owner" || viewer.access_preset.as_deref() == Some("manager");
-        Ok((requirements, waiver))
+        Ok(viewer.user.role == "owner" || viewer.access_preset.as_deref() == Some("manager"))
     }
 
     pub fn direct_booking_requirements(
@@ -1898,6 +1901,18 @@ impl HttpTransport {
             return Err(TransportError::Server("Unexpected booking acknowledgement".into()).into());
         }
         Ok(result)
+    }
+
+    pub fn create_booking_attempt(
+        &self,
+        attempt: &BookingAttempt,
+    ) -> Result<chrono::DateTime<chrono::Utc>, BookingError> {
+        match attempt {
+            BookingAttempt::Single(packet) => self
+                .create_reviewed_booking(packet)
+                .map(|saved| saved.starts_at),
+            BookingAttempt::Series(packet) => self.create_reviewed_series(packet),
+        }
     }
 
     pub fn preview_booking_series(

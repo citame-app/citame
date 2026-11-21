@@ -13,6 +13,7 @@ import {
   intakeRevision,
   intakeSubmission,
   pgErrorCode,
+  service,
   staffProfile,
   user,
 } from "@sob/db";
@@ -599,6 +600,7 @@ test("a recent response can accompany a reviewed series while published changes 
 });
 
 test("Desktop reviews recurring visits with explicit forms and replays one complete series", async () => {
+  await t.db.update(service).set({ currency: "EUR" });
   const form = await publish({ requiredAtBooking: true, allowTeamResponses: true });
   const requirements = intakeRequirementsSchema.parse(
     await (
@@ -632,13 +634,33 @@ test("Desktop reviews recurring visits with explicit forms and replays one compl
     return { reviewHash };
   };
   const incomplete = await preview(input);
+  const appointmentIds = [crypto.randomUUID(), crypto.randomUUID()];
   expect(
-    (await call(path, "POST", { ...input, ...incomplete, idempotencyKey: crypto.randomUUID() }))
-      .status,
+    (
+      await call(path, "POST", {
+        ...input,
+        ...incomplete,
+        appointmentIds,
+        idempotencyKey: crypto.randomUUID(),
+      })
+    ).status,
   ).toBe(409);
   expect(await t.db.select().from(appointment)).toHaveLength(0);
+  const enabled = await call("/admin/settings/booking-policy", "PUT", {
+    enabled: true,
+    depositKind: "percent",
+    depositValue: 2500,
+    holdMinutes: 15,
+    cancellationWindowMinutes: 1440,
+    lateCancellationBasisPoints: 2500,
+    noShowBasisPoints: 5000,
+    trustedExempt: true,
+    version: 1,
+  });
+  expect(enabled.status, await enabled.clone().text()).toBe(200);
   const reviewed = {
     ...input,
+    protectionWaiverReason: "Approved deposit waiver for the full series",
     intakeResponses: [
       {
         revisionId: form.published.id,
@@ -650,6 +672,7 @@ test("Desktop reviews recurring visits with explicit forms and replays one compl
   const request = {
     ...reviewed,
     ...(await preview(reviewed)),
+    appointmentIds,
     idempotencyKey: crypto.randomUUID(),
   };
   expect(await t.db.select().from(intakeAppointment)).toHaveLength(0);
@@ -660,7 +683,9 @@ test("Desktop reviews recurring visits with explicit forms and replays one compl
   const first = appointmentSeriesSchema.parse(await saved.json());
   const retried = appointmentSeriesSchema.parse(await replay.json());
   expect(retried.id).toBe(first.id);
+  expect(first.appointments.map((a) => a.id)).toEqual(appointmentIds);
   expect(retried.appointments.map((a) => a.id)).toEqual(first.appointments.map((a) => a.id));
+  expect(retried.appointments.map((a) => a.protection?.state)).toEqual(["waived", "waived"]);
   expect(await t.db.select().from(appointment)).toHaveLength(2);
   expect(await t.db.select().from(intakeAppointment)).toHaveLength(2);
 });

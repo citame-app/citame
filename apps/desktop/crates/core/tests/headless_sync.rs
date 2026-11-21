@@ -5456,7 +5456,7 @@ fn native_directory_replays_contacts_and_preserves_newer_edits() {
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_reviews_a_recurring_series_and_retries_the_same_request_through_the_proxy() {
-    use sob_core::booking::{BookingTerms, Cadence, Recurrence};
+    use sob_core::booking::{BookingAttempt, BookingTerms, Cadence, Recurrence};
     use sob_core::intake::IntakeSelection;
 
     let mut browser = Device::sign_in();
@@ -5501,13 +5501,15 @@ fn native_reviews_a_recurring_series_and_retries_the_same_request_through_the_pr
         .expect("a free two-visit series");
     let first = preview.occurrences[0].starts_at;
     let second = preview.occurrences[1].starts_at;
-    let request = packet.review(&preview);
+    let origin_notice = browser.store.booking_notice_head().unwrap();
+    let request = BookingAttempt::Series(packet.review(&preview));
+    request.check_before_dispatch(&mut browser.store).unwrap();
     assert_eq!(
-        device.transport.create_reviewed_series(&request).unwrap(),
+        device.transport.create_booking_attempt(&request).unwrap(),
         first
     );
     assert_eq!(
-        device.transport.create_reviewed_series(&request).unwrap(),
+        device.transport.create_booking_attempt(&request).unwrap(),
         first
     );
     browser.sync();
@@ -5524,6 +5526,14 @@ fn native_reviews_a_recurring_series_and_retries_the_same_request_through_the_pr
     assert_eq!(visits.len(), 2);
     assert_eq!(visits[0].client_id, visits[1].client_id);
     assert_eq!([visits[0].starts_at, visits[1].starts_at], [first, second]);
+    assert!(
+        browser
+            .store
+            .booking_notices_after(origin_notice)
+            .unwrap()
+            .iter()
+            .all(|(_, notice)| visits.iter().all(|visit| notice.id != visit.id))
+    );
 }
 
 #[test]

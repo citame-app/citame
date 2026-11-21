@@ -99,11 +99,17 @@ export function appointmentsRoutes({
     async (c) => {
       const principal = c.get("principal");
       const body = await readJson(c);
+      let appointmentIds: string[] | undefined;
       const input = desktop
         ? (() => {
             requirePermission(principal, "editCalendar");
-            const { desktopGeneration, ...input } = parseOrThrow(desktopSeriesCreateSchema, body);
+            const {
+              desktopGeneration,
+              appointmentIds: ids,
+              ...input
+            } = parseOrThrow(desktopSeriesCreateSchema, body);
             assertDesktopGeneration(desktopGeneration);
+            appointmentIds = ids;
             return input;
           })()
         : parseOrThrow(appointmentSeriesCreateSchema, body);
@@ -114,7 +120,7 @@ export function appointmentsRoutes({
           { ...input, ...scoped, client: scoped.client, clientId: scoped.clientId },
           principal,
           now(),
-          { desktopReviewed: desktop },
+          { appointmentIds },
         ),
         201,
       );

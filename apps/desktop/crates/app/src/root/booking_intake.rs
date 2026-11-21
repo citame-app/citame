@@ -1,15 +1,10 @@
 use super::intake_editor::{self, IntakeDraft};
 use super::*;
 use sob_core::booking::{
-    BookingError, BookingTerms, Cadence, Recurrence, ReviewedBooking, ReviewedSeries, SeriesPreview,
+    BookingAttempt, BookingError, BookingTerms, Cadence, Recurrence, ReviewedBooking,
+    ReviewedSeries, SeriesPreview,
 };
 use sob_core::sync::TransportError;
-
-#[derive(Clone)]
-enum BookingAttempt {
-    Single(ReviewedBooking),
-    Series(ReviewedSeries),
-}
 
 pub(super) struct BookingReview {
     identity: Arc<()>,
@@ -19,6 +14,8 @@ pub(super) struct BookingReview {
     review_hash: Option<String>,
     submitted: Option<BookingAttempt>,
     series: Option<(SeriesPreview, ReviewedSeries)>,
+    can_waive: bool,
+    waiver: Entity<TextField>,
     busy: bool,
     restored: bool,
     confirm_exit: bool,
@@ -40,6 +37,7 @@ impl Root {
     pub(super) fn render_recurrence(
         &self,
         recurrence: Option<Recurrence>,
+        override_notice: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let choices = [
@@ -87,6 +85,24 @@ impl Root {
                 panel
                     .child(self.series_number(Some(r.cadence), r.interval, cx))
                     .child(self.series_number(None, r.count, cx))
+                    .child(
+                        div().flex().flex_wrap().child(
+                            self.chip(
+                                "series-override-notice",
+                                self.t(Key::SeriesOverrideNotice),
+                                override_notice,
+                                cx.listener(|root, _, _, cx| {
+                                    if let Overlay::New(form) = &mut root.overlay {
+                                        form.series_override = !form.series_override;
+                                        form.error = None;
+                                        cx.notify();
+                                    }
+                                }),
+                            )
+                            .tab_index(0)
+                            .focus(|style| style.border_color(theme::text())),
+                        ),
+                    )
                     .child(
                         div()
                             .text_sm()
@@ -183,6 +199,7 @@ impl Root {
     }
 
     pub(super) fn start_booking_intake(&mut self, terms: BookingTerms, cx: &mut Context<Self>) {
+        let waiver_label = self.t(Key::WaitlistWaiverReason);
         let service_summary = terms
             .services()
             .iter()
@@ -206,6 +223,8 @@ impl Root {
             review_hash: None,
             submitted: None,
             series: None,
+            can_waive: false,
+            waiver: cx.new(|cx| TextField::new(waiver_label, false, cx)),
             busy: false,
             restored: false,
             confirm_exit: false,
@@ -233,6 +252,7 @@ impl Root {
         };
         let identity = review.identity.clone();
         let terms = review.terms.clone();
+        let series = form.recurrence.is_some();
         let session = self.svc.session.clone();
         review.busy = true;
         review.review_hash = None;
@@ -242,7 +262,11 @@ impl Root {
         cx.spawn(async move |view, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { transport.direct_booking_requirements(&terms) })
+                .spawn(async move {
+                    let requirements = transport.direct_booking_requirements(&terms)?;
+                    let can_waive = series && transport.can_waive_deposit()?;
+                    Ok::<_, TransportError>((requirements, can_waive))
+                })
                 .await;
             let _ = view.update(cx, |root, cx| {
                 if !Arc::ptr_eq(&session, &root.svc.session) || root.svc.current_session().is_none()
@@ -261,7 +285,7 @@ impl Root {
                 };
                 review.busy = false;
                 match result {
-                    Ok(requirements) => {
+                    Ok((requirements, can_waive)) => {
                         let Some(generation) = requirements.desktop_generation.clone() else {
                             form.error = Some(Key::BookingIntakeUnavailable);
                             cx.notify();
@@ -276,7 +300,8 @@ impl Root {
                         let hash = requirements.review_hash.clone();
                         intake_editor::refresh(&mut review.forms, requirements, root.locale, cx);
                         review.review_hash = Some(hash);
-                        if review.forms.is_empty() {
+                        review.can_waive = can_waive;
+                        if review.forms.is_empty() && !can_waive {
                             root.confirm_booking_intake(cx);
                             return;
                         }
@@ -325,19 +350,7 @@ impl Root {
             }
             return;
         };
-        let checked = match &packet {
-            BookingAttempt::Single(packet) => packet.mark_local_dispatch(&mut self.svc.store),
-            BookingAttempt::Series(packet) => self
-                .svc
-                .store
-                .verified_reviewed_generation()
-                .and_then(|generation| {
-                    (generation == packet.generation())
-                        .then_some(())
-                        .ok_or(CoreError::CalendarGenerationChanged)
-                }),
-        };
-        if let Err(error) = checked {
+        if let Err(error) = packet.check_before_dispatch(&mut self.svc.store) {
             if matches!(error, CoreError::CalendarGenerationChanged) {
                 review.submitted = None;
                 review.restored = true;
@@ -360,14 +373,7 @@ impl Root {
         cx.spawn(async move |view, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move {
-                    match packet {
-                        BookingAttempt::Single(packet) => transport
-                            .create_reviewed_booking(&packet)
-                            .map(|saved| saved.starts_at),
-                        BookingAttempt::Series(packet) => transport.create_reviewed_series(&packet),
-                    }
-                })
+                .spawn(async move { transport.create_booking_attempt(&packet) })
                 .await;
             let _ = view.update(cx, |root, cx| {
                 if !Arc::ptr_eq(&session, &root.svc.session) || root.svc.current_session().is_none()
@@ -465,6 +471,17 @@ impl Root {
         let Some(packet) = review.packet(cx).map(|packet| packet.series(recurrence)) else {
             return;
         };
+        let reason = review.waiver.read(cx).text().trim().to_owned();
+        let reason = (review.can_waive && !reason.is_empty()).then_some(reason);
+        if reason
+            .as_ref()
+            .is_some_and(|reason| !(8..=300).contains(&reason.encode_utf16().count()))
+        {
+            form.error = Some(Key::WaitlistWaiverReason);
+            cx.notify();
+            return;
+        }
+        let packet = packet.with_deposit_waiver(reason);
         review.series = None;
         review.busy = true;
         form.error = None;
@@ -566,9 +583,22 @@ impl Root {
             && !review.restored
             && !review.busy
         {
+            if review.can_waive {
+                body = body
+                    .child(self.label(Key::SeriesWaiver))
+                    .child(review.waiver.clone());
+            }
             for draft in &review.forms {
                 body = body.child(self.render_intake_form(draft, cx));
             }
+        }
+        if form.recurrence.is_some() && !review.forms.is_empty() {
+            body = body.child(
+                div()
+                    .text_sm()
+                    .text_color(theme::muted())
+                    .child(self.t(Key::SeriesAnswers)),
+            );
         }
         if review.busy {
             body = body.child(self.t(Key::SeriesWorking));
@@ -658,6 +688,29 @@ impl Root {
                     Kind::Ghost,
                     cx.listener(|root, _, _, cx| root.preview_booking_series(cx)),
                 ));
+                if review.can_waive || !review.forms.is_empty() {
+                    actions = actions.child(
+                        self.button(
+                            "booking-series-edit",
+                            self.t(Key::SeriesEditReview),
+                            Kind::Ghost,
+                            cx.listener(|root, _, _, cx| {
+                                if let Overlay::New(form) = &mut root.overlay
+                                    && let Some(review) = &mut form.intake
+                                    && !review.busy
+                                    && review.submitted.is_none()
+                                {
+                                    review.series = None;
+                                    form.error = None;
+                                    cx.notify();
+                                }
+                            }),
+                        )
+                        .tab_index(0)
+                        .focus(|style| style.border_color(theme::text()))
+                        .debug_selector(|| "booking-series-edit".to_owned()),
+                    );
+                }
             }
             let ready = match &review.series {
                 Some((preview, _)) => preview.occurrences.iter().all(|visit| visit.available),
@@ -790,26 +843,51 @@ mod tests {
         click(cx, "intake-confirm-rev");
         assert!(cx.debug_bounds("booking-review-confirm").is_some());
         entity.update(cx, |root, cx| {
+            let Overlay::New(form) = &mut root.overlay else {
+                panic!("missing booking editor");
+            };
+            let review = form.intake.as_mut().unwrap();
+            let payload = serde_json::to_value(review.packet(cx).unwrap()).unwrap();
+            assert_eq!(payload["intakeResponses"][0]["answers"]["q"], false);
+            let recurrence = Recurrence {
+                cadence: Cadence::Monthly,
+                interval: 2,
+                count: 4,
+            };
+            let packet = review.packet(cx).unwrap().series(recurrence);
+            let wire = serde_json::to_value(&packet).unwrap();
+            assert_eq!(wire["cadence"], "monthly");
+            assert_eq!(wire["count"], 4);
+            assert_eq!(wire["interval"], 2);
+            assert_eq!(wire["desktopGeneration"], payload["desktopGeneration"]);
+            assert_eq!(wire["intakeReviewHash"], payload["intakeReviewHash"]);
+            assert_eq!(wire["intakeResponses"], payload["intakeResponses"]);
+            assert!(wire.get("id").is_none());
+            assert!(root.svc.store.outbox(10).unwrap().is_empty());
+            let preview: SeriesPreview = serde_json::from_value(json!({
+                "reviewHash": "a".repeat(64), "timezone": "Europe/Madrid",
+                "perVisitCents": 2500, "currency": "EUR",
+                "occurrences": [{
+                    "startsAt": "2026-03-09T13:00:00Z", "endsAt": "2026-03-09T14:00:00Z", "available": false
+                }]
+            })).unwrap();
+            let reviewed = packet.review(&preview);
+            form.recurrence = Some(recurrence);
+            review.series = Some((preview, reviewed));
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("booking-review-confirm").is_none());
+        click(cx, "booking-series-edit");
+        assert!(cx.debug_bounds("booking-review-confirm").is_some());
+        entity.update(cx, |root, cx| {
             let Overlay::New(form) = &root.overlay else {
                 panic!("missing booking editor");
             };
             let review = form.intake.as_ref().unwrap();
+            assert!(review.series.is_none());
             let payload = serde_json::to_value(review.packet(cx).unwrap()).unwrap();
             assert_eq!(payload["intakeResponses"][0]["answers"]["q"], false);
-            let packet = review.packet(cx).unwrap().series(Recurrence {
-                cadence: Cadence::Monthly,
-                interval: 2,
-                count: 4,
-            });
-            let packet = serde_json::to_value(packet).unwrap();
-            assert_eq!(packet["cadence"], "monthly");
-            assert_eq!(packet["count"], 4);
-            assert_eq!(packet["interval"], 2);
-            assert_eq!(packet["desktopGeneration"], payload["desktopGeneration"]);
-            assert_eq!(packet["intakeReviewHash"], payload["intakeReviewHash"]);
-            assert_eq!(packet["intakeResponses"], payload["intakeResponses"]);
-            assert!(packet.get("id").is_none());
-            assert!(root.svc.store.outbox(10).unwrap().is_empty());
         });
     }
 }

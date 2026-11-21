@@ -234,6 +234,7 @@ struct NewForm {
     new_client_phone: Entity<TextField>,
     notes: Entity<TextField>,
     recurrence: Option<sob_core::booking::Recurrence>,
+    series_override: bool,
     intake: Option<booking_intake::BookingReview>,
     error: Option<Key>,
 }
@@ -1074,6 +1075,7 @@ impl Root {
             new_client_phone,
             notes,
             recurrence: None,
+            series_override: false,
             intake: None,
             error: None,
         }));
@@ -1168,7 +1170,7 @@ impl Root {
             starts_at,
             client_id: chosen.unwrap_or_default(),
             notes: (!notes.is_empty()).then_some(notes),
-            override_notice: false,
+            override_notice: form.recurrence.is_some() && form.series_override,
         };
         if self.status.connectivity == Connectivity::Online && self.svc.transport().is_some() {
             let inline = (!has_client)
@@ -2879,7 +2881,7 @@ impl Root {
                     }),
             )
             .child(f.notes.clone())
-            .child(self.render_recurrence(f.recurrence, cx));
+            .child(self.render_recurrence(f.recurrence, f.series_override, cx));
 
         let performed: std::collections::HashSet<_> =
             ops::performed_services(&self.svc.store, staff)

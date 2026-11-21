@@ -28,8 +28,16 @@ const desktopSeriesFields = {
 };
 export const desktopSeriesInputSchema =
   appointmentSeriesInputSchema.safeExtend(desktopSeriesFields);
-export const desktopSeriesCreateSchema =
-  appointmentSeriesCreateSchema.safeExtend(desktopSeriesFields);
+export const desktopSeriesCreateSchema = appointmentSeriesCreateSchema
+  .safeExtend({
+    ...desktopSeriesFields,
+    appointmentIds: z.array(idSchema).min(2).max(12),
+  })
+  .refine(
+    ({ appointmentIds, count }) =>
+      appointmentIds.length === count && new Set(appointmentIds).size === count,
+    { path: ["appointmentIds"], message: "Provide one unique appointment ID for each date" },
+  );
 export const appointmentSeriesPreviewSchema = z.object({
   reviewHash: z.string(),
   timezone: z.string(),

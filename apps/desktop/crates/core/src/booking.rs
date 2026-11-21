@@ -100,6 +100,8 @@ pub struct SeriesPacket {
     forms: ReviewedForms,
     #[serde(flatten)]
     recurrence: Recurrence,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    protection_waiver_reason: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -127,6 +129,13 @@ pub struct ReviewedSeries {
     packet: SeriesPacket,
     review_hash: String,
     idempotency_key: String,
+    appointment_ids: Vec<String>,
+}
+
+#[derive(Clone)]
+pub enum BookingAttempt {
+    Single(ReviewedBooking),
+    Series(ReviewedSeries),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -245,16 +254,26 @@ impl ReviewedBooking {
             fields: self.terms.fields.clone(),
             forms: self.forms.clone(),
             recurrence,
+            protection_waiver_reason: None,
         }
     }
 }
 
 impl SeriesPacket {
+    pub fn with_deposit_waiver(mut self, reason: Option<String>) -> Self {
+        self.protection_waiver_reason = reason;
+        self
+    }
+
     pub fn review(self, preview: &SeriesPreview) -> ReviewedSeries {
+        let appointment_ids = (0..self.count())
+            .map(|_| uuid::Uuid::now_v7().to_string())
+            .collect();
         ReviewedSeries {
             packet: self,
             review_hash: preview.review_hash.clone(),
             idempotency_key: uuid::Uuid::now_v7().to_string(),
+            appointment_ids,
         }
     }
 
@@ -263,8 +282,14 @@ impl SeriesPacket {
     }
 }
 
-impl ReviewedSeries {
-    pub fn generation(&self) -> &str {
-        &self.packet.desktop_generation
+impl BookingAttempt {
+    pub fn check_before_dispatch(&self, store: &mut Store) -> Result<()> {
+        match self {
+            Self::Single(booking) => booking.mark_local_dispatch(store),
+            Self::Series(series) => store.mark_local_bookings_dispatch(
+                series.appointment_ids.iter().map(String::as_str),
+                &series.packet.desktop_generation,
+            ),
+        }
     }
 }

@@ -435,25 +435,35 @@ impl Store {
     }
 
     pub(crate) fn mark_local_booking_dispatch(&mut self, id: &str, generation: &str) -> Result<()> {
+        self.mark_local_bookings_dispatch(std::iter::once(id), generation)
+    }
+
+    pub(crate) fn mark_local_bookings_dispatch<'a>(
+        &mut self,
+        ids: impl IntoIterator<Item = &'a str>,
+        generation: &str,
+    ) -> Result<()> {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let recorded = tx.execute(
-            "INSERT INTO local_booking_confirmation (appointment_id, applied_seq)
+        for id in ids {
+            let recorded = tx.execute(
+                "INSERT INTO local_booking_confirmation (appointment_id, applied_seq)
              SELECT ?1, ?2 WHERE coalesce((SELECT value FROM meta WHERE key = ?3), ?4) = ?5
                AND NOT EXISTS (SELECT 1 FROM meta WHERE key = ?6)
              ON CONFLICT(appointment_id) DO UPDATE SET applied_seq = excluded.applied_seq",
-            params![
-                id,
-                i64::MAX,
-                GENERATION_KEY,
-                INITIAL_GENERATION,
-                generation,
-                REBUILD_KEY
-            ],
-        )?;
-        if recorded == 0 {
-            return Err(CoreError::CalendarGenerationChanged);
+                params![
+                    id,
+                    i64::MAX,
+                    GENERATION_KEY,
+                    INITIAL_GENERATION,
+                    generation,
+                    REBUILD_KEY
+                ],
+            )?;
+            if recorded == 0 {
+                return Err(CoreError::CalendarGenerationChanged);
+            }
         }
         tx.execute(
             "DELETE FROM local_booking_confirmation WHERE appointment_id IN (
