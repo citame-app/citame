@@ -47,7 +47,7 @@ pub(super) struct PromoDesk {
     saving: bool,
     refresh_after: Instant,
     observed: Option<i64>,
-    retry_after: Option<Instant>,
+    retry_after: Option<(Instant, Duration)>,
     error: Option<Key>,
     saved: bool,
     confirm_exit: bool,
@@ -254,7 +254,9 @@ impl Root {
         };
         if desk.saving
             || desk.list_request.is_some()
-            || desk.retry_after.is_some_and(|retry| retry > now)
+            || desk
+                .retry_after
+                .is_some_and(|(started, delay)| now.duration_since(started) < delay)
             || (!reconnected && desk.observed == observed && now < desk.refresh_after)
         {
             return;
@@ -344,14 +346,14 @@ impl Root {
                     Err(error) => {
                         let minimum = Duration::from_secs(3);
                         let delay = match error {
-                            TransportError::RateLimited(Some(retry)) => {
-                                retry.clamp(minimum, Duration::from_secs(300))
-                            }
+                            TransportError::RateLimited(Some(retry)) => retry.max(minimum),
                             _ => minimum,
                         };
-                        desk.retry_after = Some(Instant::now() + delay);
-                        desk.list = None;
-                        desk.generation = None;
+                        desk.retry_after = Some((Instant::now(), delay));
+                        if !background {
+                            desk.list = None;
+                            desk.generation = None;
+                        }
                         if desk.editor.is_none() {
                             desk.error = Some(Key::PromoLoadFailed);
                         }
