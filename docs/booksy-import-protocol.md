@@ -500,6 +500,8 @@ Un ensayo independiente de caja usó una cita sintética de 100 EUR con un abono
 
 El ensayo del 21/11/2026 restauró el respaldo local, verificó los 1.053 originales y cotejó las 787 líneas importadas. En la agenda del 26/11 verificó 26 líneas y probó la reprogramación en ambos sentidos con SSE, el reintento idempotente y el rechazo de la versión antigua. La comprobación del inventario funcionó antes y después de crear las clasificaciones a partir de las etiquetas archivadas. La huella del respaldo original coincidió y el comprobante sigue indicando `canCutOver: false`.
 
+La repetición con la revisión `acd3792` aplicó 113 migraciones y verificó de nuevo los 1.053 originales y las 787 líneas. En la agenda del 26/11 cotejó 26 líneas, 18 reservas y tres bloqueos. Una cita con equipo asignado se movió por la API web y luego por la API de escritorio. Ambos cambios emitieron los avisos SSE esperados y actualizaron la réplica. El reintento conservó el recibo y las versiones antiguas se rechazaron. La prueba también comprobó la renovación y revocación del dispositivo. La verificación independiente del comprobante confirmó las huellas del snapshot y del respaldo cifrado. El ensayo se hizo en el mismo equipo, con la reserva pública pausada, y conserva `canCutOver: false`.
+
 ### Copia local para probar la agenda
 
 La web y la API de la copia editable de pruebas escuchan en `127.0.0.1` y arrancan sin proveedores de cobro ni de envío. Tras aplicar `0075` y `0076`, las huellas de citas, servicios reservados, anotaciones y dispositivos coincidieron. Los datos del personal también coincidieron al excluir la nueva columna de retratos. [Agenda local del 20/11/2026](http://127.0.0.1:4275/admin/calendar?date=2026-11-20&view=day)
