@@ -20,6 +20,7 @@ import {
   reviewedStaffAccessSchema,
   reviewPrivateSchema,
   staffAccountResponseSchema,
+  stampProgramSchema,
   startedPaymentSchema,
   syncPullResponseSchema,
 } from "@sob/contracts";
@@ -83,6 +84,44 @@ async function tokens(role: "owner" | "client" | "staff", emailName: string = ro
 
 const request = (path: string, access: unknown) =>
   t.app.request(path, { headers: { authorization: `Bearer ${String(access)}` } });
+
+test("desktop stamp programme and card access preserves role and method restrictions", async () => {
+  const owner = await tokens("owner", "stamp-owner");
+  const staff = await tokens("staff", "stamp-staff");
+  const path = "/admin/rewards/stamps";
+  const mutate = (url: string, method: string, access: string, input?: unknown) =>
+    t.app.request(url, {
+      method,
+      headers: { authorization: `Bearer ${access}`, "content-type": "application/json" },
+      ...(input === undefined ? {} : { body: JSON.stringify(input) }),
+    });
+  const response = await request(`${path}/program`, owner.access);
+  expect(response.status).toBe(200);
+  expect(response.headers.get("cache-control")).toBe("private, no-store");
+  const previous = stampProgramSchema.parse(await response.json());
+  expect((await request(`${path}/program`, staff.access)).status).toBe(403);
+  expect((await mutate(`${path}/program`, "POST", owner.access, {})).status).toBe(403);
+  expect((await request(`${path}/cards`, owner.access)).status).toBe(403);
+  expect((await request(`${path}/unknown`, owner.access)).status).toBe(403);
+  expect(
+    (
+      await mutate(`${path}/program`, "PUT", owner.access, {
+        ...previous,
+        generation: "restored",
+        existingCards: "keep",
+      })
+    ).status,
+  ).toBe(409);
+  expect(
+    (
+      await mutate(`${path}/program`, "PUT", owner.access, {
+        ...previous,
+        existingCards: "keep",
+      })
+    ).status,
+  ).toBe(200);
+  expect((await mutate(`${path}/cards`, "POST", owner.access, {})).status).toBe(400);
+});
 
 test("desktop commissions authorize only reviewed writes and fence versions and generations", async () => {
   const owner = await tokens("owner", "commission-owner");
