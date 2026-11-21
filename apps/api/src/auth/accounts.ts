@@ -202,7 +202,7 @@ export async function assignRole(
   db: Database,
   userId: string,
   role: UserRole,
-  audit?: Pick<AuditContext, "actorUserId">,
+  audit?: { actorUserId: string },
   options: { now?: Date } = {},
 ): Promise<AccountResult> {
   return db.transaction(async (tx) => {
