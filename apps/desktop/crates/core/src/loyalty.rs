@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub mod checkout;
+pub mod stamps;
 
 pub const LIVE_TOPIC: &str = "loyalty";
 

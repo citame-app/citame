@@ -2,6 +2,7 @@ import {
   changeStampCardSchema,
   idSchema,
   issueStampCardSchema,
+  permissionsFor,
   stampProgramInputSchema,
 } from "@sob/contracts";
 import { Hono } from "hono";
@@ -46,9 +47,14 @@ export function stampAdminRoutes({ db, config, now = () => new Date() }: AppDeps
       return c.json(await updateStampProgram(db, input, principal));
     })
     .get("/clients/:id", async (c) => {
-      requirePermission(c.get("principal"), "clients");
+      const principal = c.get("principal");
+      requirePermission(principal, "clients");
       const id = parseOrThrow(idSchema, c.req.param("id"));
-      return c.json({ ...(await listStampCards(db, id, now())), generation });
+      return c.json({
+        ...(await listStampCards(db, id, now())),
+        generation,
+        canEdit: permissionsFor(principal.role, principal.accessPreset).editClients,
+      });
     })
     .post("/cards", async (c) => {
       requirePermission(c.get("principal"), "editClients");

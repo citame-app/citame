@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 mod policy;
+mod stamps;
 
 pub(super) struct Pending {
     session: sob_core::auth::SessionHandle,
@@ -19,6 +20,7 @@ pub(super) struct Desk {
     results: Vec<(Uuid, String)>,
     selected: Option<(Uuid, String)>,
     statement: Option<Statement>,
+    stamps: stamps::CardList,
     request: Option<Arc<()>>,
     loading: bool,
     refresh_at: Instant,
@@ -93,6 +95,7 @@ impl Root {
             results: Vec::new(),
             selected: None,
             statement: None,
+            stamps: stamps::CardList::default(),
             request: None,
             loading: false,
             refresh_at: Instant::now(),
@@ -173,6 +176,7 @@ impl Root {
         desk.results.clear();
         desk.selected = None;
         desk.statement = None;
+        desk.stamps = stamps::CardList::default();
         desk.request = None;
         desk.loading = false;
         desk.error = None;
@@ -250,6 +254,7 @@ impl Root {
         };
         desk.selected = Some(client);
         desk.statement = None;
+        desk.stamps = stamps::CardList::default();
         desk.points.update(cx, |field, cx| field.set_text("", cx));
         desk.reason.update(cx, |field, cx| field.set_text("", cx));
         desk.saved = false;
@@ -288,6 +293,10 @@ impl Root {
             || desk.saving
             || (!reconnected && desk.observed == observed && Instant::now() < desk.refresh_at)
         {
+            return;
+        }
+        if desk.stamps.visible {
+            self.load_stamp_cards(true, cx);
             return;
         }
         let page = desk
@@ -646,6 +655,10 @@ impl Root {
         let Some(desk) = self.loyalty_desk() else {
             return;
         };
+        if desk.stamps.visible {
+            self.hide_stamp_cards(cx);
+            return;
+        }
         if desk.saving {
             return;
         }
@@ -703,7 +716,13 @@ impl Root {
                 self.pending_loyalty().is_some() && desk.adjustment.is_none(),
                 |body| body.child(self.t(Key::LoyaltyPending)),
             )
-            .when(!online, |body| body.child(self.t(Key::LoyaltyOffline)))
+            .when(!online, |body| {
+                body.child(self.t(if desk.stamps.visible {
+                    Key::StampOffline
+                } else {
+                    Key::LoyaltyOffline
+                }))
+            })
             .when(desk.loading || desk.saving, |body| {
                 body.child(self.t(Key::MarketingLoading))
             })
@@ -743,6 +762,8 @@ impl Root {
                         cx,
                     ))
                 });
+        } else if desk.stamps.visible {
+            body = body.child(self.render_stamp_cards(desk, ready, cx));
         } else {
             body = body
                 .when(self.can_configure_points() && ready, |body| {
@@ -800,6 +821,15 @@ impl Root {
                         ))
                     },
                 )
+                .when(desk.selected.is_some() && ready, |body| {
+                    body.child(self.loyalty_button(
+                        "loyalty-stamp-cards",
+                        Key::StampCards,
+                        Kind::Ghost,
+                        Root::show_stamp_cards,
+                        cx,
+                    ))
+                })
                 .when_some(desk.statement.as_ref(), |body, statement| {
                     body.child(self.render_loyalty_statement(desk, statement, ready, cx))
                 });

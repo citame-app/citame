@@ -111,6 +111,7 @@ export type StampCard = z.infer<typeof stampCardSchema>;
 
 export const stampCardsSchema = z.object({ cards: z.array(stampCardSchema) });
 export const adminStampCardsSchema = stampCardsSchema.extend({
+  canEdit: z.boolean().optional(),
   generation: syncGenerationSchema,
   programVersion: version,
   program: stampProgramTermsSchema,

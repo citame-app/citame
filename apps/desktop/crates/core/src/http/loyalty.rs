@@ -1,10 +1,12 @@
 use super::*;
+use crate::loyalty::stamps::{Card, Cards, Command};
 use crate::loyalty::{
     Adjustment, AdjustmentResult, ClientChoice, Policy, ReviewedPolicy, Statement,
 };
 use uuid::Uuid;
 
 const PATH: &str = "/admin/rewards/clients";
+const STAMPS: &str = "/admin/rewards/stamps";
 const POLICY: &str = "/admin/rewards/policy/reviewed";
 
 impl HttpTransport {
@@ -45,6 +47,27 @@ impl HttpTransport {
             false,
         )?;
         Ok(result.clients)
+    }
+
+    pub fn stamp_cards(&self, client: Uuid) -> Result<Cards, TransportError> {
+        read_response(
+            self.get(
+                &self.agent,
+                &format!("{STAMPS}/clients/{client}"),
+                Some("application/json"),
+            )?,
+            false,
+        )
+    }
+
+    pub fn change_stamp_card(&self, command: &Command) -> Result<Card, TransportError> {
+        let response = match command {
+            Command::Issue(issue) => self.send_json(&format!("{STAMPS}/cards"), issue)?,
+            Command::Change(id, change) => {
+                self.send_json(&format!("{STAMPS}/cards/{id}"), change)?
+            }
+        };
+        read_response_with(response, review_transport_error)
     }
 
     pub fn loyalty_statement(&self, client: Uuid, page: u32) -> Result<Statement, TransportError> {

@@ -1523,3 +1523,92 @@ fn intake_timeouts_preserve_retry_but_retired_services_return_to_the_editor() {
         super::FormWriteError::Invalid
     ));
 }
+
+#[test]
+fn stamp_card_transport_reads_access_and_reuses_the_exact_reviewed_command() {
+    use crate::loyalty::stamps::{Action, Change, Command, Issue, State};
+    let client = uuid::Uuid::now_v7();
+    let id = uuid::Uuid::now_v7();
+    let generation = "reviewed-generation";
+    let program = serde_json::json!({
+        "enabled": true, "name": "Treatment stamps", "goal": 3, "welcomeStamps": 1,
+        "appearance": "rose", "terms": "Eligible treatment visits", "reward": {
+            "name": "Manicure", "discountBasisPoints": 2500
+        }
+    });
+    let card = serde_json::json!({
+        "id": id, "version": 2, "program": &program, "stamps": 2, "state": "queued",
+        "needsReview": false, "completedAt": null, "stampExpiresAt": "2027-01-10T23:00:00Z"
+    });
+    let list = serde_json::json!({
+        "cards": [&card], "program": &program, "canEdit": true,
+        "generation": generation, "programVersion": 3
+    });
+    let (base, seen) = serve(vec![
+        http("200 OK", &[], &list.to_string()),
+        http("408 Request Timeout", &[], ""),
+        http("200 OK", &[], &card.to_string()),
+        http(
+            "409 Conflict",
+            &[],
+            r#"{"error":{"code":"sync_generation_changed"}}"#,
+        ),
+    ]);
+    let transport = signed_in(&base);
+    let reviewed = transport.stamp_cards(client).unwrap();
+    assert!(reviewed.can_edit);
+    assert_eq!(reviewed.cards[0].state, State::Queued);
+    let key = uuid::Uuid::now_v7();
+    let command = Command::Change(
+        id,
+        Change {
+            generation: reviewed.generation.clone(),
+            idempotency_key: key,
+            version: reviewed.cards[0].version,
+            action: Action::Edit {
+                stamps: 1,
+                expires_at: None,
+                reason: "Correct duplicate stamp".into(),
+            },
+        },
+    );
+    assert!(matches!(
+        transport.change_stamp_card(&command),
+        Err(TransportError::Offline(_))
+    ));
+    assert_eq!(transport.change_stamp_card(&command).unwrap().id, id);
+    let issue = Command::Issue(Issue {
+        generation: reviewed.generation,
+        idempotency_key: key,
+        client_id: client,
+        program_version: reviewed.program_version,
+        initial_stamps: reviewed.program.welcome_stamps,
+        expires_at: None,
+    });
+    assert!(matches!(
+        transport.change_stamp_card(&issue),
+        Err(TransportError::ReplicaGenerationChanged)
+    ));
+    let seen = seen.lock().unwrap();
+    let body = |index: usize| -> serde_json::Value {
+        serde_json::from_str(seen[index].split_once("\r\n\r\n").unwrap().1).unwrap()
+    };
+    assert!(seen[0].starts_with(&format!("GET /admin/rewards/stamps/clients/{client} ")));
+    assert!(seen[1].starts_with(&format!("POST /admin/rewards/stamps/cards/{id} ")));
+    assert_eq!(body(1), body(2));
+    assert_eq!(
+        body(1),
+        serde_json::json!({
+            "version": 2, "generation": generation, "idempotencyKey": key, "type": "edit",
+            "stamps": 1, "expiresAt": null, "reason": "Correct duplicate stamp"
+        })
+    );
+    assert!(seen[3].starts_with("POST /admin/rewards/stamps/cards "));
+    assert_eq!(
+        body(3),
+        serde_json::json!({
+            "generation": generation, "idempotencyKey": key, "clientId": client,
+            "programVersion": 3, "initialStamps": 1
+        })
+    );
+}

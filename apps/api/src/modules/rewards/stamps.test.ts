@@ -74,6 +74,19 @@ beforeEach(async () => {
     actor(t, "client", "other@stamps.test"),
   ]);
 });
+test("admin card views advertise edit access without exposing management to customers", async () => {
+  const endpoint = `${path}/clients/${fixtures.clientId}`;
+  const response = await call(owner, endpoint);
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({
+    canEdit: true,
+    generation: generation(),
+    programVersion: 1,
+    cards: [],
+  });
+  expect((await call(customer, endpoint)).status).toBe(403);
+});
+
 async function settle(serviceId: string, amountCents = 10_000) {
   const created = await call(owner, "/admin/commerce/checkouts", "POST", {
     clientId: customer.clientId,
