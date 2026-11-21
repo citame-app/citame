@@ -1,6 +1,7 @@
 use super::*;
-use sob_core::http::{AccountRole, AccountRoleReceipt, UnlinkedAccount, valid_staff_login};
-use sob_core::sync::TransportError;
+use sob_core::http::{
+    AccountLookupError, AccountRole, AccountRoleReceipt, UnlinkedAccount, valid_staff_login,
+};
 
 pub(super) struct Desk {
     identity: Arc<()>,
@@ -69,6 +70,7 @@ impl Root {
         } else {
             let email = desk.email.read(cx).text().trim().to_owned();
             desk.account = None;
+            desk.saved = None;
             if !valid_staff_login(&email, None) {
                 desk.notice = Some(Key::AccountsEmailInvalid);
                 cx.notify();
@@ -94,7 +96,8 @@ impl Root {
                             .map(Reply::Account),
                         Command::Change(account, role) => transport
                             .change_unlinked_role(&account, role)
-                            .map(Reply::Saved),
+                            .map(Reply::Saved)
+                            .map_err(AccountLookupError::from),
                     }
                 })
                 .await;
@@ -115,8 +118,9 @@ impl Root {
                         desk.saved = Some(receipt);
                         root.svc.wake(Wake::Local);
                     }
-                    Err(TransportError::BadRequest(_)) if lookup => {
-                        desk.notice = Some(Key::AccountsNotFound)
+                    Err(AccountLookupError::NotFound) => desk.notice = Some(Key::AccountsNotFound),
+                    Err(AccountLookupError::InvalidAddress) => {
+                        desk.notice = Some(Key::AccountsEmailInvalid)
                     }
                     Err(_) => {
                         desk.notice = Some(if lookup {
@@ -130,6 +134,22 @@ impl Root {
             });
         })
         .detach();
+    }
+
+    fn review_account_role(&mut self, role: AccountRole, cx: &mut Context<Self>) {
+        if self.status.connectivity == Connectivity::Online
+            && self.can_configure_salon()
+            && let Overlay::AccountRoles(desk) = &mut self.overlay
+            && !desk.busy
+            && desk.proposed.is_none()
+            && desk
+                .account
+                .as_ref()
+                .is_some_and(|account| account.can_change_to(role))
+        {
+            desk.proposed = Some(role);
+            cx.notify();
+        }
     }
 
     pub(super) fn close_account_roles(&mut self, cx: &mut Context<Self>) {
@@ -226,15 +246,7 @@ impl Root {
                                         self.t(role_label(role)),
                                         Kind::Ghost,
                                         cx.listener(move |root, _, _, cx| {
-                                            if let Overlay::AccountRoles(desk) = &mut root.overlay
-                                                && !desk.busy
-                                                && desk.account.as_ref().is_some_and(|account| {
-                                                    account.can_change_to(role)
-                                                })
-                                            {
-                                                desk.proposed = Some(role);
-                                                cx.notify();
-                                            }
+                                            root.review_account_role(role, cx)
                                         }),
                                     )
                                 }),
@@ -295,3 +307,46 @@ fn role_impact(role: AccountRole) -> Key {
 }
 
 use super::staff_access::role_label;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    async fn unlinked_role_confirmation_respects_verification_and_can_be_cancelled(
+        cx: &mut TestAppContext,
+    ) {
+        let (_directory, window) = super::super::tests::open(cx);
+        window
+            .update(cx, |root, _, cx| {
+                root.open_account_roles(cx);
+                root.status.connectivity = Connectivity::Online;
+                let Overlay::AccountRoles(desk) = &mut root.overlay else {
+                    panic!("Missing account lookup")
+                };
+                desk.account = Some(UnlinkedAccount {
+                    user_id: "synthetic-account".into(),
+                    name: "Synthetic account".into(),
+                    email: "account@example.test".into(),
+                    email_verified: false,
+                    role: AccountRole::Client,
+                    generation: "initial".into(),
+                    revision: "a".repeat(64),
+                });
+                root.review_account_role(AccountRole::Staff, cx);
+                let Overlay::AccountRoles(desk) = &mut root.overlay else {
+                    panic!("Missing role review")
+                };
+                assert!(desk.proposed.is_none());
+                desk.account.as_mut().unwrap().email_verified = true;
+                root.review_account_role(AccountRole::Staff, cx);
+                assert!(matches!(&root.overlay, Overlay::AccountRoles(desk)
+                if desk.proposed == Some(AccountRole::Staff) && !desk.busy));
+                root.close_account_roles(cx);
+                assert!(matches!(&root.overlay, Overlay::AccountRoles(desk)
+                if desk.proposed.is_none() && desk.account.is_some() && !desk.busy));
+            })
+            .unwrap();
+    }
+}

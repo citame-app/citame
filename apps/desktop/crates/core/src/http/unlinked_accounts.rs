@@ -28,17 +28,42 @@ pub struct AccountRoleReceipt {
     pub client_id: Option<String>,
 }
 
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum AccountLookupError {
+    #[error("No unlinked account matches that email")]
+    NotFound,
+    #[error("Enter a complete email address")]
+    InvalidAddress,
+    #[error(transparent)]
+    Transport(#[from] TransportError),
+}
+
 impl HttpTransport {
-    pub fn lookup_unlinked_account(&self, email: &str) -> Result<UnlinkedAccount, TransportError> {
+    pub fn lookup_unlinked_account(
+        &self,
+        email: &str,
+    ) -> Result<UnlinkedAccount, AccountLookupError> {
         let email = email.trim().to_lowercase();
         if !valid_staff_login(&email, None) {
-            return Err(TransportError::BadRequest(
-                "Enter an exact email address".into(),
-            ));
+            return Err(AccountLookupError::InvalidAddress);
         }
-        let account: UnlinkedAccount = self.post_json(
-            "/admin/accounts/lookup",
-            &serde_json::json!({ "email": email }),
+        let account: UnlinkedAccount = read_response_with(
+            self.send_json(
+                "/admin/accounts/lookup",
+                &serde_json::json!({ "email": email }),
+            )?,
+            |status, retry_after, body| {
+                let error = serde_json::from_str::<serde_json::Value>(body).ok();
+                let code = error
+                    .as_ref()
+                    .and_then(|value| value.pointer("/error/code"))
+                    .and_then(serde_json::Value::as_str);
+                match (status, code) {
+                    (404, Some("not_found")) => AccountLookupError::NotFound,
+                    (400, Some("validation_error")) => AccountLookupError::InvalidAddress,
+                    _ => classify_status(status, retry_after, body, false).into(),
+                }
+            },
         )?;
         if account.user_id.is_empty()
             || account.email != email
@@ -49,7 +74,7 @@ impl HttpTransport {
                 .bytes()
                 .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
         {
-            return Err(TransportError::Server("Unexpected account lookup".into()));
+            return Err(TransportError::Server("Unexpected account lookup".into()).into());
         }
         Ok(account)
     }

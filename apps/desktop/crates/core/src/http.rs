@@ -79,7 +79,7 @@ pub use staff_access::{
 };
 mod unlinked_accounts;
 pub use staff_portraits::{PortraitDirectory, PortraitStaff, PortraitUpdate};
-pub use unlinked_accounts::{AccountRoleReceipt, UnlinkedAccount};
+pub use unlinked_accounts::{AccountLookupError, AccountRoleReceipt, UnlinkedAccount};
 mod weekly_hours;
 pub use weekly_hours::{WeeklyHours, WeeklyRange, parse_weekly_hours};
 mod date_shifts;

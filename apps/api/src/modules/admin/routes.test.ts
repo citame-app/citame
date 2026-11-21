@@ -234,7 +234,7 @@ describe("POST /admin/staff-accounts", () => {
 
 describe("PATCH /admin/users/:id/role", () => {
   test("the owner promotes a client to staff, and the profile appears", async () => {
-    const { userId } = await signUp(t.app, "lucia@example.com", "Lucia");
+    const { userId } = await actor(t, "client", "lucia@example.com");
     const res = await setRole(owner, userId, "staff");
     expect(res.status).toBe(200);
     const body = changeRoleResponseSchema.parse(await res.json());
@@ -253,6 +253,16 @@ describe("PATCH /admin/users/:id/role", () => {
     }
     const [row] = await t.db.select().from(user).where(eq(user.id, userId));
     expect(row?.role).toBe("client");
+  });
+
+  test("an owner cannot grant a privileged role to an unverified public signup", async () => {
+    const { userId } = await signUp(t.app, "unverified@example.com");
+    const res = await setRole(owner, userId, "staff");
+    expect(res.status).toBe(409);
+    expect(await code(res)).toBe("invalid_state");
+    expect(
+      await t.db.select().from(staffProfile).where(eq(staffProfile.userId, userId)),
+    ).toHaveLength(0);
   });
 
   test("a client cannot promote themselves", async () => {

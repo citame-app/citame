@@ -408,6 +408,7 @@ test("an owner can review and promote an existing verified account without a cal
   const lookup = "/admin/accounts/lookup";
   const change = "/admin/accounts/role/reviewed";
   expect((await send(lookup, "POST", { email }, staff.access)).status).toBe(403);
+  expect((await json(t.app, lookup, "POST", { email }, staff.who.cookie)).status).toBe(403);
   expect((await request(lookup, owner.access)).status).toBe(403);
   expect((await send(lookup, "POST", { email: "unlinked-target" })).status).toBe(400);
   expect((await send(lookup, "POST", { email: staff.who.email })).status).toBe(404);
@@ -444,8 +445,14 @@ test("an owner can review and promote an existing verified account without a cal
   ).toHaveLength(0);
   await t.db.update(user).set({ emailVerified: true }).where(eq(user.id, member.userId));
   review = (await (await send(lookup, "POST", { email })).json()) as Record<string, unknown>;
-  const promoted = await send(change, "PUT", { ...mutation, revision: review.revision });
-  expect(promoted.status).toBe(200);
+  const current = { ...mutation, revision: review.revision };
+  const confirmations = await Promise.all([
+    send(change, "PUT", current),
+    json(t.app, change, "PUT", current, owner.who.cookie),
+  ]);
+  expect(confirmations.map(({ status }) => status).sort()).toEqual([200, 409]);
+  const promoted = confirmations.find(({ status }) => status === 200);
+  if (!promoted) throw new Error("No role was saved");
   const result = (await promoted.json()) as Record<string, unknown>;
   expect(result).toMatchObject({ userId: member.userId, role: "staff", clientId: member.clientId });
   expect(result.staffId).toBeString();

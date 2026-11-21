@@ -410,11 +410,6 @@ export async function assignRole(
           throw new DomainError("version_conflict", "The account changed; repeat the lookup");
         if (row.role === role)
           throw new DomainError("validation_error", "Choose a different account role");
-        if (role !== "client" && !row.emailVerified)
-          throw new DomainError(
-            "invalid_state",
-            "The email address must be verified before granting access",
-          );
       }
       // A concurrent promotion may have created a calendar while we waited for the account.
       if (staff && staff.id !== calendarId)
@@ -426,6 +421,11 @@ export async function assignRole(
           ? staff !== undefined && (!staff.active || staff.deletedAt !== null)
           : role === "client" && staff?.active === true;
     }
+    if (audit && role !== "client" && role !== row.role && !row.emailVerified)
+      throw new DomainError(
+        "invalid_state",
+        "The email address must be verified before granting access",
+      );
     await tx.update(user).set({ role }).where(eq(user.id, userId));
 
     if (role === "staff") await ensureStaffProfile(tx, userId, row.name);

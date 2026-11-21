@@ -106,22 +106,32 @@ export function UnlinkedAccountRoles({ onOpenMember }: { onOpenMember: (id: stri
       </form>
       {lookup.isError && (
         <p role="alert" className="text-sm text-danger-fg">
-          {lookup.error instanceof ApiError && lookup.error.code === "not_found"
-            ? t("access.accounts.notFound")
-            : t("access.accounts.lookupFailed")}
+          {t(
+            lookup.error instanceof ApiError && lookup.error.code === "not_found"
+              ? "access.accounts.notFound"
+              : lookup.error instanceof ApiError && lookup.error.code === "validation_error"
+                ? "access.accounts.invalidEmail"
+                : "access.accounts.lookupFailed",
+          )}
         </p>
       )}
+      <div role="status" className="space-y-2">
+        {lookupAccount && (
+          <>
+            <p className="break-all text-sm">
+              {lookupAccount.name} · {lookupAccount.email}
+            </p>
+            <p className="text-sm">
+              {t("access.currentRole", { role: t(`access.role.${lookupAccount.role}`) })}
+            </p>
+            {!lookupAccount.emailVerified && (
+              <p className="text-sm text-muted">{t("access.accounts.verifyEmail")}</p>
+            )}
+          </>
+        )}
+      </div>
       {lookupAccount && (
         <div className="space-y-2">
-          <p className="break-all text-sm">
-            {lookupAccount.name} · {lookupAccount.email}
-          </p>
-          <p className="text-sm">
-            {t("access.currentRole", { role: t(`access.role.${lookupAccount.role}`) })}
-          </p>
-          {!lookupAccount.emailVerified && (
-            <p className="text-sm text-muted">{t("access.accounts.verifyEmail")}</p>
-          )}
           {availableRoles.length > 0 && (
             <div className="flex flex-wrap items-end gap-3">
               <SelectField

@@ -47,6 +47,7 @@ export const accessEn = {
   "access.accounts.title": "Find an account without a calendar",
   "access.accounts.email": "Exact account email",
   "access.accounts.search": "Find account",
+  "access.accounts.invalidEmail": "Enter a complete email address.",
   "access.accounts.notFound":
     "No unlinked account matches that email. Use Staff access for accounts with a calendar.",
   "access.accounts.verifyEmail":
@@ -111,6 +112,7 @@ export const accessEsAR: Record<keyof typeof accessEn, string> = {
   "access.accounts.title": "Buscar cuenta sin agenda",
   "access.accounts.email": "Correo exacto de la cuenta",
   "access.accounts.search": "Buscar cuenta",
+  "access.accounts.invalidEmail": "Escribe un correo electrónico completo.",
   "access.accounts.notFound":
     "No hay una cuenta sin agenda con ese correo. Usa Acceso del equipo para las cuentas con agenda.",
   "access.accounts.verifyEmail":
