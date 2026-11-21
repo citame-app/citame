@@ -137,13 +137,15 @@ impl Selection {
             }
         } else {
             let family = item.family();
-            if self.bases().any(|base| {
-                catalog.services.iter().any(|selected| {
-                    selected.id == base
-                        && selected.family() != family
-                        && selected.currency != item.currency
+            if !self.bases().any(|base| base == id)
+                && self.bases().any(|base| {
+                    catalog.services.iter().any(|selected| {
+                        selected.id == base
+                            && selected.family() != family
+                            && selected.currency != item.currency
+                    })
                 })
-            }) {
+            {
                 return false;
             }
             let existing = self.segments.iter().position(|(base, _)| {

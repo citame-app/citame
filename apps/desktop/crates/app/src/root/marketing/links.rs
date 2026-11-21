@@ -223,13 +223,15 @@ impl Root {
                 Ok(Ok(Some(path))) => {
                     let current = root
                         .update(cx, |root, _| {
-                            root.booking_links().is_some_and(|view| {
-                                Arc::ptr_eq(&identity, &view.identity)
-                                    && view
-                                        .qr
-                                        .as_ref()
-                                        .is_some_and(|(qr, _)| Arc::ptr_eq(qr, &bytes))
-                            })
+                            root.status.connectivity == Connectivity::Online
+                                && root.booking_links().is_some_and(|view| {
+                                    Arc::ptr_eq(&identity, &view.identity)
+                                        && !view.loading
+                                        && view
+                                            .qr
+                                            .as_ref()
+                                            .is_some_and(|(qr, _)| Arc::ptr_eq(qr, &bytes))
+                                })
                         })
                         .unwrap_or(false);
                     if !current {
