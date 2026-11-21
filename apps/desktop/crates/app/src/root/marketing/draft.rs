@@ -1,5 +1,8 @@
 use super::*;
 use sob_core::http::marketing::{Audience, Draft, DraftRevision, DraftWrite};
+use std::{cell::Cell, rc::Rc};
+
+const MAX_EDITABLE_LINES: usize = 256;
 
 const CHANNELS: [Channel; 3] = [Channel::Email, Channel::Sms, Channel::Optimized];
 const TRIGGERS: [Trigger; 4] = [
@@ -17,8 +20,8 @@ pub(super) struct Editor {
     channel: Channel,
     trigger: Trigger,
     subject: Entity<TextField>,
-    email: Vec<Entity<TextField>>,
-    sms: Vec<Entity<TextField>>,
+    email: MessageInput,
+    sms: MessageInput,
     tags: Entity<TextField>,
     inactive_days: Entity<TextField>,
     delay: Entity<TextField>,
@@ -42,6 +45,32 @@ enum Message {
     Sms,
 }
 
+struct MessageInput {
+    lines: Vec<Entity<TextField>>,
+    remaining_lines: Rc<Cell<usize>>,
+}
+
+impl MessageInput {
+    fn new(message: Message, value: &str, cx: &mut Context<Root>) -> Self {
+        let remaining_lines = Rc::new(Cell::new(0));
+        let lines = value
+            .split('\n')
+            .map(|line| message.line(line, &remaining_lines, cx))
+            .collect();
+        let input = Self {
+            lines,
+            remaining_lines,
+        };
+        input.update_budget();
+        input
+    }
+
+    fn update_budget(&self) {
+        self.remaining_lines
+            .set(MAX_EDITABLE_LINES.saturating_sub(self.lines.len()));
+    }
+}
+
 impl Message {
     fn label(self) -> Key {
         match self {
@@ -57,16 +86,22 @@ impl Message {
         }
     }
 
-    fn lines(self, editor: &mut Editor) -> &mut Vec<Entity<TextField>> {
+    fn input(self, editor: &mut Editor) -> &mut MessageInput {
         match self {
             Self::Email => &mut editor.email,
             Self::Sms => &mut editor.sms,
         }
     }
 
-    fn line(self, value: &str, cx: &mut Context<Root>) -> Entity<TextField> {
+    fn line(
+        self,
+        value: &str,
+        budget: &Rc<Cell<usize>>,
+        cx: &mut Context<Root>,
+    ) -> Entity<TextField> {
         let field = cx.new(|cx| {
-            let mut field = TextField::new("", false, cx).with_line_paste(self.limit());
+            let mut field =
+                TextField::new("", false, cx).with_bounded_line_paste(self.limit(), budget.clone());
             field.set_text(value, cx);
             field
         });
@@ -77,18 +112,20 @@ impl Message {
             let Some(editor) = &mut desk.editor else {
                 return;
             };
-            let lines = self.lines(editor);
-            let Some(index) = lines.iter().position(|line| *line == origin) else {
+            let input = self.input(editor);
+            let Some(index) = input.lines.iter().position(|line| *line == origin) else {
                 return;
             };
             match event {
                 FieldEvent::PasteLines(tail) => {
-                    lines.splice(
+                    input.lines.splice(
                         index + 1..index + 1,
-                        tail.iter().map(|line| self.line(line, cx)),
+                        tail.iter()
+                            .map(|line| self.line(line, &input.remaining_lines, cx)),
                     );
+                    input.update_budget();
                 }
-                FieldEvent::PasteTooLong => desk.error = Some(Key::MarketingDraftInvalid),
+                FieldEvent::PasteTooLong => desk.error = Some(Key::MarketingPasteLimit),
                 _ => return,
             }
             cx.notify();
@@ -120,6 +157,14 @@ fn optional_days(value: &str) -> Option<Option<u32>> {
     (1..=3650).contains(&days).then_some(Some(days))
 }
 
+fn timing(value: &str, max: u32, relevant: bool) -> Option<u32> {
+    value
+        .parse()
+        .ok()
+        .filter(|n| *n <= max)
+        .or_else(|| (!relevant).then_some(0))
+}
+
 impl Editor {
     fn new(campaign: Option<&Campaign>, generation: String, cx: &mut Context<Root>) -> Self {
         let days = campaign
@@ -139,16 +184,8 @@ impl Editor {
             channel: campaign.map_or(Channel::Email, |c| c.channel),
             trigger: campaign.map_or(Trigger::Manual, |c| c.trigger),
             subject: input(campaign.map_or("", |c| &c.subject), cx),
-            email: campaign
-                .map_or("", |c| &c.email_body)
-                .split('\n')
-                .map(|value| Message::Email.line(value, cx))
-                .collect(),
-            sms: campaign
-                .map_or("", |c| &c.sms_body)
-                .split('\n')
-                .map(|value| Message::Sms.line(value, cx))
-                .collect(),
+            email: MessageInput::new(Message::Email, campaign.map_or("", |c| &c.email_body), cx),
+            sms: MessageInput::new(Message::Sms, campaign.map_or("", |c| &c.sms_body), cx),
             tags: input(&tags, cx),
             inactive_days: input(&days, cx),
             delay: input(&campaign.map_or(0, |c| c.delay_minutes).to_string(), cx),
@@ -174,10 +211,18 @@ impl Editor {
     fn packet(&self, cx: &App) -> Option<DraftWrite> {
         let name = text(&self.name, cx);
         let subject = text(&self.subject, cx);
-        let email_body = message_text(&self.email, cx);
-        let sms_body = message_text(&self.sms, cx);
-        let delay_minutes = text(&self.delay, cx).parse().ok()?;
-        let birthday_lead_days = text(&self.birthday, cx).parse().ok()?;
+        let email_body = message_text(&self.email.lines, cx);
+        let sms_body = message_text(&self.sms.lines, cx);
+        let delay_minutes = timing(
+            &text(&self.delay, cx),
+            525600,
+            self.trigger == Trigger::FirstVisit,
+        )?;
+        let birthday_lead_days = timing(
+            &text(&self.birthday, cx),
+            30,
+            self.trigger == Trigger::Birthday,
+        )?;
         let tags: Vec<_> = text(&self.tags, cx)
             .split(',')
             .map(str::trim)
@@ -190,12 +235,6 @@ impl Editor {
             || subject.contains(['\r', '\n'])
             || email_body.encode_utf16().count() > Message::Email.limit()
             || sms_body.encode_utf16().count() > Message::Sms.limit()
-            || delay_minutes > 525600
-            || birthday_lead_days > 30
-            || tags.len() > 20
-            || tags
-                .iter()
-                .any(|tag| tag.encode_utf16().count() > 40 || tag.contains(';'))
         {
             return None;
         }
@@ -345,9 +384,10 @@ impl Root {
                                 if let Some(editor) =
                                     root.marketing_desk().and_then(|desk| desk.editor.as_mut())
                                 {
-                                    let lines = message.lines(editor);
-                                    if lines.len() > 1 {
-                                        lines.retain(|line| *line != remove);
+                                    let input = message.input(editor);
+                                    if input.lines.len() > 1 {
+                                        input.lines.retain(|line| *line != remove);
+                                        input.update_budget();
                                         cx.notify();
                                     }
                                 }
@@ -356,23 +396,28 @@ impl Root {
                         ))
                     })
             }))
-            .child(self.marketing_button(
-                SharedString::from(format!("add-{name}-line")),
-                Key::MarketingAddLine,
-                Kind::Ghost,
-                move |root, cx| {
-                    if let Some(editor) =
-                        root.marketing_desk().and_then(|desk| desk.editor.as_mut())
-                    {
-                        let lines = message.lines(editor);
-                        if lines.len() <= message.limit() {
-                            lines.push(message.line("", cx));
-                            cx.notify();
+            .when(lines.len() < MAX_EDITABLE_LINES, |body| {
+                body.child(self.marketing_button(
+                    SharedString::from(format!("add-{name}-line")),
+                    Key::MarketingAddLine,
+                    Kind::Ghost,
+                    move |root, cx| {
+                        if let Some(editor) =
+                            root.marketing_desk().and_then(|desk| desk.editor.as_mut())
+                        {
+                            let input = message.input(editor);
+                            if input.lines.len() < MAX_EDITABLE_LINES {
+                                input
+                                    .lines
+                                    .push(message.line("", &input.remaining_lines, cx));
+                                input.update_budget();
+                                cx.notify();
+                            }
                         }
-                    }
-                },
-                cx,
-            ))
+                    },
+                    cx,
+                ))
+            })
     }
 
     pub(super) fn render_campaign_editor(
@@ -422,8 +467,19 @@ impl Root {
         if editor.pending.is_some() {
             return body.when(ready, |body| body.child(save));
         }
-        let email = editor.channel != Channel::Sms;
-        let sms = editor.channel != Channel::Email;
+        let email = editor.channel != Channel::Sms
+            || !editor.subject.read(cx).text().is_empty()
+            || editor
+                .email
+                .lines
+                .iter()
+                .any(|line| !line.read(cx).text().is_empty());
+        let sms = editor.channel != Channel::Email
+            || editor
+                .sms
+                .lines
+                .iter()
+                .any(|line| !line.read(cx).text().is_empty());
         body.child(self.label(Key::MarketingCampaignName))
             .child(editor.name.clone())
             .child(self.label(Key::MarketingChannel))
@@ -492,10 +548,10 @@ impl Root {
             .when(email, |body| {
                 body.child(self.label(Key::MarketingSubject))
                     .child(editor.subject.clone())
-                    .child(self.edit_message(Message::Email, &editor.email, cx))
+                    .child(self.edit_message(Message::Email, &editor.email.lines, cx))
             })
             .when(sms, |body| {
-                body.child(self.edit_message(Message::Sms, &editor.sms, cx))
+                body.child(self.edit_message(Message::Sms, &editor.sms.lines, cx))
             })
             .child(self.label(Key::MarketingTags))
             .child(editor.tags.clone())
@@ -515,7 +571,8 @@ impl Root {
                         }
                     }),
                 )
-                .tab_index(0),
+                .tab_index(0)
+                .focus(|style| style.border_color(theme::text())),
             )
             .when(ready && !editor.stale, |body| body.child(save))
     }

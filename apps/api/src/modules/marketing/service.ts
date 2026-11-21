@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   type Campaign,
   type CampaignCreate,
@@ -146,18 +147,29 @@ export async function updateCampaign(
   id: string,
   input: CampaignUpdate,
   p: Principal,
+  allowIdenticalReplay = false,
 ) {
   requirePermission(p, "editCatalog");
   return db.transaction(async (tx) => {
     const current = await campaignRow(tx, id, true);
-    if (current.version !== input.version)
+    const { version, ...fields } = input;
+    if (
+      allowIdenticalReplay &&
+      current.status === "draft" &&
+      (current.version === version || current.version === version + 1) &&
+      Object.entries(fields).every(([key, value]) =>
+        isDeepStrictEqual(current[key as keyof typeof fields], value),
+      )
+    ) {
+      return (await campaignViews(tx, [current]))[0]!;
+    }
+    if (current.version !== version)
       throw new DomainError("version_conflict", "Campaign changed; reload before editing");
     if (current.status !== "draft")
       throw new DomainError(
         "invalid_state",
         "Only a draft can be edited; cancel or duplicate this campaign",
       );
-    const { version, ...fields } = input;
     const [row] = await tx
       .update(marketingCampaign)
       .set({ ...fields, version: version + 1 })

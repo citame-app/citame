@@ -5501,6 +5501,9 @@ fn native_reviews_future_campaign_delivery_and_cancels_through_the_proxy() {
         device.transport.save_campaign_draft(&create).unwrap().id,
         created.id
     );
+    browser.sync();
+    let after_create = browser.store.live_view_revision(LIVE_TOPIC).unwrap();
+    assert!(after_create > previous);
     let mut update = DraftWrite {
         revision: DraftRevision::Edit {
             id: id.clone(),
@@ -5512,12 +5515,26 @@ fn native_reviews_future_campaign_delivery_and_cancels_through_the_proxy() {
     let updated = device.transport.save_campaign_draft(&update).unwrap();
     assert_eq!(updated.version, created.version + 1);
     assert_eq!(updated.birthday_lead_days, 5);
+    let replayed = device.transport.save_campaign_draft(&update).unwrap();
+    assert_eq!(replayed.version, updated.version);
+    let noop = DraftWrite {
+        revision: DraftRevision::Edit {
+            id: id.clone(),
+            version: updated.version,
+        },
+        ..update.clone()
+    };
+    assert_eq!(
+        device.transport.save_campaign_draft(&noop).unwrap().version,
+        updated.version
+    );
+    update.draft.birthday_lead_days = 4;
     assert!(matches!(
         device.transport.save_campaign_draft(&update),
         Err(MutationError::Changed)
     ));
     browser.sync();
-    assert!(browser.store.live_view_revision(LIVE_TOPIC).unwrap() > previous);
+    assert!(browser.store.live_view_revision(LIVE_TOPIC).unwrap() > after_create);
     let found = device
         .transport
         .marketing_campaigns(1, &name, Some(Status::Draft))

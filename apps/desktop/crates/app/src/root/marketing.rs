@@ -186,7 +186,8 @@ impl Root {
             return;
         }
         if desk.editor.is_some() {
-            self.leave_campaign_editor(cx);
+            desk.confirm_exit = !desk.confirm_exit;
+            cx.notify();
             return;
         }
         if desk.uncertain && !desk.confirm_exit {
@@ -320,7 +321,11 @@ impl Root {
                         if saving && let Some(editor) = &mut desk.editor {
                             editor.mark_stale();
                         }
-                        desk.error = Some(Key::MarketingChanged);
+                        desk.error = Some(if saving {
+                            Key::MarketingDraftConflict
+                        } else {
+                            Key::MarketingChanged
+                        });
                         desk.review = None;
                         desk.action = None;
                         desk.uncertain = false;
@@ -507,7 +512,11 @@ impl Root {
                 "close-marketing",
                 close,
                 Kind::Ghost,
-                Root::dismiss_marketing,
+                if desk.editor.is_some() {
+                    Root::leave_campaign_editor
+                } else {
+                    Root::dismiss_marketing
+                },
                 cx,
             ))
         });
@@ -988,7 +997,8 @@ mod tests {
             let campaign = serde_json::from_value(json!({
                 "id": "synthetic", "name": "Synthetic draft", "channel": "email", "trigger": "manual",
                 "status": "draft", "version": 2, "subject": "Subject", "emailBody": "Body",
-                "smsBody": "", "scheduledFor": null, "audience": {
+                "smsBody": "", "delayMinutes": 0, "birthdayLeadDays": 0,
+                "scheduledFor": null, "audience": {
                     "tags":[],"inactiveDays":null,"noFutureAppointments":false
                 }, "counts": {"pending":0,"processing":0,"sent":0,"skipped":0,"failed":0,"unknown":0,"cancelled":0}
             })).unwrap();

@@ -92,6 +92,8 @@ keys! {
     MarketingSaveDraft => ("Save draft", "Guardar borrador"),
     MarketingDiscardDraft => ("Leave draft editor", "Salir del editor"),
     MarketingDiscardWarning => ("Leave the editor? Changes that haven't been saved will be lost.", "¿Salir del editor? Se perderán los cambios sin guardar."),
+    MarketingDraftConflict => ("Cloud changed this draft. Copy any text you want to keep, then go back to see the latest version.", "Cloud cambió este borrador. Copia el texto que quieras conservar y vuelve atrás para ver la versión actual."),
+    MarketingPasteLimit => ("Paste a shorter message with up to 256 lines.", "Pega un mensaje más corto, de hasta 256 líneas."),
     MarketingDraftInvalid => ("Check the campaign fields. Review length limits, tags and timing.", "Revisa los campos de la campaña, incluidos los límites de longitud, las etiquetas y los plazos."),
     MarketingCampaignName => ("Campaign name (up to 160 characters)", "Nombre de la campaña (hasta 160 caracteres)"),
     MarketingChannel => ("Channel", "Canal"),
