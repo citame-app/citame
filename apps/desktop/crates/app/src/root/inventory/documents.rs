@@ -979,6 +979,8 @@ impl Root {
                         panel.notice = Some(Key::InventoryReceiptAlreadyRecorded);
                     }
                     self.reload(cx);
+                } else if let Some(panel) = self.document_panel() {
+                    panel.notice = Some(Key::InventoryReceiptDifferentRecorded);
                 }
             }
             DeliveryReview::Current {

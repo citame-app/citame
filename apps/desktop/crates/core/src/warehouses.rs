@@ -24,6 +24,12 @@ pub struct WarehouseList {
     pub generation: String,
 }
 
+impl WarehouseList {
+    pub fn has_active_location(&self, id: Option<Uuid>) -> bool {
+        self.warehouses.iter().any(|row| row.id == id && row.active)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WarehouseBalance {

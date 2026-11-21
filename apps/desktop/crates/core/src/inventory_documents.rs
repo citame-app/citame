@@ -99,6 +99,7 @@ pub struct ReceiptHeader {
     pub id: Uuid,
     pub number: u32,
     pub received_on: String,
+    pub supplier_id: Option<Uuid>,
     pub supplier_name: Option<String>,
     pub invoice_reference: Option<String>,
     pub notes: Option<String>,
@@ -107,6 +108,8 @@ pub struct ReceiptHeader {
     pub warehouse_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub warehouse_name: Option<String>,
+    #[serde(default)]
+    pub warehouse_confirmed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub purchase_order_id: Option<Uuid>,
 }
@@ -126,6 +129,26 @@ pub struct Receipt {
     #[serde(flatten)]
     pub header: ReceiptHeader,
     pub lines: Vec<ReceiptLine>,
+}
+
+impl Receipt {
+    pub fn matches_delivery(&self, proposed: &Delivery) -> bool {
+        self.header.id == proposed.id
+            && self.header.warehouse_confirmed
+            && self.header.warehouse_id == proposed.warehouse_id
+            && self.header.supplier_id == proposed.supplier_id
+            && self.header.purchase_order_id == proposed.purchase_order.map(|order| order.id)
+            && self.header.received_on == proposed.received_on
+            && self.header.invoice_reference == proposed.invoice_reference
+            && self.header.notes == proposed.notes
+            && self.lines.len() == proposed.lines.len()
+            && proposed.lines.iter().all(|planned| {
+                self.lines.iter().any(|recorded| {
+                    planned.product_id == recorded.product_id
+                        && planned.quantity == recorded.quantity
+                })
+            })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

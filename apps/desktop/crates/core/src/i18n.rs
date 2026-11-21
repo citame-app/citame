@@ -685,6 +685,8 @@ keys! {
     InventorySuppliersEmpty => ("No matching suppliers", "No hay proveedores que coincidan"),
     InventoryReceiptWarehouse => ("Receiving warehouse", "Almacén de entrada"),
     InventoryReceiptLoadWarehouses => ("Refresh warehouses", "Actualizar almacenes"),
+    InventoryReceiptWarehouseUnverified => ("Location to verify", "Ubicación por verificar"),
+    InventoryReceiptDifferentRecorded => ("Cloud already has a receipt with this number and different details. The proposal remains in Sync conflicts.", "Cloud ya tiene un albarán para esta operación con otros datos. La propuesta sigue en Conflictos de sincronización."),
     InventoryReceiptWarehouseMissing => ("The selected warehouse is unavailable. Refresh warehouses or choose an active location.", "El almacén seleccionado no está disponible. Actualiza los almacenes o elige una ubicación activa."),
     InventoryReceiptNew => ("New stock receipt", "Nuevo albarán de entrada"),
     InventoryReceiptView => ("View stock receipt", "Ver albarán"),

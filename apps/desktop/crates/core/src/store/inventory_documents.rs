@@ -512,9 +512,10 @@ impl Store {
         self.write_transaction(|store| {
             Self::ensure_generation(&store.conn, Some(generation))?;
             match store.inventory_document_conflict(mutation_id)? {
-                Some(DocumentProposal::Receipt(draft)) if draft.id == receipt.header.id => {
+                Some(DocumentProposal::Receipt(draft)) if receipt.matches_delivery(&draft) => {
                     store.resolve_conflict(mutation_id, "recorded")
                 }
+                Some(DocumentProposal::Receipt(_)) => Err(CoreError::CatalogueVersionChanged),
                 _ => Err(CoreError::NotFound("stock receipt proposal".into())),
             }
         })

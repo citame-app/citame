@@ -5045,6 +5045,7 @@ fn native_purchase_orders_survive_restart_and_rebase_a_concurrent_cloud_delivery
         PurchaseOrderAction, PurchaseOrderFields, PurchaseOrderLink, PurchaseOrderProposal,
         PurchaseOrderStatus, RequestedProduct,
     };
+    use sob_core::warehouses::WarehouseEdit;
     use uuid::Uuid;
 
     let desktop = proxy_device();
@@ -5178,13 +5179,37 @@ fn native_purchase_orders_survive_restart_and_rebase_a_concurrent_cloud_delivery
     store
         .cache_purchase_order(&current.value, &current.generation)
         .unwrap();
+    let warehouse = Uuid::now_v7();
+    let locations = desktop.transport.inventory_warehouses().unwrap();
+    store.cache_warehouse_list(&locations).unwrap();
+    store
+        .queue_warehouse_edit(
+            &generation,
+            WarehouseEdit {
+                id: warehouse,
+                name: "Native order delivery stockroom".into(),
+                active: true,
+                version: 0,
+            },
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*desktop.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let locations = desktop.transport.inventory_warehouses().unwrap();
+    store.cache_warehouse_list(&locations).unwrap();
     let receipt_id = Uuid::now_v7();
     let link = PurchaseOrderLink {
         id,
         version: current.value.header.version,
     };
     let mut delivery = Delivery {
-        warehouse_id: None,
+        warehouse_id: Some(warehouse),
         id: receipt_id,
         supplier_id: Some(supplier.id),
         received_on: "2026-01-29".into(),
@@ -5228,11 +5253,11 @@ fn native_purchase_orders_survive_restart_and_rebase_a_concurrent_cloud_delivery
         products,
         supplier,
         order: Some(order),
-        ..
+        warehouses: Some(locations),
     } = desktop
         .transport
         .review_delivery(&DeliveryReviewRequest {
-            warehouse_id: None,
+            warehouse_id: Some(warehouse),
             id: receipt_id,
             supplier_id: delivery.supplier_id,
             product_ids: vec![product_id],
@@ -5242,6 +5267,7 @@ fn native_purchase_orders_survive_restart_and_rebase_a_concurrent_cloud_delivery
     else {
         panic!("order and stock versions remain available for manual review");
     };
+    store.cache_warehouse_list(&locations).unwrap();
     assert_eq!(order.value.lines[0].remaining(), 5);
     store
         .cache_delivery_review(&generation, &[product_id], &products, supplier.as_ref())
@@ -5268,6 +5294,26 @@ fn native_purchase_orders_survive_restart_and_rebase_a_concurrent_cloud_delivery
             .push
             .applied,
         1
+    );
+    assert_eq!(
+        desktop
+            .transport
+            .warehouse_product(Some(warehouse), product_id)
+            .unwrap()
+            .products[0]
+            .on_hand,
+        2
+    );
+    assert_eq!(
+        desktop
+            .transport
+            .inventory_receipt(receipt_id)
+            .unwrap()
+            .unwrap()
+            .value
+            .header
+            .warehouse_id,
+        Some(warehouse)
     );
     assert_eq!(web.rest_get(&order_path)["lines"][0]["receivedQuantity"], 3);
     assert_eq!(
@@ -5521,6 +5567,26 @@ fn native_warehouse_transfers_survive_restart_and_reject_stale_stock() {
         .inventory_receipt(receipt.id)
         .unwrap()
         .unwrap();
+    assert!(recorded.value.matches_delivery(&receipt));
+    let redirected = Delivery {
+        warehouse_id: None,
+        ..receipt.clone()
+    };
+    assert!(!recorded.value.matches_delivery(&redirected));
+    let mut old_cache = serde_json::to_value(&recorded.value).unwrap();
+    let cached_fields = old_cache.as_object_mut().unwrap();
+    for field in [
+        "warehouseId",
+        "warehouseName",
+        "warehouseConfirmed",
+        "supplierId",
+    ] {
+        cached_fields.remove(field);
+    }
+    let old_cache: sob_core::inventory_documents::Receipt =
+        serde_json::from_value(old_cache).unwrap();
+    assert!(!old_cache.header.warehouse_confirmed);
+    assert!(!old_cache.matches_delivery(&redirected));
     assert_eq!(recorded.value.header.warehouse_id, Some(warehouse));
     assert_eq!(
         recorded.value.header.warehouse_name.as_deref(),

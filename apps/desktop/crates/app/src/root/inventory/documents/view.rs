@@ -417,10 +417,13 @@ impl Root {
             .child(format!(
                 "{} · {}",
                 self.t(Key::InventoryReceiptWarehouse),
-                header
-                    .warehouse_name
-                    .as_deref()
-                    .unwrap_or(self.t(Key::InventoryWarehouseMain)),
+                header.warehouse_name.as_deref().unwrap_or_else(|| self.t(
+                    if header.warehouse_confirmed && header.warehouse_id.is_none() {
+                        Key::InventoryWarehouseMain
+                    } else {
+                        Key::InventoryReceiptWarehouseUnverified
+                    },
+                )),
             ))
             .when_some(header.invoice_reference.as_ref(), |body, reference| {
                 body.child(format!(
@@ -614,14 +617,8 @@ impl Root {
         busy: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        let missing = selected.is_some_and(|id| {
-            locations.is_none_or(|list| {
-                !list
-                    .warehouses
-                    .iter()
-                    .any(|row| row.id == Some(id) && row.active)
-            })
-        });
+        let missing = selected
+            .is_some_and(|id| locations.is_none_or(|list| !list.has_active_location(Some(id))));
         div()
             .flex()
             .flex_col()
@@ -713,11 +710,9 @@ impl Root {
         let draft_order = form.draft_order.is_some();
         let warehouses = self.svc.store.cached_warehouses().ok().flatten();
         let destination_available = form.warehouse_id.is_none_or(|id| {
-            warehouses.as_ref().is_some_and(|list| {
-                list.warehouses
-                    .iter()
-                    .any(|row| row.id == Some(id) && row.active)
-            })
+            warehouses
+                .as_ref()
+                .is_some_and(|list| list.has_active_location(Some(id)))
         });
         let closed = form
             .purchase_order

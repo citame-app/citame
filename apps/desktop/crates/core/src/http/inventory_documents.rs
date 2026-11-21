@@ -97,7 +97,7 @@ impl HttpTransport {
         &self,
         page: u32,
     ) -> Result<ReviewedDocument<ReceiptPage>, TransportError> {
-        let result: ReviewedDocument<ReceiptPage> = read_response(
+        let mut result: ReviewedDocument<ReceiptPage> = read_response(
             self.get(
                 &self.agent,
                 &format!("/admin/inventory/receipts?page={page}"),
@@ -108,6 +108,9 @@ impl HttpTransport {
         if result.value.pagination.page != page {
             return Err(TransportError::Server("Unexpected receipt page".into()));
         }
+        for row in &mut result.value.receipts {
+            row.warehouse_confirmed = true;
+        }
         Ok(result)
     }
 
@@ -115,11 +118,15 @@ impl HttpTransport {
         &self,
         id: Uuid,
     ) -> Result<Option<ReviewedDocument<Receipt>>, TransportError> {
-        self.read_inventory_document(
+        let mut result = self.read_inventory_document(
             &format!("/admin/inventory/receipts/{id}"),
             id,
             |row: &Receipt| row.header.id,
-        )
+        )?;
+        if let Some(receipt) = &mut result {
+            receipt.value.header.warehouse_confirmed = true;
+        }
+        Ok(result)
     }
 
     pub fn inventory_purchase_orders(
