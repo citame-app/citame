@@ -179,6 +179,16 @@ export function createMarketingWorker(options: {
         .returning();
     });
   }
+  const currentRecipient = (clientId: string) =>
+    db.transaction(
+      async (tx) => {
+        const client = await clientRoot(tx, clientId);
+        const permission = client.id === clientId ? await consentFor(tx, client.id) : null;
+        return { client, permission };
+      },
+      { isolationLevel: "repeatable read", accessMode: "read only" },
+    );
+
   async function handle(row: DeliveryRow) {
     let renew: ReturnType<typeof setInterval> | undefined;
     try {
@@ -194,14 +204,7 @@ export function createMarketingWorker(options: {
         await finish(row, { status: "skipped", reason: "review_eligibility_changed" });
         return;
       }
-      const { client, permission } = await db.transaction(
-        async (tx) => {
-          const client = await clientRoot(tx, row.clientId);
-          const permission = client.id === row.clientId ? await consentFor(tx, client.id) : null;
-          return { client, permission };
-        },
-        { isolationLevel: "repeatable read", accessMode: "read only" },
-      );
+      const { client, permission } = await currentRecipient(row.clientId);
       if (client.id !== row.clientId) {
         await finish(row, { status: "skipped", reason: "client_identity_changed" });
         return;
@@ -322,6 +325,17 @@ export function createMarketingWorker(options: {
           return;
         }
         raw = target.email.trim();
+      }
+      if (row.channel === "email") {
+        const fresh = await currentRecipient(row.clientId);
+        if (
+          fresh.client.email !== client.email ||
+          !fresh.permission?.email.enabled ||
+          fresh.permission.email.version !== permission.email.version
+        ) {
+          await finish(row, { status: "skipped", reason: "marketing_permission_withdrawn" });
+          return;
+        }
       }
       const result =
         row.channel === "email"

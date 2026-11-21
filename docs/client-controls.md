@@ -21,5 +21,5 @@ Migration `0016` adds the controls to client profiles with safe defaults, leavin
 Web and Desktop can change or clear the email of an active standalone contact after reviewing the
 current contact revision. Desktop queues the change offline and surfaces a conflict if the reviewed
 revision becomes stale. A linked account keeps control of its sign-in email. Changing a contact
-email withdraws existing email marketing permission. Appointment messages resolve the current
-contact, and SMS marketing permission is independent. The edit never establishes an account link.
+email invalidates the reviewed email marketing permission. Queued appointment emails resolve the
+current contact. SMS marketing permission is independent. The edit never establishes an account link.

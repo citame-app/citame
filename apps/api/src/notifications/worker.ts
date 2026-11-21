@@ -60,7 +60,13 @@ const E164 = /^\+[1-9]\d{7,14}$/;
 
 type Prepared =
   | { skip: string }
-  | { channel: "email" | "sms" | "whatsapp"; to: string; data: MessageData; clientName: string };
+  | {
+      channel: "email" | "sms" | "whatsapp";
+      to: string;
+      data: MessageData;
+      clientName: string;
+      clientId: string;
+    };
 
 /** Reads the current state and decides whether (and what) to send. Never throws on bad data. */
 async function prepare(
@@ -142,7 +148,7 @@ async function prepare(
       ? `${config.publicUrl}/notifications/opt-out?token=${optOutToken}`
       : undefined,
   };
-  return { channel: row.channel, to, data, clientName: client.name };
+  return { channel: row.channel, to, data, clientName: client.name, clientId: client.id };
 }
 
 export function createNotificationWorker(options: WorkerOptions): NotificationWorker {
@@ -194,6 +200,24 @@ export function createNotificationWorker(options: WorkerOptions): NotificationWo
           ? new URL(prepared.data.optOutUrl).searchParams.get("token")
           : null;
         if (!email) throw new Error("Email provider missing after delivery preparation");
+        const [contact] = await db
+          .select({ email: clientProfile.email })
+          .from(clientProfile)
+          .where(
+            and(
+              eq(clientProfile.id, prepared.clientId),
+              isNull(clientProfile.deletedAt),
+              isNull(clientProfile.mergedIntoId),
+            ),
+          );
+        if (contact?.email?.trim() !== prepared.to) {
+          await finish(
+            row.attempts >= config.maxAttempts
+              ? { status: "skipped", reason: "contact_email_changed" }
+              : { status: "pending", error: "contact_email_changed", retryAt: clock() },
+          );
+          return;
+        }
         result = await email.send({
           to: prepared.to,
           subject: rendered.subject,

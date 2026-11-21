@@ -162,20 +162,17 @@ export async function unsubscribeMarketing(
 
 /** The caller must hold the active client profile lock used for consent edits. */
 export async function withdrawContactEmailConsent(tx: Tx, clientId: string, actorId: string) {
+  const withdrawal = {
+    enabled: false,
+    source: "Contact email changed",
+    recordedBy: actorId,
+    updatedAt: new Date(),
+  };
   await tx
-    .update(marketingConsent)
-    .set({
-      enabled: false,
-      source: "Contact email changed",
-      version: sql`${marketingConsent.version}+1`,
-      recordedBy: actorId,
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(marketingConsent.clientId, clientId),
-        eq(marketingConsent.channel, "email"),
-        eq(marketingConsent.enabled, true),
-      ),
-    );
+    .insert(marketingConsent)
+    .values({ clientId, channel: "email", version: 1, ...withdrawal })
+    .onConflictDoUpdate({
+      target: [marketingConsent.clientId, marketingConsent.channel],
+      set: { ...withdrawal, version: sql`${marketingConsent.version}+1` },
+    });
 }

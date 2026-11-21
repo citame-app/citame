@@ -628,15 +628,59 @@ pub fn create_directory_client(
 fn validate_directory_email(email: &str) -> Result<Option<&str>> {
     let email = email.trim();
     check_len("email", email, 254)?;
-    if !email.is_empty()
-        && (email.chars().any(char::is_whitespace)
-            || !email.split_once('@').is_some_and(|(name, domain)| {
-                !name.is_empty() && !domain.contains('@') && domain.split('.').count() > 1
-            }))
-    {
+    if !email.is_empty() && !matches_contact_email(email) {
         return Err(CoreError::Invalid("Enter a valid email address".into()));
     }
     Ok((!email.is_empty()).then_some(email))
+}
+
+/// Mirrors the shared Zod email contract so invalid edits never enter the offline queue.
+fn matches_contact_email(email: &str) -> bool {
+    let Some((local, domain)) = email.split_once('@') else {
+        return false;
+    };
+    let Some((labels, suffix)) = domain.rsplit_once('.') else {
+        return false;
+    };
+    !local.ends_with('\'')
+        && local.split('.').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"_'+-".contains(&byte))
+        })
+        && labels.split('.').all(|label| {
+            label
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+        && suffix.len() >= 2
+        && suffix.bytes().all(|byte| byte.is_ascii_alphabetic())
+}
+
+#[test]
+fn contact_email_validation_matches_the_sync_contract() {
+    for valid in [
+        "x@example.test",
+        "a.b+notes@sub.example.test",
+        "o'brien@example.test",
+    ] {
+        assert!(matches_contact_email(valid), "{valid}");
+    }
+    for invalid in [
+        "x@example.",
+        ".x@example.test",
+        "x..y@example.test",
+        "x'@example.test",
+        "x@localhost",
+        "x@-example.test",
+    ] {
+        assert!(!matches_contact_email(invalid), "{invalid}");
+    }
 }
 
 fn require_directory(store: &Store) -> Result<()> {

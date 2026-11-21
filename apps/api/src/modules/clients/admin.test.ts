@@ -205,6 +205,40 @@ describe("GET /admin/clients/:id", () => {
 });
 
 describe("PATCH /admin/clients/:id", () => {
+  test("invalidates a pending consent review even when permission was disabled or absent", async () => {
+    await t.db.insert(marketingConsent).values({
+      clientId: zoe,
+      channel: "email",
+      enabled: false,
+      source: "Synthetic withdrawal",
+      version: 4,
+    });
+    for (const [clientId, version] of [
+      [marta, 0],
+      [zoe, 4],
+    ] as const) {
+      const path = `/admin/clients/${clientId}`;
+      const before = clientDetailResponseSchema.parse(
+        await (await call(owner, "GET", path)).json(),
+      );
+      const corrected = await call(owner, "PATCH", path, {
+        emailChange: {
+          email: "corrected@example.test",
+          expectedUpdatedAt: before.client.updatedAt,
+        },
+      });
+      expect(corrected.status).toBe(200);
+      const oldReview = await call(owner, "PATCH", `${path}/marketing-consent`, {
+        channel: "email",
+        version,
+        enabled: true,
+        source: "Synthetic reviewed consent",
+      });
+      expect(oldReview.status).toBe(409);
+      expect(await errorCode(oldReview)).toBe("version_conflict");
+    }
+  });
+
   test("changes only a standalone contact email and withdraws consent for the previous address", async () => {
     const detail = async (id: string) =>
       clientDetailResponseSchema.parse(
