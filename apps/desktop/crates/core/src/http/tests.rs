@@ -71,6 +71,55 @@ fn signed_in(base: &str) -> HttpTransport {
 }
 
 #[test]
+fn unlinked_role_change_uses_the_exact_account_review() {
+    let email = "account@example.test";
+    let staff = "0198f5a0-7b1c-7000-8000-000000000203";
+    let revision = "a".repeat(64);
+    let lookup = serde_json::json!({
+        "userId": "account", "name": "Synthetic account", "email": email,
+        "emailVerified": true, "role": "client", "generation": "initial", "revision": revision,
+    });
+    let response = serde_json::json!({
+        "userId": "account", "role": "staff", "staffId": staff, "clientId": null,
+    });
+    let (base, writes) = serve(vec![
+        http("200 OK", &[], &lookup.to_string()),
+        http("200 OK", &[], &response.to_string()),
+    ]);
+    let transport = signed_in(&base);
+    let mut account = transport
+        .lookup_unlinked_account(&email.to_uppercase())
+        .unwrap();
+    account.email_verified = false;
+    assert!(
+        transport
+            .change_unlinked_role(&account, AccountRole::Staff)
+            .is_err()
+    );
+    account.email_verified = true;
+    assert_eq!(
+        transport
+            .change_unlinked_role(&account, AccountRole::Staff)
+            .unwrap()
+            .staff_id
+            .as_deref(),
+        Some(staff),
+    );
+    let requests = writes.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].starts_with("POST /admin/accounts/lookup HTTP/"));
+    assert!(requests[1].starts_with("PUT /admin/accounts/role/reviewed HTTP/"));
+    let posted: serde_json::Value =
+        serde_json::from_str(requests[1].split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(
+        posted,
+        serde_json::json!({
+            "userId": account.user_id, "generation": "initial", "role": "staff", "revision": revision,
+        })
+    );
+}
+
+#[test]
 fn linking_staff_checks_the_review_and_uses_the_server_access_version() {
     let id = "0198f5a0-7b1c-7000-8000-000000000201";
     let received = serde_json::json!({

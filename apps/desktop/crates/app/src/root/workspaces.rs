@@ -271,6 +271,12 @@ impl Root {
                     Kind::Ghost,
                     cx.listener(|root, _, _, cx| root.open_staff_access(cx)),
                 ))
+                .child(self.button(
+                    "find-account-roles",
+                    self.t(Key::AccountsFind),
+                    Kind::Ghost,
+                    cx.listener(|root, _, _, cx| root.open_account_roles(cx)),
+                ))
             })
             .when(online && desk.opening.is_none(), |view| {
                 let links = div()

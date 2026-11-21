@@ -84,6 +84,28 @@ export const reviewedStaffRoleInputSchema = changeRoleRequestSchema
   });
 export type ReviewedStaffRoleInput = z.infer<typeof reviewedStaffRoleInputSchema>;
 
+const unlinkedAccountRevision = z.string().regex(/^[a-f0-9]{64}$/);
+export const unlinkedAccountLookupSchema = z.strictObject({
+  email: z.string().trim().pipe(z.email().max(LIMITS.email)),
+});
+export const unlinkedAccountReviewSchema = z.object({
+  userId: z.string().min(1).max(256),
+  name: z.string(),
+  email: z.email().max(LIMITS.email),
+  emailVerified: z.boolean(),
+  role: userRoleSchema,
+  generation: syncGenerationSchema,
+  revision: unlinkedAccountRevision,
+});
+export type UnlinkedAccountReview = z.infer<typeof unlinkedAccountReviewSchema>;
+export const reviewedUnlinkedRoleInputSchema = z.strictObject({
+  userId: unlinkedAccountReviewSchema.shape.userId,
+  generation: syncGenerationSchema,
+  revision: unlinkedAccountRevision,
+  role: userRoleSchema,
+});
+export type ReviewedUnlinkedRoleInput = z.infer<typeof reviewedUnlinkedRoleInputSchema>;
+
 export const changeRoleResponseSchema = z.object({
   userId: z.string(),
   role: userRoleSchema,

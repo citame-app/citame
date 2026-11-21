@@ -4,11 +4,13 @@ import {
   createStaffAccountRequestSchema,
   idSchema,
   reviewedStaffRoleInputSchema,
+  reviewedUnlinkedRoleInputSchema,
+  unlinkedAccountLookupSchema,
 } from "@sob/contracts";
 import { Hono } from "hono";
 import { createMiddleware } from "hono/factory";
 import type { AppDeps } from "../../app";
-import { assignRole, provisionStaffAccount } from "../../auth/accounts";
+import { assignRole, lookupUnlinkedAccount, provisionStaffAccount } from "../../auth/accounts";
 import type { Auth } from "../../auth/auth";
 import { requireRole } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
@@ -29,6 +31,34 @@ export function adminRoutes(deps: AppDeps, auth: Auth) {
       // router mounted under /admin.
       .use("/staff-accounts", ownerOnly)
       .use("/users/*", ownerOnly)
+      .post("/accounts/lookup", ownerOnly, async (c) => {
+        const { email } = parseOrThrow(unlinkedAccountLookupSchema, await readJson(c));
+        c.header("Cache-Control", "private, no-store");
+        return c.json(
+          await lookupUnlinkedAccount(
+            db,
+            c.get("principal").userId,
+            email,
+            deps.config.syncReplicaGeneration,
+          ),
+        );
+      })
+      .put("/accounts/role/reviewed", ownerOnly, async (c) => {
+        const { userId, role, ...input } = parseOrThrow(
+          reviewedUnlinkedRoleInputSchema,
+          await readJson(c),
+        );
+        const { staffId, clientId } = await assignRole(
+          db,
+          userId,
+          role,
+          { actorUserId: c.get("principal").userId },
+          { now: now(), review: { generation: deps.config.syncReplicaGeneration, input } },
+        );
+        c.header("Cache-Control", "private, no-store");
+        const response: ChangeRoleResponse = { userId, role, staffId, clientId };
+        return c.json(response);
+      })
       .post("/staff-accounts", async (c) => {
         const body = parseOrThrow(createStaffAccountRequestSchema, await readJson(c));
         if (c.get("desktopRequest") && !body.existingCalendar && !body.newCalendar)

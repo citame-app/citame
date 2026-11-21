@@ -76,6 +76,48 @@ fn desktop_opens_cloud_management_with_the_linked_users_web_session_through_the_
 }
 
 #[test]
+#[ignore = "needs the synthetic account and production proxy seeded by smoke-prod.sh"]
+fn native_unlinked_account_review_works_through_proxy() {
+    use sob_core::http::AccountRole;
+    let device = proxy_device();
+    let mut web = Device::sign_in();
+    web.sync();
+    let before = web.store.staff_directory_revision().unwrap();
+    let email = env("SOB_TEST_UNLINKED_ACCOUNT_EMAIL");
+    let review = device
+        .transport
+        .lookup_unlinked_account(&email.to_uppercase())
+        .unwrap();
+    assert_eq!(review.email, email);
+    assert_eq!(review.role, AccountRole::Client);
+    assert!(review.email_verified);
+    let receipt = device
+        .transport
+        .change_unlinked_role(&review, AccountRole::Staff)
+        .unwrap();
+    assert!(receipt.client_id.is_some());
+    let staff_id = receipt.staff_id.as_deref().unwrap();
+    web.sync();
+    assert!(web.store.staff_directory_revision().unwrap() > before);
+    assert!(
+        web.store
+            .staff_including_inactive()
+            .unwrap()
+            .iter()
+            .any(|staff| staff.id == staff_id
+                && staff.active
+                && staff.user_id.as_deref() == Some(review.user_id.as_str()))
+    );
+    assert!(device.transport.lookup_unlinked_account(&email).is_err());
+    assert!(
+        device
+            .transport
+            .change_unlinked_role(&review, AccountRole::Owner)
+            .is_err()
+    );
+}
+
+#[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_team_access_uses_reviewed_permissions_through_the_proxy() {
     use sob_core::http::{AccessPreset, AccountRole, StaffAccountError};

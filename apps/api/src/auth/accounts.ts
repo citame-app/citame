@@ -1,11 +1,14 @@
+import { createHash } from "node:crypto";
 import type {
   CreateStaffAccountRequest,
   ReviewedStaffRoleInput,
+  ReviewedUnlinkedRoleInput,
   StaffAccountResponse,
+  UnlinkedAccountReview,
   UserRole,
 } from "@sob/contracts";
 import { account, clientProfile, type Database, pgErrorCode, staffProfile, user } from "@sob/db";
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, getTableColumns, inArray, isNull, ne, notExists, sql } from "drizzle-orm";
 import { z } from "zod";
 import { recordAudit } from "../audit";
 import type { AppConfig } from "../config";
@@ -70,6 +73,59 @@ function assertPasswordPolicy(password: string) {
 }
 
 const normalizeEmail = (email: string) => email.trim().toLowerCase();
+
+const accountReviewColumns = { ...getTableColumns(user), revision: sql<string>`xmin::text` };
+
+function accountReviewRevision(userId: string, revision: string) {
+  return createHash("sha256")
+    .update(JSON.stringify([userId, revision]))
+    .digest("hex");
+}
+
+export async function lookupUnlinkedAccount(
+  db: Database,
+  actorId: string,
+  email: string,
+  generation: string,
+): Promise<UnlinkedAccountReview> {
+  return db.transaction(async (tx) => {
+    const [actor] = await tx
+      .select({ role: user.role })
+      .from(user)
+      .where(eq(user.id, actorId))
+      .for("share");
+    if (actor?.role !== "owner")
+      throw new DomainError("forbidden", "Only the owner can review accounts");
+    const [candidate] = await tx
+      .select({
+        userId: user.id,
+        name: user.name,
+        email: user.email,
+        emailVerified: user.emailVerified,
+        role: user.role,
+        revision: accountReviewColumns.revision,
+      })
+      .from(user)
+      .where(
+        and(
+          eq(user.email, normalizeEmail(email)),
+          ne(user.id, actorId),
+          notExists(
+            tx
+              .select({ id: staffProfile.id })
+              .from(staffProfile)
+              .where(eq(staffProfile.userId, user.id)),
+          ),
+        ),
+      );
+    if (!candidate) throw new DomainError("not_found", "No unlinked account matches that email");
+    return {
+      ...candidate,
+      generation,
+      revision: accountReviewRevision(candidate.userId, candidate.revision),
+    };
+  });
+}
 
 /** Returns the id of the user's calendar profile, creating or reviving it as needed. */
 async function ensureStaffProfile(tx: Tx, userId: string, displayName: string): Promise<string> {
@@ -287,28 +343,31 @@ export async function assignRole(
   audit?: { actorUserId: string },
   options: {
     now?: Date;
-    review?: {
-      staffId: string;
-      generation: string;
-      input: Pick<
-        ReviewedStaffRoleInput,
-        "generation" | "expectedEmail" | "expectedRole" | "version"
-      >;
-    };
+    review?:
+      | {
+          staffId: string;
+          generation: string;
+          input: Pick<
+            ReviewedStaffRoleInput,
+            "generation" | "expectedEmail" | "expectedRole" | "version"
+          >;
+        }
+      | { generation: string; input: Pick<ReviewedUnlinkedRoleInput, "generation" | "revision"> };
   } = {},
 ) {
   const review = options.review;
+  const linked = review && "staffId" in review ? review : undefined;
   if (review && !audit)
     throw new DomainError("forbidden", "Only the owner can change account roles");
   if (audit?.actorUserId === userId)
     throw new DomainError("forbidden", "You cannot change your own role");
   if (review && review.input.generation !== review.generation)
     throw new DomainError("sync_generation_changed", "The centre was restored; review access");
-  if (review?.input.expectedRole === role)
+  if (linked?.input.expectedRole === role)
     throw new DomainError("validation_error", "Choose a different account role");
 
   return db.transaction(async (tx) => {
-    let calendarId = review?.staffId;
+    let calendarId = linked?.staffId;
     if (!review && role !== "owner") {
       const [calendar] = await tx
         .select({ id: staffProfile.id })
@@ -320,7 +379,7 @@ export async function assignRole(
     if (calendarId) await lockCalendars(tx, [calendarId]);
 
     const accounts = await tx
-      .select()
+      .select(accountReviewColumns)
       .from(user)
       .where(inArray(user.id, audit ? [userId, audit.actorUserId] : [userId]))
       .orderBy(asc(user.id))
@@ -334,18 +393,29 @@ export async function assignRole(
       const [staff] = await tx
         .select()
         .from(staffProfile)
-        .where(review ? eq(staffProfile.id, review.staffId) : eq(staffProfile.userId, userId))
+        .where(linked ? eq(staffProfile.id, linked.staffId) : eq(staffProfile.userId, userId))
         .for("update");
       if (
-        review &&
+        linked &&
         (!staff ||
           staff.deletedAt ||
           staff.userId !== userId ||
-          staff.accessVersion !== review.input.version ||
-          row.email !== review.input.expectedEmail ||
-          row.role !== review.input.expectedRole)
+          staff.accessVersion !== linked.input.version ||
+          row.email !== linked.input.expectedEmail ||
+          row.role !== linked.input.expectedRole)
       )
         throw new DomainError("version_conflict", "The linked account changed; review access");
+      if (review && !("staffId" in review)) {
+        if (staff || accountReviewRevision(row.id, row.revision) !== review.input.revision)
+          throw new DomainError("version_conflict", "The account changed; repeat the lookup");
+        if (row.role === role)
+          throw new DomainError("validation_error", "Choose a different account role");
+        if (role !== "client" && !row.emailVerified)
+          throw new DomainError(
+            "invalid_state",
+            "The email address must be verified before granting access",
+          );
+      }
       // A concurrent promotion may have created a calendar while we waited for the account.
       if (staff && staff.id !== calendarId)
         throw new DomainError("version_conflict", "The staff calendar changed; reload its access");
@@ -393,12 +463,12 @@ export async function assignRole(
       staffId: staff?.id ?? null,
       clientId: client?.id ?? null,
       invited: false,
-      ...(review && {
+      ...(linked && {
         reviewedAccess: await getReviewedStaffAccess(
           tx,
-          review.staffId,
+          linked.staffId,
           { role: "owner" },
-          review.generation,
+          linked.generation,
         ),
       }),
     };

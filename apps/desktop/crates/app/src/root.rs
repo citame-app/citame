@@ -30,6 +30,7 @@ use crate::field::{FieldEvent, TextField};
 use crate::services::Services;
 use crate::theme;
 
+mod account_roles;
 mod annotations;
 mod appointment_badges;
 mod billing;
@@ -289,6 +290,7 @@ enum Overlay {
     TeamShifts(Box<team_shifts::Desk>),
     StaffPortraits(Box<staff_portraits::Desk>),
     StaffAccess(Box<staff_access::Desk>),
+    AccountRoles(Box<account_roles::Desk>),
     ServiceAssignments(Box<service_assignments::Desk>),
     ServiceCatalog(Box<service_catalog::Desk>),
     ResourceRequirements(Box<resource_requirements::Desk>),
@@ -2568,6 +2570,7 @@ impl Root {
             Overlay::ResourcePools(_) => self.close_resource_pools(cx),
             Overlay::Combinations(_) => self.close_combinations(cx),
             Overlay::StaffAccess(_) => self.close_staff_access(cx),
+            Overlay::AccountRoles(_) => self.close_account_roles(cx),
             Overlay::Directory(desk) if desk.intake.is_some() => self.back_record(cx),
             Overlay::Directory(desk) if desk.has_controls() => self.back_client_controls(cx),
             Overlay::ReviewModeration(desk) => {
@@ -4088,6 +4091,9 @@ impl Render for Root {
                         }
                         Overlay::StaffPortraits(desk) => {
                             Some(self.render_staff_portraits(desk, window.viewport_size(), cx))
+                        }
+                        Overlay::AccountRoles(desk) => {
+                            Some(self.render_account_roles(desk, window.viewport_size(), cx))
                         }
                         Overlay::StaffAccess(desk) => {
                             Some(self.render_staff_access(desk, window.viewport_size(), cx))

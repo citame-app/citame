@@ -44,6 +44,22 @@ export const accessEn = {
   "access.roleFailed":
     "Could not confirm the role change. Review the current account before trying again.",
   "access.roleSaved": "Account role changed",
+  "access.accounts.title": "Find an account without a calendar",
+  "access.accounts.email": "Exact account email",
+  "access.accounts.search": "Find account",
+  "access.accounts.notFound":
+    "No unlinked account matches that email. Use Staff access for accounts with a calendar.",
+  "access.accounts.verifyEmail":
+    "The account must verify its email before it can receive staff or owner access.",
+  "access.accounts.lookupFailed":
+    "Could not look up the account. Check the connection and try again.",
+  "access.accounts.saveFailed":
+    "Could not confirm the change. Look up the account again before retrying.",
+  "access.accounts.impact.staff":
+    "Citame will create a calendar for this existing account. Review its working hours and services in Staff access.",
+  "access.accounts.impact.client":
+    "This account will have client access. Its previous appointments will be kept.",
+  "access.accounts.openCalendar": "Open staff calendar settings",
   "access.noAccount":
     "No login is linked to this calendar. The preset is ready for a linked staff account.",
 } as const;
@@ -92,6 +108,22 @@ export const accessEsAR: Record<keyof typeof accessEn, string> = {
   "access.roleFailed":
     "No se pudo confirmar el cambio de rol. Revisa la cuenta antes de volver a intentarlo.",
   "access.roleSaved": "Rol de la cuenta actualizado",
+  "access.accounts.title": "Buscar cuenta sin agenda",
+  "access.accounts.email": "Correo exacto de la cuenta",
+  "access.accounts.search": "Buscar cuenta",
+  "access.accounts.notFound":
+    "No hay una cuenta sin agenda con ese correo. Usa Acceso del equipo para las cuentas con agenda.",
+  "access.accounts.verifyEmail":
+    "La cuenta debe verificar su correo para recibir acceso de profesional o propietaria.",
+  "access.accounts.lookupFailed":
+    "No se pudo consultar la cuenta. Comprueba la conexión y vuelve a intentarlo.",
+  "access.accounts.saveFailed":
+    "No se pudo confirmar el cambio. Vuelve a buscar la cuenta antes de reintentar.",
+  "access.accounts.impact.staff":
+    "Citame creará una agenda para esta cuenta. Revisa sus horarios y servicios en Acceso del equipo.",
+  "access.accounts.impact.client":
+    "Esta cuenta tendrá acceso de cliente. Se conservarán sus citas anteriores.",
+  "access.accounts.openCalendar": "Abrir configuración de la agenda",
   "access.noAccount":
     "Esta agenda no tiene una cuenta vinculada. El perfil queda preparado para una cuenta del equipo.",
 };

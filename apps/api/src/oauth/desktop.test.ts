@@ -23,7 +23,7 @@ import {
   startedPaymentSchema,
   syncPullResponseSchema,
 } from "@sob/contracts";
-import { appointment, checkoutPayment, clientProfile, staffProfile } from "@sob/db";
+import { appointment, checkoutPayment, clientProfile, staffProfile, user } from "@sob/db";
 import { eq } from "drizzle-orm";
 import { actor, cookieFrom, json, NOW, seedFixtures, setupApiTest } from "../../test/helpers";
 import { authorizeFlow, ORIGIN, obtainTokens, tokenFor, tokenRequest } from "../../test/oauth";
@@ -392,6 +392,65 @@ test("Desktop changes a linked role only against the current account and calenda
   expect(await t.db.select().from(appointment).where(eq(appointment.id, visit))).toMatchObject([
     { id: visit, status: "cancelled", staffId: original.access.staffId },
   ]);
+});
+
+test("an owner can review and promote an existing verified account without a calendar", async () => {
+  const owner = await tokens("owner", "unlinked-roles-owner");
+  const staff = await tokens("staff", "unlinked-roles-staff");
+  const email = "unlinked-target@example.com";
+  const member = await actor(t, "client", email);
+  const send = (path: string, method: string, body: unknown, access = owner.access) =>
+    t.app.request(path, {
+      method,
+      headers: { authorization: `Bearer ${access}`, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  const lookup = "/admin/accounts/lookup";
+  const change = "/admin/accounts/role/reviewed";
+  expect((await send(lookup, "POST", { email }, staff.access)).status).toBe(403);
+  expect((await request(lookup, owner.access)).status).toBe(403);
+  expect((await send(lookup, "POST", { email: "unlinked-target" })).status).toBe(400);
+  expect((await send(lookup, "POST", { email: staff.who.email })).status).toBe(404);
+  const found = await send(lookup, "POST", { email: email.toUpperCase() });
+  expect(found.status).toBe(200);
+  let review = (await found.json()) as Record<string, unknown>;
+  expect(review).toMatchObject({
+    userId: member.userId,
+    email,
+    role: "client",
+    emailVerified: true,
+  });
+  const mutation = {
+    userId: member.userId,
+    generation: review.generation,
+    revision: review.revision,
+    role: "staff",
+  };
+  expect((await send(change, "PUT", mutation, staff.access)).status).toBe(403);
+  expect((await send(change, "PUT", { ...mutation, generation: "previous-database" })).status).toBe(
+    409,
+  );
+  expect((await send(change, "PUT", { ...mutation, userId: owner.who.userId })).status).toBe(403);
+  await t.db.update(user).set({ role: "owner" }).where(eq(user.id, member.userId));
+  await t.db.update(user).set({ role: "client" }).where(eq(user.id, member.userId));
+  expect((await send(change, "PUT", mutation)).status).toBe(409);
+  await t.db.update(user).set({ emailVerified: false }).where(eq(user.id, member.userId));
+  review = (await (await send(lookup, "POST", { email })).json()) as Record<string, unknown>;
+  const blocked = await send(change, "PUT", { ...mutation, revision: review.revision });
+  expect(blocked.status).toBe(409);
+  expect(await blocked.json()).toMatchObject({ error: { code: "invalid_state" } });
+  expect(
+    await t.db.select().from(staffProfile).where(eq(staffProfile.userId, member.userId)),
+  ).toHaveLength(0);
+  await t.db.update(user).set({ emailVerified: true }).where(eq(user.id, member.userId));
+  review = (await (await send(lookup, "POST", { email })).json()) as Record<string, unknown>;
+  const promoted = await send(change, "PUT", { ...mutation, revision: review.revision });
+  expect(promoted.status).toBe(200);
+  const result = (await promoted.json()) as Record<string, unknown>;
+  expect(result).toMatchObject({ userId: member.userId, role: "staff", clientId: member.clientId });
+  expect(result.staffId).toBeString();
+  expect((await send(change, "PUT", mutation)).status).toBe(409);
+  expect((await send(lookup, "POST", { email })).status).toBe(404);
 });
 
 test("native booking protection shares the Cloud policy and only opted-in replicas see refreshes", async () => {

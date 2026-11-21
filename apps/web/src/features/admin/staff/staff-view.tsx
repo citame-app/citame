@@ -23,6 +23,7 @@ import { StaffPortrait, StaffPortraitEditor } from "./staff-portrait";
 import { StaffServices } from "./staff-services";
 import { TeamList } from "./team-list";
 import { TimeOffPanel } from "./time-off-panel";
+import { UnlinkedAccountRoles } from "./unlinked-account-roles";
 
 export interface StaffSearch {
   member?: string;
@@ -79,10 +80,17 @@ export function StaffView({
 
   if (permissions.editSchedules && !memberId) {
     return (
-      <TeamList
-        canManageAccounts={permissions.manageAccounts}
-        onOpenMember={(member) => onSearchChange({ member, tab: search.tab })}
-      />
+      <>
+        <TeamList
+          canManageAccounts={permissions.manageAccounts}
+          onOpenMember={(member) => onSearchChange({ member, tab: search.tab })}
+        />
+        {permissions.manageAccounts && (
+          <UnlinkedAccountRoles
+            onOpenMember={(member) => onSearchChange({ member, tab: search.tab })}
+          />
+        )}
+      </>
     );
   }
   if (staff.isPending) return <Skeleton className="h-96" />;

@@ -149,7 +149,7 @@ impl Root {
         true
     }
 
-    fn select_staff_access(&mut self, id: &str, cx: &mut Context<Self>) {
+    pub(super) fn select_staff_access(&mut self, id: &str, cx: &mut Context<Self>) {
         let Overlay::StaffAccess(desk) = &mut self.overlay else {
             return;
         };
@@ -1145,7 +1145,7 @@ fn account_role(value: &str) -> Option<AccountRole> {
         .find(|role| role.as_str() == value)
 }
 
-fn role_label(role: AccountRole) -> Key {
+pub(super) fn role_label(role: AccountRole) -> Key {
     match role {
         AccountRole::Owner => Key::AccessRoleOwner,
         AccountRole::Staff => Key::AccessRoleStaff,

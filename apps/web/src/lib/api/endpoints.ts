@@ -23,6 +23,7 @@ import {
   type CreateStaffAccountRequest,
   type CreateTimeOffRequest,
   calendarResponseSchema,
+  changeRoleResponseSchema,
   clientControlsSchema,
   clientDetailResponseSchema,
   clientDuplicatesSchema,
@@ -54,6 +55,7 @@ import {
   type ReportOutcomesQuery,
   type ReviewedStaffAccessInput,
   type ReviewedStaffRoleInput,
+  type ReviewedUnlinkedRoleInput,
   reportClientsSchema,
   reportOutcomesPageSchema,
   reportSummarySchema,
@@ -76,6 +78,7 @@ import {
   type UpdateServiceRequest,
   type UpdateStaffRequest,
   type UpdateTimeOffRequest,
+  unlinkedAccountReviewSchema,
   type WhatsAppReviewedConnect,
   type WhatsAppReviewedDisconnect,
   type WhatsAppReviewedRules,
@@ -261,6 +264,10 @@ export function createEndpoints(client: ApiClient) {
         client.patch(`/appointments/${id}`, { version, startsAt, staffId }, appointmentSchema),
     },
     admin: {
+      lookupUnlinkedAccount: (email: string) =>
+        client.post("/admin/accounts/lookup", { email }, unlinkedAccountReviewSchema),
+      setUnlinkedAccountRole: (input: ReviewedUnlinkedRoleInput) =>
+        client.put("/admin/accounts/role/reviewed", input, changeRoleResponseSchema),
       emailDelivery: {
         get: (signal?: AbortSignal) =>
           client.get("/admin/email-delivery", emailDeliverySettingsSchema, { signal }),
