@@ -1,6 +1,6 @@
 import {
   type WhatsAppRule,
-  type WhatsAppSettings,
+  type WhatsAppSettingsResponse,
   whatsappKindSchema,
   whatsappVariableSchema,
 } from "@sob/contracts";
@@ -180,7 +180,7 @@ function orderedRules(rules: WhatsAppRule[]) {
   return events.flatMap((kind) => rules.filter((rule) => rule.kind === kind));
 }
 
-function reviewedSignupRevision(settings: WhatsAppSettings | undefined) {
+function reviewedSignupRevision(settings: WhatsAppSettingsResponse | undefined) {
   return settings?.connection ? settings.connection.revision : settings?.signupRevision;
 }
 

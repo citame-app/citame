@@ -14,7 +14,6 @@ import { z } from "zod";
 import type { AppDeps } from "../../app";
 import { requireRole } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
-import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
 import {
   connectWhatsApp,
