@@ -79,7 +79,7 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(receipt.getByRole("status").filter({ hasText: /^Paid$/ })).toBeVisible();
       expect(errors).toEqual([]);
       await page.screenshot({
-        path: `/tmp/citame-pos-${scheme}-${info.project.name}.png`,
+        path: info.outputPath("receipt.png"),
         fullPage: true,
       });
     });
