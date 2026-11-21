@@ -70,6 +70,10 @@ pub struct Application {
 }
 
 impl Application {
+    pub fn choice(&self) -> &Choice {
+        &self.choice
+    }
+
     pub fn reviewed(choice: Choice, quote: &Quote, receipt_total: u32) -> Option<Self> {
         let valid_kind = match &choice {
             Choice::Points { points } => {

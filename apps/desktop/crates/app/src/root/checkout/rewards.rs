@@ -38,6 +38,7 @@ pub(super) struct Editor {
     balance: Option<u64>,
     review: Option<ReviewedReward>,
     observed_balance: i64,
+    balance_retry_at: Option<Instant>,
     retry_at: Option<Instant>,
     feedback: Option<Key>,
 }
@@ -115,6 +116,9 @@ impl Root {
             !editor.returning
                 && !editor.uncertain()
                 && !editor.limited()
+                && editor
+                    .balance_retry_at
+                    .is_none_or(|deadline| Instant::now() >= deadline)
                 && editor.observed_balance != revision
         }) else {
             return;
@@ -161,6 +165,7 @@ impl Root {
             balance: None,
             review: None,
             observed_balance: -1,
+            balance_retry_at: None,
             retry_at: None,
             feedback: None,
         });
@@ -264,9 +269,6 @@ impl Root {
         }
         let writing = matches!(request, Request::Write);
         let refreshing_balance = matches!(request, Request::Balance(_));
-        if refreshing_balance {
-            editor.observed_balance = balance_revision;
-        }
         let review = editor.review.as_ref().map(|review| review.command.clone());
         if writing && review.is_none() {
             return;
@@ -334,7 +336,12 @@ impl Root {
                 form.busy = false;
                 match result {
                     Ok(Response::Balance(balance)) => {
+                        editor.observed_balance = balance_revision;
+                        editor.balance_retry_at = None;
                         editor.balance = balance;
+                        if editor.feedback == Some(Key::CheckoutRewardBalanceFailed) {
+                            editor.feedback = None;
+                        }
                         if editor.kind == RewardKind::Points && editor.choice(cx).is_none() {
                             if editor.review.is_some() {
                                 editor.reset_review();
@@ -347,7 +354,9 @@ impl Root {
                         }
                     }
                     Ok(Response::Quote(choice, quote)) => {
-                        if let Some(review) =
+                        if editor.choice(cx).as_ref() != Some(&choice) {
+                            editor.feedback = Some(Key::CheckoutRewardChanged);
+                        } else if let Some(review) =
                             Application::reviewed(choice, &quote, form.receipt.total_cents)
                         {
                             editor.review = Some(ReviewedReward {
@@ -372,6 +381,32 @@ impl Root {
                         form.gift_code.update(cx, |field, cx| field.clear(cx));
                         form.replace_receipt(*receipt, cx);
                         root.svc.wake(Wake::Manual);
+                    }
+                    Err(error) if refreshing_balance => {
+                        match error {
+                            RewardError::Transport(
+                                TransportError::Forbidden(_) | TransportError::Unauthorized,
+                            ) => {
+                                editor.observed_balance = balance_revision;
+                                editor.balance = None;
+                                if editor.kind == RewardKind::Points {
+                                    editor.reset_review();
+                                    editor.kind = RewardKind::Promotion;
+                                    editor.input.update(cx, |field, cx| field.clear(cx));
+                                }
+                            }
+                            RewardError::Transport(TransportError::RateLimited(delay)) => {
+                                editor.balance_retry_at = Instant::now()
+                                    .checked_add(delay.unwrap_or(Duration::from_secs(10)));
+                            }
+                            _ => {
+                                editor.balance_retry_at =
+                                    Instant::now().checked_add(Duration::from_secs(10))
+                            }
+                        }
+                        if editor.feedback.is_none() {
+                            editor.feedback = Some(Key::CheckoutRewardBalanceFailed);
+                        }
                     }
                     Err(error) => {
                         let mut uncertain = false;
@@ -539,17 +574,25 @@ impl Root {
             });
         if let Some(review) = &editor.review {
             let quote = match review.command.as_ref() {
-                Review::Apply { quote, .. } => Some(quote),
+                Review::Apply { application, quote } => Some((application.choice(), quote)),
                 Review::Return(_) => None,
             };
             return body
-                .when_some(quote, |view, quote| {
+                .when_some(quote, |view, (choice, quote)| {
                     let name = if quote.kind == RewardKind::Points {
                         self.t(Key::CheckoutRewardPoints)
                     } else {
                         &quote.name
                     };
+                    let reviewed = match choice {
+                        Choice::Points { points } => i18n::fill(
+                            self.t(Key::CheckoutRewardUsed),
+                            &[("points", &points.to_string())],
+                        ),
+                        Choice::Promotion { code } => code.clone(),
+                    };
                     view.child(name.to_owned())
+                        .child(reviewed)
                         .child(i18n::fill(
                             self.t(Key::CheckoutRewardQuote),
                             &[

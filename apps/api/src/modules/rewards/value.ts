@@ -44,9 +44,21 @@ async function expireLot(tx: Tx, lot: Lot, now: Date): Promise<Lot> {
     .onConflictDoNothing();
   return updated ?? lot;
 }
+type CheckoutValueRows = {
+  lines: (typeof checkoutLine.$inferSelect)[];
+  payments: (typeof checkoutPayment.$inferSelect)[];
+  refunds: (typeof checkoutRefund.$inferSelect)[];
+};
+
 /** Gross customer value; prepaid services earn their original funded allocation, never face value. */
-async function retainedValue(tx: Tx | Database, sale: typeof checkout.$inferSelect) {
-  const lines = await tx.select().from(checkoutLine).where(eq(checkoutLine.checkoutId, sale.id));
+async function retainedValue(
+  tx: Tx | Database,
+  sale: typeof checkout.$inferSelect,
+  loaded?: CheckoutValueRows,
+) {
+  const lines =
+    loaded?.lines ??
+    (await tx.select().from(checkoutLine).where(eq(checkoutLine.checkoutId, sale.id)));
   const redemptions = await tx
     .select()
     .from(passRedemption)
@@ -54,24 +66,25 @@ async function retainedValue(tx: Tx | Database, sale: typeof checkout.$inferSele
     .orderBy(desc(passRedemption.createdAt), desc(passRedemption.id));
   const byLine = new Map<string, typeof passRedemption.$inferSelect>();
   for (const r of redemptions) if (!byLine.has(r.checkoutLineId)) byLine.set(r.checkoutLineId, r);
-  const paid = await tx
-    .select()
-    .from(checkoutPayment)
-    .where(eq(checkoutPayment.checkoutId, sale.id));
-  const refunds = paid.length
-    ? await tx
-        .select()
-        .from(checkoutRefund)
-        .where(
-          and(
-            inArray(
-              checkoutRefund.paymentId,
-              paid.map((p) => p.id),
+  const paid =
+    loaded?.payments ??
+    (await tx.select().from(checkoutPayment).where(eq(checkoutPayment.checkoutId, sale.id)));
+  const refunds =
+    loaded?.refunds ??
+    (paid.length
+      ? await tx
+          .select()
+          .from(checkoutRefund)
+          .where(
+            and(
+              inArray(
+                checkoutRefund.paymentId,
+                paid.map((p) => p.id),
+              ),
+              eq(checkoutRefund.status, "succeeded"),
             ),
-            eq(checkoutRefund.status, "succeeded"),
-          ),
-        )
-    : [];
+          )
+      : []);
   const money = paid.filter((p) => !["package", "membership"].includes(p.method));
   const net = Math.max(
     0,
@@ -79,7 +92,7 @@ async function retainedValue(tx: Tx | Database, sale: typeof checkout.$inferSele
       .filter((p) => ["succeeded", "reconciliation"].includes(p.status))
       .reduce((sum, p) => sum + p.amountCents, 0) -
       refunds
-        .filter((r) => money.some((p) => p.id === r.paymentId))
+        .filter((r) => r.status === "succeeded" && money.some((p) => p.id === r.paymentId))
         .reduce((sum, r) => sum + r.amountCents, 0),
   );
   const face = [...byLine.values()].reduce((sum, r) => sum + r.amountCents, 0);
@@ -117,13 +130,14 @@ export async function canReturnCheckoutPoints(
     typeof checkoutReward.$inferSelect,
     "kind" | "state" | "pointsUsed" | "returnedPoints"
   > | null,
+  loaded?: CheckoutValueRows,
 ) {
   return Boolean(
     reward?.kind === "points" &&
     reward.state === "applied" &&
     reward.returnedPoints < reward.pointsUsed &&
     sale.fulfilledAt &&
-    (await retainedValue(tx, sale)).totalRetained === 0,
+    (await retainedValue(tx, sale, loaded)).totalRetained === 0,
   );
 }
 /** Return oldest allocations first so repeated partial returns are monotonic and cent-exact. */

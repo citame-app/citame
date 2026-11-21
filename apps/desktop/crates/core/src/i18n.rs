@@ -1410,6 +1410,7 @@ keys! {
     CheckoutRewardUsePoints => ("Use points", "Canjear puntos"),
     CheckoutRewardUseCode => ("Use a promotion code", "Usar código promocional"),
     CheckoutRewardBalance => ("{points} points available", "{points} puntos disponibles"),
+    CheckoutRewardBalanceFailed => ("Could not refresh the points balance.", "No se pudo actualizar el saldo de puntos."),
     CheckoutRewardReview => ("Review", "Revisar"),
     CheckoutRewardQuote => ("Save {discount} · New total {total}", "Descuento de {discount} · Nuevo total {total}"),
     CheckoutRewardApply => ("Apply discount", "Aplicar descuento"),

@@ -216,7 +216,13 @@ async function snapshot(
     balanceCents,
     reward,
     ...(reward?.kind === "points"
-      ? { canReturnPoints: await canReturnCheckoutPoints(db, row, reward) }
+      ? {
+          canReturnPoints: await canReturnCheckoutPoints(db, row, reward, {
+            lines,
+            payments,
+            refunds,
+          }),
+        }
       : {}),
     ...(protection
       ? { protection, payableCents: await protectedPayable(db, row, balanceCents, now) }
