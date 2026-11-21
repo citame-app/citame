@@ -957,6 +957,7 @@ test("candidate reconciliation rejects invented processing and an inactive staff
     const context = source.contexts[booking.id]!;
     const note = context.rows[0]!;
     note.internalNote = "Synthetic original note";
+    note.paid = false;
     context.rows.push({ ...note, servicePosition: 1, sourceRef: `${note.sourceRef}:extra` });
     source.contexts = { [booking.id]: context };
     const bytes = JSON.stringify({ businessId: source.businessId });
@@ -1019,6 +1020,16 @@ test("candidate reconciliation rejects invented processing and an inactive staff
     expect(verified.canCutOver).toBe(false);
     expect(verified.bookingLinks).toBeUndefined();
     expect(verified.priceHolds).toBeUndefined();
+    const verifyPaymentEvidence = () =>
+      inspectNativeBooksy(db, hash, source.fromDate, { paymentEvidence: true });
+    await expect(verifyPaymentEvidence()).rejects.toThrow(
+      "Native payment holds differ from the archived reservation evidence",
+    );
+    await db
+      .update(appointmentContext)
+      .set({ sourcePaymentUnverified: true })
+      .where(eq(appointmentContext.appointmentId, booking.id));
+    expect((await verifyPaymentEvidence()).nativeFieldsVerified).toBe(true);
     const withPrivateLinks = await inspectNativeBooksy(db, hash, source.fromDate, {
       bookingLinks: true,
       priceHolds: "day",
@@ -1056,7 +1067,7 @@ test("candidate reconciliation rejects invented processing and an inactive staff
     const billingEvidence = {
       missingPrices: { serviceLines: 1, calendarLines: 1, visitGroups: 1 },
       invoice: { positive: 0, negative: 0, unknown: 1 },
-      payment: { positive: 1, negative: 0, unknown: 0 },
+      payment: { positive: 0, negative: 1, unknown: 0 },
     };
     expect(verified.blockers.billingEvidence).toEqual(billingEvidence);
     expect(verified.blockers.trackedNativeMappings).toEqual([

@@ -262,6 +262,43 @@ for (const prefix of ["local", "upstream-first", "upstream-full"] as const) {
   }, 30_000);
 }
 
+test("the Booksy payment review migration requires older API readers to stop first", async () => {
+  const url = new URL(process.env.DATABASE_URL ?? DEFAULT_DATABASE_URL);
+  const database = `sob_test_payment_review_${Bun.randomUUIDv7().replaceAll("-", "")}`;
+  const admin = createDb(url.href, NO_DB_TIMEOUTS);
+  const folder = await mkdtemp(join(tmpdir(), "citame-payment-review-migration-"));
+  try {
+    const journal = await Bun.file(join(migrationsFolder, "meta", "_journal.json")).json();
+    const pending = journal.entries.findIndex(
+      ({ tag }: { tag: string }) => tag === "0101_booksy_payment_review",
+    );
+    expect(pending).toBeGreaterThan(0);
+    journal.entries = journal.entries.slice(0, pending);
+    for (const { tag } of journal.entries)
+      await cp(join(migrationsFolder, `${tag}.sql`), join(folder, `${tag}.sql`));
+    await mkdir(join(folder, "meta"));
+    await Bun.write(join(folder, "meta", "_journal.json"), JSON.stringify(journal));
+    await admin.db.execute(sql`create database ${sql.identifier(database)}`);
+    url.pathname = `/${database}`;
+    const target = createDb(url.href, NO_DB_TIMEOUTS);
+    try {
+      await migrate(target.db, { migrationsFolder: folder });
+      await expect(runMigrations(target.db, { online: true })).rejects.toThrow(
+        "Migration 0101 requires a maintenance upgrade",
+      );
+      await runMigrations(target.db);
+      expect(await verifyMigrationLedger(target.db)).toEqual(getReleaseMigrationLedger());
+      await runMigrations(target.db, { online: true });
+    } finally {
+      await target.close();
+    }
+  } finally {
+    await admin.db.execute(sql`drop database if exists ${sql.identifier(database)}`);
+    await admin.close();
+    await rm(folder, { recursive: true, force: true });
+  }
+}, 30_000);
+
 test("catalogue migration backfills imported labels and preserves product stock under maintenance", async () => {
   const url = new URL(process.env.DATABASE_URL ?? DEFAULT_DATABASE_URL);
   const name = `sob_test_classifications_${Bun.randomUUIDv7().replaceAll("-", "")}`;

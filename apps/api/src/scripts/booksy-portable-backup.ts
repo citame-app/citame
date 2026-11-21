@@ -26,7 +26,10 @@ import {
 } from "../modules/booksy-transfer/operational-copy-check";
 import { OperationalDesktopProofError } from "../modules/booksy-transfer/operational-desktop-check";
 import { OperationalMoveProofError } from "../modules/booksy-transfer/operational-move-check";
-import { inspectNativeBooksy } from "../modules/booksy-transfer/operational-rehearsal";
+import {
+  inspectNativeBooksy,
+  restoreLegacyBooksyPaymentEvidence,
+} from "../modules/booksy-transfer/operational-rehearsal";
 import { fingerprint } from "../modules/booksy-transfer/plan";
 import {
   recoveredReplicaEvidenceSchema,
@@ -538,8 +541,12 @@ async function restoreInIsolatedPostgres(
       `);
       const expectPaymentReannouncement = !original?.paymentReviewSchema;
       await runMigrations(connection.db, { allowReviewDatabase: true });
+      if (expectPaymentReannouncement)
+        await restoreLegacyBooksyPaymentEvidence(connection.db, expected.snapshotHash);
       const migrations = await verifyMigrationLedger(connection.db);
-      await inspectNativeBooksy(connection.db, expected.snapshotHash, date);
+      await inspectNativeBooksy(connection.db, expected.snapshotHash, date, {
+        paymentEvidence: true,
+      });
       const migrated = await readTables();
       const migratedTableContentSha256 = fingerprint(migrated);
       if (probe === "operational-copy" || probe === "operational-write") {

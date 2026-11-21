@@ -508,6 +508,12 @@ La sesión HTTP propietaria comprobó 47 líneas de 38 reservas, 49 servicios y 
 
 El cotejo de Caja para el 20/11/2026 devolvió 44 líneas en **Por cobrar** y tres en **Citas por conciliar** por importe original desconocido. La ruta web y la de escritorio devolvieron los mismos datos y exigieron autenticación. El informe de la candidata verificó 1.053 originales e identificó 27 servicios de 23 reservas con el cobro bloqueado por importe desconocido en todo el horizonte. La última cita de origen sigue sin estar demostrada.
 
+El 21/11/2026 se comprobó que la copia local actualizada conserva 787 líneas de agenda, 57 bloqueos, siete profesionales y 187 servicios. La siguiente fecha del archivo con citas activas es el lunes 23/11/2026, con 38 líneas. La restauración cifrada cotejó 1.053 originales y el ensayo de la candidata verificó 102 tablas nativas tras aplicar 102 migraciones. [Agenda local del 23/11/2026](http://127.0.0.1:4275/admin/calendar?date=2026-11-23&view=day)
+
+Tras la migración `0101`, Caja separa las dos citas activas que carecen de evidencia de pago. Solo la cuenta propietaria puede registrar su conciliación con una referencia. El bloqueo independiente de las 27 líneas sin importe sigue activo. La candidata restaurada mantuvo pausada la reserva pública. El comprobante conserva `canCutOver: false` hasta completar la cobertura final, la conciliación y la verificación del respaldo fuera del equipo.
+
+La restauración aislada de un respaldo anterior a `0101` reconstruye la evidencia de pago a partir de los detalles archivados de cada reserva. Una marca negativa sin detalle suficiente conserva el bloqueo y genera un evento para actualizar las réplicas. El ensayo verifica los bloqueos contra el archivo antes de crear una candidata operativa.
+
 ## 5. Cuando se decida dejar Booksy: corte futuro separado
 
 Esta fase no se ejecuta durante el ensayo actual. Booksy sigue recibiendo cambios mientras tanto; por ello, una copia de hoy no sustituye una extracción final.

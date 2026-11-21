@@ -11,6 +11,7 @@ import { assertOperationalDatabase } from "./operational-database";
 export const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 const calendarBadgeBackfillTimestamp = 1795057784682;
 const inventoryClassificationBackfillTimestamp = 1795242011000;
+const booksyPaymentReviewBackfillTimestamp = 1795248805000;
 
 /** Summarize the ordered ledger that a successful migration must leave behind. */
 export function getReleaseMigrationLedger(migrations = readMigrationFiles({ migrationsFolder })) {
@@ -192,6 +193,16 @@ export async function runMigrations(
     ) {
       throw new Error(
         "Migration 0099 requires a maintenance upgrade with old inventory writers drained.",
+      );
+    }
+    if (
+      online &&
+      expected
+        .slice(applied.length)
+        .some(({ folderMillis }) => folderMillis === booksyPaymentReviewBackfillTimestamp)
+    ) {
+      throw new Error(
+        "Migration 0101 requires a maintenance upgrade with old API replicas drained.",
       );
     }
     await migrate(migrationDb, { migrationsFolder });

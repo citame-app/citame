@@ -12,7 +12,7 @@ import {
   timeOff,
   waitlistSourceEntry,
 } from "@sob/db";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { lockScheduling, type Tx } from "../../tx";
 import { IMPORTED_STAFF_UNIT_START } from "../availability/staff-reservations";
@@ -729,12 +729,63 @@ async function assertCandidateSettings(tx: Tx, timezone: string) {
     throw new Error("The candidate must use the source timezone and pause appointment reminders");
 }
 
+async function verifyNativePaymentEvidence(tx: Tx, plan: NativePlan) {
+  const expected = new Map(plan.visits.map((v) => [v.item.id, v.sourcePaymentUnverified]));
+  const flags = await tx
+    .select({
+      id: appointmentContext.appointmentId,
+      unverified: appointmentContext.sourcePaymentUnverified,
+    })
+    .from(appointmentContext);
+  if (flags.some((row) => expected.get(row.id) !== row.unverified))
+    throw new Error("Native payment holds differ from the archived reservation evidence");
+}
+
+/** Fill payment provenance missing from a pre-0101 archive on its isolated restoration only. */
+export async function restoreLegacyBooksyPaymentEvidence(db: Database, snapshotHash: string) {
+  return db.transaction(async (tx) => {
+    const [identity] = await tx.execute<{ name: string }>(sql`select current_database() as name`);
+    if (!/^sob_booksy_restorecheck_\d{8}_\d+$/.test(identity?.name ?? ""))
+      throw new Error("Payment evidence repair requires an isolated Booksy restoration");
+    const model = await loadBooksySourceModel(tx, snapshotHash, { exclusiveExtensions: true });
+    const plan = planNativeRehearsal(model);
+    const unverified = plan.visits.filter((v) => v.sourcePaymentUnverified).map((v) => v.item.id);
+    if (unverified.length) {
+      const updated = await tx
+        .update(appointmentContext)
+        .set({ sourcePaymentUnverified: true })
+        .where(
+          and(
+            inArray(appointmentContext.appointmentId, unverified),
+            eq(appointmentContext.source, "booksy"),
+            eq(appointmentContext.sourcePaymentUnverified, false),
+          ),
+        )
+        .returning({ id: appointmentContext.appointmentId });
+      const changed = [...new Set(updated.map(({ id }) => id))];
+      if (changed.length) {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('sob.sync_change', 0))`);
+        await tx.execute(sql`
+          insert into sync_change (entity, row_id, op)
+          select 'appointment', id, 'upsert'
+          from (values ${sql.join(
+            changed.map((id) => sql`(${id}::text)`),
+            sql`, `,
+          )}) as changed(id)
+          order by id
+        `);
+      }
+    }
+    await verifyNativePaymentEvidence(tx, plan);
+  });
+}
+
 /** Reconcile a persisted candidate under one read-only snapshot. Prints no client data. */
 export async function inspectNativeBooksy(
   db: Database,
   snapshotHash: string,
   date: string,
-  options: { bookingLinks?: boolean; priceHolds?: "day" | "all" } = {},
+  options: { bookingLinks?: boolean; priceHolds?: "day" | "all"; paymentEvidence?: boolean } = {},
 ) {
   return db.transaction(
     async (tx) => {
@@ -747,6 +798,7 @@ export async function inspectNativeBooksy(
       const plan = planNativeRehearsal(model);
       const capacity = await expectedNativeCapacity(tx, plan);
       const servicePositions = await verifyNativeProjection(tx, plan, capacity);
+      if (options.paymentEvidence) await verifyNativePaymentEvidence(tx, plan);
       const waitlist = await planBooksyWaitlist(tx, model);
       const waitlistRows = await tx.select().from(waitlistSourceEntry);
       const expectedWaitlist = new Map(waitlist.entries.map((row) => [row.id, row]));
@@ -1088,6 +1140,7 @@ export async function rehearseNativeBooksy(
       }
       await tx.execute(sql`set constraints all immediate`);
       await verifyNativeProjection(tx, plan, capacity);
+      await verifyNativePaymentEvidence(tx, plan);
       await assertNoNativeEffects(tx);
       if (mode === "rollback") throw rollback;
     });
