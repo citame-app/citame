@@ -1231,6 +1231,41 @@ test("transaction summaries cover the whole filtered local period with scoped pa
   expect((await call(client, `${path}&groupBy=month`)).status).toBe(403);
 });
 
+test("a client's transaction list and summaries obey the operator's receipt permissions", async () => {
+  const own = await checkout();
+  const addReceipt = async (staffId: string, clientId: string | null) => {
+    const response = await call(owner, "/admin/commerce/checkouts", "POST", {
+      staffId,
+      clientId,
+      lines: [{ kind: "custom", description: "Test receipt", quantity: 1, unitAmountCents: 100 }],
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(response.status, await response.clone().text()).toBe(201);
+    return checkoutSchema.parse(await response.json());
+  };
+  const colleague = await addReceipt(f.beaId, client.clientId);
+  await addReceipt(f.anaId, other.clientId);
+  const path = `/admin/commerce/checkouts?clientId=${client.clientId}&groupBy=month&pageSize=1`;
+  const list = async (who: Actor, page: number) => {
+    const response = await call(who, `${path}&page=${page}`);
+    expect(response.status).toBe(200);
+    return checkoutListSchema.parse(await response.json());
+  };
+  const visible = await Promise.all([list(owner, 1), list(owner, 2)]);
+  expect(visible.flatMap(({ checkouts }) => checkouts.map(({ id }) => id)).sort()).toEqual(
+    [own.id, colleague.id].sort(),
+  );
+  for (const page of visible) {
+    expect(page.total).toBe(2);
+    expect(page.groupTotals?.rows[0]?.receipts).toBe(2);
+  }
+  const professional = await list(staff, 1);
+  expect(professional.total).toBe(1);
+  expect(professional.checkouts.map(({ id }) => id)).toEqual([own.id]);
+  expect(professional.groupTotals?.rows[0]?.receipts).toBe(1);
+  expect((await call(client, path)).status).toBe(403);
+});
+
 test("transaction summaries match visible local months when clocks roll back across midnight", async () => {
   await t.db.update(salonSettings).set({ timezone: "America/Goose_Bay" });
   const later = await checkout();

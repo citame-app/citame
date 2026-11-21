@@ -484,6 +484,7 @@ pub struct CheckoutSummary {
 #[derive(Clone, Debug, Default)]
 pub struct CheckoutHistoryFilters {
     pub search: String,
+    pub client_id: Option<Uuid>,
     pub status: Option<&'static str>,
     pub method: Option<&'static str>,
     pub from: Option<DateTime<Utc>>,

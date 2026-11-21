@@ -13,6 +13,7 @@ pub(super) struct Directory {
     choosing_group: bool,
     form: Option<Form>,
     history: Vec<Appointment>,
+    pub(super) sales_history: Option<transactions::History>,
     pub(super) intake: Option<intake_record::Desk>,
     controls: Option<controls::Desk>,
     error: Option<String>,
@@ -63,6 +64,7 @@ impl Root {
             choosing_group: false,
             form: None,
             history: vec![],
+            sales_history: None,
             intake: None,
             controls: None,
             error: None,
@@ -88,6 +90,7 @@ impl Root {
                 if desk.contacts.find(&previous.id).is_none() {
                     desk.form = None;
                     desk.controls = None;
+                    desk.sales_history = None;
                     desk.history.clear();
                 } else {
                     desk.history = self
@@ -134,10 +137,41 @@ impl Root {
             email,
             notes,
         });
+        desk.sales_history = None;
         desk.error = None;
         desk.history = id
             .and_then(|id| self.svc.store.client_history(id).ok())
             .unwrap_or_default();
+        cx.notify();
+    }
+
+    fn open_client_transactions(&mut self, cx: &mut Context<Self>) {
+        if !self.directory_enabled() {
+            return;
+        }
+        let Overlay::Directory(desk) = &self.overlay else {
+            return;
+        };
+        let Some(client) = desk.form.as_ref().and_then(|form| form.previous.as_ref()) else {
+            return;
+        };
+        let Ok(id) = client.id.parse() else {
+            return;
+        };
+        if !self.svc.store.client_is_synced(&client.id).unwrap_or(false) {
+            return;
+        }
+        let history = self.new_sales_history(
+            Some(transactions::HistoryClient {
+                id,
+                name: client.name.clone(),
+            }),
+            cx,
+        );
+        if let Overlay::Directory(desk) = &mut self.overlay {
+            desk.sales_history = Some(history);
+        }
+        self.load_sales_history(transactions::HistoryLoad::ApplyFilters, cx);
         cx.notify();
     }
 
@@ -211,6 +245,9 @@ impl Root {
         if let Some(controls) = &desk.controls {
             return self.render_client_controls(controls, cx);
         }
+        if let Some(history) = &desk.sales_history {
+            return self.render_sales_history(history, viewport, cx);
+        }
         let title = |key| {
             div()
                 .text_lg()
@@ -262,6 +299,17 @@ impl Root {
                                         Kind::Ghost,
                                         cx.listener(|root, _, _, cx| root.open_client_controls(cx)),
                                     ))
+                                    .child(
+                                        self.directory_button(
+                                            "directory-transactions",
+                                            self.t(Key::SalesHistory),
+                                            Kind::Ghost,
+                                            cx.listener(|root, _, _, cx| {
+                                                root.open_client_transactions(cx)
+                                            }),
+                                        )
+                                        .debug_selector(|| "directory-transactions".to_owned()),
+                                    )
                                 },
                             )
                         })
@@ -564,6 +612,78 @@ impl Root {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    async fn client_transactions_keep_the_contact_draft_and_close_on_access_loss(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, config) = super::super::tests::desk();
+        let (entity, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        cx.simulate_resize(gpui::size(px(780.), px(860.)));
+        let client_id = entity.update(cx, |root, cx| {
+            root.svc.stop_sync();
+            root.status.connectivity = Connectivity::Offline;
+            root.svc
+                .store
+                .set_meta("client_directory", "allowed")
+                .unwrap();
+            root.open_directory(cx);
+            let Overlay::Directory(desk) = &root.overlay else {
+                panic!("directory didn't open");
+            };
+            let id = desk
+                .contacts
+                .clients
+                .iter()
+                .find(|client| client.name == "Lucia")
+                .unwrap()
+                .id
+                .clone();
+            root.directory_form(Some(&id), cx);
+            let Overlay::Directory(desk) = &root.overlay else {
+                panic!("client didn't open");
+            };
+            desk.form.as_ref().unwrap().name.update(cx, |field, cx| {
+                field.set_text("Unsubmitted client edit", cx);
+            });
+            id.parse::<uuid::Uuid>().unwrap()
+        });
+        cx.run_until_parked();
+        let action = cx
+            .debug_bounds("directory-transactions")
+            .expect("transactions action");
+        cx.simulate_click(action.center(), Default::default());
+        cx.run_until_parked();
+        entity.update(cx, |root, cx| {
+            let history = root
+                .overlay
+                .sales_history_mut()
+                .expect("client transactions");
+            assert_eq!(history.client_id(), Some(client_id));
+            history.receipt = Some(checkout::CheckoutReview::Failed);
+            assert!(root.checkout_review_mut().is_some());
+            root.dismiss_overlay(cx);
+            assert!(root.overlay.sales_history().is_some());
+            assert!(root.checkout_review_mut().is_none());
+            root.dismiss_overlay(cx);
+            let Overlay::Directory(desk) = &root.overlay else {
+                panic!("didn't return to the client");
+            };
+            assert!(desk.sales_history.is_none());
+            assert_eq!(
+                desk.form.as_ref().unwrap().name.read(cx).text(),
+                "Unsubmitted client edit"
+            );
+            root.open_client_transactions(cx);
+            assert!(root.overlay.sales_history().is_some());
+            root.svc
+                .store
+                .set_meta("client_directory", "denied")
+                .unwrap();
+            root.reload_directory();
+            assert!(matches!(root.overlay, Overlay::None));
+        });
+    }
     use gpui::TestAppContext;
 
     #[gpui::test]

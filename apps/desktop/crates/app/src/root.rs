@@ -2539,6 +2539,9 @@ impl Root {
         if self.dismiss_inventory_document_panel(cx) {
             return;
         }
+        if self.dismiss_sales_history(cx) {
+            return;
+        }
         match &mut self.overlay {
             Overlay::None => return,
             Overlay::New(form)
@@ -2552,22 +2555,6 @@ impl Root {
             Overlay::WalkIn(sale) if !sale.can_dismiss() => return,
             Overlay::WalkInReceipt(review) if !review.can_go_back() => return,
             Overlay::WalkIn(_) | Overlay::WalkInReceipt(_) => {
-                self.load_register(cx);
-                return;
-            }
-            Overlay::SalesHistory(history) if history.receipt.is_some() => {
-                if !history
-                    .receipt
-                    .as_ref()
-                    .is_some_and(|review| review.can_go_back())
-                {
-                    return;
-                }
-                history.receipt = None;
-                let page = history.page;
-                self.load_sales_history(transactions::HistoryLoad::Page(page), cx);
-            }
-            Overlay::SalesHistory(_) => {
                 self.load_register(cx);
                 return;
             }

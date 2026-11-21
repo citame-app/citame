@@ -455,8 +455,7 @@ impl Root {
         match overlay {
             Overlay::Details(details) => details.checkout.as_mut(),
             Overlay::WalkInReceipt(review) => Some(review),
-            Overlay::SalesHistory(history) => history.receipt.as_mut(),
-            _ => None,
+            _ => overlay.sales_history_mut()?.receipt.as_mut(),
         }
     }
 
@@ -465,12 +464,10 @@ impl Root {
         review: &CheckoutReview,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        let history = self.overlay.sales_history().is_some();
         let body = div().flex().flex_col().gap_3().child(
             div().text_lg().font_weight(FontWeight::BOLD).child(self.t(
-                if matches!(
-                    self.overlay,
-                    Overlay::WalkInReceipt(_) | Overlay::SalesHistory(_)
-                ) {
+                if history || matches!(self.overlay, Overlay::WalkInReceipt(_)) {
                     Key::SaleCreateReceipt
                 } else {
                     Key::OpenAppointmentCheckout
@@ -540,17 +537,13 @@ impl Root {
                                 .child(self.t(key)),
                         )
                     })
-                    .when(
-                        receipt.appointment_id.is_none()
-                            || matches!(self.overlay, Overlay::SalesHistory(_)),
-                        |view| {
-                            view.children(receipt.lines.iter().map(|line| {
-                                div()
-                                    .text_sm()
-                                    .child(format!("{} × {}", line.quantity, line.description))
-                            }))
-                        },
-                    )
+                    .when(receipt.appointment_id.is_none() || history, |view| {
+                        view.children(receipt.lines.iter().map(|line| {
+                            div()
+                                .text_sm()
+                                .child(format!("{} × {}", line.quantity, line.description))
+                        }))
+                    })
                     .when_some(form.error.as_ref(), |view, message| {
                         view.child(
                             div()

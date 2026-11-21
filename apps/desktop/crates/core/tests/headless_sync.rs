@@ -3406,6 +3406,15 @@ fn imported_eur_booking(desk: &mut Device, price: u32) -> Appointment {
 #[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
     let browser = Device::sign_in();
+    let client_id = uuid::Uuid::now_v7();
+    let other_client_id = uuid::Uuid::now_v7();
+    for (id, name) in [
+        (client_id, "Synthetic receipt client"),
+        (other_client_id, "Synthetic unrelated client"),
+    ] {
+        let client = browser.rest_post("/admin/clients", json!({ "id": id, "name": name }));
+        assert_eq!(client["id"], id.to_string());
+    }
     let product = browser.rest_post(
         "/admin/inventory/products",
         json!({
@@ -3437,7 +3446,7 @@ fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
     let staff_id: uuid::Uuid = catalog(&staff_lookup).staff.parse().unwrap();
     let sale = WalkInSale {
         idempotency_key: uuid::Uuid::now_v7(),
-        client_id: None,
+        client_id: Some(client_id),
         staff_id: Some(staff_id),
         use_client_discount: None,
         lines: vec![
@@ -3480,15 +3489,30 @@ fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
                 status: Some("paid"),
                 method: Some("external_card"),
                 group_by: Some(sob_core::billing::CheckoutHistoryGroup::Day),
+                client_id: Some(client_id),
                 ..Default::default()
             },
             1,
         )
         .unwrap();
     let totals = history.group_totals.as_ref().unwrap();
-    let web_history = browser.rest_get(
-        "/admin/commerce/checkouts?search=Synthetic%20walk-in%20product&status=paid&method=external_card&groupBy=day",
-    );
+    let web_history = browser.rest_get(&format!(
+        "/admin/commerce/checkouts?clientId={client_id}&search=Synthetic%20walk-in%20product&status=paid&method=external_card&groupBy=day",
+    ));
+    assert_eq!(history.total, 1);
+    let unrelated = device
+        .transport
+        .checkout_history(
+            &sob_core::billing::CheckoutHistoryFilters {
+                client_id: Some(other_client_id),
+                group_by: Some(sob_core::billing::CheckoutHistoryGroup::Day),
+                ..Default::default()
+            },
+            1,
+        )
+        .unwrap();
+    assert_eq!(unrelated.total, 0);
+    assert!(unrelated.checkouts.is_empty() && unrelated.group_totals.unwrap().rows.is_empty());
     assert_eq!(web_history["groupTotals"]["timezone"], totals.timezone);
     let row = totals.rows.first().unwrap();
     assert_eq!(row.paid_cents, 4200);

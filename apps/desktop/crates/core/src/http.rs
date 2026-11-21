@@ -388,6 +388,9 @@ impl HttpTransport {
             .append_pair("search", filters.search.trim())
             .append_pair("page", &page.to_string())
             .append_pair("pageSize", "15");
+        if let Some(client_id) = filters.client_id {
+            query.append_pair("clientId", &client_id.to_string());
+        }
         if let Some(status) = filters.status {
             query.append_pair("status", status);
         }

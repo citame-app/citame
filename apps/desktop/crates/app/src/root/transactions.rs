@@ -3,9 +3,11 @@ use checkout::CheckoutReview;
 use sob_core::billing::{
     CheckoutGroupTotal, CheckoutHistoryFilters, CheckoutHistoryGroup, CheckoutPage,
 };
+use sob_core::sync::TransportError;
 use uuid::Uuid;
 
 pub(super) struct History {
+    client: Option<HistoryClient>,
     search: Entity<TextField>,
     from: Entity<TextField>,
     to: Entity<TextField>,
@@ -25,6 +27,35 @@ pub(super) struct History {
     needs_refresh: bool,
     refresh_failed: bool,
     pub(super) receipt: Option<CheckoutReview>,
+}
+
+pub(super) struct HistoryClient {
+    pub id: Uuid,
+    pub name: String,
+}
+
+impl History {
+    pub(super) fn client_id(&self) -> Option<Uuid> {
+        self.client.as_ref().map(|client| client.id)
+    }
+}
+
+impl Overlay {
+    pub(super) fn sales_history(&self) -> Option<&History> {
+        match self {
+            Self::SalesHistory(history) => Some(history),
+            Self::Directory(directory) => directory.sales_history.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub(super) fn sales_history_mut(&mut self) -> Option<&mut History> {
+        match self {
+            Self::SalesHistory(history) => Some(history),
+            Self::Directory(directory) => directory.sales_history.as_mut(),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -80,6 +111,15 @@ fn read_date(field: &Entity<TextField>, cx: &App) -> Option<Option<NaiveDate>> {
 
 impl Root {
     pub(super) fn open_sales_history(&mut self, cx: &mut Context<Self>) {
+        self.overlay = Overlay::SalesHistory(Box::new(self.new_sales_history(None, cx)));
+        self.load_sales_history(HistoryLoad::ApplyFilters, cx);
+    }
+
+    pub(super) fn new_sales_history(
+        &self,
+        client: Option<HistoryClient>,
+        cx: &mut Context<Self>,
+    ) -> History {
         let search = cx.new(|cx| TextField::new(self.t(Key::SalesSearch), false, cx));
         let from = cx.new(|cx| TextField::new("AAAA-MM-DD", false, cx));
         let to = cx.new(|cx| TextField::new("AAAA-MM-DD", false, cx));
@@ -93,7 +133,8 @@ impl Root {
                 })
             })
             .collect();
-        self.overlay = Overlay::SalesHistory(Box::new(History {
+        History {
+            client,
             search,
             from,
             to,
@@ -113,12 +154,30 @@ impl Root {
             needs_refresh: false,
             refresh_failed: false,
             receipt: None,
-        }));
-        self.load_sales_history(HistoryLoad::ApplyFilters, cx);
+        }
+    }
+
+    pub(super) fn dismiss_sales_history(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(history) = self.overlay.sales_history_mut() else {
+            return false;
+        };
+        if let Some(receipt) = &history.receipt {
+            if receipt.can_go_back() {
+                history.receipt = None;
+                self.load_sales_history(HistoryLoad::Refresh, cx);
+                cx.notify();
+            }
+        } else if let Overlay::Directory(directory) = &mut self.overlay {
+            directory.sales_history = None;
+            cx.notify();
+        } else {
+            self.load_register(cx);
+        }
+        true
     }
 
     pub(super) fn refresh_sales_history(&mut self, reconnected: bool, cx: &mut Context<Self>) {
-        let Overlay::SalesHistory(history) = &mut self.overlay else {
+        let Some(history) = self.overlay.sales_history_mut() else {
             return;
         };
         history.needs_refresh |= reconnected;
@@ -150,7 +209,7 @@ impl Root {
         else {
             return;
         };
-        let Overlay::SalesHistory(history) = &mut self.overlay else {
+        let Some(history) = self.overlay.sales_history_mut() else {
             return;
         };
         if matches!(load, HistoryLoad::ApplyFilters) {
@@ -179,6 +238,7 @@ impl Root {
         let group = history.group;
         let filters = CheckoutHistoryFilters {
             search: history.submitted.search.clone(),
+            client_id: history.client_id(),
             status: history.submitted.status,
             method: history.submitted.method,
             from: history
@@ -228,7 +288,7 @@ impl Root {
                 if !Arc::ptr_eq(&session, &root.svc.session) {
                     return;
                 }
-                let Overlay::SalesHistory(history) = &mut root.overlay else {
+                let Some(history) = root.overlay.sales_history_mut() else {
                     return;
                 };
                 if !history
@@ -245,13 +305,19 @@ impl Root {
                         history.loaded_group = Some(group);
                         history.refresh_failed = false;
                     }
-                    Err(_)
-                        if matches!(load, HistoryLoad::Refresh)
-                            && matches!(history.results, Ok(Some(_))) =>
+                    Err(
+                        TransportError::Offline(_)
+                        | TransportError::Server(_)
+                        | TransportError::RateLimited(_),
+                    ) if matches!(load, HistoryLoad::Refresh)
+                        && matches!(history.results, Ok(Some(_))) =>
                     {
                         history.refresh_failed = true;
                     }
-                    Err(_) => history.results = Err(()),
+                    Err(_) => {
+                        history.results = Err(());
+                        history.refresh_failed = false;
+                    }
                 }
                 cx.notify();
             });
@@ -267,9 +333,13 @@ impl Root {
         else {
             return;
         };
-        let Overlay::SalesHistory(history) = &mut self.overlay else {
+        let Some(history) = self.overlay.sales_history_mut() else {
             return;
         };
+        if !matches!(&history.results, Ok(Some(page)) if page.checkouts.iter().any(|row| row.id == id))
+        {
+            return;
+        }
         let token = Arc::new(());
         history.receipt = Some(CheckoutReview::Loading(token.clone()));
         let revision = self
@@ -283,7 +353,7 @@ impl Root {
             let result = cx.background_executor().spawn(async move { transport.open_saved_checkout(id) }).await;
             let _ = root.update(cx, |root, cx| {
                 if !Arc::ptr_eq(&session, &root.svc.session) { return; }
-                let Overlay::SalesHistory(history) = &mut root.overlay else { return };
+                let Some(history) = root.overlay.sales_history_mut() else { return };
                 if !matches!(&history.receipt, Some(CheckoutReview::Loading(current)) if Arc::ptr_eq(current, &token)) { return; }
                 history.receipt = Some(match result {
                     Ok(receipt) => CheckoutReview::from_receipt(receipt, revision, cx),
@@ -323,7 +393,7 @@ impl Root {
                                 Kind::Ghost
                             },
                             cx.listener(move |root, _, _, cx| {
-                                if let Overlay::SalesHistory(history) = &mut root.overlay {
+                                if let Some(history) = root.overlay.sales_history_mut() {
                                     if status {
                                         history.status = value;
                                     } else {
@@ -381,7 +451,7 @@ impl Root {
                         Kind::Ghost
                     },
                     cx.listener(move |root, _, _, cx| {
-                        let Overlay::SalesHistory(history) = &mut root.overlay else {
+                        let Some(history) = root.overlay.sales_history_mut() else {
                             return;
                         };
                         if history.group != group {
@@ -448,6 +518,14 @@ impl Root {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(self.t(Key::SalesHistory)),
             )
+            .when_some(history.client.as_ref(), |view, client| {
+                view.child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::muted())
+                        .child(client.name.clone()),
+                )
+            })
             .child(self.render_sales_grouping(history, cx))
             .child(history.search.clone())
             .child(self.button(
@@ -455,7 +533,7 @@ impl Root {
                 self.t(Key::SalesFilters),
                 Kind::Ghost,
                 cx.listener(|root, _, _, cx| {
-                    if let Overlay::SalesHistory(history) = &mut root.overlay {
+                    if let Some(history) = root.overlay.sales_history_mut() {
                         history.filters_open = !history.filters_open;
                         cx.notify();
                     }

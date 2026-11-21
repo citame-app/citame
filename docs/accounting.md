@@ -67,6 +67,9 @@ completed refunds and net payments across all matching receipts in that period, 
 receipts on other pages. A method filter selects receipts with a matching payment method.
 Totals describe the selected receipts and include their other tenders and refunds, including
 prepaid value. The financial summary above tracks new money by payment confirmation date.
+Open **Transactions** from a client profile in Web or Desktop to apply that client scope to the
+receipts and all totals, including receipts attached to merged profiles. Desktop needs a connection
+to fetch receipts and keeps the current client form in place when returning from the history.
 
 Migrations `0011_staff_accounting.sql` and `0012_backfill_checkout_attribution.sql` add the ledgers and prepare previously open receipts. The upgrade retains settled historical totals and allocates discounts/tax on unfulfilled open receipts using exact integer arithmetic. No bank transfers or real charges are performed by local verification.
 
