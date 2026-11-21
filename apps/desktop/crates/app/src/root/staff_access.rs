@@ -1,5 +1,7 @@
 use super::*;
-use sob_core::http::{AccessPreset, ReviewedStaffAccess, StaffAccountError, valid_staff_login};
+use sob_core::http::{
+    AccessPreset, AccountRole, ReviewedStaffAccess, StaffAccountError, valid_staff_login,
+};
 use sob_core::sync::TransportError;
 
 pub(super) struct Desk {
@@ -8,12 +10,18 @@ pub(super) struct Desk {
     editor: Option<Editor>,
     link: Option<LinkDraft>,
     creation: Option<CreateDraft>,
+    role_draft: Option<RoleDraft>,
     observed: Option<i64>,
     retry_at: Option<Instant>,
     busy: bool,
     needs_reload: bool,
     notice: Option<Key>,
     confirm_back: bool,
+}
+
+struct RoleDraft {
+    reviewed: ReviewedStaffAccess,
+    role: AccountRole,
 }
 
 struct LinkDraft {
@@ -79,6 +87,7 @@ impl Editor {
 enum Request {
     Read,
     Save(ReviewedStaffAccess, AccessPreset),
+    Role(ReviewedStaffAccess, AccountRole),
     Link {
         reviewed: ReviewedStaffAccess,
         name: String,
@@ -105,6 +114,7 @@ impl Root {
             editor: None,
             link: None,
             creation: None,
+            role_draft: None,
             observed: None,
             retry_at: None,
             busy: false,
@@ -123,6 +133,7 @@ impl Root {
             return false;
         }
         desk.link = None;
+        desk.role_draft = None;
         if let Some(field) = desk
             .creation
             .as_ref()
@@ -189,6 +200,7 @@ impl Root {
         let success_notice = match &request {
             Request::Read => None,
             Request::Save(_, _) => Some(Key::AccessSaved),
+            Request::Role(_, _) => Some(Key::AccessRoleSaved),
             Request::Create { password, .. } => Some(if password.is_some() {
                 Key::AccessAccountCreated
             } else {
@@ -201,6 +213,7 @@ impl Root {
             }),
         };
         let linking = matches!(request, Request::Link { .. });
+        let changing_role = matches!(request, Request::Role(_, _));
         desk.busy = true;
         desk.retry_at = None;
         desk.observed = self.svc.store.staff_directory_revision().ok();
@@ -218,6 +231,9 @@ impl Root {
                         Request::Save(reviewed, preset) => transport
                             .save_staff_access(&reviewed, preset)
                             .map_err(StaffAccountError::from),
+                        Request::Role(reviewed, role) => {
+                            transport.change_staff_role(&reviewed, role)
+                        }
                         Request::Link {
                             reviewed,
                             name,
@@ -265,6 +281,9 @@ impl Root {
                         desk.editor = Some(Editor::new(current));
                         desk.needs_reload = false;
                         desk.notice = success_notice;
+                        if changing_role {
+                            desk.role_draft = None;
+                        }
                         if linking {
                             desk.link = None;
                         }
@@ -289,6 +308,9 @@ impl Root {
                                     | Key::AccessLinkFailed
                                     | Key::AccessAccountCreated
                                     | Key::AccessNewInvitationQueued
+                                    | Key::AccessRoleSaved
+                                    | Key::AccessRoleFutureAppointments
+                                    | Key::AccessRoleFailed
                             )
                         ) {
                             desk.notice = None;
@@ -317,7 +339,13 @@ impl Root {
                             return;
                         }
                         desk.needs_reload = true;
-                        desk.notice = Some(if linking {
+                        desk.notice = Some(if changing_role {
+                            if error == StaffAccountError::FutureAppointments {
+                                Key::AccessRoleFutureAppointments
+                            } else {
+                                Key::AccessRoleFailed
+                            }
+                        } else if linking {
                             Key::AccessLinkFailed
                         } else {
                             Key::AccessFailed
@@ -346,7 +374,8 @@ impl Root {
             return;
         };
         let Some(editor) = &desk.editor else { return };
-        if desk.needs_reload
+        if desk.role_draft.is_some()
+            || desk.needs_reload
             || desk.confirm_back
             || !editor.dirty()
             || editor.changed()
@@ -355,6 +384,63 @@ impl Root {
             return;
         }
         self.request_staff_access(Request::Save(editor.reviewed.clone(), editor.proposed), cx);
+    }
+
+    fn can_change_staff_role(&self, reviewed: &ReviewedStaffAccess) -> bool {
+        self.svc.current_session().is_some_and(|session| {
+            session.role == "owner"
+                && reviewed
+                    .account_id
+                    .as_deref()
+                    .is_some_and(|id| session.user_id != id)
+        })
+    }
+
+    fn review_staff_role_change(&mut self, role: AccountRole, cx: &mut Context<Self>) {
+        let Overlay::StaffAccess(desk) = &self.overlay else {
+            return;
+        };
+        let Some(editor) = &desk.editor else { return };
+        if self.status.connectivity != Connectivity::Online
+            || desk.busy
+            || desk.needs_reload
+            || desk.confirm_back
+            || desk.role_draft.is_some()
+            || desk.link.is_some()
+            || editor.dirty()
+            || editor.changed()
+            || !self.can_change_staff_role(&editor.latest)
+            || editor.latest.access.account_role.as_deref() == Some(role.as_str())
+        {
+            return;
+        }
+        let draft = RoleDraft {
+            reviewed: editor.latest.clone(),
+            role,
+        };
+        if let Overlay::StaffAccess(desk) = &mut self.overlay {
+            desk.role_draft = Some(draft);
+            desk.notice = None;
+        }
+        cx.notify();
+    }
+
+    fn confirm_staff_role_change(&mut self, cx: &mut Context<Self>) {
+        let Overlay::StaffAccess(desk) = &self.overlay else {
+            return;
+        };
+        let (Some(draft), Some(editor)) = (&desk.role_draft, &desk.editor) else {
+            return;
+        };
+        if desk.busy
+            || desk.needs_reload
+            || editor.dirty()
+            || draft.reviewed != editor.latest
+            || !self.can_change_staff_role(&draft.reviewed)
+        {
+            return;
+        }
+        self.request_staff_access(Request::Role(draft.reviewed.clone(), draft.role), cx);
     }
 
     fn open_account_link(&mut self, cx: &mut Context<Self>) {
@@ -530,7 +616,9 @@ impl Root {
         if desk.busy {
             return;
         }
-        if desk.has_draft() {
+        if desk.role_draft.take().is_some() {
+            desk.notice = None;
+        } else if desk.has_draft() {
             desk.confirm_back = !desk.confirm_back;
         } else if desk.selected.is_some() {
             desk.back();
@@ -648,7 +736,11 @@ impl Root {
                     body.child(self.render_staff_creation(desk, draft, online, cx))
                 })
                 .when_some(desk.editor.as_ref(), |body, editor| {
-                    body.child(self.render_access_editor(desk, editor, online, cx))
+                    if let Some(draft) = &desk.role_draft {
+                        body.child(self.render_role_review(desk, editor, draft, online, cx))
+                    } else {
+                        body.child(self.render_access_editor(desk, editor, online, cx))
+                    }
                 })
                 .when(online && !desk.busy && desk.needs_reload, |body| {
                     body.child(self.button(
@@ -756,6 +848,47 @@ impl Root {
                     &[("email", email)],
                 )))
             })
+            .when_some(
+                editor
+                    .latest
+                    .access
+                    .account_role
+                    .as_deref()
+                    .and_then(account_role),
+                |body, role| {
+                    body.child(div().text_sm().child(i18n::fill(
+                        self.t(Key::AccessRoleCurrent),
+                        &[("role", self.t(role_label(role)))],
+                    )))
+                    .when(
+                        online
+                            && !desk.busy
+                            && !desk.needs_reload
+                            && !editor.dirty()
+                            && !editor.changed()
+                            && desk.link.is_none()
+                            && self.can_change_staff_role(&editor.latest),
+                        |body| {
+                            body.child(div().text_sm().child(self.t(Key::AccessRoleChange)))
+                                .children(
+                                    AccountRole::ALL
+                                        .into_iter()
+                                        .filter(|candidate| *candidate != role)
+                                        .map(|candidate| {
+                                            self.button(
+                                                ("staff-account-role", candidate as usize),
+                                                self.t(role_label(candidate)),
+                                                Kind::Ghost,
+                                                cx.listener(move |root, _, _, cx| {
+                                                    root.review_staff_role_change(candidate, cx)
+                                                }),
+                                            )
+                                        }),
+                                )
+                        },
+                    )
+                },
+            )
             .when(!editable, |body| {
                 body.child(div().text_sm().child(self.t(Key::AccessOtherRole)))
             })
@@ -834,6 +967,71 @@ impl Root {
                     && !editor.changed();
                 body.child(self.render_account_link(desk, &editor.latest, available, cx))
             })
+    }
+
+    fn render_role_review(
+        &self,
+        desk: &Desk,
+        editor: &Editor,
+        draft: &RoleDraft,
+        online: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let stale = draft.reviewed != editor.latest;
+        let impact = match draft.role {
+            AccountRole::Owner => Key::AccessRoleOwnerImpact,
+            AccountRole::Staff => Key::AccessRoleStaffImpact,
+            AccountRole::Client => Key::AccessRoleClientImpact,
+        };
+        div()
+            .id("staff-role-confirmation")
+            .min_h(px(0.))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(self.t(Key::AccessRoleChange)),
+            )
+            .child(i18n::fill(
+                self.t(Key::AccessRoleReview),
+                &[
+                    (
+                        "account",
+                        draft.reviewed.account_email.as_deref().unwrap_or_default(),
+                    ),
+                    ("role", self.t(role_label(draft.role))),
+                ],
+            ))
+            .child(div().text_sm().child(self.t(impact)))
+            .when(stale, |body| {
+                body.child(div().text_sm().child(self.t(Key::AccessChanged)))
+            })
+            .when(!desk.busy, |body| {
+                body.child(self.button(
+                    "cancel-staff-role",
+                    self.t(Key::Cancel),
+                    Kind::Ghost,
+                    cx.listener(|root, _, _, cx| root.close_staff_access(cx)),
+                ))
+            })
+            .when(
+                online
+                    && !stale
+                    && !desk.busy
+                    && !desk.needs_reload
+                    && self.can_change_staff_role(&draft.reviewed),
+                |body| {
+                    body.child(self.button(
+                        "confirm-staff-role",
+                        self.t(Key::AccessRoleConfirm),
+                        Kind::Danger,
+                        cx.listener(|root, _, _, cx| root.confirm_staff_role_change(cx)),
+                    ))
+                },
+            )
     }
 
     fn render_account_link(
@@ -933,10 +1131,25 @@ impl Desk {
         self.editor = None;
         self.link = None;
         self.creation = None;
+        self.role_draft = None;
         self.notice = None;
         self.retry_at = None;
         self.needs_reload = false;
         self.confirm_back = false;
+    }
+}
+
+fn account_role(value: &str) -> Option<AccountRole> {
+    AccountRole::ALL
+        .into_iter()
+        .find(|role| role.as_str() == value)
+}
+
+fn role_label(role: AccountRole) -> Key {
+    match role {
+        AccountRole::Owner => Key::AccessRoleOwner,
+        AccountRole::Staff => Key::AccessRoleStaff,
+        AccountRole::Client => Key::AccessRoleClient,
     }
 }
 
@@ -998,7 +1211,7 @@ mod tests {
             editor.proposed = AccessPreset::Restricted;
             root.overlay = Overlay::StaffAccess(Box::new(Desk {
                 identity: Arc::new(()), selected: Some("professional".into()), editor: Some(editor),
-                link: None, creation: None,
+                link: None, creation: None, role_draft: None,
                 observed: Some(1), retry_at: None, busy: true, needs_reload: false,
                 notice: None, confirm_back: false,
             }));
@@ -1077,5 +1290,38 @@ mod tests {
                 assert!(matches!(&root.overlay, Overlay::StaffAccess(desk) if desk.confirm_back));
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    async fn role_confirmation_cannot_follow_a_changed_account(cx: &mut TestAppContext) {
+        let (_directory, window) = super::super::tests::open(cx);
+        window.update(cx, |root, _, cx| {
+            root.open_staff_access(cx);
+            root.status.connectivity = Connectivity::Online;
+            let Overlay::StaffAccess(desk) = &mut root.overlay else { panic!("Missing team desk") };
+            let id = "0198f5a0-7b1c-7000-8000-000000000201";
+            desk.selected = Some(id.into());
+            let baseline = ReviewedStaffAccess {
+                generation: "initial".into(),
+                account_id: Some("reviewed-account".into()),
+                account_email: Some("role@example.test".into()),
+                access: StaffAccess {
+                    staff_id: id.into(), preset: AccessPreset::Professional,
+                    version: 1, account_role: Some("staff".into()),
+                },
+            };
+            desk.editor = Some(Editor::new(baseline.clone()));
+            root.review_staff_role_change(AccountRole::Owner, cx);
+            let Overlay::StaffAccess(desk) = &mut root.overlay else { panic!("Missing review") };
+            assert_eq!(desk.role_draft.as_ref().unwrap().reviewed, baseline);
+            let mut updated = baseline;
+            updated.account_id = Some("updated-account".into());
+            updated.access.version = 2;
+            desk.editor.as_mut().unwrap().receive(updated);
+            root.confirm_staff_role_change(cx);
+            assert!(matches!(&root.overlay, Overlay::StaffAccess(desk) if !desk.busy && desk.role_draft.is_some()));
+            root.close_staff_access(cx);
+            assert!(matches!(&root.overlay, Overlay::StaffAccess(desk) if desk.selected.is_some() && desk.role_draft.is_none()));
+        }).unwrap();
     }
 }

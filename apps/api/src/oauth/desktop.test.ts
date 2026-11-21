@@ -312,6 +312,79 @@ test("reviewed team access uses the same owner policy in Desktop and Cloud", asy
   expect(await (await json(t.app, path, "GET", undefined, owner.who.cookie)).json()).toEqual(saved);
 });
 
+test("Desktop changes a linked role only against the current account and calendar review", async () => {
+  const owner = await tokens("owner", "change-linked-role-owner");
+  const member = await tokens("staff", "change-linked-role-member");
+  const calendar = `/admin/staff/${member.who.staffId}`;
+  const path = `${calendar}/account-role/reviewed`;
+  const original = reviewedStaffAccessSchema.parse(
+    await (await request(`${calendar}/access/reviewed`, owner.access)).json(),
+  );
+  const reviewed = {
+    generation: original.generation,
+    accountId: original.accountId,
+    expectedRole: original.access.accountRole,
+    version: original.access.version,
+    role: "client",
+  };
+  const put = (body: unknown, access = owner.access) =>
+    t.app.request(path, {
+      method: "PUT",
+      headers: { authorization: `Bearer ${access}`, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  expect((await put(reviewed, member.access)).status).toBe(403);
+  expect((await request(path, owner.access)).status).toBe(403);
+  expect((await put({ ...reviewed, generation: "earlier-database" })).status).toBe(409);
+  expect((await put({ ...reviewed, accountId: owner.who.userId })).status).toBe(403);
+  expect((await put({ ...reviewed, expectedRole: "client" })).status).toBe(409);
+  const other = await actor(t, "client", "role-other-account@example.com");
+  expect((await put({ ...reviewed, accountId: other.userId })).status).toBe(409);
+  const visit = Bun.randomUUIDv7();
+  if (!other.clientId) throw new Error("Missing test client");
+  await t.db.insert(appointment).values({
+    id: visit,
+    staffId: original.access.staffId,
+    clientId: other.clientId,
+    status: "booked",
+    startsAt: new Date(NOW.getTime() + 3600000),
+    endsAt: new Date(NOW.getTime() + 7200000),
+  });
+  const blocked = await put(reviewed);
+  expect(blocked.status).toBe(409);
+  expect(await blocked.json()).toMatchObject({ error: { code: "has_future_appointments" } });
+  expect(await (await request(`${calendar}/access/reviewed`, owner.access)).json()).toEqual(
+    original,
+  );
+  await t.db.update(appointment).set({ status: "cancelled" }).where(eq(appointment.id, visit));
+  const demoted = await put(reviewed);
+  expect(demoted.status).toBe(200);
+  const current = reviewedStaffAccessSchema.parse(await demoted.json());
+  expect(current.access).toMatchObject({
+    accountRole: "client",
+    staffId: original.access.staffId,
+    version: original.access.version + 1,
+  });
+  expect(
+    await t.db.select().from(staffProfile).where(eq(staffProfile.id, current.access.staffId)),
+  ).toMatchObject([{ active: false, userId: original.accountId }]);
+  expect((await put(reviewed)).status).toBe(409);
+  expect((await request("/sync/pull", member.access)).status).toBe(403);
+  const promoted = await put({
+    ...reviewed,
+    expectedRole: current.access.accountRole,
+    version: current.access.version,
+    role: "staff",
+  });
+  expect(promoted.status).toBe(200);
+  expect(
+    await t.db.select().from(staffProfile).where(eq(staffProfile.id, current.access.staffId)),
+  ).toMatchObject([{ active: true, userId: original.accountId }]);
+  expect(await t.db.select().from(appointment).where(eq(appointment.id, visit))).toMatchObject([
+    { id: visit, status: "cancelled", staffId: original.access.staffId },
+  ]);
+});
+
 test("native booking protection shares the Cloud policy and only opted-in replicas see refreshes", async () => {
   const owner = await tokens("owner", "booking-policy-desktop-owner");
   const staff = await tokens("staff", "booking-policy-desktop-staff");

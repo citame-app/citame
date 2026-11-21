@@ -78,7 +78,7 @@ fn desktop_opens_cloud_management_with_the_linked_users_web_session_through_the_
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_team_access_uses_reviewed_permissions_through_the_proxy() {
-    use sob_core::http::{AccessPreset, StaffAccountError};
+    use sob_core::http::{AccessPreset, AccountRole, StaffAccountError};
 
     let device = proxy_device();
     let mut web = Device::sign_in();
@@ -162,10 +162,33 @@ fn native_team_access_uses_reviewed_permissions_through_the_proxy() {
             .save_staff_access(&saved, AccessPreset::Manager)
             .is_err()
     );
-    assert_eq!(
-        device.transport.staff_access(id).unwrap().access.preset,
-        AccessPreset::Restricted
+    let current = device.transport.staff_access(id).unwrap();
+    assert_eq!(current.access.preset, AccessPreset::Restricted);
+    assert!(
+        device
+            .transport
+            .change_staff_role(&saved, AccountRole::Client)
+            .is_err()
     );
+    let demoted = device
+        .transport
+        .change_staff_role(&current, AccountRole::Client)
+        .unwrap();
+    assert_eq!(web.rest_get(&path)["access"]["accountRole"], "client");
+    web.sync();
+    assert!(
+        web.store
+            .staff_including_inactive()
+            .unwrap()
+            .iter()
+            .any(|staff| staff.id == id && !staff.active)
+    );
+    let restored = device
+        .transport
+        .change_staff_role(&demoted, AccountRole::Staff)
+        .unwrap();
+    assert_eq!(restored.access.preset, AccessPreset::Restricted);
+    assert_eq!(web.rest_get(&path)["access"]["accountRole"], "staff");
 }
 
 #[test]

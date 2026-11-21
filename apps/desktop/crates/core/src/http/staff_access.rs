@@ -19,6 +19,26 @@ impl AccessPreset {
     ];
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountRole {
+    Owner,
+    Staff,
+    Client,
+}
+
+impl AccountRole {
+    pub const ALL: [Self; 3] = [Self::Owner, Self::Staff, Self::Client];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Owner => "owner",
+            Self::Staff => "staff",
+            Self::Client => "client",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StaffAccess {
@@ -65,6 +85,8 @@ pub enum StaffAccountError {
     EmailUnavailable,
     #[error("Invalid staff account details")]
     InvalidDetails,
+    #[error("The calendar has upcoming appointments")]
+    FutureAppointments,
     #[error(transparent)]
     Transport(#[from] TransportError),
 }
@@ -82,6 +104,53 @@ pub fn valid_staff_login(email: &str, password: Option<&str>) -> bool {
 }
 
 impl HttpTransport {
+    pub fn change_staff_role(
+        &self,
+        reviewed: &ReviewedStaffAccess,
+        role: AccountRole,
+    ) -> Result<ReviewedStaffAccess, StaffAccountError> {
+        let (Some(account_id), Some(previous)) =
+            (&reviewed.account_id, &reviewed.access.account_role)
+        else {
+            return Err(StaffAccountError::InvalidDetails);
+        };
+        let id = parse_id(&reviewed.access.staff_id)?.to_string();
+        let path = format!("/admin/staff/{id}/account-role/reviewed");
+        let body = serde_json::json!({
+            "generation": reviewed.generation, "accountId": account_id, "expectedRole": previous,
+            "version": reviewed.access.version, "role": role,
+        });
+        let saved: ReviewedStaffAccess = read_response_with(
+            self.send_put_json(&path, &body)?,
+            |status, retry_after, body| {
+                let future_appointments = serde_json::from_str::<serde_json::Value>(body)
+                    .is_ok_and(|value| {
+                        value
+                            .pointer("/error/code")
+                            .and_then(serde_json::Value::as_str)
+                            == Some("has_future_appointments")
+                    });
+                if status == 409 && future_appointments {
+                    StaffAccountError::FutureAppointments
+                } else {
+                    classify_status(status, retry_after, body, false).into()
+                }
+            },
+        )?;
+        let saved = saved.verify(&id)?;
+        if saved.generation != reviewed.generation
+            || saved.account_id != reviewed.account_id
+            || saved.account_email != reviewed.account_email
+            || saved.access.account_role.as_deref() != Some(role.as_str())
+            || saved.access.version <= reviewed.access.version
+        {
+            return Err(
+                TransportError::Server("Unexpected role change acknowledgement".into()).into(),
+            );
+        }
+        Ok(saved)
+    }
+
     pub fn link_staff_account(
         &self,
         reviewed: &ReviewedStaffAccess,

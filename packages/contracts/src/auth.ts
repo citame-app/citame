@@ -69,6 +69,15 @@ export type StaffAccountResponse = z.infer<typeof staffAccountResponseSchema>;
 /** Owner-only: promotes or demotes an existing account. */
 export const changeRoleRequestSchema = z.object({ role: userRoleSchema });
 export type ChangeRoleRequest = z.infer<typeof changeRoleRequestSchema>;
+export const reviewedStaffRoleInputSchema = changeRoleRequestSchema
+  .extend({
+    generation: syncGenerationSchema,
+    accountId: z.string().min(1).max(256),
+    expectedRole: userRoleSchema,
+    version: z.number().int().positive(),
+  })
+  .strict();
+export type ReviewedStaffRoleInput = z.infer<typeof reviewedStaffRoleInputSchema>;
 
 export const changeRoleResponseSchema = z.object({
   userId: z.string(),

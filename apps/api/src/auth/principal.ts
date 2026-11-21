@@ -136,6 +136,7 @@ export function requireAuth(
         !DESKTOP_PROXY_ROUTE.test(path) ||
         (path === "/appointments/desktop-booking" && method !== "POST") ||
         (path === "/admin/staff-accounts" && method !== "POST") ||
+        (path.endsWith("/account-role/reviewed") && method !== "PUT") ||
         (path.startsWith("/admin/services/") &&
           method !==
             (path === "/admin/services/reviewed" || path.endsWith("/resources/reviewed")

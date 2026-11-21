@@ -2,6 +2,8 @@ import {
   type ChangeRoleResponse,
   changeRoleRequestSchema,
   createStaffAccountRequestSchema,
+  idSchema,
+  reviewedStaffRoleInputSchema,
 } from "@sob/contracts";
 import { Hono } from "hono";
 import { createMiddleware } from "hono/factory";
@@ -56,6 +58,25 @@ export function adminRoutes(deps: AppDeps, auth: Auth) {
         );
         const response: ChangeRoleResponse = result;
         return c.json(response);
+      })
+      .put("/staff/:id/account-role/reviewed", ownerOnly, async (c) => {
+        const principal = c.get("principal");
+        const staffId = parseOrThrow(idSchema, c.req.param("id"));
+        const input = parseOrThrow(reviewedStaffRoleInputSchema, await readJson(c));
+        if (input.accountId === principal.userId)
+          throw new DomainError("forbidden", "You cannot change your own role");
+        const result = await assignRole(
+          db,
+          input.accountId,
+          input.role,
+          { actorUserId: principal.userId },
+          {
+            now: now(),
+            review: { staffId, generation: deps.config.syncReplicaGeneration, input },
+          },
+        );
+        if (!result.reviewedAccess) throw new Error("Reviewed role mutation returned no access");
+        return c.json(result.reviewedAccess);
       })
   );
 }

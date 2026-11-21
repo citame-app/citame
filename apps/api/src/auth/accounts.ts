@@ -1,4 +1,9 @@
-import type { CreateStaffAccountRequest, StaffAccountResponse, UserRole } from "@sob/contracts";
+import type {
+  CreateStaffAccountRequest,
+  ReviewedStaffRoleInput,
+  StaffAccountResponse,
+  UserRole,
+} from "@sob/contracts";
 import { account, clientProfile, type Database, pgErrorCode, staffProfile, user } from "@sob/db";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -280,11 +285,20 @@ export async function assignRole(
   userId: string,
   role: UserRole,
   audit?: { actorUserId: string },
-  options: { now?: Date } = {},
-): Promise<AccountResult> {
+  options: {
+    now?: Date;
+    review?: { staffId: string; generation: string; input: ReviewedStaffRoleInput };
+  } = {},
+) {
   return db.transaction(async (tx) => {
+    const review = options.review;
     // Demoting to client deactivates the calendar, which must not strand upcoming bookings.
-    if (role === "client") {
+    if (review) {
+      if (review.input.generation !== review.generation)
+        throw new DomainError("sync_generation_changed", "The centre was restored; review access");
+      // Keep calendar, user, and profile locks in the same order used by scheduling and access writes.
+      await lockCalendars(tx, [review.staffId]);
+    } else if (role === "client") {
       const [calendar] = await tx
         .select({ id: staffProfile.id })
         .from(staffProfile)
@@ -311,6 +325,23 @@ export async function assignRole(
       throw new DomainError("forbidden", "Only the owner can change account roles");
     const row = accounts.find((account) => account.id === userId);
     if (!row) throw new DomainError("not_found", `User ${userId} not found`);
+    if (review) {
+      const [staff] = await tx
+        .select()
+        .from(staffProfile)
+        .where(eq(staffProfile.id, review.staffId))
+        .for("update");
+      if (
+        !staff ||
+        staff.deletedAt ||
+        staff.userId !== userId ||
+        staff.accessVersion !== review.input.version ||
+        row.role !== review.input.expectedRole
+      )
+        throw new DomainError("version_conflict", "The linked account changed; review access");
+      if (role === "client" && staff.active)
+        await assertNoFutureAppointments(tx, staff.id, options.now ?? new Date());
+    }
     await tx.update(user).set({ role }).where(eq(user.id, userId));
 
     if (role === "staff") await ensureStaffProfile(tx, userId, row.name);
@@ -348,6 +379,14 @@ export async function assignRole(
       staffId: staff?.id ?? null,
       clientId: client?.id ?? null,
       invited: false,
+      ...(review && {
+        reviewedAccess: await getReviewedStaffAccess(
+          tx,
+          review.staffId,
+          { role: "owner" },
+          review.generation,
+        ),
+      }),
     };
   });
 }
