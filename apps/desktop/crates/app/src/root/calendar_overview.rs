@@ -1,6 +1,5 @@
 use super::*;
 use chrono::{Days, Months};
-use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CalendarMode {
@@ -89,7 +88,21 @@ fn month_range(date: NaiveDate) -> Option<(NaiveDate, u32)> {
 }
 
 impl Root {
-    pub(super) fn render_overview_filter(&self, cx: &mut Context<Self>) -> gpui::Div {
+    pub(super) fn includes_calendar_staff(&self, id: &str) -> bool {
+        self.overview_staff.is_empty() || self.overview_staff.contains(id)
+    }
+
+    pub(super) fn preferred_calendar_staff(&self) -> Option<&str> {
+        if self.calendar_mode == CalendarMode::Week {
+            return (!self.week_staff_id.is_empty()).then_some(&self.week_staff_id);
+        }
+        self.staff
+            .iter()
+            .find(|member| self.overview_staff.contains(&member.id))
+            .map(|m| m.id.as_str())
+    }
+
+    pub(super) fn render_overview_staff_filter(&self, cx: &mut Context<Self>) -> gpui::Div {
         div()
             .flex()
             .flex_wrap()
@@ -107,6 +120,7 @@ impl Root {
                 },
                 cx.listener(|root, _, _, cx| {
                     root.overview_staff.clear();
+                    root.calendar_layout.take();
                     cx.notify();
                 }),
             ))
@@ -124,18 +138,90 @@ impl Root {
                         if !root.overview_staff.remove(&id) {
                             root.overview_staff.insert(id.clone());
                         }
+                        root.calendar_layout.take();
                         cx.notify();
                     }),
                 )
             }))
     }
 
+    pub(super) fn render_overview_filter(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let statuses = [
+            (None, Key::SalesAllStatuses),
+            (Some(AppointmentStatus::Booked), Key::ReportBooked),
+            (Some(AppointmentStatus::Completed), Key::Completed),
+            (Some(AppointmentStatus::NoShow), Key::NoShow),
+            (Some(AppointmentStatus::Cancelled), Key::CalendarCancelled),
+        ];
+        div()
+            .flex()
+            .flex_col()
+            .child(self.render_overview_staff_filter(cx))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .px_4()
+                    .pb_2()
+                    .child(div().w(px(225.)).child(self.overview_search.clone()))
+                    .children(
+                        statuses
+                            .into_iter()
+                            .enumerate()
+                            .filter(|(_, (status, _))| {
+                                self.overview_show_cancelled
+                                    || *status != Some(AppointmentStatus::Cancelled)
+                            })
+                            .map(|(index, (status, label))| {
+                                self.button(
+                                    ("overview-status", index),
+                                    self.t(label),
+                                    if self.overview_status == status {
+                                        Kind::Primary
+                                    } else {
+                                        Kind::Ghost
+                                    },
+                                    cx.listener(move |root, _, _, cx| {
+                                        root.overview_status = status;
+                                        cx.notify();
+                                    }),
+                                )
+                            }),
+                    )
+                    .child(self.button(
+                        "overview-show-cancelled",
+                        self.t(if self.overview_show_cancelled {
+                            Key::CalendarHideCancelled
+                        } else {
+                            Key::CalendarShowCancelled
+                        }),
+                        Kind::Ghost,
+                        cx.listener(|root, _, _, cx| {
+                            root.overview_show_cancelled = !root.overview_show_cancelled;
+                            if !root.overview_show_cancelled
+                                && root.overview_status == Some(AppointmentStatus::Cancelled)
+                            {
+                                root.overview_status = None;
+                            }
+                            cx.notify();
+                        }),
+                    )),
+            )
+    }
+
     pub(super) fn render_calendar_overview(&self, cx: &mut Context<Self>) -> Stateful<gpui::Div> {
         let today = self.calendar_now.with_timezone(&self.tz).date_naive();
+        let filter = calendar::OverviewFilter::new(
+            self.overview_search.read(cx).text(),
+            self.overview_status,
+            self.overview_show_cancelled,
+        );
         let content = if self.calendar_mode == CalendarMode::Month {
-            self.render_month_overview(today, cx)
+            self.render_month_overview(today, &filter, cx)
         } else {
-            self.render_list_overview(today, cx)
+            self.render_list_overview(today, &filter, cx)
         };
         div()
             .id(SharedString::from(format!(
@@ -151,11 +237,21 @@ impl Root {
             .child(content)
     }
 
-    fn overview_items<'a>(&self, day: &'a DayView) -> Vec<(&'a Staff, &'a CalendarItem)> {
+    fn overview_items<'a>(
+        &self,
+        day: &'a DayView,
+        filter: &calendar::OverviewFilter,
+    ) -> Vec<(&'a Staff, &'a CalendarItem)> {
         let mut rows = Vec::new();
         for column in &day.columns {
-            if self.overview_staff.is_empty() || self.overview_staff.contains(&column.staff.id) {
-                rows.extend(column.items.iter().map(|item| (&column.staff, item)));
+            if self.includes_calendar_staff(&column.staff.id) {
+                rows.extend(
+                    column
+                        .items
+                        .iter()
+                        .filter(|item| filter.matches(item))
+                        .map(|item| (&column.staff, item)),
+                );
             }
         }
         rows.sort_by(|(_, a), (_, b)| {
@@ -192,7 +288,12 @@ impl Root {
         self.set_calendar_mode(CalendarMode::Day, cx);
     }
 
-    fn render_month_overview(&self, today: NaiveDate, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_month_overview(
+        &self,
+        today: NaiveDate,
+        filter: &calendar::OverviewFilter,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         div()
             .min_w(px(875.))
             .flex()
@@ -220,7 +321,7 @@ impl Root {
                     .border_color(theme::line())
                     .children(week.iter().map(|day| {
                         let date = day.date;
-                        let rows = self.overview_items(day);
+                        let rows = self.overview_items(day, filter);
                         let day_label = if date == today {
                             self.t(Key::Today).to_owned()
                         } else {
@@ -261,13 +362,16 @@ impl Root {
                             .child(
                                 div()
                                     .id(SharedString::from(format!("overview-count-{date}")))
+                                    .debug_selector(|| format!("overview-count-{date}"))
                                     .text_xs()
                                     .text_color(theme::muted())
                                     .cursor_pointer()
                                     .hover(|style| style.text_color(theme::accent()))
                                     .on_click(cx.listener(move |root, _, _, cx| {
                                         if matches!(root.overlay, Overlay::None) {
-                                            root.open_overview_day(date, cx);
+                                            root.date = date;
+                                            root.pending_local_today = false;
+                                            root.set_calendar_mode(CalendarMode::List, cx);
                                         }
                                     }))
                                     .child(count_label),
@@ -276,22 +380,20 @@ impl Root {
             }))
     }
 
-    fn render_list_overview(&self, today: NaiveDate, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_list_overview(
+        &self,
+        today: NaiveDate,
+        filter: &calendar::OverviewFilter,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         div()
             .flex()
             .flex_col()
             .gap_3()
             .p_4()
             .children(self.period_views.iter().map(|day| {
-                let rows = self.overview_items(day);
-                let mut totals = BTreeMap::<&str, i64>::new();
-                for (_, item) in &rows {
-                    if item.appointment.status != AppointmentStatus::Cancelled {
-                        for service in &item.appointment.services {
-                            *totals.entry(&service.currency).or_default() += service.price_cents;
-                        }
-                    }
-                }
+                let rows = self.overview_items(day, filter);
+                let totals = calendar::scheduled_value(rows.iter().map(|(_, item)| *item));
                 let scheduled = totals
                     .iter()
                     .map(|(currency, amount)| i18n::amount_label(self.locale, *amount, currency))
@@ -467,12 +569,12 @@ mod tests {
         let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
         cx.simulate_resize(gpui::size(px(1100.), px(880.)));
         let date: NaiveDate = "2026-03-09".parse().unwrap();
-        let selector = format!("overview-appointment-{date}-{EXISTING}");
+        let selector = "overview-appointment-2026-03-09-01a1d81e-0000-7000-8000-0000000000e1";
         for mode in [CalendarMode::Month, CalendarMode::List] {
             root.update(cx, |root, cx| root.set_calendar_mode(mode, cx));
             cx.run_until_parked();
             let card = cx
-                .debug_bounds(&selector)
+                .debug_bounds(selector)
                 .expect("the local booking is visible");
             cx.simulate_click(card.center(), Default::default());
             cx.run_until_parked();
@@ -505,7 +607,10 @@ mod tests {
                 .iter()
                 .find(|day| day.date == date)
                 .unwrap();
-            assert!(root.overview_items(day).is_empty());
+            assert!(
+                root.overview_items(day, &calendar::OverviewFilter::default())
+                    .is_empty()
+            );
             assert!(
                 root.cloud_calendar_url()
                     .unwrap()
@@ -514,6 +619,63 @@ mod tests {
             );
             root.open_overview_day(date, cx);
             assert_eq!(root.calendar_mode, CalendarMode::Day);
+            assert_eq!(root.calendar_columns().len(), 1);
+            assert_eq!(root.calendar_columns()[0].1.staff.id, other);
+        });
+    }
+
+    #[gpui::test]
+    async fn month_overflow_keeps_the_selected_staff_and_included_cancellations(
+        cx: &mut TestAppContext,
+    ) {
+        let (_directory, config) = desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        cx.simulate_resize(gpui::size(px(1100.), px(950.)));
+        root.update(cx, |root, cx| {
+            let store = &mut root.svc.store;
+            let appointment = store.appointment(EXISTING).unwrap().unwrap();
+            let mut changes = Vec::new();
+            for position in 1..=3 {
+                let sequence = 20 + position;
+                let mut row = appointment.clone();
+                row.id = uuid::Uuid::now_v7().to_string();
+                row.starts_at += Span::hours(position);
+                row.ends_at += Span::hours(position);
+                if position == 3 {
+                    row.status = AppointmentStatus::Cancelled;
+                }
+                changes.push(RawChange {
+                    seq: sequence,
+                    entity: "appointment".into(),
+                    id: row.id.clone(),
+                    op: "upsert".into(),
+                    data: Some(serde_json::to_value(row).unwrap()),
+                });
+            }
+            store.apply_page(&changes, 23).unwrap();
+            root.overview_staff.insert(appointment.staff_id);
+            root.overview_show_cancelled = true;
+            root.set_calendar_mode(CalendarMode::Month, cx);
+        });
+        cx.run_until_parked();
+        let count = cx.debug_bounds("overview-count-2026-03-09").unwrap();
+        cx.simulate_click(count.center(), Default::default());
+        cx.run_until_parked();
+        root.update(cx, |root, _| {
+            assert_eq!(root.calendar_mode, CalendarMode::List);
+            assert_eq!(root.overview_staff.len(), 1);
+            let query =
+                calendar::OverviewFilter::new("haircut", None, root.overview_show_cancelled);
+            let items = root.overview_items(&root.period_views[0], &query);
+            assert_eq!(items.len(), 4);
+            assert_eq!(
+                items.last().unwrap().1.appointment.status,
+                AppointmentStatus::Cancelled
+            );
+            assert_eq!(
+                calendar::scheduled_value(items.iter().map(|(_, item)| *item))["ARS"],
+                3
+            );
         });
     }
 
@@ -560,7 +722,14 @@ mod tests {
                 );
                 root.date = after;
                 root.set_calendar_mode(CalendarMode::List, cx);
-                assert_eq!(root.overview_items(&root.period_views[0]).len(), 1);
+                assert_eq!(
+                    root.overview_items(
+                        &root.period_views[0],
+                        &calendar::OverviewFilter::new("", None, true)
+                    )
+                    .len(),
+                    1
+                );
             })
             .unwrap();
     }

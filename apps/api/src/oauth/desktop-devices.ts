@@ -55,8 +55,16 @@ const loopbackOrigin = z
   });
 const calendarTarget = z.object({
   date: z.iso.date(),
-  view: z.enum(["day", "week"]),
-  staff: deviceId.optional(),
+  view: z.enum(["day", "week", "month", "list"]),
+  staff: z
+    .string()
+    .min(36)
+    .max(3699)
+    .refine((input) => {
+      const ids = input.split(",");
+      return ids.length <= 100 && ids.every((id) => deviceId.safeParse(id).success);
+    })
+    .optional(),
 });
 const calendarDestination = { calendar: calendarTarget };
 const workspaceDestination = { workspace: desktopWorkspaceSchema };

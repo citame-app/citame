@@ -347,7 +347,7 @@ assert.equal(otherBrowserUser.status, 200);
 const otherUser = meResponseSchema.parse(await otherBrowserUser.json()).user;
 assert.equal(otherUser.role, "client");
 assert.notEqual(otherUser.id, desktopUser.id);
-const redeem = () =>
+const redeem = (code = ticket) =>
   request(`${desktopResource}/browser`, {
     method: "POST",
     headers: {
@@ -355,7 +355,7 @@ const redeem = () =>
       "content-type": "application/x-www-form-urlencoded",
       cookie: otherBrowserCookie,
     },
-    body: new URLSearchParams({ ticket }).toString(),
+    body: new URLSearchParams({ ticket: code }).toString(),
   });
 const browserSession = await redeem();
 assert.equal(browserSession.status, 303, "Open the calendar from the linked device");
@@ -377,6 +377,34 @@ const browserPage = await request(`${origin}${browserSession.headers.get("locati
 });
 assert.equal(browserPage.status, 200, "The browser session can open the agenda");
 assert.equal((await redeem()).status, 401, "The handoff cannot be used twice");
+const selectedStaff = [
+  "a4a08ac9-d3ce-4c1b-be6a-eb8a764cf78f",
+  "716df2ff-67ba-473a-8c17-c1bfd5b7cf1d",
+].join(",");
+for (const view of ["month", "list"]) {
+  const calendar = { date: "2026-11-18", view, staff: selectedStaff };
+  const response = await deviceRequest("browser-ticket", {
+    proof: reception.proof("browser-ticket", [browserOrigin, calendar.date, view, selectedStaff]),
+    origin: browserOrigin,
+    calendar,
+  });
+  assert.equal(response.status, 200, `Issue a ${view} handoff with both professionals`);
+  const { ticket: code } = (await response.json()) as { ticket: string };
+  const session = await redeem(code);
+  assert.equal(session.status, 303);
+  const location = new URL(session.headers.get("location") ?? "", origin);
+  assert.equal(location.pathname, "/admin/calendar");
+  assert.equal(location.searchParams.get("view"), view);
+  assert.equal(location.searchParams.get("date"), calendar.date);
+  assert.equal(location.searchParams.get("staff"), selectedStaff);
+  const sessionCookie = session.headers
+    .getSetCookie()
+    .map((value) => value.split(";")[0])
+    .join("; ");
+  const user = await request(`${origin}/api/me`, { headers: { cookie: sessionCookie } });
+  assert.equal(user.status, 200);
+  assert.deepEqual(meResponseSchema.parse(await user.json()).user, desktopUser);
+}
 assert.deepEqual(
   new Set(await linkedDeviceIds()),
   new Set([reception.deviceId, office.deviceId, reserve.deviceId]),

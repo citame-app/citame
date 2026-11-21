@@ -213,6 +213,7 @@ impl Root {
     ) {
         self.overlay = Overlay::None;
         self.calendar_mode = CalendarMode::Day;
+        self.overview_staff.clear();
         self.pending_local_today = false;
         self.date = appointment.starts_at.with_timezone(&self.tz).date_naive();
         self.svc.wake(Wake::Manual);

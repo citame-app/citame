@@ -309,6 +309,10 @@ pub struct Root {
     calendar_mode: CalendarMode,
     period_views: Vec<DayView>,
     overview_staff: BTreeSet<String>,
+    overview_search: Entity<TextField>,
+    overview_status: Option<AppointmentStatus>,
+    overview_show_cancelled: bool,
+
     calendar_layout: OnceCell<CalendarLayout>,
     slot_drag: Option<slots::SlotDrag>,
     horizontal_scroll: scrollbar::Scrollbar,
@@ -364,6 +368,9 @@ impl Root {
                 }
             }),
         );
+        let overview_search =
+            cx.new(|cx| TextField::new(i18n::t(locale, Key::CalendarOverviewSearch), false, cx));
+        subs.push(cx.observe(&overview_search, |_, _, cx| cx.notify()));
         let mut root = Self {
             svc,
             locale,
@@ -385,6 +392,9 @@ impl Root {
             calendar_mode: CalendarMode::Day,
             period_views: vec![],
             overview_staff: BTreeSet::new(),
+            overview_search,
+            overview_status: None,
+            overview_show_cancelled: false,
             calendar_layout: OnceCell::new(),
             slot_drag: None,
             horizontal_scroll: scrollbar::Scrollbar::default(),
@@ -567,6 +577,10 @@ impl Root {
         self.calendar_mode = CalendarMode::Day;
         self.week_staff_id.clear();
         self.overview_staff.clear();
+        self.overview_search
+            .update(cx, |field, cx| field.set_text("", cx));
+        self.overview_status = None;
+        self.overview_show_cancelled = false;
         self.notices.clear();
         self.notice_cursor = self.svc.store.booking_notice_head().unwrap_or_default();
         if let Err(e) = self.svc.start_sync() {
@@ -894,7 +908,13 @@ impl Root {
         } else {
             self.view
                 .as_ref()
-                .map(|view| view.columns.iter().map(|col| (view.date, col)).collect())
+                .map(|view| {
+                    view.columns
+                        .iter()
+                        .filter(|column| self.includes_calendar_staff(&column.staff.id))
+                        .map(|col| (view.date, col))
+                        .collect()
+                })
                 .unwrap_or_default()
         }
     }
@@ -966,7 +986,10 @@ impl Root {
             date: self.date,
             minutes: 10 * 60,
             selected_end: None,
-            staff_id: self.staff.first().map(|s| s.id.clone()),
+            staff_id: self
+                .preferred_calendar_staff()
+                .or_else(|| self.staff.first().map(|s| s.id.as_str()))
+                .map(str::to_owned),
             services: vec![],
             selected_quotes: Default::default(),
             client_id: None,
@@ -1642,7 +1665,7 @@ impl Root {
             .append_pair("view", self.calendar_mode.route_name());
         if self.calendar_mode == CalendarMode::Week && !self.week_staff_id.is_empty() {
             query.append_pair("staff", &self.week_staff_id);
-        } else if self.calendar_mode.is_overview() && !self.overview_staff.is_empty() {
+        } else if self.calendar_mode != CalendarMode::Week && !self.overview_staff.is_empty() {
             query.append_pair(
                 "staff",
                 &self
@@ -1662,7 +1685,7 @@ impl Root {
             .flex()
             .flex_wrap()
             .items_center()
-            .gap_4()
+            .gap_2()
             .min_h(px(60.))
             .py_2()
             .px_4()
@@ -1717,18 +1740,25 @@ impl Root {
                             )),
                     ),
             )
-            .children(CalendarMode::ALL.map(|mode| {
-                self.button(
-                    mode.button_id(),
-                    self.t(mode.label()),
-                    if self.calendar_mode == mode {
-                        Kind::Primary
-                    } else {
-                        Kind::Ghost
-                    },
-                    cx.listener(move |this, _, _, cx| this.set_calendar_mode(mode, cx)),
-                )
-            }))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .children(CalendarMode::ALL.map(|mode| {
+                        self.button(
+                            mode.button_id(),
+                            self.t(mode.label()),
+                            if self.calendar_mode == mode {
+                                Kind::Primary
+                            } else {
+                                Kind::Ghost
+                            },
+                            cx.listener(move |this, _, _, cx| this.set_calendar_mode(mode, cx)),
+                        )
+                        .px_2()
+                    })),
+            )
             .when(self.cloud_calendar_url().is_some(), |d| {
                 d.child(
                     self.button(
@@ -3989,7 +4019,13 @@ impl Render for Root {
                                 .child(self.render_calendar_overview(cx))
                         })
                         .when(!self.calendar_mode.is_overview(), |frame| {
-                            frame.child(self.render_calendar(window.viewport_size().height, cx))
+                            frame
+                                .when(
+                                    self.calendar_mode == CalendarMode::Day
+                                        && !self.overview_staff.is_empty(),
+                                    |frame| frame.child(self.render_overview_staff_filter(cx)),
+                                )
+                                .child(self.render_calendar(window.viewport_size().height, cx))
                         })
                         .when(!self.notices.is_empty(), |d| {
                             d.child(self.render_notices(cx))

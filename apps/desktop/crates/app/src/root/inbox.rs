@@ -289,6 +289,7 @@ impl Root {
                                             cx.listener(move |this, _, _, cx| {
                                                 this.overlay = Overlay::None;
                                                 this.calendar_mode = CalendarMode::Day;
+                                                this.overview_staff.clear();
                                                 this.pending_local_today = false;
                                                 this.date =
                                                     starts.with_timezone(&this.tz).date_naive();

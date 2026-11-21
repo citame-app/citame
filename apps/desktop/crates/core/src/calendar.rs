@@ -1,6 +1,6 @@
 //! Local calendar read model: server mirror plus the user's pending edits (the outbox).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
 use chrono_tz::{GapInfo, Tz};
@@ -47,6 +47,51 @@ pub struct CalendarItem {
     pub pending: bool,
     /// True when a rejected edit of this appointment awaits the user's decision.
     pub conflict: bool,
+}
+
+#[derive(Default)]
+pub struct OverviewFilter {
+    search: String,
+    status: Option<AppointmentStatus>,
+    show_cancelled: bool,
+}
+
+impl OverviewFilter {
+    pub fn new(search: &str, status: Option<AppointmentStatus>, show_cancelled: bool) -> Self {
+        Self {
+            search: search.trim().to_lowercase(),
+            status,
+            show_cancelled,
+        }
+    }
+
+    pub fn matches(&self, item: &CalendarItem) -> bool {
+        let appointment = &item.appointment;
+        (self.show_cancelled || appointment.status != AppointmentStatus::Cancelled)
+            && self
+                .status
+                .is_none_or(|status| appointment.status == status)
+            && (self.search.is_empty()
+                || item.client_name.to_lowercase().contains(&self.search)
+                || appointment
+                    .services
+                    .iter()
+                    .any(|service| service.name.to_lowercase().contains(&self.search)))
+    }
+}
+
+pub fn scheduled_value<'a>(
+    items: impl IntoIterator<Item = &'a CalendarItem>,
+) -> BTreeMap<&'a str, i64> {
+    let mut totals = BTreeMap::new();
+    for item in items {
+        if item.appointment.status != AppointmentStatus::Cancelled {
+            for service in &item.appointment.services {
+                *totals.entry(service.currency.as_str()).or_default() += service.price_cents;
+            }
+        }
+    }
+    totals
 }
 
 #[derive(Debug, Clone, PartialEq)]
