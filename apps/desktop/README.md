@@ -112,7 +112,7 @@ Owners and managers can open **Reports → Clients**. The period and team member
 
 ### Inventory
 
-**Inventory** searches products by name, SKU or barcode and can include archived products. The detail shows the latest stock and the optional amount and unit of content per pack. Owners and managers can change or clear the pack content without recording a stock movement. Open **Stock history** to see the shared ledger and record deliveries, consumption and physical counts. A count replaces the physical total and respects the units reserved for sales. Catalog and idle stock views refresh through sync when connected.
+**Inventory** searches products by name, SKU or barcode and can include archived products. The detail shows the latest stock and the optional amount and unit of content per pack. Owners and managers can change or clear the pack content without recording a stock movement. Open **Stock history** to see the shared ledger and record deliveries, consumption and physical counts. A count replaces the physical stock in the main warehouse and respects the units reserved for sales. Catalog and idle stock views refresh through sync when connected.
 
 Open **Stock movements** to see the history across products. Search by name, SKU or reason, or choose a movement type. Opening a product keeps the filter and page when you return. New movements are announced while you browse. Choose **Show latest movements** to include them and return to page one. **Save CSV** exports the matching rows from the current view using your inventory permissions. This view requires a server connection.
 

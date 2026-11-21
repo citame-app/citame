@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import {
+  checkoutSchema,
   productListSchema,
   productPhotoVersionSchema,
   productSchema,
@@ -7,7 +8,9 @@ import {
   stockLedgerSchema,
   stockReceiptInputSchema,
   stockReceiptSchema,
+  stockTransferSchema,
   supplierSchema,
+  warehouseStockSchema,
 } from "@sob/contracts";
 import { retailProduct } from "@sob/db";
 import { eq, sql } from "drizzle-orm";
@@ -333,6 +336,185 @@ test("purchase orders link versioned partial receipts to stock without over-rece
   expect(await (await call(staff, `${orders}?search=SUP-42&status=received`)).json()).toMatchObject(
     { orders: [expect.objectContaining({ id })] },
   );
+});
+
+test("warehouses fence reservations, receive documents and transfer atomically without changing total stock", async () => {
+  const item = await product();
+  const other = await product({ sku: "WAREHOUSE-SERUM", openingStock: 2 });
+  const generation = item.inventoryGeneration;
+  const root = "/admin/inventory";
+  const warehouse = crypto.randomUUID();
+  const second = crypto.randomUUID();
+  const fields = { generation, version: 0, name: "Synthetic back room", active: true };
+  expect((await call(client, `${root}/warehouses`)).status).toBe(403);
+  expect((await call(staff, `${root}/warehouses/${warehouse}`, "PUT", fields)).status).toBe(403);
+  expect((await call(owner, `${root}/warehouses/${warehouse}`, "PUT", fields)).status).toBe(200);
+  expect(
+    (
+      await call(owner, `${root}/warehouses/${second}`, "PUT", {
+        ...fields,
+        name: "Synthetic cabinet",
+      })
+    ).status,
+  ).toBe(200);
+  const read = async (id: string, sku: string) => {
+    const response = await call(staff, `${root}/warehouse-stock?warehouseId=${id}&search=${sku}`);
+    expect(response.status, await response.clone().text()).toBe(200);
+    return warehouseStockSchema.parse(await response.json()).products[0];
+  };
+  const cart = await call(owner, "/admin/commerce/checkouts", "POST", {
+    idempotencyKey: crypto.randomUUID(),
+    lines: [{ kind: "product", productId: item.id, quantity: 2 }],
+  });
+  expect(cart.status, await cart.clone().text()).toBe(201);
+  const checkout = checkoutSchema.parse(await cart.json());
+  const starting = await read("main", "SHAMPOO-250");
+  expect(starting).toMatchObject({ onHand: 5, reserved: 2, version: 2 });
+
+  const command = {
+    sourceId: null,
+    destinationId: warehouse,
+    reason: "Replenish back room",
+    generation,
+    lines: [
+      { productId: item.id, quantity: 3, version: 2 },
+      { productId: other.id, quantity: 1, version: 1 },
+    ],
+  };
+  const transferPath = `${root}/transfers/${crypto.randomUUID()}`;
+  expect((await call(staff, transferPath, "PUT", command)).status).toBe(403);
+  expect(
+    (
+      await call(owner, transferPath, "PUT", {
+        ...command,
+        lines: [{ ...command.lines[0], quantity: 4 }],
+      })
+    ).status,
+  ).toBe(409);
+  expect(
+    (
+      await call(owner, transferPath, "PUT", {
+        ...command,
+        lines: [...command.lines.slice(0, 1), { ...command.lines[1], version: 2 }],
+      })
+    ).status,
+  ).toBe(409);
+  expect(await read(warehouse, "SHAMPOO-250")).toBeUndefined();
+  const attempts = await Promise.all([
+    call(owner, transferPath, "PUT", command),
+    call(owner, transferPath, "PUT", command),
+  ]);
+  for (const response of attempts) expect(response.status, await response.clone().text()).toBe(200);
+  const doc = stockTransferSchema.parse(await attempts[0]?.json());
+  expect(stockTransferSchema.parse(await attempts[1]?.json())).toEqual(doc);
+  expect(stockTransferSchema.parse(await (await call(staff, transferPath)).json())).toEqual(doc);
+  expect((await call(owner, transferPath, "PUT", { ...command, reason: "Changed" })).status).toBe(
+    409,
+  );
+  expect(await read(warehouse, "SHAMPOO-250")).toMatchObject({
+    onHand: 3,
+    reserved: 0,
+    version: 3,
+  });
+  expect(await read("main", "SHAMPOO-250")).toMatchObject({ onHand: 2, reserved: 2, version: 3 });
+  const physical = await call(staff, `${root}/products/${item.id}`);
+  expect(await physical.json()).toMatchObject({
+    stockOnHand: 5,
+    stockAllocated: 3,
+    sellableAvailable: 0,
+  });
+  expect(
+    (
+      await call(owner, "/admin/commerce/checkouts", "POST", {
+        idempotencyKey: crypto.randomUUID(),
+        lines: [{ kind: "product", productId: item.id, quantity: 1 }],
+      })
+    ).status,
+  ).toBe(409);
+  expect(
+    (
+      await call(owner, `${root}/warehouses/${warehouse}`, "PUT", {
+        ...fields,
+        version: 1,
+        active: false,
+      })
+    ).status,
+  ).toBe(409);
+
+  expect(
+    (
+      await call(owner, `${root}/products/${item.id}/movements`, "POST", {
+        kind: "count",
+        generation,
+        quantity: 5,
+        version: 3,
+        reason: "Unscoped count",
+        idempotencyKey: crypto.randomUUID(),
+      })
+    ).status,
+  ).toBe(409);
+  const movement = {
+    kind: "count",
+    generation,
+    quantity: 2,
+    version: 3,
+    warehouseId: warehouse,
+    reason: "Count the room",
+    idempotencyKey: crypto.randomUUID(),
+  };
+  expect(
+    (await call(owner, `${root}/products/${item.id}/movements`, "POST", movement)).status,
+  ).toBe(201);
+  expect(await read(warehouse, "SHAMPOO-250")).toMatchObject({ onHand: 2, version: 4 });
+  const receipt = await call(owner, `${root}/receipts`, "POST", {
+    warehouseId: second,
+    receivedOn: "2026-02-01",
+    supplierId: null,
+    invoiceReference: "WAREHOUSE-IN",
+    notes: null,
+    actorUserId: owner.userId,
+    generation,
+    idempotencyKey: crypto.randomUUID(),
+    lines: [{ productId: item.id, version: 4, quantity: 5 }],
+  });
+  expect(receipt.status, await receipt.clone().text()).toBe(201);
+  expect(stockReceiptSchema.parse(await receipt.json())).toMatchObject({
+    warehouseId: second,
+    warehouseName: "Synthetic cabinet",
+  });
+  expect(await read(second, "SHAMPOO-250")).toMatchObject({ onHand: 5, version: 5 });
+  const relocated = await call(owner, `${root}/transfers/${crypto.randomUUID()}`, "PUT", {
+    ...command,
+    sourceId: warehouse,
+    destinationId: second,
+    lines: [
+      { productId: item.id, quantity: 2, version: 5 },
+      { productId: other.id, quantity: 1, version: 2 },
+    ],
+  });
+  expect(relocated.status, await relocated.clone().text()).toBe(200);
+  const archived = await call(owner, `${root}/warehouses/${warehouse}`, "PUT", {
+    ...fields,
+    version: 1,
+    active: false,
+  });
+  expect(archived.status, await archived.clone().text()).toBe(200);
+  expect(await read(second, "SHAMPOO-250")).toMatchObject({ onHand: 7, version: 6 });
+  const ledger = stockLedgerSchema.parse(
+    await (await call(staff, `${root}/movements?kind=transfer&warehouseId=${warehouse}`)).json(),
+  );
+  expect(ledger.movements).toHaveLength(4);
+  expect(ledger.movements.map((row) => row.warehouseId)).toEqual(Array(4).fill(warehouse));
+  expect(ledger.movements.filter((row) => row.transferId === doc.id)).toHaveLength(2);
+  expect(await (await call(owner, `${root}/products/${item.id}`)).json()).toMatchObject({
+    stockOnHand: 9,
+    stockReserved: 2,
+    stockAllocated: 7,
+  });
+  expect(
+    (await call(owner, `/admin/commerce/checkouts/${checkout.id}/void`, "POST", {})).status,
+  ).toBe(200);
+  expect(await read("main", "SHAMPOO-250")).toMatchObject({ onHand: 2, reserved: 0 });
 });
 
 test("product photos are private, normalized and protected against stale writes", async () => {
@@ -706,9 +888,9 @@ test("movement CSV keeps microsecond cursors, matches both filters and hides res
   expect(new Set(rows.map((row) => row.split(",")[1])).size).toBe(501);
   expect(rows[0]).toStartWith('"2026-03-09T12:00:00.000501Z"');
   expect(rows.at(-1)).toStartWith('"2026-03-09T12:00:00.000001Z"');
-  expect(rows.every((row) => row.includes(`"'=2+2 inventory test"`) && row.endsWith('"321"'))).toBe(
-    true,
-  );
+  expect(
+    rows.every((row) => row.includes(`"'=2+2 inventory test"`) && row.includes(',"321",')),
+  ).toBe(true);
   const missing = await call(owner, `${common}/export?kind=opening&search=inventory%20test`);
   expect((await missing.text()).trimEnd().split("\r\n")).toHaveLength(1);
   const staffCsv = await (await call(staff, `${common}/export${filters}`)).text();

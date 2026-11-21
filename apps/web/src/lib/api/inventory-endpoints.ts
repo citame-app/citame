@@ -22,13 +22,20 @@ import {
   type StockReceiptInput,
   type StockReceiptQuery,
   type StockReturnInput,
+  type StockTransferInput,
   type SupplierInput,
   type SupplierQuery,
   stockLedgerSchema,
   stockReceiptSchema,
+  stockTransferSchema,
   supplierListSchema,
   supplierSchema,
   type UpdateProductInput,
+  type WarehouseInput,
+  type WarehouseStockQuery,
+  warehouseListSchema,
+  warehouseSchema,
+  warehouseStockSchema,
 } from "@sob/contracts";
 import type { ApiClient } from "./client";
 
@@ -56,6 +63,15 @@ export const stockLedgerExportHref = (filters: Partial<StockLedgerFilters>) =>
 
 export function inventoryEndpoints(client: ApiClient) {
   return {
+    warehouses: () => client.get("/admin/inventory/warehouses", warehouseListSchema),
+    warehouseStock: (
+      query: Partial<WarehouseStockQuery> & Pick<WarehouseStockQuery, "warehouseId">,
+    ) => client.get("/admin/inventory/warehouse-stock", warehouseStockSchema, { query }),
+    saveWarehouse: (id: string, body: WarehouseInput) =>
+      client.put(`/admin/inventory/warehouses/${id}`, body, warehouseSchema),
+    transfer: (id: string) => client.get(`/admin/inventory/transfers/${id}`, stockTransferSchema),
+    saveTransfer: (id: string, body: StockTransferInput) =>
+      client.put(`/admin/inventory/transfers/${id}`, body, stockTransferSchema),
     orders: (query: Partial<PurchaseOrderQuery> = {}) =>
       client.get("/admin/inventory/orders", purchaseOrderListSchema, { query }),
     order: (id: string) => client.get(`/admin/inventory/orders/${id}`, purchaseOrderSchema),

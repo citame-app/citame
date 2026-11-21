@@ -29,6 +29,13 @@ import { loadPrincipal, type Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
 
+import { movementView } from "./movement-view";
+import {
+  lockActiveWarehouses,
+  readWarehouseQuantity,
+  writeWarehouseQuantity,
+} from "./warehouse-balances";
+
 type Connection = Database | Tx;
 export type ProductRow = typeof retailProduct.$inferSelect;
 function packageColumns(content: PackageContent | null | undefined) {
@@ -83,6 +90,12 @@ export function productView(
     stockOnHand: row.stockOnHand,
     stockReserved: row.stockReserved,
     available,
+    ...(row.stockAllocated
+      ? {
+          stockAllocated: row.stockAllocated,
+          sellableAvailable: available - row.stockAllocated,
+        }
+      : {}),
     lowStockThreshold: row.lowStockThreshold,
     lowStock: available <= row.lowStockThreshold,
     version: row.version,
@@ -337,27 +350,42 @@ export async function moveStock(
     }
     if (row.version !== input.version)
       throw new DomainError("version_conflict", "Stock changed; reload before adjusting");
+    if (input.kind === "count" && input.warehouseId === undefined && row.stockAllocated > 0)
+      throw new DomainError("version_conflict", "Choose the warehouse for this physical count");
+    const warehouseId = input.warehouseId === "main" ? undefined : input.warehouseId;
+    const locationOnHand = warehouseId
+      ? await readWarehouseQuantity(tx, id, warehouseId)
+      : row.stockOnHand - row.stockAllocated;
+    const warehouseName = warehouseId
+      ? (await lockActiveWarehouses(tx, [warehouseId])).get(warehouseId)
+      : undefined;
     const delta =
       input.kind === "count"
-        ? input.quantity - row.stockOnHand
+        ? input.quantity - locationOnHand
         : input.kind === "receive"
           ? input.quantity
           : -input.quantity;
     const next = row.stockOnHand + delta;
-    if (next < row.stockReserved || next > 999999999)
+    const nextAtLocation = locationOnHand + delta;
+    if (nextAtLocation < (warehouseId ? 0 : row.stockReserved) || next > 999999999)
       throw new DomainError(
         "invalid_state",
         "Stock adjustment would consume reserved or unavailable units",
       );
+    // Reducing an allocation frees units before reducing the total. Adding units works in reverse.
+    if (warehouseId && delta < 0) await writeWarehouseQuantity(tx, id, warehouseId, nextAtLocation);
     const [updated] = await tx
       .update(retailProduct)
       .set({ stockOnHand: next, version: row.version + 1 })
       .where(eq(retailProduct.id, id))
       .returning();
     if (!updated) throw new Error("Stock update failed");
+    if (warehouseId && delta > 0) await writeWarehouseQuantity(tx, id, warehouseId, nextAtLocation);
     await tx.insert(stockMovement).values({
       productId: id,
       receiptId,
+      warehouseId,
+      warehouseName,
       quantityDelta: delta,
       kind: input.kind,
       reason: input.reason,
@@ -371,9 +399,12 @@ export async function moveStock(
       action: "inventory.stock_moved",
       entity: "retail_product",
       entityId: id,
-      metadata: { kind: input.kind, quantityDelta: delta },
+      metadata: { kind: input.kind, quantityDelta: delta, ...(warehouseId ? { warehouseId } : {}) },
     });
-    return productView(updated, principal);
+    return productView(
+      warehouseId ? { ...updated, stockAllocated: row.stockAllocated + delta } : updated,
+      principal,
+    );
   });
 }
 export async function listMovements(
@@ -399,19 +430,9 @@ export async function listMovements(
         .limit(pageSize)
         .offset((page - 1) * pageSize);
       return {
-        movements: rows.map((row) => ({
-          id: row.id,
-          productId: row.productId,
-          kind: row.kind,
-          quantityDelta: row.quantityDelta,
-          reason: row.reason,
-          ...(permissionsFor(principal.role, principal.accessPreset).readCosts
-            ? { unitCostCents: row.unitCostCents }
-            : {}),
-          checkoutLineId: row.checkoutLineId,
-          ...(row.receiptId ? { receiptId: row.receiptId } : {}),
-          createdAt: row.createdAt.toISOString(),
-        })),
+        movements: rows.map((row) =>
+          movementView(row, permissionsFor(principal.role, principal.accessPreset).readCosts),
+        ),
         pagination: { page, pageSize, total: total?.n ?? 0 },
       };
     },

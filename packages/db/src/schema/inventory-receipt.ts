@@ -15,6 +15,7 @@ import {
 import { user } from "./auth";
 import { bunJsonb, createdAt, primaryId, timestamptz, updatedAt } from "./helpers";
 import { retailProduct } from "./inventory-product";
+import { inventoryWarehouse } from "./inventory-warehouse";
 
 export const inventorySupplier = pgTable(
   "inventory_supplier",
@@ -120,6 +121,8 @@ export const stockReceipt = pgTable(
     supplierId: uuid().references(() => inventorySupplier.id),
     supplierName: text(),
     purchaseOrderId: uuid().references(() => purchaseOrder.id),
+    warehouseId: uuid().references(() => inventoryWarehouse.id),
+    warehouseName: text(),
     receivedOn: date({ mode: "string" }).notNull(),
     invoiceReference: text(),
     notes: text(),

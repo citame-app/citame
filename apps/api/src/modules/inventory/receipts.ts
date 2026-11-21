@@ -21,6 +21,7 @@ import {
   replay,
   requireCurrentInventoryWriter,
 } from "./service";
+import { lockActiveWarehouses } from "./warehouse-balances";
 
 function assertGeneration(reviewed: string, current: string) {
   if (reviewed !== current)
@@ -124,6 +125,8 @@ const receiptHeader = {
   supplierId: stockReceipt.supplierId,
   supplierName: stockReceipt.supplierName,
   purchaseOrderId: stockReceipt.purchaseOrderId,
+  warehouseId: stockReceipt.warehouseId,
+  warehouseName: stockReceipt.warehouseName,
   invoiceReference: stockReceipt.invoiceReference,
   notes: stockReceipt.notes,
   lineCount: stockReceipt.lineCount,
@@ -141,12 +144,16 @@ function receiptView(row: typeof stockReceipt.$inferSelect, principal: Principal
 
 function receiptHeaderView({
   purchaseOrderId,
+  warehouseId,
+  warehouseName,
   createdAt,
   ...header
 }: Pick<typeof stockReceipt.$inferSelect, keyof typeof receiptHeader>) {
   return {
     ...header,
     ...(purchaseOrderId ? { purchaseOrderId } : {}),
+    ...(warehouseId ? { warehouseId } : {}),
+    ...(warehouseName ? { warehouseName } : {}),
     createdAt: createdAt.toISOString(),
   };
 }
@@ -248,6 +255,9 @@ export async function receiveStockDocument(
         unitCostCents: product.costCents,
       });
     }
+    const warehouseName = input.warehouseId
+      ? (await lockActiveWarehouses(tx, [input.warehouseId])).get(input.warehouseId)
+      : undefined;
     const [receipt] = await tx
       .insert(stockReceipt)
       .values({
@@ -255,6 +265,8 @@ export async function receiveStockDocument(
         supplierId: input.supplierId,
         supplierName,
         purchaseOrderId: delivery?.order.id,
+        warehouseId: input.warehouseId,
+        warehouseName,
         receivedOn: input.receivedOn,
         invoiceReference: input.invoiceReference,
         notes: input.notes,
@@ -272,6 +284,7 @@ export async function receiveStockDocument(
         line.productId,
         {
           kind: "receive",
+          warehouseId: input.warehouseId,
           quantity: line.quantity,
           version: line.version,
           generation,
@@ -293,6 +306,7 @@ export async function receiveStockDocument(
         number: receipt.number,
         lineCount: receipt.lineCount,
         ...(delivery ? { purchaseOrderId: delivery.order.id } : {}),
+        ...(input.warehouseId ? { warehouseId: input.warehouseId } : {}),
       },
     });
     return receiptView(receipt, current);

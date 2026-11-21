@@ -49,8 +49,10 @@ export function ProductCart({
               { value: "", label: t("inventory.pick") },
               ...products.data.products.map((p) => ({
                 value: p.id,
-                label: `${p.name} · ${formatMoney(p.priceCents, "EUR", locale)} · ${p.available}`,
-                disabled: p.available === 0 || items.some((item) => item.product.id === p.id),
+                label: `${p.name} · ${formatMoney(p.priceCents, "EUR", locale)} · ${p.sellableAvailable ?? p.available}`,
+                disabled:
+                  (p.sellableAvailable ?? p.available) === 0 ||
+                  items.some((item) => item.product.id === p.id),
               })),
             ]}
             onChange={setSelected}

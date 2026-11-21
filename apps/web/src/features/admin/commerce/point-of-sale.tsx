@@ -289,7 +289,10 @@ export function PointOfSale({
                             className="pos-catalog-item"
                             type="button"
                             key={product.id}
-                            disabled={product.available < 1 || create.isPending}
+                            disabled={
+                              (product.sellableAvailable ?? product.available) < 1 ||
+                              create.isPending
+                            }
                             onClick={() =>
                               add({
                                 key: `product:${product.id}`,
@@ -297,13 +300,16 @@ export function PointOfSale({
                                 id: product.id,
                                 name: product.name,
                                 priceCents: product.priceCents,
-                                available: product.available,
+                                available: product.sellableAvailable ?? product.available,
                               })
                             }
                           >
                             <span className="pos-item-name">{product.name}</span>
                             <span className="pos-item-detail">
-                              {product.sku} · {t("pos.available", { count: product.available })}
+                              {product.sku} ·{" "}
+                              {t("pos.available", {
+                                count: product.sellableAvailable ?? product.available,
+                              })}
                             </span>
                             <strong>{formatMoney(product.priceCents, "EUR", locale)}</strong>
                           </button>

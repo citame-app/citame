@@ -20,6 +20,7 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 - Desktop filters and sorts the product catalogue with the same options as Cloud, shows filtered stock totals and exports all matching products. Costs remain restricted to authorized accounts.
 - Desktop creates, edits, archives and reactivates inventory products with versioned offline proposals. Only product creation records opening stock.
 - Desktop can view private product photos and queue replacements or removals offline. Cloud and Desktop refresh after either client changes the photo, and stale drafts require explicit review.
+- Cloud manages warehouses, tracks inventory and receipts by location, and records atomic transfers with an auditable document. Existing stock starts in the main warehouse, where checkout continues to reserve and fulfil sales.
 - Cloud tracks purchase orders from draft to delivery. Partial and complete deliveries create numbered stock receipts and update the order in the same transaction. Cancelling outstanding units preserves prior receipts and stock movements.
 - Cloud manages supplier profiles and numbered stock receipts. Each receipt posts all reviewed product quantities in one transaction and keeps the supplier name and invoice reference in its history. An interrupted request can be retried with the same receipt identity.
 - Desktop also prepares purchase orders and linked deliveries offline. Cloud and Desktop enforce the same order and product versions when changes synchronize, and a rejected delivery preserves its quantities for review.

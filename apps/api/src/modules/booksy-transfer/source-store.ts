@@ -16,11 +16,12 @@ import { type BooksySourceReadModel, booksyCents } from "./source-read-model";
 type ReadSourceDb = Pick<Database, "execute" | "select">;
 type SourceVerification = { exclusiveExtensions?: boolean };
 
+const { stockAllocated: _, ...sourceProductColumns } = getTableColumns(retailProduct);
 const {
-  packageContentQuantity: _,
-  packageContentUnit: __,
+  packageContentQuantity: __,
+  packageContentUnit: ___,
   ...legacyProductColumns
-} = getTableColumns(retailProduct);
+} = sourceProductColumns;
 // Keep these fields fixed so new bookkeeping columns cannot change an archived opening hash.
 const sourceStockColumns = {
   id: stockMovement.id,
@@ -117,7 +118,13 @@ export async function storeBooksySourceModel(db: Database, model: BooksySourceRe
       const [written] = await tx
         .insert(table)
         .values({ ...values, id } as typeof table.$inferInsert)
-        .returning(table === stockMovement ? sourceStockColumns : getTableColumns(table));
+        .returning(
+          table === stockMovement
+            ? sourceStockColumns
+            : table === retailProduct
+              ? sourceProductColumns
+              : getTableColumns(table),
+        );
       if (!written) throw new Error("Native extension was not stored");
       await tx.execute(
         sql`insert into booksy_rehearsal.source_entity(snapshot_hash,kind,source_id,target_id,target_hash,raw) values(${hash},${kind},${sourceId},${id}::uuid,${fingerprint(written)},${packBooksyJson(raw)}::jsonb)`,

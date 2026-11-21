@@ -37,6 +37,7 @@ export const retailProduct = pgTable(
     active: boolean().notNull().default(true),
     stockOnHand: integer().notNull().default(0),
     stockReserved: integer().notNull().default(0),
+    stockAllocated: integer().notNull().default(0),
     lowStockThreshold: integer().notNull().default(0),
     version: integer().notNull().default(1),
     createdBy: text().references(() => user.id, { onDelete: "set null" }),
@@ -51,6 +52,10 @@ export const retailProduct = pgTable(
     check(
       "retail_product_stock_valid",
       sql`${t.stockOnHand} between 0 and 999999999 and ${t.stockReserved} between 0 and ${t.stockOnHand} and ${t.lowStockThreshold} between 0 and 999999999 and ${t.version} > 0`,
+    ),
+    check(
+      "retail_product_warehouse_allocation_valid",
+      sql`${t.stockAllocated} between 0 and ${t.stockOnHand} - ${t.stockReserved}`,
     ),
     check(
       "retail_product_money_valid",

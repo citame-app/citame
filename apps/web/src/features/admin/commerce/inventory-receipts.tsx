@@ -96,6 +96,11 @@ export function InventoryReceipts({
                 {formatDateWithYear(receipt.receivedOn, locale)} ·{" "}
                 {receipt.supplierName ?? t("inventory.receipts.noSupplier")}
               </p>
+              {receipt.warehouseName && (
+                <p className="break-words">
+                  {t("inventory.warehouse.location")} · {receipt.warehouseName}
+                </p>
+              )}
               {receipt.invoiceReference && (
                 <p className="break-words">
                   {t("inventory.receipts.invoice")} · {receipt.invoiceReference}
@@ -206,7 +211,7 @@ export function InventoryReceipts({
   );
 }
 
-export function SupplierPickerPager({
+export function InventoryPickerPager({
   pagination,
   onChange,
 }: {
@@ -318,6 +323,7 @@ function ReceiptEditor({
   const heading = useId();
   const today = localDateOf(new Date().toISOString(), timeZone);
   const [receivedOn, setReceivedOn] = useState(today);
+  const [warehouseId, setWarehouseId] = useState("");
   const [supplier, setSupplier] = useState<Supplier | null>(null);
   const [invoice, setInvoice] = useState("");
   const [notes, setNotes] = useState("");
@@ -344,6 +350,11 @@ function ReceiptEditor({
     }
   });
   const busy = useRef(false);
+  const warehouses = useQuery({
+    queryKey: ["inventory", "warehouses"],
+    queryFn: () => api().inventory.warehouses(),
+    enabled: online,
+  });
   const products = useQuery({
     queryKey: ["inventory", "receipt-products", productSearch],
     queryFn: () => api().inventory.list({ search: productSearch, pageSize: 10 }),
@@ -412,6 +423,7 @@ function ReceiptEditor({
     onSuccess: async ({ products, supplier, input, latest }) => {
       await receiptRequests.clear(key, input);
       setReceivedOn(input.receivedOn);
+      setWarehouseId(input.warehouseId ?? "");
       setInvoice(input.invoiceReference ?? "");
       setNotes(input.notes ?? "");
       setLines(products);
@@ -423,6 +435,7 @@ function ReceiptEditor({
   });
   const dirty = !!(
     receivedOn !== today ||
+    warehouseId ||
     supplier ||
     invoice ||
     notes ||
@@ -457,6 +470,7 @@ function ReceiptEditor({
           const generation = order?.generation ?? included[0]?.product.inventoryGeneration;
           const payload = stockReceiptInputSchema.safeParse({
             receivedOn,
+            ...(warehouseId ? { warehouseId } : {}),
             supplierId: order?.supplierId ?? supplier?.id ?? null,
             ...(order ? { purchaseOrder: { id: order.id, version: order.version } } : {}),
             invoiceReference: invoice.trim() || null,
@@ -473,6 +487,8 @@ function ReceiptEditor({
           if (
             !payload.success ||
             supplier?.active === false ||
+            (warehouseId &&
+              !warehouses.data?.warehouses.some((row) => row.id === warehouseId && row.active)) ||
             included.some(
               ({ product, quantity }) =>
                 (!order && !product.active) ||
@@ -515,6 +531,21 @@ function ReceiptEditor({
         ) : (
           <>
             <div className="grid gap-3 sm:grid-cols-2">
+              <SelectField
+                name="warehouse"
+                className="min-w-0"
+                label={t("inventory.warehouse.receiptDestination")}
+                value={warehouseId}
+                onChange={setWarehouseId}
+                options={[
+                  { value: "", label: t("inventory.warehouse.main") },
+                  ...(warehouses.data?.warehouses.flatMap((row) =>
+                    row.id && (row.active || row.id === warehouseId)
+                      ? [{ value: row.id, label: row.name ?? "", disabled: !row.active }]
+                      : [],
+                  ) ?? []),
+                ]}
+              />
               <TextField
                 name="receivedOn"
                 label={t("inventory.receipts.date")}
@@ -571,13 +602,16 @@ function ReceiptEditor({
               )}
             </div>
             {!order && suppliers.data && (
-              <SupplierPickerPager
+              <InventoryPickerPager
                 pagination={suppliers.data.pagination}
                 onChange={setSupplierPage}
               />
             )}
             {!order && suppliers.isError && (
               <ErrorState error={suppliers.error} onRetry={() => void suppliers.refetch()} />
+            )}
+            {warehouses.isError && (
+              <ErrorState error={warehouses.error} onRetry={() => void warehouses.refetch()} />
             )}
             <TextAreaField
               name="notes"

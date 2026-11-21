@@ -35,7 +35,7 @@ export async function loadCheckoutProducts(
     if (
       !row.active ||
       !row.resellable ||
-      row.stockOnHand - row.stockReserved < (quantities.get(row.id) ?? 0)
+      row.stockOnHand - row.stockAllocated - row.stockReserved < (quantities.get(row.id) ?? 0)
     )
       throw new DomainError(
         "invalid_state",

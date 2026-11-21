@@ -13,10 +13,13 @@ import {
   stockReceiptInputSchema,
   stockReceiptQuerySchema,
   stockReturnSchema,
+  stockTransferInputSchema,
   supplierInputSchema,
   supplierQuerySchema,
   updatePackageContentSchema,
   updateProductSchema,
+  warehouseInputSchema,
+  warehouseStockQuerySchema,
 } from "@sob/contracts";
 import { Hono } from "hono";
 import type { AppDeps } from "../../app";
@@ -44,6 +47,14 @@ import {
   returnStock,
   updateProduct,
 } from "./service";
+import {
+  getStockTransfer,
+  listWarehouses,
+  saveWarehouse,
+  transferStock,
+  warehouseInventory,
+} from "./warehouses";
+
 export function inventoryRoutes(deps: AppDeps) {
   const generation = deps.config.syncReplicaGeneration;
   return new Hono<AppEnv>()
@@ -53,6 +64,56 @@ export function inventoryRoutes(deps: AppDeps) {
         requirePermission(c.get("principal"), "writeInventory");
       await next();
     })
+    .get("/warehouses", async (c) =>
+      c.json(await listWarehouses(deps.db, c.get("principal"), generation), 200, {
+        "Cache-Control": "private, no-store",
+      }),
+    )
+    .get("/warehouse-stock", async (c) =>
+      c.json(
+        await warehouseInventory(
+          deps.db,
+          parseOrThrow(warehouseStockQuerySchema, c.req.query()),
+          c.get("principal"),
+          generation,
+        ),
+        200,
+        { "Cache-Control": "private, no-store" },
+      ),
+    )
+    .put("/warehouses/:id", async (c) =>
+      c.json(
+        await saveWarehouse(
+          deps.db,
+          parseOrThrow(idSchema, c.req.param("id")).toLowerCase(),
+          parseOrThrow(warehouseInputSchema, await readJson(c)),
+          c.get("principal"),
+          generation,
+        ),
+      ),
+    )
+    .get("/transfers/:id", async (c) =>
+      c.json(
+        await getStockTransfer(
+          deps.db,
+          parseOrThrow(idSchema, c.req.param("id")).toLowerCase(),
+          c.get("principal"),
+        ),
+        200,
+        { "Cache-Control": "private, no-store" },
+      ),
+    )
+    .put("/transfers/:id", async (c) =>
+      c.json(
+        await transferStock(
+          deps.db,
+          parseOrThrow(idSchema, c.req.param("id")).toLowerCase(),
+          parseOrThrow(stockTransferInputSchema, await readJson(c)),
+          c.get("principal"),
+          generation,
+        ),
+      ),
+    )
     .get("/facets", async (c) => c.json(await inventoryFacets(deps.db, c.get("principal"))))
     .get("/orders", async (c) =>
       c.json(

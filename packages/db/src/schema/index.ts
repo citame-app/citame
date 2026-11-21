@@ -19,6 +19,7 @@ export * from "./intake";
 export * from "./inventory";
 export * from "./inventory-product";
 export * from "./inventory-receipt";
+export * from "./inventory-warehouse";
 export * from "./marketing";
 export * from "./notification";
 export * from "./oauth";

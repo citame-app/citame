@@ -23,7 +23,7 @@ import { useInventoryLiveRevision } from "../calendar/live-provider";
 import { UnsavedGuard } from "../unsaved-guard";
 import { useDebounced } from "../use-debounced";
 import type { InventoryNavigation } from "./inventory-navigation";
-import { OrderReceiptEditor, orderReceiptKey, SupplierPickerPager } from "./inventory-receipts";
+import { InventoryPickerPager, OrderReceiptEditor, orderReceiptKey } from "./inventory-receipts";
 import { orderRequests, type PendingOrder, receiptRequests } from "./inventory-requests";
 
 type Editor = { id: string; generation: string; order?: PurchaseOrder };
@@ -576,7 +576,7 @@ function OrderEditor({
           />
         </div>
         {suppliers.data && (
-          <SupplierPickerPager pagination={suppliers.data.pagination} onChange={setSupplierPage} />
+          <InventoryPickerPager pagination={suppliers.data.pagination} onChange={setSupplierPage} />
         )}
         {suppliers.isError && (
           <ErrorState error={suppliers.error} onRetry={() => void suppliers.refetch()} />

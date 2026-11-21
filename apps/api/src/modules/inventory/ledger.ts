@@ -1,10 +1,11 @@
 import { permissionsFor, type StockLedgerFilters, type StockLedgerQuery } from "@sob/contracts";
 import { type Database, retailProduct, stockMovement } from "@sob/db";
-import { and, asc, count, desc, eq, gt, ilike, isNotNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, ilike, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { requirePermission } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import { streamCsv } from "../../csv";
 import { DomainError } from "../../errors";
+import { movementView } from "./movement-view";
 
 export async function inventoryFacets(db: Database, principal: Principal) {
   requirePermission(principal, "readInventory");
@@ -29,7 +30,16 @@ export async function inventoryFacets(db: Database, principal: Principal) {
 function ledgerFilter(query: StockLedgerFilters) {
   const term = `%${query.search.replace(/[\\%_]/g, "\\$&")}%`;
   return and(
-    query.kind ? eq(stockMovement.kind, query.kind) : undefined,
+    query.kind === "transfer"
+      ? isNotNull(stockMovement.transferId)
+      : query.kind
+        ? and(eq(stockMovement.kind, query.kind), isNull(stockMovement.transferId))
+        : undefined,
+    query.warehouseId === "main"
+      ? isNull(stockMovement.warehouseId)
+      : query.warehouseId
+        ? eq(stockMovement.warehouseId, query.warehouseId)
+        : undefined,
     query.search
       ? or(
           ilike(retailProduct.name, term),
@@ -106,18 +116,10 @@ export async function stockLedger(
         .offset((query.page - 1) * query.pageSize);
       const costs = permissionsFor(principal.role, principal.accessPreset).readCosts;
       return {
-        movements: rows.map(({ movement: row, productName, sku }) => ({
-          id: row.id,
-          productId: row.productId,
-          kind: row.kind,
-          quantityDelta: row.quantityDelta,
-          reason: row.reason,
-          checkoutLineId: row.checkoutLineId,
-          ...(row.receiptId ? { receiptId: row.receiptId } : {}),
-          createdAt: row.createdAt.toISOString(),
+        movements: rows.map(({ movement, productName, sku }) => ({
+          ...movementView(movement, costs),
           productName,
           sku,
-          ...(costs ? { unitCostCents: row.unitCostCents } : {}),
         })),
         pagination: { page: query.page, pageSize: query.pageSize, total: total?.n ?? 0 },
         anchor: `${generation}~${position}`,
@@ -153,6 +155,9 @@ export function exportStockLedger(
     sku: retailProduct.sku,
     name: retailProduct.name,
     occurredAt,
+    warehouseId: stockMovement.warehouseId,
+    warehouseName: stockMovement.warehouseName,
+    transferId: stockMovement.transferId,
   };
   return streamCsv(db, {
     filename: "citame-stock-movements.csv",
@@ -168,6 +173,9 @@ export function exportStockLedger(
       "reason",
       "checkout_line_id",
       ...(costs ? ["unit_cost_cents"] : []),
+      "warehouse_id",
+      "warehouse_name",
+      "transfer_id",
     ],
     readBatch: (tx, cursor: { occurredAt: string; id: string } | undefined, limit) =>
       tx
@@ -191,11 +199,14 @@ export function exportStockLedger(
       row.productId,
       row.sku,
       row.name,
-      row.kind,
+      row.transferId ? "transfer" : row.kind,
       row.quantityDelta,
       row.reason,
       row.checkoutLineId,
       ...(costs ? [row.unitCostCents] : []),
+      row.warehouseId,
+      row.warehouseName,
+      row.transferId,
     ],
   });
 }

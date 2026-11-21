@@ -257,10 +257,14 @@ impl Root {
                 .children(page.movements.iter().map(|row| {
                     let movement = &row.movement;
                     let product = movement.product_id;
-                    let kind = FILTERS
-                        .iter()
-                        .find(|(kind, _)| *kind == Some(movement.kind))
-                        .map_or(Key::InventoryLedgerAll, |(_, label)| *label);
+                    let kind = if movement.transfer_id.is_some() {
+                        Key::InventoryStockTransfer
+                    } else {
+                        FILTERS
+                            .iter()
+                            .find(|(kind, _)| *kind == Some(movement.kind))
+                            .map_or(Key::InventoryLedgerAll, |(_, label)| *label)
+                    };
                     div()
                         .flex()
                         .flex_wrap()
@@ -282,6 +286,9 @@ impl Root {
                                             .with_timezone(&self.tz)
                                             .format("%d/%m/%Y %H:%M"),
                                     )))
+                                .when_some(movement.warehouse_name.as_ref(), |row, name| {
+                                    row.child(div().text_sm().child(name.clone()))
+                                })
                                 .child(
                                     div()
                                         .text_sm()

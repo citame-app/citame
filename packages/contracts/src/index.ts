@@ -34,6 +34,7 @@ export * from "./intake";
 export * from "./inventory";
 export * from "./inventory-orders";
 export * from "./inventory-receipts";
+export * from "./inventory-warehouses";
 export * from "./marketing";
 export * from "./mcp";
 export * from "./notifications";

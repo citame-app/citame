@@ -26,17 +26,21 @@ function clearMovement(key: string, command: StockMovementInput) {
 export function StockAdjustment({
   product,
   userId,
+  location,
   onSaved,
 }: {
   product: Product;
   userId?: string;
+  location?: { id: string; name: string; onHand: number; reserved: number };
   onSaved: (product: Product) => void | Promise<void>;
 }) {
   const { t } = useI18n();
   const toast = useToast();
   const online = useOnline();
   const heading = useId();
-  const key = userId ? `citame:stock:${encodeURIComponent(userId)}:${product.id}` : undefined;
+  const key = userId
+    ? `citame:stock:${encodeURIComponent(userId)}:${product.id}${location ? `:${location.id}` : ""}`
+    : undefined;
   const [stored, setStored] = useState(() => {
     try {
       return { command: key ? readMovement(key) : null, failed: false };
@@ -94,7 +98,25 @@ export function StockAdjustment({
         const history = await api().inventory.movements(product.id, 1);
         if (history.inventoryGeneration !== current.inventoryGeneration)
           throw new Error("Stock history changed while reviewing");
-        return { current, history };
+        const balance = location
+          ? await api().inventory.warehouseStock({
+              warehouseId: location.id,
+              productId: product.id,
+            })
+          : null;
+        if (
+          balance &&
+          (balance.generation !== current.inventoryGeneration ||
+            balance.products[0]?.version !== current.version)
+        )
+          throw new Error("Stock changed while reviewing");
+        return {
+          current,
+          history,
+          onHand:
+            balance?.products[0]?.onHand ?? current.stockOnHand - (current.stockAllocated ?? 0),
+          reserved: location ? 0 : current.stockReserved,
+        };
       }
       if (key && command) clearMovement(key, command);
       return { current, history: null };
@@ -137,6 +159,11 @@ export function StockAdjustment({
           } else if (!pending) {
             const parsed = stockMovementInputSchema.safeParse({
               kind,
+              ...(location
+                ? { warehouseId: location.id }
+                : kind === "count" && product.stockAllocated
+                  ? { warehouseId: "main" }
+                  : {}),
               quantity: /^\d+$/.test(quantity.trim()) ? Number(quantity) : undefined,
               reason,
               version: product.version,
@@ -166,8 +193,13 @@ export function StockAdjustment({
         {t("inventory.movement")}
       </h3>
       <p className="text-sm text-muted sm:col-span-2">
-        {t("inventory.onHand", { count: product.stockOnHand })} ·{" "}
-        {t("inventory.reserved", { count: product.stockReserved })}
+        {(location?.name || product.stockAllocated) && (
+          <>{location?.name ?? t("inventory.warehouse.main")} · </>
+        )}
+        {t("inventory.onHand", {
+          count: location?.onHand ?? product.stockOnHand - (product.stockAllocated ?? 0),
+        })}{" "}
+        · {t("inventory.reserved", { count: location?.reserved ?? product.stockReserved })}
       </p>
       <SelectField
         name="kind"
@@ -232,8 +264,8 @@ export function StockAdjustment({
         <section className="space-y-2 sm:col-span-2">
           <h4 className="font-semibold">{t("inventory.movementCurrentHistory")}</h4>
           <p>
-            {t("inventory.onHand", { count: restored.current.stockOnHand })} ·{" "}
-            {t("inventory.reserved", { count: restored.current.stockReserved })}
+            {t("inventory.onHand", { count: restored.onHand })} ·{" "}
+            {t("inventory.reserved", { count: restored.reserved })}
           </p>
           {restored.history.movements.length ? (
             <ul className="max-h-44 space-y-1 overflow-y-auto">

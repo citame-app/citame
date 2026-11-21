@@ -61,6 +61,7 @@ export const stockReceiptInputSchema = z.strictObject({
   actorUserId: z.string().min(1).max(200),
   generation: syncGenerationSchema,
   purchaseOrder: purchaseOrderLinkSchema.optional(),
+  warehouseId: idSchema.transform((id) => id.toLowerCase()).optional(),
   lines: z
     .array(receiptLineSchema)
     .min(1)
@@ -77,6 +78,8 @@ const receiptHeader = z.object({
   supplierId: idSchema.nullable(),
   supplierName: z.string().nullable(),
   purchaseOrderId: idSchema.optional(),
+  warehouseId: idSchema.optional(),
+  warehouseName: z.string().optional(),
   invoiceReference: z.string().nullable(),
   notes: z.string().nullable(),
   createdAt: instantSchema,

@@ -10,7 +10,15 @@ import {
   type UserRole,
 } from "@sob/contracts";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type Dispatch, type SetStateAction, useEffect, useRef, useState } from "react";
+import {
+  type Dispatch,
+  lazy,
+  type SetStateAction,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { Button, buttonClasses } from "~/components/ui/button";
 import { TextField } from "~/components/ui/field";
 import { SelectField, TextAreaField } from "~/components/ui/select-field";
@@ -31,9 +39,15 @@ import { centsInput, inputCents } from "./money";
 import { ProductPhoto, ProductPhotoEditor } from "./product-photo";
 import { StockAdjustment } from "./stock-adjustment";
 
+const InventoryWarehouses = lazy(async () => {
+  const warehouse = await import("./inventory-warehouses");
+  return { default: warehouse.InventoryWarehouses };
+});
+
 type LedgerView = {
   search: string;
   kind: StockLedgerQuery["kind"];
+  warehouseId?: StockLedgerQuery["warehouseId"];
   page: number;
   anchor: StockLedgerQuery["anchor"];
   revision: number;
@@ -226,7 +240,9 @@ export function InventoryView({
                         ? "inventory.receipts.title"
                         : value === "orders"
                           ? "inventory.orders.title"
-                          : "inventory.suppliers.title",
+                          : value === "warehouses"
+                            ? "inventory.warehouse.title"
+                            : "inventory.suppliers.title",
               )}
             </button>
           ))}
@@ -252,6 +268,16 @@ export function InventoryView({
           onNavigation={go}
           onEditingChange={setInventoryEditor}
         />
+      ) : currentSection === "warehouses" ? (
+        <Suspense fallback={<Skeleton className="h-40" />}>
+          <InventoryWarehouses
+            canWrite={writeInventory}
+            userId={userId}
+            navigation={activeNavigation}
+            onNavigation={go}
+            onEditingChange={setInventoryEditor}
+          />
+        </Suspense>
       ) : currentSection === "suppliers" && writeInventory ? (
         <InventorySuppliers
           onEditingChange={setInventoryEditor}
@@ -262,6 +288,7 @@ export function InventoryView({
         <StockLedger
           onOpen={openProduct}
           onReceipt={(id) => go({ inventoryTab: "receipts", receipt: id })}
+          onTransfer={(id) => go({ inventoryTab: "warehouses", transfer: id })}
           canManage={writeInventory}
           opening={open.isPending}
           view={ledgerView}
@@ -947,7 +974,11 @@ function StockHistory({ product }: { product: Product }) {
             {history.data.movements.map((move) => (
               <li key={move.id} className="flex flex-wrap justify-between gap-3 py-3">
                 <div>
-                  <p>{move.reason}</p>
+                  <p>
+                    {move.transferId && <>{t("inventory.warehouse.transfer")} · </>}
+                    {move.reason}
+                  </p>
+                  {move.warehouseName && <p className="text-muted text-sm">{move.warehouseName}</p>}
                   <p className="text-sm text-muted">
                     {new Intl.DateTimeFormat(locale, {
                       dateStyle: "medium",
@@ -984,6 +1015,7 @@ function StockHistory({ product }: { product: Product }) {
 function StockLedger({
   onOpen,
   onReceipt,
+  onTransfer,
   canManage,
   opening,
   view,
@@ -991,6 +1023,7 @@ function StockLedger({
 }: {
   onOpen: (id: string, button: HTMLButtonElement) => void;
   onReceipt: (id: string) => void;
+  onTransfer: (id: string) => void;
   canManage: boolean;
   opening: boolean;
   view: LedgerView;
@@ -999,12 +1032,12 @@ function StockLedger({
   const { t, locale, timeZone } = useI18n();
   const cache = useQueryClient();
   const liveRevision = useInventoryLiveRevision();
-  const { page, search, kind, anchor, revision } = view;
+  const { page, search, kind, warehouseId, anchor, revision } = view;
   const term = useDebounced(search.trim(), 200);
-  const filters = { search: term, kind, anchor };
+  const filters = { search: term, kind, warehouseId, anchor };
   const settled = term === search.trim();
   const ledger = useQuery({
-    queryKey: ledgerPageKey({ page, term, kind, anchor, revision }, liveRevision),
+    queryKey: ledgerPageKey({ page, term, kind, warehouseId, anchor, revision }, liveRevision),
     queryFn: ({ signal }) => api().inventory.ledger({ page, ...filters }, signal),
     enabled: settled,
     placeholderData: (previous, previousQuery) => {
@@ -1012,6 +1045,7 @@ function StockLedger({
       return from?.page === page &&
         from.term === term &&
         from.kind === kind &&
+        from.warehouseId === warehouseId &&
         from.anchor === anchor &&
         from.revision === revision
         ? previous
@@ -1024,7 +1058,7 @@ function StockLedger({
   useEffect(() => {
     if (!settled || anchor || !data?.anchor || ledger.isPlaceholderData) return;
     cache.setQueryData(
-      ledgerPageKey({ page, term, kind, anchor: data.anchor, revision }, liveRevision),
+      ledgerPageKey({ page, term, kind, warehouseId, anchor: data.anchor, revision }, liveRevision),
       data,
     );
     setView((current) => (current === view ? { ...current, anchor: data.anchor } : current));
@@ -1041,8 +1075,13 @@ function StockLedger({
     settled,
     term,
     view,
+    warehouseId,
   ]);
-  const showLatest = (updated: Partial<Pick<LedgerView, "search" | "kind">> = {}) =>
+  const warehouses = useQuery({
+    queryKey: ["inventory", "warehouses"],
+    queryFn: () => api().inventory.warehouses(),
+  });
+  const showLatest = (updated: Partial<Pick<LedgerView, "search" | "kind" | "warehouseId">> = {}) =>
     setView((current) => ({
       ...current,
       ...updated,
@@ -1067,13 +1106,32 @@ function StockLedger({
           onChange={(value) => showLatest({ kind: (value || undefined) as typeof kind })}
           options={[
             { value: "", label: t("pos.allMovements") },
-            ...(["opening", "receive", "consume", "count", "sale", "return"] as const).map(
-              (value) => ({
-                value,
-                label: t(value === "sale" ? "pos.movementSale" : `inventory.${value}`),
-              }),
-            ),
+            ...(
+              ["opening", "receive", "consume", "count", "sale", "return", "transfer"] as const
+            ).map((value) => ({
+              value,
+              label: t(
+                value === "sale"
+                  ? "pos.movementSale"
+                  : value === "transfer"
+                    ? "inventory.warehouse.transfer"
+                    : `inventory.${value}`,
+              ),
+            })),
           ]}
+        />
+        <SelectField
+          name="warehouse"
+          label={t("inventory.warehouse.location")}
+          value={warehouseId ?? ""}
+          options={[
+            { value: "", label: t("inventory.warehouse.all") },
+            ...(warehouses.data?.warehouses.map((row) => ({
+              value: row.id ?? "main",
+              label: row.name ?? t("inventory.warehouse.main"),
+            })) ?? []),
+          ]}
+          onChange={(value) => showLatest({ warehouseId: value || undefined })}
         />
         <Button variant="secondary" onClick={() => showLatest()}>
           {t("inventory.history.latest")}
@@ -1112,7 +1170,15 @@ function StockLedger({
                       timeStyle: "short",
                       timeZone,
                     }).format(new Date(row.createdAt))}{" "}
-                    · {t(row.kind === "sale" ? "pos.movementSale" : `inventory.${row.kind}`)}
+                    ·{" "}
+                    {t(
+                      row.transferId
+                        ? "inventory.warehouse.transfer"
+                        : row.kind === "sale"
+                          ? "pos.movementSale"
+                          : `inventory.${row.kind}`,
+                    )}
+                    {row.warehouseName && <> · {row.warehouseName}</>}
                   </p>
                   <p className="break-words text-sm">{row.reason}</p>
                 </div>
@@ -1120,6 +1186,16 @@ function StockLedger({
                   {row.quantityDelta > 0 ? "+" : ""}
                   {row.quantityDelta}
                 </strong>
+                {row.transferId && (
+                  <Button
+                    variant="ghost"
+                    onClick={() => {
+                      if (row.transferId) onTransfer(row.transferId);
+                    }}
+                  >
+                    {t("inventory.warehouse.viewTransfer")}
+                  </Button>
+                )}
                 {row.receiptId && (
                   <Button
                     variant="ghost"

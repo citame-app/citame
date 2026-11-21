@@ -112,6 +112,9 @@ export const inventoryReportSchema = z.object({
     .optional(),
 });
 const movementFields = {
+  warehouseId: z
+    .union([z.literal("main"), idSchema.transform((id) => id.toLowerCase())])
+    .optional(),
   quantity,
   reason: z
     .string()
@@ -167,6 +170,8 @@ export const productSchema = z.object({
   stockOnHand: quantity,
   stockReserved: quantity,
   available: quantity,
+  stockAllocated: quantity.optional(),
+  sellableAvailable: quantity.optional(),
   lowStockThreshold: quantity,
   lowStock: z.boolean(),
   version: z.number().int().positive(),
@@ -191,6 +196,9 @@ export const stockMovementSchema = z.object({
   unitCostCents: moneyCentsSchema.nullable().optional(),
   checkoutLineId: idSchema.nullable(),
   receiptId: idSchema.optional(),
+  warehouseId: idSchema.optional(),
+  warehouseName: z.string().optional(),
+  transferId: idSchema.optional(),
   createdAt: instantSchema,
 });
 export const stockMovementListSchema = z.object({
@@ -219,7 +227,10 @@ const stockLedgerAnchorSchema = z
   .templateLiteral([syncGenerationSchema, "~", z.string().regex(/^(?:0|[1-9][0-9]{0,18})$/)])
   .refine((value) => BigInt(value.slice(value.indexOf("~") + 1)) <= 9_223_372_036_854_775_807n);
 export const stockLedgerFiltersSchema = z.object({
-  kind: z.enum(["opening", "receive", "consume", "count", "sale", "return"]).optional(),
+  kind: z.enum(["opening", "receive", "consume", "count", "sale", "return", "transfer"]).optional(),
+  warehouseId: z
+    .union([z.literal("main"), idSchema.transform((id) => id.toLowerCase())])
+    .optional(),
   search: z.string().trim().max(100).default(""),
   anchor: stockLedgerAnchorSchema.optional(),
 });

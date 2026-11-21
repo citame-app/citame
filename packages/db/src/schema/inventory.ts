@@ -16,6 +16,7 @@ import { checkout, checkoutLine } from "./commerce";
 import { createdAt, primaryId, timestamptz, updatedAt } from "./helpers";
 import { retailProduct } from "./inventory-product";
 import { stockReceipt } from "./inventory-receipt";
+import { inventoryWarehouse, stockTransfer } from "./inventory-warehouse";
 
 export const stockReservationStatus = pgEnum("stock_reservation_status", [
   "reserved",
@@ -61,6 +62,9 @@ export const stockMovement = pgTable(
     unitCostCents: integer(),
     checkoutLineId: uuid().references(() => checkoutLine.id),
     receiptId: uuid().references(() => stockReceipt.id),
+    warehouseId: uuid().references(() => inventoryWarehouse.id),
+    warehouseName: text(),
+    transferId: uuid().references(() => stockTransfer.id),
     createdBy: text().references(() => user.id, { onDelete: "set null" }),
     idempotencyKey: text().notNull(),
     requestHash: text().notNull(),
@@ -76,6 +80,14 @@ export const stockMovement = pgTable(
     uniqueIndex("stock_movement_receipt_product")
       .on(t.receiptId, t.productId)
       .where(sql`${t.receiptId} is not null`),
+    index("stock_movement_warehouse_position_idx").on(t.warehouseId, t.ledgerPosition),
+    uniqueIndex("stock_movement_transfer_product_kind")
+      .on(t.transferId, t.productId, t.kind)
+      .where(sql`${t.transferId} is not null`),
+    check(
+      "stock_movement_transfer_valid",
+      sql`${t.transferId} is null or (${t.receiptId} is null and ${t.checkoutLineId} is null and ((${t.kind} = 'receive' and ${t.quantityDelta} > 0) or (${t.kind} = 'consume' and ${t.quantityDelta} < 0)))`,
+    ),
     check("stock_movement_receipt_kind", sql`${t.receiptId} is null or ${t.kind} = 'receive'`),
     uniqueIndex("stock_movement_ledger_position_idx")
       .on(t.ledgerPosition)

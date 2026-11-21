@@ -300,7 +300,10 @@ pub struct Product {
     pub storage_location: Option<String>,
     pub stock_on_hand: u32,
     pub stock_reserved: u32,
+    #[serde(default)]
+    pub stock_allocated: u32,
     pub available: u32,
+    pub sellable_available: Option<u32>,
     pub unit_label: String,
     pub package_content: Option<PackageContent>,
     pub price_cents: i64,
@@ -363,6 +366,8 @@ pub struct StockMovement {
     pub quantity_delta: i64,
     pub reason: String,
     pub receipt_id: Option<Uuid>,
+    pub warehouse_name: Option<String>,
+    pub transfer_id: Option<Uuid>,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -402,6 +407,8 @@ pub struct StockCommand {
     pub version: u32,
     pub generation: String,
     pub idempotency_key: StockRequestId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warehouse_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -426,11 +433,14 @@ impl PendingStock {
         let physical = match kind {
             StockKind::Receive if quantity > 0 => product.stock_on_hand.checked_add(quantity)?,
             StockKind::Consume if quantity > 0 => product.stock_on_hand.checked_sub(quantity)?,
-            StockKind::Count => quantity,
+            StockKind::Count => quantity.checked_add(product.stock_allocated)?,
             _ => return None,
         };
         if !product.can_manage
-            || !(product.stock_reserved..=999_999_999).contains(&physical)
+            || !(product
+                .stock_reserved
+                .saturating_add(product.stock_allocated)..=999_999_999)
+                .contains(&physical)
             || !(3..=300).contains(&reason.encode_utf16().count())
             || reason.contains('\0')
         {
@@ -445,6 +455,8 @@ impl PendingStock {
                 version: product.version,
                 generation: product.inventory_generation.clone()?,
                 idempotency_key: Uuid::now_v7(),
+                warehouse_id: (kind == StockKind::Count && product.stock_allocated > 0)
+                    .then(|| "main".to_owned()),
             },
         })
     }

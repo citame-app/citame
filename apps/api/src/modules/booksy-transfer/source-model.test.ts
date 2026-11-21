@@ -770,7 +770,12 @@ test("retains overlapping source appointments, groups and private NUL notes idem
 test("retains old product fingerprints through migration and detects changed package content", async () => {
   const [product] = await t.db.select().from(retailProduct);
   if (!product) throw new Error("Expected the imported fixture product");
-  const { packageContentQuantity: _, packageContentUnit: __, ...legacy } = product;
+  const {
+    packageContentQuantity: _,
+    packageContentUnit: __,
+    stockAllocated: ___,
+    ...legacy
+  } = product;
   await t.db
     .update(retailProduct)
     .set({

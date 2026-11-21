@@ -1,4 +1,9 @@
-import { idSchema, purchaseOrderCommandSchema, stockReceiptInputSchema } from "@sob/contracts";
+import {
+  idSchema,
+  purchaseOrderCommandSchema,
+  stockReceiptInputSchema,
+  stockTransferInputSchema,
+} from "@sob/contracts";
 import { z } from "zod";
 
 function requestStorage() {
@@ -23,10 +28,10 @@ function inventoryRequests<T>(
 
   return {
     read,
-    preserve: (key: string, request: T) =>
+    preserve: (key: string, request: T, replaceIdentity?: string) =>
       withStorage(key, (storage) => {
         const existing = read(key, storage);
-        if (existing) return existing;
+        if (existing && identity(existing) !== replaceIdentity) return existing;
         storage.setItem(key, JSON.stringify(request));
         return request;
       }),
@@ -48,3 +53,7 @@ export const receiptRequests = inventoryRequests(
   stockReceiptInputSchema,
   (request) => request.idempotencyKey,
 );
+
+const transferRequestSchema = z.strictObject({ id: idSchema, command: stockTransferInputSchema });
+export type PendingTransfer = z.infer<typeof transferRequestSchema>;
+export const transferRequests = inventoryRequests(transferRequestSchema, (request) => request.id);

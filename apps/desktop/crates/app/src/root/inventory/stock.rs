@@ -413,7 +413,11 @@ impl Root {
                 div()
                     .child(format!(
                         "{} · {:+} {} · {}",
-                        self.t(kind_label(movement.kind)),
+                        self.t(if movement.transfer_id.is_some() {
+                            Key::InventoryStockTransfer
+                        } else {
+                            kind_label(movement.kind)
+                        }),
                         movement.quantity_delta,
                         product.unit_label,
                         movement

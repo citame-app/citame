@@ -172,6 +172,153 @@ test("purchase orders recover an interrupted draft and link partial deliveries t
   }
 });
 
+test("warehouse transfers survive lost responses and keep checkout stock in the main warehouse", async ({
+  page,
+}) => {
+  const owner = await asOwner();
+  const name = `Room ${crypto.randomUUID()}`;
+  const productName = `Warehouse serum ${crypto.randomUUID()}`;
+  try {
+    const productResponse = await owner.post("/api/admin/inventory/products", {
+      data: {
+        name: productName,
+        priceCents: 1200,
+        openingStock: 5,
+        idempotencyKey: crypto.randomUUID(),
+      },
+    });
+    expect(productResponse.status(), await productResponse.text()).toBe(201);
+    const product = await productResponse.json();
+    await signInAs(page, OWNER_EMAIL, "/admin/commerce?view=inventory&inventoryTab=warehouses");
+    await page.getByRole("button", { name: "New warehouse", exact: true }).click();
+    await page.getByLabel("Warehouse name", { exact: true }).fill(name);
+    await page.getByRole("button", { name: "Save warehouse", exact: true }).click();
+    const warehouse = page.getByLabel("Warehouse", { exact: true });
+    await expect(warehouse.locator("option:checked")).toHaveText(name);
+    const destinationId = await warehouse.inputValue();
+    await warehouse.selectOption("main");
+    await page.getByRole("button", { name: "New transfer", exact: true }).click();
+    await page.getByLabel("Destination warehouse", { exact: true }).selectOption(destinationId);
+    await page.getByLabel("Reason", { exact: true }).fill("Synthetic stock transfer");
+    await page.getByLabel("Search products", { exact: true }).fill(productName);
+    await page.getByLabel("Add a product", { exact: true }).selectOption(product.id);
+    await page.getByLabel("Quantity", { exact: true }).fill("3");
+    await expectNoHorizontalScroll(page);
+    const requests: unknown[] = [];
+    await page.context().route("**/api/admin/inventory/transfers/*", async (route) => {
+      if (route.request().method() !== "PUT") return route.continue();
+      requests.push(route.request().postDataJSON());
+      if (requests.length > 1) return route.continue();
+      const response = await route.fetch();
+      expect(response.status(), await response.text()).toBe(200);
+      await route.abort("failed");
+    });
+    await page.getByRole("button", { name: "Record transfer", exact: true }).click();
+    const retry = page.getByRole("button", { name: "Retry this transfer", exact: true });
+    await expect(retry).toBeVisible();
+    await page.reload();
+    await retry.click();
+    await expect(page.getByRole("heading", { name: "Stock transfer", exact: true })).toBeVisible();
+    await expect(page.getByText(`Main warehouse → ${name}`, { exact: true })).toBeVisible();
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toEqual(requests[0]);
+    const current = await owner.get(`/api/admin/inventory/products/${product.id}`);
+    expect(await current.json()).toMatchObject({
+      stockOnHand: 5,
+      stockAllocated: 3,
+      sellableAvailable: 2,
+    });
+
+    await page.getByRole("button", { name: "Stock movements", exact: true }).click();
+    await page.getByLabel("Stock movement", { exact: true }).selectOption("transfer");
+    await page.getByLabel("Warehouse", { exact: true }).selectOption(destinationId);
+    const ledgerItem = page.getByRole("listitem").filter({ hasText: productName });
+    await expect(ledgerItem).toHaveCount(1);
+    await expect(ledgerItem.getByText("+3", { exact: true })).toBeVisible();
+    await ledgerItem.getByRole("button", { name: "View transfer", exact: true }).click();
+    await expect(page.getByText(`Main warehouse → ${name}`, { exact: true })).toBeVisible();
+    await expectNoHorizontalScroll(page);
+
+    await page.getByRole("button", { name: "Stock receipts", exact: true }).click();
+    await page.getByRole("button", { name: "New stock receipt", exact: true }).click();
+    await page.getByLabel("Receive into", { exact: true }).selectOption(destinationId);
+    await page.getByLabel("Search products", { exact: true }).fill(productName);
+    await page.getByLabel("Add a product", { exact: true }).selectOption(product.id);
+    await page.getByLabel("Quantity", { exact: true }).fill("2");
+    await page.getByRole("button", { name: "Record stock receipt", exact: true }).click();
+    await expect(page.getByText(`Warehouse · ${name}`, { exact: true })).toBeVisible();
+    const afterDelivery = await owner.get(`/api/admin/inventory/products/${product.id}`);
+    expect(await afterDelivery.json()).toMatchObject({
+      stockOnHand: 7,
+      stockAllocated: 5,
+      sellableAvailable: 2,
+    });
+  } finally {
+    await owner.dispose();
+  }
+});
+
+test("a stale saved warehouse transfer can be reviewed after reloading", async ({ page }) => {
+  const owner = await asOwner();
+  const suffix = crypto.randomUUID();
+  const name = `Recovery serum ${suffix}`;
+  const warehouse = `Recovery room ${suffix}`;
+  try {
+    const created = await owner.post("/api/admin/inventory/products", {
+      data: { name, priceCents: 1200, openingStock: 5, idempotencyKey: crypto.randomUUID() },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const product = await created.json();
+    const location = crypto.randomUUID();
+    const saved = await owner.put(`/api/admin/inventory/warehouses/${location}`, {
+      data: { name: warehouse, active: true, generation: product.inventoryGeneration, version: 0 },
+    });
+    expect(saved.status(), await saved.text()).toBe(200);
+    await signInAs(page, OWNER_EMAIL, "/admin/commerce?view=inventory&inventoryTab=warehouses");
+    await page.getByRole("button", { name: "New transfer", exact: true }).click();
+    await page.getByLabel("Destination warehouse").selectOption(location);
+    await page.getByLabel("Reason").fill("Recover the staged transfer");
+    await page.getByLabel("Search products").fill(name);
+    await page.getByLabel("Add a product").selectOption(product.id);
+    await page.getByLabel("Quantity", { exact: true }).fill("3");
+    const pattern = "**/api/admin/inventory/transfers/*";
+    await page.route(pattern, (route) =>
+      route.request().method() === "PUT" ? route.abort("failed") : route.continue(),
+    );
+    await page.getByRole("button", { name: "Record transfer", exact: true }).click();
+    const retry = page.getByRole("button", { name: "Retry this transfer" });
+    await expect(retry).toBeVisible();
+    await page.unroute(pattern);
+    const receipt = await owner.post(`/api/admin/inventory/products/${product.id}/movements`, {
+      data: {
+        kind: "receive",
+        quantity: 1,
+        generation: product.inventoryGeneration,
+        version: product.version,
+        reason: "Concurrent delivery",
+        idempotencyKey: crypto.randomUUID(),
+      },
+    });
+    expect(receipt.status(), await receipt.text()).toBe(201);
+    await page.reload();
+    await retry.click();
+    await page.getByRole("button", { name: "Review current stock", exact: true }).click();
+    await expect(page.getByLabel("Reason")).toHaveValue("Recover the staged transfer");
+    await expect(page.getByLabel("Quantity", { exact: true })).toHaveValue("3");
+    await expect(page.getByText("Available in this warehouse: 6")).toBeVisible();
+    await page.getByRole("button", { name: "Record transfer", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Stock transfer", exact: true })).toBeVisible();
+    const actual = await owner.get(`/api/admin/inventory/products/${product.id}`);
+    expect(await actual.json()).toMatchObject({
+      stockOnHand: 6,
+      stockAllocated: 3,
+      sellableAvailable: 3,
+    });
+  } finally {
+    await owner.dispose();
+  }
+});
+
 test("stock movement pages stay in place until the operator loads the latest entries", async ({
   page,
 }) => {

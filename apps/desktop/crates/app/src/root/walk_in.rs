@@ -673,18 +673,21 @@ impl Root {
                     return view.child(self.t(Key::CheckoutUnavailable));
                 }
                 if let Some(page) = &sale.products {
-                    for product in page
-                        .products
-                        .iter()
-                        .filter(|p| p.available > 0 && p.currency == "EUR")
-                    {
-                        view = view.child(self.sale_choice(
-                            product.id,
-                            product.name.clone(),
-                            product.available.min(1000),
-                            true,
-                            cx,
-                        ));
+                    for product in page.products.iter().filter(|p| {
+                        p.sellable_available.unwrap_or(p.available) > 0 && p.currency == "EUR"
+                    }) {
+                        view = view.child(
+                            self.sale_choice(
+                                product.id,
+                                product.name.clone(),
+                                product
+                                    .sellable_available
+                                    .unwrap_or(product.available)
+                                    .min(1000),
+                                true,
+                                cx,
+                            ),
+                        );
                     }
                     let number = page.pagination.page;
                     let paging = div()
