@@ -467,6 +467,7 @@ test("an imported price review leaves collection locked until its partial paymen
   await expect(collect).toHaveCount(0);
   await expectNoHorizontalScroll(page);
   await expectNoSeriousA11yViolations(page);
+  await price.scrollIntoViewIfNeeded();
   await page.screenshot({
     path: info.outputPath("imported-price-review.png"),
     animations: "disabled",
