@@ -189,10 +189,6 @@ pub struct ClientVisitFrequency {
 }
 
 impl ClientVisitFrequency {
-    pub fn is_empty(&self) -> bool {
-        self.one == 0 && self.two == 0 && self.three_or_more == 0
-    }
-
     pub fn to_csv(&self) -> String {
         format!(
             "visit_frequency,clients\r\none,{}\r\ntwo,{}\r\nthreeOrMore,{}\r\n",

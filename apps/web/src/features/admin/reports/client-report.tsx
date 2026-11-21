@@ -153,7 +153,7 @@ function ClientBreakdown({
   const { t, locale } = useI18n();
   const headingId = useId();
   const numbers = new Intl.NumberFormat(locale);
-  const hasClients = rows.some((row) => row.clients > 0);
+  const hasRows = rows.length > 0;
 
   return (
     <section className="space-y-3">
@@ -161,14 +161,14 @@ function ClientBreakdown({
         <h2 id={headingId} className="text-heading">
           {title}
         </h2>
-        {hasClients && (
+        {hasRows && (
           <Button variant="secondary" onClick={onExport}>
             {exportLabel}
           </Button>
         )}
       </div>
       <p className="text-sm text-muted">{basis}</p>
-      {hasClients ? (
+      {hasRows ? (
         <section
           aria-labelledby={headingId}
           // biome-ignore lint/a11y/noNoninteractiveTabindex: Keyboard users need to focus this scroll region.

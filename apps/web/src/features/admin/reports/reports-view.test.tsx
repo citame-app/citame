@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import type { ReportSummary } from "@sob/contracts";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderApp } from "../../../../test/render";
-import { clientFrequencyReportCsv, clientGroupReportCsv, clientReportCsv } from "./client-report";
+import { clientGroupReportCsv, clientReportCsv } from "./client-report";
 import { ReportsView } from "./reports-view";
 
 const ANA = "0198f5a0-7b1c-7000-8000-000000000201";
@@ -143,10 +143,26 @@ describe("ReportsView", () => {
     );
     const frequencyTable = screen.getByRole("table", { name: "Clients by visit frequency" });
     expect(within(frequencyTable).getByRole("row", { name: "3 or more visits 3" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Export visit frequency CSV" })).toBeEnabled();
-    expect(clientFrequencyReportCsv(clientReport.frequency)).toBe(
-      "visit_frequency,clients\r\none,2\r\ntwo,0\r\nthreeOrMore,3\r\n",
+    const click = spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
+      function (this: HTMLAnchorElement) {
+        expect(this.download).toBe("client-frequency-2026-02-17-2026-03-18.csv");
+      },
     );
+    const blobs: Blob[] = [];
+    const createUrl = spyOn(URL, "createObjectURL").mockImplementation((blob) => {
+      if (blob instanceof Blob) blobs.push(blob);
+      return "blob:frequency";
+    });
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Export visit frequency CSV" }));
+      expect(click).toHaveBeenCalledTimes(1);
+      expect(await blobs[0]?.text()).toBe(
+        "visit_frequency,clients\r\none,2\r\ntwo,0\r\nthreeOrMore,3\r\n",
+      );
+    } finally {
+      click.mockRestore();
+      createUrl.mockRestore();
+    }
   });
 
   test("asks for the preset range in salon-local dates", async () => {

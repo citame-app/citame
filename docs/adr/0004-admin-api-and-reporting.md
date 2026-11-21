@@ -86,7 +86,8 @@ three or more completed visits matching the selected dates and professional. Any
 line counts for its imported visit group, which is counted once per client. Appointments without a
 visit group count individually. The categories are exclusive and cover every client in the report,
 even if the client has no current group. The Web and native Desktop reports export the same category
-keys and counts in a separate CSV and use the existing financial-report permissions.
+keys and counts in a separate CSV, including zero counts for an empty period, and use the existing
+financial-report permissions.
 
 ### Calendar read model
 

@@ -436,6 +436,7 @@ assert.equal(nativeClients.headers.get("cache-control"), "private, no-store");
 const clients = reportClientsSchema.parse(await nativeClients.json());
 assert.deepEqual(clients.totals, { newClients: 1, returningClients: 1 });
 assert.deepEqual(clients.rows, [{ date: outcomes.date, newClients: 1, returningClients: 1 }]);
+assert.deepEqual(clients.frequency, { one: 2, two: 0, threeOrMore: 0 });
 const webClients = await request(`${origin}/api${clientReportPath}`, { headers: { cookie } });
 assert.equal(webClients.status, 200);
 assert.deepEqual(

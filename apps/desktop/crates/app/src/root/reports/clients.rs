@@ -214,7 +214,7 @@ impl Root {
                 }
             }
         };
-        let has_clients = rows.iter().any(|(_, count)| *count > 0);
+        let has_rows = !rows.is_empty();
         Some(
             div()
                 .flex()
@@ -229,7 +229,7 @@ impl Root {
                         .gap_2()
                         .child(div().font_weight(FontWeight::SEMIBOLD).child(self.t(title)))
                         .when(
-                            has_clients
+                            has_rows
                                 && !desk.export_pending
                                 && desk.request.is_none()
                                 && desk.error.is_none(),
@@ -251,7 +251,7 @@ impl Root {
                         .text_color(theme::muted())
                         .child(self.t(basis)),
                 )
-                .when(!has_clients, |view| {
+                .when(!has_rows, |view| {
                     view.child(
                         div()
                             .text_sm()
@@ -259,7 +259,7 @@ impl Root {
                             .child(self.t(empty)),
                     )
                 })
-                .when(has_clients, |view| {
+                .when(has_rows, |view| {
                     view.child(
                         div()
                             .id(table_id)
@@ -325,11 +325,7 @@ impl Root {
             ClientReportBreakdown::Groups => ("client-groups", report.groups_csv()),
             ClientReportBreakdown::Frequency => (
                 "client-frequency",
-                report
-                    .frequency
-                    .as_ref()
-                    .filter(|band| !band.is_empty())
-                    .map(|band| band.to_csv()),
+                report.frequency.as_ref().map(|band| band.to_csv()),
             ),
         };
         let Some(csv) = csv else {
@@ -353,7 +349,7 @@ mod tests {
 
     #[gpui::test]
     async fn client_report_preserves_filters_and_renders_the_daily_table(cx: &mut TestAppContext) {
-        let (_dir, config) = super::super::super::tests::desk();
+        let (dir, config) = super::super::super::tests::desk();
         let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
         cx.simulate_resize(gpui::size(px(650.), px(450.)));
         root.update(cx, |root, cx| {
@@ -388,23 +384,24 @@ mod tests {
                 desk.client_report.as_ref().unwrap().groups_csv().as_deref(),
                 Some("group,clients\r\nvip,2\r\n'=group,1\r\n")
             );
-            let frequency = desk
-                .client_report
-                .as_ref()
-                .unwrap()
-                .frequency
-                .as_ref()
-                .unwrap();
-            assert_eq!(
-                frequency.to_csv(),
-                "visit_frequency,clients\r\none,2\r\ntwo,0\r\nthreeOrMore,3\r\n"
-            );
+            desk.request = None;
+            desk.error = None;
             cx.notify();
         });
         cx.run_until_parked();
         assert!(cx.debug_bounds("client-report-table").is_some());
         assert!(cx.debug_bounds("client-group-report-table").is_some());
         assert!(cx.debug_bounds("client-frequency-report-table").is_some());
+        let export = dir.path().join("frequency.csv");
+        root.update(cx, |root, cx| {
+            root.save_client_breakdown(ClientReportBreakdown::Frequency, cx)
+        });
+        cx.simulate_new_path_selection(|_| Some(export.clone()));
+        cx.run_until_parked();
+        assert_eq!(
+            std::fs::read_to_string(&export).unwrap(),
+            "visit_frequency,clients\r\none,2\r\ntwo,0\r\nthreeOrMore,3\r\n"
+        );
         root.update(cx, |root, cx| {
             root.select_report_mode(ReportMode::Overview, cx);
             let Overlay::Reports(desk) = &root.overlay else {
