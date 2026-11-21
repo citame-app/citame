@@ -4,6 +4,8 @@ import {
   type CalendarAppointment,
   calendarResponseSchema,
   errorResponseSchema,
+  type SyncPushBatch,
+  type SyncPushResponse,
   type UpdateAppointmentRequest,
 } from "@sob/contracts";
 import {
@@ -17,7 +19,7 @@ import {
 import { and, asc, eq, sql } from "drizzle-orm";
 import { IMPORTED_STAFF_UNIT_START } from "../availability/staff-reservations";
 import { IMPORTED_RESOURCE_UNIT_START } from "../resources/reservations";
-import { collectDesktopAppointments } from "./operational-desktop-check";
+import { collectDesktopAppointments, openRehearsalSyncStream } from "./operational-desktop-check";
 import { fingerprint } from "./plan";
 
 export class OperationalMoveProofError extends Error {}
@@ -71,13 +73,188 @@ async function moveEffects(db: Database) {
   return row.digest;
 }
 
+async function otherMutationReceipts(db: Database, deviceId: string) {
+  const [row] = await db.execute<{ digest: string }>(sql`
+    select encode(sha256(convert_to(coalesce(
+      jsonb_agg(to_jsonb(m) order by m.mutation_id)::text, '[]'
+    ), 'UTF8')), 'hex') as digest
+    from public.sync_mutation m where m.device_id is distinct from ${deviceId}
+  `);
+  if (!row)
+    throw new OperationalMoveProofError("The existing mutation receipts could not be verified");
+  return row.digest;
+}
+
+type OwnerRequest = (
+  path: string,
+  patch?: UpdateAppointmentRequest,
+) => Response | Promise<Response>;
+type MoveState = Awaited<ReturnType<typeof readMoveState>>;
+
+async function verifyStoredMove(db: Database, before: MoveState, startsAt: string, others: string) {
+  const id = before.visit.id;
+  const after = await readMoveState(db, id);
+  const staff = await db
+    .select()
+    .from(staffReservation)
+    .where(and(eq(staffReservation.appointmentId, id), eq(staffReservation.active, true)));
+  const delta = Date.parse(startsAt) - before.visit.startsAt.getTime();
+  const movedSnapshot = {
+    ...after.visit,
+    startsAt: before.visit.startsAt,
+    endsAt: before.visit.endsAt,
+    version: before.visit.version,
+    updatedAt: before.visit.updatedAt,
+  };
+  const resourceWindow = (
+    { startsAt, endsAt, unitIndex: _unit, ...row }: MoveState["resources"][number],
+    shift: number,
+  ) => ({
+    ...row,
+    startsAt: startsAt.getTime() - shift,
+    endsAt: endsAt.getTime() - shift,
+  });
+  if (
+    delta === 0 ||
+    after.visit.startsAt.getTime() !== Date.parse(startsAt) ||
+    after.visit.endsAt.getTime() !== before.visit.endsAt.getTime() + delta ||
+    after.visit.version !== before.visit.version + 1 ||
+    fingerprint(movedSnapshot) !== fingerprint(before.visit) ||
+    fingerprint(after.services) !== fingerprint(before.services) ||
+    fingerprint(after.context) !== fingerprint(before.context) ||
+    !before.resources.length ||
+    !staff.length ||
+    staff.some(
+      (row) => row.staffId !== before.visit.staffId || row.unitIndex >= IMPORTED_STAFF_UNIT_START,
+    ) ||
+    after.resources.some((row) => row.unitIndex >= IMPORTED_RESOURCE_UNIT_START) ||
+    fingerprint(after.resources.map((row) => resourceWindow(row, delta))) !==
+      fingerprint(before.resources.map((row) => resourceWindow(row, 0))) ||
+    (await otherAppointments(db, id)) !== others
+  )
+    throw new OperationalMoveProofError(
+      "The move changed frozen details, resources or other appointments",
+    );
+  return after;
+}
+
+async function assertCalendarMove(
+  owner: OwnerRequest,
+  calendarRoute: string,
+  id: string,
+  startsAt: string,
+  version: number,
+) {
+  const response = await owner(calendarRoute);
+  const calendar = calendarResponseSchema.safeParse(await response.json());
+  const visible = calendar.success && calendar.data.appointments.find((item) => item.id === id);
+  if (
+    response.status !== 200 ||
+    !visible ||
+    visible.startsAt !== startsAt ||
+    visible.version !== version
+  )
+    throw new OperationalMoveProofError("The web calendar did not reflect the rehearsal move");
+}
+
+type RehearsalDesktopPush = {
+  deviceId: string;
+  generation: string;
+  push: (batch: SyncPushBatch) => Promise<SyncPushResponse>;
+};
+
+async function rehearseDesktopMove(
+  db: Database,
+  owner: OwnerRequest,
+  calendarRoute: string,
+  desktop: RehearsalDesktopPush,
+  before: MoveState,
+  destinations: string[],
+  others: string,
+) {
+  const { id, version, updatedAt } = before.visit;
+  const receipts = await otherMutationReceipts(db, desktop.deviceId);
+  const stream = await openRehearsalSyncStream(owner, desktop.generation, "Web");
+  try {
+    const startingHead = await stream.next();
+    for (const startsAt of destinations) {
+      const mutation = {
+        kind: "appointment.reschedule" as const,
+        mutationId: Bun.randomUUIDv7(),
+        createdAt: updatedAt.toISOString(),
+        payload: { id, version, startsAt },
+      };
+      const batch: SyncPushBatch = {
+        deviceId: desktop.deviceId,
+        generation: desktop.generation,
+        mutations: [mutation],
+      };
+      const {
+        results: [applied],
+      } = await desktop.push(batch);
+      if (
+        applied?.status === "rejected" &&
+        ["slot_taken", "slot_unavailable"].includes(applied.reason)
+      )
+        continue;
+      if (
+        applied?.status !== "applied" ||
+        applied.mutationId !== mutation.mutationId ||
+        applied.replayed ||
+        applied.appliedSeq === null ||
+        applied.appliedSeq <= startingHead
+      )
+        throw new OperationalMoveProofError(
+          "The linked device could not move the imported appointment",
+        );
+
+      const next = await stream.next();
+      if (next < applied.appliedSeq)
+        throw new OperationalMoveProofError("The web session missed the desktop's live change");
+      await assertCalendarMove(owner, calendarRoute, id, startsAt, version + 1);
+      const moved = await verifyStoredMove(db, before, startsAt, others);
+      const storedEffects = await moveEffects(db);
+      const {
+        results: [replayed],
+      } = await desktop.push(batch);
+      const staleMutationId = Bun.randomUUIDv7();
+      const {
+        results: [stale],
+      } = await desktop.push({
+        ...batch,
+        mutations: [{ ...mutation, mutationId: staleMutationId }],
+      });
+      if (
+        replayed?.status !== "applied" ||
+        replayed.mutationId !== mutation.mutationId ||
+        !replayed.replayed ||
+        replayed.appliedSeq !== applied.appliedSeq ||
+        stale?.status !== "rejected" ||
+        stale.mutationId !== staleMutationId ||
+        stale.reason !== "conflict" ||
+        stale.replayed ||
+        fingerprint(await readMoveState(db, id)) !== fingerprint(moved) ||
+        (await moveEffects(db)) !== storedEffects ||
+        (await otherMutationReceipts(db, desktop.deviceId)) !== receipts
+      )
+        throw new OperationalMoveProofError(
+          "The desktop retry or stale edit changed the import twice",
+        );
+      return;
+    }
+    throw new OperationalMoveProofError("The linked device had no available second move");
+  } finally {
+    await stream.close();
+  }
+}
+
 export async function rehearseNativeCalendarMove(
   db: Database,
-  owner: (path: string, patch?: UpdateAppointmentRequest) => Response | Promise<Response>,
+  owner: OwnerRequest,
   date: string,
   calendarRoute: string,
   visits: CalendarAppointment[],
-  desktop: {
+  desktop: RehearsalDesktopPush & {
     get: (path: string) => Response | Promise<Response>;
     renew: () => Promise<void>;
     generation: string;
@@ -104,7 +281,7 @@ export async function rehearseNativeCalendarMove(
     if (!slots.success)
       throw new OperationalMoveProofError("The reschedule availability was invalid");
     const destinations = slots.data.slots.filter((slot) => slot.startsAt !== visit.startsAt);
-    if (!destinations.length) continue;
+    if (slots.data.slots.length < 2 || !destinations.length) continue;
 
     const before = await readMoveState(db, visit.id);
     const others = await otherAppointments(db, visit.id);
@@ -120,7 +297,7 @@ export async function rehearseNativeCalendarMove(
         );
       }
       const moved = appointmentSchema.safeParse(await response.json());
-      const after = await readMoveState(db, visit.id);
+      const after = await verifyStoredMove(db, before, slot.startsAt, others);
       const effects = await moveEffects(db);
       const stale = await owner(path, { startsAt: visit.startsAt, version: visit.version });
       const staleBody = errorResponseSchema.safeParse(await stale.json());
@@ -133,55 +310,14 @@ export async function rehearseNativeCalendarMove(
       )
         throw new OperationalMoveProofError("The move accepted a stale appointment version");
 
-      const staff = await db
-        .select()
-        .from(staffReservation)
-        .where(
-          and(eq(staffReservation.appointmentId, visit.id), eq(staffReservation.active, true)),
-        );
-      const delta = Date.parse(slot.startsAt) - before.visit.startsAt.getTime();
-      const movedSnapshot = {
-        ...after.visit,
-        startsAt: before.visit.startsAt,
-        endsAt: before.visit.endsAt,
-        version: before.visit.version,
-        updatedAt: before.visit.updatedAt,
-      };
-      const resourceWindow = (
-        { startsAt, endsAt, unitIndex: _unit, ...row }: (typeof after.resources)[number],
-        shift: number,
-      ) => ({
-        ...row,
-        startsAt: startsAt.getTime() - shift,
-        endsAt: endsAt.getTime() - shift,
-      });
       if (
         !moved.success ||
         moved.data.id !== visit.id ||
         moved.data.startsAt !== slot.startsAt ||
-        moved.data.version !== visit.version + 1 ||
-        delta === 0 ||
-        after.visit.startsAt.getTime() !== Date.parse(slot.startsAt) ||
-        after.visit.endsAt.getTime() !== before.visit.endsAt.getTime() + delta ||
-        after.visit.version !== visit.version + 1 ||
-        fingerprint(movedSnapshot) !== fingerprint(before.visit) ||
-        fingerprint(after.services) !== fingerprint(before.services) ||
-        fingerprint(after.context) !== fingerprint(before.context) ||
-        !before.resources.length ||
-        !staff.length ||
-        staff.some(
-          (row) => row.staffId !== visit.staffId || row.unitIndex >= IMPORTED_STAFF_UNIT_START,
-        ) ||
-        after.resources.some((row) => row.unitIndex >= IMPORTED_RESOURCE_UNIT_START) ||
-        fingerprint(after.resources.map((row) => resourceWindow(row, delta))) !==
-          fingerprint(before.resources.map((row) => resourceWindow(row, 0))) ||
-        (await otherAppointments(db, visit.id)) !== others
+        moved.data.version !== visit.version + 1
       )
-        throw new OperationalMoveProofError(
-          "The move changed frozen details, resources or other appointments",
-        );
-
-      const calendar = calendarResponseSchema.safeParse(await (await owner(calendarRoute)).json());
+        throw new OperationalMoveProofError("The web move did not return the updated appointment");
+      await assertCalendarMove(owner, calendarRoute, visit.id, slot.startsAt, visit.version + 1);
       const nudge = await desktop.stream.next();
       await desktop.renew();
       const replica = await collectDesktopAppointments(
@@ -189,22 +325,26 @@ export async function rehearseNativeCalendarMove(
         desktop.generation,
         desktop.cursor,
       );
-      const visible =
-        calendar.success && calendar.data.appointments.find((item) => item.id === visit.id);
       const replayed = replica.appointments.get(visit.id);
       if (
-        !visible ||
-        visible.startsAt !== slot.startsAt ||
-        visible.version !== visit.version + 1 ||
         !replayed ||
         replayed.data.startsAt !== slot.startsAt ||
         replayed.data.version !== visit.version + 1 ||
         replayed.seq > nudge ||
         nudge <= desktop.startingHead
       )
-        throw new OperationalMoveProofError(
-          "The calendar or desktop sync feed did not reflect the move",
-        );
+        throw new OperationalMoveProofError("The desktop sync feed did not reflect the web move");
+      await rehearseDesktopMove(
+        db,
+        owner,
+        calendarRoute,
+        desktop,
+        after,
+        slots.data.slots
+          .map((destination) => destination.startsAt)
+          .filter((start) => start !== slot.startsAt),
+        others,
+      );
       return {
         movedThroughApi: true,
         staleVersionRejected: true,
@@ -213,10 +353,14 @@ export async function rehearseNativeCalendarMove(
         replicaUpdated: true,
         deviceProofRenewed: true,
         desktopLiveChangeReceived: true,
+        movedThroughDesktop: true,
+        webLiveChangeReceived: true,
+        desktopReplayIdempotent: true,
+        staleDesktopVersionRejected: true,
       };
     }
   }
   throw new OperationalMoveProofError(
-    "No resource-backed imported appointment had an available move",
+    "No resource-backed imported appointment had two available rehearsal slots",
   );
 }

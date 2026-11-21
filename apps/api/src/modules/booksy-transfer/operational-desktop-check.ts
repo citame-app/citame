@@ -8,6 +8,8 @@ import {
   oauthAccessTokenResponseSchema,
   oauthConsentResponseSchema,
   type SyncChange,
+  type SyncPushBatch,
+  syncPushResponseSchema,
   syncNudgeSchema,
   syncPullResponseSchema,
 } from "@sob/contracts";
@@ -108,8 +110,10 @@ export async function hydrateRehearsalDesktop(
   return cursor;
 }
 
-export async function openRehearsalDesktopStream(
+export async function openRehearsalSyncStream(
   get: (path: string) => Response | Promise<Response>,
+  generation: string,
+  client: "Web" | "Desktop",
 ) {
   const response = await get("/sync/stream");
   const reader = response.body?.getReader();
@@ -119,7 +123,7 @@ export async function openRehearsalDesktopStream(
     !response.headers.get("content-type")?.includes("text/event-stream")
   ) {
     await reader?.cancel();
-    throw new OperationalDesktopProofError("The linked desktop could not open its live stream");
+    throw new OperationalDesktopProofError(`${client} could not open its rehearsal live stream`);
   }
   const decoder = new TextDecoder();
   let pending = "";
@@ -130,7 +134,7 @@ export async function openRehearsalDesktopStream(
         timer = setTimeout(
           () =>
             reject(
-              new OperationalDesktopProofError("The linked desktop did not receive a live change"),
+              new OperationalDesktopProofError(`${client} did not receive a rehearsal live change`),
             ),
           4_000,
         );
@@ -142,7 +146,7 @@ export async function openRehearsalDesktopStream(
             const chunk = await Promise.race([reader.read(), timeout]);
             if (chunk.done)
               throw new OperationalDesktopProofError(
-                "The desktop live stream closed before the change",
+                `${client} live stream closed before the rehearsal change`,
               );
             pending += decoder.decode(chunk.value, { stream: true });
             continue;
@@ -153,8 +157,8 @@ export async function openRehearsalDesktopStream(
           const nudge = syncNudgeSchema.safeParse(
             JSON.parse(/^data: (.+)$/m.exec(frame)?.[1] ?? "null"),
           );
-          if (!nudge.success)
-            throw new OperationalDesktopProofError("The desktop live change was invalid");
+          if (!nudge.success || nudge.data.generation !== generation)
+            throw new OperationalDesktopProofError(`${client} received an invalid live change`);
           return nudge.data.seq;
         }
       } finally {
@@ -302,7 +306,28 @@ export async function linkOperationalRehearsalDevice(
       "The linked device could not resolve the restored owner",
     );
   return {
+    deviceId,
     get: (path: string) => bearer(path, access),
+    push: async (batch: SyncPushBatch) => {
+      const response = await request(`${origin}/sync/push`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${access}`, "content-type": "application/json" },
+        body: JSON.stringify(batch),
+      });
+      const parsed = syncPushResponseSchema.safeParse(await response.json());
+      if (
+        response.status !== 200 ||
+        !parsed.success ||
+        parsed.data.results.length !== batch.mutations.length ||
+        parsed.data.results.some(
+          (result, index) => result.mutationId !== batch.mutations[index]?.mutationId,
+        )
+      )
+        throw new OperationalDesktopProofError(
+          "The linked device did not receive a valid push reply",
+        );
+      return parsed.data;
+    },
     renew: async () => {
       access = await renew();
     },

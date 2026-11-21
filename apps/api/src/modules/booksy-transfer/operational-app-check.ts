@@ -21,7 +21,7 @@ import { isOperationalProbeDatabase, syncHistoryDigest } from "./operational-cop
 import {
   hydrateRehearsalDesktop,
   linkOperationalRehearsalDevice,
-  openRehearsalDesktopStream,
+  openRehearsalSyncStream,
 } from "./operational-desktop-check";
 import { rehearseNativeCalendarMove } from "./operational-move-check";
 import { fingerprint } from "./plan";
@@ -283,7 +283,7 @@ export async function rehearseNativeBooksyApp(
       try {
         const generation = config.syncReplicaGeneration;
         const cursor = await hydrateRehearsalDesktop(desktop.get, generation, calendar.data);
-        const stream = await openRehearsalDesktopStream(desktop.get);
+        const stream = await openRehearsalSyncStream(desktop.get, generation, "Desktop");
         try {
           const startingHead = await stream.next();
           move = await rehearseNativeCalendarMove(

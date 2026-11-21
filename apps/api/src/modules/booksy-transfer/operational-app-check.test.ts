@@ -18,7 +18,7 @@ import { createTestValkey } from "../../../test/valkey";
 import { rehearseNativeBooksyApp } from "./operational-app-check";
 import { operationalProbePrefix, pauseBooksyCopyBooking } from "./operational-copy-check";
 
-test("the native rehearsal can optionally move a resource-backed imported appointment", async () => {
+test("the native rehearsal moves a resource-backed imported appointment in both directions", async () => {
   const name = `${operationalProbePrefix}${randomBytes(8).toString("hex")}`;
   const url = new URL(process.env.DATABASE_URL ?? DEFAULT_DATABASE_URL);
   // PostgreSQL may wait for a checkpoint while dropping a database under parallel test load.
@@ -112,11 +112,15 @@ test("the native rehearsal can optionally move a resource-backed imported appoin
           deviceProofRenewed: true,
           desktopLiveChangeReceived: true,
           desktopDeviceLinkedAndRevoked: true,
+          movedThroughDesktop: true,
+          webLiveChangeReceived: true,
+          desktopReplayIdempotent: true,
+          staleDesktopVersionRejected: true,
         },
       });
       const [moved] = await copy.db.select().from(appointment);
-      expect(moved).toMatchObject({ id: visit.id, version: visit.version + 1 });
-      expect(moved?.startsAt).not.toEqual(visit.startsAt);
+      expect(moved).toMatchObject({ id: visit.id, version: visit.version + 2 });
+      expect(moved?.startsAt).toEqual(visit.startsAt);
     } finally {
       await copy.close();
       // The test owns this randomly named database. Drain any session still closing after SSE.

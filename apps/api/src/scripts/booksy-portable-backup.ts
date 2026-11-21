@@ -549,6 +549,7 @@ async function restoreInIsolatedPostgres(
               "audit_log",
               "reminder",
               "sync_change",
+              "sync_mutation",
             ]);
             const unrelated = ({ schema, table }: { schema: string; table: string }) =>
               schema !== "public" || !moveTables.has(table);
