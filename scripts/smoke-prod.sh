@@ -556,7 +556,8 @@ web_id="$("${COMPOSE[@]}" ps -q web)"
 wait "$stream_pid" || fail "the open staff stream did not close cleanly"
 await_http_status "$BASE/healthz" 503 14 ||
   fail "the proxy did not mark the stopped web gateway unavailable"
-"${COMPOSE[@]}" start web || fail "web gateway did not restart"
+# Restart only the gateway so this test keeps the original API and database running.
+docker start "$web_id" >/dev/null || fail "web gateway did not restart"
 web_address="$("${COMPOSE[@]}" port web 4173)" || fail "web gateway has no loopback port"
 await_http_status "http://$web_address/healthz" 200 12 ||
   fail "the restarted web gateway did not become healthy on loopback"
