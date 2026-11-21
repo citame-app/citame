@@ -2222,7 +2222,7 @@ fn native_portfolio_keeps_drafts_private_and_rechecks_publication_versions() {
     let mut store = Store::open(&replica).unwrap();
     assert_eq!(
         store.pending_portfolio_captions(service_id).unwrap(),
-        [input.caption.clone()]
+        std::slice::from_ref(&input.caption)
     );
     assert!(
         desktop

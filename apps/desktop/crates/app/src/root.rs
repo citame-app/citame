@@ -3647,16 +3647,20 @@ impl Root {
                                 ))
                             },
                         )
-                        .when(c.kind != sob_core::product_editor::PHOTO, |row| {
-                            row.child(self.button(
-                                ("c-dismiss", i),
-                                self.t(Key::ConflictDismiss),
-                                Kind::Ghost,
-                                cx.listener(move |this, _, _, cx| {
-                                    this.resolve(&m, Resolution::Dismiss, cx)
-                                }),
-                            ))
-                        }),
+                        .when(
+                            c.kind != sob_core::product_editor::PHOTO
+                                && c.kind != sob_core::http::PORTFOLIO_UPLOAD,
+                            |row| {
+                                row.child(self.button(
+                                    ("c-dismiss", i),
+                                    self.t(Key::ConflictDismiss),
+                                    Kind::Ghost,
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.resolve(&m, Resolution::Dismiss, cx)
+                                    }),
+                                ))
+                            },
+                        ),
                 );
             }
             if let Some(dr) = draft {

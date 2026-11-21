@@ -2,12 +2,12 @@ use std::fs::File;
 use std::io;
 use std::path::Path;
 
-/// Publish the completed CSV in its destination directory without overwriting an existing file.
+/// Publish the completed file in its destination directory without overwriting an existing file.
 pub fn save(path: &Path, write: impl FnOnce(&mut File) -> io::Result<()>) -> io::Result<()> {
     let parent = path.parent().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
-            "CSV needs a destination directory",
+            "Export needs a destination directory",
         )
     })?;
     let mut staged = tempfile::NamedTempFile::new_in(parent)?;

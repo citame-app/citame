@@ -13,6 +13,7 @@ struct Draft {
     needs_review: bool,
     upload_packet: Option<PortfolioEdit>,
     conflict: Option<String>,
+    generation: String,
 }
 
 impl Draft {
@@ -52,6 +53,7 @@ enum Confirm {
     Publish(Uuid, u32),
     Remove(Uuid, u32),
     Discard,
+    DiscardConflict,
 }
 
 enum Action {
@@ -121,8 +123,10 @@ impl Panel {
         self.confirm = None;
         self.observed = None;
         self.retry_at = None;
+        self.pending.clear();
+        self.pending_revision = None;
         if let Some(draft) = &mut self.draft {
-            draft.needs_review = matches!(draft.source, Source::Existing(_));
+            draft.needs_review = true;
         }
     }
 
@@ -130,7 +134,11 @@ impl Panel {
         if self.busy {
             return false;
         }
-        if self.draft.is_some() {
+        if self
+            .draft
+            .as_ref()
+            .is_some_and(|draft| draft.conflict.is_none())
+        {
             self.confirm = Some(Confirm::Discard);
             return false;
         }
@@ -163,11 +171,26 @@ impl Root {
         let Ok(service) = editor.base.id.parse() else {
             return;
         };
+        let name = editor.base.details.name.clone();
+        let active = editor.base.details.active;
+        self.install_portfolio_panel(service, name, active);
+        self.request_catalog_portfolio(Action::Load, None, cx);
+    }
+
+    fn install_portfolio_panel(&mut self, service: Uuid, name: String, allow_upload: bool) {
+        let pending = self
+            .svc
+            .store
+            .pending_portfolio_captions(service)
+            .unwrap_or_default();
+        let Overlay::ServiceCatalog(desk) = &mut self.overlay else {
+            return;
+        };
         desk.portfolio = Some(Box::new(Panel {
             instance: Arc::new(()),
             service,
-            name: editor.base.details.name.clone(),
-            allow_upload: editor.base.details.active,
+            name,
+            allow_upload,
             photos: None,
             selected: None,
             preview: None,
@@ -177,14 +200,9 @@ impl Root {
             draft: None,
             confirm: None,
             notice: None,
-            pending: self
-                .svc
-                .store
-                .pending_portfolio_captions(service)
-                .unwrap_or_default(),
+            pending,
             pending_revision: self.data_version,
         }));
-        self.request_catalog_portfolio(Action::Load, None, cx);
     }
 
     fn portfolio_revision(&self) -> (i64, i64) {
@@ -248,7 +266,9 @@ impl Root {
             return;
         }
         let Some(transport) = transport else {
-            panel.notice = Some(Key::CatalogPhotosOffline);
+            if !matches!(action, Action::Load) {
+                panel.notice = Some(Key::CatalogPhotosOffline);
+            }
             cx.notify();
             return;
         };
@@ -373,6 +393,9 @@ impl Root {
     }
 
     fn start_portfolio_draft(&mut self, source: Source, cx: &mut Context<Self>) {
+        let Ok(generation) = self.svc.store.verified_reviewed_generation() else {
+            return;
+        };
         let Some(panel) = self.catalog_portfolio() else {
             return;
         };
@@ -399,6 +422,7 @@ impl Root {
             needs_review: false,
             upload_packet: None,
             conflict: None,
+            generation,
         });
         panel.notice = None;
         cx.notify();
@@ -478,6 +502,10 @@ impl Root {
             return;
         };
         let Some(draft) = &panel.draft else { return };
+        if draft.needs_review {
+            return;
+        }
+        let generation = draft.generation.clone();
         let input = draft.input(panel.service, cx);
         let Ok(input) = input.normalized() else {
             panel.notice = Some(Key::CatalogPhotosInvalid);
@@ -495,13 +523,9 @@ impl Root {
         if let Action::Upload(key, input, jpeg) = &action
             && self.svc.store.can_queue_portfolio_uploads()
         {
-            let result = self
-                .svc
-                .store
-                .verified_reviewed_generation()
-                .and_then(|generation| {
-                    let upload = QueuedPortfolioUpload::new(*key, input, jpeg)
-                        .map_err(|error| CoreError::Invalid(error.to_string()))?;
+            let result = QueuedPortfolioUpload::new(*key, input, jpeg)
+                .map_err(|error| CoreError::Invalid(error.to_string()))
+                .and_then(|upload| {
                     self.svc
                         .store
                         .queue_portfolio_upload(&generation, &upload, conflict.as_deref())
@@ -509,6 +533,7 @@ impl Root {
             if let Some(panel) = self.catalog_portfolio() {
                 panel.notice = Some(if result.is_ok() {
                     panel.draft = None;
+                    panel.pending_revision = None;
                     Key::CatalogPhotosQueued
                 } else {
                     Key::CatalogPhotosFailure
@@ -521,7 +546,15 @@ impl Root {
             cx.notify();
             return;
         }
-        if conflict.is_some() {
+        if conflict.is_some()
+            || self
+                .svc
+                .store
+                .verified_reviewed_generation()
+                .as_deref()
+                .ok()
+                != Some(&generation)
+        {
             return;
         }
         self.request_catalog_portfolio(action, None, cx);
@@ -531,7 +564,7 @@ impl Root {
         let revision = self.data_version;
         if let Some(service) = self
             .catalog_portfolio()
-            .filter(|panel| panel.pending_revision != revision)
+            .filter(|panel| panel.pending_revision.is_none() || panel.pending_revision != revision)
             .map(|panel| panel.service)
         {
             let pending = self
@@ -561,9 +594,19 @@ impl Root {
         else {
             return;
         };
+        let target = self
+            .svc
+            .store
+            .catalogue_template(&upload.service_id.to_string())
+            .ok()
+            .flatten();
+        let title = target.as_ref().map_or_else(
+            || self.t(Key::CatalogPhotosMissingService).to_owned(),
+            |row| row.name.clone(),
+        );
         self.open_service_catalog(cx);
-        self.select_catalog_service(&upload.service_id.to_string(), cx);
-        self.open_catalog_portfolio(cx);
+        self.install_portfolio_panel(upload.service_id, title, false);
+        self.request_catalog_portfolio(Action::Load, None, cx);
         let Some(panel) = self.catalog_portfolio() else {
             return;
         };
@@ -612,6 +655,71 @@ impl Root {
                         draft.conflict = Some(id);
                     }
                     cx.notify();
+                } else if let Some(panel) = root.catalog_portfolio() {
+                    panel.notice = Some(Key::CatalogPhotosPreviewUnavailable);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn export_portfolio_conflict(&mut self, cx: &mut Context<Self>) {
+        if !self.svc.store.cached_catalogue_access() {
+            return;
+        }
+        let session = self.svc.session.clone();
+        let Some(panel) = self.catalog_portfolio() else {
+            return;
+        };
+        let Some(draft) = panel
+            .draft
+            .as_ref()
+            .filter(|draft| draft.conflict.is_some())
+        else {
+            return;
+        };
+        let Source::Upload { jpeg, .. } = &draft.source else {
+            return;
+        };
+        let jpeg = jpeg.clone();
+        let instance = panel.instance.clone();
+        let home = std::env::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"));
+        let picker = cx.prompt_for_new_path(&home, Some("foto-servicio.jpg"));
+        cx.spawn(async move |handle, cx| {
+            let Ok(Ok(Some(path))) = picker.await else {
+                return;
+            };
+            let allowed = handle
+                .update(cx, |root, _| {
+                    Arc::ptr_eq(&root.svc.session, &session)
+                        && root.svc.store.cached_catalogue_access()
+                        && root
+                            .catalog_portfolio()
+                            .is_some_and(|panel| Arc::ptr_eq(&panel.instance, &instance))
+                })
+                .unwrap_or(false);
+            if !allowed {
+                return;
+            }
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    use std::io::Write;
+                    sob_core::csv_file::save(&path, |file| file.write_all(&jpeg))
+                })
+                .await;
+            let _ = handle.update(cx, |root, cx| {
+                if let Some(panel) = root
+                    .catalog_portfolio()
+                    .filter(|panel| Arc::ptr_eq(&panel.instance, &instance))
+                {
+                    panel.notice = Some(if result.is_ok() {
+                        Key::CatalogPhotosCopySaved
+                    } else {
+                        Key::ReportExportFailed
+                    });
+                    cx.notify();
                 }
             });
         })
@@ -625,6 +733,13 @@ impl Root {
     ) -> gpui::Div {
         let online = self.svc.status().connectivity == Connectivity::Online;
         let can_queue = self.svc.store.can_queue_portfolio_uploads();
+        let target_active = self
+            .svc
+            .store
+            .catalogue_template(&panel.service.to_string())
+            .ok()
+            .flatten()
+            .is_some_and(|row| row.active);
         let body = div()
             .min_h_0()
             .flex()
@@ -653,7 +768,11 @@ impl Root {
                 body.child(self.t(Key::CloudWorkspacesLoading))
             })
             .when(!online, |body| {
-                body.child(self.t(Key::CatalogPhotosOffline))
+                body.child(self.t(if can_queue {
+                    Key::CatalogPhotosOfflineQueue
+                } else {
+                    Key::CatalogPhotosOffline
+                }))
             })
             .when_some(panel.notice, |body, notice| body.child(self.t(notice)));
         if let Some(confirm) = panel.confirm {
@@ -662,6 +781,7 @@ impl Root {
                     Confirm::Publish(..) => Key::CatalogPhotosPublishConfirm,
                     Confirm::Remove(..) => Key::StaffPortraitRemoveConfirm,
                     Confirm::Discard => Key::SalonConfirmDiscard,
+                    Confirm::DiscardConflict => Key::CatalogPhotosDiscardConfirm,
                 }))
                 .child(
                     div()
@@ -679,14 +799,21 @@ impl Root {
                             }),
                         ))
                         .when(
-                            !panel.busy && (online || matches!(confirm, Confirm::Discard)),
+                            !panel.busy
+                                && (online
+                                    || matches!(
+                                        confirm,
+                                        Confirm::Discard | Confirm::DiscardConflict
+                                    )),
                             |actions| {
                                 actions.child(self.button(
                                     "portfolio-confirm",
                                     self.t(match confirm {
                                         Confirm::Publish(..) => Key::StaffPortraitPublish,
                                         Confirm::Remove(..) => Key::StaffPortraitRemove,
-                                        Confirm::Discard => Key::SalonDiscard,
+                                        Confirm::Discard | Confirm::DiscardConflict => {
+                                            Key::SalonDiscard
+                                        }
                                     }),
                                     Kind::Primary,
                                     cx.listener(move |root, _, _, cx| {
@@ -734,6 +861,54 @@ impl Root {
                     reviewed.is_some_and(|photo| photo.status == PortfolioStatus::Published),
                     |body| body.child(self.t(Key::CatalogPhotosEditPublic)),
                 )
+                .when(draft.conflict.is_some(), |body| {
+                    body.child(self.t(if target_active {
+                        Key::CatalogPhotosReviewUpload
+                    } else {
+                        Key::CatalogPhotosMissingService
+                    }))
+                    .child(self.button(
+                        "portfolio-export-conflict",
+                        self.t(Key::CatalogPhotosSaveCopy),
+                        Kind::Ghost,
+                        cx.listener(|root, _, _, cx| root.export_portfolio_conflict(cx)),
+                    ))
+                    .child(self.button(
+                        "portfolio-discard-conflict",
+                        self.t(Key::SalonDiscard),
+                        Kind::Danger,
+                        cx.listener(|root, _, _, cx| {
+                            if let Some(panel) = root.catalog_portfolio() {
+                                panel.confirm = Some(Confirm::DiscardConflict);
+                            }
+                            cx.notify();
+                        }),
+                    ))
+                })
+                .when(
+                    stale && target_active && matches!(draft.source, Source::Upload { .. }),
+                    |body| {
+                        body.child(self.button(
+                            "portfolio-review-upload",
+                            self.t(Key::CatalogPhotosCurrent),
+                            Kind::Ghost,
+                            cx.listener(|root, _, _, cx| {
+                                let Ok(generation) = root.svc.store.verified_reviewed_generation()
+                                else {
+                                    return;
+                                };
+                                if let Some(draft) = root
+                                    .catalog_portfolio()
+                                    .and_then(|panel| panel.draft.as_mut())
+                                {
+                                    draft.generation = generation;
+                                    draft.needs_review = false;
+                                }
+                                cx.notify();
+                            }),
+                        ))
+                    },
+                )
                 .when(stale, |body| {
                     body.child(self.t(Key::CatalogPhotosCurrent)).when_some(
                         reviewed,
@@ -746,11 +921,17 @@ impl Root {
                                     self.t(Key::CatalogPhotosUseVersion),
                                     Kind::Ghost,
                                     cx.listener(move |root, _, _, cx| {
+                                        let Ok(generation) =
+                                            root.svc.store.verified_reviewed_generation()
+                                        else {
+                                            return;
+                                        };
                                         if let Some(draft) = root
                                             .catalog_portfolio()
                                             .and_then(|panel| panel.draft.as_mut())
                                         {
                                             draft.source = Source::Existing(current.clone());
+                                            draft.generation = generation;
                                             draft.needs_review = false;
                                         }
                                         cx.notify();
@@ -764,7 +945,7 @@ impl Root {
                         && !stale
                         && changed
                         && if matches!(draft.source, Source::Upload { .. }) {
-                            can_queue || (online && draft.conflict.is_none())
+                            target_active && (can_queue || (online && draft.conflict.is_none()))
                         } else {
                             online
                         },
@@ -782,6 +963,28 @@ impl Root {
     }
 
     fn confirm_portfolio_action(&mut self, confirm: Confirm, cx: &mut Context<Self>) {
+        if matches!(confirm, Confirm::DiscardConflict) {
+            let id = self
+                .catalog_portfolio()
+                .and_then(|panel| panel.draft.as_ref()?.conflict.clone());
+            if let Some(id) = id
+                && self
+                    .svc
+                    .store
+                    .conflicted_portfolio_upload(&id)
+                    .ok()
+                    .flatten()
+                    .is_some()
+                && self.svc.store.resolve_conflict(&id, "discarded").is_ok()
+            {
+                self.overlay = Overlay::Conflicts {
+                    editing: None,
+                    error: None,
+                };
+                self.edited(cx);
+            }
+            return;
+        }
         if matches!(confirm, Confirm::Discard) {
             if let Overlay::ServiceCatalog(desk) = &mut self.overlay {
                 desk.portfolio = None;
@@ -794,7 +997,7 @@ impl Root {
         };
         let (id, version) = match confirm {
             Confirm::Publish(id, version) | Confirm::Remove(id, version) => (id, version),
-            Confirm::Discard => return,
+            Confirm::Discard | Confirm::DiscardConflict => return,
         };
         let Some(photo) = panel
             .selection()
@@ -811,7 +1014,7 @@ impl Root {
                 Action::Publication(photo, PortfolioPublication::ConfirmedPublish)
             }
             Confirm::Remove(..) => Action::Remove(photo),
-            Confirm::Discard => return,
+            Confirm::Discard | Confirm::DiscardConflict => return,
         };
         self.request_catalog_portfolio(action, None, cx);
     }
@@ -993,6 +1196,77 @@ impl Root {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+
+    #[gpui::test]
+    async fn a_rejected_upload_can_be_opened_after_its_service_disappears(cx: &mut TestAppContext) {
+        let (_directory, window) = crate::root::tests::open(cx);
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../web/public/icon-512.png");
+        let jpeg = prepare_photo(&source).unwrap();
+        let service = Uuid::now_v7();
+        let upload = QueuedPortfolioUpload::new(
+            Uuid::now_v7(),
+            &PortfolioEdit {
+                caption: "Saved treatment".into(),
+                alt: "Fixture image".into(),
+                service_id: Some(service),
+            },
+            &jpeg,
+        )
+        .unwrap();
+        let id = window
+            .update(cx, |root, _, cx| {
+                let generation = root.svc.store.verified_reviewed_generation().unwrap();
+                root.svc
+                    .store
+                    .remember_catalogue_access(&generation)
+                    .unwrap();
+                let entry = root
+                    .svc
+                    .store
+                    .enqueue(
+                        sob_core::http::PORTFOLIO_UPLOAD,
+                        &upload.idempotency_key.to_string(),
+                        serde_json::to_value(&upload).unwrap(),
+                    )
+                    .unwrap();
+                let id = entry.mutation_id.clone();
+                root.svc
+                    .store
+                    .apply_push_results(
+                        &[entry],
+                        &[sob_core::model::MutationResult::Rejected {
+                            mutation_id: id.clone(),
+                            reason: "not_found".into(),
+                            message: "Service was removed".into(),
+                            replayed: false,
+                        }],
+                    )
+                    .unwrap();
+                root.open_portfolio_upload_conflict(&id, cx);
+                id
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |root, _, cx| {
+                let panel = root.catalog_portfolio().unwrap();
+                assert_eq!(panel.service, service);
+                assert!(!panel.allow_upload);
+                let draft = panel.draft.as_ref().unwrap();
+                assert_eq!(draft.input(service, cx).caption, upload.caption);
+                assert_eq!(draft.conflict.as_deref(), Some(id.as_str()));
+                root.close_service_catalog(cx);
+                assert!(
+                    root.svc
+                        .store
+                        .conflicted_portfolio_upload(&id)
+                        .unwrap()
+                        .is_some()
+                );
+            })
+            .unwrap();
+    }
 
     #[gpui::test]
     async fn restoring_a_replica_retains_the_photo_draft_for_explicit_review(
