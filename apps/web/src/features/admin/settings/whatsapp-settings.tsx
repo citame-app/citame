@@ -186,6 +186,7 @@ export function WhatsAppSettings() {
   });
   const connection = status.data?.connection;
   const setup = status.data?.setup;
+  const signupRevision = connection ? connection.revision : status.data?.signupRevision;
   const templates = useQuery({
     queryKey: templatesKey,
     queryFn: endpoints.templates,
@@ -212,11 +213,22 @@ export function WhatsAppSettings() {
 
   const connect = useMutation({
     mutationFn: endpoints.connect,
-    onSuccess: (result) => {
+    onSuccess: (result, submitted) => {
       setPin("");
       setRenewing(false);
       queryClient.removeQueries({ queryKey: templatesKey });
-      queryClient.setQueryData(settingsKey, result);
+      queryClient.setQueryData<typeof result>(settingsKey, (current) =>
+        !current || (current.connection?.revision ?? null) === submitted.revision
+          ? result
+          : current,
+      );
+      void queryClient.invalidateQueries({ queryKey: settingsKey });
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && error.code === "version_conflict") {
+        setRenewing(false);
+        void queryClient.invalidateQueries({ queryKey: settingsKey });
+      }
     },
     onSettled: () => setPopup(false),
   });
@@ -288,7 +300,8 @@ export function WhatsAppSettings() {
   }
 
   function begin() {
-    if (!setup) return;
+    const revision = signupRevision;
+    if (!setup || !revision) return;
     setPopup(true);
     setSignupError(false);
     connect.reset();
@@ -296,7 +309,7 @@ export function WhatsAppSettings() {
     cleanup.current = startMetaSignup(
       setup.configId,
       pin,
-      (input) => connect.mutate(input),
+      (input) => connect.mutate({ ...input, revision }),
       () => {
         setPopup(false);
         setSignupError(true);
@@ -337,7 +350,7 @@ export function WhatsAppSettings() {
               {setup && (
                 <Button
                   variant="secondary"
-                  disabled={dirty || save.isPending}
+                  disabled={!connection.revision || dirty || save.isPending}
                   onClick={() => {
                     setRenewing(true);
                     setSignupError(false);
@@ -349,13 +362,16 @@ export function WhatsAppSettings() {
               )}
             </div>
             {!connection.revision && (
-              <p className="text-sm text-muted">{t("whatsapp.disconnectUnavailable")}</p>
+              <p className="text-sm text-muted">{t("whatsapp.connectionUnavailable")}</p>
             )}
           </>
         ) : (
           <>
             <p className="text-sm text-muted">{setup ? copy.introduction : copy.missing}</p>
-            {setup && sdk !== "ready" && (
+            {setup && !signupRevision && (
+              <p className="text-sm text-muted">{t("whatsapp.connectionUnavailable")}</p>
+            )}
+            {setup && signupRevision && sdk !== "ready" && (
               <Button onClick={() => void prepareSdk()} loading={sdk === "loading"}>
                 {copy.prepare}
               </Button>
@@ -384,7 +400,7 @@ export function WhatsAppSettings() {
                 )}
                 <Button
                   onClick={begin}
-                  disabled={pin.length !== 0 && pin.length !== 6}
+                  disabled={!signupRevision || (pin.length !== 0 && pin.length !== 6)}
                   loading={popup}
                 >
                   {popup ? copy.connecting : copy.connect}
@@ -405,7 +421,9 @@ export function WhatsAppSettings() {
         )}
         {connect.error && (
           <p role="alert" className="text-danger-fg">
-            {connect.error.message}
+            {connect.error instanceof ApiError && connect.error.code === "version_conflict"
+              ? t("whatsapp.connectChanged")
+              : connect.error.message}
           </p>
         )}
       </section>

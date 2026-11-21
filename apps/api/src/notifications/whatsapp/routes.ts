@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import {
   whatsappCompleteSchema,
+  whatsappReviewedConnectSchema,
   whatsappReviewedDisconnectSchema,
   whatsappReviewedRulesSchema,
   whatsappRulesSchema,
@@ -15,13 +16,13 @@ import { requireRole } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
-import { createMeta, tokenCipher } from "./meta";
 import {
+  connectWhatsApp,
   disconnectWhatsApp,
   listDeliveries,
   listTemplates,
-  lockWhatsAppConnection,
   readConnection,
+  readWhatsappSettings,
   updateWhatsAppRules,
   whatsappDesk,
   whatsappSettings,
@@ -40,83 +41,23 @@ export function whatsappAdminRoutes({
       c.header("Cache-Control", "private, no-store");
       await next();
     })
-    .get("/", async (c) => c.json(whatsappSettings(notifications, await readConnection(db))))
-    .post("/connect", async (c) => {
-      const settings = notifications.whatsapp;
-      if (!settings) throw new DomainError("invalid_state", "Meta WhatsApp no está configurado.");
+    .get("/", async (c) => c.json(await readWhatsappSettings(db, notifications)))
+    .post("/connect", bodyLimit({ maxSize: 8192 }), async (c) => {
       const input = parseOrThrow(whatsappCompleteSchema, await readJson(c));
-      if (!notifications.publicUrl.startsWith("https://"))
-        throw new DomainError("invalid_state", "La conexión necesita una URL pública HTTPS.");
-      const meta = createMeta(settings, whatsappFetch);
-      try {
-        const connection = await db.transaction(async (tx) => {
-          await lockWhatsAppConnection(tx);
-          const current = await readConnection(tx);
-          const grant = await meta.exchange(input.code);
-          const phones = await meta.phones(input.wabaId, grant.access_token);
-          const selected = input.phoneId
-            ? phones.find((phone) => phone.id === input.phoneId)
-            : phones.length === 1
-              ? phones[0]
-              : undefined;
-          if (!selected)
-            throw new DomainError(
-              "validation_error",
-              "Seleccione un único número de la cuenta autorizada en Meta.",
-            );
-          if (current && (current.wabaId !== input.wabaId || current.phoneId !== selected.id))
-            throw new DomainError(
-              "invalid_state",
-              "Seleccione el número conectado o desconéctelo de Citame antes de cambiarlo.",
-            );
-          const coexistence = selected.is_on_biz_app === true;
-          if (
-            !current &&
-            !coexistence &&
-            !(selected.platform_type === "CLOUD_API" && selected.status === "CONNECTED")
-          ) {
-            if (!input.pin)
-              throw new DomainError(
-                "validation_error",
-                "El número nuevo necesita un PIN de verificación de seis cifras.",
-              );
-            await meta.register(selected.id, grant.access_token, input.pin);
-          }
-          await meta.subscribe(
-            input.wabaId,
-            grant.access_token,
-            `${notifications.publicUrl}/api/whatsapp/webhook`,
-          );
-          const sender = {
-            phone: selected.display_phone_number,
-            coexistence,
-            encryptedToken: tokenCipher(notifications.signingSecret, selected.id).seal(
-              grant.access_token,
-            ),
-            expiresAt: grant.expires_in
-              ? new Date(now().getTime() + grant.expires_in * 1000)
-              : null,
-          };
-          const [saved] = await tx
-            .insert(whatsappConnection)
-            .values({
-              wabaId: input.wabaId,
-              phoneId: selected.id,
-              ...sender,
-            })
-            .onConflictDoUpdate({ target: whatsappConnection.id, set: sender })
-            .returning();
-          if (!saved) throw new Error("Could not persist WhatsApp connection");
-          return saved;
-        });
-        return c.json(whatsappSettings(notifications, connection));
-      } catch (error) {
-        if (error instanceof DomainError) throw error;
-        throw new DomainError(
-          "invalid_state",
-          "Meta no pudo conectar el número. Compruebe los permisos y vuelva a iniciar la conexión.",
-        );
-      }
+      const connection = await connectWhatsApp(db, notifications, input, now, whatsappFetch);
+      return c.json(whatsappSettings(notifications, connection));
+    })
+    .post("/connect/reviewed", bodyLimit({ maxSize: 8192 }), async (c) => {
+      const { revision, ...input } = parseOrThrow(whatsappReviewedConnectSchema, await readJson(c));
+      const connection = await connectWhatsApp(
+        db,
+        notifications,
+        input,
+        now,
+        whatsappFetch,
+        revision,
+      );
+      return c.json(whatsappSettings(notifications, connection));
     })
     .get("/deliveries", async (c) => c.json(await listDeliveries(db)))
     .get("/desk", async (c) => c.json(await whatsappDesk(db, notifications)))

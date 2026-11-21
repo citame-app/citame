@@ -324,7 +324,10 @@ impl HttpTransport {
             .content_type("application/json")
             .send(body)
             .map_err(|error| TransportError::Offline(error.to_string()))?;
-        reviewed_outcome(response)
+        Ok(match read_reviewed::<serde::de::IgnoredAny>(response)? {
+            Some(_) => ReviewedOutcome::Applied,
+            None => ReviewedOutcome::Conflict,
+        })
     }
 
     pub fn disconnect_whatsapp(&self, revision: &str) -> Result<ReviewedOutcome, TransportError> {
@@ -332,17 +335,24 @@ impl HttpTransport {
             "/admin/whatsapp/disconnect/reviewed",
             &serde_json::json!({ "revision": revision }),
         )?;
-        reviewed_outcome(response)
+        match read_reviewed::<serde_json::Value>(response)? {
+            Some(receipt) if receipt.get("connection") == Some(&serde_json::Value::Null) => {
+                Ok(ReviewedOutcome::Applied)
+            }
+            None => Ok(ReviewedOutcome::Conflict),
+            Some(_) => Err(TransportError::Server(
+                "Invalid WhatsApp disconnect acknowledgement".into(),
+            )),
+        }
     }
 }
 
-fn reviewed_outcome(
+fn read_reviewed<T: serde::de::DeserializeOwned>(
     response: ureq::http::Response<ureq::Body>,
-) -> Result<ReviewedOutcome, TransportError> {
+) -> Result<Option<T>, TransportError> {
     use super::{classify_status, read_response_with};
-    let result = read_response_with::<serde::de::IgnoredAny, Option<TransportError>>(
-        response,
-        |status, retry_after, body| {
+    let result =
+        read_response_with::<T, Option<TransportError>>(response, |status, retry_after, body| {
             if status == 409
                 && serde_json::from_str::<serde_json::Value>(body).is_ok_and(|error| {
                     error
@@ -355,11 +365,10 @@ fn reviewed_outcome(
             } else {
                 Some(classify_status(status, retry_after, body, false))
             }
-        },
-    );
+        });
     match result {
-        Ok(_) => Ok(ReviewedOutcome::Applied),
-        Err(None) => Ok(ReviewedOutcome::Conflict),
+        Ok(data) => Ok(Some(data)),
+        Err(None) => Ok(None),
         Err(Some(error)) => Err(error),
     }
 }

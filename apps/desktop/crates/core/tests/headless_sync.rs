@@ -1028,6 +1028,7 @@ fn native_whatsapp_desk_reads_private_delivery_status_through_the_proxy() {
             .unwrap(),
         ReviewedOutcome::Conflict
     );
+    let before_disconnect = browser.store.live_view_revision(LIVE_TOPIC).unwrap();
     let current = device
         .transport
         .whatsapp_desk()
@@ -1051,6 +1052,8 @@ fn native_whatsapp_desk_reads_private_delivery_status_through_the_proxy() {
                 && row.displayed_status() == Some(Status::Read))
     );
     assert!(browser.rest_get("/admin/whatsapp")["connection"].is_null());
+    browser.sync();
+    assert!(browser.store.live_view_revision(LIVE_TOPIC).unwrap() > before_disconnect);
     device.disconnect_and_check("/api/admin/whatsapp/desk");
     assert!(matches!(
         device.transport.whatsapp_desk(),

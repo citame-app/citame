@@ -168,3 +168,60 @@ test("a renewed connection requires a new confirmation before disconnecting", as
   await waitFor(() => expect(requests).toEqual([{ revision: "b".repeat(64) }]));
   expect(await screen.findByText("Read")).toBeInTheDocument();
 });
+
+test("Embedded Signup sends the revision captured when the popup opened", async () => {
+  const setup = { appId: "123456", configId: "234567", version: "v27.0" };
+  const original = "a".repeat(64);
+  let signupRevision = original;
+  let finish: Parameters<NonNullable<Window["FB"]>["login"]>[0] | undefined;
+  const previousSdk = window.FB;
+  window.FB = {
+    init() {},
+    login(callback) {
+      finish = callback;
+    },
+  };
+  const attempts: unknown[] = [];
+  globalThis.fetch = mock(async (input: URL | string, init?: RequestInit) => {
+    const path = new URL(String(input), "http://localhost").pathname;
+    if (path.endsWith("/deliveries")) return Response.json([]);
+    if (path.endsWith("/connect/reviewed")) {
+      attempts.push(JSON.parse(String(init?.body)));
+      return Response.json(
+        { error: { code: "version_conflict", message: "changed" } },
+        { status: 409 },
+      );
+    }
+    return Response.json({ setup, connection: null, signupRevision });
+  }) as unknown as typeof fetch;
+  try {
+    const view = renderApp(<WhatsAppSettings />);
+    fireEvent.click(await screen.findByRole("button", { name: "Load Meta sign-in" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Connect WhatsApp Business" }));
+    signupRevision = "b".repeat(64);
+    await act(async () =>
+      view.queryClient.invalidateQueries({ queryKey: ["admin", "whatsapp", "connection"] }),
+    );
+    await act(async () => {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          origin: "https://www.facebook.com",
+          data: {
+            type: "WA_EMBEDDED_SIGNUP",
+            event: "FINISH",
+            data: { waba_id: "456789", phone_number_id: "345678" },
+          },
+        }),
+      );
+      finish?.({ authResponse: { code: "synthetic-signup-code" } });
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The connection changed while Meta was open",
+    );
+    expect(attempts).toEqual([
+      { code: "synthetic-signup-code", wabaId: "456789", phoneId: "345678", revision: original },
+    ]);
+  } finally {
+    window.FB = previousSdk;
+  }
+});

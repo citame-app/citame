@@ -39,7 +39,9 @@ export const esAR: Record<MessageKey, string> = {
     "Esto detiene los avisos pendientes de WhatsApp en Citame. El historial de entregas seguirá disponible.",
   "whatsapp.disconnectChanged":
     "La conexión cambió. Revisa el número actual antes de desconectarlo.",
-  "whatsapp.disconnectUnavailable": "Actualiza Cloud para desconectar este número de forma segura.",
+  "whatsapp.connectionUnavailable": "Actualiza Cloud para cambiar esta conexión de forma segura.",
+  "whatsapp.connectChanged":
+    "La conexión cambió mientras Meta estaba abierto. Revisa la conexión actual y vuelve a empezar.",
   "whatsapp.rulesChanged":
     "Otra sesión cambió estas automatizaciones. Recarga los ajustes guardados antes de guardar.",
   "whatsapp.rulesReload": "Descartar borrador y recargar",

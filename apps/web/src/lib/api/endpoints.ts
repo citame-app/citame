@@ -75,6 +75,8 @@ import {
   type UpdateServiceRequest,
   type UpdateStaffRequest,
   type UpdateTimeOffRequest,
+  type WhatsAppReviewedConnect,
+  type WhatsAppReviewedDisconnect,
   type WhatsAppReviewedRules,
   whatsappDeliveriesSchema,
   whatsappSettingsSchema,
@@ -273,14 +275,14 @@ export function createEndpoints(client: ApiClient) {
       whatsapp: {
         get: (signal?: AbortSignal) =>
           client.get("/admin/whatsapp", whatsappSettingsSchema, { signal }),
-        connect: (request: { code: string; wabaId: string; phoneId?: string; pin?: string }) =>
-          client.post("/admin/whatsapp/connect", request, whatsappSettingsSchema),
+        connect: (input: WhatsAppReviewedConnect) =>
+          client.post("/admin/whatsapp/connect/reviewed", input, whatsappSettingsSchema),
         templates: () => client.get("/admin/whatsapp/templates", z.array(whatsappTemplateSchema)),
         deliveries: (signal?: AbortSignal) =>
           client.get("/admin/whatsapp/deliveries", whatsappDeliveriesSchema, { signal }),
         save: (input: WhatsAppReviewedRules) =>
           client.patch("/admin/whatsapp/rules/reviewed", input, whatsappSettingsSchema),
-        disconnect: (input: { revision: string }) =>
+        disconnect: (input: WhatsAppReviewedDisconnect) =>
           client.post("/admin/whatsapp/disconnect/reviewed", input, whatsappSettingsSchema),
       },
       calendar: (

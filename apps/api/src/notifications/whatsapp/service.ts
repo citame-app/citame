@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  type WhatsAppConnectInput,
   type WhatsAppRule,
   type WhatsAppTemplate,
   whatsappDeliveriesSchema,
@@ -8,7 +9,7 @@ import {
   whatsappRuleSchema,
   whatsappTemplateSchema,
 } from "@sob/contracts";
-import { type Database, reminder, whatsappConnection } from "@sob/db";
+import { type Database, reminder, syncChange, whatsappConnection } from "@sob/db";
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { NotificationConfig } from "../../config";
@@ -79,7 +80,13 @@ export async function listDeliveries(db: Pick<Database, "select">) {
       lastError: reminder.lastError,
     })
     .from(reminder)
-    .where(eq(reminder.channel, "whatsapp"))
+    .where(
+      and(
+        eq(reminder.channel, "whatsapp"),
+        // These jobs never went to Meta. A batch disconnect must not bury delivery history.
+        sql`${reminder.lastError} is distinct from 'whatsapp_disconnected'`,
+      ),
+    )
     .orderBy(desc(reminder.updatedAt), desc(reminder.id))
     .limit(20);
   return whatsappDeliveriesSchema.parse(
@@ -165,11 +172,121 @@ export async function updateWhatsAppRules(
   });
 }
 
-export async function lockWhatsAppConnection(tx: Tx) {
+async function lockWhatsAppConnection(tx: Tx) {
   const [lock] = await tx.execute<{ locked: boolean }>(
     sql`select pg_try_advisory_xact_lock(hashtext('citame.whatsapp.connection')) as locked`,
   );
   if (!lock?.locked) throw new DomainError("invalid_state", "Ya hay una conexión en curso.");
+}
+
+// Compaction retains the latest entry per topic. Its position distinguishes disconnected periods.
+async function disconnectedRevision(db: Pick<Database, "select">) {
+  const [entry] = await db
+    .select({ seq: syncChange.seq })
+    .from(syncChange)
+    .where(and(eq(syncChange.entity, "live_view"), eq(syncChange.rowId, "whatsapp_settings")))
+    .orderBy(desc(syncChange.seq))
+    .limit(1);
+  return createHash("sha256")
+    .update(`disconnected:${entry?.seq ?? 0}`)
+    .digest("hex");
+}
+
+export async function readWhatsappSettings(db: Database, config: NotificationConfig) {
+  const connection = await readConnection(db);
+  return {
+    ...whatsappSettings(config, connection),
+    ...(!connection && config.whatsapp ? { signupRevision: await disconnectedRevision(db) } : {}),
+  };
+}
+
+export async function connectWhatsApp(
+  db: Database,
+  notifications: NotificationConfig,
+  input: WhatsAppConnectInput,
+  now: () => Date,
+  request: typeof fetch | undefined,
+  reviewedRevision?: string,
+) {
+  const settings = notifications.whatsapp;
+  if (!settings) throw new DomainError("invalid_state", "Meta WhatsApp no está configurado.");
+  if (!notifications.publicUrl.startsWith("https://"))
+    throw new DomainError("invalid_state", "La conexión necesita una URL pública HTTPS.");
+  const meta = createMeta(settings, request);
+  try {
+    return await db.transaction(async (tx) => {
+      await lockWhatsAppConnection(tx);
+      const current = await readConnection(tx);
+      if (
+        reviewedRevision !== undefined &&
+        reviewedRevision !== (current ? senderRevision(current) : await disconnectedRevision(tx))
+      )
+        throw new DomainError(
+          "version_conflict",
+          "La conexión de WhatsApp cambió. Vuelva a iniciar el alta en Meta.",
+        );
+      const grant = await meta.exchange(input.code);
+      const phones = await meta.phones(input.wabaId, grant.access_token);
+      const selected = input.phoneId
+        ? phones.find((phone) => phone.id === input.phoneId)
+        : phones.length === 1
+          ? phones[0]
+          : undefined;
+      if (!selected)
+        throw new DomainError(
+          "validation_error",
+          "Seleccione un único número de la cuenta autorizada en Meta.",
+        );
+      if (current && (current.wabaId !== input.wabaId || current.phoneId !== selected.id))
+        throw new DomainError(
+          "invalid_state",
+          "Seleccione el número conectado o desconéctelo de Citame antes de cambiarlo.",
+        );
+      const coexistence = selected.is_on_biz_app === true;
+      if (
+        !current &&
+        !coexistence &&
+        !(selected.platform_type === "CLOUD_API" && selected.status === "CONNECTED")
+      ) {
+        if (!input.pin)
+          throw new DomainError(
+            "validation_error",
+            "El número nuevo necesita un PIN de verificación de seis cifras.",
+          );
+        await meta.register(selected.id, grant.access_token, input.pin);
+      }
+      await meta.subscribe(
+        input.wabaId,
+        grant.access_token,
+        `${notifications.publicUrl}/api/whatsapp/webhook`,
+      );
+      const sender = {
+        phone: selected.display_phone_number,
+        coexistence,
+        encryptedToken: tokenCipher(notifications.signingSecret, selected.id).seal(
+          grant.access_token,
+        ),
+        expiresAt: grant.expires_in ? new Date(now().getTime() + grant.expires_in * 1000) : null,
+      };
+      const [saved] = await tx
+        .insert(whatsappConnection)
+        .values({
+          wabaId: input.wabaId,
+          phoneId: selected.id,
+          ...sender,
+        })
+        .onConflictDoUpdate({ target: whatsappConnection.id, set: sender })
+        .returning();
+      if (!saved) throw new Error("Could not persist WhatsApp connection");
+      return saved;
+    });
+  } catch (error) {
+    if (error instanceof DomainError) throw error;
+    throw new DomainError(
+      "invalid_state",
+      "Meta no pudo conectar el número. Compruebe los permisos y vuelva a iniciar la conexión.",
+    );
+  }
 }
 
 export async function disconnectWhatsApp(db: Database, revision?: string) {

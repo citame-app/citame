@@ -37,7 +37,9 @@ export const en = {
     "This stops pending WhatsApp notifications from Citame. The delivery history remains available.",
   "whatsapp.disconnectChanged":
     "The connection changed. Review the current number before disconnecting.",
-  "whatsapp.disconnectUnavailable": "Update Cloud to disconnect this number safely.",
+  "whatsapp.connectionUnavailable": "Update Cloud to change this connection safely.",
+  "whatsapp.connectChanged":
+    "The connection changed while Meta was open. Review the current connection and start again.",
   "whatsapp.rulesChanged":
     "Another session changed these automations. Reload the saved settings before saving.",
   "whatsapp.rulesReload": "Discard draft and reload",

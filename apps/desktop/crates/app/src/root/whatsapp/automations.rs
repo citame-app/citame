@@ -28,7 +28,7 @@ impl Root {
             return;
         };
         if let Some(revision) = &connection.revision {
-            self.request_whatsapp_automations(Operation::Open(revision.clone()), cx);
+            self.request_whatsapp_action(Operation::Open(revision.clone()), cx);
         }
     }
 
@@ -41,7 +41,7 @@ impl Root {
             return;
         }
         if let Some(proposed) = editor.proposed() {
-            self.request_whatsapp_automations(Operation::Save(proposed), cx);
+            self.request_whatsapp_action(Operation::Save(proposed), cx);
         }
     }
 
@@ -52,18 +52,12 @@ impl Root {
         let Some(review) = &desk.disconnect_review else {
             return;
         };
-        let current = desk
-            .snapshot
-            .as_ref()
-            .and_then(|view| view.connection.as_ref());
-        if current.and_then(|connection| connection.revision.as_deref())
-            == Some(review.revision.as_str())
-        {
-            self.request_whatsapp_automations(Operation::Disconnect(review.revision.clone()), cx);
+        if desk.sender_revision() == Some(review.revision.as_str()) {
+            self.request_whatsapp_action(Operation::Disconnect(review.revision.clone()), cx);
         }
     }
 
-    fn request_whatsapp_automations(&mut self, operation: Operation, cx: &mut Context<Self>) {
+    fn request_whatsapp_action(&mut self, operation: Operation, cx: &mut Context<Self>) {
         if self.status.connectivity != Connectivity::Online {
             return;
         }
@@ -73,13 +67,13 @@ impl Root {
         let Overlay::Whatsapp(desk) = &mut self.overlay else {
             return;
         };
-        if desk.editing_request {
+        if desk.action_pending {
             return;
         }
         let connecting_templates = matches!(&operation, Operation::Open(_));
         let disconnecting = matches!(&operation, Operation::Disconnect(_));
-        desk.editing_request = true;
-        desk.editor_message = None;
+        desk.action_pending = true;
+        desk.action_message = None;
         let identity = desk.identity.clone();
         let session = self.svc.session.clone();
         cx.notify();
@@ -110,7 +104,7 @@ impl Root {
                 if !Arc::ptr_eq(&desk.identity, &identity) {
                     return;
                 }
-                desk.editing_request = false;
+                desk.action_pending = false;
                 match result {
                     Ok(Reply::Open(revision, templates)) => {
                         let current = desk
@@ -127,22 +121,25 @@ impl Root {
                                 desk.editor = Editor::new(connection, templates);
                             }
                         } else {
-                            desk.editor_message = Some(Key::WhatsappRulesChanged);
+                            desk.action_message = Some(Key::WhatsappRulesChanged);
                         }
                     }
                     Ok(Reply::Saved(ReviewedOutcome::Applied)) => {
                         desk.editor = None;
-                        desk.editor_message = Some(Key::WhatsappRulesSaved);
+                        desk.action_message = Some(Key::WhatsappRulesSaved);
                         root.load_whatsapp_desk(true, cx);
                     }
                     Ok(Reply::Saved(ReviewedOutcome::Conflict)) => {
-                        desk.editor_message = Some(Key::WhatsappRulesChanged);
+                        desk.action_message = Some(Key::WhatsappRulesChanged);
                         root.load_whatsapp_desk(true, cx);
                     }
                     Ok(Reply::Disconnected(revision, outcome)) => {
                         desk.disconnect_review = None;
-                        desk.editor_message = Some(match outcome {
+                        desk.action_message = Some(match outcome {
                             ReviewedOutcome::Applied => {
+                                // Ignore a desk read started before this acknowledgement.
+                                desk.identity = Arc::new(());
+                                desk.loading = false;
                                 if let Some(snapshot) = &mut desk.snapshot
                                     && snapshot
                                         .connection
@@ -159,19 +156,19 @@ impl Root {
                         root.load_whatsapp_desk(true, cx);
                     }
                     Err(_) if connecting_templates => {
-                        desk.editor_message = Some(Key::WhatsappTemplatesFailed);
+                        desk.action_message = Some(Key::WhatsappTemplatesFailed);
                     }
                     Err(_) if disconnecting => {
                         desk.disconnect_review = None;
-                        desk.editor_message = Some(Key::WhatsappDisconnectUnconfirmed);
+                        desk.action_message = Some(Key::WhatsappDisconnectUnconfirmed);
                         root.load_whatsapp_desk(true, cx);
                     }
                     Err(TransportError::BadRequest(_)) => {
-                        desk.editor_message = Some(Key::WhatsappRulesInvalid);
+                        desk.action_message = Some(Key::WhatsappRulesInvalid);
                         root.load_whatsapp_desk(true, cx);
                     }
                     Err(_) => {
-                        desk.editor_message = Some(Key::WhatsappRulesUnconfirmed);
+                        desk.action_message = Some(Key::WhatsappRulesUnconfirmed);
                         root.load_whatsapp_desk(true, cx);
                     }
                 }
@@ -196,7 +193,7 @@ impl Root {
         });
         let stale = desk.automations_stale();
         let can_edit =
-            self.status.connectivity == Connectivity::Online && !stale && !desk.editing_request;
+            self.status.connectivity == Connectivity::Online && !stale && !desk.action_pending;
         div()
             .flex()
             .flex_col()
@@ -364,7 +361,7 @@ impl Root {
                     && let Some(editor) = &mut desk.editor
                 {
                     editor.select_template(index);
-                    desk.editor_message = None;
+                    desk.action_message = None;
                     cx.notify();
                 }
             }),
@@ -383,7 +380,7 @@ impl Root {
 
 impl Desk {
     fn can_edit_rules(&self) -> bool {
-        !self.editing_request && !self.automations_stale()
+        !self.action_pending && !self.automations_stale()
     }
 
     fn automations_stale(&self) -> bool {
@@ -395,7 +392,7 @@ impl Desk {
                     connection.revision.as_deref() != Some(editor.revision.as_str())
                 })
                 || matches!(
-                    self.editor_message,
+                    self.action_message,
                     Some(Key::WhatsappRulesChanged | Key::WhatsappRulesUnconfirmed)
                 )
         })

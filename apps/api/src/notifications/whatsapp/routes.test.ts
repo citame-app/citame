@@ -459,6 +459,9 @@ test("a reviewed disconnect cannot remove a sender renewed in another session", 
   expect(whatsappSettingsSchema.parse(await success.json()).connection).toBeNull();
   expect(await t.db.select().from(whatsappConnection)).toHaveLength(0);
   const retained = await t.db.select().from(reminder).where(eq(reminder.channel, "whatsapp"));
+  const history = await json(t.app, "/admin/whatsapp/desk", "GET", undefined, owner.cookie);
+  const { deliveries } = whatsappDeskSchema.parse(await history.json());
+  expect(deliveries.map((row) => row.kind).sort()).toEqual(["reminder_24h", "reminder_2h"]);
   expect(retained.find((row) => row.kind === "confirmation")?.status).toBe("cancelled");
   expect(retained.find((row) => row.kind === "reminder_24h")?.status).toBe("processing");
   expect(retained.find((row) => row.kind === "reminder_2h")).toMatchObject({
@@ -469,4 +472,51 @@ test("a reviewed disconnect cannot remove a sender renewed in another session", 
     (await json(t.app, path, "POST", { revision: renewed.connection?.revision }, owner.cookie))
       .status,
   ).toBe(200);
+});
+
+test("reviewed Embedded Signup rejects a stale renewal before exchanging the Meta code", async () => {
+  const initial = await json(t.app, "/admin/whatsapp", "GET", undefined, owner.cookie);
+  const oldSignup = whatsappSettingsSchema.parse(await initial.json()).signupRevision;
+  const original = whatsappSettingsSchema.parse(await (await connect()).json());
+  const revision = original.connection?.revision;
+  const disconnected = await json(
+    t.app,
+    "/admin/whatsapp/disconnect/reviewed",
+    "POST",
+    { revision },
+    owner.cookie,
+  );
+  expect(disconnected.status).toBe(200);
+  const review = (expected: string | undefined) =>
+    json(
+      t.app,
+      "/admin/whatsapp/connect/reviewed",
+      "POST",
+      {
+        code: "synthetic-login-code",
+        ...originalSender,
+        revision: expected,
+      },
+      owner.cookie,
+    );
+  const callsBefore = calls.length;
+  const stale = await review(revision);
+  expect(stale.status).toBe(409);
+  expect(await stale.json()).toMatchObject({ error: { code: "version_conflict" } });
+  expect(calls).toHaveLength(callsBefore);
+  expect(await t.db.select().from(whatsappConnection)).toHaveLength(0);
+
+  expect((await review(oldSignup)).status).toBe(409);
+  expect(calls).toHaveLength(callsBefore);
+  const current = await json(t.app, "/admin/whatsapp", "GET", undefined, owner.cookie);
+  const newSignup = whatsappSettingsSchema.parse(await current.json()).signupRevision;
+  expect(newSignup).not.toEqual(oldSignup);
+  const connected = await review(newSignup);
+  expect(connected.status).toBe(200);
+  expect(whatsappSettingsSchema.parse(await connected.json()).connection?.phone).toBe(
+    "+34 611 000 000",
+  );
+  const after = calls.length;
+  expect((await review(newSignup)).status).toBe(409);
+  expect(calls).toHaveLength(after);
 });

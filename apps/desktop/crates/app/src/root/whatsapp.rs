@@ -20,10 +20,21 @@ pub(super) struct Desk {
     loading: bool,
     error: bool,
     editor: Option<automations::Editor>,
-    editing_request: bool,
-    editor_message: Option<Key>,
+    action_pending: bool,
+    action_message: Option<Key>,
     confirm_discard: bool,
     disconnect_review: Option<SenderReview>,
+}
+
+impl Desk {
+    fn sender_revision(&self) -> Option<&str> {
+        self.snapshot
+            .as_ref()?
+            .connection
+            .as_ref()?
+            .revision
+            .as_deref()
+    }
 }
 
 fn event_key(event: Event) -> Key {
@@ -76,8 +87,8 @@ impl Root {
             loading: false,
             error: false,
             editor: None,
-            editing_request: false,
-            editor_message: None,
+            action_pending: false,
+            action_message: None,
             confirm_discard: false,
             disconnect_review: None,
         }));
@@ -89,7 +100,7 @@ impl Root {
         let Overlay::Whatsapp(desk) = &mut self.overlay else {
             return;
         };
-        if desk.editing_request {
+        if desk.action_pending {
             return;
         }
         if desk.disconnect_review.take().is_some() {
@@ -103,7 +114,7 @@ impl Root {
                 desk.confirm_discard = true;
             } else {
                 desk.editor = None;
-                desk.editor_message = None;
+                desk.action_message = None;
             }
         } else {
             self.open_web_management(cx);
@@ -118,7 +129,7 @@ impl Root {
         let Overlay::Whatsapp(desk) = &mut self.overlay else {
             return;
         };
-        if desk.editor.is_some() || desk.editing_request || desk.loading {
+        if desk.editor.is_some() || desk.action_pending || desk.loading {
             return;
         }
         let Some(connection) = desk
@@ -133,7 +144,7 @@ impl Root {
                 revision: revision.clone(),
                 phone: connection.phone.clone(),
             });
-            desk.editor_message = None;
+            desk.action_message = None;
             cx.notify();
         }
     }
@@ -180,7 +191,7 @@ impl Root {
                 match result {
                     Ok(snapshot) => {
                         desk.refresh.applied(cursor);
-                        if matches!(desk.editor_message, Some(Key::WhatsappRulesUnconfirmed))
+                        if matches!(desk.action_message, Some(Key::WhatsappRulesUnconfirmed))
                             && desk.editor.as_ref().is_some_and(|editor| {
                                 snapshot
                                     .connection
@@ -189,10 +200,10 @@ impl Root {
                                     == Some(editor.revision.as_str())
                             })
                         {
-                            desk.editor_message = None;
+                            desk.action_message = None;
                         }
                         let reopen = !desk.confirm_discard
-                            && !desk.editing_request
+                            && !desk.action_pending
                             && desk.editor.as_ref().is_some_and(|editor| {
                                 !editor.dirty()
                                     && snapshot.configured
@@ -313,7 +324,7 @@ impl Root {
                 online
                     && desk.editor.is_none()
                     && desk.disconnect_review.is_none()
-                    && !desk.editing_request
+                    && !desk.action_pending
                     && desk.snapshot.as_ref().is_some_and(|snapshot| {
                         snapshot.configured
                             && snapshot.connection.as_ref().is_some_and(|connection| {
@@ -328,7 +339,7 @@ impl Root {
             .when(
                 online
                     && !desk.loading
-                    && !desk.editing_request
+                    && !desk.action_pending
                     && desk.editor.is_none()
                     && desk.disconnect_review.is_none()
                     && desk
@@ -346,12 +357,7 @@ impl Root {
                 },
             )
             .when_some(desk.disconnect_review.as_ref(), |body, review| {
-                let current = desk
-                    .snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.connection.as_ref())
-                    .and_then(|connection| connection.revision.as_deref());
-                let changed = current != Some(review.revision.as_str());
+                let changed = desk.sender_revision() != Some(review.revision.as_str());
                 body.child(div().font_weight(FontWeight::SEMIBOLD).child(i18n::fill(
                     self.t(Key::WhatsappDisconnectTitle),
                     &[("phone", &review.phone)],
@@ -360,7 +366,7 @@ impl Root {
                 .when(changed, |body| {
                     body.child(self.t(Key::WhatsappDisconnectChanged))
                 })
-                .when(!desk.editing_request, |body| {
+                .when(!desk.action_pending, |body| {
                     body.child(
                         div()
                             .flex()
@@ -434,10 +440,10 @@ impl Root {
                     }))
                 },
             )
-            .when_some(desk.editor_message, |body, message| {
+            .when_some(desk.action_message, |body, message| {
                 body.child(self.t(message))
             })
-            .when(desk.editing_request, |body| {
+            .when(desk.action_pending, |body| {
                 body.child(self.t(Key::EmailDeliveryWorking))
             })
             .when(desk.confirm_discard, |body| {
@@ -449,7 +455,7 @@ impl Root {
                         cx.listener(|root, _, _, cx| {
                             if let Overlay::Whatsapp(desk) = &mut root.overlay {
                                 desk.editor = None;
-                                desk.editor_message = None;
+                                desk.action_message = None;
                                 desk.confirm_discard = false;
                                 cx.notify();
                             }
@@ -475,7 +481,7 @@ impl Root {
                         online
                             && desk.editor.is_none()
                             && desk.disconnect_review.is_none()
-                            && !desk.editing_request,
+                            && !desk.action_pending,
                         |row| {
                             row.child(self.button(
                                 "whatsapp-reload",
@@ -535,7 +541,7 @@ mod tests {
 
             root.confirm_whatsapp_disconnect(cx);
             let Overlay::Whatsapp(desk) = &root.overlay else { panic!("Missing WhatsApp desk") };
-            assert!(!desk.editing_request);
+            assert!(!desk.action_pending);
             assert_eq!(desk.disconnect_review.as_ref().unwrap().revision, "original");
             root.close_whatsapp_desk(cx);
             assert!(matches!(&root.overlay, Overlay::Whatsapp(desk) if desk.disconnect_review.is_none()));

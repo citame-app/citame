@@ -132,6 +132,7 @@ export const whatsappRulesSchema = z
   );
 const whatsappRevision = z.string().regex(/^[a-f0-9]{64}$/);
 export const whatsappReviewedDisconnectSchema = z.strictObject({ revision: whatsappRevision });
+export type WhatsAppReviewedDisconnect = z.infer<typeof whatsappReviewedDisconnectSchema>;
 export const whatsappReviewedRulesSchema = z.strictObject({
   revision: whatsappRevision,
   rules: whatsappRulesSchema,
@@ -151,6 +152,11 @@ export const whatsappCompleteSchema = z
       .optional(),
   })
   .strict();
+export type WhatsAppConnectInput = z.infer<typeof whatsappCompleteSchema>;
+export const whatsappReviewedConnectSchema = whatsappCompleteSchema.extend({
+  revision: whatsappRevision,
+});
+export type WhatsAppReviewedConnect = z.infer<typeof whatsappReviewedConnectSchema>;
 export const whatsappTemplateSchema = z.object({
   id: z.string().regex(/^\d{5,32}$/),
   name: z.string(),
@@ -160,6 +166,7 @@ export const whatsappTemplateSchema = z.object({
   named: z.boolean(),
 });
 export const whatsappSettingsSchema = z.object({
+  signupRevision: whatsappRevision.optional(),
   setup: z.object({ appId: z.string(), configId: z.string(), version: z.string() }).nullable(),
   connection: z
     .object({
