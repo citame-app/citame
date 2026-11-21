@@ -109,6 +109,8 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX appointment_client_history
         ON appointment (json_extract(json, '$.clientId'), starts_at_ms DESC, id);
     "#,
+    // 5: submitted combination payloads stay immutable across retries and restarts.
+    "ALTER TABLE outbox ADD COLUMN submitted INTEGER NOT NULL DEFAULT 0;",
 ];
 
 const MIRROR_TABLES: &[&str] = &[
@@ -127,6 +129,7 @@ pub struct Store {
     conn: Connection,
     reviewed_generation: String,
     validated_pool_catalogue: bool,
+    validated_combination_catalogue: bool,
 }
 
 #[derive(Default)]
@@ -135,6 +138,7 @@ struct PullMetadata<'a> {
     generation: Option<&'a str>,
     catalogue_access: Option<bool>,
     resource_pools: Option<&'a [crate::resource_pools::ManagedPool]>,
+    combinations: Option<&'a [crate::combinations::ManagedCombination]>,
 }
 
 /// What `apply_push_results` did.
@@ -355,6 +359,7 @@ impl Store {
             conn,
             reviewed_generation,
             validated_pool_catalogue: false,
+            validated_combination_catalogue: false,
         })
     }
 
@@ -881,6 +886,7 @@ impl Store {
                 generation: Some(generation),
                 catalogue_access: page.viewer_edit_catalogue,
                 resource_pools: page.resource_pools.as_deref(),
+                combinations: page.combinations.as_deref(),
             },
         )
     }
@@ -921,12 +927,17 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         Self::ensure_generation(&tx, metadata.generation)?;
         let mut received_pools = false;
+        let mut received_combinations = false;
         if let Some(allowed) = metadata.catalogue_access {
             let generation = Self::generation_at(&tx)?;
             Self::apply_catalogue_access_at(&tx, &generation, allowed)?;
             if allowed && let Some(pools) = metadata.resource_pools {
                 Self::cache_resource_pools_at(&tx, pools, &generation)?;
                 received_pools = true;
+            }
+            if allowed && let Some(combinations) = metadata.combinations {
+                Self::cache_combinations_at(&tx, combinations, &generation)?;
+                received_combinations = true;
             }
         }
         let cursor = tx
@@ -1037,6 +1048,7 @@ impl Store {
         )?;
         tx.commit()?;
         self.validated_pool_catalogue |= received_pools;
+        self.validated_combination_catalogue |= received_combinations;
         Ok(applied)
     }
 
@@ -1096,7 +1108,7 @@ impl Store {
             tx.execute(&format!("DELETE FROM {t}"), [])?;
         }
         tx.execute(
-            "DELETE FROM meta WHERE key IN ('cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','desk_waitlist','resource_pool_catalogue',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
+            "DELETE FROM meta WHERE key IN ('cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','desk_waitlist','resource_pool_catalogue','service_combinations',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
             [CATALOG_COLORS_CACHED, SALON_CONFIGURATION_CACHE, SALON_CONFIGURATION_ACK, SALON_CONFIGURATION_UNAVAILABLE],
         )?;
         tx.execute("DELETE FROM local_booking_confirmation", [])?;
@@ -1546,6 +1558,8 @@ impl Store {
                                 | crate::service_resources::MUTATION_KIND
                                 | crate::resource_pools::CREATE
                                 | crate::resource_pools::UPDATE
+                                | crate::combinations::CREATE
+                                | crate::combinations::UPDATE
                         )
                     {
                         Self::set_meta_at(
@@ -1573,6 +1587,8 @@ impl Store {
                                 | crate::service_resources::MUTATION_KIND
                                 | crate::resource_pools::CREATE
                                 | crate::resource_pools::UPDATE
+                                | crate::combinations::CREATE
+                                | crate::combinations::UPDATE
                         )
                     {
                         Self::forget_catalogue_access_at(&tx)?;
@@ -1672,6 +1688,7 @@ impl Store {
 
 mod service_assignments;
 pub use service_assignments::{AssignmentSnapshot, AssignmentWork, ServiceAssignment};
+mod combinations;
 mod resource_pools;
 mod resource_requirements;
 mod service_creation;

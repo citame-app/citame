@@ -36,6 +36,7 @@ import {
   updateService,
   updateServiceConfiguration,
 } from "../services/admin";
+import { saveCombination } from "../services/combinations";
 import { getSalonSettings, updateReviewedSettings, updateSalonSettings } from "../settings/service";
 import { requireStaff, updateStaff } from "../staff/admin";
 import { createTimeOff, deleteTimeOff, updateTimeOff } from "../staff/schedule";
@@ -69,6 +70,7 @@ export function rejectionReason(
       intake_required: "intake_required",
       booking_intent_conflict: "booking_intent_conflict",
       has_future_appointments: "invalid_state",
+      storage_limit: "invalid_state",
     };
     const reason = map[error.code];
     return reason ? { reason, message: error.message } : null;
@@ -264,6 +266,20 @@ export async function applyMutation(
     case "resource.update": {
       const { id, ...input } = mutation.payload;
       await updateResource(db, id, input, principal, now);
+      return;
+    }
+    case "combination.create": {
+      const { id, ...input } = mutation.payload;
+      await saveCombination(db, { ...input, idempotencyKey: mutation.mutationId }, principal, now, {
+        kind: "create",
+        id,
+        reviewOnline: true,
+      });
+      return;
+    }
+    case "combination.update": {
+      const { id, ...input } = mutation.payload;
+      await saveCombination(db, input, principal, now, { kind: "update", id, reviewOnline: true });
       return;
     }
     case "staff.update": {

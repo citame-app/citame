@@ -7,6 +7,7 @@ pub mod billing;
 pub mod booking;
 pub mod booking_policy;
 pub mod calendar;
+pub mod combinations;
 pub mod csv_file;
 pub mod error;
 pub mod http;
@@ -28,6 +29,13 @@ pub mod store;
 pub mod sync;
 pub mod team_shifts;
 pub mod waitlist;
+
+fn trim_like_javascript(text: &str) -> &str {
+    // JavaScript's String.trim treats BOM as whitespace and keeps NEXT LINE.
+    text.trim_matches(|character: char| {
+        character == '\u{feff}' || (character.is_whitespace() && character != '\u{0085}')
+    })
+}
 
 #[cfg(test)]
 mod offline_tests;

@@ -268,6 +268,177 @@ fn native_resource_pool_creation_and_edits_resume_through_the_proxy() {
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_combinations_resume_after_restart_and_preserve_cloud_order() {
+    use sob_core::combinations::{CombinationDraft, PendingCombination};
+
+    let device = proxy_device();
+    let web = Device::sign_in();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("combinations.sqlite");
+    let mut store = Store::open(&path).unwrap();
+    sync::pull_all(&mut store, &*device.transport).unwrap();
+    let staff = store.staff().unwrap().remove(0).id;
+    let service_ids: Vec<_> = [
+        "First combination treatment",
+        "Second combination treatment",
+    ]
+    .into_iter()
+    .map(|name| {
+        web.rest_post(
+            "/admin/services",
+            json!({
+                "name":name,"durationMinutes":30,"priceCents":2500,"staffIds":[staff],
+            }),
+        )["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    })
+    .collect();
+    sync::pull_all(&mut store, &*device.transport).unwrap();
+    let initial = store.managed_combinations().unwrap().unwrap();
+    let id = uuid::Uuid::now_v7().to_string();
+    let original = CombinationDraft {
+        name: "Offline combination".into(),
+        description: Some("Line one\n\nLine three".into()),
+        service_ids,
+        active: true,
+    };
+    assert!(
+        store
+            .queue_combination(
+                &initial.generation,
+                &id,
+                None,
+                CombinationDraft {
+                    name: "First offline draft".into(),
+                    ..original.clone()
+                },
+                None,
+                None,
+            )
+            .unwrap()
+    );
+    let first = store.pending_combinations().unwrap().remove(0);
+    assert!(!first.submitted);
+    assert!(
+        store
+            .queue_combination(
+                &initial.generation,
+                &id,
+                None,
+                original.clone(),
+                Some(&first.mutation_id),
+                None,
+            )
+            .unwrap()
+    );
+    drop(store);
+
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(
+        store.pending_combinations().unwrap()[0].edit.proposed,
+        original
+    );
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    assert!(store.pending_combinations().unwrap().is_empty());
+    let confirmed = store.managed_combinations().unwrap().unwrap();
+    let saved = confirmed
+        .combinations
+        .iter()
+        .find(|row| row.id == id)
+        .unwrap();
+    assert_eq!(saved.draft, original);
+    let proposed = CombinationDraft {
+        name: "Offline name update".into(),
+        ..original.clone()
+    };
+    assert!(
+        store
+            .queue_combination(
+                &confirmed.generation,
+                &id,
+                Some(saved.version),
+                proposed.clone(),
+                None,
+                None
+            )
+            .unwrap()
+    );
+    let mut cloud_order = original.service_ids.clone();
+    cloud_order.reverse();
+    let prefix = std::env::var("SOB_TEST_REST_PREFIX").unwrap_or_default();
+    ureq::put(&format!(
+        "{}{prefix}/admin/services/combinations/{id}",
+        web.base
+    ))
+    .header("Cookie", &web.cookie)
+    .header("Origin", &web.base)
+    .content_type("application/json")
+    .send(
+        json!({
+            "name":original.name,"description":original.description,"serviceIds":cloud_order,
+            "active":false,"version":saved.version,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .rejected,
+        1
+    );
+    let conflict = store.conflicts().unwrap().pop().unwrap();
+    let edit: PendingCombination = serde_json::from_value(conflict.payload).unwrap();
+    let latest = store.managed_combinations().unwrap().unwrap();
+    let current = latest.combinations.iter().find(|row| row.id == id).unwrap();
+    assert_eq!(current.draft.service_ids, cloud_order);
+    assert!(!current.draft.active);
+    let reviewed = edit
+        .proposed
+        .rebase(&edit.reviewed.unwrap(), &current.draft, true);
+    assert!(
+        store
+            .queue_combination(
+                &latest.generation,
+                &id,
+                Some(current.version),
+                reviewed,
+                None,
+                Some(&conflict.mutation_id)
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let published = web.rest_get("/admin/services/combinations");
+    let row = published["combinations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id)
+        .unwrap();
+    assert_eq!(row["name"], proposed.name);
+    assert_eq!(row["serviceIds"], json!(cloud_order));
+    assert_eq!(row["active"], false);
+    assert!(store.conflicts().unwrap().is_empty());
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_resource_requirements_reopen_and_rebase_through_the_proxy() {
     use sob_core::service_resources::{
         LIVE_TOPIC, PendingServiceResources, ResourceDraft, SelectionMode,

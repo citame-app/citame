@@ -34,6 +34,7 @@ impl Store {
 
     pub(super) fn forget_catalogue_access_at(conn: &Connection) -> Result<()> {
         Self::forget_resource_pools_at(conn)?;
+        Self::forget_combinations_at(conn)?;
         conn.execute(
             "DELETE FROM meta WHERE key LIKE 'reviewed_service_resources:%'",
             [],

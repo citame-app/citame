@@ -25,6 +25,8 @@ export async function pull(
   if (query.intakeViews) params.set("intakeViews", query.intakeViews);
   if (query.resourceCatalogue) params.set("resourceCatalogue", query.resourceCatalogue);
   if (query.resourcePools) params.set("resourcePools", query.resourcePools);
+  if (query.combinationCatalogue) params.set("combinationCatalogue", query.combinationCatalogue);
+  if (query.combinations) params.set("combinations", query.combinations);
   const res = await json(t.app, `/sync/pull?${params}`, "GET", undefined, who?.cookie);
   if (res.status !== 200) throw new Error(`pull failed: ${res.status} ${await res.text()}`);
   return syncPullResponseSchema.parse(await res.json());

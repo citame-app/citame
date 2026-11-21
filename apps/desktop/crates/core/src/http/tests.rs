@@ -885,7 +885,7 @@ fn an_upgraded_replica_recovers_service_colors_without_rewinding_its_cursor() {
         .enqueue("client.create", "local", json!({"id":"local","name":"Ana"}))
         .unwrap();
     let page = r#"{"changes":[],"nextCursor":42,"hasMore":false,"headSeq":42}"#;
-    let repaired = r##"{"changes":[],"nextCursor":42,"hasMore":false,"headSeq":42,"catalogColors":{"s1":"#AC3456"},"resourcePools":[],"viewerEditCatalogue":true}"##;
+    let repaired = r##"{"changes":[],"nextCursor":42,"hasMore":false,"headSeq":42,"catalogColors":{"s1":"#AC3456"},"resourcePools":[],"combinations":[],"viewerEditCatalogue":true}"##;
     let (base, seen) = serve(
         [page, repaired, page]
             .map(|body| http("200 OK", &["Content-Type: application/json"], body))
@@ -910,13 +910,13 @@ fn an_upgraded_replica_recovers_service_colors_without_rewinding_its_cursor() {
     pull_all(&mut store, &transport).unwrap();
     let requests = seen.lock().unwrap();
     assert!(requests[0].starts_with(
-        "GET /sync/pull?since=42&limit=200&catalogColors=1&reviewRequests=1&intakeViews=1&bookingPolicy=1&resourceCatalogue=1&resourcePools=full "
+        "GET /sync/pull?since=42&limit=200&catalogColors=1&reviewRequests=1&intakeViews=1&bookingPolicy=1&resourceCatalogue=1&resourcePools=full&combinations=full "
     ));
     assert!(requests[1].starts_with(
-        "GET /sync/pull?since=42&limit=200&catalogColors=1&reviewRequests=1&intakeViews=1&bookingPolicy=1&resourceCatalogue=1&resourcePools=full "
+        "GET /sync/pull?since=42&limit=200&catalogColors=1&reviewRequests=1&intakeViews=1&bookingPolicy=1&resourceCatalogue=1&resourcePools=full&combinations=full "
     ));
     assert!(requests[2].starts_with(
-        "GET /sync/pull?since=42&limit=200&reviewRequests=1&intakeViews=1&bookingPolicy=1&resourceCatalogue=1&resourcePools=delta "
+        "GET /sync/pull?since=42&limit=200&reviewRequests=1&intakeViews=1&bookingPolicy=1&resourceCatalogue=1&resourcePools=delta&combinations=delta "
     ));
 }
 

@@ -43,6 +43,12 @@ pub enum TransportError {
     ReplicaGenerationChanged,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct CatalogueSnapshots {
+    pub full_resource_pools: bool,
+    pub full_combinations: bool,
+}
+
 pub trait Transport: Send + Sync {
     fn push(&self, request: &PushRequest) -> Result<PushResponse, TransportError>;
     fn pull(&self, since: i64, limit: u32) -> Result<PullResponse, TransportError>;
@@ -64,7 +70,7 @@ pub trait Transport: Send + Sync {
         since: i64,
         limit: u32,
         colors: bool,
-        _full_resource_pools: bool,
+        _snapshots: CatalogueSnapshots,
     ) -> Result<(PullResponse, Option<CatalogColors>), TransportError> {
         if colors {
             self.pull_with_catalog_colors(since, limit)
@@ -180,6 +186,10 @@ pub fn push_outbox(store: &mut Store, transport: &dyn Transport) -> Result<PushR
             continue;
         }
         batch.truncate(request.mutations.len());
+        if !store.reserve_combination_payloads(&generation, &batch)? {
+            // An editor revised an unsent proposal after this batch was read.
+            continue;
+        }
         let response = match transport.push(&request) {
             Ok(r) => r,
             Err(e) => {
@@ -232,7 +242,10 @@ pub fn pull_all(store: &mut Store, transport: &dyn Transport) -> Result<PullRepo
             since,
             PULL_PAGE,
             request_colors,
-            store.needs_resource_pool_snapshot()?,
+            CatalogueSnapshots {
+                full_resource_pools: store.needs_resource_pool_snapshot()?,
+                full_combinations: store.needs_combination_snapshot()?,
+            },
         );
         let (page, colors) = match response {
             Ok(p) => p,

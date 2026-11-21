@@ -52,6 +52,7 @@ const shared: Record<SyncEntity | SyncLiveView, readonly (readonly string[])[]> 
     ["appointment-catalog"],
     ["services"],
     ["staff"],
+    ["combinations"],
   ],
   staff: [
     ...calendar,
@@ -63,6 +64,7 @@ const shared: Record<SyncEntity | SyncLiveView, readonly (readonly string[])[]> 
     ["admin", "staff-capacity"],
     ["admin", "report"],
     ["staff"],
+    ["combinations"],
   ],
   working_hours: [...calendar, ["admin", "working-hours"], ["date-shifts"], teamShiftWeekKey],
   date_shift: [...calendar, ["admin", "working-hours"], ["date-shifts"], teamShiftWeekKey],
@@ -82,6 +84,7 @@ const shared: Record<SyncEntity | SyncLiveView, readonly (readonly string[])[]> 
   intake_records: [intakeHistoryQueryKey],
   booking_policy: [["booking-policy"], ["admin", "booking-policy"]],
   resource_catalogue: [...calendar, ["appointments"], ["admin", "resources"]],
+  service_combinations: [["combinations"]],
 };
 
 export function liveQueryKeys(changes?: Iterable<SyncEntity | SyncLiveView>) {

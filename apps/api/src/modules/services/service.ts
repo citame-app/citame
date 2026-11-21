@@ -37,6 +37,14 @@ export async function listServices(db: Database, includeInternal = false): Promi
   });
 }
 
+export async function onlineServicesByIds(db: Pick<Database, "select">, ids: string[]) {
+  if (!ids.length) return [];
+  const active = await loadActiveCatalogRows(db, ids);
+  const visible = await onlineCatalogRows(db, active);
+  const metadata = await catalogMetadata(db, visible);
+  return visible.map((row) => publicService(row, metadata.get(row.id)));
+}
+
 async function onlineCatalogRows(
   db: Pick<Database, "select">,
   rows: (typeof service.$inferSelect)[],
@@ -83,15 +91,19 @@ export async function getServicesByIds(
   return (await readServiceTerms(db, ids)).map(({ row, catalog }) => publicService(row, catalog));
 }
 
-async function readServiceTerms(db: Pick<Database, "select">, ids: string[]) {
-  const unique = [...new Set(ids)];
-  const rows = await activeCatalogRows(
+async function loadActiveCatalogRows(db: Pick<Database, "select">, ids: string[]) {
+  return activeCatalogRows(
     db,
     await db
       .select()
       .from(service)
-      .where(and(inArray(service.id, unique), eq(service.active, true), isNull(service.deletedAt))),
+      .where(and(inArray(service.id, ids), eq(service.active, true), isNull(service.deletedAt))),
   );
+}
+
+async function readServiceTerms(db: Pick<Database, "select">, ids: string[]) {
+  const unique = [...new Set(ids)];
+  const rows = await loadActiveCatalogRows(db, unique);
   const metadata = await catalogMetadata(db, rows);
   const byId = new Map(rows.map((row) => [row.id, row]));
   const result = unique.map((id) => {

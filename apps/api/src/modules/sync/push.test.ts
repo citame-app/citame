@@ -294,6 +294,87 @@ test("native service configuration can rename a variant without changing its par
   });
 });
 
+test("native combinations preserve ordered services and reject stale Cloud edits", async () => {
+  const id = uuid();
+  const fields = {
+    name: "Hair care",
+    description: "Cut followed by colour",
+    serviceIds: [f.haircutId, f.colorId],
+    active: true,
+  };
+  const create = mutation("combination.create", { id, ...fields });
+  const combinations = (who: Actor, mode: "full" | "delta", since: number) =>
+    pull(t, who, { since, combinations: mode });
+  const initial = await pull(t, owner);
+  expect((await push(t, ana, [{ ...create, mutationId: mid() }])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "forbidden",
+  });
+  const committed = (await push(t, owner, [create])).body.results[0];
+  expect(committed).toMatchObject({ status: "applied", appliedSeq: expect.any(Number) });
+  expect((await push(t, owner, [create])).body.results[0]).toMatchObject({
+    status: "applied",
+    replayed: true,
+  });
+  expect((await push(t, owner, [{ ...create, mutationId: mid() }])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "invalid_state",
+  });
+  expect(await combinations(owner, "delta", initial.headSeq)).toMatchObject({
+    combinations: [{ id, ...fields, version: 1 }],
+  });
+  expect(
+    (await pull(t, owner, { since: initial.headSeq, combinationCatalogue: "1" })).refresh,
+  ).toContain("service_combinations");
+  expect((await pull(t, owner, { since: initial.headSeq })).refresh ?? []).not.toContain(
+    "service_combinations",
+  );
+  expect(await combinations(ana, "full", 0)).not.toHaveProperty("combinations");
+  await t.db.update(service).set({ onlineBooking: false }).where(eq(service.id, f.colorId));
+  const hiddenCreate = mutation("combination.create", { ...fields, id: uuid() });
+  expect((await push(t, owner, [hiddenCreate])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "invalid",
+  });
+  expect(await combinations(owner, "full", 0)).toMatchObject({
+    combinations: [{ id, bookable: false, version: 1 }],
+  });
+  await t.db.update(service).set({ onlineBooking: true }).where(eq(service.id, f.colorId));
+  const path = `/admin/services/combinations/${id}`;
+  const current = {
+    ...fields,
+    name: "Cloud colour and cut",
+    serviceIds: [f.colorId, f.haircutId],
+  };
+  expect((await json(t.app, path, "PUT", { ...current, version: 1 }, owner.cookie)).status).toBe(
+    200,
+  );
+  const archive = (version: number, reviewed: typeof fields) =>
+    mutation("combination.update", { ...reviewed, id, version, active: false });
+  expect((await push(t, owner, [archive(1, fields)])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "conflict",
+  });
+  const reviewed = await combinations(owner, "full", 0);
+  expect(reviewed).toMatchObject({ combinations: [{ id, ...current, version: 2 }] });
+  expect(await combinations(owner, "delta", reviewed.headSeq)).not.toHaveProperty("combinations");
+  expect((await push(t, owner, [archive(2, current)])).body.results[0]).toMatchObject({
+    status: "applied",
+    appliedSeq: expect.any(Number),
+  });
+  expect(await combinations(owner, "delta", reviewed.headSeq)).toMatchObject({
+    combinations: [{ id, ...current, active: false, version: 3 }],
+  });
+  expect(await (await json(t.app, "/services/combinations", "GET")).json()).toEqual({
+    combinations: [],
+  });
+  const afterArchive = await combinations(owner, "full", 0);
+  await t.db.update(service).set({ active: false }).where(eq(service.id, f.colorId));
+  expect(await combinations(owner, "delta", afterArchive.headSeq)).toMatchObject({
+    combinations: [{ id, active: false, bookable: false, version: 3 }],
+  });
+});
+
 test("native resource requirements are versioned, validated and replay safely", async () => {
   const path = `/admin/services/${f.haircutId}/resources`;
   const create = await json(

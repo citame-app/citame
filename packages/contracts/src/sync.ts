@@ -15,6 +15,11 @@ import {
   salonResponseSchema,
   updateSalonSettingsRequestSchema,
 } from "./salon";
+import {
+  combinationCreateSchema,
+  combinationUpdateSchema,
+  serviceCombinationSchema,
+} from "./service-combinations";
 import { serviceCatalogUpdateSchema } from "./service-options";
 import {
   createServiceRequestSchema,
@@ -259,6 +264,18 @@ const resourceUpdate = z.object({
   payload: resourceUpdateSchema.extend({ id: idSchema }),
 });
 
+const combinationCreate = z.object({
+  ...envelope,
+  kind: z.literal("combination.create"),
+  payload: combinationCreateSchema.omit({ idempotencyKey: true }).extend({ id: idSchema }),
+});
+
+const combinationUpdate = z.object({
+  ...envelope,
+  kind: z.literal("combination.update"),
+  payload: combinationUpdateSchema.extend({ id: idSchema }),
+});
+
 const staffUpdate = z.object({
   ...envelope,
   kind: z.literal("staff.update"),
@@ -294,6 +311,8 @@ export const syncMutationSchema = z.discriminatedUnion("kind", [
   serviceResources,
   resourceCreate,
   resourceUpdate,
+  combinationCreate,
+  combinationUpdate,
   staffUpdate,
   settingsUpdate,
 ]);
@@ -391,6 +410,8 @@ export const syncPullQuerySchema = z.object({
   bookingPolicy: z.literal("1").optional(),
   resourceCatalogue: z.literal("1").optional(),
   resourcePools: z.enum(["full", "delta"]).optional(),
+  combinationCatalogue: z.literal("1").optional(),
+  combinations: z.enum(["full", "delta"]).optional(),
 });
 export type SyncPullQuery = z.infer<typeof syncPullQuerySchema>;
 
@@ -516,6 +537,7 @@ export const syncLiveViewSchema = z.enum([
   "intake_records",
   "booking_policy",
   "resource_catalogue",
+  "service_combinations",
 ]);
 export type SyncLiveView = z.infer<typeof syncLiveViewSchema>;
 
@@ -526,6 +548,7 @@ export const syncPullResponseSchema = z.object({
   /** Configured service colors for upgrading replicas that lacked the color field. */
   catalogColors: z.record(idSchema, z.string().regex(/^#[0-9a-fA-F]{6}$/)).optional(),
   resourcePools: z.array(resourceSchema).max(50).optional(),
+  combinations: z.array(serviceCombinationSchema).max(100).optional(),
   changes: z.array(syncChangeSchema),
   /** Store this and send it as `since` next time. Never decreases. */
   nextCursor: z.number().int().min(0),

@@ -47,12 +47,13 @@ export async function assertStaffExists(
   if (!row) throw new DomainError("not_found", `Staff member ${staffId} not found`);
 }
 
-/** Ids of active staff who perform every one of the given services. */
-export async function staffQualifiedFor(
+/** Active professional assignments for the requested services. */
+export async function activeServiceAssignments(
   db: Pick<Database, "select">,
-  serviceIds: string[],
-): Promise<string[]> {
-  const rows = await db
+  serviceIds: readonly string[],
+) {
+  if (!serviceIds.length) return [];
+  return db
     .select({ staffId: serviceStaff.staffId, serviceId: serviceStaff.serviceId })
     .from(serviceStaff)
     .innerJoin(staffProfile, eq(staffProfile.id, serviceStaff.staffId))
@@ -64,6 +65,14 @@ export async function staffQualifiedFor(
         isNull(staffProfile.deletedAt),
       ),
     );
+}
+
+/** Ids of active staff who perform every one of the given services. */
+export async function staffQualifiedFor(
+  db: Pick<Database, "select">,
+  serviceIds: string[],
+): Promise<string[]> {
+  const rows = await activeServiceAssignments(db, serviceIds);
   const counts = new Map<string, Set<string>>();
   for (const row of rows) {
     const set = counts.get(row.staffId) ?? new Set<string>();

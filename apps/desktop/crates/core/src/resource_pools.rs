@@ -40,10 +40,7 @@ impl Default for PoolDraft {
 
 impl PoolDraft {
     pub fn normalized_name(name: &str) -> &str {
-        // Match JavaScript's String.trim, which treats BOM as whitespace and keeps NEXT LINE.
-        name.trim_matches(|character: char| {
-            character == '\u{feff}' || (character.is_whitespace() && character != '\u{0085}')
-        })
+        crate::trim_like_javascript(name)
     }
 
     pub fn validated(mut self) -> Result<Self> {

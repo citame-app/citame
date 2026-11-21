@@ -36,7 +36,7 @@ use crate::reviews::{
 };
 use crate::runner::Wake;
 use crate::sse::{SseParser, nudge_seq};
-use crate::sync::{CatalogColors, Transport, TransportError};
+use crate::sync::{CatalogColors, CatalogueSnapshots, Transport, TransportError};
 use crate::waitlist::{
     AcceptOffer, AcceptOfferError, AcceptedOffer, BookedAppointment, WaitlistEntry, WaitlistPage,
     WaitlistPolicy, WaitlistRequest,
@@ -1845,9 +1845,9 @@ impl Transport for HttpTransport {
         since: i64,
         limit: u32,
         colors: bool,
-        full_resource_pools: bool,
+        snapshots: CatalogueSnapshots,
     ) -> Result<(PullResponse, Option<CatalogColors>), TransportError> {
-        self.pull_page(since, limit, colors, Some(full_resource_pools))
+        self.pull_page(since, limit, colors, Some(snapshots))
             .map(|result| (result.page, result.catalog_colors))
     }
 }
@@ -1866,22 +1866,27 @@ impl HttpTransport {
         since: i64,
         limit: u32,
         request_colors: bool,
-        resource_pools: Option<bool>,
+        snapshots: Option<CatalogueSnapshots>,
     ) -> Result<CatalogPull, TransportError> {
         let catalog = if request_colors {
             "&catalogColors=1"
         } else {
             ""
         };
-        let pools = match resource_pools {
-            Some(true) => "&resourcePools=full",
-            Some(false) => "&resourcePools=delta",
-            None => "",
-        };
+        let catalogue_snapshots = snapshots
+            .map(|snapshots| {
+                let mode = |full| if full { "full" } else { "delta" };
+                format!(
+                    "&resourcePools={}&combinations={}",
+                    mode(snapshots.full_resource_pools),
+                    mode(snapshots.full_combinations)
+                )
+            })
+            .unwrap_or_default();
         let resp = self.get(
             &self.agent,
             &format!(
-                "/sync/pull?since={since}&limit={limit}{catalog}&reviewRequests=1&intakeViews=1&bookingPolicy=1&resourceCatalogue=1{pools}"
+                "/sync/pull?since={since}&limit={limit}{catalog}&reviewRequests=1&intakeViews=1&bookingPolicy=1&resourceCatalogue=1{catalogue_snapshots}"
             ),
             None,
         )?;

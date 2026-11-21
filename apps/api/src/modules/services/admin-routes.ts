@@ -76,7 +76,7 @@ export function serviceAdminRoutes({ db, config, now = () => new Date() }: AppDe
           parseOrThrow(combinationUpdateSchema, await readJson(c)),
           c.get("principal"),
           now(),
-          parseOrThrow(idSchema, c.req.param("combinationId")),
+          { kind: "update", id: parseOrThrow(idSchema, c.req.param("combinationId")) },
         ),
       ),
     )

@@ -38,6 +38,7 @@ mod booking_intake;
 mod booking_policy;
 mod cash;
 mod checkout;
+mod combinations;
 mod connection;
 mod directory;
 mod form_admin;
@@ -268,6 +269,7 @@ enum Overlay {
     ServiceCatalog(Box<service_catalog::Desk>),
     ResourceRequirements(Box<resource_requirements::Desk>),
     ResourcePools(Box<resource_pools::Desk>),
+    Combinations(Box<combinations::Desk>),
     Reviews(Box<reviews::Desk>),
     ReviewModeration(Box<review_moderation::Desk>),
     Waitlist(Box<waitlist::Desk>),
@@ -694,6 +696,7 @@ impl Root {
         self.refresh_open_service_catalog(reconnected, cx);
         self.refresh_service_resources(reconnected, cx);
         self.refresh_resource_pools(cx);
+        self.refresh_combinations(cx);
         if reconnected {
             self.refresh_weekly_conflicts_if_ready(cx);
             self.refresh_open_annotations(true, cx);
@@ -722,6 +725,7 @@ impl Root {
                 && !self.preserve_open_catalogue()
                 && !self.preserve_open_resource_requirements()
                 && !self.preserve_open_resource_pools(generation.as_deref())
+                && !self.preserve_open_combinations(generation.as_deref())
             {
                 self.overlay = Overlay::None;
             }
@@ -2390,6 +2394,7 @@ impl Root {
             Overlay::ServiceCatalog(_) => self.close_service_catalog(cx),
             Overlay::ResourceRequirements(_) => self.close_resource_requirements(cx),
             Overlay::ResourcePools(_) => self.close_resource_pools(cx),
+            Overlay::Combinations(_) => self.close_combinations(cx),
             Overlay::StaffAccess(_) => self.close_staff_access(cx),
             Overlay::Directory(desk) if desk.intake.is_some() => self.back_record(cx),
             Overlay::ReviewModeration(desk) => {
@@ -3301,6 +3306,9 @@ impl Root {
                 sob_core::resource_pools::CREATE | sob_core::resource_pools::UPDATE => {
                     Key::PoolManagement
                 }
+                sob_core::combinations::CREATE | sob_core::combinations::UPDATE => {
+                    Key::CombinationManagement
+                }
                 _ => Key::ConflictOther,
             });
             let when = c
@@ -3477,6 +3485,23 @@ impl Root {
                                     Kind::Primary,
                                     cx.listener(move |root, _, _, cx| {
                                         root.open_resource_pools(Some(&id), cx)
+                                    }),
+                                ))
+                            },
+                        )
+                        .when(
+                            matches!(
+                                c.kind.as_str(),
+                                sob_core::combinations::CREATE | sob_core::combinations::UPDATE
+                            ) && self.can_create_catalogue_item(),
+                            |row| {
+                                let id = c.mutation_id.clone();
+                                row.child(self.button(
+                                    ("review-combination", i),
+                                    self.t(Key::CatalogReview),
+                                    Kind::Primary,
+                                    cx.listener(move |root, _, _, cx| {
+                                        root.open_combinations(Some(&id), cx)
                                     }),
                                 ))
                             },
@@ -3738,6 +3763,9 @@ impl Render for Root {
                         ),
                         Overlay::ResourcePools(desk) => {
                             Some(self.render_resource_pools(desk, window.viewport_size(), cx))
+                        }
+                        Overlay::Combinations(desk) => {
+                            Some(self.render_combinations(desk, window.viewport_size(), cx))
                         }
                         Overlay::Reviews(desk) => {
                             Some(self.render_review_requests(desk, window.viewport_size(), cx))

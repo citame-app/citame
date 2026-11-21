@@ -86,6 +86,7 @@ fn empty_pull(since: i64, _limit: u32) -> Result<PullResponse, TransportError> {
         viewer_role: None,
         viewer_edit_catalogue: None,
         resource_pools: None,
+        combinations: None,
         head_seq: since,
     })
 }
@@ -443,6 +444,7 @@ fn page(from: i64, n: i64, has_more: bool) -> PullResponse {
             viewer_role: None,
             viewer_edit_catalogue: None,
             resource_pools: None,
+            combinations: None,
         head_seq: 6,
     }
 }
@@ -500,6 +502,7 @@ fn client_visibility_change_purges_the_previous_replica_and_keeps_the_outbox() {
                 viewer_role: None,
                 viewer_edit_catalogue: None,
                 resource_pools: None,
+                combinations: None,
             })
         }),
     );
@@ -554,6 +557,7 @@ fn tombstones_in_a_pull_remove_local_rows() {
                 viewer_role: None,
                 viewer_edit_catalogue: None,
                 resource_pools: None,
+                combinations: None,
                 head_seq: 3,
             })
         }),
@@ -626,6 +630,7 @@ fn a_server_that_says_has_more_without_progress_cannot_spin_the_client() {
                 viewer_role: None,
                 viewer_edit_catalogue: None,
                 resource_pools: None,
+                combinations: None,
                 head_seq: 9,
             })
         }),
@@ -654,6 +659,7 @@ fn empty_pages_that_still_advance_the_cursor_are_followed() {
                 viewer_role: None,
                 viewer_edit_catalogue: None,
                 resource_pools: None,
+                combinations: None,
                 head_seq: 15,
             })
         }),
@@ -798,6 +804,7 @@ fn offline_create_then_reconnect_applies_and_clears_the_pending_flag() {
                 viewer_role: None,
                 viewer_edit_catalogue: None,
                 resource_pools: None,
+                combinations: None,
                 head_seq: 4,
             })
         }),

@@ -70,6 +70,7 @@ impl Transport for Scripted {
             viewer_role: None,
             viewer_edit_catalogue: None,
             resource_pools: None,
+            combinations: None,
             head_seq: 5,
         })
     }

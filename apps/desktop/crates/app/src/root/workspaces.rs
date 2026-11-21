@@ -221,6 +221,12 @@ impl Root {
                             Kind::Ghost,
                             cx.listener(|root, _, _, cx| root.open_resource_pools(None, cx)),
                         ))
+                        .child(self.button(
+                            "native-combinations",
+                            self.t(Key::CombinationManagement),
+                            Kind::Ghost,
+                            cx.listener(|root, _, _, cx| root.open_combinations(None, cx)),
+                        ))
                     })
                 },
             )

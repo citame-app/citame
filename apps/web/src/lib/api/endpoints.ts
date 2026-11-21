@@ -214,6 +214,7 @@ export function createEndpoints(client: ApiClient) {
             intakeViews: "1",
             bookingPolicy: "1",
             resourceCatalogue: "1",
+            combinationCatalogue: "1",
           },
           signal,
           cache: "no-store",

@@ -19,6 +19,7 @@ import { DomainError } from "../../errors";
 import { calendarBadges } from "../appointments/context";
 import { loadSnapshots, toAppointment } from "../appointments/service";
 import { listResources } from "../resources/catalog";
+import { listCombinations } from "../services/combinations";
 import { catalogMetadata, publicService } from "../services/options";
 import { toReviewedSettings, toSalonResponse } from "../settings/service";
 
@@ -274,7 +275,9 @@ export async function pullChanges(
         (topic.data !== "intake_records" || (query.intakeViews === "1" && permissions.clients)) &&
         (topic.data !== "booking_policy" || query.bookingPolicy === "1") &&
         (topic.data !== "resource_catalogue" ||
-          (query.resourceCatalogue === "1" && permissions.editCatalog))
+          (query.resourceCatalogue === "1" && permissions.editCatalog)) &&
+        (topic.data !== "service_combinations" ||
+          (query.combinationCatalogue === "1" && permissions.editCatalog))
       )
         refresh.add(topic.data);
       continue;
@@ -328,10 +331,23 @@ export async function pullChanges(
     (query.resourcePools === "full" || (query.resourcePools === "delta" && resourceChanged))
       ? (await listResources(db, principal)).resources
       : undefined;
+  const combinationsChanged = page.some(
+    (row) =>
+      (row.entity === "live_view" && row.rowId === "service_combinations") ||
+      row.entity === "service" ||
+      row.entity === "service_staff" ||
+      row.entity === "staff",
+  );
+  const combinations =
+    permissions.editCatalog &&
+    (query.combinations === "full" || (query.combinations === "delta" && combinationsChanged))
+      ? (await listCombinations(db, principal)).combinations
+      : undefined;
   return {
     changes,
     ...(catalogColors ? { catalogColors } : {}),
     ...(resourcePools ? { resourcePools } : {}),
+    ...(combinations ? { combinations } : {}),
     ...(refresh.size ? { refresh: [...refresh] } : {}),
     nextCursor,
     hasMore,
