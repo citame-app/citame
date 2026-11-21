@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderApp } from "../../../../test/render";
 import { ServicesView } from "./services-view";
 
@@ -297,9 +297,9 @@ describe("ServicesView", () => {
 
   test("assignment refresh updates a clean team and preserves a busy editor's draft", async () => {
     const { queryClient } = open();
-    const replaceTeam = async (staffIds: string[], version: number) => {
+    const replaceTeam = (staffIds: string[], version: number) => {
       services = services.map((row) => (row.id === CUT ? { ...row, staffIds, version } : row));
-      await queryClient.invalidateQueries({ queryKey: ["admin", "services"] });
+      act(() => queryClient.setQueryData(["admin", "services"], services));
     };
     fireEvent.click(
       within(await screen.findByRole("table", { name: "Services" })).getByRole("button", {
@@ -312,11 +312,11 @@ describe("ServicesView", () => {
     const price = dialog.getByLabelText("Price");
     fireEvent.change(price, { target: { value: "16000" } });
     expect(bea).toBeChecked();
-    await replaceTeam([ANA], 2);
+    replaceTeam([ANA], 2);
     await waitFor(() => expect(bea).not.toBeChecked());
     expect(price).toHaveValue("16000");
     fireEvent.click(ana);
-    await replaceTeam([ANA, BEA], 3);
+    replaceTeam([ANA, BEA], 3);
     await dialog.findByRole("status");
     const save = dialog.getByRole("button", { name: "Save changes" });
     expect(save).toBeDisabled();
