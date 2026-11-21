@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 mod policy;
+mod stamp_programme;
 mod stamps;
 pub(super) use stamps::PendingStamp;
 
@@ -27,6 +28,7 @@ pub(super) struct Desk {
     refresh_at: Instant,
     observed: Option<i64>,
     policy: Option<policy::Editor>,
+    stamp_programme: Option<stamp_programme::Editor>,
     retry: Option<(Instant, Duration)>,
     points: Entity<TextField>,
     reason: Entity<TextField>,
@@ -102,6 +104,7 @@ impl Root {
             refresh_at: Instant::now(),
             observed: None,
             policy: None,
+            stamp_programme: None,
             retry: None,
             points: cx.new(|cx| TextField::new("", false, cx)),
             reason: cx.new(|cx| TextField::new("", false, cx)),
@@ -268,6 +271,13 @@ impl Root {
             return;
         }
         let observed = self.svc.store.live_view_revision(LIVE_TOPIC).ok();
+        if self
+            .loyalty_desk()
+            .is_some_and(|desk| desk.stamp_programme.is_some())
+        {
+            self.refresh_stamp_programme(reconnected, observed, cx);
+            return;
+        }
         if self
             .loyalty_desk()
             .is_some_and(|desk| desk.policy.is_some())
@@ -648,6 +658,13 @@ impl Root {
     pub(super) fn dismiss_loyalty(&mut self, confirm: bool, cx: &mut Context<Self>) {
         if self
             .loyalty_desk()
+            .is_some_and(|desk| desk.stamp_programme.is_some())
+        {
+            self.close_stamp_programme(confirm, cx);
+            return;
+        }
+        if self
+            .loyalty_desk()
             .is_some_and(|desk| desk.policy.is_some())
         {
             self.close_points_policy(confirm, cx);
@@ -704,6 +721,9 @@ impl Root {
         viewport: gpui::Size<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        if let Some(editor) = &desk.stamp_programme {
+            return self.render_stamp_programme(editor, viewport, cx);
+        }
         if let Some(editor) = &desk.policy {
             return self.render_points_policy(editor, viewport, cx);
         }
@@ -776,6 +796,13 @@ impl Root {
                         Key::LoyaltyProgramme,
                         Kind::Ghost,
                         Root::open_points_policy,
+                        cx,
+                    ))
+                    .child(self.loyalty_button(
+                        "loyalty-stamp-programme",
+                        Key::StampProgramme,
+                        Kind::Ghost,
+                        Root::open_stamp_programme,
                         cx,
                     ))
                 })

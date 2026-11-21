@@ -1,5 +1,8 @@
 use super::*;
-use crate::loyalty::stamps::{Card, Cards, Command};
+use crate::loyalty::stamps::{
+    Card, Cards, Command,
+    programme::{Programme, Review},
+};
 use crate::loyalty::{
     Adjustment, AdjustmentResult, ClientChoice, Policy, ReviewedPolicy, Statement,
 };
@@ -47,6 +50,28 @@ impl HttpTransport {
             false,
         )?;
         Ok(result.clients)
+    }
+
+    pub fn stamp_programme(&self) -> Result<Programme, TransportError> {
+        read_response(
+            self.get(
+                &self.agent,
+                &format!("{STAMPS}/program"),
+                Some("application/json"),
+            )?,
+            false,
+        )
+    }
+
+    pub fn save_stamp_programme(&self, review: &Review) -> Result<Programme, TransportError> {
+        let response = self.send_put_json(&format!("{STAMPS}/program"), review)?;
+        let saved: Programme = read_response_with(response, review_transport_error)?;
+        if !review.matches_successor(&saved) {
+            return Err(TransportError::Server(
+                "Unexpected stamp programme acknowledgement".into(),
+            ));
+        }
+        Ok(saved)
     }
 
     pub fn stamp_cards(&self, client: Uuid) -> Result<Cards, TransportError> {

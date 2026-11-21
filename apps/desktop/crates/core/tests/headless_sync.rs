@@ -63,6 +63,100 @@ fn proxy_device() -> ProxyDevice {
 }
 
 #[test]
+#[ignore = "needs the isolated production smoke stack behind the web gateway (see README)"]
+fn native_stamp_programme_shares_revision_and_card_terms_through_the_proxy() {
+    use sob_core::loyalty::LIVE_TOPIC;
+    use sob_core::loyalty::stamps::{
+        Command, Issue, State,
+        programme::{ExistingCards, Review},
+    };
+    use uuid::Uuid;
+
+    let mut web = Device::sign_in();
+    web.sync();
+    let name = format!("Synthetic stamp account {}", Uuid::now_v7());
+    let client: Uuid = ops::create_client(&mut web.store, &name, None)
+        .unwrap()
+        .parse()
+        .unwrap();
+    web.sync();
+    let marker = web.store.live_view_revision(LIVE_TOPIC).unwrap();
+    let device = proxy_device();
+    let original = device.transport.stamp_programme().unwrap();
+    let initial = original.clone();
+    let mut input = Review {
+        reviewed: initial,
+        existing_cards: ExistingCards::Keep,
+    };
+    let program = &mut input.reviewed.program;
+    program.card.enabled = true;
+    program.card.name = "Synthetic reviewed treatment card".into();
+    program.card.goal = 4;
+    program.card.welcome_stamps = 1;
+    program.automatic_issue = false;
+    let current = device.transport.save_stamp_programme(&input).unwrap();
+    let check = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let endpoint = "/admin/rewards/stamps/program";
+        assert_eq!(
+            web.rest_get(endpoint),
+            serde_json::to_value(&current).unwrap()
+        );
+        assert_eq!(
+            device.transport.save_stamp_programme(&input).unwrap(),
+            current
+        );
+        assert!(matches!(
+            device.transport.save_stamp_programme(&Review {
+                existing_cards: ExistingCards::Void,
+                ..input
+            }),
+            Err(TransportError::BadRequest(_))
+        ));
+        let card = device
+            .transport
+            .change_stamp_card(&Command::Issue(Issue {
+                client_id: client,
+                generation: current.generation.clone(),
+                program_version: current.version,
+                idempotency_key: Uuid::now_v7(),
+                initial_stamps: 1,
+                expires_at: None,
+            }))
+            .unwrap();
+
+        let mut subsequent = Review {
+            reviewed: current.clone(),
+            existing_cards: ExistingCards::Keep,
+        };
+        subsequent.reviewed.program.card.goal = 5;
+        let newer = device.transport.save_stamp_programme(&subsequent).unwrap();
+        assert_eq!(web.rest_get(endpoint)["program"]["goal"], 5);
+        let reviewed_cards = device.transport.stamp_cards(client).unwrap();
+        assert_eq!(reviewed_cards.program_version, newer.version);
+        assert!(reviewed_cards.can_edit);
+        assert_eq!(reviewed_cards.cards[0].id, card.id);
+        assert_eq!(reviewed_cards.cards[0].state, State::Active);
+        assert_eq!(reviewed_cards.cards[0].program.goal, 4);
+        web.sync();
+        assert!(web.store.live_view_revision(LIVE_TOPIC).unwrap() > marker);
+    }));
+    let latest = device.transport.stamp_programme().unwrap();
+    device
+        .transport
+        .save_stamp_programme(&Review {
+            reviewed: sob_core::loyalty::stamps::programme::Programme {
+                program: original.program,
+                ..latest
+            },
+            existing_cards: ExistingCards::Keep,
+        })
+        .unwrap();
+    if let Err(error) = check {
+        std::panic::resume_unwind(error);
+    }
+}
+
+#[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_loyalty_reviews_adjustments_and_checkout_rewards_through_the_proxy() {
     use sob_core::loyalty::checkout::{Application, Choice, ReturnPoints, RewardError};

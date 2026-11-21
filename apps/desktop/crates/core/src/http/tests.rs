@@ -1612,3 +1612,98 @@ fn stamp_card_transport_reads_access_and_reuses_the_exact_reviewed_command() {
         })
     );
 }
+
+#[test]
+fn stamp_programme_transport_reviews_all_terms_and_checks_the_save_acknowledgement() {
+    use crate::loyalty::stamps::programme::{ExistingCards, Fields, Review};
+
+    let treatment = uuid::Uuid::now_v7();
+    let product = uuid::Uuid::now_v7();
+    let loaded = serde_json::json!({
+        "version": 5, "generation": "fixture",
+        "program": {
+            "enabled": true, "name": "Visits", "appearance": "rose", "goal": 6, "welcomeStamps": 1,
+            "qualifyingServiceIds": [treatment], "minimumSpendCents": 1234,
+            "stampExpiryDays": 90, "expiryFrom": "activity", "rewardExpiryDays": 30,
+            "automaticIssue": false, "awardOn": "appointment", "terms": "First line\nSecond line",
+            "reward": {"kind": "product", "name": "Reward", "targetId": product, "discountBasisPoints": 2500}
+        }
+    });
+    let mut saved = loaded.clone();
+    saved["version"] = 6.into();
+    saved["program"]["name"] = "New visits".into();
+    saved["program"]["minimumSpendCents"] = 1999.into();
+    let mut unexpected = saved.clone();
+    unexpected["generation"] = "restored".into();
+    let (base, seen) = serve(vec![
+        http("200 OK", &[], &loaded.to_string()),
+        http("408 Request Timeout", &[], ""),
+        http("200 OK", &[], &saved.to_string()),
+        http("200 OK", &[], &unexpected.to_string()),
+    ]);
+    let transport = signed_in(&base);
+    let mut programme = transport.stamp_programme().unwrap();
+    let fields = Fields {
+        name: " New visits ",
+        goal: "6",
+        welcome: "1",
+        minimum: "19,99",
+        stamp_expiry: "90",
+        reward_name: "Reward",
+        discount: "25",
+        reward_expiry: "30",
+        terms: "First line\nSecond line",
+    };
+    assert!(
+        programme
+            .program
+            .parse_fields(Fields {
+                welcome: "6",
+                ..fields
+            })
+            .is_none()
+    );
+    assert!(
+        programme
+            .program
+            .parse_fields(Fields {
+                discount: "100,01",
+                ..fields
+            })
+            .is_none()
+    );
+    assert!(
+        programme
+            .program
+            .parse_fields(Fields {
+                reward_expiry: "3651",
+                ..fields
+            })
+            .is_none()
+    );
+    programme.program = programme.program.parse_fields(fields).unwrap();
+    let review = Review {
+        reviewed: programme,
+        existing_cards: ExistingCards::Void,
+    };
+    assert!(matches!(
+        transport.save_stamp_programme(&review),
+        Err(TransportError::Offline(_))
+    ));
+    assert!(review.matches_successor(&transport.save_stamp_programme(&review).unwrap()));
+    assert!(matches!(
+        transport.save_stamp_programme(&review),
+        Err(TransportError::Server(_))
+    ));
+    let requests = seen.lock().unwrap();
+    assert!(requests[0].starts_with("GET /admin/rewards/stamps/program "));
+    assert!(requests[1].starts_with("PUT /admin/rewards/stamps/program "));
+    let body = |index: usize| -> serde_json::Value {
+        serde_json::from_str(requests[index].split_once("\r\n\r\n").unwrap().1).unwrap()
+    };
+    let mut expected = saved;
+    expected["version"] = 5.into();
+    expected["existingCards"] = "void".into();
+    assert_eq!(body(1), expected);
+    assert_eq!(body(2), expected);
+}

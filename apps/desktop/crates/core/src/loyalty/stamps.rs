@@ -3,6 +3,8 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub mod programme;
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Cards {
@@ -29,7 +31,7 @@ pub struct Card {
     pub reward_issued_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Terms {
     pub enabled: bool,
@@ -41,15 +43,16 @@ pub struct Terms {
     pub reward: Reward,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Reward {
     pub kind: RewardKind,
     pub name: String,
     pub discount_basis_points: Option<u32>,
+    pub target_id: Option<Uuid>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Appearance {
     Neutral,
@@ -116,7 +119,7 @@ pub enum Command {
     Change(Uuid, Change),
 }
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RewardKind {
     Service,
