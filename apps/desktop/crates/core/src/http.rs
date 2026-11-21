@@ -62,8 +62,8 @@ mod staff_portraits;
 mod warehouses;
 pub use crate::model::{CatalogPrice, ServiceOption};
 pub use portfolio::{
-    PORTFOLIO_LIVE_TOPIC, PortfolioEdit, PortfolioList, PortfolioPhoto, PortfolioPublication,
-    PortfolioStatus,
+    PORTFOLIO_LIVE_TOPIC, PORTFOLIO_UPLOAD, PortfolioEdit, PortfolioList, PortfolioPhoto,
+    PortfolioPublication, PortfolioStatus, QueuedPortfolioUpload,
 };
 pub use service_catalog::{
     CatalogService, CatalogWriteError, NewCatalogService, ReviewedCatalog, ServiceCreation,

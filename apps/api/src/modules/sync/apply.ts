@@ -35,6 +35,7 @@ import { saveProductPhoto } from "../inventory/photo";
 import { receiveStockDocument, saveSupplier } from "../inventory/receipts";
 import { createProduct, moveStock, updateProduct } from "../inventory/service";
 import { saveWarehouse, transferStock } from "../inventory/warehouses";
+import { uploadPortfolio } from "../reputation/portfolio";
 import { createResource, setServiceResources, updateResource } from "../resources/catalog";
 import {
   createService,
@@ -304,6 +305,9 @@ export async function applyMutation(
       await saveProductPhoto(db, id, photo, principal);
       return;
     }
+    case "portfolio.upload":
+      await uploadPortfolio(db, mutation.payload, principal, now);
+      return;
     case "supplier.save": {
       const { id, ...input } = mutation.payload;
       await saveSupplier(

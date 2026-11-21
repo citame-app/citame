@@ -88,6 +88,7 @@ fn empty_pull(since: i64, _limit: u32) -> Result<PullResponse, TransportError> {
         resource_pools: None,
         combinations: None,
         viewer_write_inventory: None,
+        portfolio_uploads: None,
         viewer_read_inventory: None,
         head_seq: since,
     })
@@ -448,6 +449,7 @@ fn page(from: i64, n: i64, has_more: bool) -> PullResponse {
             resource_pools: None,
             combinations: None,
             viewer_write_inventory: None,
+            portfolio_uploads: None,
             viewer_read_inventory: None,
         head_seq: 6,
     }
@@ -508,6 +510,7 @@ fn client_visibility_change_purges_the_previous_replica_and_keeps_the_outbox() {
                 resource_pools: None,
                 combinations: None,
                 viewer_write_inventory: None,
+                portfolio_uploads: None,
                 viewer_read_inventory: None,
             })
         }),
@@ -565,6 +568,7 @@ fn tombstones_in_a_pull_remove_local_rows() {
                 resource_pools: None,
                 combinations: None,
                 viewer_write_inventory: None,
+                portfolio_uploads: None,
                 viewer_read_inventory: None,
                 head_seq: 3,
             })
@@ -640,6 +644,7 @@ fn a_server_that_says_has_more_without_progress_cannot_spin_the_client() {
                 resource_pools: None,
                 combinations: None,
                 viewer_write_inventory: None,
+                portfolio_uploads: None,
                 viewer_read_inventory: None,
                 head_seq: 9,
             })
@@ -671,6 +676,7 @@ fn empty_pages_that_still_advance_the_cursor_are_followed() {
                 resource_pools: None,
                 combinations: None,
                 viewer_write_inventory: None,
+                portfolio_uploads: None,
                 viewer_read_inventory: None,
                 head_seq: 15,
             })
@@ -818,6 +824,7 @@ fn offline_create_then_reconnect_applies_and_clears_the_pending_flag() {
                 resource_pools: None,
                 combinations: None,
                 viewer_write_inventory: None,
+                portfolio_uploads: None,
                 viewer_read_inventory: None,
                 head_seq: 4,
             })

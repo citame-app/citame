@@ -5,6 +5,8 @@ use uuid::Uuid;
 
 pub const PORTFOLIO_LIVE_TOPIC: &str = "portfolio";
 
+pub const PORTFOLIO_UPLOAD: &str = "portfolio.upload";
+
 const PORTFOLIO: &str = "/admin/portfolio";
 
 #[derive(Clone, Debug, Deserialize)]
@@ -87,11 +89,7 @@ impl HttpTransport {
         edit: &PortfolioEdit,
         jpeg: &[u8],
     ) -> Result<PortfolioPhoto, TransportError> {
-        if jpeg.len() > crate::staff_portrait_image::INPUT_LIMIT
-            || !crate::staff_portrait_image::is_bounded_jpeg(jpeg)
-        {
-            return Err(TransportError::BadRequest("Invalid portfolio JPEG".into()));
-        }
+        validate_jpeg(jpeg)?;
         let edit = edit.normalized()?;
         self.post_json(
             PORTFOLIO,
@@ -165,4 +163,53 @@ impl HttpTransport {
         }
         Ok(())
     }
+}
+
+/// A service photo saved by the operator and waiting to be uploaded as a private draft.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueuedPortfolioUpload {
+    pub idempotency_key: Uuid,
+    pub service_id: Uuid,
+    pub caption: String,
+    pub alt: String,
+    image_base64: String,
+}
+
+impl QueuedPortfolioUpload {
+    pub fn new(
+        idempotency_key: Uuid,
+        edit: &PortfolioEdit,
+        jpeg: &[u8],
+    ) -> Result<Self, TransportError> {
+        let edit = edit.normalized()?;
+        let service_id = edit
+            .service_id
+            .ok_or_else(|| TransportError::BadRequest("Choose a service for this draft".into()))?;
+        validate_jpeg(jpeg)?;
+        Ok(Self {
+            idempotency_key,
+            service_id,
+            caption: edit.caption,
+            alt: edit.alt,
+            image_base64: STANDARD.encode(jpeg),
+        })
+    }
+
+    pub fn image(&self) -> Result<Vec<u8>, TransportError> {
+        let bytes = STANDARD
+            .decode(&self.image_base64)
+            .map_err(|_| TransportError::BadRequest("Invalid portfolio JPEG".into()))?;
+        validate_jpeg(&bytes)?;
+        Ok(bytes)
+    }
+}
+
+fn validate_jpeg(jpeg: &[u8]) -> Result<(), TransportError> {
+    if jpeg.len() > crate::staff_portrait_image::INPUT_LIMIT
+        || !crate::staff_portrait_image::is_bounded_jpeg(jpeg)
+    {
+        return Err(TransportError::BadRequest("Invalid portfolio JPEG".into()));
+    }
+    Ok(())
 }

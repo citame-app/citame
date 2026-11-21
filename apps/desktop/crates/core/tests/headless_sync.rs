@@ -2179,6 +2179,7 @@ fn native_inventory_documents_survive_restart_and_rebase_a_concurrent_cloud_deli
 fn native_portfolio_keeps_drafts_private_and_rechecks_publication_versions() {
     use sob_core::http::{
         PORTFOLIO_LIVE_TOPIC, PortfolioEdit, PortfolioPublication, PortfolioStatus,
+        QueuedPortfolioUpload,
     };
     use sob_core::staff_portrait_image::prepare_photo;
     use uuid::Uuid;
@@ -2203,16 +2204,71 @@ fn native_portfolio_keeps_drafts_private_and_rechecks_publication_versions() {
         .unwrap();
     let jpeg = prepare_photo(&path).unwrap();
     let input = PortfolioEdit {
-        caption: "Synthetic treatment".into(),
+        caption: format!("Synthetic treatment {}", Uuid::now_v7()),
         alt: "Synthetic raster".into(),
         service_id: Some(service_id),
     };
     let key = Uuid::now_v7();
-    let generation = desktop.transport.portfolio().unwrap().generation;
-    let photo = desktop
-        .transport
-        .upload_portfolio_photo(&generation, key, &input, &jpeg)
+    let replica = dir.path().join("gallery.sqlite");
+    let mut store = Store::open(&replica).unwrap();
+    sync::pull_all(&mut store, &*desktop.transport).unwrap();
+    let generation = store.verified_reviewed_generation().unwrap();
+    let upload = QueuedPortfolioUpload::new(key, &input, &jpeg).unwrap();
+    store
+        .queue_portfolio_upload(&generation, &upload, None)
         .unwrap();
+    let packet = store.outbox(1).unwrap().pop().unwrap().to_wire();
+    drop(store);
+    let mut store = Store::open(&replica).unwrap();
+    assert_eq!(
+        store.pending_portfolio_captions(service_id).unwrap(),
+        [input.caption.clone()]
+    );
+    assert!(
+        desktop
+            .transport
+            .portfolio()
+            .unwrap()
+            .photos
+            .iter()
+            .all(|photo| photo.caption != input.caption)
+    );
+    // Simulate a committed upload whose acknowledgement was lost before Desktop could record it.
+    let response = desktop
+        .transport
+        .push(&PushRequest {
+            device_id: "native-portfolio-fixture".into(),
+            generation: Some(generation.clone()),
+            mutations: vec![packet],
+        })
+        .unwrap();
+    assert!(matches!(
+        response.results.first(),
+        Some(MutationResult::Applied { .. })
+    ));
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*desktop.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    assert!(
+        store
+            .pending_portfolio_captions(service_id)
+            .unwrap()
+            .is_empty()
+    );
+    let photos: Vec<_> = desktop
+        .transport
+        .portfolio()
+        .unwrap()
+        .photos
+        .into_iter()
+        .filter(|photo| photo.caption == input.caption)
+        .collect();
+    assert_eq!(photos.len(), 1);
+    let photo = photos.into_iter().next().unwrap();
     web.sync();
     assert!(web.store.live_view_revision(PORTFOLIO_LIVE_TOPIC).unwrap() > revision);
     assert_eq!(photo.status, PortfolioStatus::Draft);

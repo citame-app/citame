@@ -3309,6 +3309,7 @@ impl Root {
                 "settings.update" => Key::SalonConfiguration,
                 "service.staff_replace" => Key::ServiceAssignments,
                 sob_core::store::SERVICE_CREATION_KIND => Key::CatalogNew,
+                sob_core::http::PORTFOLIO_UPLOAD => Key::CatalogPhotos,
                 sob_core::store::SERVICE_EDIT_KIND => Key::CatalogTitle,
                 sob_core::service_resources::MUTATION_KIND => Key::ResourceRequirements,
                 sob_core::resource_pools::CREATE | sob_core::resource_pools::UPDATE => {
@@ -3627,6 +3628,21 @@ impl Root {
                                     Kind::Primary,
                                     cx.listener(move |root, _, _, cx| {
                                         root.open_classification_conflict(&id, cx)
+                                    }),
+                                ))
+                            },
+                        )
+                        .when(
+                            c.kind == sob_core::http::PORTFOLIO_UPLOAD
+                                && self.svc.store.cached_catalogue_access(),
+                            |row| {
+                                let id = mid.clone();
+                                row.child(self.button(
+                                    ("c-portfolio", i),
+                                    self.t(Key::CatalogPhotosCurrent),
+                                    Kind::Primary,
+                                    cx.listener(move |root, _, _, cx| {
+                                        root.open_portfolio_upload_conflict(&id, cx)
                                     }),
                                 ))
                             },

@@ -13,6 +13,7 @@ import { inventoryClassificationInputSchema } from "./inventory-classification";
 import { purchaseOrderSyncPayloadSchema } from "./inventory-orders";
 import { stockReceiptInputSchema, supplierInputSchema } from "./inventory-receipts";
 import { stockTransferSyncPayloadSchema, warehouseInputSchema } from "./inventory-warehouses";
+import { portfolioUploadSchema } from "./portfolio";
 import {
   resourceCreateSchema,
   resourceSchema,
@@ -304,6 +305,12 @@ const productPhoto = z.object({
   payload: productPhotoInputSchema.extend({ id: idSchema }),
 });
 
+const portfolioUpload = z.object({
+  ...envelope,
+  kind: z.literal("portfolio.upload"),
+  payload: portfolioUploadSchema.omit({ generation: true }).extend({ serviceId: idSchema }),
+});
+
 const supplierSave = z.object({
   ...envelope,
   kind: z.literal("supplier.save"),
@@ -392,6 +399,7 @@ export const syncMutationSchema = z.discriminatedUnion("kind", [
   productCreate,
   productUpdate,
   productPhoto,
+  portfolioUpload,
   supplierSave,
   stockReceipt,
   purchaseOrderWrite,
@@ -650,6 +658,7 @@ export const syncPullResponseSchema = z.object({
   clientDirectory: z.boolean().optional(),
   viewerRole: z.enum(["owner", "staff"]).optional(),
   viewerEditCatalogue: z.boolean().optional(),
+  portfolioUploads: z.boolean().optional(),
   viewerWriteInventory: z.boolean().optional(),
   viewerReadInventory: z.boolean().optional(),
   calendarScope: z.union([z.literal("none"), z.literal("all"), idSchema]).optional(),

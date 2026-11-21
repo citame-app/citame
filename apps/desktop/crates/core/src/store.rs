@@ -141,6 +141,7 @@ struct PullMetadata<'a> {
     combinations: Option<&'a [crate::combinations::ManagedCombination]>,
     inventory_access: Option<bool>,
     inventory_read_access: Option<bool>,
+    portfolio_uploads: bool,
 }
 
 /// What `apply_push_results` did.
@@ -891,6 +892,7 @@ impl Store {
                 combinations: page.combinations.as_deref(),
                 inventory_access: page.viewer_write_inventory,
                 inventory_read_access: page.viewer_read_inventory.or(page.viewer_write_inventory),
+                portfolio_uploads: page.portfolio_uploads.unwrap_or(false),
             },
         )
     }
@@ -935,6 +937,9 @@ impl Store {
         }
         if let Some(allowed) = metadata.inventory_access {
             Self::apply_inventory_access_at(&tx, allowed)?;
+        }
+        if metadata.generation.is_some() {
+            Self::apply_portfolio_upload_support_at(&tx, metadata.portfolio_uploads)?;
         }
         let mut received_pools = false;
         let mut received_combinations = false;
@@ -1576,6 +1581,7 @@ impl Store {
                                 | crate::product_editor::CREATE
                                 | crate::product_editor::UPDATE
                                 | crate::product_editor::PHOTO
+                                | crate::http::PORTFOLIO_UPLOAD
                                 | crate::inventory_documents::SUPPLIER_SAVE
                                 | crate::inventory_documents::RECEIVE_STOCK
                                 | crate::purchase_orders::PURCHASE_ORDER_WRITE
@@ -1623,6 +1629,7 @@ impl Store {
                             s.kind.as_str(),
                             SERVICE_EDIT_KIND
                                 | SERVICE_CREATION_KIND
+                                | crate::http::PORTFOLIO_UPLOAD
                                 | service_assignments::KIND
                                 | crate::service_resources::MUTATION_KIND
                                 | crate::resource_pools::CREATE
@@ -1716,7 +1723,7 @@ impl Store {
     fn resolve_conflict_at(conn: &Connection, mutation_id: &str, resolution: &str) -> Result<()> {
         let n = conn.execute(
             "UPDATE conflict SET resolved_at = ?2, resolution = ?3,
-             payload = CASE WHEN kind = 'product.photo' THEN json_remove(payload, '$.imageBase64') ELSE payload END
+             payload = CASE WHEN kind IN ('product.photo','portfolio.upload') THEN json_remove(payload, '$.imageBase64') ELSE payload END
              WHERE mutation_id = ?1 AND resolved_at IS NULL",
             params![mutation_id, now_iso(), resolution],
         )?;
@@ -1727,6 +1734,7 @@ impl Store {
     }
 }
 
+mod portfolio;
 mod service_assignments;
 pub use service_assignments::{AssignmentSnapshot, AssignmentWork, ServiceAssignment};
 mod combinations;

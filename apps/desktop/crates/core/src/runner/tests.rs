@@ -72,6 +72,7 @@ impl Transport for Scripted {
             resource_pools: None,
             combinations: None,
             viewer_write_inventory: None,
+            portfolio_uploads: None,
             viewer_read_inventory: None,
             head_seq: 5,
         })

@@ -224,6 +224,8 @@ keys! {
     CatalogPhotosEmpty => ("There are no photos for this service.", "Este servicio todavía no tiene fotos."),
     CatalogPhotosCaption => ("Caption", "Pie de foto"),
     CatalogPhotosAlt => ("Alternative text for the image", "Texto alternativo de la imagen"),
+    CatalogPhotosQueued => ("Private drafts waiting for sync", "Borradores privados pendientes de sincronizar"),
+    CatalogPhotosOfflineQueue => ("New photos are saved as private drafts and uploaded when you reconnect.", "Las fotos nuevas se guardan como borradores privados y se suben al recuperar la conexión."),
     CatalogPhotosOffline => ("Connect to Cloud to load or save photos.", "Conéctate a Cloud para cargar o guardar fotos."),
     CatalogPhotosPreviewUnavailable => ("The preview could not be loaded. Refresh the gallery to try again.", "No se pudo cargar la vista previa. Actualiza la galería para reintentarlo."),
     CatalogPhotosFailure => ("Could not confirm this change. Review the gallery before retrying.", "No se pudo confirmar el cambio. Revisa la galería antes de reintentarlo."),

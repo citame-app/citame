@@ -357,6 +357,7 @@ export async function pullChanges(
     clientDirectory: permissions.clients,
     viewerRole: principal.role === "owner" ? "owner" : "staff",
     viewerEditCatalogue: permissions.editCatalog,
+    ...(query.portfolio === "1" ? { portfolioUploads: permissions.editCatalog } : {}),
     ...(query.inventoryAccess === "1"
       ? {
           viewerWriteInventory: permissions.writeInventory,

@@ -1,7 +1,7 @@
 use super::*;
 use sob_core::http::{
     PORTFOLIO_LIVE_TOPIC, PortfolioEdit, PortfolioList, PortfolioPhoto, PortfolioPublication,
-    PortfolioStatus,
+    PortfolioStatus, QueuedPortfolioUpload,
 };
 use sob_core::staff_portrait_image::prepare_photo;
 use uuid::Uuid;
@@ -12,6 +12,7 @@ struct Draft {
     source: Source,
     needs_review: bool,
     upload_packet: Option<PortfolioEdit>,
+    conflict: Option<String>,
 }
 
 impl Draft {
@@ -99,6 +100,8 @@ pub(super) struct Panel {
     draft: Option<Draft>,
     confirm: Option<Confirm>,
     notice: Option<Key>,
+    pending: Vec<String>,
+    pending_revision: Option<i64>,
 }
 
 impl Panel {
@@ -174,6 +177,12 @@ impl Root {
             draft: None,
             confirm: None,
             notice: None,
+            pending: self
+                .svc
+                .store
+                .pending_portfolio_captions(service)
+                .unwrap_or_default(),
+            pending_revision: self.data_version,
         }));
         self.request_catalog_portfolio(Action::Load, None, cx);
     }
@@ -201,6 +210,7 @@ impl Root {
             }
             return;
         }
+        self.refresh_pending_portfolio(cx);
         if self.catalog_portfolio().is_some_and(|panel| {
             !panel.busy
                 && (reconnected
@@ -388,6 +398,7 @@ impl Root {
             source,
             needs_review: false,
             upload_packet: None,
+            conflict: None,
         });
         panel.notice = None;
         cx.notify();
@@ -473,6 +484,7 @@ impl Root {
             cx.notify();
             return;
         };
+        let conflict = draft.conflict.clone();
         let action = match &draft.source {
             Source::Upload { key, jpeg, .. } => Action::Upload(*key, input, jpeg.clone()),
             Source::Existing(photo) if photo.caption != input.caption || photo.alt != input.alt => {
@@ -480,7 +492,130 @@ impl Root {
             }
             Source::Existing(_) => return,
         };
+        if let Action::Upload(key, input, jpeg) = &action
+            && self.svc.store.can_queue_portfolio_uploads()
+        {
+            let result = self
+                .svc
+                .store
+                .verified_reviewed_generation()
+                .and_then(|generation| {
+                    let upload = QueuedPortfolioUpload::new(*key, input, jpeg)
+                        .map_err(|error| CoreError::Invalid(error.to_string()))?;
+                    self.svc
+                        .store
+                        .queue_portfolio_upload(&generation, &upload, conflict.as_deref())
+                });
+            if let Some(panel) = self.catalog_portfolio() {
+                panel.notice = Some(if result.is_ok() {
+                    panel.draft = None;
+                    Key::CatalogPhotosQueued
+                } else {
+                    Key::CatalogPhotosFailure
+                });
+            }
+            if result.is_ok() {
+                self.edited(cx);
+                self.refresh_pending_portfolio(cx);
+            }
+            cx.notify();
+            return;
+        }
+        if conflict.is_some() {
+            return;
+        }
         self.request_catalog_portfolio(action, None, cx);
+    }
+
+    fn refresh_pending_portfolio(&mut self, cx: &mut Context<Self>) {
+        let revision = self.data_version;
+        if let Some(service) = self
+            .catalog_portfolio()
+            .filter(|panel| panel.pending_revision != revision)
+            .map(|panel| panel.service)
+        {
+            let pending = self
+                .svc
+                .store
+                .pending_portfolio_captions(service)
+                .unwrap_or_default();
+            if let Some(panel) = self.catalog_portfolio() {
+                panel.pending = pending;
+                panel.pending_revision = revision;
+            }
+            cx.notify();
+        }
+    }
+
+    pub(in crate::root) fn open_portfolio_upload_conflict(
+        &mut self,
+        id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(upload) = self
+            .svc
+            .store
+            .conflicted_portfolio_upload(id)
+            .ok()
+            .flatten()
+        else {
+            return;
+        };
+        self.open_service_catalog(cx);
+        self.select_catalog_service(&upload.service_id.to_string(), cx);
+        self.open_catalog_portfolio(cx);
+        let Some(panel) = self.catalog_portfolio() else {
+            return;
+        };
+        let instance = panel.instance.clone();
+        let session = self.svc.session.clone();
+        let id = id.to_owned();
+        let renderer = cx.svg_renderer();
+        cx.spawn(async move |handle, cx| {
+            let image = cx
+                .background_executor()
+                .spawn(async move {
+                    let jpeg = upload.image().ok()?;
+                    let preview = gpui::Image::from_bytes(gpui::ImageFormat::Jpeg, jpeg.clone())
+                        .to_image_data(renderer)
+                        .ok()?;
+                    Some((upload, jpeg, preview))
+                })
+                .await;
+            let _ = handle.update(cx, |root, cx| {
+                if !Arc::ptr_eq(&root.svc.session, &session)
+                    || !root.svc.store.cached_catalogue_access()
+                    || !root.catalog_portfolio().is_some_and(|panel| {
+                        Arc::ptr_eq(&panel.instance, &instance) && panel.draft.is_none()
+                    })
+                {
+                    return;
+                }
+                if let Some((upload, jpeg, preview)) = image {
+                    root.start_portfolio_draft(
+                        Source::Upload {
+                            key: upload.idempotency_key,
+                            jpeg: Arc::new(jpeg),
+                            preview: scoped_preview(preview, cx),
+                        },
+                        cx,
+                    );
+                    if let Some(draft) = root
+                        .catalog_portfolio()
+                        .and_then(|panel| panel.draft.as_mut())
+                    {
+                        draft.upload_packet = Some(PortfolioEdit {
+                            caption: upload.caption,
+                            alt: upload.alt,
+                            service_id: Some(upload.service_id),
+                        });
+                        draft.conflict = Some(id);
+                    }
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     pub(super) fn render_catalog_portfolio(
@@ -489,6 +624,7 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let online = self.svc.status().connectivity == Connectivity::Online;
+        let can_queue = self.svc.store.can_queue_portfolio_uploads();
         let body = div()
             .min_h_0()
             .flex()
@@ -623,14 +759,24 @@ impl Root {
                         },
                     )
                 })
-                .when(!panel.busy && online && !stale && changed, |body| {
-                    body.child(self.button(
-                        "portfolio-save",
-                        self.t(Key::StaffPortraitSave),
-                        Kind::Primary,
-                        cx.listener(|root, _, _, cx| root.save_portfolio_draft(cx)),
-                    ))
-                });
+                .when(
+                    !panel.busy
+                        && !stale
+                        && changed
+                        && if matches!(draft.source, Source::Upload { .. }) {
+                            can_queue || (online && draft.conflict.is_none())
+                        } else {
+                            online
+                        },
+                    |body| {
+                        body.child(self.button(
+                            "portfolio-save",
+                            self.t(Key::StaffPortraitSave),
+                            Kind::Primary,
+                            cx.listener(|root, _, _, cx| root.save_portfolio_draft(cx)),
+                        ))
+                    },
+                );
         }
         self.render_portfolio_photos(body, panel, online, cx)
     }
@@ -715,9 +861,24 @@ impl Root {
                     },
                 ),
         )
-        .when(panel.photos.is_some() && selected.is_none(), |body| {
-            body.child(self.t(Key::CatalogPhotosEmpty))
+        .when(!panel.pending.is_empty(), |body| {
+            body.child(
+                div()
+                    .text_sm()
+                    .child(self.t(Key::CatalogPhotosQueued))
+                    .children(
+                        panel
+                            .pending
+                            .iter()
+                            .cloned()
+                            .map(|caption| div().child(caption)),
+                    ),
+            )
         })
+        .when(
+            panel.photos.is_some() && selected.is_none() && panel.pending.is_empty(),
+            |body| body.child(self.t(Key::CatalogPhotosEmpty)),
+        )
         .child(
             div()
                 .id("portfolio-photo-list")
