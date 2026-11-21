@@ -400,6 +400,9 @@ impl HttpTransport {
         if let Some(to) = filters.to {
             query.append_pair("to", &to.to_rfc3339());
         }
+        if let Some(group_by) = filters.group_by {
+            query.append_pair("groupBy", group_by.as_str());
+        }
         let query = query.finish();
         read_response(
             self.get(

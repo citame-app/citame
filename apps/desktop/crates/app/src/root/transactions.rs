@@ -1,6 +1,8 @@
 use super::*;
 use checkout::CheckoutReview;
-use sob_core::billing::{CheckoutHistoryFilters, CheckoutPage};
+use sob_core::billing::{
+    CheckoutGroupTotal, CheckoutHistoryFilters, CheckoutHistoryGroup, CheckoutPage,
+};
 use uuid::Uuid;
 
 pub(super) struct History {
@@ -17,7 +19,14 @@ pub(super) struct History {
     pub(super) page: u32,
     results: Result<Option<CheckoutPage>, ()>,
     request: Option<Arc<()>>,
+    observed_revision: Option<i64>,
     pub(super) receipt: Option<CheckoutReview>,
+}
+
+pub(super) enum HistoryLoad {
+    ApplyFilters,
+    Page(u32),
+    Refresh,
 }
 
 const STATUSES: [(Option<&str>, Key); 6] = [
@@ -66,7 +75,7 @@ impl Root {
             .into_iter()
             .map(|field| {
                 cx.subscribe(field, |root, _, event, cx| match event {
-                    FieldEvent::Submit => root.load_sales_history(1, true, cx),
+                    FieldEvent::Submit => root.load_sales_history(HistoryLoad::ApplyFilters, cx),
                     FieldEvent::Changed => cx.notify(),
                     _ => {}
                 })
@@ -86,12 +95,24 @@ impl Root {
             page: 1,
             results: Ok(None),
             request: None,
+            observed_revision: None,
             receipt: None,
         }));
-        self.load_sales_history(1, true, cx);
+        self.load_sales_history(HistoryLoad::ApplyFilters, cx);
     }
 
-    pub(super) fn load_sales_history(&mut self, page: u32, apply: bool, cx: &mut Context<Self>) {
+    pub(super) fn refresh_sales_history(&mut self, reconnected: bool, cx: &mut Context<Self>) {
+        if self.status.connectivity == Connectivity::Online
+            && matches!(&self.overlay, Overlay::SalesHistory(history)
+                if history.receipt.is_none() && history.request.is_none() && !history.invalid_dates
+                    && (reconnected || (matches!(history.results, Ok(Some(_)))
+                        && history.observed_revision != self.svc.store.live_view_revision("commerce").ok())))
+        {
+            self.load_sales_history(HistoryLoad::Refresh, cx);
+        }
+    }
+
+    pub(super) fn load_sales_history(&mut self, load: HistoryLoad, cx: &mut Context<Self>) {
         let Some(transport) = self
             .svc
             .transport()
@@ -102,7 +123,7 @@ impl Root {
         let Overlay::SalesHistory(history) = &mut self.overlay else {
             return;
         };
-        if apply {
+        if matches!(load, HistoryLoad::ApplyFilters) {
             let dates = boundary(&history.from, false, self.tz, cx).zip(boundary(
                 &history.to,
                 true,
@@ -124,11 +145,27 @@ impl Root {
                 method: history.method,
                 from,
                 to,
+                group_by: None,
             };
         }
-        let filters = history.submitted.clone();
+        let mut filters = history.submitted.clone();
+        filters.group_by = Some(if history.group_by_month {
+            CheckoutHistoryGroup::Month
+        } else {
+            CheckoutHistoryGroup::Day
+        });
+        let page = match load {
+            HistoryLoad::ApplyFilters => 1,
+            HistoryLoad::Page(page) => page,
+            HistoryLoad::Refresh => history.page,
+        };
+        if !matches!(load, HistoryLoad::Refresh) {
+            history.results = Ok(None);
+        }
         let request = Arc::new(());
         history.request = Some(request.clone());
+        history.observed_revision = self.svc.store.live_view_revision("commerce").ok();
+        history.page = page;
         let session = self.svc.session.clone();
         cx.notify();
         cx.spawn(async move |root, cx| {
@@ -151,7 +188,6 @@ impl Root {
                     return;
                 }
                 history.request = None;
-                history.page = page;
                 history.results = result.map(Some).map_err(|_| ());
                 cx.notify();
             });
@@ -272,14 +308,48 @@ impl Root {
                                     Kind::Ghost
                                 },
                                 cx.listener(move |root, _, _, cx| {
-                                    if let Overlay::SalesHistory(history) = &mut root.overlay {
+                                    let Overlay::SalesHistory(history) = &mut root.overlay else {
+                                        return;
+                                    };
+                                    if history.group_by_month != month
+                                        && root.status.connectivity == Connectivity::Online
+                                    {
                                         history.group_by_month = month;
-                                        cx.notify();
+                                        let page = history.page;
+                                        root.load_sales_history(HistoryLoad::Page(page), cx);
                                     }
                                 }),
                             )
                         }),
                 ),
+            )
+    }
+
+    fn render_sales_totals(&self, totals: &CheckoutGroupTotal, currency: &str) -> gpui::Div {
+        div()
+            .flex()
+            .flex_wrap()
+            .gap_2()
+            .text_xs()
+            .text_color(theme::muted())
+            .children(
+                [
+                    (Key::SalesReceipts, totals.receipts.to_string()),
+                    (
+                        Key::SalesRecordedPayments,
+                        self.amount_label(totals.paid_cents, currency),
+                    ),
+                    (
+                        Key::SalesRefunds,
+                        self.amount_label(totals.refunded_cents, currency),
+                    ),
+                    (
+                        Key::SalesNetPayments,
+                        self.amount_label(totals.paid_cents - totals.refunded_cents, currency),
+                    ),
+                ]
+                .into_iter()
+                .map(|(label, value)| div().child(format!("{} · {value}", self.t(label)))),
             )
     }
 
@@ -336,20 +406,42 @@ impl Root {
                     "search-sales",
                     self.t(Key::SaleSearch),
                     Kind::Ghost,
-                    cx.listener(|root, _, _, cx| root.load_sales_history(1, true, cx)),
+                    cx.listener(|root, _, _, cx| {
+                        root.load_sales_history(HistoryLoad::ApplyFilters, cx)
+                    }),
                 ))
             })
             .when(!online, |view| view.child(self.t(Key::CheckoutOffline)));
 
-        let body = if history.request.is_some() {
+        let timezone = history
+            .results
+            .as_ref()
+            .ok()
+            .and_then(Option::as_ref)
+            .and_then(|page| page.group_totals.as_ref())
+            .and_then(|group| group.timezone.parse().ok())
+            .unwrap_or(self.tz);
+        let period_of = |instant: DateTime<Utc>| {
+            let day = instant.with_timezone(&timezone).date_naive();
+            if history.group_by_month {
+                day.with_day(1).unwrap_or(day)
+            } else {
+                day
+            }
+        };
+        let body = if history.request.is_some() && matches!(history.results, Ok(None)) {
             body.child(self.t(Key::CheckoutLoading))
         } else {
             match &history.results {
                 Err(()) => body.child(self.t(Key::CheckoutUnavailable)),
-                Ok(Some(page)) if page.checkouts.is_empty() => {
-                    body.child(self.t(Key::SalesNoResults))
-                }
                 Ok(Some(page)) => body
+                    .when(page.checkouts.is_empty(), |view| {
+                        view.child(self.t(Key::SalesNoResults))
+                    })
+                    .when(
+                        !page.checkouts.is_empty() && page.group_totals.is_some(),
+                        |body| body.child(self.label(Key::SalesTotalsHelp)),
+                    )
                     .child(
                         div()
                             .id("sales-history-rows")
@@ -361,21 +453,24 @@ impl Root {
                             .overflow_y_scroll()
                             .child(div().flex().flex_col().gap_2().children(
                                 page.checkouts.iter().enumerate().map(|(index, row)| {
-                                    let day = row.created_at.with_timezone(&self.tz).date_naive();
+                                    let period = period_of(row.created_at);
                                     let previous = index.checked_sub(1).map(|previous| {
-                                        page.checkouts[previous]
-                                            .created_at
-                                            .with_timezone(&self.tz)
-                                            .date_naive()
+                                        period_of(page.checkouts[previous].created_at)
                                     });
-                                    let group = if history.group_by_month {
-                                        (previous.map(|date| (date.year(), date.month()))
-                                            != Some((day.year(), day.month())))
-                                        .then(|| day.format("%Y-%m").to_string())
-                                    } else {
-                                        (previous != Some(day))
-                                            .then(|| i18n::date_label(self.locale, day))
-                                    };
+                                    let group = (previous != Some(period)).then(|| {
+                                        if history.group_by_month {
+                                            period.format("%Y-%m").to_string()
+                                        } else {
+                                            i18n::date_label(self.locale, period)
+                                        }
+                                    });
+                                    let totals = group.as_ref().and_then(|_| {
+                                        page.group_totals
+                                            .as_ref()?
+                                            .rows
+                                            .iter()
+                                            .find(|row| row.period == period)
+                                    });
                                     let id = row.id;
                                     let title = row
                                         .lines
@@ -409,6 +504,11 @@ impl Root {
                                                     .child(label),
                                             )
                                         })
+                                        .when_some(totals, |view, totals| {
+                                            view.child(
+                                                self.render_sales_totals(totals, &row.currency),
+                                            )
+                                        })
                                         .child(self.button(
                                             SharedString::from(format!("history-{id}")),
                                             title,
@@ -437,7 +537,7 @@ impl Root {
                                     "<",
                                     Kind::Ghost,
                                     cx.listener(move |root, _, _, cx| {
-                                        root.load_sales_history(page, false, cx)
+                                        root.load_sales_history(HistoryLoad::Page(page), cx)
                                     }),
                                 ))
                             })
@@ -452,7 +552,7 @@ impl Root {
                                         ">",
                                         Kind::Ghost,
                                         cx.listener(move |root, _, _, cx| {
-                                            root.load_sales_history(page, false, cx)
+                                            root.load_sales_history(HistoryLoad::Page(page), cx)
                                         }),
                                     ))
                                 },

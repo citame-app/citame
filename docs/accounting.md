@@ -61,6 +61,13 @@ When historical line amounts, discounts or tax do not reconcile to a receipt, it
 amount and recorded receipt tax appear in the unallocated row without an inferred split. The family breakdown
 uses the same salon dates and professional filter as the financial summary.
 
+In **Transactions**, Web and Desktop group receipts by their creation date in the salon
+timezone. The header of each visible day or month shows the receipt count, recorded payments,
+completed refunds and net payments across all matching receipts in that period, including
+receipts on other pages. A method filter selects receipts with a matching payment method.
+Totals describe the selected receipts and include their other tenders and refunds, including
+prepaid value. The financial summary above tracks new money by payment confirmation date.
+
 Migrations `0011_staff_accounting.sql` and `0012_backfill_checkout_attribution.sql` add the ledgers and prepare previously open receipts. The upgrade retains settled historical totals and allocates discounts/tax on unfulfilled open receipts using exact integer arithmetic. No bank transfers or real charges are performed by local verification.
 
 Gift-card tender is prepaid value, not a second collection of cash. The summary excludes gift redemption/refund from new-money totals and excludes gift purchases from settled service/retail sales. Gift value issued and applied/returned are separate metrics; CSV method rows describe applied and returned tender.

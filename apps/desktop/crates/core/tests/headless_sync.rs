@@ -3479,11 +3479,25 @@ fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
                 search: "Synthetic walk-in product".into(),
                 status: Some("paid"),
                 method: Some("external_card"),
+                group_by: Some(sob_core::billing::CheckoutHistoryGroup::Day),
                 ..Default::default()
             },
             1,
         )
         .unwrap();
+    let totals = history.group_totals.as_ref().unwrap();
+    let web_history = browser.rest_get(
+        "/admin/commerce/checkouts?search=Synthetic%20walk-in%20product&status=paid&method=external_card&groupBy=day",
+    );
+    assert_eq!(web_history["groupTotals"]["timezone"], totals.timezone);
+    let row = totals.rows.first().unwrap();
+    assert_eq!(row.paid_cents, 4200);
+    assert_eq!(row.refunded_cents, 0);
+    assert_eq!(row.receipts, 1);
+    assert_eq!(
+        web_history["groupTotals"]["rows"][0]["paidCents"],
+        row.paid_cents
+    );
     let saved = history
         .checkouts
         .iter()

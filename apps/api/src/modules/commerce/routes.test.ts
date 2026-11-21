@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import {
   calendarResponseSchema,
+  checkoutListSchema,
   checkoutSchema,
   importedSettlementResponseSchema,
   syncPullResponseSchema,
@@ -14,6 +15,7 @@ import {
   checkoutPayment,
   checkout as checkoutTable,
   clientProfile,
+  salonSettings,
   service,
   serviceAddon,
   staffProfile,
@@ -1157,6 +1159,75 @@ test("transactions paginate, filter statuses and search receipt lines within the
       )
     ).status,
   ).toBe(400);
+});
+
+test("transaction summaries cover the whole filtered local period with scoped payments and refunds", async () => {
+  await t.db.update(salonSettings).set({ timezone: "Europe/Madrid" });
+  expect(
+    (await call(owner, "/admin/commerce/cash-sessions", "POST", { openingCents: 0 })).status,
+  ).toBe(201);
+  const first = await checkout();
+  const charge = await pay(first.id, "cash", 6000);
+  expect(charge.status).toBe(201);
+  const { payment } = (await charge.json()) as { payment: { id: string } };
+  expect((await pay(first.id, "external_card", 4000)).status).toBe(201);
+  for (const amountCents of [1000, 500]) {
+    const refund = await call(owner, `/admin/commerce/payments/${payment.id}/refunds`, "POST", {
+      amountCents,
+      reason: "Test refund",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(refund.status).toBe(201);
+  }
+
+  const addReceipt = async (createdAt: Date) => {
+    const response = await call(owner, "/admin/commerce/checkouts", "POST", {
+      staffId: f.beaId,
+      lines: [{ kind: "custom", description: "Haircut trial", quantity: 1, unitAmountCents: 2000 }],
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(response.status).toBe(201);
+    const receipt = checkoutSchema.parse(await response.json());
+    expect((await pay(receipt.id, "external_card", 2000)).status).toBe(201);
+    await t.db.update(checkoutTable).set({ createdAt }).where(eq(checkoutTable.id, receipt.id));
+    return receipt.id;
+  };
+  const second = await addReceipt(new Date("2026-03-01T08:00:00Z"));
+  await addReceipt(new Date("2026-02-28T22:59:59Z"));
+  await t.db
+    .update(checkoutTable)
+    .set({ createdAt: new Date("2026-02-28T23:00:00Z") })
+    .where(eq(checkoutTable.id, first.id));
+
+  const path = "/admin/commerce/checkouts?pageSize=1&search=Haircut&method=external_card";
+  const get = async (who: Actor, filters: string) => {
+    const response = await call(who, `${path}${filters}`);
+    expect(response.status, await response.clone().text()).toBe(200);
+    return checkoutListSchema.parse(await response.json());
+  };
+  const expected = [{ period: "2026-03-01", receipts: 2, paidCents: 12000, refundedCents: 1500 }];
+  for (const [page, id] of [
+    [1, second],
+    [2, first.id],
+  ] as const) {
+    const daily = await get(owner, `&page=${page}&groupBy=day`);
+    expect(daily.total).toBe(3);
+    expect(daily.checkouts.map((receipt) => receipt.id)).toEqual([id]);
+    expect(daily.groupTotals).toEqual({ timezone: "Europe/Madrid", rows: expected });
+  }
+  const march = await get(owner, "&groupBy=month&from=2026-02-28T23:00:00Z&status=paid");
+  expect(march.total).toBe(1);
+  expect(march.groupTotals?.rows).toEqual([
+    { period: "2026-03-01", receipts: 1, paidCents: 2000, refundedCents: 0 },
+  ]);
+  const own = await get(staff, "&groupBy=day");
+  expect(own.total).toBe(1);
+  expect(own.groupTotals?.rows).toEqual([
+    { period: "2026-03-01", receipts: 1, paidCents: 10000, refundedCents: 1500 },
+  ]);
+  expect((await get(owner, "&page=4&groupBy=month")).groupTotals?.rows).toEqual([]);
+  expect((await get(owner, "")).groupTotals).toBeUndefined();
+  expect((await call(client, `${path}&groupBy=month`)).status).toBe(403);
 });
 
 test("unpaid appointments stay settled beyond the latest hundred sales and respect staff scope", async () => {

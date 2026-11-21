@@ -488,12 +488,45 @@ pub struct CheckoutHistoryFilters {
     pub method: Option<&'static str>,
     pub from: Option<DateTime<Utc>>,
     pub to: Option<DateTime<Utc>>,
+    pub group_by: Option<CheckoutHistoryGroup>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum CheckoutHistoryGroup {
+    Day,
+    Month,
+}
+
+impl CheckoutHistoryGroup {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Day => "day",
+            Self::Month => "month",
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CheckoutPage {
     pub checkouts: Vec<CheckoutSummary>,
     pub total: u64,
+    pub group_totals: Option<CheckoutGroupTotals>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CheckoutGroupTotals {
+    pub timezone: String,
+    pub rows: Vec<CheckoutGroupTotal>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckoutGroupTotal {
+    pub period: chrono::NaiveDate,
+    pub receipts: u64,
+    pub paid_cents: i64,
+    pub refunded_cents: i64,
 }
 
 #[derive(Debug, Deserialize)]

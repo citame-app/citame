@@ -79,6 +79,11 @@ export function CalendarLiveProvider({
             void queryClient.cancelQueries({ queryKey }).then(() => {
               if (!closed) return queryClient.invalidateQueries({ queryKey });
             });
+          } else if (queryKey[0] === "commerce" && queryKey.length === 1) {
+            // A pending first load can also miss a payment observed by the stream.
+            void queryClient.cancelQueries({ queryKey: ["commerce", "transactions"] }).then(() => {
+              if (!closed) return queryClient.invalidateQueries({ queryKey });
+            });
           } else {
             void queryClient.invalidateQueries({ queryKey });
           }

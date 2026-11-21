@@ -65,8 +65,10 @@ import {
 } from "../passes/value";
 import { assertRewardPayment, checkoutRewardView } from "../rewards/discounts";
 import { releaseCheckoutReward, syncCheckoutRewards } from "../rewards/value";
+import { getSalonSettings } from "../settings/service";
 import { assertAppointmentBillable, importedPartialPayments } from "./appointment-billing";
 import { checkoutServices } from "./catalog";
+import { checkoutGroupTotals } from "./history-totals";
 import { allocateDiscount } from "./money";
 
 type Connection = Database | Tx;
@@ -291,11 +293,20 @@ export async function listCheckouts(
         .where(where);
       const results: Checkout[] = [];
       for (const row of rows) results.push(await snapshot(tx, row));
+      const timezone = query.groupBy ? (await getSalonSettings(tx)).timezone : undefined;
       return {
         checkouts: results,
         total: count?.total ?? 0,
         page: query.page,
         pageSize: query.pageSize,
+        ...(query.groupBy && timezone
+          ? {
+              groupTotals: {
+                timezone,
+                rows: await checkoutGroupTotals(tx, where, query.groupBy, timezone, rows),
+              },
+            }
+          : {}),
       };
     },
     { isolationLevel: "repeatable read", accessMode: "read only" },

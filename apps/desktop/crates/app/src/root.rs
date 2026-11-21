@@ -757,6 +757,7 @@ impl Root {
             cx.notify();
         }
         self.refresh_unpaid_if_changed(reconnected, cx);
+        self.refresh_sales_history(reconnected, cx);
         self.refresh_salon_configuration(reconnected, cx);
         self.refresh_booking_policy(reconnected, cx);
         self.refresh_staff_access(reconnected, cx);
@@ -2564,7 +2565,7 @@ impl Root {
                 }
                 history.receipt = None;
                 let page = history.page;
-                self.load_sales_history(page, false, cx);
+                self.load_sales_history(transactions::HistoryLoad::Page(page), cx);
             }
             Overlay::SalesHistory(_) => {
                 self.load_register(cx);

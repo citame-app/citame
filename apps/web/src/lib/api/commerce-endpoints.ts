@@ -58,8 +58,8 @@ export function commerceEndpoints(client: ApiClient) {
         mode === "admin" ? "/admin/commerce/capabilities" : "/me/commerce/capabilities",
         paymentCapabilitiesSchema,
       ),
-    list: (query: Partial<CheckoutListQuery> = {}) =>
-      client.get("/admin/commerce/checkouts", checkoutListSchema, { query }),
+    list: (query: Partial<CheckoutListQuery> = {}, signal?: AbortSignal) =>
+      client.get("/admin/commerce/checkouts", checkoutListSchema, { query, signal }),
     create: (input: CreateCheckoutInput, mode: CommerceMode = "admin") =>
       client.post(`${base(mode)}/checkouts`, input, checkoutSchema),
     finalizePrices: (id: string, input: CheckoutPrices) =>

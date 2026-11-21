@@ -22,6 +22,8 @@ export const checkoutStatusSchema = z.enum([
   "refunded",
   "void",
 ]);
+const checkoutHistoryGroupSchema = z.enum(["day", "month"]);
+export type CheckoutHistoryGroup = z.infer<typeof checkoutHistoryGroupSchema>;
 export const checkoutListQuerySchema = z
   .object({
     page: z.coerce.number().int().min(1).max(100000).default(1),
@@ -32,6 +34,7 @@ export const checkoutListQuerySchema = z
     clientId: idSchema.optional(),
     from: instantSchema.optional(),
     to: instantSchema.optional(),
+    groupBy: checkoutHistoryGroupSchema.optional(),
   })
   .refine((value) => !value.from || !value.to || Date.parse(value.from) < Date.parse(value.to), {
     message: "The end must follow the start",
@@ -309,7 +312,19 @@ export const checkoutSchema = z.object({
   refunds: z.array(z.lazy(() => checkoutRefundSchema)).default([]),
   createdAt: instantSchema,
 });
-export const checkoutListSchema = pageInfoSchema.extend({ checkouts: z.array(checkoutSchema) });
+const checkoutGroupTotalSchema = z.object({
+  period: z.iso.date(),
+  receipts: z.number().int().nonnegative(),
+  paidCents: z.number().int().nonnegative(),
+  refundedCents: z.number().int().nonnegative(),
+});
+export type CheckoutGroupTotal = z.infer<typeof checkoutGroupTotalSchema>;
+export const checkoutListSchema = pageInfoSchema.extend({
+  checkouts: z.array(checkoutSchema),
+  groupTotals: z
+    .object({ timezone: z.string(), rows: z.array(checkoutGroupTotalSchema) })
+    .optional(),
+});
 export type CheckoutList = z.infer<typeof checkoutListSchema>;
 
 export type CreateCheckoutInput = z.infer<typeof createCheckoutSchema>;

@@ -175,6 +175,14 @@ export const posEn = {
   "pos.netPrice": "Net retail price",
   "pos.grossPrice": "Gross retail price",
   "pos.transactionsHelp": "Open a receipt to review payments, returns and reconciliation.",
+  "pos.transactionTotalsHelp":
+    "Totals include all payments and refunds on receipts matching the filters.",
+  "pos.transactionReceipts": "Receipts",
+  "pos.transactionStatus": "Receipt status",
+  "pos.transactionGrouping": "Group transactions",
+  "pos.transactionPaid": "Recorded payments",
+  "pos.transactionRefunded": "Refunds",
+  "pos.transactionNet": "Net payments",
 } as const;
 
 export const posEs: Record<keyof typeof posEn, string> = {
@@ -359,4 +367,12 @@ export const posEs: Record<keyof typeof posEn, string> = {
   "pos.netPrice": "Precio de venta neto",
   "pos.grossPrice": "Precio de venta bruto",
   "pos.transactionsHelp": "Abre un recibo para revisar cobros, devoluciones y conciliación.",
+  "pos.transactionTotalsHelp":
+    "Los totales incluyen todos los pagos y devoluciones de los recibos que coinciden con los filtros.",
+  "pos.transactionReceipts": "Recibos",
+  "pos.transactionStatus": "Estado del recibo",
+  "pos.transactionGrouping": "Agrupar transacciones",
+  "pos.transactionPaid": "Pagos registrados",
+  "pos.transactionRefunded": "Devoluciones",
+  "pos.transactionNet": "Pagos netos",
 };

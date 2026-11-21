@@ -1,4 +1,4 @@
-import type { Checkout, CheckoutListQuery } from "@sob/contracts";
+import type { Checkout, CheckoutHistoryGroup, CheckoutListQuery } from "@sob/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Button } from "~/components/ui/button";
@@ -27,30 +27,51 @@ export function Transactions({
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [page, setPage] = useState(1);
-  const [group, setGroup] = useState<"days" | "months">("days");
+  const [group, setGroup] = useState<CheckoutHistoryGroup>("day");
   const invalidRange = Boolean(from && to && from > to);
   const result = useQuery({
-    queryKey: ["commerce", "transactions", term, status, method, from, to, page, clientId],
-    queryFn: () =>
-      api().commerce.list({
-        page,
-        pageSize: 25,
-        search: term || undefined,
-        status,
-        method,
-        clientId,
-        ...(from ? { from: localDayBounds(from, timeZone).from } : {}),
-        ...(to ? { to: localDayBounds(addDaysLocal(to, 1), timeZone).from } : {}),
-      }),
+    queryKey: [
+      "commerce",
+      "transactions",
+      term,
+      status,
+      method,
+      from,
+      to,
+      page,
+      clientId,
+      group,
+      timeZone,
+    ],
+    queryFn: ({ signal }) =>
+      api().commerce.list(
+        {
+          page,
+          pageSize: 25,
+          search: term || undefined,
+          status,
+          method,
+          clientId,
+          groupBy: group,
+          ...(from ? { from: localDayBounds(from, timeZone).from } : {}),
+          ...(to ? { to: localDayBounds(addDaysLocal(to, 1), timeZone).from } : {}),
+        },
+        signal,
+      ),
     enabled: !invalidRange,
   });
   const rows = result.data?.checkouts ?? [];
   const total = result.data?.total ?? rows.length;
+  const groupTotals = result.data?.groupTotals;
+  const receiptTimezone = groupTotals?.timezone ?? timeZone;
+  const totalsByPeriod = new Map(groupTotals?.rows.map((row) => [row.period, row]));
   const grouped = new Map<string, Checkout[]>();
   for (const row of rows) {
-    const date = localDateOf(row.createdAt, timeZone);
-    const key = group === "days" ? date : date.slice(0, 7);
-    grouped.set(key, [...(grouped.get(key) ?? []), row]);
+    const date = localDateOf(row.createdAt, receiptTimezone);
+    const period = group === "day" ? date : `${date.slice(0, 7)}-01`;
+    const receipts = grouped.get(period);
+    if (receipts) receipts.push(row);
+    else grouped.set(period, [row]);
   }
   return (
     <section className="commerce-transactions space-y-5" aria-label={t("pos.transactions")}>
@@ -59,15 +80,15 @@ export function Transactions({
           <h2 className="text-heading">{t("commerce.history")}</h2>
           <p className="mt-1 text-sm text-muted">{t("pos.transactionsHelp")}</p>
         </div>
-        <div className="calendar-view-segments">
-          <button type="button" aria-pressed={group === "days"} onClick={() => setGroup("days")}>
+        <div
+          className="commerce-section-nav commerce-transaction-grouping"
+          role="group"
+          aria-label={t("pos.transactionGrouping")}
+        >
+          <button type="button" aria-pressed={group === "day"} onClick={() => setGroup("day")}>
             {t("pos.days")}
           </button>
-          <button
-            type="button"
-            aria-pressed={group === "months"}
-            onClick={() => setGroup("months")}
-          >
+          <button type="button" aria-pressed={group === "month"} onClick={() => setGroup("month")}>
             {t("pos.months")}
           </button>
         </div>
@@ -83,7 +104,7 @@ export function Transactions({
           }}
         />
         <SelectField
-          label={t("inventory.filter")}
+          label={t("pos.transactionStatus")}
           value={status ?? ""}
           options={[
             { value: "", label: t("pos.allStatuses") },
@@ -150,45 +171,70 @@ export function Transactions({
         <EmptyState title={t("commerce.noSales")} description={t("commerce.noSalesHelp")} />
       ) : (
         <div className="space-y-5">
-          {[...grouped].map(([date, sales]) => (
-            <section className="commerce-transaction-group" key={date}>
-              <h3>
-                {group === "days"
-                  ? formatDateLong(date, locale)
-                  : new Intl.DateTimeFormat(locale, {
-                      month: "long",
-                      year: "numeric",
-                      timeZone: "UTC",
-                    }).format(new Date(`${date}-01T12:00:00Z`))}
-              </h3>
-              <ul>
-                {sales.map((sale) => (
-                  <li key={sale.id}>
-                    <button
-                      type="button"
-                      className="commerce-transaction-row"
-                      onClick={() => onOpen(sale.id)}
-                    >
-                      <div>
-                        <span className="text-xs text-muted">
-                          {formatTime(sale.createdAt, timeZone, locale)} ·{" "}
-                          {sale.id.slice(-8).toUpperCase()}
-                        </span>
-                        <strong>{sale.lines.map((line) => line.description).join(", ")}</strong>
+          {groupTotals && <p className="text-sm text-muted">{t("pos.transactionTotalsHelp")}</p>}
+          {[...grouped].map(([date, sales]) => {
+            const totals = totalsByPeriod.get(date);
+            return (
+              <section className="commerce-transaction-group" key={date}>
+                <h3>
+                  {group === "day"
+                    ? formatDateLong(date, locale)
+                    : new Intl.DateTimeFormat(locale, {
+                        month: "long",
+                        year: "numeric",
+                        timeZone: "UTC",
+                      }).format(new Date(`${date}T12:00:00Z`))}
+                </h3>
+                {totals && (
+                  <dl className="commerce-transaction-totals">
+                    <div>
+                      <dt>{t("pos.transactionReceipts")}</dt>
+                      <dd>{totals.receipts.toLocaleString(locale)}</dd>
+                    </div>
+                    {(
+                      [
+                        ["pos.transactionPaid", totals.paidCents],
+                        ["pos.transactionRefunded", totals.refundedCents],
+                        ["pos.transactionNet", totals.paidCents - totals.refundedCents],
+                      ] as const
+                    ).map(([label, amount]) => (
+                      <div key={label}>
+                        <dt>{t(label)}</dt>
+                        <dd>{formatMoney(amount, "EUR", locale)}</dd>
                       </div>
-                      <span className="commerce-transaction-status">
-                        {t(`commerce.status.${sale.status}`)}
-                      </span>
-                      <strong className="tabular-nums">
-                        {formatMoney(sale.totalCents, sale.currency, locale)}
-                      </strong>
-                      <ChevronRightIcon width={18} height={18} />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ))}
+                    ))}
+                  </dl>
+                )}
+                {/* biome-ignore lint/a11y/noRedundantRoles: Safari needs this role when list markers are hidden. */}
+                <ol role="list">
+                  {sales.map((sale) => (
+                    <li key={sale.id}>
+                      <button
+                        type="button"
+                        className="commerce-transaction-row"
+                        onClick={() => onOpen(sale.id)}
+                      >
+                        <div>
+                          <span className="text-xs text-muted">
+                            {formatTime(sale.createdAt, receiptTimezone, locale)} ·{" "}
+                            {sale.id.slice(-8).toUpperCase()}
+                          </span>
+                          <strong>{sale.lines.map((line) => line.description).join(", ")}</strong>
+                        </div>
+                        <span className="commerce-transaction-status">
+                          {t(`commerce.status.${sale.status}`)}
+                        </span>
+                        <strong className="tabular-nums">
+                          {formatMoney(sale.totalCents, sale.currency, locale)}
+                        </strong>
+                        <ChevronRightIcon width={18} height={18} />
+                      </button>
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            );
+          })}
         </div>
       )}
       {total > 0 && !invalidRange && (
