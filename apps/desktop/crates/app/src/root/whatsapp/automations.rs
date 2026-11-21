@@ -1,16 +1,18 @@
 use super::*;
 pub(super) use sob_core::http::whatsapp::ReviewedAutomations as Editor;
-use sob_core::http::whatsapp::{ApprovedTemplate, EVENTS, RuleSaveOutcome, RulesChange, VARIABLES};
+use sob_core::http::whatsapp::{ApprovedTemplate, EVENTS, ReviewedOutcome, RulesChange, VARIABLES};
 use sob_core::sync::TransportError;
 
 enum Operation {
     Open(String),
     Save(RulesChange),
+    Disconnect(String),
 }
 
 enum Reply {
     Open(String, Vec<ApprovedTemplate>),
-    Saved(RuleSaveOutcome),
+    Saved(ReviewedOutcome),
+    Disconnected(String, ReviewedOutcome),
 }
 
 impl Root {
@@ -43,6 +45,24 @@ impl Root {
         }
     }
 
+    pub(super) fn confirm_whatsapp_disconnect(&mut self, cx: &mut Context<Self>) {
+        let Overlay::Whatsapp(desk) = &self.overlay else {
+            return;
+        };
+        let Some(review) = &desk.disconnect_review else {
+            return;
+        };
+        let current = desk
+            .snapshot
+            .as_ref()
+            .and_then(|view| view.connection.as_ref());
+        if current.and_then(|connection| connection.revision.as_deref())
+            == Some(review.revision.as_str())
+        {
+            self.request_whatsapp_automations(Operation::Disconnect(review.revision.clone()), cx);
+        }
+    }
+
     fn request_whatsapp_automations(&mut self, operation: Operation, cx: &mut Context<Self>) {
         if self.status.connectivity != Connectivity::Online {
             return;
@@ -56,7 +76,8 @@ impl Root {
         if desk.editing_request {
             return;
         }
-        let saving = matches!(&operation, Operation::Save(_));
+        let connecting_templates = matches!(&operation, Operation::Open(_));
+        let disconnecting = matches!(&operation, Operation::Disconnect(_));
         desk.editing_request = true;
         desk.editor_message = None;
         let identity = desk.identity.clone();
@@ -73,6 +94,9 @@ impl Root {
                         Operation::Save(change) => {
                             transport.save_whatsapp_rules(&change).map(Reply::Saved)
                         }
+                        Operation::Disconnect(revision) => transport
+                            .disconnect_whatsapp(&revision)
+                            .map(|outcome| Reply::Disconnected(revision, outcome)),
                     }
                 })
                 .await;
@@ -106,16 +130,42 @@ impl Root {
                             desk.editor_message = Some(Key::WhatsappRulesChanged);
                         }
                     }
-                    Ok(Reply::Saved(RuleSaveOutcome::Applied)) => {
+                    Ok(Reply::Saved(ReviewedOutcome::Applied)) => {
                         desk.editor = None;
                         desk.editor_message = Some(Key::WhatsappRulesSaved);
                         root.load_whatsapp_desk(true, cx);
                     }
-                    Ok(Reply::Saved(RuleSaveOutcome::Conflict)) => {
+                    Ok(Reply::Saved(ReviewedOutcome::Conflict)) => {
                         desk.editor_message = Some(Key::WhatsappRulesChanged);
                         root.load_whatsapp_desk(true, cx);
                     }
-                    Err(_) if !saving => desk.editor_message = Some(Key::WhatsappTemplatesFailed),
+                    Ok(Reply::Disconnected(revision, outcome)) => {
+                        desk.disconnect_review = None;
+                        desk.editor_message = Some(match outcome {
+                            ReviewedOutcome::Applied => {
+                                if let Some(snapshot) = &mut desk.snapshot
+                                    && snapshot
+                                        .connection
+                                        .as_ref()
+                                        .and_then(|value| value.revision.as_deref())
+                                        == Some(revision.as_str())
+                                {
+                                    snapshot.connection = None;
+                                }
+                                Key::WhatsappDisconnected
+                            }
+                            ReviewedOutcome::Conflict => Key::WhatsappDisconnectChanged,
+                        });
+                        root.load_whatsapp_desk(true, cx);
+                    }
+                    Err(_) if connecting_templates => {
+                        desk.editor_message = Some(Key::WhatsappTemplatesFailed);
+                    }
+                    Err(_) if disconnecting => {
+                        desk.disconnect_review = None;
+                        desk.editor_message = Some(Key::WhatsappDisconnectUnconfirmed);
+                        root.load_whatsapp_desk(true, cx);
+                    }
                     Err(TransportError::BadRequest(_)) => {
                         desk.editor_message = Some(Key::WhatsappRulesInvalid);
                         root.load_whatsapp_desk(true, cx);

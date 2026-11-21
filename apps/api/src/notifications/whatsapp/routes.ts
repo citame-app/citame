@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import {
   whatsappCompleteSchema,
+  whatsappReviewedDisconnectSchema,
   whatsappReviewedRulesSchema,
   whatsappRulesSchema,
 } from "@sob/contracts";
@@ -14,12 +15,12 @@ import { requireRole } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
-import { lockScheduling } from "../../tx";
 import { createMeta, tokenCipher } from "./meta";
 import {
-  disableWhatsApp,
+  disconnectWhatsApp,
   listDeliveries,
   listTemplates,
+  lockWhatsAppConnection,
   readConnection,
   updateWhatsAppRules,
   whatsappDesk,
@@ -49,11 +50,7 @@ export function whatsappAdminRoutes({
       const meta = createMeta(settings, whatsappFetch);
       try {
         const connection = await db.transaction(async (tx) => {
-          const lock = await tx.execute<{ locked: boolean }>(
-            sql`select pg_try_advisory_xact_lock(hashtext('citame.whatsapp.connection')) as locked`,
-          );
-          if (!lock[0]?.locked)
-            throw new DomainError("invalid_state", "Ya hay una conexión en curso.");
+          await lockWhatsAppConnection(tx);
           const current = await readConnection(tx);
           const grant = await meta.exchange(input.code);
           const phones = await meta.phones(input.wabaId, grant.access_token);
@@ -147,15 +144,12 @@ export function whatsappAdminRoutes({
       return c.json(whatsappSettings(notifications, saved));
     })
     .delete("/", async (c) => {
-      await db.transaction(async (tx) => {
-        const lock = await tx.execute<{ locked: boolean }>(
-          sql`select pg_try_advisory_xact_lock(hashtext('citame.whatsapp.connection')) as locked`,
-        );
-        if (!lock[0]?.locked)
-          throw new DomainError("invalid_state", "Ya hay una conexión en curso.");
-        await lockScheduling(tx);
-        await disableWhatsApp(tx);
-      });
+      await disconnectWhatsApp(db);
+      return c.json(whatsappSettings(notifications, undefined));
+    })
+    .post("/disconnect/reviewed", bodyLimit({ maxSize: 1024 }), async (c) => {
+      const { revision } = parseOrThrow(whatsappReviewedDisconnectSchema, await readJson(c));
+      await disconnectWhatsApp(db, revision);
       return c.json(whatsappSettings(notifications, undefined));
     });
 }

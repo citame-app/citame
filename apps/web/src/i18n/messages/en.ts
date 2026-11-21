@@ -32,6 +32,12 @@ import { waitlistEn } from "./waitlist";
 /** English is the source catalog: its keys define what every other catalog must provide. */
 export const en = {
   ...emailDeliveryEn,
+  "whatsapp.disconnectTitle": "Disconnect {phone}?",
+  "whatsapp.disconnectDescription":
+    "This stops pending WhatsApp notifications from Citame. The delivery history remains available.",
+  "whatsapp.disconnectChanged":
+    "The connection changed. Review the current number before disconnecting.",
+  "whatsapp.disconnectUnavailable": "Update Cloud to disconnect this number safely.",
   "whatsapp.rulesChanged":
     "Another session changed these automations. Reload the saved settings before saving.",
   "whatsapp.rulesReload": "Discard draft and reload",

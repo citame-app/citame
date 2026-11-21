@@ -8,6 +8,11 @@ use sob_core::http::whatsapp::{
 };
 use std::time::Instant;
 
+struct SenderReview {
+    revision: String,
+    phone: String,
+}
+
 pub(super) struct Desk {
     identity: Arc<()>,
     snapshot: Option<WhatsAppDesk>,
@@ -18,6 +23,7 @@ pub(super) struct Desk {
     editing_request: bool,
     editor_message: Option<Key>,
     confirm_discard: bool,
+    disconnect_review: Option<SenderReview>,
 }
 
 fn event_key(event: Event) -> Key {
@@ -73,6 +79,7 @@ impl Root {
             editing_request: false,
             editor_message: None,
             confirm_discard: false,
+            disconnect_review: None,
         }));
         self.load_whatsapp_desk(true, cx);
         cx.notify();
@@ -83,6 +90,10 @@ impl Root {
             return;
         };
         if desk.editing_request {
+            return;
+        }
+        if desk.disconnect_review.take().is_some() {
+            cx.notify();
             return;
         }
         if desk.confirm_discard {
@@ -98,6 +109,33 @@ impl Root {
             self.open_web_management(cx);
         }
         cx.notify();
+    }
+
+    fn review_whatsapp_disconnect(&mut self, cx: &mut Context<Self>) {
+        if self.status.connectivity != Connectivity::Online {
+            return;
+        }
+        let Overlay::Whatsapp(desk) = &mut self.overlay else {
+            return;
+        };
+        if desk.editor.is_some() || desk.editing_request || desk.loading {
+            return;
+        }
+        let Some(connection) = desk
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.connection.as_ref())
+        else {
+            return;
+        };
+        if let Some(revision) = &connection.revision {
+            desk.disconnect_review = Some(SenderReview {
+                revision: revision.clone(),
+                phone: connection.phone.clone(),
+            });
+            desk.editor_message = None;
+            cx.notify();
+        }
     }
 
     pub(super) fn refresh_whatsapp_desk(&mut self, reconnected: bool, cx: &mut Context<Self>) {
@@ -274,6 +312,7 @@ impl Root {
             .when(
                 online
                     && desk.editor.is_none()
+                    && desk.disconnect_review.is_none()
                     && !desk.editing_request
                     && desk.snapshot.as_ref().is_some_and(|snapshot| {
                         snapshot.configured
@@ -286,8 +325,69 @@ impl Root {
                     }),
                 |body| body.child(self.whatsapp_automation_button(cx)),
             )
+            .when(
+                online
+                    && !desk.loading
+                    && !desk.editing_request
+                    && desk.editor.is_none()
+                    && desk.disconnect_review.is_none()
+                    && desk
+                        .snapshot
+                        .as_ref()
+                        .and_then(|snapshot| snapshot.connection.as_ref())
+                        .is_some_and(|connection| connection.revision.is_some()),
+                |body| {
+                    body.child(self.button(
+                        "whatsapp-review-disconnect",
+                        self.t(Key::WhatsappDisconnect),
+                        Kind::Ghost,
+                        cx.listener(|root, _, _, cx| root.review_whatsapp_disconnect(cx)),
+                    ))
+                },
+            )
+            .when_some(desk.disconnect_review.as_ref(), |body, review| {
+                let current = desk
+                    .snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.connection.as_ref())
+                    .and_then(|connection| connection.revision.as_deref());
+                let changed = current != Some(review.revision.as_str());
+                body.child(div().font_weight(FontWeight::SEMIBOLD).child(i18n::fill(
+                    self.t(Key::WhatsappDisconnectTitle),
+                    &[("phone", &review.phone)],
+                )))
+                .child(self.t(Key::WhatsappDisconnectHelp))
+                .when(changed, |body| {
+                    body.child(self.t(Key::WhatsappDisconnectChanged))
+                })
+                .when(!desk.editing_request, |body| {
+                    body.child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(self.button(
+                                "whatsapp-disconnect-cancel",
+                                self.t(Key::Cancel),
+                                Kind::Ghost,
+                                cx.listener(|root, _, _, cx| root.close_whatsapp_desk(cx)),
+                            ))
+                            .when(online && !changed, |row| {
+                                row.child(self.button(
+                                    "whatsapp-disconnect-confirm",
+                                    self.t(Key::WhatsappDisconnectConfirm),
+                                    Kind::Danger,
+                                    cx.listener(|root, _, _, cx| {
+                                        root.confirm_whatsapp_disconnect(cx)
+                                    }),
+                                ))
+                            }),
+                    )
+                })
+            })
             .when_some(
-                desk.snapshot.as_ref().filter(|_| desk.editor.is_none()),
+                desk.snapshot
+                    .as_ref()
+                    .filter(|_| desk.editor.is_none() && desk.disconnect_review.is_none()),
                 |body, snapshot| {
                     body.when_some(snapshot.connection.as_ref(), |body, connection| {
                         let body = body.when(
@@ -372,7 +472,10 @@ impl Root {
                         cx.listener(|root, _, _, cx| root.close_whatsapp_desk(cx)),
                     ))
                     .when(
-                        online && desk.editor.is_none() && !desk.editing_request,
+                        online
+                            && desk.editor.is_none()
+                            && desk.disconnect_review.is_none()
+                            && !desk.editing_request,
                         |row| {
                             row.child(self.button(
                                 "whatsapp-reload",
@@ -405,6 +508,39 @@ impl Root {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+
+    #[gpui::test]
+    async fn a_pending_disconnect_is_bound_to_the_number_reviewed(cx: &mut TestAppContext) {
+        let (_directory, window) = super::super::tests::open(cx);
+        window.update(cx, |root, _, cx| {
+            root.status.connectivity = Connectivity::Offline;
+            root.open_whatsapp_desk(cx);
+            let Overlay::Whatsapp(desk) = &mut root.overlay else { panic!("Missing WhatsApp desk") };
+            desk.snapshot = Some(WhatsAppDesk {
+                configured: true,
+                connection: Some(Connection {
+                    phone: "+34 611 000 000".into(),
+                    revision: Some("original".into()),
+                    coexistence: true,
+                    expires_at: None,
+                    rules: vec![],
+                }),
+                deliveries: vec![],
+            });
+            root.status.connectivity = Connectivity::Online;
+            root.review_whatsapp_disconnect(cx);
+            let Overlay::Whatsapp(desk) = &mut root.overlay else { panic!("Missing WhatsApp desk") };
+            assert_eq!(desk.disconnect_review.as_ref().unwrap().revision, "original");
+            desk.snapshot.as_mut().unwrap().connection.as_mut().unwrap().revision = Some("renewed".into());
+
+            root.confirm_whatsapp_disconnect(cx);
+            let Overlay::Whatsapp(desk) = &root.overlay else { panic!("Missing WhatsApp desk") };
+            assert!(!desk.editing_request);
+            assert_eq!(desk.disconnect_review.as_ref().unwrap().revision, "original");
+            root.close_whatsapp_desk(cx);
+            assert!(matches!(&root.overlay, Overlay::Whatsapp(desk) if desk.disconnect_review.is_none()));
+        }).unwrap();
+    }
 
     #[gpui::test]
     async fn only_the_owner_can_open_the_native_whatsapp_desk(cx: &mut TestAppContext) {

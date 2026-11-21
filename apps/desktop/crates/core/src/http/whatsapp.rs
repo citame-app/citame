@@ -140,7 +140,7 @@ pub struct RuleChange {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RuleSaveOutcome {
+pub enum ReviewedOutcome {
     Applied,
     Conflict,
 }
@@ -311,7 +311,7 @@ impl HttpTransport {
     pub fn save_whatsapp_rules(
         &self,
         input: &RulesChange,
-    ) -> Result<RuleSaveOutcome, TransportError> {
+    ) -> Result<ReviewedOutcome, TransportError> {
         let mut request = self
             .agent
             .patch(&format!("{}/admin/whatsapp/rules/reviewed", self.base_url));
@@ -324,29 +324,43 @@ impl HttpTransport {
             .content_type("application/json")
             .send(body)
             .map_err(|error| TransportError::Offline(error.to_string()))?;
-        use super::{classify_status, read_response_with};
-        let result = read_response_with::<serde::de::IgnoredAny, Option<TransportError>>(
-            response,
-            |status, retry_after, body| {
-                if status == 409
-                    && serde_json::from_str::<serde_json::Value>(body).is_ok_and(|error| {
-                        error
-                            .pointer("/error/code")
-                            .and_then(serde_json::Value::as_str)
-                            == Some("version_conflict")
-                    })
-                {
-                    None
-                } else {
-                    Some(classify_status(status, retry_after, body, false))
-                }
-            },
-        );
-        match result {
-            Ok(_) => Ok(RuleSaveOutcome::Applied),
-            Err(None) => Ok(RuleSaveOutcome::Conflict),
-            Err(Some(error)) => Err(error),
-        }
+        reviewed_outcome(response)
+    }
+
+    pub fn disconnect_whatsapp(&self, revision: &str) -> Result<ReviewedOutcome, TransportError> {
+        let response = self.send_json(
+            "/admin/whatsapp/disconnect/reviewed",
+            &serde_json::json!({ "revision": revision }),
+        )?;
+        reviewed_outcome(response)
+    }
+}
+
+fn reviewed_outcome(
+    response: ureq::http::Response<ureq::Body>,
+) -> Result<ReviewedOutcome, TransportError> {
+    use super::{classify_status, read_response_with};
+    let result = read_response_with::<serde::de::IgnoredAny, Option<TransportError>>(
+        response,
+        |status, retry_after, body| {
+            if status == 409
+                && serde_json::from_str::<serde_json::Value>(body).is_ok_and(|error| {
+                    error
+                        .pointer("/error/code")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("version_conflict")
+                })
+            {
+                None
+            } else {
+                Some(classify_status(status, retry_after, body, false))
+            }
+        },
+    );
+    match result {
+        Ok(_) => Ok(ReviewedOutcome::Applied),
+        Err(None) => Ok(ReviewedOutcome::Conflict),
+        Err(Some(error)) => Err(error),
     }
 }
 

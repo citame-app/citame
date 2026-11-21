@@ -988,7 +988,7 @@ fn native_sends_a_reviewed_email_test_through_the_proxy() {
 #[test]
 #[ignore = "needs the synthetic WhatsApp history behind the web gateway"]
 fn native_whatsapp_desk_reads_private_delivery_status_through_the_proxy() {
-    use sob_core::http::whatsapp::{Event, LIVE_TOPIC, RuleSaveOutcome, RulesChange, Status};
+    use sob_core::http::whatsapp::{Event, LIVE_TOPIC, ReviewedOutcome, RulesChange, Status};
 
     let device = proxy_device();
     let mut browser = Device::sign_in();
@@ -1011,7 +1011,7 @@ fn native_whatsapp_desk_reads_private_delivery_status_through_the_proxy() {
     };
     assert_eq!(
         device.transport.save_whatsapp_rules(&update).unwrap(),
-        RuleSaveOutcome::Applied
+        ReviewedOutcome::Applied
     );
     let web = browser.rest_get("/admin/whatsapp");
     assert_eq!(web["connection"]["rules"], json!([]));
@@ -1019,8 +1019,38 @@ fn native_whatsapp_desk_reads_private_delivery_status_through_the_proxy() {
     assert!(browser.store.live_view_revision(LIVE_TOPIC).unwrap() > revision);
     assert_eq!(
         device.transport.save_whatsapp_rules(&update).unwrap(),
-        RuleSaveOutcome::Conflict
+        ReviewedOutcome::Conflict
     );
+    assert_eq!(
+        device
+            .transport
+            .disconnect_whatsapp(&update.revision)
+            .unwrap(),
+        ReviewedOutcome::Conflict
+    );
+    let current = device
+        .transport
+        .whatsapp_desk()
+        .unwrap()
+        .connection
+        .unwrap();
+    assert_eq!(
+        device
+            .transport
+            .disconnect_whatsapp(&current.revision.unwrap())
+            .unwrap(),
+        ReviewedOutcome::Applied
+    );
+    let disconnected = device.transport.whatsapp_desk().unwrap();
+    assert!(disconnected.connection.is_none());
+    assert!(
+        disconnected
+            .deliveries
+            .iter()
+            .any(|row| row.kind == Event::Confirmation
+                && row.displayed_status() == Some(Status::Read))
+    );
+    assert!(browser.rest_get("/admin/whatsapp")["connection"].is_null());
     device.disconnect_and_check("/api/admin/whatsapp/desk");
     assert!(matches!(
         device.transport.whatsapp_desk(),

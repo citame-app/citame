@@ -391,3 +391,82 @@ test("a reviewed WhatsApp write cannot replace automation saved in another sessi
   expect(syncPullResponseSchema.parse(await updated.json()).refresh).toEqual(["whatsapp_settings"]);
   expect((await save("confirmation")).status).toBe(409);
 });
+
+test("a reviewed disconnect cannot remove a sender renewed in another session", async () => {
+  const first = whatsappSettingsSchema.parse(await (await connect()).json());
+  const review = first.connection?.revision;
+  expect(review).toBeDefined();
+  const renewed = whatsappSettingsSchema.parse(await (await connect()).json());
+  expect(renewed.connection?.revision).not.toBe(review);
+  const path = "/admin/whatsapp/disconnect/reviewed";
+  const staff = await actor(t, "staff", "staff@example.com", { staffProfileId: f.anaId });
+  expect((await json(t.app, path, "POST", { revision: review })).status).toBe(401);
+  expect((await json(t.app, path, "POST", { revision: review }, staff.cookie)).status).toBe(403);
+  const stale = await json(t.app, path, "POST", { revision: review }, owner.cookie);
+  expect(stale.status).toBe(409);
+  expect(await stale.json()).toMatchObject({ error: { code: "version_conflict" } });
+  expect(await t.db.select().from(whatsappConnection)).toHaveLength(1);
+  const appointmentResponse = await json(
+    t.app,
+    "/appointments",
+    "POST",
+    {
+      staffId: f.anaId,
+      serviceIds: [f.haircutId],
+      startsAt: MONDAY_0900,
+      clientId: f.clientId,
+    },
+    owner.cookie,
+  );
+  expect(appointmentResponse.status).toBe(201);
+  const visit = (await appointmentResponse.json()) as { id: string; version: number };
+  await t.db.insert(reminder).values([
+    {
+      appointmentId: visit.id,
+      appointmentVersion: visit.version,
+      channel: "whatsapp",
+      scheduledFor: NOW,
+      kind: "confirmation",
+      status: "pending",
+    },
+    {
+      appointmentId: visit.id,
+      appointmentVersion: visit.version,
+      channel: "whatsapp",
+      scheduledFor: NOW,
+      kind: "reminder_24h",
+      status: "processing",
+      whatsappDispatchAt: NOW,
+    },
+    {
+      appointmentId: visit.id,
+      appointmentVersion: visit.version,
+      channel: "whatsapp",
+      scheduledFor: NOW,
+      kind: "reminder_2h",
+      status: "sent",
+      whatsappDelivery: "delivered",
+    },
+  ]);
+  const success = await json(
+    t.app,
+    path,
+    "POST",
+    { revision: renewed.connection?.revision },
+    owner.cookie,
+  );
+  expect(success.status).toBe(200);
+  expect(whatsappSettingsSchema.parse(await success.json()).connection).toBeNull();
+  expect(await t.db.select().from(whatsappConnection)).toHaveLength(0);
+  const retained = await t.db.select().from(reminder).where(eq(reminder.channel, "whatsapp"));
+  expect(retained.find((row) => row.kind === "confirmation")?.status).toBe("cancelled");
+  expect(retained.find((row) => row.kind === "reminder_24h")?.status).toBe("processing");
+  expect(retained.find((row) => row.kind === "reminder_2h")).toMatchObject({
+    status: "sent",
+    whatsappDelivery: "delivered",
+  });
+  expect(
+    (await json(t.app, path, "POST", { revision: renewed.connection?.revision }, owner.cookie))
+      .status,
+  ).toBe(200);
+});

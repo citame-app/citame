@@ -34,6 +34,12 @@ import { waitlistEsAR } from "./waitlist";
 /** Neutral, professional Spanish for Argentina. */
 export const esAR: Record<MessageKey, string> = {
   ...emailDeliveryEs,
+  "whatsapp.disconnectTitle": "¿Desconectar {phone}?",
+  "whatsapp.disconnectDescription":
+    "Esto detiene los avisos pendientes de WhatsApp en Citame. El historial de entregas seguirá disponible.",
+  "whatsapp.disconnectChanged":
+    "La conexión cambió. Revisa el número actual antes de desconectarlo.",
+  "whatsapp.disconnectUnavailable": "Actualiza Cloud para desconectar este número de forma segura.",
   "whatsapp.rulesChanged":
     "Otra sesión cambió estas automatizaciones. Recarga los ajustes guardados antes de guardar.",
   "whatsapp.rulesReload": "Descartar borrador y recargar",

@@ -280,7 +280,8 @@ export function createEndpoints(client: ApiClient) {
           client.get("/admin/whatsapp/deliveries", whatsappDeliveriesSchema, { signal }),
         save: (input: WhatsAppReviewedRules) =>
           client.patch("/admin/whatsapp/rules/reviewed", input, whatsappSettingsSchema),
-        disconnect: () => client.delete("/admin/whatsapp", whatsappSettingsSchema),
+        disconnect: (input: { revision: string }) =>
+          client.post("/admin/whatsapp/disconnect/reviewed", input, whatsappSettingsSchema),
       },
       calendar: (
         query: Omit<CalendarQuery, "staffIds"> & { staffIds?: string[] },

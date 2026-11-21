@@ -9,11 +9,11 @@ import {
   whatsappTemplateSchema,
 } from "@sob/contracts";
 import { type Database, reminder, whatsappConnection } from "@sob/db";
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { NotificationConfig } from "../../config";
 import { DomainError } from "../../errors";
-import { lockScheduling } from "../../tx";
+import { lockScheduling, type Tx } from "../../tx";
 import { backfillWhatsAppReminders } from "../outbox";
 import { createMeta, tokenCipher } from "./meta";
 
@@ -162,6 +162,28 @@ export async function updateWhatsAppRules(
         );
     await backfillWhatsAppReminders(tx, now, enabled);
     return updated;
+  });
+}
+
+export async function lockWhatsAppConnection(tx: Tx) {
+  const [lock] = await tx.execute<{ locked: boolean }>(
+    sql`select pg_try_advisory_xact_lock(hashtext('citame.whatsapp.connection')) as locked`,
+  );
+  if (!lock?.locked) throw new DomainError("invalid_state", "Ya hay una conexión en curso.");
+}
+
+export async function disconnectWhatsApp(db: Database, revision?: string) {
+  await db.transaction(async (tx) => {
+    await lockWhatsAppConnection(tx);
+    await lockScheduling(tx);
+    const current = await readConnection(tx, "update");
+    if (!current) return;
+    if (revision !== undefined && senderRevision(current) !== revision)
+      throw new DomainError(
+        "version_conflict",
+        "La conexión de WhatsApp cambió. Revísela antes de desconectar.",
+      );
+    await disableWhatsApp(tx);
   });
 }
 

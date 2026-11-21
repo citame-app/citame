@@ -131,6 +131,7 @@ export const whatsappRulesSchema = z
     "Choose one WhatsApp template per event",
   );
 const whatsappRevision = z.string().regex(/^[a-f0-9]{64}$/);
+export const whatsappReviewedDisconnectSchema = z.strictObject({ revision: whatsappRevision });
 export const whatsappReviewedRulesSchema = z.strictObject({
   revision: whatsappRevision,
   rules: whatsappRulesSchema,

@@ -120,3 +120,51 @@ test("undoing a draft lets the next save use the live connection revision", asyn
     ]),
   );
 });
+
+test("a renewed connection requires a new confirmation before disconnecting", async () => {
+  let connection = {
+    phone: "+34 600 000 000",
+    revision: "a".repeat(64),
+    rules: [],
+    coexistence: true,
+    expiresAt: null,
+  } as { phone: string; revision: string; rules: []; coexistence: boolean; expiresAt: null } | null;
+  const requests: unknown[] = [];
+  globalThis.fetch = mock(async (input: URL | string, init?: RequestInit) => {
+    const url = new URL(String(input), "http://localhost");
+    if (url.pathname.endsWith("/deliveries"))
+      return Response.json([
+        {
+          id: "01965683-0000-7000-8000-000000000001",
+          kind: "confirmation",
+          scheduledFor: "2026-11-21T10:00:00.000Z",
+          status: "sent",
+          delivery: "read",
+          lastError: null,
+        },
+      ]);
+    if (url.pathname.endsWith("/disconnect/reviewed")) {
+      requests.push(JSON.parse(String(init?.body)));
+      connection = null;
+    }
+    return Response.json({ setup: null, connection });
+  }) as unknown as typeof fetch;
+  const view = renderApp(<WhatsAppSettings />);
+  fireEvent.click(await screen.findByRole("button", { name: "Disconnect from Citame" }));
+  let dialog = within(await screen.findByRole("dialog", { name: "Disconnect +34 600 000 000?" }));
+  expect(dialog.getByRole("button", { name: "Cancel" })).toHaveFocus();
+  connection = { ...connection!, revision: "b".repeat(64) };
+  await act(async () =>
+    view.queryClient.invalidateQueries({ queryKey: ["admin", "whatsapp", "connection"] }),
+  );
+  await waitFor(() =>
+    expect(dialog.getByRole("button", { name: "Confirm disconnect" })).toBeDisabled(),
+  );
+  expect(requests).toEqual([]);
+  fireEvent.click(dialog.getByRole("button", { name: "Cancel" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Disconnect from Citame" }));
+  dialog = within(await screen.findByRole("dialog"));
+  fireEvent.click(dialog.getByRole("button", { name: "Confirm disconnect" }));
+  await waitFor(() => expect(requests).toEqual([{ revision: "b".repeat(64) }]));
+  expect(await screen.findByText("Read")).toBeInTheDocument();
+});

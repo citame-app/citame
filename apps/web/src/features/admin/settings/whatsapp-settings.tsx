@@ -2,6 +2,7 @@ import { type WhatsAppRule, whatsappKindSchema, whatsappVariableSchema } from "@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
+import { ConfirmDialog } from "~/components/ui/dialog";
 import { SelectField } from "~/components/ui/select-field";
 import { ErrorState, Skeleton } from "~/components/ui/states";
 import { useI18n } from "~/i18n/react";
@@ -41,7 +42,6 @@ const words = {
     cloud: "Cloud API connected",
     expiry: "Connection expires",
     expired: "The authorization expired. Reconnect to resume sending.",
-    disconnectHelp: "This stops pending WhatsApp notifications from Citame.",
     automation: "Appointment automations",
     timing:
       "Reminder timings come from Settings → Reminders. Customers must enable WhatsApp in their notification preferences.",
@@ -106,7 +106,6 @@ const words = {
     cloud: "Cloud API conectada",
     expiry: "La autorización caduca el",
     expired: "La autorización ha caducado. Vuelve a conectar para reanudar los envíos.",
-    disconnectHelp: "Esto detiene los avisos pendientes de WhatsApp que salen de Citame.",
     automation: "Automatizaciones de citas",
     timing:
       "Configura los horarios desde Ajustes → Recordatorios. Los clientes deben autorizar WhatsApp en sus preferencias de notificaciones.",
@@ -195,7 +194,7 @@ export function WhatsAppSettings() {
   const deliveries = useQuery({
     queryKey: deliveriesKey,
     queryFn: ({ signal }) => endpoints.deliveries(signal),
-    enabled: Boolean(connection),
+    enabled: Boolean(status.data),
     refetchInterval: 30000,
   });
   const [editor, setEditor] = useState<ReviewedDraft | null>(null);
@@ -204,7 +203,7 @@ export function WhatsAppSettings() {
   const [popup, setPopup] = useState(false);
   const [signupError, setSignupError] = useState(false);
   const [renewing, setRenewing] = useState(false);
-  const [confirm, setConfirm] = useState(false);
+  const [review, setReview] = useState<{ phone: string; revision: string } | null>(null);
   const cleanup = useRef<(() => void) | undefined>(undefined);
   useEffect(() => () => cleanup.current?.(), []);
   const draft: Draft =
@@ -223,11 +222,17 @@ export function WhatsAppSettings() {
   });
   const disconnect = useMutation({
     mutationFn: endpoints.disconnect,
-    onSuccess: (result) => {
+    onSuccess: (result, submitted) => {
       queryClient.removeQueries({ queryKey: templatesKey });
-      queryClient.setQueryData(settingsKey, result);
-      setConfirm(false);
+      queryClient.setQueryData<typeof result>(settingsKey, (current) =>
+        !current || current.connection?.revision === submitted.revision ? result : current,
+      );
+      setReview(null);
+      void queryClient.invalidateQueries({ queryKey: settingsKey });
       void queryClient.invalidateQueries({ queryKey: deliveriesKey });
+    },
+    onError: () => {
+      void queryClient.invalidateQueries({ queryKey: settingsKey });
     },
   });
   const save = useMutation({
@@ -253,6 +258,10 @@ export function WhatsAppSettings() {
   const stale =
     Boolean(dirty && editor && editor.revision !== connection?.revision) ||
     (save.error instanceof ApiError && save.error.code === "version_conflict");
+  const reviewChanged =
+    review !== null &&
+    (review.revision !== connection?.revision ||
+      (disconnect.error instanceof ApiError && disconnect.error.code === "version_conflict"));
   const expired = Boolean(
     connection?.expiresAt && new Date(connection.expiresAt).getTime() <= Date.now(),
   );
@@ -312,18 +321,23 @@ export function WhatsAppSettings() {
                   : `${copy.expiry} ${new Date(connection.expiresAt).toLocaleDateString(locale)}`}
               </p>
             )}
-            {confirm && <p className="text-sm">{copy.disconnectHelp}</p>}
             <div className="flex flex-wrap gap-2">
               <Button
-                variant={confirm ? "danger" : "secondary"}
-                loading={disconnect.isPending}
-                onClick={() => (confirm ? disconnect.mutate() : setConfirm(true))}
+                variant="secondary"
+                disabled={!connection.revision || dirty || save.isPending}
+                onClick={() => {
+                  if (connection.revision) {
+                    disconnect.reset();
+                    setReview({ phone: connection.phone, revision: connection.revision });
+                  }
+                }}
               >
-                {confirm ? copy.confirmDisconnect : copy.disconnect}
+                {copy.disconnect}
               </Button>
-              {!confirm && setup && (
+              {setup && (
                 <Button
                   variant="secondary"
+                  disabled={dirty || save.isPending}
                   onClick={() => {
                     setRenewing(true);
                     setSignupError(false);
@@ -333,12 +347,10 @@ export function WhatsAppSettings() {
                   {copy.renew}
                 </Button>
               )}
-              {confirm && (
-                <Button variant="ghost" onClick={() => setConfirm(false)}>
-                  {copy.cancel}
-                </Button>
-              )}
             </div>
+            {!connection.revision && (
+              <p className="text-sm text-muted">{t("whatsapp.disconnectUnavailable")}</p>
+            )}
           </>
         ) : (
           <>
@@ -391,12 +403,37 @@ export function WhatsAppSettings() {
             )}
           </>
         )}
-        {(connect.error || disconnect.error) && (
+        {connect.error && (
           <p role="alert" className="text-danger-fg">
-            {(connect.error ?? disconnect.error)?.message}
+            {connect.error.message}
           </p>
         )}
       </section>
+      {review && (
+        <ConfirmDialog
+          open
+          destructive
+          pending={disconnect.isPending}
+          confirmDisabled={reviewChanged || dirty || save.isPending}
+          title={t("whatsapp.disconnectTitle", { phone: review.phone })}
+          description={t("whatsapp.disconnectDescription")}
+          confirmLabel={copy.confirmDisconnect}
+          cancelLabel={copy.cancel}
+          onOpenChange={(open) => {
+            if (!open) setReview(null);
+          }}
+          onConfirm={() => {
+            if (!reviewChanged && !dirty && !save.isPending && !disconnect.isPending)
+              disconnect.mutate({ revision: review.revision });
+          }}
+        >
+          {(reviewChanged || disconnect.error) && (
+            <p role="alert" className="mt-2 text-sm text-danger-fg">
+              {reviewChanged ? t("whatsapp.disconnectChanged") : disconnect.error?.message}
+            </p>
+          )}
+        </ConfirmDialog>
+      )}
 
       {((connection && setup && !expired) || dirty) && (
         <form
@@ -555,37 +592,35 @@ export function WhatsAppSettings() {
           </Button>
         </form>
       )}
-      {connection && (
-        <section className="space-y-3 rounded-xl border border-line bg-surface p-5">
-          <h2 className="text-heading">{copy.deliveries}</h2>
-          {deliveries.isPending && <Skeleton className="h-14" />}
-          {deliveries.isError && (
-            <ErrorState error={deliveries.error} onRetry={() => void deliveries.refetch()} />
-          )}
-          {deliveries.data?.length === 0 && <p className="text-sm text-muted">{copy.none}</p>}
-          <ul className="divide-y divide-line">
-            {deliveries.data?.map((item) => (
-              <li
-                key={item.id}
-                className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm"
-              >
-                <span>
-                  {copy.events[events.indexOf(item.kind)]} ·{" "}
-                  {new Date(item.scheduledFor).toLocaleString(locale, {
-                    dateStyle: "short",
-                    timeStyle: "short",
-                  })}
-                </span>
-                <span className="font-semibold text-muted">
-                  {!item.delivery && item.lastError === "whatsapp_delivery_unknown"
-                    ? copy.unknown
-                    : copy.states[item.delivery ?? item.status]}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      <section className="space-y-3 rounded-xl border border-line bg-surface p-5">
+        <h2 className="text-heading">{copy.deliveries}</h2>
+        {deliveries.isPending && <Skeleton className="h-14" />}
+        {deliveries.isError && (
+          <ErrorState error={deliveries.error} onRetry={() => void deliveries.refetch()} />
+        )}
+        {deliveries.data?.length === 0 && <p className="text-sm text-muted">{copy.none}</p>}
+        <ul className="divide-y divide-line">
+          {deliveries.data?.map((item) => (
+            <li
+              key={item.id}
+              className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm"
+            >
+              <span>
+                {copy.events[events.indexOf(item.kind)]} ·{" "}
+                {new Date(item.scheduledFor).toLocaleString(locale, {
+                  dateStyle: "short",
+                  timeStyle: "short",
+                })}
+              </span>
+              <span className="font-semibold text-muted">
+                {!item.delivery && item.lastError === "whatsapp_delivery_unknown"
+                  ? copy.unknown
+                  : copy.states[item.delivery ?? item.status]}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </section>
     </div>
   );
 }
