@@ -168,6 +168,8 @@ jobs:
           k6 run k6/booking-contention.js
           bun k6/check-overlaps.ts
         env:
+          BASE_URL: http://localhost:4173
+          API_PREFIX: /api
           K6_EMAIL: ci-owner@example.com
           K6_PASSWORD: correct horse battery staple
       - uses: actions/upload-artifact@v4
