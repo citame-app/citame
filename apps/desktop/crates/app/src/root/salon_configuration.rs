@@ -26,37 +26,6 @@ pub(super) struct Desk {
     read_failed: bool,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use gpui::TestAppContext;
-
-    #[gpui::test]
-    async fn leaving_a_native_settings_draft_requires_confirmation(cx: &mut TestAppContext) {
-        let (_directory, window) = super::super::tests::open(cx);
-        window.update(cx, |root, _, cx| {
-            let saved: ReviewedSalonConfiguration = serde_json::from_value(serde_json::json!({
-                "name": "Test Salon", "timezone": "Europe/Madrid", "slotGranularityMinutes": 15,
-                "minNoticeMinutes": 30, "maxDaysAhead": 60, "onlineBookingEnabled": true,
-                "reminderFirstLeadMinutes": 1440, "reminderSecondLeadMinutes": 120,
-                "revision": "2026-11-21T00:00:00Z"
-            })).unwrap();
-            let mut editor = Editor::new(saved, None, LABELS.map(|key| root.t(key)), cx);
-            assert!(!editor.dirty(cx));
-            editor.online = false;
-            root.overlay = Overlay::SalonConfiguration(Box::new(Desk {
-                instance: Arc::new(()), editor: Some(editor), busy: false, pending: None,
-                conflict: false, confirm_close: false, observed: None, message: None, read_failed: false,
-            }));
-            root.dismiss_overlay(cx);
-            assert!(matches!(&root.overlay, Overlay::SalonConfiguration(desk) if desk.confirm_close));
-            root.dismiss_overlay(cx);
-            assert!(matches!(&root.overlay, Overlay::SalonConfiguration(desk)
-                if !desk.confirm_close && desk.editor.as_ref().is_some_and(|editor| !editor.online)));
-        }).unwrap();
-    }
-}
-
 struct Editor {
     saved: ReviewedSalonConfiguration,
     inputs: [Entity<TextField>; 6],
@@ -500,5 +469,36 @@ impl Root {
                     }
                 }),
             ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    async fn leaving_a_native_settings_draft_requires_confirmation(cx: &mut TestAppContext) {
+        let (_directory, window) = super::super::tests::open(cx);
+        window.update(cx, |root, _, cx| {
+            let saved: ReviewedSalonConfiguration = serde_json::from_value(serde_json::json!({
+                "name": "Test Salon", "timezone": "Europe/Madrid", "slotGranularityMinutes": 15,
+                "minNoticeMinutes": 30, "maxDaysAhead": 60, "onlineBookingEnabled": true,
+                "reminderFirstLeadMinutes": 1440, "reminderSecondLeadMinutes": 120,
+                "revision": "2026-11-21T00:00:00Z"
+            })).unwrap();
+            let mut editor = Editor::new(saved, None, LABELS.map(|key| root.t(key)), cx);
+            assert!(!editor.dirty(cx));
+            editor.online = false;
+            root.overlay = Overlay::SalonConfiguration(Box::new(Desk {
+                instance: Arc::new(()), editor: Some(editor), busy: false, pending: None,
+                conflict: false, confirm_close: false, observed: None, message: None, read_failed: false,
+            }));
+            root.dismiss_overlay(cx);
+            assert!(matches!(&root.overlay, Overlay::SalonConfiguration(desk) if desk.confirm_close));
+            root.dismiss_overlay(cx);
+            assert!(matches!(&root.overlay, Overlay::SalonConfiguration(desk)
+                if !desk.confirm_close && desk.editor.as_ref().is_some_and(|editor| !editor.online)));
+        }).unwrap();
     }
 }
