@@ -77,6 +77,71 @@ fn desktop_opens_cloud_management_with_the_linked_users_web_session_through_the_
 }
 
 #[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_manages_timed_promotions_through_the_proxy() {
+    use sob_core::promotions::{Discount, Eligible, SavePromotion, Terms, Timing};
+    let mut browser = Device::sign_in();
+    browser.sync();
+    let catalog = catalog(&browser);
+    let device = proxy_device();
+    let generation = browser.store.verified_reviewed_generation().unwrap();
+    let code = format!("DESK-{}", &uuid::Uuid::now_v7().simple().to_string()[16..]);
+    let mut save = SavePromotion {
+        revision: None,
+        generation: "old-replica".into(),
+        terms: Terms {
+            code: code.to_uppercase(),
+            name: "Synthetic weekday promotion".into(),
+            kind: Discount::Percent,
+            value: 1500,
+            minimum_spend_cents: 2000,
+            maximum_discount_cents: Some(5000),
+            usage_limit: Some(10),
+            per_client_limit: Some(1),
+            starts_at: None,
+            ends_at: None,
+            eligible_kinds: vec![Eligible::Service],
+            service_ids: vec![catalog.haircut.parse().unwrap()],
+            active: true,
+            timing: Some(Timing {
+                weekdays: vec![1, 3],
+                start_minute: 16 * 60,
+                end_minute: 1440,
+                last_minute_hours: Some(24),
+            }),
+        },
+    };
+    assert!(matches!(
+        device.transport.save_promotion(&save),
+        Err(TransportError::ReplicaGenerationChanged)
+    ));
+    save.generation = generation;
+    let created = device.transport.save_promotion(&save).unwrap();
+    assert_eq!(created.terms, save.terms);
+    assert_eq!(
+        device.transport.save_promotion(&save).unwrap().id,
+        created.id
+    );
+    save.revision = Some((created.id, created.version));
+    save.terms.active = false;
+    let edited = device.transport.save_promotion(&save).unwrap();
+    assert_eq!(edited.version, created.version + 1);
+    assert_eq!(
+        device.transport.save_promotion(&save).unwrap().version,
+        edited.version
+    );
+    save.terms.active = true;
+    assert!(matches!(
+        device.transport.save_promotion(&save),
+        Err(TransportError::BadRequest(_))
+    ));
+    let result = device.transport.promotions(1, &code).unwrap();
+    assert_eq!(result.promotions.len(), 1);
+    assert!(!result.promotions[0].terms.active);
+    assert_eq!(result.promotions[0].used_count, 0);
+}
+
+#[test]
 #[ignore = "needs the public web gateway and the synthetic catalogue from smoke-prod.sh"]
 fn native_booking_links_use_public_catalogue_through_the_proxy() {
     use sob_core::booking_links::{Selection, qr_png};

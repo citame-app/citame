@@ -6,7 +6,7 @@ import {
   rewardAdjustmentInputSchema,
   rewardChoiceSchema,
 } from "@sob/contracts";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { z } from "zod";
 import type { AppDeps } from "../../app";
 import { requirePermission, requireRole } from "../../auth/policy";
@@ -19,7 +19,13 @@ import { listPromotions, savePromotion } from "./promotions";
 import { returnCheckoutPoints } from "./value";
 
 const pageSchema = z.coerce.number().int().min(1).max(100000).default(1);
-export function rewardsAdminRoutes({ db }: AppDeps) {
+function promotionGeneration(c: Context<AppEnv>, current: string) {
+  const generation = c.req.header("x-citame-generation");
+  if ((c.get("desktopRequest") || generation !== undefined) && generation !== current)
+    throw new DomainError("sync_generation_changed", "Review promotions on the restored server");
+  return generation !== undefined;
+}
+export function rewardsAdminRoutes({ db, config }: AppDeps) {
   return new Hono<AppEnv>()
     .use("*", async (c, next) => {
       requirePermission(c.get("principal"), "commerce");
@@ -29,18 +35,20 @@ export function rewardsAdminRoutes({ db }: AppDeps) {
       requireRole(c.get("principal"), "owner");
       return c.json(await getLoyaltyPolicy(db));
     })
-    .get("/promotions", async (c) =>
-      c.json(
+    .get("/promotions", async (c) => {
+      c.header("Cache-Control", "private, no-store");
+      return c.json(
         await listPromotions(
           db,
           c.get("principal"),
           parseOrThrow(pageSchema, c.req.query("page")),
           parseOrThrow(z.string().trim().max(100).default(""), c.req.query("search")),
         ),
-      ),
-    )
-    .post("/promotions", async (c) =>
-      c.json(
+      );
+    })
+    .post("/promotions", async (c) => {
+      promotionGeneration(c, config.syncReplicaGeneration);
+      return c.json(
         await savePromotion(
           db,
           null,
@@ -48,18 +56,20 @@ export function rewardsAdminRoutes({ db }: AppDeps) {
           c.get("principal"),
         ),
         201,
-      ),
-    )
-    .put("/promotions/:id", async (c) =>
-      c.json(
+      );
+    })
+    .put("/promotions/:id", async (c) => {
+      const reviewed = promotionGeneration(c, config.syncReplicaGeneration);
+      return c.json(
         await savePromotion(
           db,
           parseOrThrow(idSchema, c.req.param("id")),
           parseOrThrow(promotionInputSchema, await readJson(c)),
           c.get("principal"),
+          reviewed,
         ),
-      ),
-    )
+      );
+    })
     .put("/policy", async (c) =>
       c.json(
         await setLoyaltyPolicy(

@@ -67,6 +67,7 @@ export async function savePromotion(
   id: string | null,
   input: PromotionInput,
   principal: Principal,
+  allowIdenticalReplay = false,
 ) {
   requirePermission(principal, "editCatalog");
   if (input.serviceIds.length) await getServicesByIds(db, input.serviceIds);
@@ -86,6 +87,15 @@ export async function savePromotion(
           .where(eq(promotion.id, id))
           .for("update");
         if (!current) throw new DomainError("not_found", "Promotion not found");
+        if (
+          allowIdenticalReplay &&
+          version !== null &&
+          (current.version === version || current.version === version + 1) &&
+          current.code === code &&
+          current.name === name &&
+          rewardHash(current.terms) === rewardHash(terms)
+        )
+          return promotionView(current);
         if (current.version !== version)
           throw new DomainError("version_conflict", "Promotion changed; review the current terms");
         [row] = await tx

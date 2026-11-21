@@ -136,6 +136,10 @@ export function requireAuth(
         (method === "POST" &&
           /^\/admin\/marketing\/campaigns(?:\/[\da-f-]+\/(?:queue|cancel))?$/.test(path)) ||
         (method === "PATCH" && /^\/admin\/marketing\/campaigns\/[\da-f-]+$/.test(path));
+      const promotionAllowed =
+        path === "/admin/rewards/promotions"
+          ? method === "GET" || method === "POST"
+          : method === "PUT";
       if (
         ((path === "/admin/portfolio" || path.startsWith("/admin/portfolio/")) &&
           !portfolioAllowed) ||
@@ -144,6 +148,7 @@ export function requireAuth(
         (path.startsWith("/admin/intake-forms") && !intakeAllowed) ||
         (path === "/admin/intake-forms" && method === "GET" && c.req.query("view") !== "summary") ||
         !DESKTOP_PROXY_ROUTE.test(path) ||
+        (path.startsWith("/admin/rewards/") && !promotionAllowed) ||
         (path.startsWith("/admin/marketing/") &&
           (method === "GET" ? /\/(?:queue|cancel)$/.test(path) : !campaignMutation)) ||
         (method !== "POST" &&

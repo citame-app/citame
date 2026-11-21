@@ -8,8 +8,10 @@ use sob_core::sync::TransportError;
 
 mod draft;
 mod links;
+mod promotions;
 use draft::{Editor, EditorMode};
 use links::LinkDesk;
+use promotions::PromoDesk;
 
 pub(super) struct Desk {
     identity: Arc<()>,
@@ -26,6 +28,7 @@ pub(super) struct Desk {
     action: Option<CampaignAction>,
     editor: Option<Editor>,
     links: Option<LinkDesk>,
+    promotions: Option<PromoDesk>,
     choose_template: bool,
     uncertain: bool,
     confirm_exit: bool,
@@ -162,6 +165,7 @@ impl Root {
             action: None,
             editor: None,
             links: None,
+            promotions: None,
             choose_template: false,
             search: cx.new(|cx| TextField::new(search, false, cx)),
             applied_search: String::new(),
@@ -186,6 +190,10 @@ impl Root {
     }
 
     pub(super) fn refresh_marketing(&mut self, reconnected: bool, cx: &mut Context<Self>) {
+        if matches!(&self.overlay, Overlay::Marketing(desk) if desk.promotions.is_some()) {
+            self.refresh_promotions(reconnected, cx);
+            return;
+        }
         if matches!(&self.overlay, Overlay::Marketing(desk) if desk.links.is_some()) {
             self.refresh_booking_links(reconnected, cx);
             return;
@@ -219,6 +227,10 @@ impl Root {
             return;
         };
         if desk.busy {
+            return;
+        }
+        if desk.promotions.is_some() {
+            self.back_from_promotions(false, cx);
             return;
         }
         if desk.links.take().is_some() {
@@ -538,7 +550,9 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let ready = self.status.connectivity == Connectivity::Online && !desk.busy;
-        let body = if let Some(links) = &desk.links {
+        let body = if let Some(promotions) = &desk.promotions {
+            self.render_promotions(promotions, ready, cx)
+        } else if let Some(links) = &desk.links {
             self.render_booking_links(links, ready, cx)
         } else if desk.choose_template {
             self.campaign_templates(ready, desk.editor.is_some(), cx)
@@ -550,6 +564,17 @@ impl Root {
             self.render_campaign_list(desk, ready, cx)
         };
         let footer = div().flex().flex_wrap().gap_2().when(!desk.busy, |row| {
+            if let Some(promotions) = &desk.promotions {
+                return row.when_some(self.promotion_back_key(promotions), |row, label| {
+                    row.child(self.marketing_button(
+                        "back-from-promotions",
+                        label,
+                        Kind::Ghost,
+                        |root, cx| root.back_from_promotions(true, cx),
+                        cx,
+                    ))
+                });
+            }
             let close = if desk.choose_template || desk.links.is_some() {
                 Key::Back
             } else if desk.editor.is_some() {
@@ -929,6 +954,13 @@ impl Root {
                                 Kind::Primary
                             },
                             Root::execute_marketing_action,
+                            cx,
+                        ))
+                        .child(self.marketing_button(
+                            "marketing-promotions",
+                            Key::PromoTitle,
+                            Kind::Ghost,
+                            Root::open_promotions,
                             cx,
                         ))
                     })

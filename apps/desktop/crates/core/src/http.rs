@@ -68,6 +68,7 @@ pub mod email_delivery;
 mod inventory_documents;
 pub mod marketing;
 mod portfolio;
+mod promotions;
 mod service_catalog;
 mod service_catalog_form;
 mod service_resources;
