@@ -119,6 +119,10 @@ impl Root {
         let ready = online && !editor.busy && !editor.limited();
         let stale = editor.base.is_some() && editor.base != editor.current && !editor.can_confirm();
         let can_mutate = self.can_configure_points();
+        let editing = !editor.busy;
+        let feedback = editor.feedback.filter(|key| {
+            *key != Key::StampProgrammeSaved || (editor.base == editor.current && !editor.dirty(cx))
+        });
         let mut body = div()
             .flex()
             .flex_col()
@@ -128,9 +132,7 @@ impl Root {
                 editor.busy || (editor.refreshing && editor.draft.is_none()),
                 |body| body.child(self.t(Key::MarketingLoading)),
             )
-            .when_some(editor.feedback, |body, feedback| {
-                body.child(self.t(feedback))
-            })
+            .when_some(feedback, |body, feedback| body.child(self.t(feedback)))
             .when(
                 stale && editor.feedback != Some(Key::StampProgrammeConflict),
                 |body| body.child(self.t(Key::StampProgrammeConflict)),
@@ -185,7 +187,7 @@ impl Root {
                 );
         } else if let Some(picker) = &editor.catalogue.picker {
             body = body.child(self.render_stamp_catalogue(editor, picker, cx));
-        } else if let Some(draft) = &editor.draft {
+        } else if let Some(draft) = editor.draft.as_ref().filter(|_| editing) {
             body = body
                 .child(self.render_programme_form(editor, draft, online, cx))
                 .when(ready && !stale && editor.dirty(cx), |body| {
