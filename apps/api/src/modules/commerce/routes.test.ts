@@ -490,7 +490,7 @@ test("an owner can verify an unknown price once without changing the original or
   expect(await checkout()).toMatchObject({ subtotalCents: 3650, paidCents: 0, status: "open" });
 });
 
-test("price verification cannot remove a Booksy billing hold or reprice a draft receipt", async () => {
+test("a verified price keeps the Booksy hold until the owner reconciles the partial payment", async () => {
   const existing = await checkout();
   const [line] = await t.db
     .update(appointmentService)
@@ -515,11 +515,44 @@ test("price verification cannot remove a Booksy billing hold or reprice a draft 
     sourceRef: "synthetic-invoice",
     invoiced: true,
   });
-  expect((await call(owner, path)).status).toBe(409);
-  expect((await call(owner, path, "PUT", input)).status).toBe(409);
+  const partial = `/admin/commerce/appointments/${appointmentId}/imported-partial-payment`;
+  expect((await call(owner, partial)).status).toBe(409);
+  expect((await call(staff, path)).status).toBe(403);
+  expect((await call(owner, path)).status).toBe(200);
+  expect((await call(owner, path, "PUT", input)).status).toBe(200);
   expect(await t.db.select().from(appointmentService)).toMatchObject([
-    { reviewedPriceCents: null },
+    { priceCents: 0, sourceUnpriced: true, reviewedPriceCents: 3650 },
   ]);
+  expect(await t.db.select().from(appointmentContext)).toMatchObject([{ invoiced: true }]);
+  const range = "?from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z";
+  expect(await (await call(owner, `/admin/commerce/unpaid${range}`)).json()).toMatchObject({
+    appointments: [],
+    billingReview: [{ id: appointmentId, reasons: ["invoiced_in_booksy"] }],
+  });
+  expect(
+    (
+      await call(owner, "/admin/commerce/checkouts", "POST", {
+        appointmentId,
+        idempotencyKey: crypto.randomUUID(),
+      })
+    ).status,
+  ).toBe(409);
+  expect(await (await call(owner, partial)).json()).toEqual({
+    appointmentVersion: 2,
+    originalTotalCents: 3650,
+  });
+  const payment = { appointmentVersion: 2, amountCents: 1000, reference: "Deposit receipt" };
+  expect((await call(owner, partial, "PUT", { ...payment, appointmentVersion: 1 })).status).toBe(
+    409,
+  );
+  expect((await call(owner, partial, "PUT", payment)).status).toBe(200);
+  expect(await t.db.select().from(checkoutPayment)).toHaveLength(0);
+  expect(await checkout()).toMatchObject({
+    lines: [{ kind: "external_balance", unitAmountCents: 2650 }],
+    totalCents: 2650,
+    paidCents: 0,
+    balanceCents: 2650,
+  });
 });
 
 test("builds totals from immutable appointment snapshots, not a browser total", async () => {

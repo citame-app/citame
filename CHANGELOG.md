@@ -72,6 +72,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Fixed
 
+- Web and Desktop let owners verify unknown imported appointment prices before reconciling external payments. The original payment and invoice holds remain in place until reconciliation.
+
 - Booksy recovery verifies archived product fingerprints before inventory classification columns existed and after migrating their root labels, while rejecting changed links.
 
 ## [0.1.0] - 2026-11-15

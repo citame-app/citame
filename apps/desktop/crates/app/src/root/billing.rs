@@ -67,10 +67,6 @@ impl Root {
                 .services
                 .iter()
                 .all(|line| line.currency == "EUR")
-            && appointment
-                .billing_review_reasons
-                .iter()
-                .all(|reason| *reason == BillingReviewReason::UnknownAmount)
     }
 
     pub(super) fn open_price_review(&mut self, cx: &mut Context<Self>) {
@@ -281,5 +277,32 @@ impl Root {
             Kind::Ghost,
             cx.listener(|this, _, _, cx| this.dismiss_overlay(cx)),
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::root::tests::{EXISTING, open};
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    async fn an_imported_billing_flag_can_coexist_with_a_price_review(cx: &mut TestAppContext) {
+        let (_directory, window) = open(cx);
+        window
+            .update(cx, |root, _, _| {
+                let mut appointment = root.svc.store.appointment(EXISTING).unwrap().unwrap();
+                appointment.services[0].currency = "EUR".into();
+                appointment.services[0].source_unpriced = true;
+                appointment.billing_review_reasons = vec![
+                    BillingReviewReason::UnknownAmount,
+                    BillingReviewReason::InvoicedInBooksy,
+                ];
+                root.status.connectivity = Connectivity::Online;
+                assert!(root.can_open_price_review(&appointment));
+                appointment.externally_settled = true;
+                assert!(!root.can_open_price_review(&appointment));
+            })
+            .unwrap();
     }
 }

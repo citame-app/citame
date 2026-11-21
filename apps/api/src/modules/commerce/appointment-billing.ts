@@ -100,18 +100,12 @@ async function assertPriceCanBeReviewed(
 ) {
   if (booking.status === "cancelled" || lines.some((line) => line.currency !== "EUR"))
     throw new DomainError("invalid_state", "This appointment cannot be repriced at checkout");
-  const [legacy] = await db
-    .select({ id: appointmentContext.id })
-    .from(appointmentContext)
-    .where(and(eq(appointmentContext.appointmentId, booking.id), sourceBilling))
-    .limit(1);
   const [receipt] = await db
     .select({ id: checkout.id })
     .from(checkout)
     .where(and(eq(checkout.appointmentId, booking.id), ne(checkout.status, "void")))
     .limit(1);
   if (
-    legacy ||
     receipt ||
     (await externallySettledAppointments(db, [booking.id])).size ||
     (await importedPartialPayments(db, [booking.id])).size

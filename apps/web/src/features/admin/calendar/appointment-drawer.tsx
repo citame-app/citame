@@ -389,11 +389,12 @@ function DrawerBody({
             <p className="text-sm text-muted">{t("pos.billingReview.help")}</p>
             {!readOnly &&
               billingRole === "owner" &&
-              appointment.unpricedServices?.length &&
-              appointment.billingReviewReasons.length === 1 &&
+              !appointment.externalBalance &&
+              appointment.services.every((service) => service.currency === "EUR") &&
+              !!appointment.unpricedServices?.length &&
               appointment.billingReviewReasons.includes("unknown_amount") && (
                 <ImportedPriceReview
-                  key={appointment.version}
+                  key={`prices-${appointment.version}`}
                   appointmentId={appointment.id}
                   version={appointment.version}
                   services={appointment.unpricedServices}

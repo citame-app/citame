@@ -139,6 +139,34 @@ describe("AppointmentDrawer", () => {
     expect(within(dialog).getByText(/11:00 AM/)).toBeInTheDocument();
   });
 
+  test("lets an owner review an unknown amount while retaining Booksy payment review", async () => {
+    open({
+      appointment: {
+        ...appointment,
+        importedFromBooksy: true,
+        billingReviewReasons: ["unknown_amount", "invoiced_in_booksy"],
+        services: appointment.services.map((line) => ({
+          ...line,
+          currency: "EUR",
+          priceCents: 0,
+          sourceUnpriced: true,
+        })),
+        unpricedServices: [{ id: CUT, name: "Haircut" }],
+      },
+    });
+    const dialog = await screen.findByRole("dialog", { name: "Lucia Perez" });
+    expect(
+      within(dialog).getByRole("form", { name: "Confirm imported amounts" }),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("form", { name: "Reconcile Booksy payment" }),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText("Marked as invoiced in Booksy")).toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("form", { name: "Reconcile partial Booksy payment" }),
+    ).toBeNull();
+  });
+
   test("loads the client's contact data and notes", async () => {
     open();
     expect(await screen.findByText("+54 9 11 5555-0000")).toBeInTheDocument();
