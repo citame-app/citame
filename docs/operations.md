@@ -189,6 +189,17 @@ The command checks the receipt for the capacity, booking, rescheduling, checkout
 
 Use [the operational-copy rehearsal](booksy-import-protocol.md#ensayar-la-separación-de-la-base-operativa) to verify a separate native database from the same archive. It checks the copied tables and migration ledger, excludes the private source schema, verifies that no accounts or delivery configuration are carried and pauses public booking. The pinned Valkey image must be present locally. The rehearsal uses disposable PostgreSQL and Valkey instances to exercise the normal signed-in calendar and verify that customer booking is blocked.
 
+Verify the trusted receipt for the selected operational rehearsal using the same references. Append `operational-copy` for the sign-in, permissions and restored replica proof. Append `operational-write` for a receipt that also demonstrates both sync directions, confirmed live changes, an idempotent replay, stale-version rejection and device revocation.
+
+```sh
+cd apps/api
+bun src/scripts/booksy-portable-backup.ts verify-rehearsal \
+  /private/operational-write.json FINAL_SNAPSHOT_SHA256 RECORDED_CIPHER_SHA256 YYYY-MM-DD \
+  operational-write
+```
+
+Keep the receipt private and obtain the reference hashes independently. The verifier checks internal consistency and the exact release ledger. Each scope requires its own evidence and preserves `canCutOver: false`.
+
 The local rehearsal `release-evidence-recovery.*` verified the 69 migrations up to `0068`. The command accepted that receipt for 2026-11-18 and rejected it for 2026-11-19. It also rejected a previous receipt that lacked the full ledger hash.
 
 The local rehearsals `review-email-ledger-recovery.*` and `next-day-0070-recovery.*` verified all 71 migrations through `0070` against the encrypted candidate backup for 2026-11-18 and 2026-11-19. The disposable databases restored the 94 original tables and verified the 1,053 archived source files. Rollback preserved the contents of all 98 migrated tables after the scheduling rehearsals. Each receipt covers its archived snapshot and date.

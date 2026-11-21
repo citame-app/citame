@@ -72,27 +72,28 @@ const rehearsalReference = z.object({
   encryptedSha256: sha256,
   date: z.iso.date(),
 });
-const rehearsalReceipt = rehearsalReference.omit({ date: true }).extend({
+const rehearsalScope = z.enum(["schedule", "operational-copy", "operational-write"]);
+const migrationEvidence = z.object({
+  applied: size,
+  headTimestamp: size,
+  headSha256: sha256,
+  ledgerSha256: sha256,
+});
+const rehearsalBase = rehearsalReference.omit({ date: true }).extend({
   verifiedAt: z.iso.datetime(),
   tableContentSha256: sha256,
   tables: size,
   archiveArtifactsVerified: size,
   portableRestorationVerified: z.literal(true),
   day: z.object({ date: z.iso.date() }),
-  candidate: z.object({
-    calendarLines: size,
-    products: z.number().int().nonnegative(),
-    waitlistForReview: z.number().int().nonnegative(),
-  }),
   canCutOver: z.literal(false),
+});
+const count = z.number().int().nonnegative();
+const scheduleReceipt = rehearsalBase.extend({
+  candidate: z.object({ calendarLines: size, products: count, waitlistForReview: count }),
   schedule: z.object({
     date: z.iso.date(),
-    migrations: z.object({
-      applied: size,
-      headTimestamp: size,
-      headSha256: sha256,
-      ledgerSha256: sha256,
-    }),
+    migrations: migrationEvidence,
     migratedTables: size,
     migratedTableContentSha256: sha256,
     nativeProjectionVerifiedAfterMigration: z.literal(true),
@@ -111,25 +112,130 @@ const rehearsalReceipt = rehearsalReference.omit({ date: true }).extend({
   }),
 });
 
+const operationalReceipt = rehearsalBase.extend({
+  day: rehearsalBase.shape.day.extend({ calendarLines: count }),
+  candidate: z.object({ calendarLines: count, staff: size, services: size, frozenServices: count }),
+  operationalCopy: z.object({
+    nativeTablesVerified: size,
+    nativeTableContentSha256: sha256,
+    migrations: migrationEvidence,
+    replica: z.object({
+      calendarLines: count,
+      reannouncedCalendarLines: count,
+      serviceIndicatorsVerified: count,
+      serviceColorsVerified: count,
+      reannouncedServiceColors: count,
+    }),
+    application: z.object({
+      ownerSignedIn: z.literal(true),
+      calendarLines: count,
+      serviceLines: count,
+      staffColumns: size,
+      anonymousCalendarDenied: z.literal(true),
+      customerCalendarDenied: z.literal(true),
+      customerBookingPaused: z.literal(true),
+      move: z
+        .object({
+          movedThroughApi: z.literal(true),
+          staleVersionRejected: z.literal(true),
+          resourceAssignments: size,
+          calendarUpdated: z.literal(true),
+          replicaUpdated: z.literal(true),
+          deviceProofRenewed: z.literal(true),
+          desktopLiveChangeReceived: z.literal(true),
+          movedThroughDesktop: z.literal(true),
+          webLiveChangeReceived: z.literal(true),
+          desktopReplayIdempotent: z.literal(true),
+          staleDesktopVersionRejected: z.literal(true),
+          desktopDeviceLinkedAndRevoked: z.literal(true),
+        })
+        .optional(),
+    }),
+    privateArchiveExcluded: z.literal(true),
+    originalArchiveUnchanged: z.literal(true),
+    onlineBookingPaused: z.literal(true),
+    credentialAndDeliveryTablesEmptyBeforeRehearsal: z.literal(true),
+  }),
+});
+
 class RehearsalEvidenceError extends Error {}
+
+function incompleteRehearsal(): never {
+  throw new RehearsalEvidenceError("Receipt does not record a successful migrated rehearsal");
+}
+
+function verifyRehearsalBinding(
+  receipt: z.infer<typeof rehearsalBase>,
+  expected: z.infer<typeof rehearsalReference>,
+  rehearsalMigrations: z.infer<typeof migrationEvidence>,
+) {
+  const { snapshotHash, encryptedSha256, date } = expected;
+  if (
+    receipt.snapshotHash !== snapshotHash ||
+    receipt.encryptedSha256 !== encryptedSha256 ||
+    receipt.day.date !== date
+  )
+    throw new RehearsalEvidenceError(
+      "Receipt does not match the selected snapshot, encrypted backup or rehearsal day",
+    );
+  const migrations = getReleaseMigrationLedger();
+  if (fingerprint(rehearsalMigrations) !== fingerprint(migrations))
+    throw new RehearsalEvidenceError("Receipt was verified against a different migration ledger");
+  return {
+    recoveryEvidenceVerified: true,
+    verifiedAt: receipt.verifiedAt,
+    snapshotHash,
+    encryptedSha256,
+    date,
+    migrations,
+    canCutOver: false,
+  };
+}
 
 /** Check a trusted receipt against independently selected evidence and the local migration tree. */
 export function verifyPortableBooksyRehearsal(
   receipt: unknown,
   reference: z.input<typeof rehearsalReference>,
+  scope: z.infer<typeof rehearsalScope> = "schedule",
 ) {
   const expected = rehearsalReference.safeParse(reference);
-  const proof = rehearsalReceipt.safeParse(receipt);
   if (!expected.success)
     throw new RehearsalEvidenceError("Expected two SHA-256 hashes and an audit date");
-  if (!proof.success)
-    throw new RehearsalEvidenceError("Receipt does not record a successful migrated rehearsal");
-  const { snapshotHash, encryptedSha256, date } = expected.data;
-  const { day, schedule, verifiedAt } = proof.data;
+  if (scope !== "schedule") {
+    const proof = operationalReceipt.safeParse(receipt);
+    if (!proof.success) incompleteRehearsal();
+    const { day, candidate, operationalCopy } = proof.data;
+    const { application, replica, migrations } = operationalCopy;
+    if (
+      (scope === "operational-write") !== Boolean(application.move) ||
+      day.calendarLines > candidate.calendarLines ||
+      application.calendarLines !== day.calendarLines ||
+      application.staffColumns !== candidate.staff ||
+      application.serviceLines < application.calendarLines ||
+      application.serviceLines > candidate.frozenServices ||
+      replica.calendarLines !== candidate.calendarLines ||
+      replica.reannouncedCalendarLines > replica.calendarLines ||
+      replica.serviceIndicatorsVerified > candidate.frozenServices ||
+      replica.serviceColorsVerified > candidate.services ||
+      replica.reannouncedServiceColors > replica.serviceColorsVerified
+    )
+      incompleteRehearsal();
+    return {
+      ...verifyRehearsalBinding(proof.data, expected.data, migrations),
+      rehearsal: scope,
+      calendarLines: replica.calendarLines,
+      dayCalendarLines: application.calendarLines,
+      ...(application.move ? { move: application.move } : {}),
+    };
+  }
+
+  const proof = scheduleReceipt.safeParse(receipt);
+  if (!proof.success) incompleteRehearsal();
+  const { schedule, candidate } = proof.data;
   if (
-    schedule.replica.calendarLines !== proof.data.candidate.calendarLines ||
-    (schedule.inventory.status === "exercised") !== proof.data.candidate.products > 0 ||
-    schedule.waitlist.sourceRequests !== proof.data.candidate.waitlistForReview ||
+    schedule.replica.calendarLines !== candidate.calendarLines ||
+    (schedule.inventory.status === "exercised") !== candidate.products > 0 ||
+    schedule.waitlist.sourceRequests !== candidate.waitlistForReview ||
     schedule.waitlist.preparedOnce !== schedule.waitlist.sourceRequests ||
     schedule.waitlist.availableControls !== schedule.waitlist.sourceRequests ||
     schedule.waitlist.enabledPolicyRejections !== schedule.waitlist.sourceRequests ||
@@ -137,30 +243,15 @@ export function verifyPortableBooksyRehearsal(
     schedule.waitlist.anyProfessionalAccepted !== schedule.waitlist.sourceRequests ||
     schedule.waitlist.replaysWhileEnabled !== schedule.waitlist.sourceRequests
   )
-    throw new RehearsalEvidenceError("Receipt does not record a successful migrated rehearsal");
-  if (
-    proof.data.snapshotHash !== snapshotHash ||
-    proof.data.encryptedSha256 !== encryptedSha256 ||
-    day.date !== date ||
-    schedule.date !== date
-  )
+    incompleteRehearsal();
+  if (schedule.date !== expected.data.date)
     throw new RehearsalEvidenceError(
       "Receipt does not match the selected snapshot, encrypted backup or rehearsal day",
     );
-
-  const migrations = getReleaseMigrationLedger();
-  if (fingerprint(schedule.migrations) !== fingerprint(migrations))
-    throw new RehearsalEvidenceError("Receipt was verified against a different migration ledger");
   return {
-    recoveryEvidenceVerified: true,
-    verifiedAt,
-    snapshotHash,
-    encryptedSha256,
-    date,
-    migrations,
+    ...verifyRehearsalBinding(proof.data, expected.data, schedule.migrations),
     inventory: schedule.inventory,
     waitlist: schedule.waitlist,
-    canCutOver: false,
   };
 }
 
@@ -565,7 +656,7 @@ async function restoreInIsolatedPostgres(
             fingerprint(await readTables()) !== migratedTableContentSha256
           )
             throw new Error("Native copy verification differs from the reviewed source");
-          return {
+          const rehearsal = {
             ...result,
             operationalCopy: {
               nativeTablesVerified: copyAfter.length,
@@ -579,6 +670,8 @@ async function restoreInIsolatedPostgres(
               credentialAndDeliveryTablesEmptyBeforeRehearsal: true,
             },
           };
+          verifyPortableBooksyRehearsal(rehearsal, { ...expected, date }, probe);
+          return rehearsal;
         } finally {
           await native.close();
         }
@@ -599,7 +692,7 @@ async function restoreInIsolatedPostgres(
           allTableContentsUnchanged: true,
         },
       };
-      rehearsalReceipt.parse(rehearsal);
+      scheduleReceipt.parse(rehearsal);
       return rehearsal;
     } finally {
       await connection.close();
@@ -695,25 +788,35 @@ if (import.meta.main) {
           2,
         ),
       );
-    } else if (operation === "verify-rehearsal" && args.length === 4) {
-      const [receipt, snapshotHash, encryptedSha256, date] = args as [
+    } else if (operation === "verify-rehearsal" && (args.length === 4 || args.length === 5)) {
+      const [receipt, snapshotHash, encryptedSha256, date, rawScope] = args as [
         string,
         string,
         string,
         string,
+        string?,
       ];
+      const scope = rehearsalScope.safeParse(rawScope ?? "schedule");
+      if (!scope.success)
+        throw new RehearsalEvidenceError(
+          "Expected schedule, operational-copy or operational-write",
+        );
       const path = await privatePath(receipt);
       const evidence = await Bun.file(path).json();
       console.log(
         JSON.stringify(
-          verifyPortableBooksyRehearsal(evidence, { snapshotHash, encryptedSha256, date }),
+          verifyPortableBooksyRehearsal(
+            evidence,
+            { snapshotHash, encryptedSha256, date },
+            scope.data,
+          ),
           null,
           2,
         ),
       );
     } else {
       throw new Error(
-        "Expected seal <verified-receipt> <private-output-dir> <keyring> <recipient-fingerprint>, restore / rehearse-schedule / rehearse-operational-copy / rehearse-operational-write <archive> <receipt> <trusted-sha256> <keyring> <date>, or verify-rehearsal <rehearsal-receipt> <snapshot-sha256> <trusted-cipher-sha256> <date>",
+        "Expected seal <verified-receipt> <private-output-dir> <keyring> <recipient-fingerprint>, restore / rehearse-schedule / rehearse-operational-copy / rehearse-operational-write <archive> <receipt> <trusted-sha256> <keyring> <date>, or verify-rehearsal <rehearsal-receipt> <snapshot-sha256> <trusted-cipher-sha256> <date> [schedule|operational-copy|operational-write]",
       );
     }
   } catch (error) {
