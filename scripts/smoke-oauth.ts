@@ -569,8 +569,14 @@ assert.equal(
     .status,
   403,
 );
+const settledSale = await request(`${origin}/api/admin/commerce/checkouts/${saleId}`, {
+  headers: { cookie },
+});
+assert.equal(settledSale.status, 200);
+const { fulfilledAt } = checkoutSchema.parse(await settledSale.json());
+assert.ok(fulfilledAt, "The smoke sale has settled");
 const saleDate = new Intl.DateTimeFormat("en-CA", { timeZone: reportSummary.timezone }).format(
-  new Date(),
+  new Date(fulfilledAt),
 );
 const saleFilters = new URLSearchParams({ from: saleDate, to: saleDate, staffId: professional.id });
 const familyPath = `/admin/accounting/sales?${saleFilters}`;

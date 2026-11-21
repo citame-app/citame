@@ -20,7 +20,7 @@ import type { Tx } from "../../tx";
 import { multiplyDivide } from "../commerce/money";
 import { getSalonSettings } from "../settings/service";
 import { requireStaff } from "../staff/admin";
-import { redeemedAtSettlement, settledFamilies } from "./settled-families";
+import { redeemedAtSettlement, settledSales } from "./settled-families";
 
 type Connection = Database | Tx;
 function ownStatement(principal: Principal, staffId: string) {
@@ -328,13 +328,7 @@ export async function salesReport(db: Database, query: ReportQuery, principal: P
       const refunds = await tx.execute<{ method: string; amount: string | number }>(
         sql`select p.method::text as method, sum(r.amount_cents)::bigint as amount from checkout_refund r join checkout_payment p on p.id = r.payment_id join checkout c on c.id = p.checkout_id where r.status = 'succeeded' and r.updated_at >= ${fromAt} and r.updated_at < ${toAt} ${staff} group by p.method`,
       );
-      const [sales] = await tx.execute<{
-        sold: string | number;
-        tax: string | number;
-        tips: string | number;
-      }>(
-        sql`select coalesce(sum(c.total_cents - (select coalesce(sum(pr.amount_cents-pr.allocated_cents),0) from pass_redemption pr where pr.checkout_id=c.id and ${redeemedAtSettlement})),0)::bigint as sold, coalesce(sum(c.tax_cents - (select coalesce(sum(l.tax_cents-pr.tax_cents),0) from pass_redemption pr join checkout_line l on l.id=pr.checkout_line_id where pr.checkout_id=c.id and ${redeemedAtSettlement})),0)::bigint as tax, coalesce(sum(c.tip_cents),0)::bigint as tips from checkout c where c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt} and not exists (select 1 from checkout_line gl where gl.checkout_id = c.id and gl.kind in ('gift_card','package_purchase','membership_period')) ${staff}`,
-      );
+      const sales = await settledSales(tx, fromAt, toAt, query.staffId);
       const [costs] = await tx.execute<{ cost: string | number; unknown: number }>(
         sql`select coalesce(sum(l.quantity * l.unit_cost_cents::bigint),0)::bigint as cost, count(*) filter (where l.unit_cost_cents is null)::int as unknown from checkout_line l join checkout c on c.id = l.checkout_id where l.kind = 'product' and c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt} ${staff}`,
       );
@@ -354,7 +348,6 @@ export async function salesReport(db: Database, query: ReportQuery, principal: P
       const [bookingFees] = await tx.execute<{ amount: string | number }>(
         sql`select coalesce(sum(m.amount_cents),0)::bigint as amount from booking_fee_movement m join checkout c on c.id=m.checkout_id where m.created_at >= ${fromAt} and m.created_at < ${toAt} ${staff}`,
       );
-      const settledByFamily = await settledFamilies(tx, fromAt, toAt, query.staffId);
       const sessions = query.staffId
         ? []
         : await tx
@@ -397,12 +390,9 @@ export async function salesReport(db: Database, query: ReportQuery, principal: P
         prepaidAllocationReturnedCents: Number(prepaid?.returned ?? 0),
         membershipAccessFeesCents: Number(fees?.amount ?? 0),
         bookingFeesCents: Number(bookingFees?.amount ?? 0),
-        soldCents: Number(sales?.sold ?? 0),
-        includedTaxCents: Number(sales?.tax ?? 0),
-        tipsCents: Number(sales?.tips ?? 0),
+        ...sales,
         productCostCents: Number(costs?.cost ?? 0),
         unknownCostLines: costs?.unknown ?? 0,
-        settledByFamily,
         methods,
         cashSessions: sessions.map((row) => ({
           id: row.id,

@@ -6,6 +6,7 @@ import {
   DESKTOP_SIGN_IN_SCOPE,
   passContractSchema,
   passPurchaseResponseSchema,
+  salesReportSchema,
 } from "@sob/contracts";
 import {
   appointment,
@@ -694,7 +695,8 @@ test("financial reports separate new cash, receipt face values and the prepaid a
   // Simulate a historical receipt whose line tax no longer reconciles to its settled header.
   await t.db.execute(sql`update checkout_line set tax_cents = 100 where checkout_id = ${s.id}`);
   const legacy = await call(owner, `/admin/accounting/sales?from=${date}&to=${date}`);
-  expect(await legacy.json()).toMatchObject({
+  expect(salesReportSchema.parse(await legacy.json())).toMatchObject({
+    includedTaxCents: 0,
     settledByFamily: expect.arrayContaining([
       { family: "unallocated", amountCents: 334, taxCents: 0 },
     ]),
