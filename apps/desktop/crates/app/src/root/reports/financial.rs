@@ -91,6 +91,36 @@ impl Root {
                 self.t(Key::FinancialUnknownCost),
                 &[("n", &lines)],
             )))
+            .when_some(report.settled_by_family.as_ref(), |view, rows| {
+                view.child(
+                    div()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(self.t(Key::FinancialFamilies)),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::muted())
+                        .child(self.t(Key::FinancialFamiliesBasis)),
+                )
+                .when(rows.is_empty(), |view| {
+                    view.child(
+                        div()
+                            .text_sm()
+                            .text_color(theme::muted())
+                            .child(self.t(Key::FinancialFamiliesEmpty)),
+                    )
+                })
+                .children(rows.iter().map(|row| {
+                    self.financial_row(
+                        self.t(row.family.descriptor().1),
+                        [
+                            (Key::FinancialFamilyAmount, amount(row.amount_cents)),
+                            (Key::FinancialTax, amount(row.tax_cents)),
+                        ],
+                    )
+                }))
+            })
             .when(!report.methods.is_empty(), |view| {
                 view.child(
                     div()
@@ -237,6 +267,10 @@ mod tests {
                 "tipsCents": 0,
                 "productCostCents": 500,
                 "unknownCostLines": 1,
+                "settledByFamily": [
+                    { "family": "product", "amountCents": 900, "taxCents": 156 },
+                    { "family": "unallocated", "amountCents": 100, "taxCents": 17 }
+                ],
                 "methods": [{ "method": "cash", "collectedCents": 1000, "refundedCents": 1300 }],
                 "cashSessions": [],
             })).unwrap());
@@ -252,6 +286,11 @@ mod tests {
         assert!(csv.contains("\"net_collections\",\"-300\",\"EUR\""));
         assert!(csv.contains("\"cash\",\"1000\",\"1300\",\"EUR\""));
         assert!(csv.contains("\"cash_session_id\""));
+        assert!(csv.contains(
+            "\"sale_family\",\"settled_amount_cents\",\"included_tax_cents\",\"currency\""
+        ));
+        assert!(csv.contains("\"product\",\"900\",\"156\",\"EUR\""));
+        assert!(csv.contains("\"unallocated\",\"100\",\"17\",\"EUR\""));
 
         let revoked = dir.path().join("revoked.csv");
         root.update(cx, |root, cx| {

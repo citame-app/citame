@@ -39,8 +39,45 @@ pub struct FinancialReport {
     #[serde(default)]
     pub booking_fees_cents: i64,
     pub unknown_cost_lines: u64,
+    pub settled_by_family: Option<Vec<SalesFamilyTotal>>,
     pub methods: Vec<FinancialMethod>,
     pub cash_sessions: Vec<FinancialSession>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SalesFamilyTotal {
+    pub family: SalesFamily,
+    pub amount_cents: i64,
+    pub tax_cents: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SalesFamily {
+    Service,
+    Product,
+    Custom,
+    GiftCard,
+    PackagePurchase,
+    MembershipPeriod,
+    Other,
+    Unallocated,
+}
+
+impl SalesFamily {
+    pub fn descriptor(&self) -> (&'static str, Key) {
+        match self {
+            Self::Service => ("service", Key::FinancialFamilyService),
+            Self::Product => ("product", Key::FinancialFamilyProduct),
+            Self::Custom => ("custom", Key::FinancialFamilyCustom),
+            Self::GiftCard => ("gift_card", Key::FinancialFamilyGift),
+            Self::PackagePurchase => ("package_purchase", Key::FinancialFamilyPackage),
+            Self::MembershipPeriod => ("membership_period", Key::FinancialFamilyMembership),
+            Self::Other => ("other", Key::FinancialFamilyOther),
+            Self::Unallocated => ("unallocated", Key::FinancialFamilyUnallocated),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -173,6 +210,17 @@ impl FinancialReport {
                 optional(entry.counted_cents),
                 optional(entry.difference_cents)
             );
+        }
+        if let Some(rows) = &self.settled_by_family {
+            csv.push_str("\r\n\r\n\"sale_family\",\"settled_amount_cents\",\"included_tax_cents\",\"currency\"");
+            for row in rows {
+                let (family, _) = row.family.descriptor();
+                let _ = write!(
+                    csv,
+                    "\r\n\"{family}\",\"{}\",\"{}\",\"{CURRENCY}\"",
+                    row.amount_cents, row.tax_cents
+                );
+            }
         }
         csv
     }

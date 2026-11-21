@@ -50,7 +50,15 @@ In Desktop, open **Reports → Financial reports** to use the same summary. Appl
 EUR totals, payment method amounts and cash sessions. The optional professional filter limits
 amounts to that attribution. Cash sessions are shared across the team, so the history is shown
 for the unfiltered team only. Desktop refreshes the open report when the connected replica advances.
-The CSV uses the same metric, payment method and cash session columns as the Web report.
+Web and Desktop both filter by professional and use the same CSV columns.
+
+The settled amount by family uses receipt line snapshots after discounts, with tips and later
+refunds excluded. A redeemed prepaid visit uses its allocated amount and tax. Gift-card,
+package and membership issuance have separate rows. These rows include payments for stored
+value and should be read separately from the sale total, which excludes prepaid issuance.
+When historical line amounts, discounts or tax do not reconcile to a receipt, its settled
+amount and tax appear in the unallocated row without an inferred split. The family breakdown
+uses the same salon dates and professional filter as the financial summary.
 
 Migrations `0011_staff_accounting.sql` and `0012_backfill_checkout_attribution.sql` add the ledgers and prepare previously open receipts. The upgrade retains settled historical totals and allocates discounts/tax on unfulfilled open receipts using exact integer arithmetic. No bank transfers or real charges are performed by local verification.
 

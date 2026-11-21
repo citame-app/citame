@@ -11,6 +11,7 @@ import { api } from "~/lib/api/instance";
 import { formatMoney } from "~/lib/format";
 import { downloadCsv } from "./csv";
 import { centsInput, inputCents } from "./money";
+import { SalesFamilies } from "./sales-families";
 export function AccountingView({
   role,
   section = "all",
@@ -390,7 +391,12 @@ function SalesReport() {
   const today = new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date());
   const [from, setFrom] = useState(today);
   const [to, setTo] = useState(today);
-  const [range, setRange] = useState({ from: today, to: today });
+  const [professional, setProfessional] = useState("");
+  const [range, setRange] = useState<{ from: string; to: string; staffId?: string }>({
+    from: today,
+    to: today,
+  });
+  const staff = useQuery(adminStaffQuery);
   const report = useQuery({
     queryKey: ["accounting", "sales", range],
     queryFn: () => api().accounting.sales(range),
@@ -406,7 +412,7 @@ function SalesReport() {
         className="flex flex-wrap items-end gap-3"
         onSubmit={(e) => {
           e.preventDefault();
-          setRange({ from, to });
+          setRange({ from, to, staffId: professional || undefined });
         }}
       >
         <TextField
@@ -422,6 +428,18 @@ function SalesReport() {
           value={to}
           onChange={(e) => setTo(e.target.value)}
           required
+        />
+        <SelectField
+          label={t("accounting.staff")}
+          value={professional}
+          options={[
+            { value: "", label: t("accounting.allStaff") },
+            ...(staff.data ?? []).map((member) => ({
+              value: member.id,
+              label: member.displayName,
+            })),
+          ]}
+          onChange={setProfessional}
         />
         <Button type="submit">{t("accounting.load")}</Button>
       </form>
@@ -491,6 +509,18 @@ function SalesReport() {
                     session.differenceCents,
                     "EUR",
                   ]),
+                  ...(report.data.settledByFamily
+                    ? [
+                        [],
+                        ["sale_family", "settled_amount_cents", "included_tax_cents", "currency"],
+                        ...report.data.settledByFamily.map((row) => [
+                          row.family,
+                          row.amountCents,
+                          row.taxCents,
+                          "EUR",
+                        ]),
+                      ]
+                    : []),
                 ],
                 `financial-summary-${report.data.from}-${report.data.to}.csv`,
               )
@@ -526,6 +556,7 @@ function SalesReport() {
           <p className="text-sm text-muted">
             {t("accounting.unknown", { count: report.data.unknownCostLines })}
           </p>
+          {report.data.settledByFamily && <SalesFamilies rows={report.data.settledByFamily} />}
           <ul className="divide-y divide-line">
             {report.data.methods.map((method) => (
               <li key={method.method} className="flex flex-wrap justify-between gap-3 py-2">
@@ -540,6 +571,7 @@ function SalesReport() {
             ))}
           </ul>
           <h4 className="font-semibold">{t("accounting.cashHistory")}</h4>
+          {range.staffId && <p className="text-sm text-muted">{t("accounting.cashTeam")}</p>}
           <ul className="divide-y divide-line">
             {report.data.cashSessions.map((session) => (
               <li key={session.id} className="flex flex-wrap justify-between gap-3 py-3">

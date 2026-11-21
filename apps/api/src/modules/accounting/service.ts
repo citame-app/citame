@@ -20,6 +20,7 @@ import type { Tx } from "../../tx";
 import { multiplyDivide } from "../commerce/money";
 import { getSalonSettings } from "../settings/service";
 import { requireStaff } from "../staff/admin";
+import { settledFamilies } from "./settled-families";
 
 type Connection = Database | Tx;
 function ownStatement(principal: Principal, staffId: string) {
@@ -353,6 +354,7 @@ export async function salesReport(db: Database, query: ReportQuery, principal: P
       const [bookingFees] = await tx.execute<{ amount: string | number }>(
         sql`select coalesce(sum(m.amount_cents),0)::bigint as amount from booking_fee_movement m join checkout c on c.id=m.checkout_id where m.created_at >= ${fromAt} and m.created_at < ${toAt} ${staff}`,
       );
+      const settledByFamily = await settledFamilies(tx, fromAt, toAt, query.staffId);
       const sessions = query.staffId
         ? []
         : await tx
@@ -400,6 +402,7 @@ export async function salesReport(db: Database, query: ReportQuery, principal: P
         tipsCents: Number(sales?.tips ?? 0),
         productCostCents: Number(costs?.cost ?? 0),
         unknownCostLines: costs?.unknown ?? 0,
+        settledByFamily,
         methods,
         cashSessions: sessions.map((row) => ({
           id: row.id,

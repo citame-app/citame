@@ -72,6 +72,22 @@ export const commissionStatementSchema = z.object({
   pagination: pageInfoSchema,
   payoutPagination: pageInfoSchema,
 });
+export const salesFamilySchema = z.enum([
+  "service",
+  "product",
+  "custom",
+  "gift_card",
+  "package_purchase",
+  "membership_period",
+  "other",
+  "unallocated",
+]);
+export const salesFamilyTotalSchema = z.object({
+  family: salesFamilySchema,
+  amountCents: signedMoney,
+  taxCents: signedMoney,
+});
+export type SalesFamilyTotal = z.infer<typeof salesFamilyTotalSchema>;
 export const salesReportSchema = z.object({
   from: z.string(),
   to: z.string(),
@@ -93,6 +109,7 @@ export const salesReportSchema = z.object({
   tipsCents: aggregateMoney,
   productCostCents: aggregateMoney,
   unknownCostLines: z.number().int().nonnegative(),
+  settledByFamily: z.array(salesFamilyTotalSchema).optional(),
   methods: z.array(
     z.object({ method: z.string(), collectedCents: aggregateMoney, refundedCents: aggregateMoney }),
   ),

@@ -238,8 +238,36 @@ test("retail commissions exclude included tax and preserve costs and rate snapsh
     includedTaxCents: 2100,
     productCostCents: 7000,
     unknownCostLines: 0,
+    settledByFamily: [{ family: "product", amountCents: 12100, taxCents: 2100 }],
   });
   expect((await call(staff, `/admin/accounting/sales?from=${date}&to=${date}`)).status).toBe(403);
+  const otherReport = await call(
+    owner,
+    `/admin/accounting/sales?from=${date}&to=${date}&staffId=${other.staffId}`,
+  );
+  expect(await otherReport.json()).toMatchObject({ settledByFamily: [], collectedCents: 0 });
+});
+
+test("settled families exclude tips and put historical receipts without matching line allocations in unallocated", async () => {
+  const receipt = await sale();
+  await settle(receipt.id, receipt.totalCents);
+  const date = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Argentina/Buenos_Aires",
+  }).format(new Date());
+  const path = `/admin/accounting/sales?from=${date}&to=${date}`;
+  expect(await (await call(owner, path)).json()).toMatchObject({
+    soldCents: 9500,
+    tipsCents: 500,
+    settledByFamily: [{ family: "service", amountCents: 9000, taxCents: 0 }],
+  });
+  const { sql } = await import("drizzle-orm");
+  await t.db.execute(
+    sql`update checkout_line set discount_cents = 0 where checkout_id = ${receipt.id}`,
+  );
+  expect(await (await call(owner, path)).json()).toMatchObject({
+    soldCents: 9500,
+    settledByFamily: [{ family: "unallocated", amountCents: 9000, taxCents: 0 }],
+  });
 });
 test("upgrade backfills open receipt attribution and allocations without changing historical totals", async () => {
   const checkout = await sale();
