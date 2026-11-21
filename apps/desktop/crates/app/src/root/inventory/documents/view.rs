@@ -414,6 +414,14 @@ impl Root {
                     .unwrap_or(self.t(Key::InventoryNoSupplier))
                     .to_owned(),
             )
+            .child(format!(
+                "{} · {}",
+                self.t(Key::InventoryReceiptWarehouse),
+                header
+                    .warehouse_name
+                    .as_deref()
+                    .unwrap_or(self.t(Key::InventoryWarehouseMain)),
+            ))
             .when_some(header.invoice_reference.as_ref(), |body, reference| {
                 body.child(format!(
                     "{} · {reference}",
@@ -598,6 +606,102 @@ impl Root {
             )
     }
 
+    fn render_receipt_warehouse(
+        &self,
+        selected: Option<Uuid>,
+        locations: Option<&WarehouseList>,
+        online: bool,
+        busy: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let missing = selected.is_some_and(|id| {
+            locations.is_none_or(|list| {
+                !list
+                    .warehouses
+                    .iter()
+                    .any(|row| row.id == Some(id) && row.active)
+            })
+        });
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(self.label(Key::InventoryReceiptWarehouse))
+            .when(missing, |row| {
+                row.child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::muted())
+                        .child(self.t(Key::InventoryReceiptWarehouseMissing)),
+                )
+            })
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(self.receipt_warehouse_choice(
+                        None,
+                        self.t(Key::InventoryWarehouseMain).to_owned(),
+                        selected,
+                        busy,
+                        cx,
+                    ))
+                    .children(
+                        locations
+                            .iter()
+                            .flat_map(|list| &list.warehouses)
+                            .filter(|row| row.active)
+                            .filter_map(|row| Some((row.id?, row.name.clone()?)))
+                            .map(|(id, name)| {
+                                self.receipt_warehouse_choice(Some(id), name, selected, busy, cx)
+                            }),
+                    )
+                    .when(online && !busy, |row| {
+                        row.child(self.button(
+                            "receipt-load-warehouses",
+                            self.t(Key::InventoryReceiptLoadWarehouses),
+                            Kind::Ghost,
+                            cx.listener(|root, _, _, cx| {
+                                root.request_document(Request::Warehouses, cx)
+                            }),
+                        ))
+                    }),
+            )
+    }
+
+    fn receipt_warehouse_choice(
+        &self,
+        id: Option<Uuid>,
+        name: String,
+        selected: Option<Uuid>,
+        busy: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<gpui::Div> {
+        self.button(
+            SharedString::from(format!(
+                "receipt-warehouse-{}",
+                id.map_or_else(|| "main".into(), |id| id.to_string())
+            )),
+            name,
+            if id == selected {
+                Kind::Primary
+            } else {
+                Kind::Ghost
+            },
+            cx.listener(move |root, _, _, cx| {
+                if !busy
+                    && let Some(panel) = root.document_panel()
+                    && panel.request.is_none()
+                    && let Some(Editor::Receipt(form)) = &mut panel.editor
+                {
+                    form.warehouse_id = id;
+                    cx.notify();
+                }
+            }),
+        )
+    }
+
     fn render_receipt_editor(
         &self,
         form: &ReceiptForm,
@@ -607,6 +711,14 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let draft_order = form.draft_order.is_some();
+        let warehouses = self.svc.store.cached_warehouses().ok().flatten();
+        let destination_available = form.warehouse_id.is_none_or(|id| {
+            warehouses.as_ref().is_some_and(|list| {
+                list.warehouses
+                    .iter()
+                    .any(|row| row.id == Some(id) && row.active)
+            })
+        });
         let closed = form
             .purchase_order
             .as_ref()
@@ -681,6 +793,15 @@ impl Root {
                     )),
             )
             .child(self.document_field(Key::InventoryDocumentNotes, &form.notes))
+            .when(!draft_order, |body| {
+                body.child(self.render_receipt_warehouse(
+                    form.warehouse_id,
+                    warehouses.as_ref(),
+                    online,
+                    busy,
+                    cx,
+                ))
+            })
             .child(
                 div()
                     .flex()
@@ -977,6 +1098,7 @@ impl Root {
                     !busy
                         && !closed
                         && !form.needs_confirmation
+                        && (draft_order || destination_available)
                         && form.generation.is_some()
                         && !form.lines.is_empty(),
                     |row| {

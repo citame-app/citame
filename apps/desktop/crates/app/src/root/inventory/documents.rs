@@ -9,6 +9,7 @@ use sob_core::purchase_orders::{
     PurchaseOrder, PurchaseOrderAction, PurchaseOrderFields, PurchaseOrderLink, PurchaseOrderPage,
     PurchaseOrderProposal, PurchaseOrderStatus, RequestedProduct,
 };
+use sob_core::warehouses::WarehouseList;
 use uuid::Uuid;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -53,6 +54,7 @@ enum Request {
         picker: bool,
     },
     Receipts(u32),
+    Warehouses,
     Supplier(Uuid),
     Receipt(Uuid),
     Orders {
@@ -69,6 +71,7 @@ enum Request {
 enum Response {
     Suppliers(SupplierPage, bool),
     Receipts(ReviewedDocument<ReceiptPage>),
+    Warehouses(WarehouseList),
     Supplier(ReviewedDocument<Option<Supplier>>),
     Receipt(Option<ReviewedDocument<Receipt>>),
     Orders(PurchaseOrderPage),
@@ -90,6 +93,7 @@ impl Request {
                 .inventory_suppliers(&search, active, page)
                 .map(|rows| Response::Suppliers(rows, picker)),
             Self::Receipts(page) => api.inventory_receipts(page).map(Response::Receipts),
+            Self::Warehouses => api.inventory_warehouses().map(Response::Warehouses),
             Self::Supplier(id) => api.review_supplier(id).map(Response::Supplier),
             Self::Receipt(id) => api.inventory_receipt(id).map(Response::Receipt),
             Self::Orders {
@@ -180,6 +184,7 @@ struct ReceiptForm {
     invoice: Entity<TextField>,
     notes: Entity<TextField>,
     supplier_id: Option<Uuid>,
+    warehouse_id: Option<Uuid>,
     supplier_search: Entity<TextField>,
     supplier_page: Option<SupplierPage>,
     product_search: Entity<TextField>,
@@ -222,6 +227,7 @@ impl ReceiptForm {
         };
         self.conflict.is_some()
             || line_changed
+            || self.warehouse_id.is_some()
             || self.date.read(cx).text() != self.default_date
             || optional(&self.invoice, cx).is_some()
             || optional(&self.notes, cx).is_some()
@@ -666,6 +672,9 @@ impl Root {
                     }
                 }
             }
+            Response::Warehouses(list) if valid(&list.generation) => {
+                let _ = self.svc.store.cache_warehouse_list(&list);
+            }
             Response::Receipts(page) if valid(&page.generation) => {
                 let _ = self
                     .svc
@@ -839,6 +848,7 @@ impl Root {
                 )
             }),
             supplier_id: draft.and_then(|draft| draft.supplier_id),
+            warehouse_id: draft.and_then(|draft| draft.warehouse_id),
             supplier_search: cx.new(|cx| TextField::new("", false, cx)),
             supplier_page: None,
             product_search: cx.new(|cx| TextField::new("", false, cx)),
@@ -975,6 +985,7 @@ impl Root {
                 products,
                 supplier,
                 order,
+                warehouses,
             } => {
                 let ids = self.document_panel().and_then(|panel| match &panel.editor {
                     Some(Editor::Receipt(form)) => {
@@ -988,6 +999,10 @@ impl Root {
                         .cache_delivery_review(generation, &ids, &products, supplier.as_ref())
                         .is_ok()
                 });
+                let warehouses_is_current = warehouses.as_ref().is_none_or(|list| {
+                    Some(list.generation.as_str()) == generation
+                        && self.svc.store.cache_warehouse_list(list).is_ok()
+                });
                 let order =
                     order.filter(|reviewed| Some(reviewed.generation.as_str()) == generation);
                 if let Some(reviewed) = &order {
@@ -999,7 +1014,8 @@ impl Root {
                 if let Some(panel) = self.document_panel()
                     && let Some(Editor::Receipt(form)) = &mut panel.editor
                 {
-                    if valid && (form.link().is_none() || order.is_some()) {
+                    if valid && warehouses_is_current && (form.link().is_none() || order.is_some())
+                    {
                         if let Some(reviewed) = order {
                             form.purchase_order = Some(reviewed.value);
                         }
@@ -1107,6 +1123,7 @@ impl Root {
                     id: form.id,
                     received_on: form.date.read(cx).text().into(),
                     supplier_id: form.supplier_id,
+                    warehouse_id: form.warehouse_id,
                     invoice_reference: optional(&form.invoice, cx),
                     notes: optional(&form.notes, cx),
                     actor_user_id: actor,
@@ -1210,6 +1227,7 @@ impl Root {
             Some(Editor::Receipt(form)) => Request::ReviewDelivery(DeliveryReviewRequest {
                 id: form.id,
                 supplier_id: form.supplier_id,
+                warehouse_id: form.warehouse_id,
                 product_ids: form.lines.iter().map(|line| line.id).collect(),
                 purchase_order: form.link(),
             }),

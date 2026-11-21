@@ -104,6 +104,10 @@ pub struct ReceiptHeader {
     pub notes: Option<String>,
     pub line_count: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub warehouse_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warehouse_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub purchase_order_id: Option<Uuid>,
 }
 
@@ -143,6 +147,7 @@ pub enum DeliveryReview {
         products: Vec<Option<Product>>,
         supplier: Option<ReviewedDocument<Supplier>>,
         order: Option<Box<ReviewedDocument<PurchaseOrder>>>,
+        warehouses: Option<crate::warehouses::WarehouseList>,
     },
 }
 
@@ -152,6 +157,7 @@ pub struct DeliveryReviewRequest {
     pub supplier_id: Option<Uuid>,
     pub product_ids: Vec<Uuid>,
     pub purchase_order: Option<PurchaseOrderLink>,
+    pub warehouse_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -204,6 +210,8 @@ pub struct Delivery {
     pub id: Uuid,
     pub received_on: String,
     pub supplier_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warehouse_id: Option<Uuid>,
     pub invoice_reference: Option<String>,
     pub notes: Option<String>,
     pub actor_user_id: String,

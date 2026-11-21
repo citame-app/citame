@@ -2044,6 +2044,7 @@ fn native_inventory_documents_survive_restart_and_rebase_a_concurrent_cloud_deli
     }
     let id = uuid::Uuid::now_v7();
     let mut receipt = Delivery {
+        warehouse_id: None,
         purchase_order: None,
         id,
         received_on: "2026-01-30".into(),
@@ -2097,6 +2098,7 @@ fn native_inventory_documents_survive_restart_and_rebase_a_concurrent_cloud_deli
         .find(|row| row.entity_id == id.to_string())
         .unwrap();
     let request = DeliveryReviewRequest {
+        warehouse_id: None,
         purchase_order: None,
         id,
         supplier_id: Some(supplier.id),
@@ -5182,6 +5184,7 @@ fn native_purchase_orders_survive_restart_and_rebase_a_concurrent_cloud_delivery
         version: current.value.header.version,
     };
     let mut delivery = Delivery {
+        warehouse_id: None,
         id: receipt_id,
         supplier_id: Some(supplier.id),
         received_on: "2026-01-29".into(),
@@ -5225,9 +5228,11 @@ fn native_purchase_orders_survive_restart_and_rebase_a_concurrent_cloud_delivery
         products,
         supplier,
         order: Some(order),
+        ..
     } = desktop
         .transport
         .review_delivery(&DeliveryReviewRequest {
+            warehouse_id: None,
             id: receipt_id,
             supplier_id: delivery.supplier_id,
             product_ids: vec![product_id],
@@ -5301,6 +5306,7 @@ fn native_purchase_orders_survive_restart_and_rebase_a_concurrent_cloud_delivery
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_warehouse_transfers_survive_restart_and_reject_stale_stock() {
+    use sob_core::inventory_documents::{Delivery, DeliveryLine, DocumentProposal};
     use sob_core::warehouses::{TransferLine, WarehouseEdit, WarehouseTransfer};
     use uuid::Uuid;
 
@@ -5479,4 +5485,50 @@ fn native_warehouse_transfers_survive_restart_and_reject_stale_stock() {
         .warehouse_product(Some(warehouse), product_id)
         .unwrap();
     assert_eq!(secondary.products[0].on_hand, 8);
+
+    // A receipt prepared offline must arrive in the selected location after reopening SQLite.
+    let product = desktop.transport.inventory_product(product_id).unwrap();
+    store.remember_reviewed_product(&product).unwrap();
+    let receipt = Delivery {
+        id: Uuid::now_v7(),
+        received_on: "2026-01-29".into(),
+        supplier_id: None,
+        warehouse_id: Some(warehouse),
+        invoice_reference: None,
+        notes: Some("Native warehouse delivery".into()),
+        actor_user_id: web.rest_get("/me")["user"]["id"].as_str().unwrap().into(),
+        lines: vec![DeliveryLine::reviewed(&product, "3", &generation).unwrap()],
+        purchase_order: None,
+    };
+    store
+        .queue_inventory_document(
+            &generation,
+            DocumentProposal::Receipt(receipt.clone()),
+            None,
+        )
+        .unwrap();
+    drop(store);
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*desktop.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let recorded = desktop
+        .transport
+        .inventory_receipt(receipt.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(recorded.value.header.warehouse_id, Some(warehouse));
+    assert_eq!(
+        recorded.value.header.warehouse_name.as_deref(),
+        Some("Native test stockroom")
+    );
+    let secondary = desktop
+        .transport
+        .warehouse_product(Some(warehouse), product_id)
+        .unwrap();
+    assert_eq!(secondary.products[0].on_hand, 11);
 }

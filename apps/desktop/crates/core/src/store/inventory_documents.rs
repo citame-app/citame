@@ -428,6 +428,18 @@ impl Store {
                     }
                 }
                 DocumentProposal::Receipt(receipt) => {
+                    if let Some(warehouse) = receipt.warehouse_id
+                        && !store.cached_warehouses()?.is_some_and(|list| {
+                            list.generation == generation
+                                && list
+                                    .warehouses
+                                    .iter()
+                                    .any(|row| row.id == Some(warehouse) && row.active)
+                        })
+                    {
+                        return Err(CoreError::CatalogueVersionChanged);
+                    }
+
                     let timezone = store
                         .salon_settings()?
                         .map(|row| row.timezone.parse::<chrono_tz::Tz>())

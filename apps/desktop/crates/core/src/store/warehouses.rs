@@ -101,6 +101,10 @@ impl Store {
         Ok(())
     }
 
+    pub fn cache_warehouse_list(&mut self, list: &WarehouseList) -> Result<()> {
+        self.cache_warehouse_review(list, &[])
+    }
+
     pub fn cache_warehouse_review(
         &mut self,
         list: &WarehouseList,

@@ -28,10 +28,15 @@ impl HttpTransport {
             Some(link) => self.inventory_purchase_order(link.id)?.map(Box::new),
             None => None,
         };
+        let warehouses = draft
+            .warehouse_id
+            .map(|_| self.inventory_warehouses())
+            .transpose()?;
         Ok(DeliveryReview::Current {
             products,
             supplier,
             order,
+            warehouses,
         })
     }
 
