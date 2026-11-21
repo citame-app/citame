@@ -40,7 +40,7 @@ enum Fields {
 
 enum Command {
     Rates(CommissionRateEdit),
-    Payout(SavedCommissionPayout),
+    Payout(SavedCommissionPayout, Option<String>),
 }
 
 enum WriteResult {
@@ -159,6 +159,10 @@ impl Root {
     }
 
     fn save_commission_editor(&mut self, cx: &mut Context<Self>) {
+        self.submit_commission_editor(false, cx);
+    }
+
+    fn submit_commission_editor(&mut self, resolve_existing: bool, cx: &mut Context<Self>) {
         let Some(transport) = self
             .svc
             .transport()
@@ -182,6 +186,17 @@ impl Root {
             return;
         };
         if editor.sending || statement.staff_id.parse::<uuid::Uuid>().ok() != Some(editor.staff_id)
+        {
+            return;
+        }
+        if resolve_existing
+            && !matches!(
+                &editor.fields,
+                Fields::Payout {
+                    pending: Some(_),
+                    ..
+                }
+            )
         {
             return;
         }
@@ -269,12 +284,18 @@ impl Root {
                 let Some(review) = pending.as_ref() else {
                     return;
                 };
-                if review.review.generation != editor.generation {
+                if !resolve_existing && editor.error == Some(Key::CommissionPayoutKeyConflict) {
+                    return;
+                }
+                if !resolve_existing && review.review.generation != editor.generation {
                     editor.error = Some(Key::CommissionPayoutGenerationChanged);
                     cx.notify();
                     return;
                 }
-                Command::Payout(review.clone())
+                Command::Payout(
+                    review.clone(),
+                    resolve_existing.then(|| editor.generation.clone()),
+                )
             }
         };
         editor.sending = true;
@@ -295,9 +316,12 @@ impl Root {
                             ),
                             None,
                         ),
-                        Command::Payout(saved) => {
+                        Command::Payout(saved, reconciliation) => {
                             let result = transport
-                                .record_reviewed_commission_payout(&saved)
+                                .record_reviewed_commission_payout(
+                                    &saved,
+                                    reconciliation.as_deref(),
+                                )
                                 .map(|_| ());
                             (WriteResult::Payout(result), Some(saved))
                         }
@@ -340,13 +364,25 @@ impl Root {
                         WriteResult::Rates(Ok(_)) => Some(Key::CommissionRatesSaved),
                         WriteResult::Payout(Ok(())) => {
                             desk.payout_page = 1;
-                            Some(Key::CommissionPayoutSaved)
+                            Some(if resolve_existing {
+                                Key::CommissionPayoutMatched
+                            } else {
+                                Key::CommissionPayoutSaved
+                            })
                         }
                         WriteResult::Payout(Err(CommissionPayoutError::BalanceChanged)) => {
                             Some(Key::CommissionPayoutBalanceChanged)
                         }
                         WriteResult::Payout(Err(CommissionPayoutError::InvalidReview)) => {
                             Some(Key::CommissionPayoutInvalid)
+                        }
+                        WriteResult::Payout(Err(CommissionPayoutError::KeyConflict)) => {
+                            editor.error = Some(Key::CommissionPayoutKeyConflict);
+                            None
+                        }
+                        WriteResult::Payout(Err(CommissionPayoutError::NoMatch)) => {
+                            editor.error = Some(Key::CommissionPayoutNotFound);
+                            None
                         }
                         WriteResult::Rates(Err(
                             TransportError::BadRequest(_)
@@ -545,12 +581,20 @@ impl Root {
                 let current = statement_generation == Some(editor.generation.as_str());
                 confirm = current
                     && pending.review.generation == editor.generation
-                    && editor.error != Some(Key::CommissionPayoutGenerationChanged);
+                    && !matches!(
+                        editor.error,
+                        Some(
+                            Key::CommissionPayoutGenerationChanged
+                                | Key::CommissionPayoutKeyConflict
+                        )
+                    );
                 let value = self.amount_label(i64::from(pending.review.amount_cents), CURRENCY);
                 panel
                     .child(format!("{value} · {}", pending.review.reference))
                     .child(self.t(if confirm {
                         Key::CommissionPayoutUnconfirmed
+                    } else if editor.error == Some(Key::CommissionPayoutKeyConflict) {
+                        Key::CommissionPayoutKeyConflict
                     } else {
                         Key::CommissionPayoutGenerationChanged
                     }))
@@ -558,7 +602,8 @@ impl Root {
                         ready
                             && current
                             && pending.review.generation != editor.generation
-                            && !editor.sending,
+                            && !editor.sending
+                            && editor.error != Some(Key::CommissionPayoutKeyConflict),
                         |view| {
                             view.child(self.button(
                                 "commission-retry-reconciled",
@@ -568,6 +613,14 @@ impl Root {
                             ))
                         },
                     )
+                    .when(ready && current && !editor.sending, |view| {
+                        view.child(self.button(
+                            "commission-resolve-recorded",
+                            self.t(Key::CommissionPayoutAlreadyRecorded),
+                            Kind::Ghost,
+                            cx.listener(|root, _, _, cx| root.submit_commission_editor(true, cx)),
+                        ))
+                    })
             }
         };
         panel

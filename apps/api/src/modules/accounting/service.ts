@@ -213,6 +213,31 @@ export async function commissionStatement(
     { isolationLevel: "repeatable read", accessMode: "read only" },
   );
 }
+export async function findRecordedPayout(
+  db: Database,
+  staffId: string,
+  input: CommissionPayoutInput,
+  principal: Principal,
+) {
+  requirePermission(principal, "manageCommissions");
+  await requireStaff(db, staffId);
+  const [row] = await db
+    .select()
+    .from(commissionPayout)
+    .where(
+      and(
+        eq(commissionPayout.staffId, staffId),
+        eq(commissionPayout.amountCents, input.amountCents),
+        eq(commissionPayout.reference, input.reference),
+      ),
+    )
+    .orderBy(desc(commissionPayout.createdAt), desc(commissionPayout.id))
+    .limit(1);
+  if (!row)
+    throw new DomainError("not_found", "No recorded payout matches this reference and amount");
+  return payoutView(row);
+}
+
 export async function recordPayout(
   db: Database,
   staffId: string,

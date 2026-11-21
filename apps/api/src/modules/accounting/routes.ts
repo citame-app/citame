@@ -15,7 +15,14 @@ import { requirePermission } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
-import { commissionStatement, getPolicy, recordPayout, salesReport, setPolicy } from "./service";
+import {
+  commissionStatement,
+  findRecordedPayout,
+  getPolicy,
+  recordPayout,
+  salesReport,
+  setPolicy,
+} from "./service";
 
 const pages = z.object({
   page: z.coerce.number().int().min(1).max(100000).default(1),
@@ -76,6 +83,7 @@ export function accountingRoutes(deps: AppDeps) {
       const {
         generation: reviewed,
         actorUserId,
+        alreadyRecorded,
         ...input
       } = parseOrThrow(reviewedCommissionPayoutInputSchema, await readJson(c));
       if (principal.userId !== actorUserId)
@@ -84,16 +92,17 @@ export function accountingRoutes(deps: AppDeps) {
           "Only the account that reviewed this payout can record it",
         );
       checkGeneration(reviewed);
-      const payout = await recordPayout(
-        deps.db,
-        parseOrThrow(idSchema, c.req.param("id")),
-        input,
-        principal,
-        "version_conflict",
+      const staffId = parseOrThrow(idSchema, c.req.param("id"));
+      const payout = alreadyRecorded
+        ? await findRecordedPayout(deps.db, staffId, input, principal)
+        : await recordPayout(deps.db, staffId, input, principal, "version_conflict");
+      return c.json(
+        { ...payout, idempotencyKey: input.idempotencyKey },
+        alreadyRecorded ? 200 : 201,
+        {
+          "Cache-Control": "private, no-store",
+        },
       );
-      return c.json({ ...payout, idempotencyKey: input.idempotencyKey }, 201, {
-        "Cache-Control": "private, no-store",
-      });
     })
     .put("/staff/:id/policy", async (c) =>
       c.json(

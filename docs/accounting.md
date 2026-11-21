@@ -32,7 +32,9 @@ key before sending it. If the outcome is uncertain, reopen the payout for the sa
 and retry the saved request. That retry uses the original reference, amount and key. A database
 restore requires reviewing the statement from the current generation before retrying the old
 request. Confirm the reconciliation to bind the same payment and key to the restored generation.
-Recording a payout only adds an accounting entry.
+If the payment was already recorded separately, **This payment is already recorded. Verify it.**
+checks the current ledger for the same professional, amount and reference before clearing the
+local request. Recording a payout only adds an accounting entry.
 
 ## Financial summary
 

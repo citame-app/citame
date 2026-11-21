@@ -1588,12 +1588,29 @@ impl HttpTransport {
     pub fn record_reviewed_commission_payout(
         &self,
         payout: &SavedCommissionPayout,
+        reconcile_existing_in: Option<&str>,
     ) -> Result<RecordedCommissionPayout, CommissionPayoutError> {
+        #[derive(serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Input {
+            #[serde(flatten)]
+            review: crate::reports::commissions::CommissionPayoutReview,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            already_recorded: Option<bool>,
+        }
+        let mut review = payout.review.clone();
+        if let Some(generation) = reconcile_existing_in {
+            review.generation = generation.to_owned();
+        }
+        let input = Input {
+            review,
+            already_recorded: reconcile_existing_in.map(|_| true),
+        };
         let path = format!(
             "/admin/accounting/staff/{}/payouts/reviewed",
             payout.staff_id
         );
-        let response = self.send_json(&path, &payout.review)?;
+        let response = self.send_json(&path, &input)?;
         let recorded: RecordedCommissionPayout =
             read_response_with(response, |status, retry_after, body| {
                 let error = serde_json::from_str::<serde_json::Value>(body).ok();
@@ -1603,6 +1620,10 @@ impl HttpTransport {
                     .and_then(serde_json::Value::as_str);
                 match (status, code) {
                     (409, Some("invalid_state")) => CommissionPayoutError::BalanceChanged,
+                    (409, Some("version_conflict")) => CommissionPayoutError::KeyConflict,
+                    (404, Some("not_found")) if reconcile_existing_in.is_some() => {
+                        CommissionPayoutError::NoMatch
+                    }
                     (400, Some("validation_error")) => CommissionPayoutError::InvalidReview,
                     _ => review_transport_error(status, retry_after, body).into(),
                 }
@@ -1610,7 +1631,7 @@ impl HttpTransport {
         if recorded.staff_id != payout.staff_id
             || recorded.idempotency_key != payout.review.idempotency_key
             || recorded.amount_cents != payout.review.amount_cents
-            || recorded.reference != payout.review.reference
+            || recorded.reference != crate::trim_like_javascript(&payout.review.reference)
         {
             return Err(
                 TransportError::Server("Unverified commission payout response".into()).into(),

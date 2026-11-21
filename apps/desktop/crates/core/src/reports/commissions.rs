@@ -82,6 +82,10 @@ pub enum CommissionPayoutError {
     BalanceChanged,
     #[error("Commission payout review rejected by validation")]
     InvalidReview,
+    #[error("Commission payout key belongs to another request")]
+    KeyConflict,
+    #[error("No matching commission payout was recorded")]
+    NoMatch,
     #[error(transparent)]
     Transport(#[from] crate::sync::TransportError),
 }
