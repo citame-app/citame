@@ -1203,6 +1203,7 @@ test("transaction summaries cover the whole filtered local period with scoped pa
   const get = async (who: Actor, filters: string) => {
     const response = await call(who, `${path}${filters}`);
     expect(response.status, await response.clone().text()).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     return checkoutListSchema.parse(await response.json());
   };
   const expected = [{ period: "2026-03-01", receipts: 2, paidCents: 12000, refundedCents: 1500 }];

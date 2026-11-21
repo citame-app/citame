@@ -15,6 +15,7 @@ pub(super) struct History {
     method: Option<&'static str>,
     filters_open: bool,
     invalid_dates: bool,
+    invalid_timezone_range: bool,
     group: CheckoutHistoryGroup,
     loaded_group: Option<CheckoutHistoryGroup>,
     pub(super) page: u32,
@@ -102,6 +103,7 @@ impl Root {
             method: None,
             filters_open: false,
             invalid_dates: false,
+            invalid_timezone_range: false,
             group: CheckoutHistoryGroup::Day,
             loaded_group: None,
             page: 1,
@@ -189,12 +191,17 @@ impl Root {
                 .map(|date| calendar::local_day_range(self.tz, date).1),
             group_by: Some(group),
         };
-        if filters
+        let observation = HistoryObservation {
+            timezone: self.tz,
+            revision: self.svc.store.live_view_revision("commerce").ok(),
+        };
+        history.invalid_timezone_range = filters
             .from
             .zip(filters.to)
-            .is_some_and(|(from, to)| from >= to)
-        {
-            history.invalid_dates = true;
+            .is_some_and(|(from, to)| from >= to);
+        history.needs_refresh = false;
+        history.observation = Some(observation);
+        if history.invalid_timezone_range {
             cx.notify();
             return;
         }
@@ -207,13 +214,8 @@ impl Root {
             history.results = Ok(None);
             history.refresh_failed = false;
         }
-        history.needs_refresh = false;
         let request = Arc::new(());
         history.request = Some(request.clone());
-        history.observation = Some(HistoryObservation {
-            timezone: self.tz,
-            revision: self.svc.store.live_view_revision("commerce").ok(),
-        });
         history.page = page;
         let session = self.svc.session.clone();
         cx.notify();
@@ -468,13 +470,16 @@ impl Root {
                         .child(self.render_sales_filters(history, cx)),
                 )
             })
-            .when(history.invalid_dates, |view| {
-                view.child(
-                    div()
-                        .text_color(theme::conflict_fg())
-                        .child(self.t(Key::SalesInvalidDates)),
-                )
-            })
+            .when(
+                history.invalid_dates || history.invalid_timezone_range,
+                |view| {
+                    view.child(
+                        div()
+                            .text_color(theme::conflict_fg())
+                            .child(self.t(Key::SalesInvalidDates)),
+                    )
+                },
+            )
             .when(online, |view| {
                 view.child(self.button(
                     "search-sales",
@@ -678,6 +683,34 @@ impl Root {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+
+    #[gpui::test]
+    async fn a_submitted_range_recovers_when_the_new_timezone_contains_the_date(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, config) = super::super::tests::desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        root.update(cx, |root, cx| {
+            root.status.connectivity = Connectivity::Offline;
+            root.open_sales_history(cx);
+            let Overlay::SalesHistory(history) = &mut root.overlay else {
+                panic!("missing transactions");
+            };
+            let skipped = "2011-12-30".parse().unwrap();
+            history.submitted.from = Some(skipped);
+            history.submitted.to = Some(skipped);
+            root.status.connectivity = Connectivity::Online;
+            root.tz = chrono_tz::Pacific::Apia;
+            root.load_sales_history(HistoryLoad::Refresh, cx);
+            assert!(matches!(&root.overlay, Overlay::SalesHistory(history)
+                if history.invalid_timezone_range && history.request.is_none()));
+
+            root.tz = chrono_tz::UTC;
+            root.refresh_sales_history(false, cx);
+            assert!(matches!(&root.overlay, Overlay::SalesHistory(history)
+                if !history.invalid_timezone_range && history.request.is_some()));
+        });
+    }
 
     #[gpui::test]
     async fn cached_receipts_can_change_group_offline_without_reusing_daily_totals(

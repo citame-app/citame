@@ -195,6 +195,8 @@ export function commerceAdminRoutes(deps: AppDeps) {
           c.get("principal"),
           parseOrThrow(checkoutListQuerySchema, c.req.query()),
         ),
+        200,
+        { "Cache-Control": "private, no-store" },
       ),
     )
     .post("/checkouts", async (c) => {
