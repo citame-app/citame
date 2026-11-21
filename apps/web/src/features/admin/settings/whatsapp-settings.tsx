@@ -52,9 +52,6 @@ const words = {
     choose: "Choose a field",
     save: "Save automations",
     saved: "Automations saved",
-    changed: "Another session changed these automations. Reload the saved settings before saving.",
-    reload: "Discard draft and reload",
-    unavailable: "Connect to an up-to-date Citame server to save automations.",
     preview: "Preview with sample data",
     noTemplates: "Add a text utility template in WhatsApp Manager and wait for Meta to approve it.",
     deliveries: "Recent activity",
@@ -120,10 +117,6 @@ const words = {
     choose: "Elige un dato",
     save: "Guardar automatizaciones",
     saved: "Automatizaciones guardadas",
-    changed:
-      "Otra sesión cambió estas automatizaciones. Recarga los ajustes guardados antes de guardar.",
-    reload: "Descartar borrador y recargar",
-    unavailable: "Conéctate a un servidor de Citame actualizado para guardar las automatizaciones.",
     preview: "Vista previa con datos de ejemplo",
     noTemplates:
       "Crea una plantilla de utilidad de texto en WhatsApp Manager y espera la aprobación de Meta.",
@@ -170,8 +163,21 @@ const sample: Record<Variable, string> = {
 type Draft = Partial<Record<WhatsAppRule["kind"], { templateId: string; variables: string[] }>>;
 type ReviewedDraft = { revision: string; baseline: WhatsAppRule[]; selections: Draft };
 
+function draftRules(draft: Draft): WhatsAppRule[] {
+  return events.flatMap((kind) => {
+    const selection = draft[kind];
+    return selection?.templateId
+      ? [{ kind, templateId: selection.templateId, variables: selection.variables as Variable[] }]
+      : [];
+  });
+}
+
+function orderedRules(rules: WhatsAppRule[]) {
+  return events.flatMap((kind) => rules.filter((rule) => rule.kind === kind));
+}
+
 export function WhatsAppSettings() {
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const copy = locale.startsWith("es") ? words.es : words.en;
   const queryClient = useQueryClient();
   const endpoints = api().admin.whatsapp;
@@ -236,21 +242,13 @@ export function WhatsAppSettings() {
     },
   });
   const findTemplate = (id?: string) => templates.data?.find((item) => item.id === id);
-  const rules: WhatsAppRule[] = events.flatMap((kind) => {
-    const selection = draft[kind];
-    if (!selection?.templateId) return [];
-    return [
-      { kind, templateId: selection.templateId, variables: selection.variables as Variable[] },
-    ];
-  });
+  const rules = draftRules(draft);
   const invalid = rules.some(
     ({ templateId, variables }) =>
       findTemplate(templateId)?.parameters.length !== variables.length ||
       variables.some((value) => !fields.includes(value)),
   );
-  const savedRules = events.flatMap((kind) =>
-    (editor?.baseline ?? connection?.rules ?? []).filter((item) => item.kind === kind),
-  );
+  const savedRules = orderedRules(editor?.baseline ?? connection?.rules ?? []);
   const dirty = JSON.stringify(rules) !== JSON.stringify(savedRules);
   const stale =
     Boolean(dirty && editor && editor.revision !== connection?.revision) ||
@@ -442,11 +440,14 @@ export function WhatsAppSettings() {
             const setRule = (value: Draft[typeof kind]) => {
               const revision = connection?.revision;
               if (!revision || save.isPending || stale) return;
-              setEditor((current) => ({
-                revision: current?.revision ?? revision,
-                baseline: current?.baseline ?? connection.rules,
-                selections: { ...(current?.selections ?? draft), [kind]: value },
-              }));
+              setEditor((current) => {
+                const baseline = current?.baseline ?? connection.rules;
+                const selections = { ...(current?.selections ?? draft), [kind]: value };
+                return JSON.stringify(draftRules(selections)) ===
+                  JSON.stringify(orderedRules(baseline))
+                  ? null
+                  : { revision: current?.revision ?? revision, baseline, selections };
+              });
             };
             return (
               <section
@@ -519,7 +520,7 @@ export function WhatsAppSettings() {
           })}
           {(save.error || stale) && (
             <p role="alert" className="text-danger-fg">
-              {stale ? copy.changed : save.error?.message}
+              {stale ? t("whatsapp.rulesChanged") : save.error?.message}
             </p>
           )}
           {stale && (
@@ -534,11 +535,11 @@ export function WhatsAppSettings() {
                 }
               }}
             >
-              {copy.reload}
+              {t("whatsapp.rulesReload")}
             </Button>
           )}
           {!connection?.revision && !stale && (
-            <p className="text-sm text-muted">{copy.unavailable}</p>
+            <p className="text-sm text-muted">{t("whatsapp.rulesUnavailable")}</p>
           )}
           {save.isSuccess && !dirty && (
             <p role="status" className="text-sm">

@@ -988,7 +988,7 @@ fn native_sends_a_reviewed_email_test_through_the_proxy() {
 #[test]
 #[ignore = "needs the synthetic WhatsApp history behind the web gateway"]
 fn native_whatsapp_desk_reads_private_delivery_status_through_the_proxy() {
-    use sob_core::http::whatsapp::{Event, LIVE_TOPIC, Status};
+    use sob_core::http::whatsapp::{Event, LIVE_TOPIC, RuleSaveOutcome, RulesChange, Status};
 
     let device = proxy_device();
     let mut browser = Device::sign_in();
@@ -1004,6 +1004,23 @@ fn native_whatsapp_desk_reads_private_delivery_status_through_the_proxy() {
     assert!(desk.deliveries.iter().any(|row| {
         row.kind == Event::Confirmation && row.displayed_status() == Some(Status::Read)
     }));
+    let revision = browser.store.live_view_revision(LIVE_TOPIC).unwrap();
+    let update = RulesChange {
+        revision: connection.revision.expect("reviewed synthetic sender"),
+        rules: vec![],
+    };
+    assert_eq!(
+        device.transport.save_whatsapp_rules(&update).unwrap(),
+        RuleSaveOutcome::Applied
+    );
+    let web = browser.rest_get("/admin/whatsapp");
+    assert_eq!(web["connection"]["rules"], json!([]));
+    browser.sync();
+    assert!(browser.store.live_view_revision(LIVE_TOPIC).unwrap() > revision);
+    assert_eq!(
+        device.transport.save_whatsapp_rules(&update).unwrap(),
+        RuleSaveOutcome::Conflict
+    );
     device.disconnect_and_check("/api/admin/whatsapp/desk");
     assert!(matches!(
         device.transport.whatsapp_desk(),

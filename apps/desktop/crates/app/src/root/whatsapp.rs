@@ -142,6 +142,17 @@ impl Root {
                 match result {
                     Ok(snapshot) => {
                         desk.refresh.applied(cursor);
+                        if matches!(desk.editor_message, Some(Key::WhatsappRulesUnconfirmed))
+                            && desk.editor.as_ref().is_some_and(|editor| {
+                                snapshot
+                                    .connection
+                                    .as_ref()
+                                    .and_then(|connection| connection.revision.as_deref())
+                                    == Some(editor.revision.as_str())
+                            })
+                        {
+                            desk.editor_message = None;
+                        }
                         desk.snapshot = Some(snapshot);
                     }
                     Err(error) => {

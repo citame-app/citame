@@ -55,6 +55,21 @@ pub fn fill(template: &str, args: &[(&str, &str)]) -> String {
     })
 }
 
+pub fn whatsapp_sample(variable: crate::http::whatsapp::Variable, locale: Locale) -> &'static str {
+    use crate::http::whatsapp::Variable;
+    match (variable, locale) {
+        (Variable::Client, _) => "Lucía",
+        (Variable::Salon, _) => "Citame",
+        (Variable::Date, Locale::En) => "18 Nov 2026",
+        (Variable::Date, Locale::EsAr) => "18/11/2026",
+        (Variable::Time, _) => "16:00",
+        (Variable::Staff, _) => "Natalia",
+        (Variable::Services, Locale::En) => "Manicure",
+        (Variable::Services, Locale::EsAr) => "Manicura",
+        (Variable::Preferences, _) => "https://citame.example/notifications",
+    }
+}
+
 macro_rules! keys {
     ($($k:ident => ($en:expr, $es:expr)),* $(,)?) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -468,6 +483,8 @@ keys! {
     WhatsappOpenWeb => ("Open WhatsApp settings in Web", "Abrir ajustes de WhatsApp en Web"),
     WhatsappTemplate => ("Approved utility template", "Plantilla de utilidad aprobada"),
     WhatsappTemplateMissing => ("The saved template is no longer listed. Choose a current template or disable this rule.", "La plantilla guardada ya no aparece. Elige una plantilla actual o desactiva esta regla."),
+    WhatsappRefreshTemplates => ("Refresh approved templates", "Actualizar plantillas aprobadas"),
+    WhatsappRulesInvalid => ("A template or variable needs review. Refresh the approved templates before retrying.", "Revisa la plantilla o sus variables. Actualiza las plantillas aprobadas antes de reintentar."),
     WhatsappPreview => ("Preview with sample data", "Vista previa con datos de ejemplo"),
     WhatsappEditRules => ("Edit automations", "Editar automatizaciones"),
     WhatsappSaveRules => ("Save automations", "Guardar automatizaciones"),

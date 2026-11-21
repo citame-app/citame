@@ -353,6 +353,8 @@ test("a reviewed WhatsApp write cannot replace automation saved in another sessi
   const desk = await json(t.app, "/admin/whatsapp/desk", "GET", undefined, owner.cookie);
   const { connection } = (await desk.json()) as { connection: { revision: string } };
   expect(connection.revision).toMatch(/^[a-f0-9]{64}$/);
+  const before = await json(t.app, "/sync/pull", "GET", undefined, owner.cookie);
+  const { headSeq } = syncPullResponseSchema.parse(await before.json());
   const save = (kind: string) =>
     json(
       t.app,
@@ -371,5 +373,21 @@ test("a reviewed WhatsApp write cannot replace automation saved in another sessi
   const committed = results.find((r) => r.status === 200);
   const saved = whatsappSettingsSchema.parse(await committed?.json());
   expect(saved.connection?.rules).toHaveLength(1);
+  const old = await json(
+    t.app,
+    `/sync/pull?since=${headSeq}&whatsappDesk=1`,
+    "GET",
+    undefined,
+    owner.cookie,
+  );
+  const updated = await json(
+    t.app,
+    `/sync/pull?since=${headSeq}&whatsappSettings=1`,
+    "GET",
+    undefined,
+    owner.cookie,
+  );
+  expect(syncPullResponseSchema.parse(await old.json()).refresh).toEqual(["whatsapp_desk"]);
+  expect(syncPullResponseSchema.parse(await updated.json()).refresh).toEqual(["whatsapp_settings"]);
   expect((await save("confirmation")).status).toBe(409);
 });

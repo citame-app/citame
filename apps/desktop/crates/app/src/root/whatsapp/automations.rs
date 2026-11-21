@@ -1,94 +1,7 @@
 use super::*;
-use sob_core::http::whatsapp::{ApprovedTemplate, EVENTS, RuleChange, RulesChange, VARIABLES};
-
-fn sample_value(variable: Variable, locale: Locale) -> &'static str {
-    match (variable, locale) {
-        (Variable::Client, _) => "Lucía",
-        (Variable::Salon, _) => "Citame",
-        (Variable::Date, Locale::En) => "18 Nov 2026",
-        (Variable::Date, Locale::EsAr) => "18/11/2026",
-        (Variable::Time, _) => "16:00",
-        (Variable::Staff, _) => "Natalia",
-        (Variable::Services, Locale::En) => "Manicure",
-        (Variable::Services, Locale::EsAr) => "Manicura",
-        (Variable::Preferences, _) => "https://citame.example/notifications",
-    }
-}
-
-#[derive(Clone)]
-struct DraftRule {
-    template_id: String,
-    variables: Vec<Option<Variable>>,
-}
-
-pub(super) struct Editor {
-    revision: String,
-    baseline: Vec<RuleChange>,
-    templates: Vec<ApprovedTemplate>,
-    entries: [Option<DraftRule>; 5],
-    selected: usize,
-}
-
-impl Editor {
-    fn new(connection: &Connection, templates: Vec<ApprovedTemplate>) -> Self {
-        let baseline = connection.editable_rules();
-        let entries = EVENTS.map(|kind| {
-            let saved = baseline.iter().find(|rule| rule.kind == kind)?;
-            Some(DraftRule {
-                template_id: saved.template_id.clone(),
-                variables: saved.variables.iter().copied().map(Some).collect(),
-            })
-        });
-        Self {
-            revision: connection.revision.clone(),
-            baseline,
-            templates,
-            entries,
-            selected: 0,
-        }
-    }
-
-    fn proposed(&self) -> Option<RulesChange> {
-        let mut rules = Vec::new();
-        for (kind, selected) in EVENTS.into_iter().zip(&self.entries) {
-            let Some(selected) = selected else { continue };
-            let variables = selected
-                .variables
-                .iter()
-                .copied()
-                .collect::<Option<Vec<_>>>()?;
-            rules.push(RuleChange {
-                kind,
-                template_id: selected.template_id.clone(),
-                variables,
-            });
-        }
-        Some(RulesChange {
-            revision: self.revision.clone(),
-            rules,
-        })
-    }
-
-    pub(super) fn dirty(&self) -> bool {
-        self.proposed()
-            .is_none_or(|change| change.rules != self.baseline)
-    }
-
-    fn select_template(&mut self, template: Option<usize>) {
-        if let (Some(index), Some(saved)) = (template, &self.entries[self.selected])
-            && saved.template_id == self.templates[index].id
-        {
-            return;
-        }
-        self.entries[self.selected] = template.map(|index| {
-            let template = &self.templates[index];
-            DraftRule {
-                template_id: template.id.clone(),
-                variables: vec![None; template.parameters.len()],
-            }
-        });
-    }
-}
+pub(super) use sob_core::http::whatsapp::ReviewedAutomations as Editor;
+use sob_core::http::whatsapp::{ApprovedTemplate, EVENTS, RuleSaveOutcome, RulesChange, VARIABLES};
+use sob_core::sync::TransportError;
 
 enum Operation {
     Open(String),
@@ -97,7 +10,7 @@ enum Operation {
 
 enum Reply {
     Open(String, Vec<ApprovedTemplate>),
-    Saved(bool),
+    Saved(RuleSaveOutcome),
 }
 
 impl Root {
@@ -112,7 +25,9 @@ impl Root {
         else {
             return;
         };
-        self.request_whatsapp_automations(Operation::Open(connection.revision.clone()), cx);
+        if let Some(revision) = &connection.revision {
+            self.request_whatsapp_automations(Operation::Open(revision.clone()), cx);
+        }
     }
 
     fn save_whatsapp_automations(&mut self, cx: &mut Context<Self>) {
@@ -177,23 +92,35 @@ impl Root {
                             .snapshot
                             .as_ref()
                             .and_then(|view| view.connection.as_ref())
-                            .filter(|connection| connection.revision == revision);
+                            .filter(|connection| {
+                                connection.revision.as_deref() == Some(revision.as_str())
+                            });
                         if let Some(connection) = current {
-                            desk.editor = Some(Editor::new(connection, templates));
+                            if let Some(editor) = &mut desk.editor {
+                                editor.templates = templates;
+                            } else {
+                                desk.editor = Some(Editor::new(connection, revision, templates));
+                            }
                         } else {
                             desk.editor_message = Some(Key::WhatsappRulesChanged);
                         }
                     }
-                    Ok(Reply::Saved(true)) => {
+                    Ok(Reply::Saved(RuleSaveOutcome::Applied)) => {
                         desk.editor = None;
                         desk.editor_message = Some(Key::WhatsappRulesSaved);
                         root.load_whatsapp_desk(true, cx);
                     }
-                    Ok(Reply::Saved(false)) => {
+                    Ok(Reply::Saved(RuleSaveOutcome::Conflict)) => {
                         desk.editor_message = Some(Key::WhatsappRulesChanged);
                         root.load_whatsapp_desk(true, cx);
                     }
-                    Err(_) => desk.editor_message = Some(Key::WhatsappRulesUnconfirmed),
+                    Err(TransportError::BadRequest(_)) => {
+                        desk.editor_message = Some(Key::WhatsappRulesInvalid)
+                    }
+                    Err(_) => {
+                        desk.editor_message = Some(Key::WhatsappRulesUnconfirmed);
+                        root.load_whatsapp_desk(true, cx);
+                    }
                 }
                 cx.notify();
             });
@@ -253,6 +180,14 @@ impl Root {
                     })),
             )
             .child(div().text_sm().child(self.t(Key::WhatsappTemplate)))
+            .when(can_edit, |body| {
+                body.child(self.button(
+                    "whatsapp-refresh-templates",
+                    self.t(Key::WhatsappRefreshTemplates),
+                    Kind::Ghost,
+                    cx.listener(|root, _, _, cx| root.open_whatsapp_automations(cx)),
+                ))
+            })
             .when(selected.is_some() && template.is_none(), |body| {
                 body.child(self.t(Key::WhatsappTemplateMissing))
             })
@@ -334,7 +269,9 @@ impl Root {
                 let values = selected
                     .variables
                     .iter()
-                    .map(|variable| variable.map(|variable| sample_value(variable, self.locale)))
+                    .map(|variable| {
+                        variable.map(|variable| i18n::whatsapp_sample(variable, self.locale))
+                    })
                     .collect::<Vec<_>>();
                 body.child(
                     div()
@@ -401,51 +338,13 @@ impl Desk {
             self.snapshot
                 .as_ref()
                 .and_then(|view| view.connection.as_ref())
-                .is_none_or(|connection| connection.revision != editor.revision)
+                .is_none_or(|connection| {
+                    connection.revision.as_deref() != Some(editor.revision.as_str())
+                })
                 || matches!(
                     self.editor_message,
                     Some(Key::WhatsappRulesChanged | Key::WhatsappRulesUnconfirmed)
                 )
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_rule_requires_every_variable_and_reselecting_preserves_the_mapping() {
-        let connection = Connection {
-            phone: "+34611000000".into(),
-            revision: "f".repeat(64),
-            coexistence: true,
-            expires_at: None,
-            rules: vec![],
-        };
-        let template = ApprovedTemplate {
-            id: "12345".into(),
-            name: "confirmation".into(),
-            language: "es_ES".into(),
-            body: "Tu cita es a las {{ 1 }} con {{2}}.".into(),
-            parameters: vec!["1".into(), "2".into()],
-        };
-        let mut editor = Editor::new(&connection, vec![template]);
-        editor.select_template(Some(0));
-        assert!(editor.dirty());
-        assert!(editor.proposed().is_none());
-        editor.entries[0].as_mut().unwrap().variables =
-            vec![Some(Variable::Time), Some(Variable::Staff)];
-        editor.select_template(Some(0));
-        assert_eq!(
-            editor.templates[0].sample(&[Some("16:00"), Some("Natalia")]),
-            "Tu cita es a las 16:00 con Natalia."
-        );
-        let draft = editor.proposed().unwrap();
-        assert_eq!(draft.revision, connection.revision);
-        assert_eq!(
-            draft.rules[0].variables,
-            vec![Variable::Time, Variable::Staff]
-        );
     }
 }

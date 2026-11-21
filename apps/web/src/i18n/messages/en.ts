@@ -32,6 +32,10 @@ import { waitlistEn } from "./waitlist";
 /** English is the source catalog: its keys define what every other catalog must provide. */
 export const en = {
   ...emailDeliveryEn,
+  "whatsapp.rulesChanged":
+    "Another session changed these automations. Reload the saved settings before saving.",
+  "whatsapp.rulesReload": "Discard draft and reload",
+  "whatsapp.rulesUnavailable": "Connect to an up-to-date Citame server to save automations.",
   ...posEn,
   ...marketingEn,
   ...bookingPromotionsEn,

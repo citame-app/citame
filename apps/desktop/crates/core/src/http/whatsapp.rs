@@ -56,7 +56,7 @@ pub struct Rule {
 #[serde(rename_all = "camelCase")]
 pub struct Connection {
     pub phone: String,
-    pub revision: String,
+    pub revision: Option<String>,
     pub coexistence: bool,
     pub expires_at: Option<DateTime<Utc>>,
     pub rules: Vec<Rule>,
@@ -139,6 +139,12 @@ pub struct RuleChange {
     pub variables: Vec<Variable>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuleSaveOutcome {
+    Applied,
+    Conflict,
+}
+
 #[derive(Debug, Serialize)]
 pub struct RulesChange {
     pub revision: String,
@@ -160,6 +166,97 @@ impl Connection {
                     })
             })
             .collect()
+    }
+}
+
+#[derive(Clone)]
+pub struct DraftRule {
+    pub template_id: String,
+    pub variables: Vec<Option<Variable>>,
+}
+
+pub struct ReviewedAutomations {
+    pub revision: String,
+    baseline: Vec<RuleChange>,
+    pub templates: Vec<ApprovedTemplate>,
+    pub entries: [Option<DraftRule>; 5],
+    pub selected: usize,
+}
+
+impl ReviewedAutomations {
+    pub fn new(
+        connection: &Connection,
+        revision: String,
+        templates: Vec<ApprovedTemplate>,
+    ) -> Self {
+        let baseline = connection.editable_rules();
+        let entries = EVENTS.map(|kind| {
+            let saved = baseline.iter().find(|rule| rule.kind == kind)?;
+            Some(DraftRule {
+                template_id: saved.template_id.clone(),
+                variables: saved.variables.iter().copied().map(Some).collect(),
+            })
+        });
+        Self {
+            revision,
+            baseline,
+            templates,
+            entries,
+            selected: 0,
+        }
+    }
+
+    fn draft_rules(&self) -> Option<Vec<RuleChange>> {
+        let mut rules = Vec::new();
+        for (kind, selected) in EVENTS.into_iter().zip(&self.entries) {
+            let Some(selected) = selected else { continue };
+            let variables = selected
+                .variables
+                .iter()
+                .copied()
+                .collect::<Option<Vec<_>>>()?;
+            rules.push(RuleChange {
+                kind,
+                template_id: selected.template_id.clone(),
+                variables,
+            });
+        }
+        Some(rules)
+    }
+
+    pub fn proposed(&self) -> Option<RulesChange> {
+        let rules = self.draft_rules()?;
+        if rules.iter().any(|rule| {
+            !self.templates.iter().any(|template| {
+                template.id == rule.template_id && template.parameters.len() == rule.variables.len()
+            })
+        }) {
+            return None;
+        }
+        Some(RulesChange {
+            revision: self.revision.clone(),
+            rules,
+        })
+    }
+
+    pub fn dirty(&self) -> bool {
+        self.draft_rules()
+            .is_none_or(|rules| rules != self.baseline)
+    }
+
+    pub fn select_template(&mut self, template: Option<usize>) {
+        if let (Some(index), Some(saved)) = (template, &self.entries[self.selected])
+            && saved.template_id == self.templates[index].id
+        {
+            return;
+        }
+        self.entries[self.selected] = template.map(|index| {
+            let template = &self.templates[index];
+            DraftRule {
+                template_id: template.id.clone(),
+                variables: vec![None; template.parameters.len()],
+            }
+        });
     }
 }
 
@@ -214,7 +311,10 @@ impl HttpTransport {
     }
 
     /// A conflict leaves the reviewed rules untouched on the server.
-    pub fn save_whatsapp_rules(&self, input: &RulesChange) -> Result<bool, TransportError> {
+    pub fn save_whatsapp_rules(
+        &self,
+        input: &RulesChange,
+    ) -> Result<RuleSaveOutcome, TransportError> {
         let mut request = self
             .agent
             .patch(&format!("{}/admin/whatsapp/rules/reviewed", self.base_url));
@@ -246,8 +346,8 @@ impl HttpTransport {
             },
         );
         match result {
-            Ok(_) => Ok(true),
-            Err(None) => Ok(false),
+            Ok(_) => Ok(RuleSaveOutcome::Applied),
+            Err(None) => Ok(RuleSaveOutcome::Conflict),
             Err(Some(error)) => Err(error),
         }
     }
@@ -273,5 +373,44 @@ mod tests {
         assert!(!refresh.ready(Some(9), false, now + retry));
         assert!(refresh.ready(Some(9), true, now + retry));
         assert!(!refresh.failed(Some(9), &TransportError::Unauthorized, now));
+    }
+}
+#[cfg(test)]
+mod automation_tests {
+    use super::*;
+
+    #[test]
+    fn a_rule_requires_every_variable_and_reselecting_preserves_the_mapping() {
+        let connection = Connection {
+            phone: "+34611000000".into(),
+            revision: Some("f".repeat(64)),
+            coexistence: true,
+            expires_at: None,
+            rules: vec![],
+        };
+        let template = ApprovedTemplate {
+            id: "12345".into(),
+            name: "confirmation".into(),
+            language: "es_ES".into(),
+            body: "Tu cita es a las {{ 1 }} con {{2}}.".into(),
+            parameters: vec!["1".into(), "2".into()],
+        };
+        let mut editor = ReviewedAutomations::new(&connection, "f".repeat(64), vec![template]);
+        editor.select_template(Some(0));
+        assert!(editor.dirty());
+        assert!(editor.proposed().is_none());
+        editor.entries[0].as_mut().unwrap().variables =
+            vec![Some(Variable::Time), Some(Variable::Staff)];
+        editor.select_template(Some(0));
+        assert_eq!(
+            editor.templates[0].sample(&[Some("16:00"), Some("Natalia")]),
+            "Tu cita es a las 16:00 con Natalia."
+        );
+        let draft = editor.proposed().unwrap();
+        assert_eq!(Some(draft.revision), connection.revision);
+        assert_eq!(
+            draft.rules[0].variables,
+            vec![Variable::Time, Variable::Staff]
+        );
     }
 }

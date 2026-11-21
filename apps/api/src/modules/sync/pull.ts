@@ -307,8 +307,10 @@ export async function pullChanges(
         (topic.data !== "booking_policy" || query.bookingPolicy === "1") &&
         (topic.data !== "email_delivery" ||
           (query.emailDelivery === "1" && principal.role === "owner")) &&
-        ((topic.data !== "whatsapp_desk" && topic.data !== "whatsapp_settings") ||
+        (topic.data !== "whatsapp_desk" ||
           (query.whatsappDesk === "1" && principal.role === "owner")) &&
+        (topic.data !== "whatsapp_settings" ||
+          (query.whatsappSettings === "1" && principal.role === "owner")) &&
         (topic.data !== "resource_catalogue" ||
           (query.resourceCatalogue === "1" && permissions.editCatalog)) &&
         (topic.data !== "service_combinations" ||

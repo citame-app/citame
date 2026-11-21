@@ -34,6 +34,11 @@ import { waitlistEsAR } from "./waitlist";
 /** Neutral, professional Spanish for Argentina. */
 export const esAR: Record<MessageKey, string> = {
   ...emailDeliveryEs,
+  "whatsapp.rulesChanged":
+    "Otra sesión cambió estas automatizaciones. Recarga los ajustes guardados antes de guardar.",
+  "whatsapp.rulesReload": "Descartar borrador y recargar",
+  "whatsapp.rulesUnavailable":
+    "Conéctate a un servidor de Citame actualizado para guardar las automatizaciones.",
   ...posEs,
   ...marketingEs,
   ...combinationsEs,
