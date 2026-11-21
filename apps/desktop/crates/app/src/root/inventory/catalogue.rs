@@ -95,6 +95,7 @@ impl Root {
         cx.notify();
         prompt_csv_export(
             "citame-products.csv",
+            |_| true,
             move |output| {
                 transport
                     .write_inventory_products_csv(&query, output)

@@ -34,6 +34,7 @@ use sob_core::inventory::{
 };
 use sob_core::model::*;
 use sob_core::ops::{self, NewAppointment, Resolution};
+use sob_core::reports::ReportQuery;
 use sob_core::reviews::{EmailStatus, ModerationCommand, ReviewStatus};
 use sob_core::runner::{Connectivity, RunnerCore, SharedStatus, SyncRunner};
 use sob_core::store::{AssignmentWork, SalonConfigurationWork, ServiceAssignment, Store};
@@ -4778,6 +4779,13 @@ fn cash_updates_are_visible_to_the_connected_native_replica_and_web_api() {
     assert_eq!(adjusted.expected_cents, 2425);
     let web = browser.rest_get("/admin/commerce/cash-sessions/current");
     assert_eq!(web["session"]["expectedCents"], 2425);
+    let day = native_session.opened_at.date_naive();
+    let report = ReportQuery {
+        from: day - Span::days(1),
+        to: day + Span::days(1),
+        staff_id: None,
+        currency: None,
+    };
     eprintln!(
         "Native to web API cash state: {} ms",
         start.elapsed().as_millis()
@@ -4786,6 +4794,16 @@ fn cash_updates_are_visible_to_the_connected_native_replica_and_web_api() {
         .transport
         .update_cash_session(&CashCommand::close(&adjusted, 2425))
         .unwrap();
+    let ledger = native.transport.financial_report(&report).unwrap();
+    let closed = ledger
+        .cash_sessions
+        .iter()
+        .find(|session| session.id == native_session.id)
+        .unwrap();
+    assert!(closed.closed_at.is_some());
+    assert_eq!(closed.opening_cents, 2300);
+    assert_eq!(closed.expected_cents, Some(2425));
+    assert_eq!(closed.difference_cents, Some(0));
 
     stop.store(true, Ordering::SeqCst);
     runner.stop();

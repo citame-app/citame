@@ -255,6 +255,7 @@ impl Root {
         cx.notify();
         prompt_csv_export(
             "citame-stock-movements.csv",
+            |_| true,
             move |output| {
                 transport
                     .write_inventory_ledger_csv(&query, output)

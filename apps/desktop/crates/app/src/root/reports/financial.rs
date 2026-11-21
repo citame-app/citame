@@ -214,7 +214,7 @@ mod tests {
                 panic!("missing reports overlay");
             };
             assert!(desk.mode == ReportMode::Overview);
-            desk.can_report_clients = true;
+            desk.can_view_financial_reports = true;
             desk.submitted.as_mut().unwrap().staff_id = Some("staff-filter".into());
             let query = desk.submitted.as_ref().unwrap().clone();
             root.select_report_mode(ReportMode::Financial, cx);
@@ -252,5 +252,31 @@ mod tests {
         assert!(csv.contains("\"net_collections\",\"-300\",\"EUR\""));
         assert!(csv.contains("\"cash\",\"1000\",\"1300\",\"EUR\""));
         assert!(csv.contains("\"cash_session_id\""));
+
+        let revoked = dir.path().join("revoked.csv");
+        root.update(cx, |root, cx| {
+            root.save_report(cx);
+            let Overlay::Reports(desk) = &mut root.overlay else {
+                panic!("missing reports overlay");
+            };
+            desk.can_view_financial_reports = false;
+        });
+        cx.simulate_new_path_selection(|_| Some(revoked.clone()));
+        cx.run_until_parked();
+        assert!(!revoked.exists());
+
+        root.update(cx, |root, cx| {
+            let Overlay::Reports(desk) = &mut root.overlay else {
+                panic!("missing reports overlay");
+            };
+            desk.from.update(cx, |field, cx| field.set_text("", cx));
+            root.report_staff("new-selection".into(), cx);
+            let Overlay::Reports(desk) = &root.overlay else {
+                panic!("missing reports overlay");
+            };
+            assert_eq!(desk.error, Some(Key::ReportRange));
+            assert!(desk.financial_report.is_none());
+            assert!(desk.request.is_none());
+        });
     }
 }

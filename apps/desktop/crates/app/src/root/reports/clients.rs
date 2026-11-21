@@ -359,7 +359,7 @@ mod tests {
                 panic!("missing reports overlay");
             };
             assert!(desk.mode == ReportMode::Overview);
-            desk.can_report_clients = true;
+            desk.can_view_financial_reports = true;
             desk.submitted.as_mut().unwrap().staff_id = Some("staff-filter".into());
             let expected_query = desk.submitted.clone().unwrap();
 

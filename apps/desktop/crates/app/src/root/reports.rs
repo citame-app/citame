@@ -76,7 +76,7 @@ pub(super) struct Desk {
     submitted: Option<ReportQuery>,
     summary: Option<ReportSummary>,
     mode: ReportMode,
-    can_report_clients: bool,
+    can_view_financial_reports: bool,
     client_report: Option<ClientReport>,
     financial_report: Option<FinancialReport>,
     group: Group,
@@ -119,7 +119,7 @@ impl Root {
             submitted: None,
             summary: None,
             mode: ReportMode::Overview,
-            can_report_clients: false,
+            can_view_financial_reports: false,
             client_report: None,
             financial_report: None,
             group: Group::Day,
@@ -143,6 +143,10 @@ impl Root {
             .zip(parse_report_date(desk.to.read(cx).text()))
             .filter(|(from, to)| (0..366).contains(&to.signed_duration_since(*from).num_days()));
         let Some((from, to)) = dates else {
+            desk.request = None;
+            desk.client_report = None;
+            desk.financial_report = None;
+            desk.outcomes.reset_page();
             desk.error = Some(Key::ReportRange);
             cx.notify();
             return;
@@ -238,7 +242,7 @@ impl Root {
                             desk.group = Group::Day;
                             desk.page = 0;
                         }
-                        desk.can_report_clients = summary.can_report_clients;
+                        desk.can_view_financial_reports = summary.can_report_clients;
                         desk.summary = Some(*summary);
                         root.refresh_outcome_page(cx);
                     }
@@ -248,7 +252,7 @@ impl Root {
                         desk.summary = None;
                         desk.client_report = None;
                         desk.financial_report = None;
-                        desk.can_report_clients = false;
+                        desk.can_view_financial_reports = false;
                         desk.outcomes.reset_page();
                         desk.error = Some(Key::ReportRestricted);
                     }
@@ -306,7 +310,7 @@ impl Root {
         let Overlay::Reports(desk) = &mut self.overlay else {
             return;
         };
-        if desk.export_pending || desk.request.is_some() {
+        if desk.export_pending || desk.request.is_some() || desk.error == Some(Key::ReportRange) {
             return;
         }
         let (filename, csv) = match desk.mode {
@@ -363,11 +367,26 @@ impl Root {
             return;
         }
         let instance = desk.instance.clone();
+        let expected_instance = instance.clone();
+        let session = self.svc.session.clone();
+        let mode = desk.mode;
+        let query = desk.submitted.clone();
         desk.export_pending = true;
         desk.export_notice = None;
         cx.notify();
         prompt_csv_export(
             &filename,
+            move |root| {
+                Arc::ptr_eq(&session, &root.svc.session)
+                    && matches!(&root.overlay, Overlay::Reports(current)
+                    if Arc::ptr_eq(&expected_instance, &current.instance)
+                        && current.mode == mode && current.submitted == query
+                        && current.error != Some(Key::ReportRange)
+                        && (mode.uses_summary() || (
+                            current.can_view_financial_reports && current.error.is_none()
+                                && current.request.is_none()
+                        )))
+            },
             write,
             move |root, notice, cx| {
                 if let Overlay::Reports(desk) = &mut root.overlay
@@ -505,7 +524,9 @@ impl Root {
                         })
                     })
                     .when_some(
-                        desk.summary.as_ref().filter(|_| desk.mode.uses_summary()),
+                        desk.summary.as_ref().filter(|_| {
+                            desk.mode.uses_summary() && desk.error != Some(Key::ReportRange)
+                        }),
                         |view, report| {
                             view.child(self.render_report_period(desk, report, cx))
                                 .when(desk.mode == ReportMode::Overview, |view| {

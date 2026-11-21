@@ -1051,6 +1051,7 @@ test("a customer cannot use desktop endpoints even with an approved authorizatio
   expect((await request("/me", access)).status).toBe(403);
   expect((await request("/sync/pull", access)).status).toBe(403);
   expect((await request(reportPath, access)).status).toBe(403);
+  expect((await request(salesReportPath, access)).status).toBe(403);
   expect((await request(outcomeExportPath, access)).status).toBe(403);
   expect((await request("/admin/reviews/requests", access)).status).toBe(403);
 });

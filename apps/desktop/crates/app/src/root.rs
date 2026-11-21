@@ -81,6 +81,7 @@ const GUTTER_PX: f32 = 56.0;
 
 fn prompt_csv_export(
     filename: &str,
+    still_allowed: impl FnOnce(&Root) -> bool + 'static,
     write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()> + Send + 'static,
     finish: impl FnOnce(&mut Root, Option<Key>, &mut Context<Root>) + 'static,
     cx: &mut Context<Root>,
@@ -89,6 +90,13 @@ fn prompt_csv_export(
     let picker = cx.prompt_for_new_path(&directory, Some(filename));
     cx.spawn(async move |root, cx| {
         let notice = match picker.await {
+            Ok(Ok(Some(_)))
+                if !root
+                    .update(cx, |root, _| still_allowed(root))
+                    .unwrap_or(false) =>
+            {
+                None
+            }
             Ok(Ok(Some(path))) => {
                 let result = cx
                     .background_executor()
