@@ -80,8 +80,15 @@ test("client group projection uses Cloud normalization and respects directory vi
     expect(page.clientGroups).toBe(true);
     const projected = clientChange(page);
     expect(projected?.data).toMatchObject({ groupNames: ["vip"] });
-    expect(projected?.data).not.toHaveProperty("bookingAccess");
-    expect(JSON.stringify(projected)).not.toContain(reason);
+    const raw = await call(who, "GET", `/sync/pull?since=${cursor}&clientGroups=1`);
+    expect(raw.status).toBe(200);
+    const body: Awaited<ReturnType<typeof pull>> = await raw.json();
+    const rawClient = clientChange(body);
+    expect(rawClient?.data).toMatchObject({ groupNames: ["vip"] });
+    expect(rawClient?.data).not.toHaveProperty("tags");
+    expect(rawClient?.data).not.toHaveProperty("bookingAccess");
+    expect(rawClient?.data).not.toHaveProperty("bookingAccessReason");
+    expect(JSON.stringify(rawClient)).not.toContain(reason);
   }
   await t.db
     .update(staffProfile)

@@ -35,15 +35,21 @@ fn directory_groups_backfill_keeps_contacts_and_pending_edits() {
     let mut replica = Store::open(&file).unwrap();
     assert_eq!(replica.cursor().unwrap(), 19);
     let generation = replica.replica_generation().unwrap();
-    assert!(replica.rewind_client_groups_if_needed(&generation).unwrap());
-    assert_eq!(replica.cursor().unwrap(), 0);
+    assert_eq!(replica.client_groups_cursor().unwrap(), Some(0));
     assert_eq!(replica.outbox_len().unwrap(), 1);
     let clients = directory_clients(&replica).unwrap();
     assert!(directory_groups(&clients).is_none());
     assert_eq!(search_directory(&clients, "pending", None)[0].id, id);
 
     client.group_names = Some(vec!["vip".into()]);
-    replica.apply_page(&[incoming(19, &client)], 19).unwrap();
+    assert_eq!(
+        replica
+            .apply_client_group_page(&[incoming(19, &client)], 19, &generation)
+            .unwrap(),
+        1
+    );
+    assert_eq!(replica.cursor().unwrap(), 19);
+    assert_eq!(replica.client_groups_cursor().unwrap(), None);
     let clients = directory_clients(&replica).unwrap();
     assert_eq!(
         directory_groups(&clients).unwrap(),

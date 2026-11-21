@@ -405,6 +405,11 @@ pub fn search_directory<'a>(
 ) -> Vec<&'a Client> {
     let query = query.trim().to_lowercase();
     let digits: String = query.chars().filter(char::is_ascii_digit).collect();
+    let match_by_digits = digits.len() >= 3
+        || (!digits.is_empty()
+            && query
+                .chars()
+                .all(|ch| ch.is_ascii_digit() || "+-(). ".contains(ch)));
     clients
         .iter()
         .filter(|client| {
@@ -420,7 +425,7 @@ pub fn search_directory<'a>(
                     .is_some_and(|email| email.to_lowercase().contains(&query))
                 || client.phone.as_ref().is_some_and(|phone| {
                     phone.contains(&query)
-                        || (digits.len() >= 3
+                        || (match_by_digits
                             && phone
                                 .chars()
                                 .filter(char::is_ascii_digit)

@@ -236,8 +236,7 @@ pub fn pull_all(store: &mut Store, transport: &dyn Transport) -> Result<PullRepo
     let mut switched_generation = false;
     let snapshot_complete = store.get_meta("calendar_snapshot_complete")?.is_some();
     let mut request_colors = store.get_meta(CATALOG_COLORS_CACHED)?.is_none();
-    let mut checked_client_groups = false;
-    loop {
+    let client_groups_supported = loop {
         let since = store.cursor()?;
         let response = transport.pull_with_catalogue(
             since,
@@ -288,12 +287,6 @@ pub fn pull_all(store: &mut Store, transport: &dyn Transport) -> Result<PullRepo
             request_colors = true;
             continue;
         }
-        if page.client_groups == Some(true) && !checked_client_groups {
-            checked_client_groups = true;
-            if since > 0 && store.rewind_client_groups_if_needed(&generation)? {
-                continue;
-            }
-        }
         if page.next_cursor < since {
             return Err(SyncError::Fatal(format!(
                 "the server moved the cursor backwards ({since} -> {})",
@@ -322,11 +315,43 @@ pub fn pull_all(store: &mut Store, transport: &dyn Transport) -> Result<PullRepo
         report.pages += 1;
         report.changes += applied;
         if !page.has_more {
-            break;
+            break page.client_groups == Some(true);
         }
+    };
+    if client_groups_supported {
+        backfill_client_groups(store, transport, &generation, &mut report)?;
     }
     report.cursor = store.cursor()?;
     Ok(report)
+}
+
+/// Enrich existing client rows without reapplying unrelated events or moving the primary cursor.
+fn backfill_client_groups(
+    store: &mut Store,
+    transport: &dyn Transport,
+    generation: &str,
+    report: &mut PullReport,
+) -> Result<(), SyncError> {
+    while let Some(since) = store.client_groups_cursor()? {
+        let page = transport.pull(since, PULL_PAGE).map_err(classify)?;
+        if page.generation.as_deref().unwrap_or(INITIAL_GENERATION) != generation
+            || page.client_groups != Some(true)
+        {
+            break;
+        }
+        if page.next_cursor < since || (page.has_more && page.next_cursor == since) {
+            return Err(SyncError::Fatal(
+                "The client groups backfill cursor did not advance".into(),
+            ));
+        }
+        report.changes +=
+            store.apply_client_group_page(&page.changes, page.next_cursor, generation)?;
+        report.pages += 1;
+        if !page.has_more {
+            break;
+        }
+    }
+    Ok(())
 }
 
 /// Push edits in the current history, then pull. A recovery fence stops the push before any

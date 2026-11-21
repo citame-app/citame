@@ -814,22 +814,60 @@ impl Store {
             .unwrap_or(0))
     }
 
-    /// Replays an older client projection once the connected server can supply group names.
-    pub(crate) fn rewind_client_groups_if_needed(&mut self, generation: &str) -> Result<bool> {
+    /// Resume enrichment for legacy rows without rewinding the main change stream.
+    pub(crate) fn client_groups_cursor(&self) -> Result<Option<i64>> {
         let missing: bool = self.conn.query_row(
             "SELECT EXISTS (SELECT 1 FROM client WHERE json_type(json, '$.groupNames') IS NULL)",
             [],
             |row| row.get(0),
         )?;
         if !missing {
-            return Ok(false);
+            return Ok(None);
         }
+        let cursor = self
+            .get_meta("client_groups_cursor")?
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0);
+        Ok(Some(cursor))
+    }
+
+    pub(crate) fn apply_client_group_page(
+        &mut self,
+        changes: &[RawChange],
+        next_cursor: i64,
+        generation: &str,
+    ) -> Result<usize> {
         self.write_transaction(|store| {
             Self::ensure_generation(&store.conn, Some(generation))?;
-            Ok(store.conn.execute(
-                "UPDATE meta SET value = '0' WHERE key = 'cursor' AND value <> '0'",
-                [],
-            )? > 0)
+            let mut updated = 0;
+            for change in changes {
+                if change.entity != "client" || change.op != "upsert" {
+                    continue;
+                }
+                let Some(groups) = change
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get("groupNames"))
+                    .filter(|groups| {
+                        groups
+                            .as_array()
+                            .is_some_and(|groups| groups.iter().all(serde_json::Value::is_string))
+                    })
+                else {
+                    continue;
+                };
+                updated += store.conn.execute(
+                    "UPDATE client SET json = json_set(json, '$.groupNames', json(?2))
+                     WHERE id = ?1 AND json_type(json, '$.groupNames') IS NULL",
+                    params![change.id, groups.to_string()],
+                )?;
+            }
+            store.conn.execute(
+                "INSERT INTO meta (key,value) VALUES ('client_groups_cursor',?1)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [next_cursor],
+            )?;
+            Ok(updated)
         })
     }
 
@@ -1158,7 +1196,7 @@ impl Store {
             tx.execute(&format!("DELETE FROM {t}"), [])?;
         }
         tx.execute(
-            "DELETE FROM meta WHERE key IN ('cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','desk_waitlist','resource_pool_catalogue','service_combinations',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
+            "DELETE FROM meta WHERE key IN ('cursor','client_groups_cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','desk_waitlist','resource_pool_catalogue','service_combinations',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
             [CATALOG_COLORS_CACHED, SALON_CONFIGURATION_CACHE, SALON_CONFIGURATION_ACK, SALON_CONFIGURATION_UNAVAILABLE],
         )?;
         tx.execute("DELETE FROM local_booking_confirmation", [])?;

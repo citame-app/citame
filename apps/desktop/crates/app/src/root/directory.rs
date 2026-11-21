@@ -494,6 +494,7 @@ impl Root {
     fn select_directory_group(&mut self, group: Option<String>, cx: &mut Context<Self>) {
         if let Overlay::Directory(desk) = &mut self.overlay {
             desk.group_filter = group;
+            desk.search.update(cx, |field, cx| field.set_text("", cx));
             desk.page = 0;
             desk.close_group_picker();
             cx.notify();
@@ -565,6 +566,35 @@ impl Root {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+
+    #[gpui::test]
+    async fn choosing_a_client_group_resets_the_search_and_page(cx: &mut TestAppContext) {
+        let (_dir, window) = super::super::tests::open(cx);
+        window
+            .update(cx, |root, _, cx| {
+                root.svc
+                    .store
+                    .set_meta("client_directory", "allowed")
+                    .unwrap();
+                root.open_directory(cx);
+                let Overlay::Directory(desk) = &mut root.overlay else {
+                    panic!("directory didn't open");
+                };
+                desk.search
+                    .update(cx, |field, cx| field.set_text("Old search", cx));
+                desk.page = 3;
+                desk.choosing_group = true;
+                root.select_directory_group(Some("vip".into()), cx);
+                let Overlay::Directory(desk) = &root.overlay else {
+                    panic!("directory didn't return after selection");
+                };
+                assert_eq!(desk.group_filter.as_deref(), Some("vip"));
+                assert_eq!(desk.page, 0);
+                assert!(desk.search.read(cx).text().is_empty());
+                assert!(!desk.choosing_group);
+            })
+            .unwrap();
+    }
 
     #[gpui::test]
     async fn local_directory_opens_synced_history_and_saves_a_new_contact(cx: &mut TestAppContext) {

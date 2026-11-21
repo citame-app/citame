@@ -482,13 +482,17 @@ fn legacy_client_groups_wait_for_server_support_before_replay() {
             .all(|client| client.group_names.is_none())
     );
 
+    let interrupted = AtomicUsize::new(0);
     let upgraded = Fake::new(
         Box::new(applied_all),
-        Box::new(|since, _| {
-            let mut response = if since == 0 {
-                page(0, 6, false)
-            } else {
-                empty_pull(since, 0)?
+        Box::new(move |since, _| {
+            let mut response = match since {
+                0 => page(0, 2, true),
+                2 if interrupted.fetch_add(1, Ordering::SeqCst) == 0 => {
+                    return Err(TransportError::Offline("Temporary outage".into()));
+                }
+                2 => page(2, 4, false),
+                _ => empty_pull(since, 0)?,
             };
             response.client_groups = Some(true);
             for change in &mut response.changes {
@@ -497,9 +501,15 @@ fn legacy_client_groups_wait_for_server_support_before_replay() {
             Ok(response)
         }),
     );
+    assert!(pull_all(&mut store, &upgraded).is_err());
+    assert_eq!(store.cursor().unwrap(), 6);
+    assert_eq!(store.client_groups_cursor().unwrap(), Some(2));
     pull_all(&mut store, &upgraded).unwrap();
     pull_all(&mut store, &upgraded).unwrap();
-    assert_eq!(upgraded.log(), ["pull:6", "pull:0", "pull:6"]);
+    assert_eq!(
+        upgraded.log(),
+        ["pull:6", "pull:0", "pull:2", "pull:6", "pull:2", "pull:6"]
+    );
     assert_eq!(store.cursor().unwrap(), 6);
     assert_eq!(
         crate::calendar::directory_groups(&store.clients().unwrap()).unwrap()["vip"],
