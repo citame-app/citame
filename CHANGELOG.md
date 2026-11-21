@@ -95,6 +95,8 @@ First release: a self-hostable booking and salon-management platform for one sal
 
 ### Fixed
 
+- Booksy recovery verifies archived product fingerprints before inventory classification columns existed and after migrating their root labels, while rejecting changed links.
+
 - **Operations**: isolate production smoke runs with unique Compose projects and image tags, ignore deployment `.env` files, disable inherited SMS providers, clean up temporary credentials, and allow realistic backup/restore integration-test durations.
 - **Tooling**: preserve runtime configuration in `bun run dev` and custom service settings in the root E2E task; exclude Rust build outputs, browser traces, screenshots and backups from Docker contexts; remove unused timezone configuration and lint warnings.
 - **Tests**: give each accessibility-audit appointment its own client identity so light and dark audits remain unambiguous even when they book on the same day; apply the API integration-test timeout through the test command.

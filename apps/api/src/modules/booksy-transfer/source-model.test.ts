@@ -805,6 +805,53 @@ test("retains old product fingerprints through migration and detects changed pac
   );
 });
 
+test("old product fingerprints verify before and after classification backfill", async () => {
+  const [product] = await t.db.select().from(retailProduct);
+  if (!product) throw new Error("Expected the imported fixture product");
+  const migration = await Bun.file(
+    new URL(
+      "../../../../../packages/db/drizzle/0099_inventory_classification.sql",
+      import.meta.url,
+    ),
+  ).text();
+  await expect(
+    t.db.transaction(async (tx) => {
+      const [labelled] = await tx
+        .update(retailProduct)
+        .set({ category: "Cabina", brand: "Marca", updatedAt: product.updatedAt })
+        .where(eq(retailProduct.id, product.id))
+        .returning();
+      if (!labelled) throw new Error("Expected source product with legacy labels");
+      const {
+        stockAllocated: _allocation,
+        categoryId: _category,
+        subcategoryId: _subcategory,
+        brandId: _brand,
+        ...legacy
+      } = labelled;
+      await tx.execute(
+        sql`update booksy_rehearsal.source_entity set target_hash=${fingerprint(legacy)} where kind='sourceProducts'`,
+      );
+      await tx.execute(sql`set constraints all immediate`);
+      await tx.execute(sql`alter table retail_product drop column category_id,
+        drop column subcategory_id, drop column brand_id`);
+      await tx.execute(sql`drop table inventory_classification`);
+      expect((await verifyBooksySourceModel(tx, model)).sourceAppointmentsVerified).toBe(true);
+      for (const statement of migration.split("--> statement-breakpoint"))
+        await tx.execute(sql.raw(statement));
+      const [migrated] = await tx.select().from(retailProduct);
+      expect(migrated?.categoryId).toBeString();
+      expect(migrated?.brandId).toBeString();
+      expect((await verifyBooksySourceModel(tx, model)).sourceAppointmentsVerified).toBe(true);
+      await tx.execute(sql`update retail_product set category_id=null where id=${labelled.id}`);
+      await expect(verifyBooksySourceModel(tx, model)).rejects.toThrow(
+        "Native product/resource fields changed",
+      );
+      tx.rollback();
+    }),
+  ).rejects.toThrow("Rollback");
+});
+
 test("the stock opening fingerprint survives migration of a populated pre-position schema", async () => {
   const [opening] = await t.db
     .select({ position: stockMovement.ledgerPosition })

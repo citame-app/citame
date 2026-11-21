@@ -20,6 +20,9 @@ const { stockAllocated: _, ...sourceProductColumns } = getTableColumns(retailPro
 const {
   packageContentQuantity: __,
   packageContentUnit: ___,
+  categoryId: _categoryId,
+  subcategoryId: _subcategoryId,
+  brandId: _brandId,
   ...legacyProductColumns
 } = sourceProductColumns;
 // Keep these fields fixed so new bookkeeping columns cannot change an archived opening hash.
@@ -46,6 +49,19 @@ function matchesExtensionFingerprint(row: Record<string, unknown>, expected: str
     packageContentUnit === null &&
     fingerprint(original) === expected
   );
+}
+
+/** Derive only the root classifications backfilled from the frozen source labels. */
+async function classificationIdsByLabel(db: ReadSourceDb) {
+  const [schema] = await db.execute<{ available: boolean }>(
+    sql`select to_regclass('public.inventory_classification') is not null as available`,
+  );
+  if (!schema?.available) return new Map<string, string>();
+  const rows = await db.execute<{ kind: string; label: string; id: string }>(sql`
+    select kind, lower(name) as label, id from public.inventory_classification
+    where parent_id is null
+  `);
+  return new Map(rows.map(({ kind, label, id }) => [`${kind}:${label}`, id]));
 }
 
 async function isolated(db: ReadSourceDb, readCandidate = false) {
@@ -278,6 +294,7 @@ export async function verifyBooksySourceModel(
     sourceStockOpening: stockMovement,
     sourceResources: resourcePool,
   };
+  let classificationIds: Map<string, string> | undefined;
   for (const r of extensions) {
     const table = tables[r.kind as keyof typeof tables];
     if (
@@ -290,28 +307,48 @@ export async function verifyBooksySourceModel(
       throw new Error("Native source extension mapping differs");
     // The test copy preserves original mappings while allowing edits in the public tables.
     if (!desktopTest || options.exclusiveExtensions) {
-      // Backups are verified before migrations as well as after. Read the two
-      // optional columns through row JSON so older tables need no schema change.
+      // Archived products need to be checked before the current schema is installed.
+      if (table === retailProduct) {
+        const [product] = await db
+          .select({
+            ...legacyProductColumns,
+            packageContentQuantity: sql<
+              string | null
+            >`to_jsonb(${retailProduct})->>'package_content_quantity'`,
+            packageContentUnit: sql<
+              string | null
+            >`to_jsonb(${retailProduct})->>'package_content_unit'`,
+            categoryId: sql<string | null>`to_jsonb(${retailProduct})->>'category_id'`,
+            subcategoryId: sql<string | null>`to_jsonb(${retailProduct})->>'subcategory_id'`,
+            brandId: sql<string | null>`to_jsonb(${retailProduct})->>'brand_id'`,
+            categoryLabel: sql<string | null>`lower(btrim(${retailProduct.category}))`,
+            brandLabel: sql<string | null>`lower(btrim(${retailProduct.brand}))`,
+          })
+          .from(retailProduct)
+          .where(eq(retailProduct.id, r.target_id));
+        if (product) {
+          const { categoryLabel, brandLabel, ...stored } = product;
+          if (matchesExtensionFingerprint(stored, r.target_hash)) continue;
+          const { categoryId, subcategoryId, brandId, ...legacy } = stored;
+          if (matchesExtensionFingerprint(legacy, r.target_hash)) {
+            classificationIds ??= await classificationIdsByLabel(db);
+            if (
+              subcategoryId === null &&
+              categoryId === (classificationIds.get(`category:${categoryLabel ?? ""}`) ?? null) &&
+              brandId === (classificationIds.get(`brand:${brandLabel ?? ""}`) ?? null)
+            )
+              continue;
+          }
+        }
+        throw new Error("Native product/resource fields changed");
+      }
       const [row] =
-        table === retailProduct
+        table === stockMovement
           ? await db
-              .select({
-                ...legacyProductColumns,
-                packageContentQuantity: sql<
-                  string | null
-                >`to_jsonb(${retailProduct})->>'package_content_quantity'`,
-                packageContentUnit: sql<
-                  string | null
-                >`to_jsonb(${retailProduct})->>'package_content_unit'`,
-              })
-              .from(retailProduct)
-              .where(eq(retailProduct.id, r.target_id))
-          : table === stockMovement
-            ? await db
-                .select(sourceStockColumns)
-                .from(stockMovement)
-                .where(eq(stockMovement.id, r.target_id))
-            : await db.select().from(table).where(eq(table.id, r.target_id));
+              .select(sourceStockColumns)
+              .from(stockMovement)
+              .where(eq(stockMovement.id, r.target_id))
+          : await db.select().from(table).where(eq(table.id, r.target_id));
       if (!row || !matchesExtensionFingerprint(row, r.target_hash))
         throw new Error("Native product/resource fields changed");
     }
