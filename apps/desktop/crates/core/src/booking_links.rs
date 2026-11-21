@@ -33,6 +33,15 @@ pub struct PublicCatalog {
 }
 
 impl PublicTreatment {
+    pub fn display_name(&self) -> String {
+        match &self.catalog {
+            Some(ServiceOption::Variant { option_label, .. }) if option_label != &self.name => {
+                format!("{} · {option_label}", self.name)
+            }
+            _ => self.name.clone(),
+        }
+    }
+
     pub fn is_extra(&self) -> bool {
         matches!(self.catalog, Some(ServiceOption::Addon { .. }))
     }
@@ -128,6 +137,15 @@ impl Selection {
             }
         } else {
             let family = item.family();
+            if self.bases().any(|base| {
+                catalog.services.iter().any(|selected| {
+                    selected.id == base
+                        && selected.family() != family
+                        && selected.currency != item.currency
+                })
+            }) {
+                return false;
+            }
             let existing = self.segments.iter().position(|(base, _)| {
                 catalog
                     .services
@@ -160,6 +178,26 @@ impl Selection {
 
     pub fn links(&self, origin: &str, catalog: &PublicCatalog) -> Option<BookingLinks> {
         if self.treatments().next().is_some() {
+            let mut families = BTreeSet::new();
+            let mut currency = None;
+            for (base, extras) in &self.segments {
+                let service = catalog
+                    .services
+                    .iter()
+                    .find(|service| service.id == *base && !service.is_extra())?;
+                if !families.insert(service.family())
+                    || currency.is_some_and(|value| value != &service.currency)
+                    || extras.iter().any(|id| {
+                        !catalog
+                            .services
+                            .iter()
+                            .any(|extra| extra.id == *id && extra.fits_base(service))
+                    })
+                {
+                    return None;
+                }
+                currency = Some(&service.currency);
+            }
             let mut eligible = self.eligible(catalog);
             if !eligible.any(|person| self.staff.is_none_or(|id| id == person.id)) {
                 return None;
@@ -267,11 +305,13 @@ mod tests {
         let variant = uid(2);
         let extra = uid(3);
         let staff = uid(4);
-        let catalog = PublicCatalog {
+        let other_currency = uid(5);
+        let mut catalog = PublicCatalog {
             services: serde_json::from_value(json!([
                 {"id":base,"name":"Gel","currency":"EUR"},
                 {"id":variant,"name":"Gel French","currency":"EUR","catalog":{"kind":"variant","parentServiceId":base,"optionLabel":"French"}},
                 {"id":extra,"name":"Deco","currency":"EUR","catalog":{"kind":"addon","allowedServiceIds":[base]}},
+                {"id":other_currency,"name":"Other service","currency":"USD"},
             ])).unwrap(),
             staff: serde_json::from_value(json!([
                 {"id":staff,"displayName":"Synthetic","serviceIds":[base,extra]},
@@ -281,6 +321,7 @@ mod tests {
         let mut selection = Selection::default();
         assert!(!selection.toggle(&catalog, extra, Some(base)));
         assert!(selection.toggle(&catalog, base, None));
+        assert!(!selection.toggle(&catalog, other_currency, None));
         assert!(selection.toggle(&catalog, extra, Some(base)));
         selection.staff = Some(staff);
         let links = selection.links("https://example.com", &catalog).unwrap();
@@ -301,6 +342,12 @@ mod tests {
                 .starts_with(b"\x89PNG\r\n\x1a\n")
         );
 
+        let available = std::mem::take(&mut catalog.staff);
+        assert!(selection.links("https://example.com", &catalog).is_none());
+        catalog.staff = available;
+        let available = std::mem::take(&mut catalog.services);
+        assert!(selection.links("https://example.com", &catalog).is_none());
+        catalog.services = available;
         assert!(selection.toggle(&catalog, variant, None));
         assert_eq!(selection.treatments().collect::<Vec<_>>(), [variant, extra]);
         assert!(selection.links("https://example.com", &catalog).is_none());

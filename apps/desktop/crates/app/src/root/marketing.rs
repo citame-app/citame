@@ -186,6 +186,10 @@ impl Root {
     }
 
     pub(super) fn refresh_marketing(&mut self, reconnected: bool, cx: &mut Context<Self>) {
+        if matches!(&self.overlay, Overlay::Marketing(desk) if desk.links.is_some()) {
+            self.refresh_booking_links(reconnected, cx);
+            return;
+        }
         let observed = self.svc.store.live_view_revision(LIVE_TOPIC).ok();
         let Some(desk) = self.marketing_desk() else {
             return;

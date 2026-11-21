@@ -1,6 +1,9 @@
 use super::*;
 use sob_core::booking_links::{BookingLinks, PublicCatalog, Selection, qr_png};
-use std::io::Write;
+use std::{
+    io::Write,
+    time::{Duration, Instant},
+};
 use uuid::Uuid;
 
 const PAGE_SIZE: usize = 10;
@@ -13,6 +16,8 @@ pub(super) struct LinkDesk {
     qr: Option<(Arc<Vec<u8>>, Arc<gpui::Image>)>,
     building: bool,
     loading: bool,
+    refresh_at: Instant,
+    catalogue_revision: (Option<i64>, Option<i64>),
     error: Option<Key>,
     notice: Option<Key>,
     search: Entity<TextField>,
@@ -21,14 +26,6 @@ pub(super) struct LinkDesk {
 
 impl Root {
     pub(super) fn open_booking_links(&mut self, cx: &mut Context<Self>) {
-        let Some(transport) = self
-            .svc
-            .transport()
-            .filter(|_| self.status.connectivity == Connectivity::Online)
-        else {
-            return;
-        };
-        let session = self.svc.session.clone();
         let search_placeholder = self.t(Key::AssignmentSearch);
         let Some(desk) = self.marketing_desk().filter(|desk| !desk.busy) else {
             return;
@@ -51,12 +48,43 @@ impl Root {
             links: None,
             qr: None,
             building: false,
-            loading: true,
+            loading: false,
+            refresh_at: Instant::now(),
+            catalogue_revision: (None, None),
             error: None,
             notice: None,
             search,
             page: 0,
         });
+        self.refresh_booking_links(true, cx);
+    }
+
+    pub(super) fn refresh_booking_links(&mut self, force: bool, cx: &mut Context<Self>) {
+        if self.status.connectivity != Connectivity::Online {
+            return;
+        }
+        let revision = (
+            self.svc.store.catalog_revision().ok(),
+            self.svc.store.staff_directory_revision().ok(),
+        );
+        let Some(view) = self.booking_links().filter(|view| {
+            !view.loading
+                && (force
+                    || view.catalogue_revision != revision
+                    || view.refresh_at <= Instant::now())
+        }) else {
+            return;
+        };
+        let identity = view.identity.clone();
+        let Some(transport) = self.svc.transport() else {
+            return;
+        };
+        let session = self.svc.session.clone();
+        let Some(view) = self.booking_links() else {
+            return;
+        };
+        view.loading = true;
+        view.catalogue_revision = revision;
         cx.notify();
         cx.spawn(async move |root, cx| {
             let result = cx
@@ -75,12 +103,19 @@ impl Root {
                     return;
                 };
                 view.loading = false;
+                view.refresh_at = Instant::now() + Duration::from_secs(30);
                 match result {
                     Ok(catalog) => {
                         view.catalog = Some(catalog);
                         root.update_booking_link(cx);
                     }
-                    Err(_) => view.error = Some(Key::BookingLinkLoadFailed),
+                    Err(_) => {
+                        view.catalog = None;
+                        view.links = None;
+                        view.qr = None;
+                        view.building = false;
+                        view.error = Some(Key::BookingLinkLoadFailed);
+                    }
                 }
                 cx.notify();
             });
@@ -97,10 +132,18 @@ impl Root {
         let Some(view) = self.booking_links() else {
             return;
         };
+        let current = view.links.as_ref().map(|links| links.book.clone());
         view.links = view
             .catalog
             .as_ref()
             .and_then(|catalog| view.selection.links(&origin, catalog));
+        let next = view.links.as_ref().map(|links| links.book.clone());
+        view.notice = None;
+        view.error = None;
+        if current == next && (view.qr.is_some() || view.building) {
+            cx.notify();
+            return;
+        }
         view.qr = None;
         view.building = false;
         view.notice = None;
@@ -248,7 +291,7 @@ impl Root {
                     "reload-booking-catalog",
                     Key::CatalogReload,
                     Kind::Ghost,
-                    Root::open_booking_links,
+                    |root, cx| root.refresh_booking_links(true, cx),
                     cx,
                 ))
             });
@@ -264,7 +307,7 @@ impl Root {
             .filter(|service| {
                 !service.is_extra()
                     && (filter.is_empty()
-                        || service.name.to_lowercase().contains(&filter)
+                        || service.display_name().to_lowercase().contains(&filter)
                         || service
                             .category
                             .as_ref()
@@ -286,7 +329,7 @@ impl Root {
                         .map(|service| {
                             self.booking_link_chip(
                                 SharedString::from(format!("public-treatment-{}", service.id)),
-                                service.name.clone(),
+                                service.display_name(),
                                 selected.contains(&service.id),
                                 {
                                     let id = service.id;
@@ -326,7 +369,7 @@ impl Root {
                                 .gap_1()
                                 .child(self.booking_link_chip(
                                     SharedString::from(format!("selected-treatment-{}", base.id)),
-                                    base.name.clone(),
+                                    base.display_name(),
                                     true,
                                     {
                                         let id = base.id;
@@ -340,10 +383,7 @@ impl Root {
                                         .iter()
                                         .filter(|extra| {
                                             extra.is_extra()
-                                                && view
-                                                    .selection
-                                                    .compatible_bases(catalog, extra)
-                                                    .contains(&base.id)
+                                                && extra.fits_base(base)
                                                 && (!selected.contains(&extra.id)
                                                     || view
                                                         .selection
@@ -410,9 +450,10 @@ impl Root {
                     )))
                 })
         })
-        .when_some(view.links.as_ref().filter(|_| ready), |body, links| {
-            body.child(self.render_booking_link_output(view, links, cx))
-        })
+        .when_some(
+            view.links.as_ref().filter(|_| ready && !view.loading),
+            |body, links| body.child(self.render_booking_link_output(view, links, cx)),
+        )
     }
 
     fn booking_link_chip(

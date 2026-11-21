@@ -78,7 +78,7 @@ fn desktop_opens_cloud_management_with_the_linked_users_web_session_through_the_
 
 #[test]
 #[ignore = "needs the public web gateway and the synthetic catalogue from smoke-prod.sh"]
-fn native_booking_links_use_the_public_gateway_catalogue() {
+fn native_booking_links_use_public_catalogue_through_the_proxy() {
     use sob_core::booking_links::{Selection, qr_png};
     let device = proxy_device();
     let catalog = device.transport.public_booking_catalog().unwrap();
@@ -90,7 +90,8 @@ fn native_booking_links_use_the_public_gateway_catalogue() {
         .find(|service| !service.is_extra())
         .unwrap();
     assert!(selection.toggle(&catalog, service.id, None));
-    selection.staff = Some(selection.eligible(&catalog).next().unwrap().id);
+    let professional = selection.eligible(&catalog).next().unwrap().id;
+    selection.staff = Some(professional);
     let origin = env("SOB_TEST_API_URL");
     let links = selection.links(&origin, &catalog).unwrap();
     assert_eq!(links.book.path(), "/book");
