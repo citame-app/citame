@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod creation;
 mod options_edit;
+mod portfolio;
 use options_edit::OptionsEditor;
 use sob_core::model::ServiceOption;
 
@@ -231,6 +232,7 @@ pub(super) struct Desk {
     replica: Option<ReviewedCatalog>,
     search: Entity<TextField>,
     editor: Option<Editor>,
+    portfolio: Option<Box<portfolio::Panel>>,
     busy: bool,
     observed: Option<(i64, i64)>,
     retry_at: Option<Instant>,
@@ -367,6 +369,7 @@ impl Root {
                 .then(|| self.svc.store.reviewed_catalogue().ok())
                 .flatten(),
             editor: None,
+            portfolio: None,
             search,
             busy: false,
             observed: None,
@@ -393,6 +396,9 @@ impl Root {
         };
         desk.list = None;
         desk.replica = None;
+        if let Some(portfolio) = &mut desk.portfolio {
+            portfolio.invalidate();
+        }
         desk.observed = None;
         desk.retry_at = None;
         desk.identity = Arc::new(());
@@ -423,6 +429,7 @@ impl Root {
         if !matches!(self.overlay, Overlay::ServiceCatalog(_)) {
             return;
         }
+        self.refresh_catalog_portfolio(reconnected, cx);
         let revision = self.catalog_review_revision();
         let authorized = self.can_create_catalogue_item();
         let Overlay::ServiceCatalog(desk) = &mut self.overlay else {
@@ -735,6 +742,13 @@ impl Root {
         let Overlay::ServiceCatalog(desk) = &mut self.overlay else {
             return;
         };
+        if let Some(portfolio) = &mut desk.portfolio {
+            if portfolio.dismiss() {
+                desk.portfolio = None;
+            }
+            cx.notify();
+            return;
+        }
         if desk.pending_preview.take().is_some() {
             cx.notify();
             return;
@@ -762,6 +776,14 @@ impl Root {
         viewport: gpui::Size<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        if let Some(portfolio) = &desk.portfolio {
+            return self.modal_with_height(
+                self.render_catalog_portfolio(portfolio, cx),
+                (viewport.width - px(32.)).max(px(280.)).min(px(630.)),
+                (viewport.height - px(32.)).max(px(260.)).min(px(740.)),
+                Some(cx),
+            );
+        }
         let online = self.status.connectivity == Connectivity::Online;
         let preview = desk
             .previewed_edit()
@@ -1075,6 +1097,14 @@ impl Root {
                     })
                     .when(editor.creation.is_none(), |body| {
                         body.child(self.render_catalog_team(desk, editor, current_service, cx))
+                            .when(!desk.denied && self.can_create_catalogue_item(), |body| {
+                                body.child(self.button(
+                                    "catalog-service-photos",
+                                    self.t(Key::CatalogPhotos),
+                                    Kind::Ghost,
+                                    cx.listener(|root, _, _, cx| root.open_catalog_portfolio(cx)),
+                                ))
+                            })
                             .when_some(editor.options.as_ref(), |body, options| {
                                 body.child(self.render_existing_options(
                                     editor,

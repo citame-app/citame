@@ -1,0 +1,4 @@
+CREATE CONSTRAINT TRIGGER sync_portfolio_live_view
+AFTER INSERT OR UPDATE OR DELETE ON portfolio_photo
+DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+EXECUTE FUNCTION sync_record_live_view('portfolio');

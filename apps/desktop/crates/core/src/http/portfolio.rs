@@ -3,6 +3,8 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub const PORTFOLIO_LIVE_TOPIC: &str = "portfolio";
+
 const PORTFOLIO: &str = "/admin/portfolio";
 
 #[derive(Clone, Debug, Deserialize)]
@@ -39,7 +41,7 @@ pub struct PortfolioEdit {
 }
 
 impl PortfolioEdit {
-    fn normalized(&self) -> Result<Self, TransportError> {
+    pub fn normalized(&self) -> Result<Self, TransportError> {
         let valid = |value: &str| {
             !value.is_empty() && !value.contains('\0') && value.encode_utf16().count() <= 300
         };

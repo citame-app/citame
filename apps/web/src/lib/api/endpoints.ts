@@ -211,6 +211,7 @@ export function createEndpoints(client: ApiClient) {
             since,
             limit: 200,
             reviewRequests: "1",
+            portfolio: "1",
             intakeViews: "1",
             bookingPolicy: "1",
             resourceCatalogue: "1",

@@ -1038,6 +1038,7 @@ impl Store {
                         | STAFF_DIRECTORY_TOPIC
                         | SERVICE_CATALOG_TOPIC
                         | crate::reviews::LIVE_TOPIC
+                        | crate::http::PORTFOLIO_LIVE_TOPIC
                         | crate::intake::FORM_LIVE_TOPIC
                         | crate::intake::RECORD_LIVE_TOPIC
                         | crate::booking_policy::LIVE_TOPIC

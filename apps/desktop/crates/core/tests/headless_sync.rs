@@ -2177,12 +2177,16 @@ fn native_inventory_documents_survive_restart_and_rebase_a_concurrent_cloud_deli
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_portfolio_keeps_drafts_private_and_rechecks_publication_versions() {
-    use sob_core::http::{PortfolioEdit, PortfolioPublication, PortfolioStatus};
+    use sob_core::http::{
+        PORTFOLIO_LIVE_TOPIC, PortfolioEdit, PortfolioPublication, PortfolioStatus,
+    };
     use sob_core::staff_portrait_image::prepare_photo;
     use uuid::Uuid;
 
     let desktop = proxy_device();
-    let web = Device::sign_in();
+    let mut web = Device::sign_in();
+    web.sync();
+    let revision = web.store.live_view_revision(PORTFOLIO_LIVE_TOPIC).unwrap();
     let service = desktop
         .transport
         .reviewed_catalog()
@@ -2208,6 +2212,8 @@ fn native_portfolio_keeps_drafts_private_and_rechecks_publication_versions() {
         .transport
         .upload_portfolio_photo(key, &input, &jpeg)
         .unwrap();
+    web.sync();
+    assert!(web.store.live_view_revision(PORTFOLIO_LIVE_TOPIC).unwrap() > revision);
     assert_eq!(photo.status, PortfolioStatus::Draft);
     assert_eq!(photo.service_id, Some(service_id));
     assert_eq!(
