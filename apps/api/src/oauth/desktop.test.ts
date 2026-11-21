@@ -14,6 +14,7 @@ import {
   intakeSubmissionSchema,
   intakeSubmissionsSchema,
   listServicesResponseSchema,
+  reviewedSalonSettingsSchema,
   reviewPrivateSchema,
   startedPaymentSchema,
   syncPullResponseSchema,
@@ -78,6 +79,76 @@ async function tokens(role: "owner" | "client" | "staff", emailName: string = ro
 
 const request = (path: string, access: unknown) =>
   t.app.request(path, { headers: { authorization: `Bearer ${String(access)}` } });
+
+test("desktop owner settings share Cloud changes and reject stale edits atomically", async () => {
+  const path = "/admin/settings/desktop";
+  const owner = await tokens("owner", "salon-config-owner");
+  const staff = await tokens("staff", "salon-config-staff");
+  const read = async () =>
+    reviewedSalonSettingsSchema.parse(await (await request(path, owner.access)).json());
+  const native = (expectedRevision: string, changes: unknown, access = owner.access) =>
+    t.app.request(path, {
+      method: "PUT",
+      headers: { authorization: `Bearer ${access}`, "content-type": "application/json" },
+      body: JSON.stringify({ expectedRevision, changes }),
+    });
+  const web = (changes: unknown) =>
+    json(t.app, "/admin/settings", "PATCH", changes, owner.who.cookie);
+  const saved = await read();
+  const changed = saved.minNoticeMinutes === 35 ? 40 : 35;
+  expect((await t.app.request(path)).status).toBe(401);
+  expect((await request(path, staff.access)).status).toBe(403);
+  expect((await native(saved.revision, { minNoticeMinutes: changed }, staff.access)).status).toBe(
+    403,
+  );
+  try {
+    const edited = {
+      onlineBookingEnabled: !saved.onlineBookingEnabled,
+      reminderFirstLeadMinutes: null,
+    };
+    expect(await (await native(saved.revision, edited)).json()).toMatchObject(edited);
+    expect((await native(saved.revision, edited)).status).toBe(200);
+    expect(
+      await (await json(t.app, "/admin/settings", "GET", undefined, owner.who.cookie)).json(),
+    ).toMatchObject(edited);
+    expect((await web({ onlineBookingEnabled: saved.onlineBookingEnabled })).status).toBe(200);
+    const reopened = await read();
+    const retry = await native(saved.revision, edited);
+    expect(retry.status).toBe(409);
+    expect(await retry.json()).toMatchObject({ error: { code: "version_conflict" } });
+    expect(await read()).toEqual(reopened);
+    expect(
+      (
+        await native(saved.revision, {
+          onlineBookingEnabled: saved.onlineBookingEnabled,
+          minNoticeMinutes: changed,
+        })
+      ).status,
+    ).toBe(409);
+    expect(await read()).toEqual(reopened);
+    const accepted = await native(reopened.revision, {
+      minNoticeMinutes: changed,
+      timezone: "europe/madrid",
+    });
+    expect(await accepted.json()).toMatchObject({
+      minNoticeMinutes: changed,
+      onlineBookingEnabled: saved.onlineBookingEnabled,
+      reminderFirstLeadMinutes: null,
+      timezone: "Europe/Madrid",
+    });
+  } finally {
+    expect(
+      (
+        await web({
+          minNoticeMinutes: saved.minNoticeMinutes,
+          onlineBookingEnabled: saved.onlineBookingEnabled,
+          reminderFirstLeadMinutes: saved.reminderFirstLeadMinutes,
+          timezone: saved.timezone,
+        })
+      ).status,
+    ).toBe(200);
+  }
+});
 
 async function assertHostedReceiptPayment(receiptId: string, cookie: string, access: string) {
   const path = `/admin/commerce/checkouts/${receiptId}`;

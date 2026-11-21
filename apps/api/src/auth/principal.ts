@@ -123,6 +123,7 @@ export function requireAuth(
         (path === "/admin/intake-forms" && method === "GET" && c.req.query("view") !== "summary") ||
         !DESKTOP_PROXY_ROUTE.test(path) ||
         (path === "/appointments/desktop-booking" && method !== "POST") ||
+        (path === "/admin/settings/desktop" && method !== "GET" && method !== "PUT") ||
         ([
           "/me",
           "/me/desktop-workspaces",

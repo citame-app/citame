@@ -1,4 +1,9 @@
-import type { OwnerSalonSettings, SalonResponse, UpdateSalonSettingsRequest } from "@sob/contracts";
+import type {
+  OwnerSalonSettings,
+  ReviewedSalonSettings,
+  SalonResponse,
+  UpdateSalonSettingsRequest,
+} from "@sob/contracts";
 import { type Database, salonSettings } from "@sob/db";
 import { eq } from "drizzle-orm";
 import { recordAudit } from "../../audit";
@@ -39,6 +44,14 @@ export function toOwnerSettings(settings: Row): OwnerSalonSettings {
   };
 }
 
+export function toReviewedSettings(settings: Row): ReviewedSalonSettings {
+  return {
+    ...toOwnerSettings(settings),
+    onlineBookingEnabled: settings.onlineBookingEnabled,
+    revision: settings.updatedAt.toISOString(),
+  };
+}
+
 const EDITABLE = [
   "name",
   "timezone",
@@ -56,6 +69,24 @@ export async function updateSalonSettings(
   input: UpdateSalonSettingsRequest,
   actor: { userId: string },
 ): Promise<OwnerSalonSettings> {
+  return toOwnerSettings(await writeSettings(db, input, actor));
+}
+
+export async function updateReviewedSettings(
+  db: Database,
+  input: UpdateSalonSettingsRequest,
+  actor: { userId: string },
+  expectedRevision: string,
+): Promise<ReviewedSalonSettings> {
+  return toReviewedSettings(await writeSettings(db, input, actor, expectedRevision));
+}
+
+async function writeSettings(
+  db: Database,
+  input: UpdateSalonSettingsRequest,
+  actor: { userId: string },
+  expectedRevision?: string,
+) {
   return db.transaction(async (tx) => {
     const current = await getSalonSettings(tx, "update");
     const changes = Object.fromEntries(
@@ -64,10 +95,15 @@ export async function updateSalonSettings(
       ),
     );
     const fields = Object.keys(changes);
-    if (fields.length === 0) return toOwnerSettings(current);
+    if (fields.length === 0) return current;
+    if (expectedRevision && Date.parse(expectedRevision) !== current.updatedAt.getTime())
+      throw new DomainError("version_conflict", "The reviewed settings changed");
     const [updated] = await tx
       .update(salonSettings)
-      .set({ ...changes, updatedAt: new Date() })
+      .set({
+        ...changes,
+        updatedAt: new Date(Math.max(Date.now(), current.updatedAt.getTime() + 1)),
+      })
       .where(eq(salonSettings.id, 1))
       .returning();
     if (!updated) throw new DomainError("internal_error", "Salon settings are not configured");
@@ -78,6 +114,6 @@ export async function updateSalonSettings(
       entityId: "1",
       metadata: { fields },
     });
-    return toOwnerSettings(updated);
+    return updated;
   });
 }

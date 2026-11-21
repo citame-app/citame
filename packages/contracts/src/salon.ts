@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { instantSchema } from "./common";
 import { reminderLeadSchema } from "./notifications";
 
 /** Public salon information: what the booking flow needs to render dates and limits. */
@@ -45,20 +46,27 @@ export type UpdateProfileRequest = z.infer<typeof updateProfileRequestSchema>;
 /** Slot grids the salon can pick from, in minutes. */
 export const SLOT_GRANULARITIES = [5, 10, 15, 20, 30, 60];
 
-const isTimeZone = (value: string) => {
-  try {
-    new Intl.DateTimeFormat("en", { timeZone: value });
-    return true;
-  } catch {
-    return false;
-  }
-};
+const ianaTimeZoneSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .transform((value, ctx) => {
+    try {
+      if (/^[A-Za-z]/.test(value)) {
+        return new Intl.DateTimeFormat("en", { timeZone: value }).resolvedOptions().timeZone;
+      }
+    } catch {
+      // Report invalid identifiers through the shared request schema.
+    }
+    ctx.addIssue({ code: "custom", message: "Unknown IANA timezone" });
+    return z.NEVER;
+  });
 
 /** Owner-only edit of the single salon settings row. Every field is optional. */
 export const updateSalonSettingsRequestSchema = z
   .object({
     name: z.string().trim().min(1).max(120),
-    timezone: z.string().trim().min(1).refine(isTimeZone, "Unknown IANA timezone"),
+    timezone: ianaTimeZoneSchema,
     /** Offered start times are multiples of this many minutes. */
     slotGranularityMinutes: z
       .number()
@@ -80,3 +88,14 @@ export const updateSalonSettingsRequestSchema = z
     path: ["name"],
   });
 export type UpdateSalonSettingsRequest = z.infer<typeof updateSalonSettingsRequestSchema>;
+
+export const reviewedSalonSettingsSchema = ownerSalonSettingsSchema
+  .required({ onlineBookingEnabled: true })
+  .extend({ revision: instantSchema });
+export type ReviewedSalonSettings = z.infer<typeof reviewedSalonSettingsSchema>;
+
+/** Native edits are conditional on the settings revision reviewed by the owner. */
+export const reviewedSalonSettingsRequestSchema = z.strictObject({
+  expectedRevision: instantSchema,
+  changes: updateSalonSettingsRequestSchema,
+});

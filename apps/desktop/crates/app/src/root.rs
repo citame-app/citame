@@ -49,6 +49,7 @@ mod notices;
 mod reports;
 mod review_moderation;
 mod reviews;
+mod salon_configuration;
 mod scrollbar;
 mod settlement;
 mod slots;
@@ -238,6 +239,7 @@ struct ConflictDraft {
 enum Overlay {
     None,
     Cloud(workspaces::CloudDesk),
+    SalonConfiguration(Box<salon_configuration::Desk>),
     IntakeForms(Box<form_admin::Desk>),
     New(Box<NewForm>),
     Slot(slots::SelectedSlot),
@@ -674,6 +676,9 @@ impl Root {
             cx.notify();
         }
         self.refresh_unpaid_if_changed(reconnected, cx);
+        if self.status.connectivity == Connectivity::Online {
+            self.refresh_salon_configuration(reconnected, cx);
+        }
         if reconnected {
             self.refresh_weekly_conflicts_if_ready(cx);
             self.refresh_open_annotations(true, cx);
@@ -2353,6 +2358,7 @@ impl Root {
                 return;
             }
             Overlay::IntakeForms(_) => self.close_intake_forms(cx),
+            Overlay::SalonConfiguration(_) => self.close_salon_configuration(cx),
             Overlay::Directory(desk) if desk.intake.is_some() => self.back_record(cx),
             Overlay::ReviewModeration(desk) => {
                 if !desk.dismiss_editor(cx) {
@@ -3521,6 +3527,9 @@ impl Render for Root {
                         Overlay::None => None,
                         Overlay::Cloud(desk) => {
                             Some(self.render_web_management(desk, window.viewport_size(), cx))
+                        }
+                        Overlay::SalonConfiguration(desk) => {
+                            Some(self.render_salon_configuration(desk, window.viewport_size(), cx))
                         }
                         Overlay::IntakeForms(desk) => {
                             Some(self.render_intake_forms(desk, window.viewport_size(), cx))

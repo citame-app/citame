@@ -205,6 +205,14 @@ impl Root {
                         Kind::Primary,
                         cx.listener(|root, _, _, cx| root.open_web_workspace(None, cx)),
                     ))
+                    .when(self.can_configure_salon(), |links| {
+                        links.child(self.button(
+                            "salon-configuration",
+                            self.t(Key::SalonConfiguration),
+                            Kind::Ghost,
+                            cx.listener(|root, _, _, cx| root.open_salon_configuration(cx)),
+                        ))
+                    })
                     .children(desk.areas.iter().flatten().enumerate().filter_map(
                         |(index, area)| {
                             let area = *area;

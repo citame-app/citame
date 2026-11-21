@@ -57,9 +57,14 @@ mod weekly_hours;
 pub use weekly_hours::{WeeklyHours, WeeklyRange, parse_weekly_hours};
 mod date_shifts;
 mod intake_records;
+mod salon_configuration;
 pub use date_shifts::{
     DatedShiftConflict, DatedShiftConflictReason, DatedShiftCopy, DatedShiftDay, DatedShiftEdit,
     DatedShiftReview, DatedShiftSelection, ReviewedDatedShift,
+};
+pub use salon_configuration::{
+    ReviewedSalonConfiguration, SALON_SLOT_STEPS, SalonConfiguration, SalonConfigurationDraft,
+    SalonConfigurationWrite, SalonWriteResult,
 };
 
 /// The stream is reconnected at least this often. ureq bounds the whole body, not each read,
