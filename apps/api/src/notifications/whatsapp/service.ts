@@ -144,7 +144,9 @@ export async function updateWhatsAppRules(
     ? mapRules(rules, await listTemplates(config, connection, request))
     : [];
   return db.transaction(async (tx) => {
-    if (!(await tryLockWhatsAppConnection(tx, "shared"))) throw changed();
+    await tx.execute(
+      sql`select pg_advisory_xact_lock_shared(hashtext('citame.whatsapp.connection'))`,
+    );
     await lockScheduling(tx);
     const current = await readConnection(tx, "update");
     if (!current || senderRevision(current) !== loadedRevision) throw changed();
@@ -173,17 +175,11 @@ export async function updateWhatsAppRules(
   });
 }
 
-async function tryLockWhatsAppConnection(tx: Tx, mode: "shared" | "exclusive") {
-  const lock = mode === "shared" ? "pg_try_advisory_xact_lock_shared" : "pg_try_advisory_xact_lock";
-  const [result] = await tx.execute<{ locked: boolean }>(
-    sql`select ${sql.identifier(lock)}(hashtext('citame.whatsapp.connection')) as locked`,
-  );
-  return result?.locked === true;
-}
-
 async function lockWhatsAppConnection(tx: Tx) {
-  if (!(await tryLockWhatsAppConnection(tx, "exclusive")))
-    throw new DomainError("invalid_state", "Ya hay una conexión en curso.");
+  const [lock] = await tx.execute<{ locked: boolean }>(
+    sql`select pg_try_advisory_xact_lock(hashtext('citame.whatsapp.connection')) as locked`,
+  );
+  if (!lock?.locked) throw new DomainError("invalid_state", "Ya hay una conexión en curso.");
 }
 
 // Compaction retains the latest entry per topic. Its position distinguishes disconnected periods.
