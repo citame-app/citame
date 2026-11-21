@@ -28,7 +28,6 @@ import { orderRequests, type PendingOrder, receiptRequests } from "./inventory-r
 
 type Editor = { id: string; generation: string; order?: PurchaseOrder };
 const statuses = purchaseOrderStatusSchema.options;
-const orderActions = ["order", "cancel"] as const;
 
 function pendingReceipt(userId: string, orderId: string) {
   try {
@@ -60,7 +59,7 @@ export function InventoryOrders({
   const [receive, setReceive] = useState<PurchaseOrder | null>(null);
   const [confirm, setConfirm] = useState<{
     order: PurchaseOrder;
-    action: (typeof orderActions)[number];
+    action: "order" | "cancel";
   } | null>(null);
   const storageKey = userId ? `citame:purchase-order:${encodeURIComponent(userId)}` : null;
   const [request, setRequest] = useState<{ pending: PendingOrder | null; failed: boolean }>({

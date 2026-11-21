@@ -56,16 +56,16 @@ export function SocialCreative({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>();
   const [feedback, setFeedback] = useState<"copied" | "copyError" | "download">();
-  const generation = useRef(0);
-  const mounted = useRef(true);
+  const activity = useRef({ generation: 0, mounted: true });
   useEffect(() => {
     setOrigin(origin ?? window.location.origin);
   }, [origin]);
   useEffect(() => {
-    mounted.current = true;
+    const current = activity.current;
+    current.mounted = true;
     return () => {
-      mounted.current = false;
-      generation.current++;
+      current.mounted = false;
+      current.generation++;
     };
   }, []);
   const promotions = useQuery({
@@ -125,7 +125,7 @@ export function SocialCreative({
   ]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: a changed source/options tuple invalidates the reviewed preview and pending render.
   useEffect(() => {
-    generation.current++;
+    activity.current.generation++;
     setPreview(undefined);
     setReviewed(false);
     setError(undefined);
@@ -163,7 +163,8 @@ export function SocialCreative({
     setReviewed(false);
   }
   async function prepare() {
-    const ticket = ++generation.current;
+    const current = activity.current;
+    const ticket = ++current.generation;
     setBusy(true);
     setError(undefined);
     setFeedback(undefined);
@@ -179,29 +180,30 @@ export function SocialCreative({
         format,
         palette,
       });
-      if (mounted.current && generation.current === ticket)
+      if (current.mounted && current.generation === ticket)
         setPreview({ ...image, source, signature: creativeSourceSignature(source) });
     } catch (reason) {
-      if (mounted.current && generation.current === ticket) failed(reason);
+      if (current.mounted && current.generation === ticket) failed(reason);
     } finally {
-      if (mounted.current && generation.current === ticket) setBusy(false);
+      if (current.mounted && current.generation === ticket) setBusy(false);
     }
   }
   async function exportContent(action: "png" | "caption" | "copy") {
     if (!preview || !reviewed) return;
-    const ticket = ++generation.current;
+    const current = activity.current;
+    const ticket = ++current.generation;
     setBusy(true);
     setError(undefined);
     setFeedback(undefined);
     let clipboardAttempted = false;
     try {
       const source = await freshSource(preview.source);
-      if (!mounted.current || generation.current !== ticket) return;
+      if (!current.mounted || current.generation !== ticket) return;
       if (creativeSourceSignature(source) !== preview.signature) throw new CreativeStaleError();
       if (action === "copy") {
         clipboardAttempted = true;
         await navigator.clipboard.writeText(preview.caption);
-        if (mounted.current && generation.current === ticket) setFeedback("copied");
+        if (current.mounted && current.generation === ticket) setFeedback("copied");
       } else {
         const url =
           action === "png"
@@ -217,7 +219,7 @@ export function SocialCreative({
         setFeedback("download");
       }
     } catch (reason) {
-      if (mounted.current && generation.current === ticket) {
+      if (current.mounted && current.generation === ticket) {
         if (
           action === "copy" &&
           clipboardAttempted &&
@@ -229,7 +231,7 @@ export function SocialCreative({
         else failed(reason);
       }
     } finally {
-      if (mounted.current && generation.current === ticket) setBusy(false);
+      if (current.mounted && current.generation === ticket) setBusy(false);
     }
   }
   const errorText =

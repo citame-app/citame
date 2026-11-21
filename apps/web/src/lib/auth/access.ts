@@ -37,8 +37,9 @@ export function safeRedirect(target: string | undefined, fallback = "/"): string
   if (!target) return fallback;
   if (!target.startsWith("/") || target.startsWith("//") || target.startsWith("/\\"))
     return fallback;
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point
-  if (/[\u0000-\u001f]/.test(safeDecode(target))) return fallback;
+  for (const character of safeDecode(target)) {
+    if (character.charCodeAt(0) < 32) return fallback;
+  }
   const path = target.split("?")[0] ?? "";
   if (AUTH_PATHS.includes(path)) return fallback;
   return target;

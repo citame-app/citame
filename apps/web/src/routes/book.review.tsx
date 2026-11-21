@@ -2,7 +2,7 @@ import { needsFinalPrice } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router";
 import { useStore } from "@tanstack/react-store";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { buttonClasses } from "~/components/ui/button";
 import { ErrorState } from "~/components/ui/states";
 import { useToast } from "~/components/ui/toast";
@@ -248,10 +248,13 @@ function SingleReviewStep() {
   });
 
   const intakeSelection = JSON.stringify(intake.payload);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reset only a stale-form error when the reviewed form selection changes
-  useEffect(() => {
+  const clearIntakeError = useEffectEvent(() => {
     if (confirm.error instanceof ApiError && confirm.error.code === "intake_required")
       confirm.reset();
+  });
+  // biome-ignore lint/correctness/useExhaustiveDependencies: form changes invalidate the earlier validation result.
+  useEffect(() => {
+    clearIntakeError();
   }, [intakeSelection]);
 
   function onCta() {
