@@ -17,7 +17,9 @@ use crate::billing::{
     PassRefundQuote, PaymentAttempt, ReceiptTender, RefundAttempt, RefundTender, SavedBankRefund,
     SavedBankRefundStatus, WalkInSale,
 };
-use crate::booking::{BookingError, BookingTerms, ReviewedBooking};
+use crate::booking::{
+    BookingError, BookingTerms, ReviewedBooking, ReviewedSeries, SeriesPacket, SeriesPreview,
+};
 use crate::booking_policy::{PolicyWriteError, ReviewedBookingPolicy};
 use crate::intake::{
     AdminForm, AdminFormSummary, AdminForms, FormWrite, FormWriteError, IntakeRequirements,
@@ -1891,32 +1893,43 @@ impl HttpTransport {
         booking: &ReviewedBooking,
     ) -> Result<BookedAppointment, BookingError> {
         let response = self.send_json("/appointments/desktop-booking", booking)?;
-        let result: BookedAppointment =
-            read_response_with(response, |status, retry_after, body| {
-                let error = serde_json::from_str::<serde_json::Value>(body).ok();
-                let code = error
-                    .as_ref()
-                    .and_then(|err| err.pointer("/error/code"))
-                    .and_then(serde_json::Value::as_str);
-                match (status, code) {
-                    (409, Some("intake_required")) => BookingError::IntakeChanged,
-                    (409, Some("slot_taken" | "slot_unavailable")) => BookingError::SlotUnavailable,
-                    (409, Some("version_conflict")) => BookingError::CatalogueChanged,
-                    (409, Some("booking_intent_conflict")) => BookingError::IntentConflict,
-                    (401, Some("unauthorized"))
-                    | (403, Some("forbidden"))
-                    | (404, Some("not_found")) => BookingError::AccessChanged,
-                    (400, Some("validation_error"))
-                    | (409, Some("invalid_state" | "client_merged" | "storage_limit")) => {
-                        BookingError::Rejected
-                    }
-                    _ => classify_status(status, retry_after, body, false).into(),
-                }
-            })?;
+        let result: BookedAppointment = read_response_with(response, classify_booking_error)?;
         if !booking.matches(&result.id, result.starts_at) {
             return Err(TransportError::Server("Unexpected booking acknowledgement".into()).into());
         }
         Ok(result)
+    }
+
+    pub fn preview_booking_series(
+        &self,
+        packet: &SeriesPacket,
+    ) -> Result<SeriesPreview, BookingError> {
+        let response = self.send_json("/appointments/desktop-series/preview", packet)?;
+        let preview: SeriesPreview = read_response_with(response, classify_booking_error)?;
+        if preview.occurrences.len() != packet.count()
+            || preview.timezone.parse::<chrono_tz::Tz>().is_err()
+        {
+            return Err(TransportError::Server("Unexpected series preview".into()).into());
+        }
+        Ok(preview)
+    }
+
+    pub fn create_reviewed_series(
+        &self,
+        packet: &ReviewedSeries,
+    ) -> Result<chrono::DateTime<chrono::Utc>, BookingError> {
+        #[derive(serde::Deserialize)]
+        struct Series {
+            appointments: Vec<BookedAppointment>,
+        }
+        let response = self.send_json("/appointments/desktop-series", packet)?;
+        let series: Series = read_response_with(response, classify_booking_error)?;
+        series
+            .appointments
+            .into_iter()
+            .next()
+            .map(|first| first.starts_at)
+            .ok_or_else(|| TransportError::Server("Empty series acknowledgement".into()).into())
     }
 
     fn post_json<T: serde::de::DeserializeOwned>(
@@ -1990,6 +2003,28 @@ fn error_message(body: &str) -> String {
 }
 
 /// Maps an error response to the protocol's error table.
+fn classify_booking_error(status: u16, retry_after: Option<&str>, body: &str) -> BookingError {
+    let error = serde_json::from_str::<serde_json::Value>(body).ok();
+    let code = error
+        .as_ref()
+        .and_then(|err| err.pointer("/error/code"))
+        .and_then(serde_json::Value::as_str);
+    match (status, code) {
+        (409, Some("intake_required")) => BookingError::IntakeChanged,
+        (409, Some("slot_taken" | "slot_unavailable")) => BookingError::SlotUnavailable,
+        (409, Some("version_conflict")) => BookingError::CatalogueChanged,
+        (409, Some("booking_intent_conflict")) => BookingError::IntentConflict,
+        (401, Some("unauthorized")) | (403, Some("forbidden")) | (404, Some("not_found")) => {
+            BookingError::AccessChanged
+        }
+        (400, Some("validation_error"))
+        | (409, Some("invalid_state" | "client_merged" | "storage_limit")) => {
+            BookingError::Rejected
+        }
+        _ => classify_status(status, retry_after, body, false).into(),
+    }
+}
+
 pub fn classify_status(
     status: u16,
     retry_after: Option<&str>,

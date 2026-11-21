@@ -1,6 +1,6 @@
 //! Online booking with a reviewed appointment and intake kept outside the outbox.
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::error::{CoreError, Result};
@@ -17,11 +17,18 @@ pub struct BookingTerms {
     #[serde(rename = "desktopGeneration")]
     generation: String,
     id: String,
+    #[serde(flatten)]
+    fields: BookingFields,
+    #[serde(skip_serializing)]
+    reviewed_services: Vec<AppointmentService>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BookingFields {
     staff_id: String,
     service_ids: Vec<String>,
     service_quotes: BTreeMap<String, String>,
-    #[serde(skip_serializing)]
-    reviewed_services: Vec<AppointmentService>,
     starts_at: DateTime<Utc>,
     #[serde(flatten)]
     client: BookingClient,
@@ -55,11 +62,71 @@ struct Contact {
 pub struct ReviewedBooking {
     #[serde(flatten)]
     terms: BookingTerms,
+    #[serde(flatten)]
+    forms: ReviewedForms,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewedForms {
     intake_review_hash: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     intake_submission_ids: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     intake_responses: Vec<IntakeResponse>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Cadence {
+    Weekly,
+    Monthly,
+}
+
+#[derive(Clone, Copy, Serialize)]
+pub struct Recurrence {
+    pub cadence: Cadence,
+    pub interval: u8,
+    pub count: u8,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesPacket {
+    desktop_generation: String,
+    #[serde(flatten)]
+    fields: BookingFields,
+    #[serde(flatten)]
+    forms: ReviewedForms,
+    #[serde(flatten)]
+    recurrence: Recurrence,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesPreview {
+    pub review_hash: String,
+    pub timezone: String,
+    pub per_visit_cents: i64,
+    pub currency: String,
+    pub occurrences: Vec<SeriesOccurrence>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesOccurrence {
+    pub starts_at: DateTime<Utc>,
+    pub ends_at: DateTime<Utc>,
+    pub available: bool,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewedSeries {
+    #[serde(flatten)]
+    packet: SeriesPacket,
+    review_hash: String,
+    idempotency_key: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -113,28 +180,30 @@ impl BookingTerms {
         Ok(Self {
             generation,
             id: uuid::Uuid::now_v7().to_string(),
-            staff_id: new.staff_id,
-            service_ids: new.service_ids,
-            service_quotes,
             reviewed_services,
-            starts_at: new.starts_at,
-            client,
-            notes: new.notes,
-            override_notice: new.override_notice.then_some(true),
+            fields: BookingFields {
+                staff_id: new.staff_id,
+                service_ids: new.service_ids,
+                service_quotes,
+                starts_at: new.starts_at,
+                client,
+                notes: new.notes,
+                override_notice: new.override_notice.then_some(true),
+            },
         })
     }
 
     pub fn service_ids(&self) -> &[String] {
-        &self.service_ids
+        &self.fields.service_ids
     }
     pub fn client_id(&self) -> Option<&str> {
-        match &self.client {
+        match &self.fields.client {
             BookingClient::Existing { id } => Some(id),
             BookingClient::Inline { .. } => None,
         }
     }
     pub fn starts_at(&self) -> DateTime<Utc> {
-        self.starts_at
+        self.fields.starts_at
     }
     pub fn generation(&self) -> &str {
         &self.generation
@@ -143,16 +212,19 @@ impl BookingTerms {
         &self.reviewed_services
     }
     pub fn matches_service_quote(&self, id: &str, displayed_quote: &str) -> bool {
-        self.service_quotes
+        self.fields
+            .service_quotes
             .get(id)
             .is_some_and(|quote| quote == displayed_quote)
     }
     pub fn reviewed(&self, review_hash: String, intake: IntakeSelection) -> ReviewedBooking {
         ReviewedBooking {
             terms: self.clone(),
-            intake_review_hash: review_hash,
-            intake_submission_ids: intake.saved,
-            intake_responses: intake.inline,
+            forms: ReviewedForms {
+                intake_review_hash: review_hash,
+                intake_submission_ids: intake.saved,
+                intake_responses: intake.inline,
+            },
         }
     }
 }
@@ -164,6 +236,35 @@ impl ReviewedBooking {
     }
 
     pub(crate) fn matches(&self, id: &str, starts_at: DateTime<Utc>) -> bool {
-        self.terms.id == id && self.terms.starts_at == starts_at
+        self.terms.id == id && self.terms.starts_at() == starts_at
+    }
+
+    pub fn series(&self, recurrence: Recurrence) -> SeriesPacket {
+        SeriesPacket {
+            desktop_generation: self.terms.generation.clone(),
+            fields: self.terms.fields.clone(),
+            forms: self.forms.clone(),
+            recurrence,
+        }
+    }
+}
+
+impl SeriesPacket {
+    pub fn review(self, preview: &SeriesPreview) -> ReviewedSeries {
+        ReviewedSeries {
+            packet: self,
+            review_hash: preview.review_hash.clone(),
+            idempotency_key: uuid::Uuid::now_v7().to_string(),
+        }
+    }
+
+    pub(crate) fn count(&self) -> usize {
+        self.recurrence.count.into()
+    }
+}
+
+impl ReviewedSeries {
+    pub fn generation(&self) -> &str {
+        &self.packet.desktop_generation
     }
 }

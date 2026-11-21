@@ -1,7 +1,15 @@
 use super::intake_editor::{self, IntakeDraft};
 use super::*;
-use sob_core::booking::{BookingError, BookingTerms, ReviewedBooking};
+use sob_core::booking::{
+    BookingError, BookingTerms, Cadence, Recurrence, ReviewedBooking, ReviewedSeries, SeriesPreview,
+};
 use sob_core::sync::TransportError;
+
+#[derive(Clone)]
+enum BookingAttempt {
+    Single(ReviewedBooking),
+    Series(ReviewedSeries),
+}
 
 pub(super) struct BookingReview {
     identity: Arc<()>,
@@ -9,7 +17,8 @@ pub(super) struct BookingReview {
     service_summary: Vec<String>,
     forms: Vec<IntakeDraft>,
     review_hash: Option<String>,
-    submitted: Option<ReviewedBooking>,
+    submitted: Option<BookingAttempt>,
+    series: Option<(SeriesPreview, ReviewedSeries)>,
     busy: bool,
     restored: bool,
     confirm_exit: bool,
@@ -28,14 +37,133 @@ impl BookingReview {
 }
 
 impl Root {
+    pub(super) fn render_recurrence(
+        &self,
+        recurrence: Option<Recurrence>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let choices = [
+            (None, Key::SeriesOnce),
+            (Some(Cadence::Weekly), Key::SeriesWeekly),
+            (Some(Cadence::Monthly), Key::SeriesMonthly),
+        ];
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(self.label(Key::SeriesRepeat))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .children(
+                        choices
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, (cadence, key))| {
+                                self.chip(
+                                    ("series-cadence", index),
+                                    SharedString::from(self.t(key)),
+                                    recurrence.map(|value| value.cadence) == cadence,
+                                    cx.listener(move |root, _, _, cx| {
+                                        if let Overlay::New(form) = &mut root.overlay {
+                                            form.recurrence = cadence.map(|cadence| Recurrence {
+                                                cadence,
+                                                interval: form.recurrence.map_or(1, |r| r.interval),
+                                                count: form.recurrence.map_or(2, |r| r.count),
+                                            });
+                                            form.error = None;
+                                        }
+                                        cx.notify();
+                                    }),
+                                )
+                                .tab_index(0)
+                                .focus(|style| style.border_color(theme::text()))
+                            }),
+                    ),
+            )
+            .when_some(recurrence, |panel, r| {
+                panel
+                    .child(self.series_number(Some(r.cadence), r.interval, cx))
+                    .child(self.series_number(None, r.count, cx))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme::muted())
+                            .child(self.t(Key::SeriesOffline)),
+                    )
+            })
+    }
+
+    fn series_number(
+        &self,
+        cadence: Option<Cadence>,
+        value: u8,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let interval = cadence.is_some();
+        let minimum = if interval { 1 } else { 2 };
+        let prefix = if interval {
+            "series-interval"
+        } else {
+            "series-count"
+        };
+        let key = match cadence {
+            Some(Cadence::Weekly) => Key::SeriesIntervalWeeks,
+            Some(Cadence::Monthly) => Key::SeriesIntervalMonths,
+            None => Key::SeriesCount,
+        };
+        let mut row = div()
+            .flex()
+            .gap_2()
+            .items_center()
+            .child(self.label(key))
+            .child(value.to_string());
+        for (index, (delta, label, enabled)) in [(-1, "−", value > minimum), (1, "+", value < 12)]
+            .into_iter()
+            .enumerate()
+        {
+            if enabled {
+                row = row.child(
+                    self.button(
+                        (prefix, index),
+                        label,
+                        Kind::Ghost,
+                        cx.listener(move |root, _, _, cx| {
+                            if let Overlay::New(form) = &mut root.overlay
+                                && let Some(series) = &mut form.recurrence
+                            {
+                                let value = if interval {
+                                    &mut series.interval
+                                } else {
+                                    &mut series.count
+                                };
+                                *value = value.saturating_add_signed(delta).clamp(minimum, 12);
+                                form.error = None;
+                                cx.notify();
+                            }
+                        }),
+                    )
+                    .tab_index(0)
+                    .focus(|style| style.border_color(theme::text())),
+                );
+            }
+        }
+        row
+    }
+
     pub(super) fn editable_intake_forms(&mut self) -> Option<&mut Vec<IntakeDraft>> {
         match &mut self.overlay {
             Overlay::Waitlist(desk) => desk.editable_intake(),
             Overlay::Directory(desk) => desk.intake.as_mut()?.editable(),
             Overlay::New(form) => {
                 let review = form.intake.as_mut()?;
-                (!review.busy && review.submitted.is_none() && review.review_hash.is_some())
-                    .then_some(&mut review.forms)
+                (!review.busy
+                    && review.submitted.is_none()
+                    && review.series.is_none()
+                    && review.review_hash.is_some())
+                .then_some(&mut review.forms)
             }
             _ => None,
         }
@@ -77,6 +205,7 @@ impl Root {
             forms: Vec::new(),
             review_hash: None,
             submitted: None,
+            series: None,
             busy: false,
             restored: false,
             confirm_exit: false,
@@ -107,6 +236,7 @@ impl Root {
         let session = self.svc.session.clone();
         review.busy = true;
         review.review_hash = None;
+        review.series = None;
         form.error = None;
         cx.notify();
         cx.spawn(async move |view, cx| {
@@ -177,10 +307,37 @@ impl Root {
         else {
             return;
         };
-        let Some(packet) = review.submitted.clone().or_else(|| review.packet(cx)) else {
+        let packet = review.submitted.clone().or_else(|| {
+            if form.recurrence.is_some() {
+                let (preview, series) = review.series.as_ref()?;
+                preview
+                    .occurrences
+                    .iter()
+                    .all(|visit| visit.available)
+                    .then(|| BookingAttempt::Series(series.clone()))
+            } else {
+                review.packet(cx).map(BookingAttempt::Single)
+            }
+        });
+        let Some(packet) = packet else {
+            if form.recurrence.is_some() && review.submitted.is_none() {
+                self.preview_booking_series(cx);
+            }
             return;
         };
-        if let Err(error) = packet.mark_local_dispatch(&mut self.svc.store) {
+        let checked = match &packet {
+            BookingAttempt::Single(packet) => packet.mark_local_dispatch(&mut self.svc.store),
+            BookingAttempt::Series(packet) => self
+                .svc
+                .store
+                .verified_reviewed_generation()
+                .and_then(|generation| {
+                    (generation == packet.generation())
+                        .then_some(())
+                        .ok_or(CoreError::CalendarGenerationChanged)
+                }),
+        };
+        if let Err(error) = checked {
             if matches!(error, CoreError::CalendarGenerationChanged) {
                 review.submitted = None;
                 review.restored = true;
@@ -203,7 +360,14 @@ impl Root {
         cx.spawn(async move |view, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { transport.create_reviewed_booking(&packet) })
+                .spawn(async move {
+                    match packet {
+                        BookingAttempt::Single(packet) => transport
+                            .create_reviewed_booking(&packet)
+                            .map(|saved| saved.starts_at),
+                        BookingAttempt::Series(packet) => transport.create_reviewed_series(&packet),
+                    }
+                })
                 .await;
             let _ = view.update(cx, |root, cx| {
                 if !Arc::ptr_eq(&session, &root.svc.session) || root.svc.current_session().is_none()
@@ -225,18 +389,25 @@ impl Root {
                 };
                 review.busy = false;
                 match result {
-                    Ok(saved) => {
-                        root.finish_new_booking(saved.starts_at, cx);
+                    Ok(starts_at) => {
+                        root.finish_new_booking(starts_at, cx);
                         return;
                     }
                     Err(BookingError::IntakeChanged) => {
                         review.submitted = None;
                         review.review_hash = None;
+                        review.series = None;
                         form.error = Some(Key::WaitlistFormsChanged);
                     }
                     Err(BookingError::SlotUnavailable) => {
-                        form.intake = None;
-                        form.error = Some(Key::ConflictSlotTaken);
+                        if form.recurrence.is_some() {
+                            review.submitted = None;
+                            review.series = None;
+                            form.error = Some(Key::SeriesSlotChanged);
+                        } else {
+                            form.intake = None;
+                            form.error = Some(Key::ConflictSlotTaken);
+                        }
                     }
                     Err(BookingError::CatalogueChanged) => {
                         form.intake = None;
@@ -263,9 +434,85 @@ impl Root {
                     }
                     Err(BookingError::Rejected) => {
                         review.submitted = None;
+                        review.series = None;
                         form.error = Some(Key::BookingIntakeRejected);
                     }
                     Err(_) => form.error = Some(Key::BookingIntakeUnconfirmed),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn preview_booking_series(&mut self, cx: &mut Context<Self>) {
+        let Some(transport) = self
+            .svc
+            .transport()
+            .filter(|_| self.status.connectivity == Connectivity::Online)
+        else {
+            return;
+        };
+        let Overlay::New(form) = &mut self.overlay else {
+            return;
+        };
+        let (Some(recurrence), Some(review)) = (form.recurrence, &mut form.intake) else {
+            return;
+        };
+        if review.busy || review.restored || review.submitted.is_some() {
+            return;
+        }
+        let Some(packet) = review.packet(cx).map(|packet| packet.series(recurrence)) else {
+            return;
+        };
+        review.series = None;
+        review.busy = true;
+        form.error = None;
+        let identity = review.identity.clone();
+        let session = self.svc.session.clone();
+        cx.notify();
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    transport.preview_booking_series(&packet).map(|preview| {
+                        let reviewed = packet.review(&preview);
+                        (preview, reviewed)
+                    })
+                })
+                .await;
+            let _ = view.update(cx, |root, cx| {
+                if !Arc::ptr_eq(&session, &root.svc.session) || root.svc.current_session().is_none()
+                {
+                    return;
+                }
+                let Overlay::New(form) = &mut root.overlay else {
+                    return;
+                };
+                let Some(review) = form
+                    .intake
+                    .as_mut()
+                    .filter(|review| Arc::ptr_eq(&review.identity, &identity))
+                else {
+                    return;
+                };
+                review.busy = false;
+                match result {
+                    Ok(series) => review.series = Some(series),
+                    Err(BookingError::CatalogueChanged) => {
+                        form.intake = None;
+                        form.error = Some(Key::ErrRefreshCatalog);
+                        root.svc.wake(Wake::Manual);
+                    }
+                    Err(BookingError::Transport(TransportError::ReplicaGenerationChanged)) => {
+                        review.restored = true;
+                        form.error = Some(Key::BookingIntakeRestore);
+                        root.svc.wake(Wake::Manual);
+                    }
+                    Err(BookingError::AccessChanged) => {
+                        form.error = Some(Key::BookingIntakeAccessChanged)
+                    }
+                    Err(_) => form.error = Some(Key::SeriesPreviewFailed),
                 }
                 cx.notify();
             });
@@ -313,13 +560,54 @@ impl Root {
                 .iter()
                 .map(|summary| div().text_sm().child(summary.clone())),
         );
-        if !awaiting && review.review_hash.is_some() && !review.restored && !review.busy {
+        if !awaiting
+            && review.series.is_none()
+            && review.review_hash.is_some()
+            && !review.restored
+            && !review.busy
+        {
             for draft in &review.forms {
                 body = body.child(self.render_intake_form(draft, cx));
             }
         }
         if review.busy {
-            body = body.child(self.t(Key::WaitlistLoading));
+            body = body.child(self.t(Key::SeriesWorking));
+        }
+        if let Some((preview, _)) = &review.series {
+            let tz = preview.timezone.parse().unwrap_or(self.tz);
+            let price = self.amount_label(preview.per_visit_cents, &preview.currency);
+            body = body.child(i18n::fill(self.t(Key::SeriesPrice), &[("price", &price)]));
+            body = body.children(preview.occurrences.iter().map(|visit| {
+                let local = visit.starts_at.with_timezone(&tz);
+                let end = visit.ends_at.with_timezone(&tz);
+                let date = i18n::date_label(self.locale, local.date_naive());
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .justify_between()
+                    .gap_2()
+                    .p_2()
+                    .rounded_md()
+                    .bg(theme::bg())
+                    .child(format!(
+                        "{date} · {}–{}",
+                        local.format("%H:%M"),
+                        end.format("%H:%M")
+                    ))
+                    .child(
+                        div()
+                            .text_color(if visit.available {
+                                theme::muted()
+                            } else {
+                                theme::conflict_fg()
+                            })
+                            .child(self.t(if visit.available {
+                                Key::SeriesAvailable
+                            } else {
+                                Key::SeriesUnavailable
+                            })),
+                    )
+            }));
         }
         let mut actions = div().flex_none().flex().flex_wrap().gap_2();
         if !awaiting {
@@ -363,12 +651,28 @@ impl Root {
                     .focus(|style| style.border_color(theme::text())),
                 );
             }
-            if awaiting || review.packet(cx).is_some() {
+            if !awaiting && review.series.is_some() {
+                actions = actions.child(self.button(
+                    "booking-series-refresh",
+                    self.t(Key::SeriesRefresh),
+                    Kind::Ghost,
+                    cx.listener(|root, _, _, cx| root.preview_booking_series(cx)),
+                ));
+            }
+            let ready = match &review.series {
+                Some((preview, _)) => preview.occurrences.iter().all(|visit| visit.available),
+                None => review.packet(cx).is_some(),
+            };
+            if awaiting || ready {
                 actions = actions.child(
                     self.button(
                         "booking-review-confirm",
                         self.t(if awaiting {
                             Key::WaitlistRetryAcceptance
+                        } else if review.series.is_some() {
+                            Key::SeriesConfirm
+                        } else if form.recurrence.is_some() {
+                            Key::SeriesReview
                         } else {
                             Key::WaitlistAcceptOffer
                         }),
@@ -388,7 +692,11 @@ impl Root {
                         .flex_none()
                         .text_xl()
                         .font_weight(FontWeight::BOLD)
-                        .child(self.t(Key::BookingIntakeTitle)),
+                        .child(self.t(if form.recurrence.is_some() {
+                            Key::SeriesReview
+                        } else {
+                            Key::BookingIntakeTitle
+                        })),
                 )
                 .child(body)
                 .when_some(form.error, |panel, error| {
@@ -488,6 +796,19 @@ mod tests {
             let review = form.intake.as_ref().unwrap();
             let payload = serde_json::to_value(review.packet(cx).unwrap()).unwrap();
             assert_eq!(payload["intakeResponses"][0]["answers"]["q"], false);
+            let packet = review.packet(cx).unwrap().series(Recurrence {
+                cadence: Cadence::Monthly,
+                interval: 2,
+                count: 4,
+            });
+            let packet = serde_json::to_value(packet).unwrap();
+            assert_eq!(packet["cadence"], "monthly");
+            assert_eq!(packet["count"], 4);
+            assert_eq!(packet["interval"], 2);
+            assert_eq!(packet["desktopGeneration"], payload["desktopGeneration"]);
+            assert_eq!(packet["intakeReviewHash"], payload["intakeReviewHash"]);
+            assert_eq!(packet["intakeResponses"], payload["intakeResponses"]);
+            assert!(packet.get("id").is_none());
             assert!(root.svc.store.outbox(10).unwrap().is_empty());
         });
     }

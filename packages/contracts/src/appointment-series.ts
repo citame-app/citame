@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { appointmentSchema, createAppointmentBaseSchema } from "./appointments";
 import { bookingPolicySchema } from "./booking-protection";
-import { idSchema, instantSchema } from "./common";
+import { idSchema, instantSchema, syncGenerationSchema } from "./common";
 
 export const appointmentSeriesInputSchema = createAppointmentBaseSchema
   .omit({ id: true, promotion: true })
@@ -21,6 +21,15 @@ export const appointmentSeriesCreateSchema = appointmentSeriesInputSchema.safeEx
   idempotencyKey: z.string().min(8).max(120),
 });
 export type AppointmentSeriesCreate = z.infer<typeof appointmentSeriesCreateSchema>;
+const desktopSeriesFields = {
+  desktopGeneration: syncGenerationSchema,
+  serviceQuotes: createAppointmentBaseSchema.shape.serviceQuotes.unwrap(),
+  intakeReviewHash: createAppointmentBaseSchema.shape.intakeReviewHash.unwrap(),
+};
+export const desktopSeriesInputSchema =
+  appointmentSeriesInputSchema.safeExtend(desktopSeriesFields);
+export const desktopSeriesCreateSchema =
+  appointmentSeriesCreateSchema.safeExtend(desktopSeriesFields);
 export const appointmentSeriesPreviewSchema = z.object({
   reviewHash: z.string(),
   timezone: z.string(),

@@ -11,6 +11,8 @@ import {
   createAppointmentBaseSchema,
   createAppointmentRequestSchema,
   desktopBookingRequestSchema,
+  desktopSeriesCreateSchema,
+  desktopSeriesInputSchema,
   idSchema,
   updateAppointmentRequestSchema,
   visitCreateSchema,
@@ -58,6 +60,66 @@ export function appointmentsRoutes({
   metrics,
   booksyNativePreview,
 }: AppDeps) {
+  function assertDesktopGeneration(generation: string) {
+    if (generation !== config.syncReplicaGeneration)
+      throw new DomainError(
+        "sync_generation_changed",
+        "Review the booking on the restored calendar",
+      );
+  }
+
+  const seriesPreview =
+    (desktop: boolean): Handler<AppEnv> =>
+    async (c) => {
+      const principal = c.get("principal");
+      const body = await readJson(c);
+      const input = desktop
+        ? (() => {
+            requirePermission(principal, "editCalendar");
+            const { desktopGeneration, ...input } = parseOrThrow(desktopSeriesInputSchema, body);
+            assertDesktopGeneration(desktopGeneration);
+            return input;
+          })()
+        : parseOrThrow(appointmentSeriesInputSchema, body);
+      const scoped = authorizeAppointmentCreate(principal, input);
+      return c.json(
+        await previewAppointmentSeries(
+          db,
+          { ...input, ...scoped, client: scoped.client, clientId: scoped.clientId },
+          principal.role,
+          now(),
+        ),
+        200,
+        { "Cache-Control": "private, no-store" },
+      );
+    };
+
+  const seriesCreate =
+    (desktop: boolean): Handler<AppEnv> =>
+    async (c) => {
+      const principal = c.get("principal");
+      const body = await readJson(c);
+      const input = desktop
+        ? (() => {
+            requirePermission(principal, "editCalendar");
+            const { desktopGeneration, ...input } = parseOrThrow(desktopSeriesCreateSchema, body);
+            assertDesktopGeneration(desktopGeneration);
+            return input;
+          })()
+        : parseOrThrow(appointmentSeriesCreateSchema, body);
+      const scoped = authorizeAppointmentCreate(principal, input);
+      return c.json(
+        await createAppointmentSeries(
+          db,
+          { ...input, ...scoped, client: scoped.client, clientId: scoped.clientId },
+          principal,
+          now(),
+          { desktopReviewed: desktop },
+        ),
+        201,
+      );
+    };
+
   const create =
     (desktopBooking: boolean): Handler<AppEnv> =>
     async (c) => {
@@ -70,12 +132,7 @@ export function appointmentsRoutes({
         principal.role === "client" ? createAppointmentBaseSchema : createAppointmentRequestSchema;
       const body = await readJson(c);
       const reviewed = desktopBooking ? parseOrThrow(desktopBookingRequestSchema, body) : undefined;
-      if (reviewed && reviewed.desktopGeneration !== config.syncReplicaGeneration) {
-        throw new DomainError(
-          "sync_generation_changed",
-          "Review the booking on the restored calendar",
-        );
-      }
+      if (reviewed) assertDesktopGeneration(reviewed.desktopGeneration);
       const request = authorizeAppointmentCreate(principal, reviewed ?? parseOrThrow(schema, body));
       const replay = async () => {
         const existing = await findAppointmentReplay(db, request, principal.userId);
@@ -184,33 +241,10 @@ export function appointmentsRoutes({
           ),
         ),
       )
-      .post("/series/preview", async (c) => {
-        const input = parseOrThrow(appointmentSeriesInputSchema, await readJson(c));
-        const principal = c.get("principal");
-        const scoped = authorizeAppointmentCreate(principal, input);
-        return c.json(
-          await previewAppointmentSeries(
-            db,
-            { ...input, ...scoped, client: scoped.client, clientId: scoped.clientId },
-            principal.role,
-            now(),
-          ),
-        );
-      })
-      .post("/series", async (c) => {
-        const input = parseOrThrow(appointmentSeriesCreateSchema, await readJson(c));
-        const principal = c.get("principal");
-        const scoped = authorizeAppointmentCreate(principal, input);
-        return c.json(
-          await createAppointmentSeries(
-            db,
-            { ...input, ...scoped, client: scoped.client, clientId: scoped.clientId },
-            principal,
-            now(),
-          ),
-          201,
-        );
-      })
+      .post("/series/preview", seriesPreview(false))
+      .post("/series", seriesCreate(false))
+      .post("/desktop-series/preview", seriesPreview(true))
+      .post("/desktop-series", seriesCreate(true))
       .get("/series/:id", async (c) =>
         c.json(
           await getAppointmentSeries(

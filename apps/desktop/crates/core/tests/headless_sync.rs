@@ -5455,6 +5455,79 @@ fn native_directory_replays_contacts_and_preserves_newer_edits() {
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_reviews_a_recurring_series_and_retries_the_same_request_through_the_proxy() {
+    use sob_core::booking::{BookingTerms, Cadence, Recurrence};
+    use sob_core::intake::IntakeSelection;
+
+    let mut browser = Device::sign_in();
+    browser.sync();
+    let catalog = catalog(&browser);
+    let device = proxy_device();
+    let note = format!("Synthetic series {}", uuid::Uuid::now_v7());
+    let (packet, preview) = (0..12)
+        .find_map(|_| {
+            let start = free_slot(&browser, &catalog.staff);
+            let terms = BookingTerms::prepare(
+                &browser.store,
+                NewAppointment {
+                    staff_id: catalog.staff.clone(),
+                    service_ids: vec![catalog.haircut.clone()],
+                    starts_at: start,
+                    client_id: String::new(),
+                    notes: Some(note.clone()),
+                    override_notice: false,
+                },
+                Some(("Synthetic recurring client", None)),
+            )
+            .unwrap();
+            let intake = device
+                .transport
+                .direct_booking_requirements(&terms)
+                .unwrap();
+            let packet = terms
+                .reviewed(intake.review_hash, IntakeSelection::default())
+                .series(Recurrence {
+                    cadence: Cadence::Weekly,
+                    interval: 1,
+                    count: 2,
+                });
+            let preview = device.transport.preview_booking_series(&packet).unwrap();
+            preview
+                .occurrences
+                .iter()
+                .all(|visit| visit.available)
+                .then_some((packet, preview))
+        })
+        .expect("a free two-visit series");
+    let first = preview.occurrences[0].starts_at;
+    let second = preview.occurrences[1].starts_at;
+    let request = packet.review(&preview);
+    assert_eq!(
+        device.transport.create_reviewed_series(&request).unwrap(),
+        first
+    );
+    assert_eq!(
+        device.transport.create_reviewed_series(&request).unwrap(),
+        first
+    );
+    browser.sync();
+    let visits = browser
+        .store
+        .appointments_between(
+            first.timestamp_millis(),
+            (second + Span::hours(2)).timestamp_millis(),
+        )
+        .unwrap()
+        .into_iter()
+        .filter(|appointment| appointment.notes.as_deref() == Some(&note))
+        .collect::<Vec<_>>();
+    assert_eq!(visits.len(), 2);
+    assert_eq!(visits[0].client_id, visits[1].client_id);
+    assert_eq!([visits[0].starts_at, visits[1].starts_at], [first, second]);
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_books_with_current_intake_and_an_inline_client_through_the_proxy() {
     use sob_core::booking::{BookingError, BookingTerms};
     use sob_core::intake::IntakeSelection;

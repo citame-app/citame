@@ -1,5 +1,9 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
-import { intakeRequirementsSchema, intakeSubmissionSchema } from "@sob/contracts";
+import {
+  appointmentSeriesSchema,
+  intakeRequirementsSchema,
+  intakeSubmissionSchema,
+} from "@sob/contracts";
 import {
   appointment,
   auditLog,
@@ -592,6 +596,73 @@ test("a recent response can accompany a reviewed series while published changes 
   );
   expect(stale.status).toBe(409);
   expect(await t.db.select().from(appointment)).toHaveLength(2);
+});
+
+test("Desktop reviews recurring visits with explicit forms and replays one complete series", async () => {
+  const form = await publish({ requiredAtBooking: true, allowTeamResponses: true });
+  const requirements = intakeRequirementsSchema.parse(
+    await (
+      await call(`/intake/requirements?serviceIds=${f.haircutId}&clientId=${customer.clientId}`)
+    ).json(),
+  );
+  const [quoted] = await getBookableServices(t.db, [f.haircutId]);
+  const { id: _id, ...base } = booking();
+  const input = {
+    ...base,
+    clientId: customer.clientId,
+    cadence: "weekly",
+    interval: 1,
+    count: 2,
+    serviceQuotes: { [f.haircutId]: quoted?.quoteHash },
+    intakeReviewHash: requirements.reviewHash,
+    desktopGeneration: requirements.desktopGeneration,
+  };
+  const path = "/appointments/desktop-series";
+  expect((await call(`${path}/preview`, "POST", input, customer)).status).toBe(403);
+  const stale = await call(`${path}/preview`, "POST", {
+    ...input,
+    desktopGeneration: "earlier-history",
+  });
+  expect(stale.status).toBe(409);
+  expect(await stale.json()).toMatchObject({ error: { code: "sync_generation_changed" } });
+  const preview = async (packet: object) => {
+    const result = await call(`${path}/preview`, "POST", packet);
+    expect(result.status, await result.clone().text()).toBe(200);
+    const { reviewHash } = (await result.json()) as { reviewHash: string };
+    return { reviewHash };
+  };
+  const incomplete = await preview(input);
+  expect(
+    (await call(path, "POST", { ...input, ...incomplete, idempotencyKey: crypto.randomUUID() }))
+      .status,
+  ).toBe(409);
+  expect(await t.db.select().from(appointment)).toHaveLength(0);
+  const reviewed = {
+    ...input,
+    intakeResponses: [
+      {
+        revisionId: form.published.id,
+        confirmation: true,
+        answers: { [QUESTION]: "Reviewed for both dates" },
+      },
+    ],
+  };
+  const request = {
+    ...reviewed,
+    ...(await preview(reviewed)),
+    idempotencyKey: crypto.randomUUID(),
+  };
+  expect(await t.db.select().from(intakeAppointment)).toHaveLength(0);
+  const saved = await call(path, "POST", request);
+  expect(saved.status, await saved.clone().text()).toBe(201);
+  const replay = await call(path, "POST", request);
+  expect(replay.status).toBe(201);
+  const first = appointmentSeriesSchema.parse(await saved.json());
+  const retried = appointmentSeriesSchema.parse(await replay.json());
+  expect(retried.id).toBe(first.id);
+  expect(retried.appointments.map((a) => a.id)).toEqual(first.appointments.map((a) => a.id));
+  expect(await t.db.select().from(appointment)).toHaveLength(2);
+  expect(await t.db.select().from(intakeAppointment)).toHaveLength(2);
 });
 
 test("responses older than the review window or from the future cannot satisfy a current booking", async () => {

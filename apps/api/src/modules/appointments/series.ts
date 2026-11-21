@@ -195,6 +195,7 @@ export async function createAppointmentSeries(
   request: AppointmentSeriesCreate,
   principal: Principal,
   now: Date,
+  options: { desktopReviewed?: boolean } = {},
 ) {
   const { reviewHash, idempotencyKey, ...fields } = request;
   const input = appointmentSeriesInputSchema.parse(fields);
@@ -257,7 +258,7 @@ export async function createAppointmentSeries(
         tx,
         { ...booking, startsAt: occurrence.startsAt },
         { userId: principal.userId, role: principal.role },
-        { now },
+        { now, ...options },
       );
       appointments.push(next);
       // Resolve an inline client only once, even when it has no phone or email.

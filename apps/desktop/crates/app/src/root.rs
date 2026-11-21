@@ -233,6 +233,7 @@ struct NewForm {
     new_client: Entity<TextField>,
     new_client_phone: Entity<TextField>,
     notes: Entity<TextField>,
+    recurrence: Option<sob_core::booking::Recurrence>,
     intake: Option<booking_intake::BookingReview>,
     error: Option<Key>,
 }
@@ -1072,6 +1073,7 @@ impl Root {
             new_client,
             new_client_phone,
             notes,
+            recurrence: None,
             intake: None,
             error: None,
         }));
@@ -1095,6 +1097,13 @@ impl Root {
             return;
         };
         if form.intake.is_some() {
+            return;
+        }
+        if form.recurrence.is_some()
+            && (self.status.connectivity != Connectivity::Online || self.svc.transport().is_none())
+        {
+            form.error = Some(Key::SeriesOffline);
+            cx.notify();
             return;
         }
         let name = form.new_client.read(cx).text().trim().to_owned();
@@ -2869,7 +2878,8 @@ impl Root {
                         )))
                     }),
             )
-            .child(f.notes.clone());
+            .child(f.notes.clone())
+            .child(self.render_recurrence(f.recurrence, cx));
 
         let performed: std::collections::HashSet<_> =
             ops::performed_services(&self.svc.store, staff)
@@ -2979,7 +2989,11 @@ impl Root {
                     ))
                     .child(self.button(
                         "new-book",
-                        self.t(Key::Book),
+                        self.t(if f.recurrence.is_some() {
+                            Key::SeriesReview
+                        } else {
+                            Key::Book
+                        }),
                         Kind::Primary,
                         cx.listener(|this, _, _, cx| this.book(cx)),
                     )),
