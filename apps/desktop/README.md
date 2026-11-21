@@ -120,7 +120,7 @@ Under **Management → Marketing → Booking links**, choose public services, co
 
 Under **Management → Marketing → Promotions**, search and edit discount codes, change eligibility and usage limits, and set booking windows in the centre's time zone. Promotion saves require a connection and a reviewed version. The editor retains the exact request if Cloud cannot confirm a save. The promotion list refreshes on live updates while preserving the open draft.
 
-**Management → Loyalty** opens the selected client's available, held, expiring and owed points and paginated movement history. Authorized operators can review an exact signed adjustment with a reason before submitting it. A lost response retains the same adjustment request in the open desk so retrying does not create another movement. A receipt linked to a movement opens in Cloud under the linked operator's session. Statements require a connection.
+**Management → Loyalty** opens the selected client's available, held, expiring and owed points and paginated movement history. Authorized operators can review an exact signed adjustment with a reason before submitting it. A lost response retains the same adjustment request while the operator stays signed in. Reopen the client statement to retry it or acknowledge the checked history. The request stays in memory. A receipt linked to a movement opens in Cloud under the linked operator's session. Statements require a connection.
 
 **Reputation → Moderate reviews** shows the shared list and publication status. Owners and managers can publish, hide with a reason, write a public reply or remove one. Review changes need a connection. The desktop keeps the reviewed version and its draft after an unsuccessful save, and asks before discarding changes.
 

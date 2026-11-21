@@ -4,6 +4,12 @@ use sob_core::sync::TransportError;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
+pub(super) struct Pending {
+    session: sob_core::auth::SessionHandle,
+    adjustment: Adjustment,
+    in_flight: bool,
+}
+
 pub(super) struct Desk {
     identity: Arc<()>,
     from_marketing: bool,
@@ -97,6 +103,38 @@ impl Root {
             error: None,
             saved: false,
         }));
+        cx.notify();
+    }
+
+    fn pending_loyalty(&self) -> Option<&Pending> {
+        self.pending_loyalty
+            .as_ref()
+            .filter(|pending| Arc::ptr_eq(&pending.session, &self.svc.session))
+    }
+
+    fn acknowledge_loyalty_statement(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self
+            .pending_loyalty()
+            .filter(|pending| !pending.in_flight)
+            .map(|pending| pending.adjustment.client_id)
+        else {
+            return;
+        };
+        let Some(desk) = self.loyalty_desk().filter(|desk| {
+            desk.statement.is_some()
+                && desk
+                    .selected
+                    .as_ref()
+                    .is_some_and(|(client, _)| *client == id)
+        }) else {
+            return;
+        };
+        desk.adjustment = None;
+        desk.uncertain = false;
+        desk.error = None;
+        desk.points.update(cx, |field, cx| field.set_text("", cx));
+        desk.reason.update(cx, |field, cx| field.set_text("", cx));
+        self.pending_loyalty = None;
         cx.notify();
     }
 
@@ -336,6 +374,9 @@ impl Root {
     }
 
     fn review_loyalty_adjustment(&mut self, cx: &mut Context<Self>) {
+        let previous = self
+            .pending_loyalty()
+            .map(|pending| (pending.adjustment.clone(), pending.in_flight));
         let generation = self.svc.store.verified_reviewed_generation().ok();
         let Some(desk) = self
             .loyalty_desk()
@@ -346,11 +387,7 @@ impl Root {
         let Some((client, _)) = &desk.selected else {
             return;
         };
-        let Some(statement) = desk
-            .statement
-            .as_ref()
-            .filter(|s| s.can_adjust && s.policy.enabled)
-        else {
+        let Some(statement) = desk.statement.as_ref().filter(|s| s.can_adjust) else {
             return;
         };
         let Some(generation) = generation.filter(|g| statement.generation.as_ref() == Some(g))
@@ -359,6 +396,20 @@ impl Root {
             cx.notify();
             return;
         };
+        if let Some((previous, in_flight)) = previous {
+            if !in_flight && previous.client_id == *client && previous.generation == generation {
+                desk.adjustment = Some(previous);
+                desk.uncertain = true;
+                desk.error = Some(Key::LoyaltyUnconfirmed);
+            } else {
+                desk.error = Some(Key::LoyaltyPending);
+            }
+            cx.notify();
+            return;
+        }
+        if !statement.policy.enabled {
+            return;
+        }
         desk.adjustment = Adjustment::prepare(
             *client,
             generation,
@@ -371,6 +422,12 @@ impl Root {
     }
 
     fn confirm_loyalty_adjustment(&mut self, cx: &mut Context<Self>) {
+        if self
+            .pending_loyalty()
+            .is_some_and(|pending| pending.in_flight)
+        {
+            return;
+        }
         let Some(transport) = self
             .svc
             .transport()
@@ -400,6 +457,12 @@ impl Root {
         desk.loading = false;
         desk.saving = true;
         desk.error = None;
+        let key = adjustment.idempotency_key;
+        self.pending_loyalty = Some(Pending {
+            session: session.clone(),
+            adjustment: adjustment.clone(),
+            in_flight: true,
+        });
         cx.notify();
         cx.spawn(async move |root, cx| {
             let result = cx
@@ -410,6 +473,16 @@ impl Root {
                 if !Arc::ptr_eq(&session, &root.svc.session) || root.svc.current_session().is_none()
                 {
                     return;
+                }
+                if let Some(pending) = root
+                    .pending_loyalty
+                    .as_mut()
+                    .filter(|pending| pending.adjustment.idempotency_key == key)
+                {
+                    pending.in_flight = false;
+                    if result.is_ok() || matches!(&result, Err(TransportError::BadRequest(_))) {
+                        root.pending_loyalty = None;
+                    }
                 }
                 let Some(desk) = root
                     .loyalty_desk()
@@ -441,7 +514,11 @@ impl Root {
                     }
                     Err(error) => {
                         if !desk.uncertain
-                            || matches!(error, TransportError::ReplicaGenerationChanged)
+                            || matches!(
+                                error,
+                                TransportError::ReplicaGenerationChanged
+                                    | TransportError::BadRequest(_)
+                            )
                         {
                             desk.adjustment = None;
                             desk.uncertain = false;
@@ -476,10 +553,9 @@ impl Root {
         };
         let handle = self.svc.session.clone();
         let auth = self.svc.auth.clone();
-        let Some(desk) = self
-            .loyalty_desk()
-            .filter(|desk| !desk.receipt_opening && desk.adjustment.is_none())
-        else {
+        let Some(desk) = self.loyalty_desk().filter(|desk| {
+            !desk.receipt_opening && desk.adjustment.is_none() && !desk.rate_limited()
+        }) else {
             return;
         };
         if !desk.statement.as_ref().is_some_and(|statement| {
@@ -597,6 +673,10 @@ impl Root {
             .flex()
             .flex_col()
             .gap_3()
+            .when(
+                self.pending_loyalty().is_some() && desk.adjustment.is_none(),
+                |body| body.child(self.t(Key::LoyaltyPending)),
+            )
             .when(!online, |body| body.child(self.t(Key::LoyaltyOffline)))
             .when(desk.loading || desk.saving, |body| {
                 body.child(self.t(Key::MarketingLoading))
@@ -783,22 +863,65 @@ impl Root {
                     }),
                 ),
             )
-            .when(statement.can_adjust && policy.enabled, |body| {
-                body.child(self.label(Key::LoyaltyAdjustment))
-                    .child(self.label(Key::LoyaltyPoints))
-                    .child(desk.points.clone())
-                    .child(self.label(Key::LoyaltyReason))
-                    .child(desk.reason.clone())
-                    .when(ready, |body| {
-                        body.child(self.loyalty_button(
-                            "review-loyalty-adjustment",
-                            Key::LoyaltyReview,
-                            Kind::Primary,
-                            Root::review_loyalty_adjustment,
-                            cx,
-                        ))
-                    })
-            })
+            .when_some(
+                self.pending_loyalty().filter(|pending| {
+                    desk.selected
+                        .as_ref()
+                        .is_some_and(|(client, _)| *client == pending.adjustment.client_id)
+                        && !pending.in_flight
+                }),
+                |body, pending| {
+                    body.child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap_2()
+                            .when(
+                                ready
+                                    && statement.can_adjust
+                                    && statement.generation.as_ref()
+                                        == Some(&pending.adjustment.generation),
+                                |row| {
+                                    row.child(self.loyalty_button(
+                                        "resume-loyalty-adjustment",
+                                        Key::LoyaltyReview,
+                                        Kind::Primary,
+                                        Root::review_loyalty_adjustment,
+                                        cx,
+                                    ))
+                                },
+                            )
+                            .when(ready, |row| {
+                                row.child(self.loyalty_button(
+                                    "acknowledge-loyalty",
+                                    Key::LoyaltyAcknowledge,
+                                    Kind::Ghost,
+                                    Root::acknowledge_loyalty_statement,
+                                    cx,
+                                ))
+                            }),
+                    )
+                },
+            )
+            .when(
+                statement.can_adjust && policy.enabled && self.pending_loyalty().is_none(),
+                |body| {
+                    body.child(self.label(Key::LoyaltyAdjustment))
+                        .child(self.label(Key::LoyaltyPoints))
+                        .child(desk.points.clone())
+                        .child(self.label(Key::LoyaltyReason))
+                        .child(desk.reason.clone())
+                        .when(ready, |body| {
+                            body.child(self.loyalty_button(
+                                "review-loyalty-adjustment",
+                                Key::LoyaltyReview,
+                                Kind::Primary,
+                                Root::review_loyalty_adjustment,
+                                cx,
+                            ))
+                        })
+                },
+            )
             .child(self.label(Key::LoyaltyHistory))
             .when(statement.movements.is_empty(), |body| {
                 body.child(self.t(Key::LoyaltyEmpty))
@@ -870,6 +993,10 @@ mod tests {
         let (root, cx) = cx.add_window_view(|window, cx| {
             let mut root = Root::new(config, window, cx);
             root.svc.stop_sync();
+            root.svc
+                .store
+                .set_meta("client_directory", "allowed")
+                .unwrap();
             root.status.connectivity = Connectivity::Offline;
             root.open_marketing(cx);
             root.status.connectivity = Connectivity::Online;
@@ -880,8 +1007,31 @@ mod tests {
         let link = cx.debug_bounds("marketing-loyalty").unwrap().center();
         cx.simulate_click(link, Default::default());
         cx.run_until_parked();
-        root.update(cx, |root, _| {
+        root.update(cx, |root, cx| {
             assert!(root.loyalty_desk().is_some());
+            let request = Adjustment::prepare(
+                Uuid::now_v7(),
+                "initial".into(),
+                "25",
+                "Synthetic reviewed adjustment",
+            )
+            .unwrap();
+            let key = request.idempotency_key;
+            root.pending_loyalty = Some(Pending {
+                session: root.svc.session.clone(),
+                adjustment: request,
+                in_flight: false,
+            });
+            root.svc
+                .store
+                .set_meta("client_directory", "denied")
+                .unwrap();
+            root.refresh_loyalty(false, cx);
+            assert!(root.loyalty_desk().is_none());
+            assert_eq!(
+                root.pending_loyalty().unwrap().adjustment.idempotency_key,
+                key
+            );
             assert!(root.svc.store.outbox(5).unwrap().is_empty());
         });
     }

@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
-import { type LoyaltyPolicy, permissionsFor } from "@sob/contracts";
-import { type Database, loyaltyLot, loyaltyMovement, loyaltyProgram } from "@sob/db";
-import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { loyaltyClientChoicesSchema, type LoyaltyPolicy, permissionsFor } from "@sob/contracts";
+import { clientProfile, type Database, loyaltyLot, loyaltyMovement, loyaltyProgram } from "@sob/db";
+import { and, asc, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requirePermission, requireRole } from "../../auth/policy";
 import { ownsClient, type Principal } from "../../auth/principal";
 import { clientIdentityIds, clientRoot, lockClientRoot } from "../../client-identity";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
+import { searchFilter } from "../clients/admin";
 
 export type RewardConnection = Database | Tx;
 function canonical(value: unknown): unknown {
@@ -98,6 +99,24 @@ export async function rewardBalance(db: RewardConnection, clientId: string, now 
     expiringPoints: Number(totals?.expiring ?? 0),
   };
 }
+export async function findLoyaltyClients(db: Database, principal: Principal, search: string) {
+  requirePermission(principal, "clients");
+  requirePermission(principal, "commerce");
+  const clients = await db
+    .select({ id: clientProfile.id, name: clientProfile.name, email: clientProfile.email })
+    .from(clientProfile)
+    .where(
+      and(
+        isNull(clientProfile.deletedAt),
+        isNull(clientProfile.mergedIntoId),
+        searchFilter(search),
+      ),
+    )
+    .orderBy(sql`lower(${clientProfile.name})`, asc(clientProfile.id))
+    .limit(8);
+  return loyaltyClientChoicesSchema.parse({ clients });
+}
+
 export async function loyaltyStatement(
   db: Database,
   clientId: string,

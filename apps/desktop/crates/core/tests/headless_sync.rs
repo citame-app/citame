@@ -67,7 +67,8 @@ fn proxy_device() -> ProxyDevice {
 fn native_loyalty_reads_and_guards_adjustments_through_the_proxy() {
     let mut web = Device::sign_in();
     web.sync();
-    let client = ops::create_client(&mut web.store, "Synthetic loyalty desk client", None).unwrap();
+    let name = format!("Synthetic loyalty {}", uuid::Uuid::now_v7());
+    let client = ops::create_client(&mut web.store, &name, None).unwrap();
     web.sync();
     let id = client.parse().unwrap();
     let device = proxy_device();
@@ -89,10 +90,7 @@ fn native_loyalty_reads_and_guards_adjustments_through_the_proxy() {
         device.transport.adjust_loyalty(&request),
         Err(TransportError::ReplicaGenerationChanged)
     ));
-    let choices = device
-        .transport
-        .find_loyalty_clients("Synthetic loyalty desk")
-        .unwrap();
+    let choices = device.transport.find_loyalty_clients(&name).unwrap();
     assert_eq!(choices.first().unwrap().id, id);
 
     let path = "/admin/rewards/policy";
@@ -109,20 +107,25 @@ fn native_loyalty_reads_and_guards_adjustments_through_the_proxy() {
     let mut enabled = saved_policy.clone();
     enabled["enabled"] = json!(true);
     let enabled = put_policy(enabled);
-    let current = statement.generation.unwrap();
-    let request =
-        sob_core::loyalty::Adjustment::prepare(id, current, "25", "Synthetic desk adjustment")
-            .unwrap();
-    let first = device.transport.adjust_loyalty(&request).unwrap();
-    let replay = device.transport.adjust_loyalty(&request).unwrap();
-    assert_eq!(first.id, replay.id);
-    let after = device.transport.loyalty_statement(id, 1).unwrap();
-    assert_eq!(after.available_points, 25);
-    assert_eq!(after.movements.len(), 1);
-    assert_eq!(after.movements[0].id, first.id);
+    let adjusted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let current = statement.generation.unwrap();
+        let request =
+            sob_core::loyalty::Adjustment::prepare(id, current, "25", "Synthetic desk adjustment")
+                .unwrap();
+        let first = device.transport.adjust_loyalty(&request).unwrap();
+        let replay = device.transport.adjust_loyalty(&request).unwrap();
+        assert_eq!(first.id, replay.id);
+        let after = device.transport.loyalty_statement(id, 1).unwrap();
+        assert_eq!(after.available_points, 25);
+        assert_eq!(after.movements.len(), 1);
+        assert_eq!(after.movements[0].id, first.id);
+    }));
     let mut restore = saved_policy;
     restore["version"] = enabled["version"].clone();
     put_policy(restore);
+    if let Err(panic) = adjusted {
+        std::panic::resume_unwind(panic);
+    }
 }
 
 #[test]

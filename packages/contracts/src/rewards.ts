@@ -105,6 +105,12 @@ export const loyaltyStatementSchema = z.object({
   ),
   pagination: pageInfoSchema,
 });
+export const loyaltyClientSearchSchema = z.object({
+  search: z.string().trim().min(1).max(100),
+});
+export const loyaltyClientChoicesSchema = z.object({
+  clients: z.array(z.object({ id: idSchema, name: z.string(), email: z.string().nullable() })),
+});
 export const adminLoyaltyStatementSchema = loyaltyStatementSchema.extend({
   generation: syncGenerationSchema,
   canAdjust: z.boolean(),

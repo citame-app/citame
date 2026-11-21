@@ -1,14 +1,13 @@
 import {
   applyRewardInputSchema,
   idSchema,
+  loyaltyClientSearchSchema,
   loyaltyPolicyInputSchema,
   permissionsFor,
   promotionInputSchema,
   rewardAdjustmentInputSchema,
   rewardChoiceSchema,
 } from "@sob/contracts";
-import { clientProfile } from "@sob/db";
-import { and, asc, isNull, sql } from "drizzle-orm";
 import { type Context, Hono } from "hono";
 import { z } from "zod";
 import type { AppDeps } from "../../app";
@@ -16,8 +15,13 @@ import { requirePermission, requireRole } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
-import { searchFilter } from "../clients/admin";
-import { adjustRewards, getLoyaltyPolicy, loyaltyStatement, setLoyaltyPolicy } from "./accounts";
+import {
+  adjustRewards,
+  findLoyaltyClients,
+  getLoyaltyPolicy,
+  loyaltyStatement,
+  setLoyaltyPolicy,
+} from "./accounts";
 import { applyCheckoutReward, quoteCheckoutReward } from "./discounts";
 import { listPromotions, savePromotion } from "./promotions";
 import { returnCheckoutPoints } from "./value";
@@ -87,22 +91,9 @@ export function rewardsAdminRoutes({ db, config }: AppDeps) {
       ),
     )
     .get("/clients", async (c) => {
-      requirePermission(c.get("principal"), "clients");
-      const search = parseOrThrow(z.string().trim().min(1).max(100), c.req.query("search"));
+      const { search } = parseOrThrow(loyaltyClientSearchSchema, c.req.query());
       c.header("Cache-Control", "private, no-store");
-      const clients = await db
-        .select({ id: clientProfile.id, name: clientProfile.name, email: clientProfile.email })
-        .from(clientProfile)
-        .where(
-          and(
-            isNull(clientProfile.deletedAt),
-            isNull(clientProfile.mergedIntoId),
-            searchFilter(search),
-          ),
-        )
-        .orderBy(sql`lower(${clientProfile.name})`, asc(clientProfile.id))
-        .limit(8);
-      return c.json({ clients });
+      return c.json(await findLoyaltyClients(db, c.get("principal"), search));
     })
     .get("/clients/:id", async (c) => {
       c.header("Cache-Control", "private, no-store");

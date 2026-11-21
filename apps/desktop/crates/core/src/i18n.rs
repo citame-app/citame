@@ -155,6 +155,8 @@ keys! {
     LoyaltyHistory => ("Point movements", "Movimientos de puntos"),
     LoyaltyEmpty => ("No movements yet.", "Todavía no hay movimientos."),
     LoyaltyReceipt => ("Open receipt in Cloud", "Abrir recibo en Cloud"),
+    LoyaltyPending => ("An adjustment is unconfirmed. Find that client and review the statement before recording another adjustment.", "Hay un ajuste sin confirmar. Busca ese cliente y revisa su extracto antes de registrar otro ajuste."),
+    LoyaltyAcknowledge => ("I checked the statement", "He comprobado el extracto"),
     LoyaltySaved => ("Adjustment recorded.", "Ajuste registrado."),
     LoyaltyEarned => ("Points earned", "Puntos acumulados"),
     LoyaltyAdjusted => ("Manual adjustment", "Ajuste manual"),
