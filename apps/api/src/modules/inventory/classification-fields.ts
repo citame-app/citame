@@ -71,15 +71,17 @@ export async function classificationFields(
   const categoryId =
     classification.categoryId === undefined
       ? (current?.categoryId ?? null)
-      : classification.categoryId;
+      : (classification.categoryId?.toLowerCase() ?? null);
   const subcategoryId =
     classification.subcategoryId === undefined
       ? categoryId === current?.categoryId
         ? (current?.subcategoryId ?? null)
         : null
-      : classification.subcategoryId;
+      : (classification.subcategoryId?.toLowerCase() ?? null);
   const brandId =
-    classification.brandId === undefined ? (current?.brandId ?? null) : classification.brandId;
+    classification.brandId === undefined
+      ? (current?.brandId ?? null)
+      : (classification.brandId?.toLowerCase() ?? null);
   const requested = [categoryId, subcategoryId, brandId].filter((id) => id !== null);
   const entries = requested.length
     ? await tx

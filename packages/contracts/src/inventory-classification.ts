@@ -29,9 +29,9 @@ export const inventoryClassificationInputSchema = z.strictObject({
   version: revision.max(2147483646),
 });
 export const inventoryClassificationAssignmentSchema = z.strictObject({
-  categoryId: uuid.nullable(),
-  subcategoryId: uuid.nullable(),
-  brandId: uuid.nullable(),
+  categoryId: idSchema.nullable(),
+  subcategoryId: idSchema.nullable(),
+  brandId: idSchema.nullable(),
 });
 export const inventoryClassificationPatchSchema = inventoryClassificationAssignmentSchema.partial();
 export type InventoryClassificationPatch = z.infer<typeof inventoryClassificationPatchSchema>;
