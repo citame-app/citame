@@ -1,10 +1,29 @@
 use super::*;
-use crate::loyalty::{Adjustment, AdjustmentResult, Statement};
+use crate::loyalty::{Adjustment, AdjustmentResult, ClientChoice, Statement};
 use uuid::Uuid;
 
 const PATH: &str = "/admin/rewards/clients";
 
 impl HttpTransport {
+    pub fn find_loyalty_clients(&self, search: &str) -> Result<Vec<ClientChoice>, TransportError> {
+        #[derive(serde::Deserialize)]
+        struct Choices {
+            clients: Vec<ClientChoice>,
+        }
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("search", search)
+            .finish();
+        let result: Choices = read_response(
+            self.get(
+                &self.agent,
+                &format!("{PATH}?{query}"),
+                Some("application/json"),
+            )?,
+            false,
+        )?;
+        Ok(result.clients)
+    }
+
     pub fn loyalty_statement(&self, client: Uuid, page: u32) -> Result<Statement, TransportError> {
         let response = self.get(
             &self.agent,

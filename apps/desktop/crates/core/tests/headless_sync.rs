@@ -89,14 +89,40 @@ fn native_loyalty_reads_and_guards_adjustments_through_the_proxy() {
         device.transport.adjust_loyalty(&request),
         Err(TransportError::ReplicaGenerationChanged)
     ));
-    assert!(
-        device
-            .transport
-            .loyalty_statement(id, 1)
-            .unwrap()
-            .movements
-            .is_empty()
-    );
+    let choices = device
+        .transport
+        .find_loyalty_clients("Synthetic loyalty desk")
+        .unwrap();
+    assert_eq!(choices.first().unwrap().id, id);
+
+    let path = "/admin/rewards/policy";
+    let prefix = std::env::var("SOB_TEST_REST_PREFIX").unwrap_or_default();
+    let put_policy = |policy: serde_json::Value| -> serde_json::Value {
+        let mut response = ureq::put(&format!("{}{prefix}{path}", web.base))
+            .header("Cookie", &web.cookie)
+            .content_type("application/json")
+            .send(policy.to_string())
+            .unwrap();
+        serde_json::from_str(&response.body_mut().read_to_string().unwrap()).unwrap()
+    };
+    let saved_policy = web.rest_get(path);
+    let mut enabled = saved_policy.clone();
+    enabled["enabled"] = json!(true);
+    let enabled = put_policy(enabled);
+    let current = statement.generation.unwrap();
+    let request =
+        sob_core::loyalty::Adjustment::prepare(id, current, "25", "Synthetic desk adjustment")
+            .unwrap();
+    let first = device.transport.adjust_loyalty(&request).unwrap();
+    let replay = device.transport.adjust_loyalty(&request).unwrap();
+    assert_eq!(first.id, replay.id);
+    let after = device.transport.loyalty_statement(id, 1).unwrap();
+    assert_eq!(after.available_points, 25);
+    assert_eq!(after.movements.len(), 1);
+    assert_eq!(after.movements[0].id, first.id);
+    let mut restore = saved_policy;
+    restore["version"] = enabled["version"].clone();
+    put_policy(restore);
 }
 
 #[test]

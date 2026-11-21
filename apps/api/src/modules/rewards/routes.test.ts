@@ -256,6 +256,10 @@ test("desktop loyalty statements are private and reviewed point adjustments repl
   expect(limited.canAdjust).toBe(false);
   expect((await call(client, path)).status).toBe(403);
 
+  const lookup = await call(receptionist, "/admin/rewards/clients?search=Lucia");
+  expect(lookup.status).toBe(200);
+  expect(lookup.headers.get("cache-control")).toBe("private, no-store");
+
   const packet = { points: 50, reason: "Synthetic desk adjustment", idempotencyKey: key() };
   const save = (generation: string, who = owner, payload = packet) =>
     t.app.request(`${path}/adjustments`, {

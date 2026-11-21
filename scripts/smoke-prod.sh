@@ -64,8 +64,8 @@ services:
   api:
     environment:
       RATE_LIMIT_GLOBAL_MAX: "1500"
-      RATE_LIMIT_AUTH_MAX: "60"
-      RATE_LIMIT_OAUTH_MAX: "240"
+      RATE_LIMIT_AUTH_MAX: "90"
+      RATE_LIMIT_OAUTH_MAX: "360"
 YAML
   smoke_overlays+=(-f "$SMOKE_DIR/desktop-limits.yaml")
 fi

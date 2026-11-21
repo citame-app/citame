@@ -130,6 +130,7 @@ keys! {
     PromoUses => ("Uses", "Usos"),
     LoyaltyTitle => ("Loyalty", "Fidelización"),
     LoyaltySearch => ("Name, email or phone", "Nombre, correo o teléfono"),
+    LoyaltySearchLimit => ("Search with up to 100 characters.", "Busca con hasta 100 caracteres."),
     LoyaltyFind => ("Find client", "Buscar cliente"),
     LoyaltyReview => ("Review points adjustment", "Revisar ajuste de puntos"),
     LoyaltyRecord => ("Record adjustment", "Registrar ajuste"),

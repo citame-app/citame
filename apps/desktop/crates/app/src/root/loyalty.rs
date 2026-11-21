@@ -14,6 +14,7 @@ pub(super) struct Desk {
     request: Option<Arc<()>>,
     loading: bool,
     refresh_at: Instant,
+    retry: Option<(Instant, Duration)>,
     points: Entity<TextField>,
     reason: Entity<TextField>,
     adjustment: Option<Adjustment>,
@@ -23,6 +24,30 @@ pub(super) struct Desk {
     receipt_opening: bool,
     error: Option<Key>,
     saved: bool,
+}
+
+impl Desk {
+    fn rate_limited(&self) -> bool {
+        self.retry
+            .is_some_and(|(began, delay)| began.elapsed() < delay)
+    }
+
+    fn delay_retry(&mut self, error: &TransportError) {
+        if let TransportError::RateLimited(delay) = error {
+            self.retry = Some((
+                Instant::now(),
+                delay
+                    .unwrap_or(Duration::from_secs(10))
+                    .max(Duration::from_secs(1)),
+            ));
+        }
+    }
+
+    fn can_review(&self) -> bool {
+        self.statement
+            .as_ref()
+            .is_some_and(|statement| statement.can_adjust)
+    }
 }
 
 fn movement_label(kind: &str) -> Key {
@@ -39,6 +64,9 @@ fn movement_label(kind: &str) -> Key {
 
 impl Root {
     pub(super) fn open_loyalty(&mut self, cx: &mut Context<Self>) {
+        if !self.directory_enabled() {
+            return;
+        }
         let from_marketing = matches!(self.overlay, Overlay::Marketing(_));
         let label = self.t(Key::LoyaltySearch);
         let search = cx.new(|cx| TextField::new(label, false, cx));
@@ -58,6 +86,7 @@ impl Root {
             request: None,
             loading: false,
             refresh_at: Instant::now(),
+            retry: None,
             points: cx.new(|cx| TextField::new("", false, cx)),
             reason: cx.new(|cx| TextField::new("", false, cx)),
             adjustment: None,
@@ -79,55 +108,85 @@ impl Root {
     }
 
     fn search_loyalty_clients(&mut self, cx: &mut Context<Self>) {
-        let Overlay::Loyalty(desk) = &self.overlay else {
+        let Some(transport) = self.svc.transport().filter(|_| {
+            self.status.connectivity == Connectivity::Online && self.directory_enabled()
+        }) else {
             return;
         };
-        if desk.saving || desk.adjustment.is_some() {
+        let session = self.svc.session.clone();
+        let Some(desk) = self
+            .loyalty_desk()
+            .filter(|desk| !desk.saving && desk.adjustment.is_none() && !desk.rate_limited())
+        else {
+            return;
+        };
+        let search = desk.search.read(cx).text().trim().to_owned();
+        if search.encode_utf16().count() > 100 {
+            desk.error = Some(Key::LoyaltySearchLimit);
+            cx.notify();
             return;
         }
-        let search = desk.search.read(cx).text().trim().to_lowercase();
-        let results = if search.is_empty() {
-            Vec::new()
-        } else {
-            self.svc
-                .store
-                .clients()
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|client| client.merged_into_id.is_none())
-                .filter(|client| {
-                    client.name.to_lowercase().contains(&search)
-                        || client
-                            .email
-                            .as_ref()
-                            .is_some_and(|email| email.to_lowercase().contains(&search))
-                        || client
-                            .phone
-                            .as_ref()
-                            .is_some_and(|phone| phone.contains(&search))
-                })
-                .filter_map(|client| {
-                    let id = client.id.parse().ok()?;
-                    let label = client.email.map_or_else(
-                        || client.name.clone(),
-                        |email| format!("{} · {email}", client.name),
-                    );
-                    Some((id, label))
-                })
-                .take(8)
-                .collect()
-        };
-        let Some(desk) = self.loyalty_desk() else {
-            return;
-        };
-        desk.results = results;
+        desk.results.clear();
         desk.selected = None;
         desk.statement = None;
         desk.request = None;
         desk.loading = false;
         desk.error = None;
         desk.saved = false;
+        if search.is_empty() {
+            cx.notify();
+            return;
+        }
+        let identity = desk.identity.clone();
+        let request = Arc::new(());
+        desk.request = Some(request.clone());
+        desk.loading = true;
         cx.notify();
+        cx.spawn(async move |root, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { transport.find_loyalty_clients(&search) })
+                .await;
+            let _ = root.update(cx, |root, cx| {
+                if !Arc::ptr_eq(&session, &root.svc.session)
+                    || root.svc.current_session().is_none()
+                    || !root.directory_enabled()
+                {
+                    return;
+                }
+                let Some(desk) = root.loyalty_desk().filter(|desk| {
+                    Arc::ptr_eq(&identity, &desk.identity)
+                        && desk
+                            .request
+                            .as_ref()
+                            .is_some_and(|current| Arc::ptr_eq(current, &request))
+                }) else {
+                    return;
+                };
+                desk.loading = false;
+                desk.request = None;
+                match result {
+                    Ok(clients) => {
+                        desk.results = clients
+                            .into_iter()
+                            .map(|client| {
+                                let label = match client.email {
+                                    Some(email) => format!("{} · {email}", client.name),
+                                    None => client.name,
+                                };
+                                (client.id, label)
+                            })
+                            .collect()
+                    }
+                    Err(error) => {
+                        desk.delay_retry(&error);
+                        desk.error = Some(Key::LoyaltyLoadFailed);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn select_loyalty_client(&mut self, id: Uuid, cx: &mut Context<Self>) {
@@ -155,9 +214,23 @@ impl Root {
     }
 
     pub(super) fn refresh_loyalty(&mut self, reconnected: bool, cx: &mut Context<Self>) {
+        if !matches!(self.overlay, Overlay::Loyalty(_)) {
+            return;
+        }
+        if !self.directory_enabled() {
+            self.overlay = Overlay::None;
+            cx.notify();
+            return;
+        }
         let Some(desk) = self.loyalty_desk() else {
             return;
         };
+        if desk.rate_limited() {
+            return;
+        }
+        if desk.retry.take().is_some() {
+            cx.notify();
+        }
         if desk.selected.is_none()
             || desk.request.is_some()
             || desk.saving
@@ -181,7 +254,10 @@ impl Root {
             return;
         };
         let session = self.svc.session.clone();
-        let Some(desk) = self.loyalty_desk().filter(|desk| !desk.saving) else {
+        let Some(desk) = self
+            .loyalty_desk()
+            .filter(|desk| !desk.saving && !desk.rate_limited())
+        else {
             return;
         };
         let Some((client, _)) = desk.selected.as_ref() else {
@@ -214,16 +290,13 @@ impl Root {
                 };
                 desk.loading = false;
                 desk.request = None;
-                let delay = match &result {
-                    Err(TransportError::RateLimited(Some(delay))) => {
-                        (*delay).min(Duration::from_secs(86_400))
-                    }
-                    _ => Duration::from_secs(10),
-                };
-                desk.refresh_at = Instant::now() + delay;
+                desk.refresh_at = Instant::now() + Duration::from_secs(10);
+                if let Err(error) = &result {
+                    desk.delay_retry(error);
+                }
                 match result {
                     Ok(statement) => {
-                        if !statement.can_adjust {
+                        if !statement.can_adjust && !desk.uncertain {
                             desk.adjustment = None;
                             desk.uncertain = false;
                             desk.confirm_exit = false;
@@ -239,9 +312,12 @@ impl Root {
                         | TransportError::BadRequest(_),
                     ) => {
                         desk.statement = None;
-                        desk.adjustment = None;
-                        desk.uncertain = false;
-                        desk.confirm_exit = false;
+                        desk.results.clear();
+                        if !desk.uncertain {
+                            desk.selected = None;
+                            desk.adjustment = None;
+                            desk.confirm_exit = false;
+                        }
                         desk.error = Some(Key::LoyaltyLoadFailed);
                     }
                     Err(_) => {
@@ -304,10 +380,9 @@ impl Root {
         };
         let generation = self.svc.store.verified_reviewed_generation().ok();
         let session = self.svc.session.clone();
-        let Some(desk) = self
-            .loyalty_desk()
-            .filter(|desk| !desk.saving && !desk.confirm_exit)
-        else {
+        let Some(desk) = self.loyalty_desk().filter(|desk| {
+            !desk.saving && !desk.confirm_exit && !desk.rate_limited() && desk.can_review()
+        }) else {
             return;
         };
         let Some(adjustment) = desk.adjustment.clone() else {
@@ -343,6 +418,9 @@ impl Root {
                     return;
                 };
                 desk.saving = false;
+                if let Err(error) = &result {
+                    desk.delay_retry(error);
+                }
                 match result {
                     Ok(_) => {
                         desk.adjustment = None;
@@ -362,8 +440,14 @@ impl Root {
                         desk.error = Some(Key::LoyaltyUnconfirmed);
                     }
                     Err(error) => {
-                        desk.adjustment = None;
-                        desk.uncertain = false;
+                        if !desk.uncertain
+                            || matches!(error, TransportError::ReplicaGenerationChanged)
+                        {
+                            desk.adjustment = None;
+                            desk.uncertain = false;
+                            desk.points.update(cx, |field, cx| field.set_text("", cx));
+                            desk.reason.update(cx, |field, cx| field.set_text("", cx));
+                        }
                         desk.error = Some(
                             if matches!(error, TransportError::ReplicaGenerationChanged) {
                                 Key::LoyaltyRestore
@@ -508,7 +592,7 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let online = self.status.connectivity == Connectivity::Online;
-        let ready = online && !desk.loading && !desk.saving;
+        let ready = online && !desk.loading && !desk.saving && !desk.rate_limited();
         let mut body = div()
             .flex()
             .flex_col()
@@ -531,6 +615,8 @@ impl Root {
                     |root, cx| root.dismiss_loyalty(false, cx),
                     cx,
                 ));
+        } else if desk.adjustment.is_some() && !desk.can_review() {
+            body = body.child(self.t(Key::LoyaltyExitReview));
         } else if let Some(adjustment) = &desk.adjustment {
             body = body
                 .child(self.label(Key::LoyaltyReview))
@@ -769,5 +855,34 @@ impl Root {
                         }),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[gpui::test]
+    async fn loyalty_opens_from_marketing_without_an_existing_campaign(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_directory, config) = crate::root::tests::desk();
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let mut root = Root::new(config, window, cx);
+            root.svc.stop_sync();
+            root.status.connectivity = Connectivity::Offline;
+            root.open_marketing(cx);
+            root.status.connectivity = Connectivity::Online;
+            root
+        });
+        cx.simulate_resize(gpui::size(px(1100.), px(720.)));
+        cx.run_until_parked();
+        let link = cx.debug_bounds("marketing-loyalty").unwrap().center();
+        cx.simulate_click(link, Default::default());
+        cx.run_until_parked();
+        root.update(cx, |root, _| {
+            assert!(root.loyalty_desk().is_some());
+            assert!(root.svc.store.outbox(5).unwrap().is_empty());
+        });
     }
 }
