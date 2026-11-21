@@ -66,6 +66,48 @@ const createAppt = (overrides: Partial<{ id: string; staffId: string; startsAt: 
 const rows = async <T>(query: ReturnType<typeof sql>) =>
   (await t.db.execute(query)) as unknown as T[];
 
+test("native service creation replays once and keeps its professional assignment", async () => {
+  const id = uuid();
+  const create = {
+    mutationId: mid(),
+    createdAt: new Date().toISOString(),
+    kind: "service.create",
+    payload: {
+      id,
+      service: {
+        name: "New native treatment",
+        durationMinutes: 40,
+        currency: "EUR",
+        priceCents: 2900,
+        staffIds: [f.anaId],
+      },
+    },
+  };
+  expect((await push(t, ana, [{ ...create, mutationId: mid() }])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "forbidden",
+  });
+  const results = await Promise.all([push(t, owner, [create]), push(t, owner, [create])]);
+  expect(results.map((response) => response.body.results[0]?.status)).toEqual([
+    "applied",
+    "applied",
+  ]);
+  expect(
+    results
+      .map(({ body }) => {
+        const result = body.results[0];
+        return result?.status === "applied" && result.replayed;
+      })
+      .sort(),
+  ).toEqual([false, true]);
+  const { services } = listAdminServicesResponseSchema.parse(
+    await (await json(t.app, "/admin/services", "GET", undefined, owner.cookie)).json(),
+  );
+  expect(services.filter((row) => row.id === id)).toEqual([
+    expect.objectContaining({ name: create.payload.service.name, staffIds: [f.anaId] }),
+  ]);
+});
+
 describe("authorization and envelope", () => {
   test("a restored generation rejects legacy and stale batches before writing or recording them", async () => {
     const restored = await setupApiTest({

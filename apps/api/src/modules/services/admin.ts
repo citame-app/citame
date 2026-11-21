@@ -112,6 +112,7 @@ export async function createService(
   db: Database,
   input: CreateServiceRequest,
   actor: AdminActor,
+  id?: string,
 ): Promise<AdminService> {
   return db.transaction(async (tx) => {
     await lockScheduling(tx);
@@ -146,6 +147,7 @@ export async function createService(
     const [row] = await tx
       .insert(service)
       .values({
+        id,
         name: input.name,
         description: input.description ?? null,
         category: input.category === undefined ? (parent?.category ?? null) : input.category,

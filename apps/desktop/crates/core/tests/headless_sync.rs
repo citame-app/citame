@@ -140,6 +140,63 @@ fn native_team_access_uses_reviewed_permissions_through_the_proxy() {
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_catalogue_creation_queues_offline_and_publishes_an_assigned_variant_once() {
+    use sob_core::http::ServiceCreation;
+    let device = proxy_device();
+    let mut web = Device::sign_in();
+    web.sync();
+    let original = catalog(&web);
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("catalogue.db");
+    let mut store = Store::open(&path).unwrap();
+    sync::sync_cycle(&mut store, &*device.transport).unwrap();
+    let generation = store.refresh_reviewed_generation().unwrap();
+    let id = uuid::Uuid::now_v7().to_string();
+    let creation: ServiceCreation = serde_json::from_value(json!({
+        "id": id,
+        "service": {
+            "name": "Synthetic offline variant", "durationMinutes": 35, "bufferMinutes": 5,
+            "currency": "ARS", "priceCents": 2750, "sortOrder": 0, "onlineBooking": true,
+            "active": true, "staffIds": [original.staff],
+            "catalog": { "kind": "variant", "parentServiceId": original.haircut, "optionLabel": "Long" }
+        }
+    })).unwrap();
+    store
+        .queue_service_creation(&generation, &creation, None)
+        .unwrap();
+    let wire = store.outbox(10).unwrap().pop().unwrap().to_wire();
+    drop(store);
+    let mut restored = Store::open(&path).unwrap();
+    assert_eq!(restored.pending_service_creations().unwrap(), [creation]);
+    let response = sync::sync_cycle(&mut restored, &*device.transport).unwrap();
+    assert_eq!(response.push.applied, 1);
+    assert!(restored.pending_service_creations().unwrap().is_empty());
+    let replay = device
+        .transport
+        .push(&PushRequest {
+            device_id: "native-catalogue-test".into(),
+            generation: Some(generation),
+            mutations: vec![wire],
+        })
+        .unwrap();
+    assert!(matches!(
+        replay.results.first(),
+        Some(MutationResult::Applied { replayed: true, .. })
+    ));
+    let response = web.rest_get("/admin/services");
+    let matches = response["services"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|service| service["id"] == id)
+        .collect::<Vec<_>>();
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0]["catalog"]["parentServiceId"], original.haircut);
+    assert_eq!(matches[0]["staffIds"], json!([original.staff]));
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_catalogue_edits_reach_web_and_respect_newer_values_through_the_proxy() {
     let device = proxy_device();
     let mut web = Device::sign_in();

@@ -1091,6 +1091,7 @@ impl Root {
                 CoreError::StaffCapacityExceeded => Key::ConflictSlotTaken,
                 CoreError::PendingClient => Key::BookingIntakeClientSync,
                 CoreError::CalendarGenerationChanged => Key::BookingIntakeRestore,
+                CoreError::IncompatibleServices => Key::ErrIncompatibleServices,
                 _ => Key::ErrGeneric,
             });
         }
@@ -2692,6 +2693,15 @@ impl Root {
                 service.active
                     && performed.contains(&service.id)
                     && service.name.to_lowercase().contains(&search)
+                    && (f.services.contains(&service.id)
+                        || ops::validate_catalogue_selection(
+                            &self.services,
+                            f.services
+                                .iter()
+                                .map(String::as_str)
+                                .chain(std::iter::once(service.id.as_str())),
+                        )
+                        .is_ok())
             })
             .collect();
         let selected_minutes: i64 = self
@@ -3274,6 +3284,7 @@ impl Root {
                 "time_off.create" | "time_off.update" | "time_off.delete" => Key::TimeOff,
                 "settings.update" => Key::SalonConfiguration,
                 "service.staff_replace" => Key::ServiceAssignments,
+                sob_core::store::SERVICE_CREATION_KIND => Key::CatalogNew,
                 _ => Key::ConflictOther,
             });
             let when = c
@@ -3283,6 +3294,15 @@ impl Root {
                 .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
                 .map(|d| self.date_time_label(d.with_timezone(&Utc)))
                 .unwrap_or_default();
+            let description = if c.kind == sob_core::store::SERVICE_CREATION_KIND {
+                c.payload
+                    .pointer("/service/name")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_owned()
+            } else {
+                when
+            };
             let staff = c
                 .payload
                 .get("staffId")
@@ -3310,7 +3330,7 @@ impl Root {
                             div()
                                 .text_sm()
                                 .text_color(theme::muted())
-                                .child(SharedString::from(format!("{when} {staff}"))),
+                                .child(SharedString::from(format!("{description} {staff}"))),
                         ),
                 )
                 .child(div().text_sm().child(
@@ -3341,7 +3361,12 @@ impl Root {
                             },
                         )
                         .when(
-                            c.requires_restored_review() || c.kind == "service.staff_replace",
+                            c.requires_restored_review()
+                                || matches!(
+                                    c.kind.as_str(),
+                                    "service.staff_replace"
+                                        | sob_core::store::SERVICE_CREATION_KIND
+                                ),
                             |row| {
                                 let details = serde_json::json!({
                                     "kind": c.kind,
@@ -3378,6 +3403,17 @@ impl Root {
                                 ))
                             },
                         )
+                        .when(c.kind == sob_core::store::SERVICE_CREATION_KIND, |row| {
+                            let id = c.mutation_id.clone();
+                            row.child(self.button(
+                                ("c-service-create", i),
+                                self.t(Key::CatalogReview),
+                                Kind::Primary,
+                                cx.listener(move |root, _, _, cx| {
+                                    root.open_catalog_creation(Some(&id), cx)
+                                }),
+                            ))
+                        })
                         .child(self.button(
                             ("c-dismiss", i),
                             self.t(Key::ConflictDismiss),

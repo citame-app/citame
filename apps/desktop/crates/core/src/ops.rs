@@ -10,7 +10,9 @@ use crate::calendar::{
     service_work_windows,
 };
 use crate::error::{CoreError, Result};
-use crate::model::{AppointmentService, AppointmentStatus, Client, TimeOff, WorkWindow};
+use crate::model::{
+    AppointmentService, AppointmentStatus, Client, Service, ServiceOption, TimeOff, WorkWindow,
+};
 use crate::store::Store;
 
 /// Longest free text the API accepts (`LIMITS` in `packages/contracts`). Counted in UTF-16 code
@@ -279,6 +281,56 @@ fn queue_appointment(store: &mut Store, new: NewAppointment) -> Result<String> {
     Ok(id)
 }
 
+/// Match the server's ordered option rules before showing or queuing a combination.
+pub fn validate_catalogue_selection<'a>(
+    catalogue: &[Service],
+    ids: impl IntoIterator<Item = &'a str>,
+) -> Result<()> {
+    let mut picked = std::collections::BTreeSet::new();
+    let mut families = std::collections::BTreeSet::new();
+    let mut base: Option<(&Service, &str)> = None;
+    let mut currency = None;
+    for id in ids {
+        let row = catalogue
+            .iter()
+            .find(|row| row.id == id && row.active)
+            .ok_or(CoreError::IncompatibleServices)?;
+        if !picked.insert(id) || currency.is_some_and(|code| code != row.currency.as_str()) {
+            return Err(CoreError::IncompatibleServices);
+        }
+        currency = Some(row.currency.as_str());
+        let family = match &row.catalog {
+            Some(ServiceOption::Addon {
+                allowed_service_ids,
+            }) => {
+                if !base.is_some_and(|(previous, family)| {
+                    allowed_service_ids.contains(&previous.id)
+                        || allowed_service_ids.contains(family)
+                }) {
+                    return Err(CoreError::IncompatibleServices);
+                }
+                continue;
+            }
+            Some(ServiceOption::Variant {
+                parent_service_id, ..
+            }) => {
+                if !catalogue.iter().any(|parent| {
+                    parent.id == *parent_service_id && parent.active && parent.catalog.is_none()
+                }) {
+                    return Err(CoreError::IncompatibleServices);
+                }
+                parent_service_id.as_str()
+            }
+            None => id,
+        };
+        if !families.insert(family) {
+            return Err(CoreError::IncompatibleServices);
+        }
+        base = Some((row, family));
+    }
+    Ok(())
+}
+
 pub(crate) fn reviewed_service_terms(
     store: &Store,
     new: &NewAppointment,
@@ -286,10 +338,8 @@ pub(crate) fn reviewed_service_terms(
     if new.service_ids.is_empty() {
         return Err(CoreError::Invalid("pick at least one service".into()));
     }
-    let known: Vec<String> = store.services()?.into_iter().map(|s| s.id).collect();
-    if let Some(bad) = new.service_ids.iter().find(|id| !known.contains(id)) {
-        return Err(CoreError::Invalid(format!("unknown service {bad}")));
-    }
+    let catalog = store.services()?;
+    validate_catalogue_selection(&catalog, new.service_ids.iter().map(String::as_str))?;
     if !store.staff()?.iter().any(|s| s.id == new.staff_id) {
         return Err(CoreError::Invalid(format!(
             "unknown staff member {}",
@@ -305,7 +355,6 @@ pub(crate) fn reviewed_service_terms(
     if let Some(notes) = &new.notes {
         check_len("notes", notes, MAX_NOTES)?;
     }
-    let catalog = store.services()?;
     let picked: Vec<_> = new
         .service_ids
         .iter()

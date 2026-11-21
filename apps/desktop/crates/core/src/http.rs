@@ -56,8 +56,10 @@ mod service_catalog;
 mod service_catalog_form;
 mod staff_access;
 mod staff_portraits;
+pub use crate::model::ServiceOption;
 pub use service_catalog::{
-    CatalogPrice, CatalogService, CatalogWriteError, ReviewedCatalog, ServiceDetails,
+    CatalogPrice, CatalogService, CatalogWriteError, NewCatalogService, ReviewedCatalog,
+    ServiceCreation, ServiceDetails,
 };
 pub use service_catalog_form::{CatalogForm, ServiceField};
 pub use staff_access::{AccessPreset, ReviewedStaffAccess, StaffAccess};

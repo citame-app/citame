@@ -51,6 +51,71 @@ fn up(seq: i64, entity: &str, id: &str, data: serde_json::Value) -> RawChange {
 const T0: &str = "2026-03-01T10:00:00.000Z";
 
 #[test]
+fn a_catalogue_creation_reopens_with_its_exact_request_and_is_not_bookable_before_sync() {
+    use crate::http::ServiceCreation;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("catalogue.sqlite");
+    let mut store = Store::open(&path).unwrap();
+    seed(&mut store);
+    let id = uuid::Uuid::now_v7().to_string();
+    let creation: ServiceCreation = serde_json::from_value(json!({
+        "id": id,
+        "service": {
+            "name": "Local treatment", "durationMinutes": 30, "bufferMinutes": 5,
+            "priceCents": 2900, "currency": "EUR", "sortOrder": 0, "onlineBooking": true,
+            "active": true, "staffIds": [ANA]
+        }
+    }))
+    .unwrap();
+    let generation = store.verified_reviewed_generation().unwrap();
+    store.remember_catalogue_access(&generation).unwrap();
+    assert!(
+        store
+            .queue_service_creation("previous", &creation, None)
+            .is_err()
+    );
+    store
+        .queue_service_creation(&generation, &creation, None)
+        .unwrap();
+    assert!(
+        store
+            .queue_service_creation(&generation, &creation, None)
+            .is_err()
+    );
+    let original = store.outbox(10).unwrap().pop().unwrap().to_wire();
+    drop(store);
+    let saved = Store::open(&path).unwrap();
+    assert!(saved.cached_catalogue_access());
+    assert_eq!(saved.pending_service_creations().unwrap(), vec![creation]);
+    assert_eq!(saved.outbox(10).unwrap().pop().unwrap().to_wire(), original);
+    assert!(saved.services().unwrap().iter().all(|row| row.id != id));
+}
+
+#[test]
+fn the_offline_calendar_excludes_invalid_option_order_and_compatible_families_repeat_once() {
+    let mut store = Store::open_in_memory().unwrap();
+    seed(&mut store);
+    let mut services = store.services().unwrap();
+    let base = services.iter().find(|row| row.id == CUT).unwrap().clone();
+    let mut extra = base.clone();
+    extra.id = "extra".into();
+    extra.catalog = Some(ServiceOption::Addon {
+        allowed_service_ids: [CUT.into()].into(),
+    });
+    let mut variant = base.clone();
+    variant.id = "variant".into();
+    variant.catalog = Some(ServiceOption::Variant {
+        parent_service_id: CUT.into(),
+        option_label: "Long".into(),
+    });
+    services.extend([extra, variant]);
+    assert!(ops::validate_catalogue_selection(&services, ["extra"]).is_err());
+    assert!(ops::validate_catalogue_selection(&services, [DRY, "extra"]).is_err());
+    assert!(ops::validate_catalogue_selection(&services, [CUT, "variant"]).is_err());
+    assert!(ops::validate_catalogue_selection(&services, ["variant", "extra"]).is_ok());
+}
+
+#[test]
 fn service_assignment_survives_restart_and_requires_review_on_a_changed_team() {
     use crate::store::{AssignmentWork, ServiceAssignment};
 

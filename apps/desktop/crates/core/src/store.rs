@@ -380,7 +380,7 @@ impl Store {
         Ok(self.reviewed_generation.clone())
     }
 
-    pub(crate) fn verified_reviewed_generation(&self) -> Result<String> {
+    pub fn verified_reviewed_generation(&self) -> Result<String> {
         let current = self.replica_generation()?;
         if current != self.reviewed_generation || self.get_meta(REBUILD_KEY)?.is_some() {
             return Err(CoreError::CalendarGenerationChanged);
@@ -922,7 +922,7 @@ impl Store {
             )?;
             tx.execute("DELETE FROM meta WHERE key = ?1", [SALON_CONFIGURATION_ACK])?;
         }
-        Self::retire_confirmed_assignments(&tx, next_cursor)?;
+        Self::retire_confirmed_catalogue_edits(&tx, next_cursor)?;
         if complete {
             tx.execute(
                 "INSERT OR IGNORE INTO meta (key,value) VALUES ('calendar_snapshot_complete','1')",
@@ -1471,7 +1471,10 @@ impl Store {
                             &serde_json::to_string(&ack)?,
                         )?;
                     } else if let Some(through) = response_head
-                        && s.kind == service_assignments::KIND
+                        && matches!(
+                            s.kind.as_str(),
+                            service_assignments::KIND | SERVICE_CREATION_KIND
+                        )
                     {
                         Self::set_meta_at(
                             &tx,
@@ -1584,6 +1587,8 @@ impl Store {
 
 mod service_assignments;
 pub use service_assignments::{AssignmentSnapshot, AssignmentWork, ServiceAssignment};
+mod service_creation;
+pub use service_creation::SERVICE_CREATION_KIND;
 
 #[cfg(test)]
 mod tests;

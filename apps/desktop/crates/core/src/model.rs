@@ -219,6 +219,8 @@ pub struct Client {
 #[serde(rename_all = "camelCase")]
 pub struct Service {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<ServiceOption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub processing: Option<ProcessingTime>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quote_hash: Option<String>,
@@ -233,6 +235,22 @@ pub struct Service {
     pub currency: String,
     pub active: bool,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ServiceOption {
+    Variant {
+        parent_service_id: String,
+        option_label: String,
+    },
+    Addon {
+        allowed_service_ids: std::collections::BTreeSet<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

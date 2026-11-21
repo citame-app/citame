@@ -29,7 +29,7 @@ import {
   updateAppointment,
 } from "../appointments/service";
 import { updateClient } from "../clients/admin";
-import { setServiceStaff, updateService } from "../services/admin";
+import { createService, setServiceStaff, updateService } from "../services/admin";
 import { getSalonSettings, updateReviewedSettings, updateSalonSettings } from "../settings/service";
 import { requireStaff, updateStaff } from "../staff/admin";
 import { createTimeOff, deleteTimeOff, updateTimeOff } from "../staff/schedule";
@@ -213,6 +213,11 @@ export async function applyMutation(
       if (mutation.kind === "time_off.delete") await deleteTimeOff(db, staffId, id, actor, now);
       else await updateTimeOff(db, staffId, id, changes, actor, now);
       await db.update(timeOff).set({ updatedAt: at }).where(eq(timeOff.id, id));
+      return;
+    }
+    case "service.create": {
+      authorizeServiceAdmin(principal);
+      await createService(db, mutation.payload.service, actor, mutation.payload.id);
       return;
     }
     case "service.update": {

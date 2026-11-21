@@ -195,7 +195,7 @@ impl Root {
                 )
             })
             .when(
-                self.can_configure_salon()
+                self.can_create_catalogue_item()
                     || desk.areas.as_ref().is_some_and(|areas| {
                         areas
                             .iter()

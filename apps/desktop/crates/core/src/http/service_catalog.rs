@@ -1,5 +1,6 @@
 use super::*;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -53,6 +54,25 @@ pub struct CatalogService {
     pub version: u64,
     #[serde(flatten)]
     pub details: ServiceDetails,
+    pub catalog: Option<ServiceOption>,
+    #[serde(default, rename = "staffIds")]
+    pub staff_ids: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewCatalogService {
+    #[serde(flatten)]
+    pub details: ServiceDetails,
+    pub staff_ids: BTreeSet<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<ServiceOption>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServiceCreation {
+    pub id: String,
+    pub service: NewCatalogService,
 }
 
 #[derive(Debug, Deserialize)]

@@ -10,6 +10,7 @@ import {
   updateSalonSettingsRequestSchema,
 } from "./salon";
 import {
+  createServiceRequestSchema,
   serviceSchema,
   setServiceStaffRequestSchema,
   updateServiceRequestSchema,
@@ -191,6 +192,12 @@ const serviceUpdate = z.object({
     .refine(oneChange, { message: "Provide at least one change", path: ["name"] }),
 });
 
+const serviceCreate = z.object({
+  ...envelope,
+  kind: z.literal("service.create"),
+  payload: z.strictObject({ id: idSchema, service: createServiceRequestSchema }),
+});
+
 const serviceStaffReplace = z.object({
   ...envelope,
   kind: z.literal("service.staff_replace"),
@@ -227,6 +234,7 @@ export const syncMutationSchema = z.discriminatedUnion("kind", [
   timeOffCreate,
   timeOffUpdate,
   timeOffDelete,
+  serviceCreate,
   serviceUpdate,
   serviceStaffReplace,
   staffUpdate,
