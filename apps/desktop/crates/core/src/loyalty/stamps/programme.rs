@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use uuid::Uuid;
 
+pub const MAX_QUALIFYING_SERVICES: usize = 50;
+pub const MAX_TERMS_UTF16: usize = 2_000;
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgrammeTerms {
@@ -121,8 +124,8 @@ impl ProgrammeTerms {
             parse_reviewed_amount(value).filter(|amount| (1..=10_000).contains(amount))
         })?;
         terms.reward_expiry_days = expiry(fields.reward_expiry)?;
-        terms.card.terms = text(fields.terms, 0, 2_000)?;
-        if terms.qualifying_service_ids.len() > 50
+        terms.card.terms = text(fields.terms, 0, MAX_TERMS_UTF16)?;
+        if terms.qualifying_service_ids.len() > MAX_QUALIFYING_SERVICES
             || terms
                 .qualifying_service_ids
                 .iter()

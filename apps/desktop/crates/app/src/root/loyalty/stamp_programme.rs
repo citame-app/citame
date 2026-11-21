@@ -2,24 +2,73 @@ use super::*;
 use sob_core::loyalty::stamps::programme::{
     ExistingCards, Fields, Programme, ProgrammeTerms, Review,
 };
+use std::{cell::Cell, rc::Rc};
 
 mod catalogue;
 mod view;
-use catalogue::{Catalogue, product_choice, service_choices};
-use sob_core::loyalty::stamps::RewardKind;
+use catalogue::{Catalogue, service_choices};
 
 const TERMS_PER_PAGE: usize = 12;
+use sob_core::loyalty::stamps::programme::MAX_TERMS_UTF16 as TERMS_LIMIT;
 
-const FIELD_LABELS: [Key; 8] = [
-    Key::StampProgrammeName,
-    Key::StampProgrammeGoal,
-    Key::StampProgrammeWelcome,
-    Key::StampProgrammeMinimum,
-    Key::StampProgrammeExpiryDays,
-    Key::StampProgrammeRewardName,
-    Key::StampProgrammeDiscount,
-    Key::StampProgrammeRewardExpiry,
-];
+#[derive(Clone, Copy)]
+#[repr(usize)]
+enum Field {
+    Name,
+    Goal,
+    Welcome,
+    Minimum,
+    StampExpiry,
+    RewardName,
+    Discount,
+    RewardExpiry,
+}
+
+impl Field {
+    const ALL: [Self; 8] = [
+        Self::Name,
+        Self::Goal,
+        Self::Welcome,
+        Self::Minimum,
+        Self::StampExpiry,
+        Self::RewardName,
+        Self::Discount,
+        Self::RewardExpiry,
+    ];
+
+    fn label(self) -> Key {
+        match self {
+            Self::Name => Key::StampProgrammeName,
+            Self::Goal => Key::StampProgrammeGoal,
+            Self::Welcome => Key::StampProgrammeWelcome,
+            Self::Minimum => Key::StampProgrammeMinimum,
+            Self::StampExpiry => Key::StampProgrammeExpiryDays,
+            Self::RewardName => Key::StampProgrammeRewardName,
+            Self::Discount => Key::StampProgrammeDiscount,
+            Self::RewardExpiry => Key::StampProgrammeRewardExpiry,
+        }
+    }
+
+    fn value(self, programme: &ProgrammeTerms) -> String {
+        use sob_core::reports::decimal_amount;
+        let days = |value: Option<u32>| value.map(|n| n.to_string()).unwrap_or_default();
+        match self {
+            Self::Name => programme.card.name.clone(),
+            Self::Goal => programme.card.goal.to_string(),
+            Self::Welcome => programme.card.welcome_stamps.to_string(),
+            Self::Minimum => decimal_amount(programme.minimum_spend_cents.into()),
+            Self::StampExpiry => days(programme.stamp_expiry_days),
+            Self::RewardName => programme.card.reward.name.clone(),
+            Self::Discount => programme
+                .card
+                .reward
+                .discount_basis_points
+                .map(|n| decimal_amount(n.into()))
+                .unwrap_or_default(),
+            Self::RewardExpiry => days(programme.reward_expiry_days),
+        }
+    }
+}
 
 pub(super) struct Editor {
     identity: Arc<()>,
@@ -29,10 +78,12 @@ pub(super) struct Editor {
     fields: [Entity<TextField>; 8],
     terms: Vec<Entity<TextField>>,
     terms_page: usize,
+    terms_lines_remaining: Rc<Cell<usize>>,
     existing_cards: ExistingCards,
     review: Option<Review>,
     feedback: Option<Key>,
     busy: bool,
+    refreshing: bool,
     confirm_exit: bool,
     observed: Option<i64>,
     refresh_at: Instant,
@@ -43,27 +94,7 @@ pub(super) struct Editor {
 enum Request {
     Refresh,
     Replace,
-    Save(Review),
-}
-
-fn values(programme: &ProgrammeTerms) -> [String; 8] {
-    use sob_core::reports::decimal_amount;
-    let days = |value: Option<u32>| value.map(|n| n.to_string()).unwrap_or_default();
-    [
-        programme.card.name.clone(),
-        programme.card.goal.to_string(),
-        programme.card.welcome_stamps.to_string(),
-        decimal_amount(programme.minimum_spend_cents.into()),
-        days(programme.stamp_expiry_days),
-        programme.card.reward.name.clone(),
-        programme
-            .card
-            .reward
-            .discount_basis_points
-            .map(|n| decimal_amount(n.into()))
-            .unwrap_or_default(),
-        days(programme.reward_expiry_days),
-    ]
+    Save(Box<Review>),
 }
 
 impl Editor {
@@ -80,11 +111,14 @@ impl Editor {
         self.existing_cards != ExistingCards::Keep
             || self.draft.as_ref() != Some(original)
             || self.terms_text(cx) != original.card.terms
-            || self
-                .fields
-                .iter()
-                .zip(values(original))
-                .any(|(field, value)| field.read(cx).text() != value)
+            || Field::ALL
+                .into_iter()
+                .any(|field| self.fields[field as usize].read(cx).text() != field.value(original))
+    }
+
+    fn update_terms_budget(&self) {
+        self.terms_lines_remaining
+            .set((TERMS_LIMIT + 1).saturating_sub(self.terms.len()));
     }
 
     fn terms_text(&self, cx: &App) -> String {
@@ -96,25 +130,16 @@ impl Editor {
     }
 
     fn proposed(&self, cx: &App) -> Option<ProgrammeTerms> {
-        let [
-            name,
-            goal,
-            welcome,
-            minimum,
-            stamp_expiry,
-            reward_name,
-            discount,
-            reward_expiry,
-        ] = self.fields.each_ref().map(|field| field.read(cx).text());
+        let input = |field: Field| self.fields[field as usize].read(cx).text();
         self.draft.as_ref()?.parse_fields(Fields {
-            name,
-            goal,
-            welcome,
-            minimum,
-            stamp_expiry,
-            reward_name,
-            discount,
-            reward_expiry,
+            name: input(Field::Name),
+            goal: input(Field::Goal),
+            welcome: input(Field::Welcome),
+            minimum: input(Field::Minimum),
+            stamp_expiry: input(Field::StampExpiry),
+            reward_name: input(Field::RewardName),
+            discount: input(Field::Discount),
+            reward_expiry: input(Field::RewardExpiry),
             terms: &self.terms_text(cx),
         })
     }
@@ -130,17 +155,19 @@ impl Editor {
     }
 
     fn replace(&mut self, programme: Programme, cx: &mut Context<Root>) {
-        for (field, value) in self.fields.iter().zip(values(&programme.program)) {
-            field.update(cx, |field, cx| field.set_text(&value, cx));
+        for field in Field::ALL {
+            let value = field.value(&programme.program);
+            self.fields[field as usize].update(cx, |field, cx| field.set_text(&value, cx));
         }
         self.terms = programme
             .program
             .card
             .terms
             .split('\n')
-            .map(|line| terms_line(line, cx))
+            .map(|line| terms_line(line, &self.terms_lines_remaining, cx))
             .collect();
         self.terms_page = 0;
+        self.update_terms_budget();
         self.draft = Some(programme.program.clone());
         self.current = Some(programme.clone());
         self.base = Some(programme);
@@ -150,9 +177,10 @@ impl Editor {
     }
 }
 
-fn terms_line(text: &str, cx: &mut Context<Root>) -> Entity<TextField> {
+fn terms_line(text: &str, budget: &Rc<Cell<usize>>, cx: &mut Context<Root>) -> Entity<TextField> {
     let input = cx.new(|cx| {
-        let mut field = TextField::new("", false, cx).with_line_paste(2_000);
+        let mut field =
+            TextField::new("", false, cx).with_bounded_line_paste(TERMS_LIMIT, budget.clone());
         field.set_text(text, cx);
         field
     });
@@ -168,17 +196,15 @@ fn terms_line(text: &str, cx: &mut Context<Root>) -> Entity<TextField> {
             return;
         };
         match event {
-            FieldEvent::PasteLines(tail)
-                if editor.terms.len().saturating_add(tail.len()) <= 2001 =>
-            {
+            FieldEvent::PasteLines(tail) => {
+                let budget = &editor.terms_lines_remaining;
                 editor.terms.splice(
                     index + 1..index + 1,
-                    tail.iter().map(|line| terms_line(line, cx)),
+                    tail.iter().map(|line| terms_line(line, budget, cx)),
                 );
+                editor.update_terms_budget();
             }
-            FieldEvent::PasteLines(_) | FieldEvent::PasteTooLong => {
-                editor.feedback = Some(Key::StampProgrammeInvalid)
-            }
+            FieldEvent::PasteTooLong => editor.feedback = Some(Key::StampProgrammeInvalid),
             _ => {}
         }
         cx.notify();
@@ -197,7 +223,7 @@ impl Root {
             return;
         }
         let catalogue = Catalogue::new(self);
-        let labels = FIELD_LABELS.map(|key| self.t(key));
+        let labels = Field::ALL.map(|field| self.t(field.label()));
         let Some(desk) = self
             .loyalty_desk()
             .filter(|desk| !desk.saving && desk.adjustment.is_none())
@@ -216,10 +242,12 @@ impl Root {
             }),
             terms: Vec::new(),
             terms_page: 0,
+            terms_lines_remaining: Rc::new(Cell::new(TERMS_LIMIT)),
             existing_cards: ExistingCards::Keep,
             review: None,
             feedback: None,
             busy: false,
+            refreshing: false,
             confirm_exit: false,
             observed: None,
             refresh_at: Instant::now(),
@@ -248,6 +276,7 @@ impl Root {
         desk.statement = None;
         desk.stamps = super::stamps::CardList::default();
         desk.request = None;
+        desk.loading = false;
         for field in [&desk.search, &desk.points, &desk.reason] {
             field.update(cx, |field, cx| field.clear(cx));
         }
@@ -260,6 +289,7 @@ impl Root {
         }
         editor.current = None;
         editor.busy = false;
+        editor.refreshing = false;
         editor.observed = None;
         editor.refresh_at = Instant::now();
         editor.catalogue.clear_picker();
@@ -286,7 +316,9 @@ impl Root {
         if editor.retry_at.take().is_some() {
             cx.notify();
         }
-        if reconnected || observed != editor.observed || Instant::now() >= editor.refresh_at {
+        if !editor.refreshing
+            && (reconnected || observed != editor.observed || Instant::now() >= editor.refresh_at)
+        {
             self.request_stamp_programme(Request::Refresh, cx);
         }
     }
@@ -306,13 +338,16 @@ impl Root {
         else {
             return;
         };
-        let identity = editor.identity.clone();
         let saving = matches!(request, Request::Save(_));
         let replacing = matches!(request, Request::Replace);
-        let known_product = editor.catalogue.target.as_ref().map(|choice| choice.id);
-        editor.busy = true;
+        if !saving && !replacing && editor.refreshing {
+            return;
+        }
+        let identity = Arc::new(());
+        editor.identity = identity.clone();
+        editor.busy = saving || replacing;
+        editor.refreshing = !editor.busy;
         editor.observed = observed;
-        editor.refresh_at = Instant::now() + Duration::from_secs(15);
         if let Some(services) = services {
             editor.catalogue.services = services;
         }
@@ -321,19 +356,10 @@ impl Root {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let programme = match request {
+                    match request {
                         Request::Refresh | Request::Replace => transport.stamp_programme(),
                         Request::Save(review) => transport.save_stamp_programme(&review),
-                    }?;
-                    let reward = &programme.program.card.reward;
-                    let product = reward
-                        .target_id
-                        .filter(|id| {
-                            reward.kind == RewardKind::Product && Some(*id) != known_product
-                        })
-                        .and_then(|id| transport.inventory_product(id).ok())
-                        .map(product_choice);
-                    Ok::<_, TransportError>((programme, product))
+                    }
                 })
                 .await;
             let _ = root.update(cx, |root, cx| {
@@ -347,16 +373,18 @@ impl Root {
                     return;
                 };
                 editor.busy = false;
+                editor.refreshing = false;
+                editor.refresh_at = Instant::now() + Duration::from_secs(15);
                 match result {
-                    Ok((programme, product))
+                    Ok(programme)
                         if saving
                             || replacing
                             || (!editor.dirty(cx) && editor.review.is_none()) =>
                     {
-                        if let Some(product) = product {
-                            editor.catalogue.target = Some(product);
-                        }
                         if saving || replacing || editor.base.as_ref() != Some(&programme) {
+                            if editor.feedback == Some(Key::StampProgrammeSaved) {
+                                editor.feedback = None;
+                            }
                             editor.replace(programme, cx);
                         } else {
                             editor.current = Some(programme);
@@ -369,16 +397,7 @@ impl Root {
                             editor.feedback = None;
                         }
                     }
-                    Ok((programme, product)) => {
-                        if let Some(product) = product
-                            && editor
-                                .draft
-                                .as_ref()
-                                .and_then(|draft| draft.card.reward.target_id)
-                                == Some(product.id)
-                        {
-                            editor.catalogue.target = Some(product);
-                        }
+                    Ok(programme) => {
                         editor.current = Some(programme);
                         if editor.feedback == Some(Key::StampProgrammeLoadFailed) {
                             editor.feedback = None;
@@ -424,10 +443,28 @@ impl Root {
                         }
                     }
                 }
+                root.resolve_stamp_programme_product(cx);
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    fn add_stamp_terms_line(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.stamp_programme().filter(|editor| {
+            !editor.busy
+                && editor.review.is_none()
+                && !editor.confirm_exit
+                && editor.terms_lines_remaining.get() > 0
+        }) else {
+            return;
+        };
+        editor.terms_page = editor.terms.len() / TERMS_PER_PAGE;
+        editor
+            .terms
+            .push(terms_line("", &editor.terms_lines_remaining, cx));
+        editor.update_terms_budget();
+        cx.notify();
     }
 
     fn review_stamp_programme(&mut self, cx: &mut Context<Self>) {
@@ -466,7 +503,7 @@ impl Root {
             .filter(|editor| editor.can_confirm())
             .and_then(|editor| editor.review.clone())
         {
-            self.request_stamp_programme(Request::Save(review), cx);
+            self.request_stamp_programme(Request::Save(Box::new(review)), cx);
         }
     }
 

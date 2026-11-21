@@ -32,7 +32,8 @@ pub(super) struct Picker {
 pub(super) struct Catalogue {
     pub(super) services: Vec<Choice>,
     pub(super) picker: Option<Picker>,
-    pub(super) target: Option<Choice>,
+    target: Option<Choice>,
+    target_request: Option<(Uuid, Arc<()>)>,
 }
 
 pub(super) fn product_choice(product: Product) -> Choice {
@@ -70,6 +71,7 @@ impl Catalogue {
             services: service_choices(root).unwrap_or_default(),
             picker: None,
             target: None,
+            target_request: None,
         }
     }
 
@@ -93,6 +95,69 @@ impl Catalogue {
 }
 
 impl Root {
+    pub(super) fn resolve_stamp_programme_product(&mut self, cx: &mut Context<Self>) {
+        let Some(transport) = self.svc.transport().filter(|_| {
+            self.can_configure_points() && self.status.connectivity == Connectivity::Online
+        }) else {
+            return;
+        };
+        let session = self.svc.session.clone();
+        let Some(editor) = self.stamp_programme() else {
+            return;
+        };
+        let Some(id) = editor
+            .draft
+            .as_ref()
+            .map(|draft| &draft.card.reward)
+            .filter(|reward| reward.kind == RewardKind::Product)
+            .and_then(|reward| reward.target_id)
+        else {
+            return;
+        };
+        if editor.catalogue.name(id, RewardKind::Product).is_some()
+            || editor
+                .catalogue
+                .target_request
+                .as_ref()
+                .is_some_and(|(requested, _)| *requested == id)
+        {
+            return;
+        }
+        let token = Arc::new(());
+        editor.catalogue.target_request = Some((id, token.clone()));
+        cx.spawn(async move |root, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { transport.inventory_product(id) })
+                .await;
+            let _ = root.update(cx, |root, cx| {
+                if !Arc::ptr_eq(&session, &root.svc.session) || !root.can_configure_points() {
+                    return;
+                }
+                let Some(editor) = root.stamp_programme().filter(|editor| {
+                    editor
+                        .catalogue
+                        .target_request
+                        .as_ref()
+                        .is_some_and(|(_, pending)| Arc::ptr_eq(pending, &token))
+                }) else {
+                    return;
+                };
+                editor.catalogue.target_request = None;
+                if editor.draft.as_ref().is_some_and(|draft| {
+                    draft.card.reward.kind == RewardKind::Product
+                        && draft.card.reward.target_id == Some(id)
+                }) && let Ok(product) = result
+                    && product.id == id
+                {
+                    editor.catalogue.target = Some(product_choice(product));
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn open_stamp_catalogue(&mut self, scope: Scope, cx: &mut Context<Self>) {
         let label = self.t(Key::StampProgrammeSearch);
         let search = cx.new(|cx| TextField::new(label, false, cx));
@@ -225,7 +290,7 @@ impl Root {
             let ids = &mut draft.qualifying_service_ids;
             if let Some(index) = ids.iter().position(|id| *id == choice.id) {
                 ids.remove(index);
-            } else if ids.len() < 50 {
+            } else if ids.len() < sob_core::loyalty::stamps::programme::MAX_QUALIFYING_SERVICES {
                 ids.push(choice.id);
             } else {
                 editor.feedback = Some(Key::StampProgrammeServiceLimit);
@@ -345,6 +410,7 @@ impl Root {
                             }),
                         )
                         .tab_index(0)
+                        .focus(|style| style.border_color(theme::text()))
                     })
                     .collect::<Vec<_>>();
                 panel.child(div().flex().flex_wrap().gap_2().children(choices))

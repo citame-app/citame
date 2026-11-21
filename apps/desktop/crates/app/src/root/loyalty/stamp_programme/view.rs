@@ -56,13 +56,13 @@ impl Root {
         }
     }
 
-    fn programme_field(&self, editor: &Editor, index: usize) -> gpui::Div {
+    fn programme_field(&self, editor: &Editor, field: Field) -> gpui::Div {
         div()
             .flex()
             .flex_col()
             .gap_1()
-            .child(self.label(FIELD_LABELS[index]))
-            .child(editor.fields[index].clone())
+            .child(self.label(field.label()))
+            .child(editor.fields[field as usize].clone())
     }
 
     fn stamp_choices<T: Copy + PartialEq + 'static>(
@@ -86,6 +86,7 @@ impl Root {
                     }),
                 )
                 .tab_index(0)
+                .focus(|style| style.border_color(theme::text()))
             })
             .collect::<Vec<_>>();
         div()
@@ -123,9 +124,10 @@ impl Root {
             .flex_col()
             .gap_3()
             .when(!online, |body| body.child(self.t(Key::StampOffline)))
-            .when(editor.busy, |body| {
-                body.child(self.t(Key::MarketingLoading))
-            })
+            .when(
+                editor.busy || (editor.refreshing && editor.draft.is_none()),
+                |body| body.child(self.t(Key::MarketingLoading)),
+            )
             .when_some(editor.feedback, |body, feedback| {
                 body.child(self.t(feedback))
             })
@@ -277,7 +279,7 @@ impl Root {
                 |editor, value| editor.draft.as_mut().unwrap().card.enabled = value,
                 cx,
             ))
-            .child(self.programme_field(editor, 0))
+            .child(self.programme_field(editor, Field::Name))
             .child(self.stamp_choices(
                 Key::StampProgrammeAppearance,
                 card.appearance,
@@ -288,11 +290,10 @@ impl Root {
         let earning = self
             .stamp_section(Key::StampProgrammeEarning)
             .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_3()
-                    .children((1..=3).map(|index| self.programme_field(editor, index))),
+                div().flex().flex_wrap().gap_3().children(
+                    [Field::Goal, Field::Welcome, Field::Minimum]
+                        .map(|field| self.programme_field(editor, field)),
+                ),
             )
             .child(self.stamp_choices(
                 Key::StampProgrammeAwardOn,
@@ -310,6 +311,27 @@ impl Root {
                 |root, cx| root.open_stamp_catalogue(Scope::Qualifying, cx),
                 cx,
             ))
+            .when(!draft.qualifying_service_ids.is_empty(), |panel| {
+                panel.child(self.loyalty_button(
+                    "stamp-programme-clear-treatments",
+                    Key::StampProgrammeClearServices,
+                    Kind::Ghost,
+                    |root, cx| {
+                        root.update_stamp_draft(
+                            |editor| {
+                                editor
+                                    .draft
+                                    .as_mut()
+                                    .unwrap()
+                                    .qualifying_service_ids
+                                    .clear();
+                            },
+                            cx,
+                        )
+                    },
+                    cx,
+                ))
+            })
             .child(self.stamp_choices(
                 Key::StampProgrammeAutomatic,
                 draft.automatic_issue,
@@ -320,7 +342,7 @@ impl Root {
                 |editor, value| editor.draft.as_mut().unwrap().automatic_issue = value,
                 cx,
             ))
-            .child(self.programme_field(editor, 4))
+            .child(self.programme_field(editor, Field::StampExpiry))
             .child(self.stamp_choices(
                 Key::StampProgrammeExpiryFrom,
                 draft.expiry_from,
@@ -330,7 +352,7 @@ impl Root {
             ));
         let reward_section = self
             .stamp_section(Key::StampProgrammeReward)
-            .child(self.programme_field(editor, 5))
+            .child(self.programme_field(editor, Field::RewardName))
             .child(self.stamp_choices(
                 Key::StampProgrammeRewardType,
                 reward.kind,
@@ -402,11 +424,10 @@ impl Root {
                     )
             })
             .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_3()
-                    .children((6..8).map(|index| self.programme_field(editor, index))),
+                div().flex().flex_wrap().gap_3().children(
+                    [Field::Discount, Field::RewardExpiry]
+                        .map(|field| self.programme_field(editor, field)),
+                ),
             );
         let terms_offset = editor.terms_page * TERMS_PER_PAGE;
         let terms = self
@@ -434,6 +455,7 @@ impl Root {
                                         root.update_stamp_draft(
                                             |editor| {
                                                 editor.terms.retain(|line| *line != id);
+                                                editor.update_terms_budget();
                                                 editor.terms_page = editor.terms_page.min(
                                                     editor.terms.len().saturating_sub(1)
                                                         / TERMS_PER_PAGE,
@@ -448,21 +470,12 @@ impl Root {
                     })
                     .collect::<Vec<_>>(),
             )
-            .when(editor.terms.len() < 2001, |panel| {
+            .when(editor.terms_lines_remaining.get() > 0, |panel| {
                 panel.child(self.loyalty_button(
                     "stamp-programme-add-line",
                     Key::StampProgrammeAddLine,
                     Kind::Ghost,
-                    |root, cx| {
-                        let line = terms_line("", cx);
-                        root.update_stamp_draft(
-                            |editor| {
-                                editor.terms_page = editor.terms.len() / TERMS_PER_PAGE;
-                                editor.terms.push(line);
-                            },
-                            cx,
-                        );
-                    },
+                    Root::add_stamp_terms_line,
                     cx,
                 ))
             });
@@ -553,6 +566,7 @@ impl Root {
                         }),
                     )
                     .tab_index(0)
+                    .focus(|style| style.border_color(theme::text()))
                     .into_any_element()
                 } else {
                     div().child(name).into_any_element()
@@ -578,10 +592,6 @@ impl Root {
                     .to_owned()
             })
             .unwrap_or_else(|| figure(Key::StampProgrammeNoTarget));
-        let expiry_summary = |index| match index {
-            6 => Key::StampProgrammeNoDiscount,
-            _ => Key::LoyaltyProgrammeNoExpiry,
-        };
         let services: Vec<_> = draft
             .qualifying_service_ids
             .iter()
@@ -605,18 +615,20 @@ impl Root {
                 Key::StampProgrammeAppearance,
                 figure(appearance(card.appearance)),
             ))
-            .children(FIELD_LABELS.into_iter().zip(values(draft)).enumerate().map(
-                |(index, (key, value))| {
-                    row(
-                        key,
-                        if value.is_empty() {
-                            figure(expiry_summary(index))
-                        } else {
-                            value
-                        },
-                    )
-                },
-            ))
+            .children(Field::ALL.map(|field| {
+                let value = field.value(draft);
+                row(
+                    field.label(),
+                    if value.is_empty() {
+                        figure(match field {
+                            Field::Discount => Key::StampProgrammeNoDiscount,
+                            _ => Key::LoyaltyProgrammeNoExpiry,
+                        })
+                    } else {
+                        value
+                    },
+                )
+            }))
             .child(row(
                 Key::StampProgrammeAwardOn,
                 figure(award_on(draft.award_on)),

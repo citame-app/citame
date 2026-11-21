@@ -150,6 +150,7 @@ keys! {
     StampProgrammeQualifying => ("Eligible treatments", "Tratamientos válidos"),
     StampProgrammeAnyService => ("Any eligible treatment", "Cualquier tratamiento válido"),
     StampProgrammeUnavailableService => ("Unavailable treatment", "Tratamiento no disponible"),
+    StampProgrammeClearServices => ("Clear treatment selection", "Quitar selección de tratamientos"),
     StampProgrammeChooseServices => ("Choose treatments", "Elegir tratamientos"),
     StampProgrammeServiceLimit => ("Choose up to 50 treatments.", "Elige hasta 50 tratamientos."),
     StampProgrammeAutomatic => ("New cards", "Tarjetas nuevas"),
