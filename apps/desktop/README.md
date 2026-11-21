@@ -110,9 +110,9 @@ Owners and managers can open **Reports → Clients**. The period and team member
 
 **Reputation → Moderate reviews** shows the shared list and publication status. Owners and managers can publish, hide with a reason, write a public reply or remove one. Review changes need a connection. The desktop keeps the reviewed version and its draft after an unsuccessful save, and asks before discarding changes.
 
-**Email delivery** is available to owners from **Management areas**. Select the server configuration, SMTP, Gmail / Google Workspace, Resend or disabled. Provider changes use the current Cloud revision. Credentials are masked and sent only to the server when saving. They stay out of the local replica and offline queue. Save before sending a test, which goes to the signed-in owner's email address. Reload if Cloud reports a different revision or cannot confirm a save.
+**Email delivery** is available to owners from **Management areas**. Select the server configuration, SMTP, Gmail / Google Workspace, Resend or disabled. Provider changes use the current Cloud revision. Unedited forms refresh as soon as Cloud confirms a change from another session. Open drafts are kept until the owner chooses to reload. Credentials are masked and sent only to the server when saving. They stay out of the local replica and offline queue. Save before sending a test, which goes to the signed-in owner's email address. Reload if Cloud reports a different revision or cannot confirm a save.
 
-### Inventory
+## Inventory
 
 **Inventory** searches products by name, SKU or barcode and can include archived products. The detail shows the latest stock and the optional amount and unit of content per pack. Owners and managers can change or clear the pack content without recording a stock movement. Open **Stock history** to see the shared ledger and record deliveries, consumption and physical counts. A count replaces the physical stock in the main warehouse and respects the units reserved for sales. Catalog and idle stock views refresh through sync when connected.
 

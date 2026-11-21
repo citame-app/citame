@@ -36,7 +36,9 @@ import {
   clientPhotosSchema,
   desktopDevicesSchema,
   type EmailDeliveryInput,
+  type EmailDeliverySettings,
   emailDeliverySettingsSchema,
+  emailDeliveryTestReceiptSchema,
   listAdminServicesResponseSchema,
   listAdminStaffResponseSchema,
   listAppointmentsResponseSchema,
@@ -214,6 +216,7 @@ export function createEndpoints(client: ApiClient) {
             portfolio: "1",
             intakeViews: "1",
             bookingPolicy: "1",
+            emailDelivery: "1",
             resourceCatalogue: "1",
             combinationCatalogue: "1",
           },
@@ -254,11 +257,12 @@ export function createEndpoints(client: ApiClient) {
     },
     admin: {
       emailDelivery: {
-        get: () => client.get("/admin/email-delivery", emailDeliverySettingsSchema),
+        get: (signal?: AbortSignal) =>
+          client.get("/admin/email-delivery", emailDeliverySettingsSchema, { signal }),
         save: (input: EmailDeliveryInput) =>
           client.put("/admin/email-delivery", input, emailDeliverySettingsSchema),
-        test: () =>
-          client.post("/admin/email-delivery/test", {}, z.object({ ok: z.literal(true) })),
+        test: (revision: EmailDeliverySettings["revision"]) =>
+          client.post("/admin/email-delivery/test", { revision }, emailDeliveryTestReceiptSchema),
       },
       whatsapp: {
         get: () => client.get("/admin/whatsapp", whatsappSettingsSchema),

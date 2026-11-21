@@ -1,48 +1,24 @@
 use super::*;
 use sob_core::http::email_delivery::{
-    EmailDelivery, EmailProvider, Encryption, SaveError, UpdateEmailDelivery,
+    EmailDelivery, EmailDraft, EmailProvider, Encryption, LIVE_TOPIC, Provider, SaveError,
+    UpdateEmailDelivery,
 };
 use sob_core::sync::TransportError;
 
-const LABELS: [Key; 6] = [
+const LABELS: [Key; 5] = [
     Key::EmailDeliverySender,
     Key::EmailDeliverySenderName,
     Key::EmailDeliveryHost,
     Key::EmailDeliveryPort,
     Key::EmailDeliveryUsername,
-    Key::EmailDeliveryCredential,
 ];
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Provider {
-    Inherit,
-    Smtp,
-    Gmail,
-    Resend,
-    Disabled,
-}
-
-impl Provider {
-    fn current(settings: &EmailProvider) -> Self {
-        match settings {
-            EmailProvider::Inherit => Self::Inherit,
-            EmailProvider::Smtp { .. } => Self::Smtp,
-            EmailProvider::Gmail { .. } => Self::Gmail,
-            EmailProvider::Resend { .. } => Self::Resend,
-            EmailProvider::Disabled => Self::Disabled,
-        }
-    }
-
-    fn active(self) -> bool {
-        !matches!(self, Self::Disabled | Self::Inherit)
-    }
-}
 
 struct Editor {
     saved: EmailDelivery,
     provider: Provider,
     encryption: Encryption,
-    fields: [Entity<TextField>; 6],
+    fields: [Entity<TextField>; 5],
+    credential: Entity<TextField>,
 }
 
 impl Editor {
@@ -54,7 +30,6 @@ impl Editor {
             String::new(),
             String::new(),
             "587".into(),
-            String::new(),
             String::new(),
         ];
         match &saved.settings {
@@ -72,7 +47,6 @@ impl Editor {
                     host.clone(),
                     port.to_string(),
                     username.clone(),
-                    String::new(),
                 ];
                 encryption = *saved_encryption;
             }
@@ -91,7 +65,7 @@ impl Editor {
         }
         let fields = std::array::from_fn(|index| {
             let field = cx.new(|cx| {
-                let mut field = TextField::new(i18n::t(locale, LABELS[index]), index == 5, cx);
+                let mut field = TextField::new(i18n::t(locale, LABELS[index]), false, cx);
                 field.set_text(&values[index], cx);
                 field
             });
@@ -103,58 +77,40 @@ impl Editor {
             .detach();
             field
         });
+        let credential =
+            cx.new(|cx| TextField::new(i18n::t(locale, Key::EmailDeliveryCredential), true, cx));
+        cx.subscribe(&credential, |_, _, event, cx| {
+            if matches!(event, FieldEvent::Changed) {
+                cx.notify();
+            }
+        })
+        .detach();
         Self {
             saved,
             provider,
             encryption,
             fields,
+            credential,
         }
     }
 
-    fn change(&self, cx: &App) -> Option<UpdateEmailDelivery> {
-        let [from_email, from_name, host, port, username, secret] =
+    fn draft<'a>(&self, cx: &'a App) -> EmailDraft<'a> {
+        let [from_email, from_name, host, port, username] =
             self.fields.each_ref().map(|field| field.read(cx).text());
-        if self.provider.active() && (from_email.trim().is_empty() || from_name.trim().is_empty()) {
-            return None;
+        EmailDraft {
+            provider: self.provider,
+            encryption: self.encryption,
+            from_email,
+            from_name,
+            host,
+            port,
+            username,
+            credential: self.credential.read(cx).text(),
         }
-        let from_email = from_email.trim().to_owned();
-        let from_name = from_name.trim().to_owned();
-        let settings = match self.provider {
-            Provider::Inherit => EmailProvider::Inherit,
-            Provider::Disabled => EmailProvider::Disabled,
-            Provider::Smtp => {
-                let port = port.trim().parse().ok().filter(|port| *port > 0)?;
-                if host.trim().is_empty() || username.trim().is_empty() {
-                    return None;
-                }
-                EmailProvider::Smtp {
-                    from_email,
-                    from_name,
-                    host: host.trim().to_ascii_lowercase(),
-                    port,
-                    encryption: self.encryption,
-                    username: username.trim().to_owned(),
-                }
-            }
-            Provider::Gmail => EmailProvider::Gmail {
-                from_email,
-                from_name,
-            },
-            Provider::Resend => EmailProvider::Resend {
-                from_email,
-                from_name,
-            },
-        };
-        Some(UpdateEmailDelivery {
-            revision: self.saved.revision.clone(),
-            settings,
-            secret: (self.provider.active() && !secret.is_empty()).then(|| secret.to_owned()),
-        })
     }
 
     fn dirty(&self, cx: &App) -> bool {
-        self.change(cx)
-            .is_none_or(|change| change.settings != self.saved.settings || change.secret.is_some())
+        self.draft(cx).dirty(&self.saved)
     }
 
     fn can_test(&self, cx: &App) -> bool {
@@ -175,14 +131,16 @@ pub(super) struct Desk {
     editor: Option<Editor>,
     busy: bool,
     blocked: bool,
+    observed: Option<i64>,
     message: Option<Key>,
     discard: Option<Discard>,
 }
 
 enum Operation {
     Load,
+    Refresh,
     Save(UpdateEmailDelivery),
-    Test,
+    Test(Option<String>),
 }
 
 impl Root {
@@ -195,6 +153,7 @@ impl Root {
             editor: None,
             busy: false,
             blocked: false,
+            observed: None,
             message: None,
             discard: None,
         }));
@@ -202,10 +161,29 @@ impl Root {
         cx.notify();
     }
 
-    pub(super) fn load_email_delivery_after_reconnect(&mut self, cx: &mut Context<Self>) {
-        if matches!(&self.overlay, Overlay::EmailDelivery(desk) if desk.editor.is_none() && !desk.busy)
+    pub(super) fn refresh_email_delivery(&mut self, reconnected: bool, cx: &mut Context<Self>) {
+        let Overlay::EmailDelivery(desk) = &mut self.overlay else {
+            return;
+        };
+        if desk.busy
+            || desk.blocked
+            || desk.discard.is_some()
+            || self.status.connectivity != Connectivity::Online
         {
-            self.request_email_delivery(Operation::Load, cx);
+            return;
+        }
+        let current = self.svc.store.live_view_revision(LIVE_TOPIC).ok();
+        if current == desk.observed && !reconnected {
+            return;
+        }
+        if desk.editor.as_ref().is_some_and(|editor| editor.dirty(cx)) {
+            if current != desk.observed {
+                desk.blocked = true;
+                desk.message = Some(Key::EmailDeliveryConflict);
+                cx.notify();
+            }
+        } else {
+            self.request_email_delivery(Operation::Refresh, cx);
         }
     }
 
@@ -242,24 +220,29 @@ impl Root {
             cx.notify();
             return;
         };
-        let testing = matches!(operation, Operation::Test);
+        let testing = matches!(operation, Operation::Test(_));
+        let refreshing = matches!(operation, Operation::Refresh);
         let saving = matches!(operation, Operation::Save(_));
         let identity = desk.identity.clone();
         let session = self.svc.session.clone();
         desk.busy = true;
-        desk.message = None;
+        desk.observed = self.svc.store.live_view_revision(LIVE_TOPIC).ok();
+        if !refreshing {
+            desk.message = None;
+        }
         cx.notify();
         cx.spawn(async move |root, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
                     match operation {
-                        Operation::Load => transport.email_delivery().map(Some).map_err(Into::into),
+                        Operation::Load | Operation::Refresh => {
+                            transport.email_delivery().map(Some).map_err(Into::into)
+                        }
                         Operation::Save(change) => transport.save_email_delivery(&change).map(Some),
-                        Operation::Test => transport
-                            .test_email_delivery()
-                            .map(|()| None)
-                            .map_err(Into::into),
+                        Operation::Test(revision) => {
+                            transport.test_email_delivery(revision).map(|()| None)
+                        }
                     }
                 })
                 .await;
@@ -275,6 +258,15 @@ impl Root {
                 }
                 desk.busy = false;
                 desk.message = match result {
+                    Ok(Some(saved))
+                        if refreshing
+                            && desk
+                                .editor
+                                .as_ref()
+                                .is_some_and(|editor| editor.saved.revision == saved.revision) =>
+                    {
+                        desk.message
+                    }
                     Ok(Some(saved)) => {
                         desk.editor = Some(Editor::new(saved, root.locale, cx));
                         desk.blocked = false;
@@ -320,12 +312,12 @@ impl Root {
             return;
         }
         let Some(editor) = &desk.editor else { return };
-        let Some(change) = editor.change(cx) else {
+        let Some(change) = editor.draft(cx).validated(&editor.saved) else {
             desk.message = Some(Key::EmailDeliveryInvalid);
             cx.notify();
             return;
         };
-        if change.settings != editor.saved.settings || change.secret.is_some() {
+        if change.differs_from(&editor.saved) {
             self.request_email_delivery(Operation::Save(change), cx);
         }
     }
@@ -339,6 +331,7 @@ impl Root {
         let online = self.status.connectivity == Connectivity::Online;
         let body = div()
             .id("email-delivery-scroll")
+            .max_h((viewport.height - px(68.)).max(px(100.)))
             .min_h_0()
             .flex_shrink()
             .overflow_y_scroll()
@@ -388,39 +381,76 @@ impl Root {
             )
         } else {
             body.when_some(desk.editor.as_ref(), |body, editor| {
-                body.child(self.render_email_fields(editor, cx))
-                    .when(online && !desk.blocked, |body| {
-                        body.child(div().flex().flex_wrap().gap_2()
-                            .when(editor.dirty(cx), |actions| {
-                                actions.child(self.button("email-save", self.t(Key::EmailDeliverySave), Kind::Primary,
-                                    cx.listener(|root, _, _, cx| root.save_email_delivery(cx))))
-                            })
-                            .when(editor.can_test(cx), |actions| {
-                                actions.child(self.button("email-test", self.t(Key::EmailDeliveryTest), Kind::Ghost,
-                                    cx.listener(|root, _, _, cx| {
-                                        if matches!(&root.overlay, Overlay::EmailDelivery(desk) if !desk.blocked
-                                            && desk.editor.as_ref().is_some_and(|editor| editor.can_test(cx))) {
-                                            root.request_email_delivery(Operation::Test, cx);
-                                        }
-                                    })))
-                            }))
-                    })
-            }).child(div().flex().gap_2()
-                .child(self.button("email-close", self.t(Key::Back), Kind::Ghost,
-                    cx.listener(|root, _, _, cx| root.dismiss_email_delivery(cx))))
-                .when(online, |actions| actions.child(self.button("email-reload", self.t(Key::EmailDeliveryReload), Kind::Ghost,
-                    cx.listener(|root, _, _, cx| {
-                        if let Overlay::EmailDelivery(desk) = &mut root.overlay
-                            && desk.editor.as_ref().is_some_and(|editor| editor.dirty(cx)) {
-                            desk.discard = Some(Discard::Reload);
-                            cx.notify();
-                        } else {
-                            root.request_email_delivery(Operation::Load, cx);
-                        }
-                    })))))
+                body.child(self.render_email_fields(editor, cx)).when(
+                    online && !desk.blocked,
+                    |body| {
+                        body.child(
+                            div()
+                                .flex()
+                                .flex_wrap()
+                                .gap_2()
+                                .when(editor.dirty(cx), |actions| {
+                                    actions.child(self.button(
+                                        "email-save",
+                                        self.t(Key::EmailDeliverySave),
+                                        Kind::Primary,
+                                        cx.listener(|root, _, _, cx| root.save_email_delivery(cx)),
+                                    ))
+                                })
+                                .when(editor.can_test(cx), |actions| {
+                                    actions.child(self.button(
+                                        "email-test",
+                                        self.t(Key::EmailDeliveryTest),
+                                        Kind::Ghost,
+                                        cx.listener(|root, _, _, cx| {
+                                            if let Overlay::EmailDelivery(desk) = &root.overlay
+                                                && !desk.blocked
+                                                && let Some(editor) = &desk.editor
+                                                && editor.can_test(cx)
+                                            {
+                                                root.request_email_delivery(
+                                                    Operation::Test(editor.saved.revision.clone()),
+                                                    cx,
+                                                );
+                                            }
+                                        }),
+                                    ))
+                                }),
+                        )
+                    },
+                )
+            })
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(self.button(
+                        "email-close",
+                        self.t(Key::Back),
+                        Kind::Ghost,
+                        cx.listener(|root, _, _, cx| root.dismiss_email_delivery(cx)),
+                    ))
+                    .when(online, |actions| {
+                        actions.child(self.button(
+                            "email-reload",
+                            self.t(Key::EmailDeliveryReload),
+                            Kind::Ghost,
+                            cx.listener(|root, _, _, cx| {
+                                if let Overlay::EmailDelivery(desk) = &mut root.overlay
+                                    && desk.editor.as_ref().is_some_and(|editor| editor.dirty(cx))
+                                {
+                                    desk.discard = Some(Discard::Reload);
+                                    cx.notify();
+                                } else {
+                                    root.request_email_delivery(Operation::Load, cx);
+                                }
+                            }),
+                        ))
+                    }),
+            )
         };
         self.modal_with_height(
-            body,
+            div().min_h_0().child(body),
             (viewport.width - px(32.)).max(px(220.)).min(px(560.)),
             (viewport.height - px(28.)).max(px(140.)),
             Some(cx),
@@ -429,7 +459,7 @@ impl Root {
 
     fn render_email_fields(&self, editor: &Editor, cx: &mut Context<Self>) -> gpui::Div {
         let fields = (0..LABELS.len()).filter(|index| match *index {
-            0 | 1 | 5 => editor.provider.active(),
+            0 | 1 => editor.provider.active(),
             _ => editor.provider == Provider::Smtp,
         });
         div()
@@ -441,7 +471,7 @@ impl Root {
                     [
                         (Provider::Inherit, self.t(Key::EmailDeliveryInherit)),
                         (Provider::Smtp, "SMTP"),
-                        (Provider::Gmail, "Gmail / Google Workspace"),
+                        (Provider::Gmail, self.t(Key::EmailDeliveryGoogle)),
                         (Provider::Resend, "Resend"),
                         (Provider::Disabled, self.t(Key::EmailDeliveryDisabled)),
                     ]
@@ -462,7 +492,7 @@ impl Root {
                                     && editor.provider != provider
                                 {
                                     editor.provider = provider;
-                                    editor.fields[5].update(cx, |field, cx| field.clear(cx));
+                                    editor.credential.update(cx, |field, cx| field.clear(cx));
                                     desk.message = None;
                                     cx.notify();
                                 }
@@ -487,23 +517,34 @@ impl Root {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .child(div().text_sm().child(self.t(if index == 5 {
-                        match editor.provider {
-                            Provider::Gmail => Key::EmailDeliveryGooglePassword,
-                            Provider::Resend => Key::EmailDeliveryResendKey,
-                            _ => LABELS[index],
-                        }
-                    } else {
-                        LABELS[index]
-                    })))
+                    .child(div().text_sm().child(self.t(LABELS[index])))
                     .child(editor.fields[index].clone())
             }))
-            .when(
-                editor.provider.active()
-                    && editor.saved.has_secret
-                    && editor.provider == Provider::current(&editor.saved.settings),
-                |body| body.child(div().text_sm().child(self.t(Key::EmailDeliveryStored))),
-            )
+            .when(editor.provider.active(), |body| {
+                let (label, help) = match editor.provider {
+                    Provider::Gmail => (
+                        Key::EmailDeliveryGooglePassword,
+                        Some(Key::EmailDeliveryGoogleHint),
+                    ),
+                    Provider::Resend => (
+                        Key::EmailDeliveryResendKey,
+                        Some(Key::EmailDeliveryResendHint),
+                    ),
+                    _ => (Key::EmailDeliveryCredential, None),
+                };
+                body.child(div().text_sm().child(self.t(label)))
+                    .when_some(help, |body, help| {
+                        body.child(div().text_sm().child(self.t(help)))
+                    })
+                    .child(editor.credential.clone())
+                    .child(div().text_sm().child(self.t(
+                        if editor.draft(cx).can_reuse_credential(&editor.saved) {
+                            Key::EmailDeliveryStored
+                        } else {
+                            Key::EmailDeliveryRequiredCredential
+                        },
+                    )))
+            })
             .when(editor.provider == Provider::Smtp, |body| {
                 body.child(
                     div().flex().gap_2().children(
@@ -539,7 +580,7 @@ impl Root {
 impl Desk {
     fn clear_credential(&mut self, cx: &mut Context<Root>) {
         if let Some(editor) = &self.editor {
-            editor.fields[5].update(cx, |field, cx| field.clear(cx));
+            editor.credential.update(cx, |field, cx| field.clear(cx));
         }
     }
 }
@@ -574,16 +615,24 @@ mod tests {
                 };
                 let editor = Editor::new(saved, root.locale, cx);
                 assert!(editor.can_test(cx));
-                assert!(editor.fields[5].read(cx).text().is_empty());
-                editor.fields[5].update(cx, |field, cx| field.set_text("re_sample", cx));
+                assert!(editor.credential.read(cx).text().is_empty());
+                editor
+                    .credential
+                    .update(cx, |field, cx| field.set_text("re_sample", cx));
                 assert!(editor.dirty(cx));
                 assert!(!editor.can_test(cx));
                 desk.editor = Some(editor);
                 root.save_email_delivery(cx);
                 assert_eq!(root.svc.store.outbox_len().unwrap(), 0);
+                root.status.connectivity = Connectivity::Online;
+                root.svc.store.set_meta("live_view:email_delivery", "11").unwrap();
+                root.refresh_email_delivery(false, cx);
+                assert!(matches!(&root.overlay, Overlay::EmailDelivery(desk)
+                    if desk.blocked && matches!(desk.message, Some(Key::EmailDeliveryConflict))
+                        && desk.editor.as_ref().unwrap().credential.read(cx).text() == "re_sample"));
                 root.dismiss_email_delivery(cx);
                 assert!(matches!(&root.overlay, Overlay::EmailDelivery(desk)
-                if matches!(desk.discard, Some(Discard::Close))));
+                    if matches!(desk.discard, Some(Discard::Close))));
             })
             .unwrap();
     }

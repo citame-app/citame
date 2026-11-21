@@ -141,8 +141,12 @@ export async function resolveNotificationEmail(
   config: NotificationConfig,
   fallback: EmailProvider | null,
   request?: typeof fetch,
+  expectedRevision?: string | null,
 ): Promise<EmailProvider | null> {
   const row = await read(db);
+  if (expectedRevision !== undefined && (row?.revision ?? null) !== expectedRevision) {
+    throw new DomainError("version_conflict", "Email settings changed; reload before testing");
+  }
   const settings = settingsFor(row);
   if (settings.provider === "inherit") return fallback;
   if (settings.provider === "disabled") return null;

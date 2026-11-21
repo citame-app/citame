@@ -382,8 +382,13 @@ put_versioned_image "$product_photo" "{\"version\":\"$photo_version\",\"imageBas
 if [ "${SMOKE_EMAIL:-0}" = 1 ]; then
   step "owner email test, appointment confirmation and live reminder delivery"
   await_mail smoke-client@example.com 'Appointment confirmed:' 1 || fail "SMTP confirmation"
-  curl -fsS --max-time 8 -b "$jar" -X POST -H "origin: $PUBLIC_URL" \
-    "$BASE/api/admin/email-delivery/test" >/dev/null || fail "owner SMTP test"
+  if [ "${SMOKE_DESKTOP:-0}" = 1 ]; then
+    desktop_tests native_sends_a_reviewed_email_test_through_the_proxy --exact ||
+      fail "native owner SMTP test"
+  else
+    curl -fsS --max-time 8 -b "$jar" -X POST -H "origin: $PUBLIC_URL" \
+      "$BASE/api/admin/email-delivery/test" >/dev/null || fail "owner SMTP test"
+  fi
   await_mail "$OWNER_EMAIL" 'Citame · Prueba de correo' 0 || fail "owner test delivery"
 
   disabled=$(email_mode null disabled) || fail "disable appointment email"
@@ -591,9 +596,15 @@ SQL
   )" || fail "could not create the synthetic imported waitlist request"
   [[ "$imported_waitlist_id" =~ ^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$ ]] ||
     fail "expected exactly one synthetic imported waitlist request"
+  # Suspend the worker while replacing the synthetic SMTP configuration with a mock credential.
+  "${COMPOSE[@]}" stop worker || fail "stop the synthetic delivery worker"
+  desktop_tests native_email_delivery_uses_the_owner_revision_through_the_proxy --exact ||
+    fail "native email settings integration failed"
+  "${COMPOSE[@]}" start worker || fail "restart the synthetic delivery worker"
   SOB_TEST_MANAGED_REVIEW="$managed_review_id" SOB_TEST_INVENTORY_PRODUCT="$product_id" \
     SOB_TEST_IMPORTED_WAITLIST="$imported_waitlist_id" \
-    desktop_tests --skip native_review_requests || fail "desktop integration tests failed"
+    desktop_tests --skip native_review_requests --skip native_sends_a_reviewed_email_test \
+      --skip native_email_delivery_uses_the_owner_revision || fail "desktop integration tests failed"
 fi
 
 step "the page renders"

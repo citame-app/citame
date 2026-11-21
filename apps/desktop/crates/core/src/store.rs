@@ -1119,6 +1119,7 @@ impl Store {
                         | crate::intake::FORM_LIVE_TOPIC
                         | crate::intake::RECORD_LIVE_TOPIC
                         | crate::booking_policy::LIVE_TOPIC
+                        | crate::http::email_delivery::LIVE_TOPIC
                         | crate::service_resources::LIVE_TOPIC
                 ) {
                     tx.execute(

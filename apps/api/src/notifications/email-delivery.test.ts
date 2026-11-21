@@ -96,6 +96,43 @@ test("only owners configure delivery, credentials stay encrypted, and stale writ
   expect(outbound).toHaveLength(0);
 });
 
+test("email settings invalidate only opted-in owner replicas and stale tests do not send", async () => {
+  const staff = await actor(t, "staff", "pro@example.com", { staffProfileId: f.anaId });
+  const head = await json(t.app, "/sync/pull", "GET", undefined, owner.cookie);
+  const { headSeq } = await head.json();
+  const saved = await save();
+  const pull = (cookie: string, optIn: boolean) =>
+    json(
+      t.app,
+      `/sync/pull?since=${headSeq}${optIn ? "&emailDelivery=1" : ""}`,
+      "GET",
+      undefined,
+      cookie,
+    );
+  const visible = await pull(owner.cookie, true);
+  const page = await visible.json();
+  expect(page.refresh).toContain("email_delivery");
+  expect(page.changes).toEqual([]);
+  expect(JSON.stringify(page)).not.toContain(secret);
+  for (const [cookie, optIn] of [
+    [owner.cookie, false],
+    [staff.cookie, true],
+  ] as const) {
+    const hidden = await pull(cookie, optIn);
+    expect(hidden.status).toBe(200);
+    expect((await hidden.json()).refresh ?? []).not.toContain("email_delivery");
+  }
+
+  const testDelivery = (revision: string | null) =>
+    json(t.app, `${path}/test`, "POST", { revision }, owner.cookie);
+  const stale = await testDelivery(null);
+  expect(stale.status).toBe(409);
+  expect(await stale.json()).toMatchObject({ error: { code: "version_conflict" } });
+  expect(outbound).toHaveLength(0);
+  expect((await testDelivery(saved.revision)).status).toBe(200);
+  expect(outbound).toHaveLength(1);
+});
+
 test("test sends only to the owner, rate limits requests and hides provider errors", async () => {
   const staff = await actor(t, "staff", "pro@example.com", { staffProfileId: f.anaId });
   await save();

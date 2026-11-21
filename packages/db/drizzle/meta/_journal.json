@@ -715,6 +715,13 @@
       "when": 1795248805000,
       "tag": "0101_booksy_payment_review",
       "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1795257351000,
+      "tag": "0102_email_delivery_live_view",
+      "breakpoints": true
     }
   ]
 }

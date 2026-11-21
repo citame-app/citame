@@ -305,6 +305,8 @@ export async function pullChanges(
           (query.intakeViews === "1" && permissions.deleteClients)) &&
         (topic.data !== "intake_records" || (query.intakeViews === "1" && permissions.clients)) &&
         (topic.data !== "booking_policy" || query.bookingPolicy === "1") &&
+        (topic.data !== "email_delivery" ||
+          (query.emailDelivery === "1" && principal.role === "owner")) &&
         (topic.data !== "resource_catalogue" ||
           (query.resourceCatalogue === "1" && permissions.editCatalog)) &&
         (topic.data !== "service_combinations" ||

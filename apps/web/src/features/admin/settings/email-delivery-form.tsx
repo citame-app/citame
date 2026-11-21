@@ -17,32 +17,45 @@ export function EmailDelivery({ email }: { email: string }) {
   const client = useQueryClient();
   const query = useQuery({
     queryKey,
-    queryFn: () => api().admin.emailDelivery.get(),
+    queryFn: ({ signal }) => api().admin.emailDelivery.get(signal),
     staleTime: Number.POSITIVE_INFINITY,
   });
   const [savedMessage, setSavedMessage] = useState(false);
+  const [draftBase, setDraftBase] = useState<EmailDeliverySettings | null>(null);
+  const [reloadCount, setReloadCount] = useState(0);
+  const initial = draftBase ?? query.data;
   return (
     <section aria-labelledby="email-delivery-title" className="max-w-2xl space-y-4">
       <h2 id="email-delivery-title" className="text-heading">
         {t("emailDelivery.title")}
       </h2>
       <p className="text-sm text-muted">{t("emailDelivery.lead")}</p>
-      {query.isError ? (
-        <ErrorState error={query.error} onRetry={() => void query.refetch()} />
-      ) : query.data ? (
+      {initial ? (
         <DeliveryFields
-          key={query.data.revision ?? "default"}
-          initial={query.data}
+          key={`${initial.revision ?? "default"}:${reloadCount}`}
+          initial={initial}
+          latestRevision={query.data?.revision}
           email={email}
           onSaved={(settings) => {
             client.setQueryData(queryKey, settings);
+            setDraftBase(null);
             setSavedMessage(true);
           }}
-          onEdited={() => setSavedMessage(false)}
+          onEdited={() => {
+            setDraftBase((old) => old ?? initial);
+            setSavedMessage(false);
+          }}
+          onTested={() => setSavedMessage(false)}
           onReload={async () => {
-            await query.refetch();
+            const result = await query.refetch();
+            if (!result.isSuccess) return false;
+            setDraftBase(null);
+            setReloadCount((current) => current + 1);
+            return true;
           }}
         />
+      ) : query.isError ? (
+        <ErrorState error={query.error} onRetry={() => void query.refetch()} />
       ) : (
         <Skeleton className="h-48" />
       )}
@@ -55,16 +68,20 @@ export function EmailDelivery({ email }: { email: string }) {
 
 function DeliveryFields({
   initial,
+  latestRevision,
   email,
   onSaved,
   onEdited,
+  onTested,
   onReload,
 }: {
   initial: EmailDeliverySettings;
+  latestRevision: EmailDeliverySettings["revision"] | undefined;
   email: string;
   onSaved: (settings: EmailDeliverySettings) => void;
   onEdited: () => void;
-  onReload: () => Promise<void>;
+  onTested: () => void;
+  onReload: () => Promise<boolean>;
 }) {
   const { t } = useI18n();
   const [provider, setProvider] = useState(initial.settings.provider);
@@ -90,6 +107,7 @@ function DeliveryFields({
   const smtp =
     provider === "smtp" && initial.settings.provider === "smtp" ? initial.settings : null;
   const needsSecret = !initial.hasSecret || provider !== initial.settings.provider;
+  const stale = dirty && latestRevision !== initial.revision;
   const canTest = !dirty && (active || (provider === "inherit" && initial.serverEmailEnabled));
 
   function edited() {
@@ -106,7 +124,7 @@ function DeliveryFields({
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy.current || !dirty) return;
+    if (busy.current || !dirty || stale || error === "emailDelivery.conflict") return;
     const values = new FormData(event.currentTarget);
     const settings = active
       ? {
@@ -157,12 +175,16 @@ function DeliveryFields({
     setPending("test");
     setError(null);
     setTested(false);
-    onEdited();
+    onTested();
     try {
-      await api().admin.emailDelivery.test();
+      await api().admin.emailDelivery.test(initial.revision);
       setTested(true);
-    } catch {
-      setError("emailDelivery.testFailed");
+    } catch (failure) {
+      setError(
+        failure instanceof ApiError && failure.code === "version_conflict"
+          ? "emailDelivery.conflict"
+          : "emailDelivery.testFailed",
+      );
     } finally {
       busy.current = false;
       setPending(null);
@@ -183,6 +205,7 @@ function DeliveryFields({
         className="space-y-4"
       >
         <fieldset disabled={Boolean(pending)} className="min-w-0 space-y-4">
+          <legend className="sr-only">{t("emailDelivery.title")}</legend>
           <SelectField
             label={t("emailDelivery.provider")}
             value={provider}
@@ -305,7 +328,7 @@ function DeliveryFields({
             </div>
           )}
           <div className="flex flex-wrap gap-3">
-            <Button type="submit" disabled={!dirty}>
+            <Button type="submit" disabled={!dirty || stale || error === "emailDelivery.conflict"}>
               {t(pending === "save" ? "emailDelivery.saving" : "emailDelivery.save")}
             </Button>
             <Button
@@ -323,12 +346,12 @@ function DeliveryFields({
       <p role="status" className="text-sm text-muted">
         {tested && t("emailDelivery.testSent", { email })}
       </p>
-      {error && (
+      {(error || stale) && (
         <p role="alert" className="text-sm text-danger-fg">
-          {t(error)}
+          {t(stale ? "emailDelivery.conflict" : (error ?? "emailDelivery.failed"))}
         </p>
       )}
-      {error === "emailDelivery.conflict" && (
+      {(stale || error === "emailDelivery.conflict") && (
         <Button
           type="button"
           variant="secondary"
@@ -336,7 +359,7 @@ function DeliveryFields({
           onClick={async () => {
             setPending("reload");
             try {
-              await onReload();
+              if (!(await onReload())) setError("emailDelivery.failed");
             } finally {
               setPending(null);
             }

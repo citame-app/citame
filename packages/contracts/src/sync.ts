@@ -503,6 +503,7 @@ export const syncPullQuerySchema = z.object({
   portfolio: z.literal("1").optional(),
   intakeViews: z.literal("1").optional(),
   bookingPolicy: z.literal("1").optional(),
+  emailDelivery: z.literal("1").optional(),
   resourceCatalogue: z.literal("1").optional(),
   resourcePools: z.enum(["full", "delta"]).optional(),
   combinationCatalogue: z.literal("1").optional(),
@@ -638,6 +639,7 @@ export const syncLiveViewSchema = z.enum([
   "intake_forms",
   "intake_records",
   "booking_policy",
+  "email_delivery",
   "resource_catalogue",
   "service_combinations",
 ]);

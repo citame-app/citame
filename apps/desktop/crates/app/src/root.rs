@@ -749,8 +749,8 @@ impl Root {
         self.refresh_service_resources(reconnected, cx);
         self.refresh_resource_pools(cx);
         self.refresh_combinations(cx);
+        self.refresh_email_delivery(reconnected, cx);
         if reconnected {
-            self.load_email_delivery_after_reconnect(cx);
             self.refresh_weekly_conflicts_if_ready(cx);
             self.refresh_open_annotations(true, cx);
             self.refresh_private_record(cx);

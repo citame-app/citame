@@ -50,3 +50,6 @@ export const emailDeliverySettingsSchema = z.strictObject({
   hasSecret: z.boolean(),
 });
 export type EmailDeliverySettings = z.infer<typeof emailDeliverySettingsSchema>;
+
+export const emailDeliveryTestInputSchema = z.object({ revision: idSchema.nullable().optional() });
+export const emailDeliveryTestReceiptSchema = z.object({ ok: z.literal(true) });

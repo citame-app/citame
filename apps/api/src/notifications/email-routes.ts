@@ -1,4 +1,9 @@
-import { emailDeliveryInputSchema, emailDeliverySettingsSchema } from "@sob/contracts";
+import {
+  emailDeliveryInputSchema,
+  emailDeliverySettingsSchema,
+  emailDeliveryTestInputSchema,
+  emailDeliveryTestReceiptSchema,
+} from "@sob/contracts";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { AppDeps } from "../app";
@@ -30,9 +35,12 @@ export function emailDeliveryRoutes(
         await updateEmailDelivery(db, config.notifications, c.get("principal").userId, input),
       );
     })
-    .post("/test", async (c) => {
+    .post("/test", bodyLimit({ maxSize: 4096 }), async (c) => {
       if (disableEmailDeliveryTest)
         throw new DomainError("forbidden", "Los envíos están desactivados en las pruebas locales.");
+      const { revision } = c.req.header("content-type")?.startsWith("application/json")
+        ? parseOrThrow(emailDeliveryTestInputSchema, await readJson(c))
+        : {};
       const { email, userId } = c.get("principal");
       const budget = await limiter.hit("email-delivery-test", userId, {
         max: 3,
@@ -49,6 +57,7 @@ export function emailDeliveryRoutes(
           config.notifications,
           fallback,
           emailFetch,
+          revision,
         );
         if (!provider) throw new DomainError("invalid_state", "Email delivery is disabled");
         try {
@@ -73,6 +82,6 @@ export function emailDeliveryRoutes(
         action: "notification.email_test_sent",
         entity: "email_delivery",
       });
-      return c.json({ ok: true });
+      return c.json(emailDeliveryTestReceiptSchema.parse({ ok: true }));
     });
 }

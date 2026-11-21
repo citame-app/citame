@@ -902,33 +902,61 @@ fn native_catalogue_edits_reach_web_and_respect_newer_values_through_the_proxy()
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_email_delivery_uses_the_owner_revision_through_the_proxy() {
-    use sob_core::http::email_delivery::{EmailProvider, SaveError, UpdateEmailDelivery};
+    use sob_core::http::email_delivery::{
+        EmailProvider, LIVE_TOPIC, SaveError, UpdateEmailDelivery,
+    };
 
     let device = proxy_device();
-    let browser = Device::sign_in();
+    let mut browser = Device::sign_in();
+    browser.sync();
+    let observed = browser.store.live_view_revision(LIVE_TOPIC).unwrap();
     let original = device.transport.email_delivery().unwrap();
     assert_eq!(original.settings, EmailProvider::Inherit);
     assert!(!original.has_secret);
+    let synthetic_secret = "re_smoke_provider_credential";
     let change = UpdateEmailDelivery {
-        revision: original.revision,
-        settings: EmailProvider::Disabled,
-        secret: None,
+        revision: original.revision.clone(),
+        settings: EmailProvider::Resend {
+            from_email: "bookings@example.com".into(),
+            from_name: "Synthetic smoke centre".into(),
+        },
+        secret: Some(synthetic_secret.into()),
     };
     let saved = device.transport.save_email_delivery(&change).unwrap();
-    assert_eq!(saved.settings, EmailProvider::Disabled);
-    assert!(!saved.has_secret);
+    assert_eq!(saved.settings, change.settings);
+    assert!(saved.has_secret);
     let web = browser.rest_get("/admin/email-delivery");
-    assert_eq!(web["settings"], json!({"provider": "disabled"}));
+    assert_eq!(web["settings"]["provider"], "resend");
     assert_eq!(web["revision"], json!(saved.revision));
-    assert!(web.get("secret").is_none());
+    assert!(!web.to_string().contains(synthetic_secret));
+    browser.sync();
+    assert!(browser.store.live_view_revision(LIVE_TOPIC).unwrap() > observed);
     assert!(matches!(
         device.transport.save_email_delivery(&change),
         Err(SaveError::Conflict)
     ));
-    assert!(device.transport.test_email_delivery().is_err());
+    assert!(matches!(
+        device.transport.test_email_delivery(original.revision),
+        Err(SaveError::Conflict)
+    ));
 
-    let restore = UpdateEmailDelivery {
+    let disable = UpdateEmailDelivery {
         revision: saved.revision,
+        settings: EmailProvider::Disabled,
+        secret: None,
+    };
+    let disabled = browser.transport.save_email_delivery(&disable).unwrap();
+    assert_eq!(
+        device.transport.email_delivery().unwrap().revision,
+        disabled.revision
+    );
+    assert!(matches!(
+        device.transport.test_email_delivery(disabled.revision.clone()),
+        Err(SaveError::Transport(TransportError::BadRequest(message)))
+            if message == "Email delivery is disabled"
+    ));
+    let restore = UpdateEmailDelivery {
+        revision: disabled.revision,
         settings: original.settings,
         secret: None,
     };
@@ -939,6 +967,22 @@ fn native_email_delivery_uses_the_owner_revision_through_the_proxy() {
         device.transport.email_delivery(),
         Err(TransportError::Unauthorized)
     ));
+}
+
+#[test]
+#[ignore = "requires SMOKE_EMAIL with an isolated SMTP sink"]
+fn native_sends_a_reviewed_email_test_through_the_proxy() {
+    let device = proxy_device();
+    let settings = device.transport.email_delivery().unwrap();
+    assert_eq!(
+        settings.settings,
+        sob_core::http::email_delivery::EmailProvider::Inherit
+    );
+    assert!(settings.server_email_enabled);
+    device
+        .transport
+        .test_email_delivery(settings.revision)
+        .unwrap();
 }
 
 #[test]
