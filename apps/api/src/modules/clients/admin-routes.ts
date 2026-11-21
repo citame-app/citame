@@ -220,6 +220,8 @@ export function clientAdminRoutes({ db, now = () => new Date(), booksyConsultati
     .get("/:id/controls", async (c) =>
       c.json(
         await getClientControls(db, parseOrThrow(idSchema, c.req.param("id")), c.get("principal")),
+        200,
+        { "Cache-Control": "private, no-store" },
       ),
     )
     .patch("/:id/controls", async (c) => {
@@ -231,6 +233,8 @@ export function clientAdminRoutes({ db, now = () => new Date(), booksyConsultati
           parseOrThrow(clientControlsInputSchema, await readJson(c)),
           c.get("principal"),
         ),
+        200,
+        { "Cache-Control": "private, no-store" },
       );
     })
     .get("/:id", async (c) => {

@@ -1,5 +1,7 @@
 use super::*;
 
+mod controls;
+
 const PAGE_SIZE: usize = 20;
 
 pub(super) struct Directory {
@@ -10,6 +12,7 @@ pub(super) struct Directory {
     form: Option<Form>,
     history: Vec<Appointment>,
     pub(super) intake: Option<intake_record::Desk>,
+    controls: Option<controls::Desk>,
     error: Option<String>,
 }
 
@@ -19,6 +22,12 @@ struct Form {
     phone: Entity<TextField>,
     email: Entity<TextField>,
     notes: Entity<TextField>,
+}
+
+impl Directory {
+    pub(super) fn has_controls(&self) -> bool {
+        self.controls.is_some()
+    }
 }
 
 fn phone_digits(value: &str) -> String {
@@ -62,6 +71,7 @@ impl Root {
             form: None,
             history: vec![],
             intake: None,
+            controls: None,
             error: None,
         }));
         self.reload_directory();
@@ -84,6 +94,7 @@ impl Root {
             if let Some(previous) = desk.form.as_ref().and_then(|form| form.previous.as_ref()) {
                 if desk.clients.iter().all(|client| client.id != previous.id) {
                     desk.form = None;
+                    desk.controls = None;
                     desk.history.clear();
                 } else {
                     desk.history = self
@@ -205,6 +216,9 @@ impl Root {
         if let Some(record) = &desk.intake {
             return self.render_intake_record(record, viewport, cx);
         }
+        if let Some(controls) = &desk.controls {
+            return self.render_client_controls(controls, cx);
+        }
         let title = |key| {
             div()
                 .text_lg()
@@ -246,6 +260,12 @@ impl Root {
                                 cx.listener(move |root, _, _, cx| {
                                     root.open_intake_record(subject.clone(), cx);
                                 }),
+                            ))
+                            .child(self.directory_button(
+                                "directory-controls",
+                                self.t(Key::ClientControls),
+                                Kind::Ghost,
+                                cx.listener(|root, _, _, cx| root.open_client_controls(cx)),
                             ))
                         })
                         .when_some(desk.error.as_ref(), |d, error| {

@@ -877,6 +877,7 @@ impl Root {
         self.refresh_service_assignments(&catalogue);
         self.services = catalogue.into_iter().filter(|s| s.active).collect();
         self.reload_directory();
+        self.refresh_client_controls(cx);
         self.reload_team_shifts();
         self.refresh_weekly_conflicts_if_ready(cx);
         self.refresh_open_annotations(previous_time_off_scope != self.time_off_scope, cx);
@@ -2554,6 +2555,7 @@ impl Root {
             Overlay::Combinations(_) => self.close_combinations(cx),
             Overlay::StaffAccess(_) => self.close_staff_access(cx),
             Overlay::Directory(desk) if desk.intake.is_some() => self.back_record(cx),
+            Overlay::Directory(desk) if desk.has_controls() => self.back_client_controls(cx),
             Overlay::ReviewModeration(desk) => {
                 if !desk.dismiss_editor(cx) {
                     self.overlay = Overlay::None;

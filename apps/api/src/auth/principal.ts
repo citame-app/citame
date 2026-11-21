@@ -123,12 +123,14 @@ export function requireAuth(
             : /\/(?:publish|unpublish|remove)$/.test(path)
               ? method === "POST"
               : method === "PUT";
-      const clientIntakeAllowed =
-        method === "GET" || (path.endsWith("/intake") && method === "POST");
+      const clientDetailAllowed =
+        method === "GET" ||
+        (path.endsWith("/intake") && method === "POST") ||
+        (path.endsWith("/controls") && method === "PATCH");
       if (
         ((path === "/admin/portfolio" || path.startsWith("/admin/portfolio/")) &&
           !portfolioAllowed) ||
-        (path.startsWith("/admin/clients/") && !clientIntakeAllowed) ||
+        (path.startsWith("/admin/clients/") && !clientDetailAllowed) ||
         (path.startsWith("/admin/intake-forms") && !intakeAllowed) ||
         (path === "/admin/intake-forms" && method === "GET" && c.req.query("view") !== "summary") ||
         !DESKTOP_PROXY_ROUTE.test(path) ||

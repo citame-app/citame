@@ -10,4 +10,6 @@ Staff with client-edit permission can manage tags. Only owners and managers can 
 
 Tag/access writes use a separate optimistic revision. A concurrent change requires an explicit reload; an unsaved control draft is preserved. Control changes do not erase an unsaved contact draft. Legacy profile edits cannot overwrite these protected fields. The CRM editor participates in the detail page's unsaved-navigation guard.
 
+In Desktop, open a synced client from **Clients** and select **Client tags & booking access**. Changing these controls requires a Cloud connection and uses the device account's existing permissions. The replica carries only the controls revision alongside the contact. Desktop refreshes an open read-only view on a newer revision and asks for review if a draft is open. Loading the current controls keeps locally changed fields and displays the current tags and access. The private reason is fetched on demand and stays out of the replica.
+
 Migration `0016` adds the controls to client profiles with safe defaults, leaving existing clients with normal access. Existing sync clients retain their current contact payload; shared server-side booking checks enforce the block when offline work reconnects. Advanced CRM photos, import/merge, forms and waivers remain separate expansion work.

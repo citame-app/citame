@@ -5021,6 +5021,7 @@ fn native_waitlist_reviews_accepts_and_requeues_real_offers() {
 #[test]
 #[ignore = "requires a running, seeded stack"]
 fn native_directory_replays_contacts_and_preserves_newer_edits() {
+    use sob_core::http::client_controls::{BookingAccess, ClientControlsUpdate};
     let mut first = Device::sign_in();
     let mut second = Device::sign_in();
     first.sync();
@@ -5073,6 +5074,52 @@ fn native_directory_replays_contacts_and_preserves_newer_edits() {
             && conflict.kind == "client.update"
             && conflict.reason == "conflict"
     }));
+
+    let reviewed_contact = read(&second);
+    let initial = first.transport.client_controls(&id).unwrap();
+    let change = ClientControlsUpdate {
+        version: initial.version,
+        tags: Some(vec![" VIP ".into()]),
+        booking_access: Some(BookingAccess::Trusted),
+        reason: Some("Reviewed centre contact".into()),
+    };
+    let saved = first
+        .transport
+        .save_client_controls(&id, &change)
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.tags, ["vip"]);
+    assert!(
+        second
+            .transport
+            .save_client_controls(&id, &change)
+            .unwrap()
+            .is_none()
+    );
+    second.sync();
+    assert_eq!(read(&second).controls_version, Some(saved.version));
+    assert_eq!(
+        second
+            .transport
+            .client_controls(&id)
+            .unwrap()
+            .booking_access,
+        BookingAccess::Trusted
+    );
+    ops::update_directory_client(
+        &mut second.store,
+        &reviewed_contact,
+        "Contact after controls",
+        "",
+        "Unchanged booking access",
+    )
+    .unwrap();
+    second.sync();
+    assert_eq!(read(&second).name, "Contact after controls");
+    assert_eq!(
+        second.transport.client_controls(&id).unwrap().version,
+        saved.version
+    );
 }
 
 #[test]

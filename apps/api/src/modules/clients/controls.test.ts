@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
-import { clientControlsSchema } from "@sob/contracts";
+import { clientControlsSchema, DESKTOP_CLIENT_ID, DESKTOP_SIGN_IN_SCOPE } from "@sob/contracts";
 import { appointment, staffProfile } from "@sob/db";
 import { eq, sql } from "drizzle-orm";
 import {
@@ -11,6 +11,9 @@ import {
   seedFixtures,
   setupApiTest,
 } from "../../../test/helpers";
+import { ORIGIN, obtainTokens } from "../../../test/oauth";
+import { pullAll } from "../../../test/sync";
+import { desktopResource } from "../../oauth/desktop";
 
 let t: Awaited<ReturnType<typeof setupApiTest>>;
 let f: Fixtures;
@@ -53,6 +56,48 @@ test("profile controls default safely and customers cannot read internal control
     canManageBookingAccess: true,
   });
   expect((await call(client, endpoint())).status).toBe(403);
+});
+
+test("a linked Desktop updates the shared controls and the replica carries only its revision", async () => {
+  const tokenFor = async (who: Actor) =>
+    (
+      await obtainTokens(t.app, {
+        clientId: DESKTOP_CLIENT_ID,
+        cookie: who.cookie,
+        scope: `${DESKTOP_SIGN_IN_SCOPE} offline_access`,
+        redirectUri: "http://127.0.0.1:63282/callback",
+        resource: desktopResource(ORIGIN),
+      })
+    ).tokens.access_token;
+  const [ownerToken, staffToken] = await Promise.all([tokenFor(owner), tokenFor(staff)]);
+  const desktop = (token: string, method: string, body?: unknown) =>
+    t.app.request(endpoint(), {
+      method,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+  const current = await desktop(ownerToken, "GET");
+  expect(current.status).toBe(200);
+  expect(current.headers.get("cache-control")).toBe("private, no-store");
+  expect((await desktop(ownerToken, "DELETE")).status).toBe(403);
+  const change = { version: 1, bookingAccess: "blocked", reason: "Private synthetic reason" };
+  expect((await desktop(staffToken, "PATCH", change)).status).toBe(403);
+  const saved = await desktop(ownerToken, "PATCH", { ...change, tags: [" VIP "] });
+  expect(saved.status).toBe(200);
+  expect(saved.headers.get("cache-control")).toBe("private, no-store");
+  expect(await (await call(owner, endpoint())).json()).toMatchObject({
+    tags: ["vip"],
+    bookingAccess: "blocked",
+    version: 2,
+  });
+  expect((await desktop(staffToken, "PATCH", { version: 1, tags: ["stale"] })).status).toBe(409);
+  const { changes } = await pullAll(t, owner);
+  const contact = changes.find(
+    (delta) => delta.entity === "client" && delta.op === "upsert" && delta.id === client.clientId,
+  );
+  expect(contact?.data).toMatchObject({ controlsVersion: 2 });
+  expect(contact?.data).not.toHaveProperty("tags");
+  expect(JSON.stringify(contact)).not.toContain(change.reason);
 });
 test("professionals manage tags while only managers and owners may change booking access", async () => {
   const response = await call(staff, endpoint(), "PATCH", { version: 1, tags: [" VIP "] });

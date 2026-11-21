@@ -52,6 +52,7 @@ pub struct HttpTransport {
     token_store: Option<Arc<dyn TokenStore>>,
 }
 
+pub mod client_controls;
 mod inventory_documents;
 mod portfolio;
 mod service_catalog;

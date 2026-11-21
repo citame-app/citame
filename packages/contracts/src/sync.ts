@@ -519,6 +519,7 @@ export const syncClientSchema = z.object({
   phone: z.string().nullable(),
   email: z.string().nullable(),
   notes: z.string().nullable(),
+  controlsVersion: z.number().int().positive().optional(),
   createdAt: instantSchema,
   updatedAt: instantSchema,
 });

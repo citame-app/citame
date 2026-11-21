@@ -125,6 +125,7 @@ async function loadVisible(
           phone: r.phone,
           email: r.email,
           notes: r.notes,
+          controlsVersion: r.controlsVersion,
           createdAt: r.createdAt.toISOString(),
           updatedAt: r.updatedAt.toISOString(),
         });

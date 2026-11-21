@@ -359,6 +359,7 @@ pub fn directory_clients(store: &Store) -> Result<Vec<Client>> {
                         phone: str_of(payload, "phone"),
                         email: str_of(payload, "email"),
                         notes: str_of(payload, "notes"),
+                        controls_version: None,
                         created_at: at.with_timezone(&Utc),
                         updated_at: at.with_timezone(&Utc),
                     });

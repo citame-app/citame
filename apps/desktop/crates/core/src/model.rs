@@ -230,6 +230,8 @@ pub struct Client {
     pub phone: Option<String>,
     pub email: Option<String>,
     pub notes: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controls_version: Option<u64>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
