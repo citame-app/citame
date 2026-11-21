@@ -258,8 +258,23 @@ for (const scheme of ["light", "dark"] as const) {
         const rejected = page.waitForResponse(
           (r) => r.url().endsWith("/api/appointments") && r.request().method() === "POST",
         );
-        await confirm.click();
-        expect((await rejected).status()).toBe(409);
+        const requirementsUrl = "**/api/intake/requirements?*";
+        const allowRefresh = Promise.withResolvers<void>();
+        await page.route(
+          requirementsUrl,
+          async (route) => {
+            await allowRefresh.promise;
+            await route.continue();
+          },
+          { times: 1 },
+        );
+        try {
+          await confirm.click();
+          expect((await rejected).status()).toBe(409);
+          await expect(page.getByRole("button", { name: "Try again", exact: true })).toBeVisible();
+        } finally {
+          allowRefresh.resolve();
+        }
         await expect(form.getByText(/Version 2/)).toBeVisible();
         await expect(confirm).toBeDisabled();
         await expect(

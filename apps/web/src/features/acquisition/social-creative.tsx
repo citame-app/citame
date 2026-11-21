@@ -116,6 +116,7 @@ export function SocialCreative({
   const optionsKey = JSON.stringify([
     kind,
     sourceKey,
+    salonName,
     format,
     palette,
     locale,
@@ -157,14 +158,18 @@ export function SocialCreative({
       throw new CreativeStaleError();
     return fresh;
   }
+  function isCurrent(ticket: number) {
+    const { generation, mounted } = activity.current;
+    return mounted && generation === ticket;
+  }
+
   function failed(reason: unknown) {
     setError(reason);
     setPreview(undefined);
     setReviewed(false);
   }
   async function prepare() {
-    const current = activity.current;
-    const ticket = ++current.generation;
+    const ticket = ++activity.current.generation;
     setBusy(true);
     setError(undefined);
     setFeedback(undefined);
@@ -180,30 +185,29 @@ export function SocialCreative({
         format,
         palette,
       });
-      if (current.mounted && current.generation === ticket)
+      if (isCurrent(ticket))
         setPreview({ ...image, source, signature: creativeSourceSignature(source) });
     } catch (reason) {
-      if (current.mounted && current.generation === ticket) failed(reason);
+      if (isCurrent(ticket)) failed(reason);
     } finally {
-      if (current.mounted && current.generation === ticket) setBusy(false);
+      if (isCurrent(ticket)) setBusy(false);
     }
   }
   async function exportContent(action: "png" | "caption" | "copy") {
     if (!preview || !reviewed) return;
-    const current = activity.current;
-    const ticket = ++current.generation;
+    const ticket = ++activity.current.generation;
     setBusy(true);
     setError(undefined);
     setFeedback(undefined);
     let clipboardAttempted = false;
     try {
       const source = await freshSource(preview.source);
-      if (!current.mounted || current.generation !== ticket) return;
+      if (!isCurrent(ticket)) return;
       if (creativeSourceSignature(source) !== preview.signature) throw new CreativeStaleError();
       if (action === "copy") {
         clipboardAttempted = true;
         await navigator.clipboard.writeText(preview.caption);
-        if (current.mounted && current.generation === ticket) setFeedback("copied");
+        if (isCurrent(ticket)) setFeedback("copied");
       } else {
         const url =
           action === "png"
@@ -219,7 +223,7 @@ export function SocialCreative({
         setFeedback("download");
       }
     } catch (reason) {
-      if (current.mounted && current.generation === ticket) {
+      if (isCurrent(ticket)) {
         if (
           action === "copy" &&
           clipboardAttempted &&
@@ -231,7 +235,7 @@ export function SocialCreative({
         else failed(reason);
       }
     } finally {
-      if (current.mounted && current.generation === ticket) setBusy(false);
+      if (isCurrent(ticket)) setBusy(false);
     }
   }
   const errorText =
