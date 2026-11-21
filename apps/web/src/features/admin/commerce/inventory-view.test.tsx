@@ -166,8 +166,9 @@ test("a live inventory refresh preserves an open draft until the operator review
     queryClient.setQueriesData({ queryKey: ["inventory", "product", id] }, detailProduct);
   });
   expect(name).toHaveValue("Unsaved local name");
-  await waitFor(() => expect(screen.getByRole("button", { name: "Save product" })).toBeDisabled());
-  fireEvent.click(screen.getByRole("button", { name: "Discard drafts and load latest details" }));
+  const review = await screen.findByText("Discard drafts and load latest details", { exact: true });
+  expect(screen.getByText("Save product", { exact: true })).toBeDisabled();
+  fireEvent.click(review);
   expect(await screen.findByLabelText("Product name")).toHaveValue("Published from Desktop");
   expect(calls).toHaveLength(0);
 });
