@@ -57,6 +57,39 @@ impl AdjustmentEditor {
 }
 
 impl Root {
+    pub(in crate::root) fn warehouse_adjustment_description(
+        &self,
+        adjustment: &WarehouseAdjustment,
+    ) -> String {
+        let location_id = adjustment.warehouse_id.0;
+        let list = self.svc.store.cached_warehouses().ok().flatten();
+        let warehouse = location_id.map_or_else(
+            || self.t(Key::InventoryWarehouseMain).to_owned(),
+            |id| {
+                list.as_ref()
+                    .and_then(|list| list.warehouses.iter().find(|row| row.id == Some(id)))
+                    .map(|row| self.warehouse_name(row).to_owned())
+                    .unwrap_or_else(|| id.to_string())
+            },
+        );
+        let product = self
+            .svc
+            .store
+            .cached_warehouse_balance(location_id, adjustment.product_id)
+            .ok()
+            .flatten()
+            .map_or_else(
+                || adjustment.product_id.to_string(),
+                |row| format!("{} ({})", row.name, row.sku),
+            );
+        format!(
+            "{warehouse} · {product} · {} {} · {}",
+            self.t(adjustment_label(adjustment.kind)),
+            adjustment.quantity,
+            adjustment.reason
+        )
+    }
+
     pub(super) fn start_warehouse_adjustment(
         &mut self,
         balance: WarehouseBalance,

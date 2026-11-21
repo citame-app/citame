@@ -207,37 +207,49 @@ impl WarehouseAdjustment {
             && !self.reason.contains('\0')
     }
 
-    pub(crate) fn fits(&self, balance: &WarehouseBalance) -> bool {
-        use crate::inventory::StockKind;
+    pub(crate) fn matches_balance(&self, balance: &WarehouseBalance) -> bool {
         self.product_id == balance.product_id
             && self.version == balance.version
             && self.reviewed_on_hand == balance.on_hand
-            && match self.kind {
-                StockKind::Receive => balance
-                    .on_hand
-                    .checked_add(self.quantity)
-                    .is_some_and(|next| next <= 999_999_999),
-                StockKind::Consume => balance.available() >= self.quantity,
-                StockKind::Count => self.quantity >= balance.reserved,
-                _ => false,
-            }
     }
 
-    pub fn matches(&self, row: &crate::inventory::StockMovement) -> bool {
+    pub(crate) fn fits(&self, balance: &WarehouseBalance) -> bool {
         use crate::inventory::StockKind;
+        match self.kind {
+            StockKind::Receive => balance
+                .on_hand
+                .checked_add(self.quantity)
+                .is_some_and(|next| next <= 999_999_999),
+            StockKind::Consume => balance.available() >= self.quantity,
+            StockKind::Count => self.quantity >= balance.reserved,
+            _ => false,
+        }
+    }
+
+    pub fn matches(&self, recorded: &RecordedAdjustment) -> bool {
+        let row = &recorded.movement;
         row.id == self.id
             && row.product_id == self.product_id
             && row.warehouse_id == self.warehouse_id.0
             && row.kind == self.kind
             && row.reason == self.reason
-            && match self.kind {
-                StockKind::Receive => row.quantity_delta == i64::from(self.quantity),
-                StockKind::Consume => row.quantity_delta == -i64::from(self.quantity),
-                StockKind::Count => {
-                    row.quantity_delta
-                        == i64::from(self.quantity) - i64::from(self.reviewed_on_hand)
-                }
-                _ => false,
-            }
+            && recorded.review.version == self.version
+            && recorded.review.on_hand == self.reviewed_on_hand
+            && recorded.review.quantity == self.quantity
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RecordedAdjustment {
+    #[serde(flatten)]
+    pub movement: crate::inventory::StockMovement,
+    pub review: AdjustmentReview,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdjustmentReview {
+    pub version: u32,
+    pub on_hand: u32,
+    pub quantity: u32,
 }

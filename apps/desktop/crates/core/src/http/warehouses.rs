@@ -1,5 +1,7 @@
 use super::*;
-use crate::warehouses::{RecordedWarehouseTransfer, WarehouseList, WarehouseStock, location_key};
+use crate::warehouses::{
+    RecordedAdjustment, RecordedWarehouseTransfer, WarehouseList, WarehouseStock, location_key,
+};
 use url::form_urlencoded;
 use uuid::Uuid;
 
@@ -52,7 +54,7 @@ impl HttpTransport {
     pub fn inventory_recorded_adjustment(
         &self,
         id: Uuid,
-    ) -> Result<Option<crate::inventory::StockMovement>, TransportError> {
+    ) -> Result<Option<RecordedAdjustment>, TransportError> {
         let response = self.get(
             &self.agent,
             &format!("/admin/inventory/stock-adjustments/{id}"),
@@ -61,13 +63,13 @@ impl HttpTransport {
         if response.status().as_u16() == 404 {
             return Ok(None);
         }
-        let movement: crate::inventory::StockMovement = read_response(response, false)?;
-        if movement.id != id {
+        let recorded: RecordedAdjustment = read_response(response, false)?;
+        if recorded.movement.id != id {
             return Err(TransportError::Server(
                 "Unexpected stock adjustment acknowledgement".into(),
             ));
         }
-        Ok(Some(movement))
+        Ok(Some(recorded))
     }
 
     fn read_location_stock(

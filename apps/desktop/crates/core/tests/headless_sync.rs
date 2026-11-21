@@ -5688,6 +5688,18 @@ fn native_stock_adjustment_to_an_empty_warehouse_replays_and_reviews_after_resta
     store
         .cache_warehouse_review(&list, std::slice::from_ref(&initial))
         .unwrap();
+    let over_consumption = WarehouseAdjustment {
+        id: Uuid::now_v7(),
+        kind: StockKind::Consume,
+        quantity: 6,
+        version: initial.products[0].version,
+        reviewed_on_hand: initial.products[0].on_hand,
+        ..received.clone()
+    };
+    assert!(matches!(
+        store.queue_warehouse_adjustment(&generation, over_consumption, None),
+        Err(sob_core::error::CoreError::Invalid(_))
+    ));
     let mut counted = WarehouseAdjustment {
         id: Uuid::now_v7(),
         kind: StockKind::Count,
@@ -5755,6 +5767,7 @@ fn native_stock_adjustment_to_an_empty_warehouse_replays_and_reviews_after_resta
     assert!(counted.matches(&movement));
     let different_count = WarehouseAdjustment {
         quantity: 3,
+        reviewed_on_hand: counted.reviewed_on_hand + 1,
         ..counted
     };
     assert!(!different_count.matches(&movement));

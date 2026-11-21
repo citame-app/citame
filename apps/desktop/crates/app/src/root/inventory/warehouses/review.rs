@@ -1,6 +1,6 @@
 use super::*;
 use sob_core::http::HttpTransport;
-use sob_core::warehouses::{ADJUST, SAVE, TRANSFER};
+use sob_core::warehouses::{ADJUST, RecordedAdjustment, SAVE, TRANSFER};
 
 pub(super) enum Proposal {
     Location(WarehouseEdit),
@@ -10,7 +10,7 @@ pub(super) enum Proposal {
 
 enum RecordedChange {
     Transfer(RecordedWarehouseTransfer),
-    Adjustment(sob_core::inventory::StockMovement),
+    Adjustment(RecordedAdjustment),
 }
 
 struct Review {
@@ -175,7 +175,7 @@ impl Root {
         let Some(conflict) = self.svc.store.conflict(id).ok().flatten() else {
             return;
         };
-        if !self.svc.store.can_queue_product_edits() {
+        if !self.svc.store.can_read_cached_orders() {
             return;
         }
         let proposal = match conflict.kind.as_str() {
@@ -272,7 +272,7 @@ impl Root {
                     .staff_directory_revision()
                     .unwrap_or_default()
                     == staff
-                    && root.svc.store.can_queue_product_edits()
+                    && root.svc.store.can_read_cached_orders()
                     && let Ok(review) = result
                     && root
                         .svc
@@ -336,6 +336,12 @@ impl Root {
                     panel.replaces = None;
                     panel.generation = None;
                 }
+            }
+            return;
+        }
+        if !self.svc.store.can_queue_product_edits() {
+            if let Some(panel) = self.warehouse_panel() {
+                panel.notice = Some(Key::InventoryRestricted);
             }
             return;
         }

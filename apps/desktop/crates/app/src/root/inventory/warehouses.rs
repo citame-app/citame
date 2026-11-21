@@ -385,6 +385,11 @@ impl Root {
             cx.notify();
             return;
         };
+        let invalid = if matches!(&proposal, Proposal::Adjustment(_)) {
+            Key::InventoryStockInvalid
+        } else {
+            Key::InventoryWarehouseInvalid
+        };
         let result = match proposal {
             Proposal::Location(edit) => {
                 self.svc
@@ -411,7 +416,7 @@ impl Root {
                     Key::InventoryDocumentQueued
                 }
                 Err(CoreError::CatalogueEditPending) => Key::InventoryWarehousePending,
-                Err(CoreError::Invalid(_)) => Key::InventoryWarehouseInvalid,
+                Err(CoreError::Invalid(_)) => invalid,
                 Err(_) => {
                     panel.generation = None;
                     Key::InventoryWarehouseChanged

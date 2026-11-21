@@ -1,4 +1,3 @@
-use super::adjustments::adjustment_label;
 use super::*;
 use sob_core::warehouses::PendingWarehouseChange;
 
@@ -335,12 +334,9 @@ impl Root {
                     .map(|entry| {
                         let details = match entry {
                             PendingWarehouseChange::Edit(edit) => edit.name,
-                            PendingWarehouseChange::Adjustment(adjustment) => format!(
-                                "{} · {} · {}",
-                                self.t(adjustment_label(adjustment.kind)),
-                                adjustment.quantity,
-                                adjustment.reason,
-                            ),
+                            PendingWarehouseChange::Adjustment(adjustment) => {
+                                self.warehouse_adjustment_description(&adjustment)
+                            }
                             PendingWarehouseChange::Transfer(transfer) => {
                                 let units = transfer
                                     .lines

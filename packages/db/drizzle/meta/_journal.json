@@ -687,6 +687,13 @@
       "when": 1795213487925,
       "tag": "0097_stock_adjustment_acknowledgements",
       "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1795213487926,
+      "tag": "0098_inventory_adjustment_review",
+      "breakpoints": true
     }
   ]
 }

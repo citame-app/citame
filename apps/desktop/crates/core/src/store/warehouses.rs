@@ -1,8 +1,8 @@
 use super::*;
 use crate::warehouses::{
-    ADJUST, PendingWarehouseChange, RecordedWarehouseTransfer, SAVE, TRANSFER, WarehouseAdjustment,
-    WarehouseBalance, WarehouseEdit, WarehouseList, WarehouseStock, WarehouseTransfer,
-    location_key,
+    ADJUST, PendingWarehouseChange, RecordedAdjustment, RecordedWarehouseTransfer, SAVE, TRANSFER,
+    WarehouseAdjustment, WarehouseBalance, WarehouseEdit, WarehouseList, WarehouseStock,
+    WarehouseTransfer, location_key,
 };
 use serde::de::DeserializeOwned;
 use uuid::Uuid;
@@ -48,6 +48,17 @@ impl Store {
             return Ok(None);
         }
         self.read_warehouse_cache("warehouse:list")
+    }
+
+    pub fn cached_warehouse_balance(
+        &self,
+        id: Option<Uuid>,
+        product: Uuid,
+    ) -> Result<Option<WarehouseBalance>> {
+        if !self.can_read_cached_orders() {
+            return Ok(None);
+        }
+        self.read_warehouse_cache(&balance_key(id, product))
     }
 
     pub fn cached_warehouse_stock(
@@ -256,18 +267,22 @@ impl Store {
         self.write_transaction(|store| {
             let list = store.warehouses_for_write(generation)?;
             let location = adjustment.warehouse_id.0;
-            if !list
-                .warehouses
-                .iter()
-                .any(|row| row.id == location && row.active)
-                || !store
-                    .read_warehouse_cache::<WarehouseBalance>(&balance_key(
-                        location,
-                        adjustment.product_id,
-                    ))?
-                    .is_some_and(|balance| adjustment.fits(&balance))
-            {
+            if !list.has_active_location(location) {
                 return Err(CoreError::CatalogueVersionChanged);
+            }
+            let Some(balance) = store
+                .read_warehouse_cache::<WarehouseBalance>(&balance_key(
+                    location,
+                    adjustment.product_id,
+                ))?
+                .filter(|balance| adjustment.matches_balance(balance))
+            else {
+                return Err(CoreError::CatalogueVersionChanged);
+            };
+            if !adjustment.fits(&balance) {
+                return Err(CoreError::Invalid(
+                    "Invalid quantity for the reviewed warehouse balance".into(),
+                ));
             }
             if store.has_pending_location_stock(adjustment.product_id)? {
                 return Err(CoreError::CatalogueEditPending);
@@ -289,7 +304,7 @@ impl Store {
         &mut self,
         generation: &str,
         conflict: &str,
-        recorded: &crate::inventory::StockMovement,
+        recorded: &RecordedAdjustment,
     ) -> Result<()> {
         self.write_transaction(|store| {
             if store.verified_reviewed_generation()? != generation

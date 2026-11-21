@@ -3335,7 +3335,15 @@ impl Root {
                 .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
                 .map(|d| self.date_time_label(d.with_timezone(&Utc)))
                 .unwrap_or_default();
-            let description = if matches!(
+            let description = if c.kind == sob_core::warehouses::ADJUST
+                && self.svc.store.can_read_cached_orders()
+            {
+                serde_json::from_value(c.payload.clone())
+                    .ok()
+                    .map_or_else(String::new, |command| {
+                        self.warehouse_adjustment_description(&command)
+                    })
+            } else if matches!(
                 c.kind.as_str(),
                 sob_core::store::SERVICE_CREATION_KIND | sob_core::store::SERVICE_EDIT_KIND
             ) {
@@ -3381,6 +3389,16 @@ impl Root {
                 .child(div().text_sm().child(
                     if c.kind == "appointment.create" && c.reason == "conflict" {
                         self.t(Key::ConflictReviewedTerms)
+                    } else if matches!(
+                        c.kind.as_str(),
+                        sob_core::warehouses::SAVE
+                            | sob_core::warehouses::TRANSFER
+                            | sob_core::warehouses::ADJUST
+                    ) && matches!(
+                        c.reason.as_str(),
+                        "conflict" | "replica_generation_changed" | "generation_changed"
+                    ) {
+                        self.t(Key::InventoryWarehouseChanged)
                     } else {
                         self.conflict_reason(&c.reason)
                     },
@@ -3582,7 +3600,7 @@ impl Root {
                                 sob_core::warehouses::SAVE
                                     | sob_core::warehouses::TRANSFER
                                     | sob_core::warehouses::ADJUST
-                            ) && self.svc.store.can_queue_product_edits()
+                            ) && self.svc.store.can_read_cached_orders()
                                 && self.status.connectivity == Connectivity::Online,
                             |row| {
                                 let id = c.mutation_id.clone();

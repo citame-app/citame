@@ -335,7 +335,11 @@ export async function moveStock(
   return db.transaction(async (tx) => {
     const current = await requireCurrentInventoryWriter(tx, principal.userId);
     const row = await productRow(tx, id, true);
-    const requestHash = fingerprint(input);
+    const requestHash = fingerprint(
+      document.reviewedOnHand === undefined
+        ? input
+        : { ...input, reviewedOnHand: document.reviewedOnHand },
+    );
     const [previous] = await tx
       .select()
       .from(stockMovement)
@@ -393,6 +397,10 @@ export async function moveStock(
       ...(document.movementId ? { id: document.movementId } : {}),
       productId: id,
       receiptId: document.receiptId,
+      adjustmentReview:
+        document.reviewedOnHand === undefined
+          ? undefined
+          : { version: input.version, onHand: document.reviewedOnHand, quantity: input.quantity },
       warehouseId,
       warehouseName,
       quantityDelta: delta,
@@ -430,8 +438,11 @@ export async function getStockAdjustment(db: Database, id: string, principal: Pr
         isNull(stockMovement.transferId),
       ),
     );
-  if (!row) throw new DomainError("not_found", "Stock adjustment not found");
-  return movementView(row, permissionsFor(principal.role, principal.accessPreset).readCosts);
+  if (!row?.adjustmentReview) throw new DomainError("not_found", "Stock adjustment not found");
+  return {
+    ...movementView(row, permissionsFor(principal.role, principal.accessPreset).readCosts),
+    review: row.adjustmentReview,
+  };
 }
 
 export async function listMovements(
