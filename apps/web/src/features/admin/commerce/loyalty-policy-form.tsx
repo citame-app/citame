@@ -70,10 +70,13 @@ function ProgramEditor({ initial }: { initial: ReviewedLoyaltyPolicy }) {
   const save = useMutation({
     mutationFn: (p: ReviewedLoyaltyPolicy) => api().rewards.savePolicy(p),
     onSuccess: (p) => {
+      const current = queries.getQueryData<ReviewedLoyaltyPolicy>(loyaltyPolicyQueryKey);
+      if (current && current.generation !== p.generation) {
+        setPending(undefined);
+        return;
+      }
       queries.setQueryData<ReviewedLoyaltyPolicy>(loyaltyPolicyQueryKey, (current) =>
-        current && (current.generation !== p.generation || current.version > p.version)
-          ? current
-          : p,
+        current && current.version > p.version ? current : p,
       );
       reset();
       setSaved(p);
