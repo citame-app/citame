@@ -217,6 +217,7 @@ export function createEndpoints(client: ApiClient) {
             intakeViews: "1",
             bookingPolicy: "1",
             emailDelivery: "1",
+            whatsappDesk: "1",
             resourceCatalogue: "1",
             combinationCatalogue: "1",
           },
@@ -273,7 +274,8 @@ export function createEndpoints(client: ApiClient) {
         connect: (request: { code: string; wabaId: string; phoneId?: string; pin?: string }) =>
           client.post("/admin/whatsapp/connect", request, whatsappSettingsSchema),
         templates: () => client.get("/admin/whatsapp/templates", z.array(whatsappTemplateSchema)),
-        deliveries: () => client.get("/admin/whatsapp/deliveries", whatsappDeliveriesSchema),
+        deliveries: (signal?: AbortSignal) =>
+          client.get("/admin/whatsapp/deliveries", whatsappDeliveriesSchema, { signal }),
         save: (rules: WhatsAppRule[]) =>
           client.patch("/admin/whatsapp/rules", rules, whatsappSettingsSchema),
         disconnect: () => client.delete("/admin/whatsapp", whatsappSettingsSchema),

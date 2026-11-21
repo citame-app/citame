@@ -252,6 +252,8 @@ Migration `0063_sync_service_colors` re-announces catalog rows through desktop s
 
 Migration `0102_email_delivery_live_view` adds an owner-only email settings invalidation. Upgrade every API replica before rolling out the matching Web and Desktop clients. Older APIs can advance past the new topic without delivering it. Reload Web and reconnect Desktop to refresh the current settings after a mixed-version rollout or rollback. The legacy email test remains available to existing clients. Updated clients use the reviewed test route, which requires the revision shown on screen.
 
+Migration `0103_whatsapp_desk_live_view` adds owner-only invalidation for connected sender and delivery status. Roll out all API replicas before relying on the new topic. Reconnect open clients after a mixed-version rollout or rollback because old readers skip unknown topics. The marker contains no sender or delivery data.
+
 Migration `0064_whatsapp_dispatch_sender` adds nullable sender identifiers to existing reminders. Deploy the API and worker after migrating. Unattributed historical sends retain their delivery state and can receive updates when the existing provider message ID matches the connected sender.
 
 On a single-replica installation, the gateway can return a brief error while Compose replaces a service. An API replica reports itself unready during `SHUTDOWN_GRACE_MS`. For rolling upgrades, an external load balancer or orchestrator must honor readiness and keep a healthy replica available.

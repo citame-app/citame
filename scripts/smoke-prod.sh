@@ -597,6 +597,15 @@ SQL
   )" || fail "could not create the synthetic imported waitlist request"
   [[ "$imported_waitlist_id" =~ ^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$ ]] ||
     fail "expected exactly one synthetic imported waitlist request"
+  "${COMPOSE[@]}" exec -T postgres psql -X -U sob -d sob -v ON_ERROR_STOP=1 -q \
+    -v booking_id="$booking_id" <<'SQL'
+INSERT INTO whatsapp_connection (waba_id, phone_id, phone, coexistence, encrypted_token, rules)
+VALUES ('111110', '111111', '+34 611 000 000', true, 'synthetic-non-credential',
+  '[{"kind":"confirmation","templateId":"111112","variables":[],"template":{"id":"111112","name":"smoke_confirmation","language":"es_ES","body":"Synthetic","parameters":[],"named":false}}]'::jsonb);
+INSERT INTO reminder (appointment_id, kind, channel, appointment_version, scheduled_for, status, whatsapp_delivery)
+SELECT id, 'confirmation', 'whatsapp', version, now(), 'sent', 'read'
+FROM appointment WHERE id = :'booking_id'::uuid;
+SQL
   # Suspend the worker while replacing the synthetic SMTP configuration with a mock credential.
   "${COMPOSE[@]}" stop worker || fail "stop the synthetic delivery worker"
   desktop_tests native_email_delivery_uses_the_owner_revision_through_the_proxy --exact ||

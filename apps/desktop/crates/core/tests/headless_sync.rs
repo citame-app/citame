@@ -986,6 +986,32 @@ fn native_sends_a_reviewed_email_test_through_the_proxy() {
 }
 
 #[test]
+#[ignore = "needs the synthetic WhatsApp history behind the web gateway"]
+fn native_whatsapp_desk_reads_private_delivery_status_through_the_proxy() {
+    use sob_core::http::whatsapp::{Event, LIVE_TOPIC, Status};
+
+    let device = proxy_device();
+    let mut browser = Device::sign_in();
+    browser.sync();
+    assert!(browser.store.live_view_revision(LIVE_TOPIC).unwrap() > 0);
+    let desk = device.transport.whatsapp_desk().unwrap();
+    assert!(!desk.configured);
+    let connection = desk.connection.unwrap();
+    assert_eq!(connection.phone, "+34 611 000 000");
+    assert!(connection.coexistence);
+    assert_eq!(connection.rules[0].template_name, "smoke_confirmation");
+    assert_eq!(connection.rules[0].kind, Event::Confirmation);
+    assert!(desk.deliveries.iter().any(|row| {
+        row.kind == Event::Confirmation && row.displayed_status() == Some(Status::Read)
+    }));
+    device.disconnect_and_check("/api/admin/whatsapp/desk");
+    assert!(matches!(
+        device.transport.whatsapp_desk(),
+        Err(TransportError::Unauthorized)
+    ));
+}
+
+#[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_policy_changes_reach_cloud_and_reject_old_reviews_through_the_proxy() {
     use sob_core::booking_policy::{LIVE_TOPIC, PolicyWriteError};

@@ -72,7 +72,8 @@ export function CalendarLiveProvider({
                 queryKey[1] === "staff-access" ||
                 queryKey[1] === "services" ||
                 queryKey[1] === "booking-policy" ||
-                queryKey[1] === "email-delivery"))
+                queryKey[1] === "email-delivery" ||
+                (queryKey[1] === "whatsapp" && queryKey[2] === "deliveries")))
           ) {
             // A pending first load can otherwise reuse a response started before the event.
             void queryClient.cancelQueries({ queryKey }).then(() => {

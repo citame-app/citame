@@ -174,7 +174,7 @@ export function WhatsAppSettings() {
   });
   const deliveries = useQuery({
     queryKey: deliveriesKey,
-    queryFn: endpoints.deliveries,
+    queryFn: ({ signal }) => endpoints.deliveries(signal),
     enabled: Boolean(connection),
     refetchInterval: 30000,
   });

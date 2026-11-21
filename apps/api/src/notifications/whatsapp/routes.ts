@@ -1,12 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import {
-  whatsappCompleteSchema,
-  whatsappDeliveriesSchema,
-  whatsappKindSchema,
-  whatsappRulesSchema,
-} from "@sob/contracts";
+import { whatsappCompleteSchema, whatsappKindSchema, whatsappRulesSchema } from "@sob/contracts";
 import { reminder, whatsappConnection } from "@sob/db";
-import { and, desc, eq, exists, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, eq, exists, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
@@ -20,9 +15,11 @@ import { backfillWhatsAppReminders } from "../outbox";
 import { createMeta, tokenCipher } from "./meta";
 import {
   disableWhatsApp,
+  listDeliveries,
   listTemplates,
   mapRules,
   readConnection,
+  whatsappDesk,
   whatsappSettings,
 } from "./service";
 
@@ -121,29 +118,8 @@ export function whatsappAdminRoutes({
         );
       }
     })
-    .get("/deliveries", async (c) => {
-      const rows = await db
-        .select({
-          id: reminder.id,
-          kind: reminder.kind,
-          scheduledFor: reminder.scheduledFor,
-          status: reminder.status,
-          delivery: reminder.whatsappDelivery,
-          lastError: reminder.lastError,
-        })
-        .from(reminder)
-        .where(eq(reminder.channel, "whatsapp"))
-        .orderBy(desc(reminder.updatedAt), desc(reminder.id))
-        .limit(20);
-      return c.json(
-        whatsappDeliveriesSchema.parse(
-          rows.map((row) => ({
-            ...row,
-            scheduledFor: row.scheduledFor.toISOString(),
-          })),
-        ),
-      );
-    })
+    .get("/deliveries", async (c) => c.json(await listDeliveries(db)))
+    .get("/desk", async (c) => c.json(await whatsappDesk(db, notifications)))
     .get("/templates", async (c) => {
       const connection = await readConnection(db);
       return c.json(

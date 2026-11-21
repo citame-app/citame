@@ -722,6 +722,13 @@
       "when": 1795257351000,
       "tag": "0102_email_delivery_live_view",
       "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1795258520000,
+      "tag": "0103_whatsapp_desk_live_view",
+      "breakpoints": true
     }
   ]
 }

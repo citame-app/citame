@@ -24,7 +24,7 @@ fn workspace_label(area: BrowserWorkspace) -> Option<Key> {
         BrowserWorkspace::Reputation => Key::Reputation,
         BrowserWorkspace::IntakeForms => Key::FormAdmin,
         BrowserWorkspace::Settings => Key::CloudSettings,
-        BrowserWorkspace::Whatsapp => Key::CloudWhatsapp,
+        BrowserWorkspace::Whatsapp => return None,
         BrowserWorkspace::Waitlist => Key::Waitlist,
         BrowserWorkspace::Unknown => return None,
     })
@@ -89,7 +89,11 @@ impl Root {
         .detach();
     }
 
-    fn open_web_workspace(&mut self, area: Option<BrowserWorkspace>, cx: &mut Context<Self>) {
+    pub(super) fn open_web_workspace(
+        &mut self,
+        area: Option<BrowserWorkspace>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(session) = self.svc.current_session() else {
             return;
         };
@@ -236,6 +240,12 @@ impl Root {
                     self.t(Key::SalonConfiguration),
                     Kind::Ghost,
                     cx.listener(|root, _, _, cx| root.open_salon_configuration(cx)),
+                ))
+                .child(self.button(
+                    "whatsapp-desk",
+                    self.t(Key::CloudWhatsapp),
+                    Kind::Ghost,
+                    cx.listener(|root, _, _, cx| root.open_whatsapp_desk(cx)),
                 ))
                 .child(self.button(
                     "email-delivery",

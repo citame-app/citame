@@ -210,6 +210,14 @@ test("an email delivery marker refreshes only the owner email settings query", a
   expect([...liveQueryKeys(["email_delivery"])]).toEqual([["admin", "email-delivery"]]);
 });
 
+test("a WhatsApp marker refreshes deliveries and leaves the rule editor query alone", async () => {
+  const h = harness(async () => ({ ...response(11), changes: [], refresh: ["whatsapp_desk"] }));
+  h.send(10);
+  h.send(11);
+  await waitFor(() => expect(h.onChanges).toHaveBeenCalledWith([], ["whatsapp_desk"]));
+  expect([...liveQueryKeys(["whatsapp_desk"])]).toEqual([["admin", "whatsapp", "deliveries"]]);
+});
+
 test("a portfolio marker refreshes the gallery without refetching the calendar", async () => {
   const h = harness(async () => ({ ...response(11), changes: [], refresh: ["portfolio"] }));
   h.send(10);

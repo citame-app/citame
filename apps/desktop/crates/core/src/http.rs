@@ -62,6 +62,7 @@ mod service_resources;
 mod staff_access;
 mod staff_portraits;
 mod warehouses;
+pub mod whatsapp;
 pub use crate::model::{CatalogPrice, ServiceOption};
 pub use portfolio::{
     PORTFOLIO_LIVE_TOPIC, PORTFOLIO_UPLOAD, PortfolioEdit, PortfolioList, PortfolioPhoto,
@@ -2013,7 +2014,7 @@ impl HttpTransport {
         let resp = self.get(
             &self.agent,
             &format!(
-                "/sync/pull?since={since}&limit={limit}{catalog}&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&emailDelivery=1&resourceCatalogue=1&inventoryAccess=1&booksyPaymentReview=1&clientGroups=1{catalogue_snapshots}"
+                "/sync/pull?since={since}&limit={limit}{catalog}&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&emailDelivery=1&whatsappDesk=1&resourceCatalogue=1&inventoryAccess=1&booksyPaymentReview=1&clientGroups=1{catalogue_snapshots}"
             ),
             None,
         )?;

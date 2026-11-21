@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
-import { whatsappSettingsSchema } from "@sob/contracts";
+import { syncPullResponseSchema, whatsappDeskSchema, whatsappSettingsSchema } from "@sob/contracts";
 import { appointment, clientProfile, reminder, whatsappConnection } from "@sob/db";
 import { eq } from "drizzle-orm";
 import {
@@ -143,6 +143,58 @@ test("schedules an existing appointment when a rule is enabled and records signe
   expect(jobs).toHaveLength(1);
   expect(jobs[0]).toMatchObject({ appointmentId: id, kind: "reminder_24h", status: "pending" });
   const jobId = jobs[0]!.id;
+  const deskPath = "/admin/whatsapp/desk";
+  const staff = await actor(t, "staff", "staff@example.com", { staffProfileId: f.anaId });
+  expect((await json(t.app, deskPath, "GET")).status).toBe(401);
+  expect((await json(t.app, deskPath, "GET", undefined, staff.cookie)).status).toBe(403);
+  const desk = await json(t.app, deskPath, "GET", undefined, owner.cookie);
+  expect(desk.headers.get("cache-control")).toBe("private, no-store");
+  const body = await desk.text();
+  expect(body).not.toContain("synthetic-credential");
+  expect(body).not.toContain("lastError");
+  expect(body).not.toContain(id);
+  expect(whatsappDeskSchema.parse(JSON.parse(body))).toMatchObject({
+    configured: true,
+    connection: {
+      phone: "+34 611 000 000",
+      coexistence: true,
+      rules: [
+        {
+          kind: "reminder_24h",
+          templateName: "recordatorio",
+          language: "es_ES",
+          variables: ["time"],
+        },
+      ],
+    },
+    deliveries: [{ id: jobId, kind: "reminder_24h", status: "pending", uncertain: false }],
+  });
+
+  const head = await json(t.app, "/sync/pull", "GET", undefined, owner.cookie);
+  const { headSeq } = syncPullResponseSchema.parse(await head.json());
+  await t.db
+    .update(reminder)
+    .set({ lastError: "whatsapp_delivery_unknown" })
+    .where(eq(reminder.id, jobId));
+  for (const [cookie, optIn, visible] of [
+    [owner.cookie, true, true],
+    [owner.cookie, false, false],
+    [staff.cookie, true, false],
+  ] as const) {
+    const pull = await json(
+      t.app,
+      `/sync/pull?since=${headSeq}${optIn ? "&whatsappDesk=1" : ""}`,
+      "GET",
+      undefined,
+      cookie,
+    );
+    const reply = syncPullResponseSchema.parse(await pull.json());
+    expect(reply.refresh?.includes("whatsapp_desk") ?? false).toBe(visible);
+    expect(reply.changes).toEqual([]);
+  }
+  const changed = await json(t.app, deskPath, "GET", undefined, owner.cookie);
+  expect(whatsappDeskSchema.parse(await changed.json()).deliveries[0]?.uncertain).toBe(true);
+
   const disabled = await json(t.app, "/admin/whatsapp/rules", "PATCH", [], owner.cookie);
   expect(disabled.status).toBe(200);
   expect((await t.db.select().from(reminder).where(eq(reminder.id, jobId)))[0]?.status).toBe(

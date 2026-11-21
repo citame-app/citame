@@ -176,3 +176,16 @@ export const whatsappDeliveriesSchema = z.array(
     lastError: z.string().nullable(),
   }),
 );
+
+export const whatsappDeskSchema = z.object({
+  configured: z.boolean(),
+  connection: whatsappSettingsSchema.shape.connection
+    .unwrap()
+    .extend({
+      rules: z.array(whatsappRuleSchema.extend({ templateName: z.string(), language: z.string() })),
+    })
+    .nullable(),
+  deliveries: z.array(
+    whatsappDeliveriesSchema.element.omit({ lastError: true }).extend({ uncertain: z.boolean() }),
+  ),
+});

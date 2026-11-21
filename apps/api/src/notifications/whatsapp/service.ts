@@ -1,11 +1,13 @@
 import {
   type WhatsAppRule,
   type WhatsAppTemplate,
+  whatsappDeliveriesSchema,
+  whatsappDeskSchema,
   whatsappRuleSchema,
   whatsappTemplateSchema,
 } from "@sob/contracts";
 import { type Database, reminder, whatsappConnection } from "@sob/db";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import type { NotificationConfig } from "../../config";
 import { DomainError } from "../../errors";
@@ -51,6 +53,52 @@ export function whatsappSettings(
         }
       : null,
   };
+}
+
+export async function listDeliveries(db: Pick<Database, "select">) {
+  const rows = await db
+    .select({
+      id: reminder.id,
+      kind: reminder.kind,
+      scheduledFor: reminder.scheduledFor,
+      status: reminder.status,
+      delivery: reminder.whatsappDelivery,
+      lastError: reminder.lastError,
+    })
+    .from(reminder)
+    .where(eq(reminder.channel, "whatsapp"))
+    .orderBy(desc(reminder.updatedAt), desc(reminder.id))
+    .limit(20);
+  return whatsappDeliveriesSchema.parse(
+    rows.map((row) => ({ ...row, scheduledFor: row.scheduledFor.toISOString() })),
+  );
+}
+
+export async function whatsappDesk(db: Database, config: NotificationConfig) {
+  const [connection, deliveries] = await Promise.all([readConnection(db), listDeliveries(db)]);
+  return whatsappDeskSchema.parse({
+    configured: Boolean(config.whatsapp),
+    connection: connection
+      ? {
+          phone: connection.phone,
+          coexistence: connection.coexistence,
+          expiresAt: connection.expiresAt?.toISOString() ?? null,
+          rules: savedRules
+            .parse(connection.rules)
+            .map(({ kind, templateId, variables, template }) => ({
+              kind,
+              templateId,
+              variables,
+              templateName: template.name,
+              language: template.language,
+            })),
+        }
+      : null,
+    deliveries: deliveries.map(({ lastError, ...delivery }) => ({
+      ...delivery,
+      uncertain: !delivery.delivery && lastError === "whatsapp_delivery_unknown",
+    })),
+  });
 }
 
 export async function disableWhatsApp(db: Pick<Database, "delete" | "update">) {

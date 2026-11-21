@@ -150,6 +150,7 @@ export function requireAuth(
         ([
           "/me",
           "/me/desktop-workspaces",
+          "/admin/whatsapp/desk",
           "/admin/commerce/unpaid",
           "/admin/commerce/capabilities",
           "/admin/passes/eligible",
