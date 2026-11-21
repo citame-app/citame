@@ -330,8 +330,12 @@ export async function listCheckouts(
 export async function refreshStatus(tx: Tx, id: string, now = new Date()) {
   await syncProtectionPayment(tx, id, now);
   const [row] = await tx.select().from(checkout).where(eq(checkout.id, id));
-  if (!row || row.status === "void") return;
-  if ((await syncCheckoutPassRefunds(tx, id)) || (await syncCheckoutGiftRefunds(tx, id))) {
+  if (!row) return;
+  if (
+    row.status === "void" ||
+    (await syncCheckoutPassRefunds(tx, id)) ||
+    (await syncCheckoutGiftRefunds(tx, id))
+  ) {
     await syncStampsAfterSpecialRefund(tx, row, now);
     return;
   }

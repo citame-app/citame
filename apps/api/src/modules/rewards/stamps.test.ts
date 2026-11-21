@@ -234,6 +234,12 @@ test("completing a visit awards once without a checkout", async () => {
   });
   expect(wrongVisit.status, await wrongVisit.clone().text()).toBe(200);
   expect(await cards()).toMatchObject([{ stamps: 0, state: "active" }]);
+  const corrected = await call(owner, `/appointments/${visit.id}`, "PATCH", {
+    status: "completed",
+    version: 3,
+  });
+  expect(corrected.status, await corrected.clone().text()).toBe(200);
+  expect(await cards()).toMatchObject([{ stamps: 1, state: "active" }]);
 });
 
 test("a booking promotion reduces the eligible spend for visit-based stamps", async () => {

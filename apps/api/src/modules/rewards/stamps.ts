@@ -409,25 +409,64 @@ async function awardStamp(tx: Tx, clientId: string, award: Award) {
   const current = await lockProgramForCard(tx);
   if (!current.program.enabled) return;
   const [duplicate] = await tx
-    .select({ source: stampCardEvent.source })
+    .select()
     .from(stampCardEvent)
     .where(eq(stampCardEvent.source, award.source));
-  if (duplicate) return;
-  let card = await activeCard(tx, root.id, current, award.now);
+  if (duplicate && (!duplicate.revokedAt || award.kind !== "appointment" || duplicate.checkoutId))
+    return;
+  let card = duplicate
+    ? await cardById(tx, duplicate.cardId)
+    : await activeCard(tx, root.id, current, award.now);
   if (!card && !current.program.automaticIssue) return;
   const terms = card ? stampProgramTermsSchema.parse(card.program) : current.program;
   if (terms.awardOn !== award.kind) return;
   const spend = await award.qualifiedSpend(terms);
   if (spend <= 0 || spend < terms.minimumSpendCents) return;
   card ??= await enrol(tx, root.id, current, award.now);
+  if (
+    duplicate &&
+    card.rewardIssuedAt &&
+    card.needsReview &&
+    !card.voidedAt &&
+    card.programVersion >= current.minimumCardVersion
+  ) {
+    await tx
+      .update(stampCardEvent)
+      .set({ revokedAt: null })
+      .where(eq(stampCardEvent.source, award.source));
+    const [other] = await tx
+      .select({ source: stampCardEvent.source })
+      .from(stampCardEvent)
+      .where(and(eq(stampCardEvent.cardId, card.id), sql`${stampCardEvent.revokedAt} is not null`))
+      .limit(1);
+    await tx
+      .update(stampCard)
+      .set({ needsReview: Boolean(other), version: card.version + 1, updatedAt: award.now })
+      .where(eq(stampCard.id, card.id));
+    return;
+  }
+  if (duplicate && state(card, current, award.now) !== "active") return;
   const then = card.stamps + 1;
   const complete = then === terms.goal;
-  await tx.insert(stampCardEvent).values({
+  const event = {
     source: award.source,
     cardId: card.id,
     checkoutId: award.checkoutId,
     createdAt: award.now,
-  });
+  };
+  if (duplicate) {
+    await tx
+      .update(stampCardEvent)
+      .set({ revokedAt: null, createdAt: award.now })
+      .where(eq(stampCardEvent.source, award.source));
+  } else {
+    const [recorded] = await tx
+      .insert(stampCardEvent)
+      .values(event)
+      .onConflictDoNothing()
+      .returning({ source: stampCardEvent.source });
+    if (!recorded) return;
+  }
   await tx
     .update(stampCard)
     .set({
@@ -584,7 +623,7 @@ export async function awardAppointmentStamp(
           and(
             eq(checkout.appointmentId, visit.id),
             eq(checkout.currency, "EUR"),
-            sql`(${checkout.idempotencyKey} = 'booking-promotion-' || ${visit.id} or ${checkout.pricingVersion} > 1)`,
+            sql`${checkout.status} <> 'void'`,
           ),
         )
         .orderBy(desc(checkout.createdAt), desc(checkout.id))
