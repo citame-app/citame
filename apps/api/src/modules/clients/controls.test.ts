@@ -100,7 +100,9 @@ test("a linked Desktop updates the shared controls and the replica carries only 
   const previousContact = before.changes.find(
     (delta) => delta.entity === "client" && delta.op === "upsert" && delta.id === client.clientId,
   );
-  expect(contact?.data).toEqual({ ...previousContact?.data, controlsVersion: 2 });
+  if (previousContact?.entity !== "client" || previousContact.op !== "upsert")
+    throw new Error("Expected a client in the initial replica");
+  expect(contact?.data).toEqual({ ...previousContact.data, controlsVersion: 2 });
   expect(contact?.data).not.toHaveProperty("tags");
   expect(JSON.stringify(contact)).not.toContain(change.reason);
 });
