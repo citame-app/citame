@@ -89,6 +89,18 @@ const COMMON_MIGRATION_COUNT = 41;
 const LOCAL_CATEGORY_MIGRATION = 42;
 const MERGED_CATALOG_PRESENTATION = originLedger[0]?.timestamp;
 const CATEGORY_COLUMN = 'ALTER TABLE "service" ADD COLUMN "category" text;';
+const WHATSAPP_ENUM = 1794952499559;
+const WHATSAPP_TRIGGERS = 1795258520000;
+
+function recordMigration(
+  db: Pick<Database, "execute">,
+  { hash, folderMillis }: ReturnType<typeof readMigrationFiles>[number],
+) {
+  return db.execute(sql`
+    insert into drizzle.__drizzle_migrations(hash, created_at)
+    values (${hash}, ${folderMillis})
+  `);
+}
 
 function legacyOriginEntries(
   expected: ReturnType<typeof readMigrationFiles>,
@@ -143,12 +155,16 @@ export async function runMigrations(
     `;
     const applied = journal?.initialized ? await readAppliedLedger(migrationDb) : [];
     const legacy = legacyOriginEntries(expected, applied);
+    // PostgreSQL requires the enum value added by 0047 to commit before 0103 uses it.
+    const beforeWhatsAppTriggers = expected.filter(
+      ({ folderMillis }) => folderMillis < WHATSAPP_TRIGGERS,
+    );
     if (legacy.length) {
       if (online)
         throw new Error("Merging the upstream migration history requires a maintenance upgrade.");
       const alreadyApplied = new Set(legacy.map(({ timestamp }) => timestamp));
       await migrationDb.transaction(async (tx) => {
-        for (const migration of expected.slice(COMMON_MIGRATION_COUNT)) {
+        for (const migration of beforeWhatsAppTriggers.slice(COMMON_MIGRATION_COUNT)) {
           const hasUpstreamEntry = alreadyApplied.has(migration.folderMillis);
           // Reconcile the upstream constraint with the wider limit already supported locally.
           if (hasUpstreamEntry && migration.folderMillis !== MERGED_CATALOG_PRESENTATION) continue;
@@ -162,12 +178,7 @@ export async function runMigrations(
             }
             await tx.execute(sql.raw(statement));
           }
-          if (!hasUpstreamEntry) {
-            await tx.execute(sql`
-              insert into drizzle.__drizzle_migrations(hash, created_at)
-              values (${migration.hash}, ${migration.folderMillis})
-            `);
-          }
+          if (!hasUpstreamEntry) await recordMigration(tx, migration);
         }
         for (const entry of legacy) {
           await tx.execute(sql`
@@ -175,16 +186,27 @@ export async function runMigrations(
             where hash = ${entry.legacyHash} and created_at = ${entry.legacyTimestamp}
           `);
         }
-        assertLedger(expected, await readAppliedLedger(tx), "exact");
+        assertLedger(beforeWhatsAppTriggers, await readAppliedLedger(tx), "exact");
       });
-      return;
+    } else {
+      assertLedger(expected, applied, "before-migration");
     }
-    assertLedger(expected, applied, "before-migration");
     if (online) {
       for (const { folderMillis } of expected.slice(applied.length)) {
         const maintenance = maintenanceMigrations.get(folderMillis);
         if (maintenance) throw new Error(maintenance);
       }
+    }
+    const latestTimestamp = Number(applied.at(-1)?.timestamp ?? 0);
+    if (!legacy.length && latestTimestamp > 0 && latestTimestamp < WHATSAPP_ENUM) {
+      // A fresh install creates the enum in the same transaction on PostgreSQL 18.
+      // An existing schema must commit the addition before the triggers can use it.
+      await migrationDb.transaction(async (tx) => {
+        for (const migration of beforeWhatsAppTriggers.slice(applied.length)) {
+          for (const statement of migration.sql) await tx.execute(sql.raw(statement));
+          await recordMigration(tx, migration);
+        }
+      });
     }
     await migrate(migrationDb, { migrationsFolder });
     assertLedger(expected, await readAppliedLedger(migrationDb), "required");

@@ -181,7 +181,7 @@ test("independent migrators wait before reading the journal and apply each migra
   }
 }, 25_000);
 
-for (const prefix of ["local", "upstream-first", "upstream-full"] as const) {
+for (const prefix of ["local", "before-whatsapp", "upstream-first", "upstream-full"] as const) {
   test(`merges the ${prefix} catalogue migration history without losing rows`, async () => {
     const url = new URL(process.env.DATABASE_URL ?? DEFAULT_DATABASE_URL);
     const database = `sob_test_merge_${Bun.randomUUIDv7().replaceAll("-", "")}`;
@@ -196,10 +196,13 @@ for (const prefix of ["local", "upstream-first", "upstream-full"] as const) {
     ];
     try {
       const journal = await Bun.file(join(migrationsFolder, "meta", "_journal.json")).json();
-      journal.entries = journal.entries.slice(0, prefix === "local" ? 77 : 41);
+      journal.entries = journal.entries.slice(
+        0,
+        prefix === "local" ? 77 : prefix === "before-whatsapp" ? 47 : 41,
+      );
       for (const row of journal.entries)
         await cp(join(migrationsFolder, row.tag + ".sql"), join(folder, row.tag + ".sql"));
-      if (prefix !== "local") {
+      if (prefix === "upstream-first" || prefix === "upstream-full") {
         const upstream = originLedger.slice(0, prefix === "upstream-first" ? 1 : 4);
         for (const [index, entry] of upstream.entries()) {
           const tag = legacyNames[index]!;
