@@ -9,9 +9,9 @@ import {
   oauthConsentResponseSchema,
   type SyncChange,
   type SyncPushBatch,
-  syncPushResponseSchema,
   syncNudgeSchema,
   syncPullResponseSchema,
+  syncPushResponseSchema,
 } from "@sob/contracts";
 import { desktopResource } from "../../oauth/desktop";
 
