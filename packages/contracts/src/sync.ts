@@ -306,7 +306,7 @@ const stockReceipt = z.object({
   ...envelope,
   kind: z.literal("stock.receipt"),
   payload: stockReceiptInputSchema
-    .omit({ generation: true, idempotencyKey: true })
+    .omit({ generation: true, idempotencyKey: true, purchaseOrder: true })
     .extend({ id: idSchema }),
 });
 

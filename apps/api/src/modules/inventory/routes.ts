@@ -5,6 +5,8 @@ import {
   productFiltersSchema,
   productPhotoInputSchema,
   productQuerySchema,
+  purchaseOrderCommandSchema,
+  purchaseOrderQuerySchema,
   stockLedgerFiltersSchema,
   stockLedgerQuerySchema,
   stockMovementInputSchema,
@@ -22,6 +24,7 @@ import { requirePermission } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
 import { exportStockLedger, inventoryFacets, stockLedger } from "./ledger";
+import { getPurchaseOrder, listPurchaseOrders, writePurchaseOrder } from "./orders";
 import { readProductPhoto, saveProductPhoto } from "./photo";
 import {
   getStockReceipt,
@@ -51,6 +54,43 @@ export function inventoryRoutes(deps: AppDeps) {
       await next();
     })
     .get("/facets", async (c) => c.json(await inventoryFacets(deps.db, c.get("principal"))))
+    .get("/orders", async (c) =>
+      c.json(
+        await listPurchaseOrders(
+          deps.db,
+          parseOrThrow(purchaseOrderQuerySchema, c.req.query()),
+          c.get("principal"),
+          generation,
+        ),
+        200,
+        { "Cache-Control": "private, no-store" },
+      ),
+    )
+    .get("/orders/:id", async (c) =>
+      c.json(
+        await getPurchaseOrder(
+          deps.db,
+          parseOrThrow(idSchema, c.req.param("id")).toLowerCase(),
+          c.get("principal"),
+          generation,
+        ),
+        200,
+        { "Cache-Control": "private, no-store" },
+      ),
+    )
+    .put("/orders/:id", async (c) =>
+      c.json(
+        await writePurchaseOrder(
+          deps.db,
+          parseOrThrow(idSchema, c.req.param("id")).toLowerCase(),
+          parseOrThrow(purchaseOrderCommandSchema, await readJson(c)),
+          c.get("principal"),
+          generation,
+        ),
+        200,
+        { "Cache-Control": "private, no-store" },
+      ),
+    )
     .get("/suppliers", async (c) =>
       c.json(
         await listSuppliers(

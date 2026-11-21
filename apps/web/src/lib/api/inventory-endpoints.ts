@@ -4,9 +4,13 @@ import {
   inventoryReportSchema,
   type ProductPhotoInput,
   type ProductQuery,
+  type PurchaseOrderCommand,
+  type PurchaseOrderQuery,
   productListSchema,
   productPhotoVersionSchema,
   productSchema,
+  purchaseOrderListSchema,
+  purchaseOrderSchema,
   reviewedInventoryMovementsSchema,
   reviewedInventoryProductSchema,
   reviewedStockReceiptListSchema,
@@ -52,6 +56,11 @@ export const stockLedgerExportHref = (filters: Partial<StockLedgerFilters>) =>
 
 export function inventoryEndpoints(client: ApiClient) {
   return {
+    orders: (query: Partial<PurchaseOrderQuery> = {}) =>
+      client.get("/admin/inventory/orders", purchaseOrderListSchema, { query }),
+    order: (id: string) => client.get(`/admin/inventory/orders/${id}`, purchaseOrderSchema),
+    saveOrder: (id: string, body: PurchaseOrderCommand) =>
+      client.put(`/admin/inventory/orders/${id}`, body, purchaseOrderSchema),
     suppliers: ({ active, ...query }: Partial<SupplierQuery> = {}) =>
       client.get("/admin/inventory/suppliers", supplierListSchema, {
         query: { ...query, active: active === undefined ? undefined : String(active) },

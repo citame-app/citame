@@ -3,6 +3,7 @@ import {
   productListSchema,
   productPhotoVersionSchema,
   productSchema,
+  purchaseOrderSchema,
   stockLedgerSchema,
   stockReceiptInputSchema,
   stockReceiptSchema,
@@ -193,6 +194,145 @@ test("numbered receipts atomically receive reviewed lines and replay without add
   );
   expect(staffReceipt.supplierName).toBe("Care Supplies");
   expect(staffReceipt.lines.every((line) => line.unitCostCents === undefined)).toBe(true);
+});
+
+test("purchase orders link versioned partial receipts to stock without over-receiving or replaying movements", async () => {
+  const first = await product();
+  const second = await product({ sku: "PO-FIXTURE", openingStock: 1 });
+  const supplierId = crypto.randomUUID();
+  const supplier = {
+    name: "Order test supplier",
+    email: null,
+    phone: null,
+    taxId: null,
+    notes: null,
+    active: true,
+    generation: first.inventoryGeneration,
+    version: 0,
+  };
+  const supplierPath = `/admin/inventory/suppliers/${supplierId}`;
+  expect((await call(owner, supplierPath, "PUT", supplier)).status).toBe(200);
+  const id = crypto.randomUUID();
+  const orders = "/admin/inventory/orders";
+  const path = `${orders}/${id}`;
+  const draft = {
+    action: "save",
+    supplierId,
+    supplierReference: "SUP-42",
+    expectedOn: "2026-02-01",
+    notes: "Synthetic purchase",
+    lines: [
+      { productId: first.id.toUpperCase(), quantity: 6 },
+      { productId: second.id, quantity: 4 },
+    ],
+    version: 0,
+    generation: first.inventoryGeneration,
+    idempotencyKey: crypto.randomUUID(),
+  };
+  expect((await call(client, orders)).status).toBe(403);
+  expect((await call(staff, path, "PUT", draft)).status).toBe(403);
+  const created = await call(owner, path, "PUT", draft);
+  expect(created.status, await created.clone().text()).toBe(200);
+  const pending = purchaseOrderSchema.parse(await created.json());
+  expect(pending).toMatchObject({ id, status: "draft", version: 1, supplierId, receipts: [] });
+  expect(purchaseOrderSchema.parse(await (await call(owner, path, "PUT", draft)).json())).toEqual(
+    pending,
+  );
+  expect((await call(owner, path, "PUT", { ...draft, notes: "Mutated request" })).status).toBe(409);
+  const place = {
+    action: "order",
+    version: 1,
+    generation: first.inventoryGeneration,
+    idempotencyKey: crypto.randomUUID(),
+  };
+  const ordered = purchaseOrderSchema.parse(await (await call(owner, path, "PUT", place)).json());
+  expect(ordered).toMatchObject({ status: "ordered", version: 2, orderedAt: expect.any(String) });
+  expect(
+    (await call(owner, path, "PUT", { ...draft, version: 2, idempotencyKey: crypto.randomUUID() }))
+      .status,
+  ).toBe(409);
+  expect(await (await call(owner, `/admin/inventory/products/${first.id}`)).json()).toMatchObject({
+    stockOnHand: 5,
+    version: 1,
+  });
+  expect(
+    (
+      await call(owner, supplierPath, "PUT", {
+        ...supplier,
+        name: "Renamed order supplier",
+        active: false,
+        version: 1,
+      })
+    ).status,
+  ).toBe(200);
+  const delivery = {
+    supplierId,
+    purchaseOrder: { id, version: 2 },
+    receivedOn: "2026-02-01",
+    notes: null,
+    invoiceReference: "INV-PO",
+    actorUserId: owner.userId,
+    generation: first.inventoryGeneration,
+    idempotencyKey: crypto.randomUUID(),
+    lines: [{ productId: first.id, version: 1, quantity: 3 }],
+  };
+  const receipts = "/admin/inventory/receipts";
+  expect(
+    (
+      await call(owner, receipts, "POST", {
+        ...delivery,
+        lines: [{ ...delivery.lines[0], quantity: 7 }],
+      })
+    ).status,
+  ).toBe(409);
+  const concurrent = await Promise.all([
+    call(owner, receipts, "POST", delivery),
+    call(owner, receipts, "POST", { ...delivery, idempotencyKey: crypto.randomUUID() }),
+  ]);
+  expect(concurrent.map((response) => response.status).sort()).toEqual([201, 409]);
+  let latest = purchaseOrderSchema.parse(await (await call(staff, path)).json());
+  expect(latest).toMatchObject({
+    status: "partially_received",
+    version: 3,
+    receipts: [expect.any(Object)],
+  });
+  expect(latest.lines.map((line) => line.receivedQuantity)).toEqual([3, 0]);
+  const remainder = {
+    ...delivery,
+    purchaseOrder: { id, version: 3 },
+    idempotencyKey: crypto.randomUUID(),
+    lines: [
+      { productId: first.id, version: 2, quantity: 3 },
+      { productId: second.id, version: 1, quantity: 4 },
+    ],
+  };
+  const received = await call(owner, receipts, "POST", remainder);
+  expect(received.status, await received.clone().text()).toBe(201);
+  const dto = stockReceiptSchema.parse(await received.json());
+  expect(dto).toMatchObject({ purchaseOrderId: id, supplierName: "Renamed order supplier" });
+  expect(
+    stockReceiptSchema.parse(await (await call(owner, receipts, "POST", remainder)).json()),
+  ).toEqual(dto);
+  latest = purchaseOrderSchema.parse(await (await call(owner, path)).json());
+  expect(latest).toMatchObject({
+    status: "received",
+    version: 4,
+    closedAt: expect.any(String),
+    supplierName: supplier.name,
+  });
+  expect(latest.receipts).toHaveLength(2);
+  expect(latest.lines.map((line) => line.receivedQuantity)).toEqual([6, 4]);
+  expect(await (await call(owner, `/admin/inventory/products/${first.id}`)).json()).toMatchObject({
+    stockOnHand: 11,
+    version: 3,
+  });
+  expect(await (await call(owner, `/admin/inventory/products/${second.id}`)).json()).toMatchObject({
+    stockOnHand: 5,
+    version: 2,
+  });
+  expect(await (await call(staff, `${orders}?search=SUP-42&status=received`)).json()).toMatchObject(
+    { orders: [expect.objectContaining({ id })] },
+  );
 });
 
 test("product photos are private, normalized and protected against stale writes", async () => {

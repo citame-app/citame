@@ -80,6 +80,98 @@ test("a numbered stock receipt survives an interrupted response without recordin
   }
 });
 
+test("purchase orders recover an interrupted draft and link partial deliveries to inventory", async ({
+  page,
+}) => {
+  const owner = await asOwner();
+  const tag = crypto.randomUUID();
+  const supplier = `Procurement ${tag}`;
+  const name = `Lotion ${tag}`;
+  const url = "/admin/commerce?view=inventory&inventoryTab=orders";
+  try {
+    const productResponse = await owner.post("/api/admin/inventory/products", {
+      data: { name, priceCents: 2000, openingStock: 0, idempotencyKey: crypto.randomUUID() },
+    });
+    expect(productResponse.status(), await productResponse.text()).toBe(201);
+    const product = await productResponse.json();
+    const supplierId = crypto.randomUUID();
+    const supplierResponse = await owner.put(`/api/admin/inventory/suppliers/${supplierId}`, {
+      data: {
+        name: supplier,
+        email: null,
+        phone: null,
+        taxId: null,
+        notes: null,
+        active: true,
+        version: 0,
+        generation: product.inventoryGeneration,
+      },
+    });
+    expect(supplierResponse.status(), await supplierResponse.text()).toBe(200);
+    await signInAs(page, OWNER_EMAIL, url);
+    await page.getByRole("button", { name: "New purchase order" }).click();
+    await page.getByLabel("Search suppliers").fill(supplier);
+    await page.getByLabel("Supplier", { exact: true }).selectOption(supplierId);
+    await page.getByLabel("Supplier order reference").fill(`PO-${tag}`);
+    await page.getByLabel("Search products", { exact: true }).fill(name);
+    await page.getByLabel("Add a product", { exact: true }).selectOption(product.id);
+    await page.getByLabel("Quantity", { exact: true }).fill("5");
+    const requests: unknown[] = [];
+    await page.context().route("**/api/admin/inventory/orders/*", async (route) => {
+      if (route.request().method() !== "PUT" || route.request().postDataJSON().action !== "save")
+        return route.continue();
+      requests.push(route.request().postDataJSON());
+      if (requests.length > 1) return route.continue();
+      const saved = await route.fetch();
+      expect(saved.status(), await saved.text()).toBe(200);
+      await route.abort("failed");
+    });
+    await page.getByRole("button", { name: "Save draft", exact: true }).click();
+    const retry = page.getByRole("button", { name: "Retry purchase order request" });
+    await expect(retry).toBeEnabled();
+    await page.reload();
+    await retry.click();
+    const heading = page.getByRole("heading", { name: /Purchase order #\d+/ });
+    await expect(heading).toBeVisible();
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toEqual(requests[0]);
+    const orderUrl = page.url();
+    const observer = await page.context().newPage();
+    await observer.goto(orderUrl);
+    await expect(observer.getByText(`${supplier} · Draft`, { exact: true })).toBeVisible();
+    const place = page.getByRole("button", { name: "Mark as ordered", exact: true });
+    await place.click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Mark as ordered", exact: true })
+      .click();
+    await expect(observer.getByText(`${supplier} · Ordered`, { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Record a delivery", exact: true }).click();
+    await page.getByLabel("Quantity", { exact: true }).fill("2");
+    await page.getByLabel("Supplier invoice reference").fill(`PARTIAL-${tag}`);
+    await page.getByRole("button", { name: "Record stock receipt", exact: true }).click();
+    await expect(page.getByRole("heading", { name: /Stock receipt #\d+/ })).toBeVisible();
+    await expect(observer.getByText("Received: 2 · Remaining: 3", { exact: false })).toBeVisible();
+    await observer.close();
+    await page.getByRole("button", { name: "Open linked purchase order" }).click();
+    await expect(page.getByText("Received: 2 · Remaining: 3", { exact: false })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Stock receipt #\d+/ })).toBeVisible();
+    await expectNoHorizontalScroll(page);
+    await page.getByRole("button", { name: "Cancel outstanding order", exact: true }).click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Cancel outstanding order", exact: true })
+      .click();
+    await expect(page.getByText(`${supplier} · Cancelled`)).toBeVisible();
+    await expect(page.getByRole("button", { name: /Stock receipt #\d+/ })).toBeVisible();
+    const stock = await owner.get(`/api/admin/inventory/products/${product.id}`);
+    expect(stock.status()).toBe(200);
+    expect((await stock.json()).stockOnHand).toBe(2);
+  } finally {
+    await owner.dispose();
+  }
+});
+
 test("stock movement pages stay in place until the operator loads the latest entries", async ({
   page,
 }) => {

@@ -5,23 +5,18 @@ import {
   instantSchema,
   localDateSchema,
   pageInfoSchema,
+  requiredTextSchema,
   syncGenerationSchema,
 } from "./common";
+import { purchaseOrderLinkSchema } from "./inventory-orders";
 
-const text = (max: number) =>
-  z
-    .string()
-    .trim()
-    .min(1)
-    .max(max)
-    .refine((value) => !value.includes("\u0000"));
 const version = z.number().int().min(0).max(2147483647);
 const supplierFields = {
-  name: text(160),
+  name: requiredTextSchema(160),
   email: z.email().max(254).nullable(),
-  phone: text(50).nullable(),
-  taxId: text(50).nullable(),
-  notes: text(1000).nullable(),
+  phone: requiredTextSchema(50).nullable(),
+  taxId: requiredTextSchema(50).nullable(),
+  notes: requiredTextSchema(1000).nullable(),
   active: z.boolean(),
 };
 export const supplierInputSchema = z.strictObject({
@@ -60,11 +55,12 @@ export const MAX_STOCK_RECEIPT_LINES = 50;
 export const stockReceiptInputSchema = z.strictObject({
   receivedOn: localDateSchema,
   supplierId: idSchema.transform((value) => value.toLowerCase()).nullable(),
-  invoiceReference: text(100).nullable(),
-  notes: text(1000).nullable(),
+  invoiceReference: requiredTextSchema(100).nullable(),
+  notes: requiredTextSchema(1000).nullable(),
   idempotencyKey: idempotencyKeySchema,
   actorUserId: z.string().min(1).max(200),
   generation: syncGenerationSchema,
+  purchaseOrder: purchaseOrderLinkSchema.optional(),
   lines: z
     .array(receiptLineSchema)
     .min(1)
@@ -80,6 +76,7 @@ const receiptHeader = z.object({
   receivedOn: localDateSchema,
   supplierId: idSchema.nullable(),
   supplierName: z.string().nullable(),
+  purchaseOrderId: idSchema.optional(),
   invoiceReference: z.string().nullable(),
   notes: z.string().nullable(),
   createdAt: instantSchema,

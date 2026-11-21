@@ -2,6 +2,7 @@ import {
   MAX_STOCK_RECEIPT_LINES,
   type PageInfo,
   type Product,
+  type PurchaseOrder,
   type StockReceipt,
   type StockReceiptInput,
   type Supplier,
@@ -22,12 +23,7 @@ import { api } from "~/lib/api/instance";
 import { formatDateWithYear, formatMoney, localDateOf } from "~/lib/format";
 import { UnsavedGuard } from "../unsaved-guard";
 import { useDebounced } from "../use-debounced";
-import {
-  clearReceiptRequest,
-  preserveReceiptRequest,
-  readReceiptRequest,
-  receiptRequestStorage,
-} from "./receipt-request";
+import { receiptRequests } from "./inventory-requests";
 
 export function InventoryReceipts({
   canWrite,
@@ -35,6 +31,7 @@ export function InventoryReceipts({
   userId,
   picked,
   onPick,
+  onOrder,
   onEditingChange,
   page,
   onPageChange,
@@ -44,6 +41,7 @@ export function InventoryReceipts({
   userId?: string;
   picked: string | null;
   onPick: (id: string | null) => void;
+  onOrder: (id: string) => void;
   onEditingChange: (editing: boolean) => void;
   page: number;
   onPageChange: (page: number) => void;
@@ -104,6 +102,16 @@ export function InventoryReceipts({
                 </p>
               )}
               {receipt.notes && <p className="whitespace-pre-wrap break-words">{receipt.notes}</p>}
+              {receipt.purchaseOrderId && (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    if (receipt.purchaseOrderId) onOrder(receipt.purchaseOrderId);
+                  }}
+                >
+                  {t("inventory.orders.linked")}
+                </Button>
+              )}
             </div>
             <ul className="divide-y divide-line rounded-xl border border-line bg-surface">
               {receipt.lines.map((line) => (
@@ -198,7 +206,7 @@ export function InventoryReceipts({
   );
 }
 
-function SupplierPickerPager({
+export function SupplierPickerPager({
   pagination,
   onChange,
 }: {
@@ -223,12 +231,83 @@ function SupplierPickerPager({
 }
 
 type ReceiptLine = { product: Product; quantity: string };
-function ReceiptEditor({
+export function orderReceiptKey(userId: string, orderId: string) {
+  return `citame:stock-receipt:${encodeURIComponent(userId)}:order:${orderId}`;
+}
+
+export function OrderReceiptEditor({
+  order,
   userId,
   onClose,
   onSaved,
 }: {
+  order: PurchaseOrder;
   userId: string;
+  onClose: () => void;
+  onSaved: (id: string) => void;
+}) {
+  const { t } = useI18n();
+  const online = useOnline();
+  const review = useQuery({
+    queryKey: ["inventory", "order-receipt-products", order.id, order.generation, order.version],
+    queryFn: () => loadOrderProducts(order),
+    enabled: online,
+  });
+  if (review.isError && !review.data)
+    return (
+      <div className="space-y-3">
+        <ErrorState error={review.error} onRetry={() => void review.refetch()} />
+        <Button onClick={onClose}>{t("inventory.orders.back")}</Button>
+      </div>
+    );
+  if (!review.data)
+    return (
+      <div className="space-y-3">
+        <p role="status">{t(online ? "admin.loading" : "problem.offline")}</p>
+        <Button onClick={onClose}>{t("inventory.orders.back")}</Button>
+      </div>
+    );
+  return (
+    <ReceiptEditor
+      userId={userId}
+      onClose={onClose}
+      onSaved={onSaved}
+      initialOrder={order}
+      initialLines={review.data}
+    />
+  );
+}
+
+async function loadOrderProducts(
+  order: PurchaseOrder,
+  input?: StockReceiptInput,
+): Promise<ReceiptLine[]> {
+  return Promise.all(
+    order.lines
+      .filter(
+        (line) =>
+          line.receivedQuantity < line.quantity ||
+          input?.lines.some((row) => row.productId === line.productId),
+      )
+      .map(async (line) => ({
+        product: await api().inventory.get(line.productId),
+        quantity: String(
+          input?.lines.find((row) => row.productId === line.productId)?.quantity ?? 0,
+        ),
+      })),
+  );
+}
+
+function ReceiptEditor({
+  userId,
+  initialOrder,
+  initialLines,
+  onClose,
+  onSaved,
+}: {
+  userId: string;
+  initialOrder?: PurchaseOrder;
+  initialLines?: ReceiptLine[];
   onClose: () => void;
   onSaved: (id: string) => void;
 }) {
@@ -242,7 +321,8 @@ function ReceiptEditor({
   const [supplier, setSupplier] = useState<Supplier | null>(null);
   const [invoice, setInvoice] = useState("");
   const [notes, setNotes] = useState("");
-  const [lines, setLines] = useState<ReceiptLine[]>([]);
+  const [order, setOrder] = useState(initialOrder);
+  const [lines, setLines] = useState<ReceiptLine[]>(initialLines ?? []);
   const [search, setSearch] = useState("");
   const productSearch = useDebounced(search.trim(), 200);
   const [supplierSearch, setSupplierSearch] = useState("");
@@ -250,11 +330,13 @@ function ReceiptEditor({
   const supplierTerm = useDebounced(supplierSearch.trim(), 200);
   const [error, setError] = useState(false);
   const [confirm, setConfirm] = useState<"leave" | "discard" | null>(null);
-  const key = `citame:stock-receipt:${encodeURIComponent(userId)}`;
+  const key = order
+    ? orderReceiptKey(userId, order.id)
+    : `citame:stock-receipt:${encodeURIComponent(userId)}`;
   const [saved, setSaved] = useState(() => {
     try {
       return {
-        command: readReceiptRequest(receiptRequestStorage(), key),
+        command: receiptRequests.read(key),
         failed: false,
       };
     } catch {
@@ -265,13 +347,13 @@ function ReceiptEditor({
   const products = useQuery({
     queryKey: ["inventory", "receipt-products", productSearch],
     queryFn: () => api().inventory.list({ search: productSearch, pageSize: 10 }),
-    enabled: productSearch.length > 0 && !saved.command && online,
+    enabled: !order && productSearch.length > 0 && !saved.command && online,
   });
   const suppliers = useQuery({
     queryKey: ["inventory", "receipt-suppliers", supplierTerm, supplierPage],
     queryFn: () =>
       api().inventory.suppliers({ search: supplierTerm, active: true, page: supplierPage }),
-    enabled: !saved.command && online,
+    enabled: !order && !saved.command && online,
   });
   const pick = useMutation({
     mutationFn: (id: string) => api().inventory.get(id),
@@ -292,7 +374,7 @@ function ReceiptEditor({
   const send = useMutation({
     mutationFn: (command: StockReceiptInput) => api().inventory.receive(command),
     onSuccess: async (receipt, command) => {
-      await clearReceiptRequest(key, command);
+      await receiptRequests.clear(key, command);
       setSaved({ command: null, failed: false });
       toast.success(t("inventory.receipts.saved"));
       await cache.invalidateQueries({ queryKey: ["inventory"] });
@@ -304,6 +386,15 @@ function ReceiptEditor({
   });
   const review = useMutation({
     mutationFn: async (input: StockReceiptInput) => {
+      if (input.purchaseOrder) {
+        const latest = await api().inventory.order(input.purchaseOrder.id);
+        if (latest.status !== "ordered" && latest.status !== "partially_received")
+          throw new ApiError("version_conflict", 409, "This purchase order is closed");
+        const products = await loadOrderProducts(latest, input);
+        if (products.some(({ product }) => product.inventoryGeneration !== latest.generation))
+          throw new ApiError("sync_generation_changed", 409, "The inventory generation changed");
+        return { products, supplier: null, input, latest };
+      }
       const [products, supplier] = await Promise.all([
         Promise.all(
           input.lines.map(async (line) => ({
@@ -316,20 +407,31 @@ function ReceiptEditor({
       const generation = products[0]?.product.inventoryGeneration;
       if (!generation || products.some(({ product }) => product.inventoryGeneration !== generation))
         throw new Error("The inventory generation changed");
-      return { products, supplier, input };
+      return { products, supplier, input, latest: undefined };
     },
-    onSuccess: async ({ products, supplier, input }) => {
-      await clearReceiptRequest(key, input);
+    onSuccess: async ({ products, supplier, input, latest }) => {
+      await receiptRequests.clear(key, input);
       setReceivedOn(input.receivedOn);
       setInvoice(input.invoiceReference ?? "");
       setNotes(input.notes ?? "");
       setLines(products);
       setSupplier(supplier);
+      setOrder(latest);
       setSaved({ command: null, failed: false });
       send.reset();
     },
   });
-  const dirty = !!(receivedOn !== today || supplier || invoice || notes || lines.length);
+  const dirty = !!(
+    receivedOn !== today ||
+    supplier ||
+    invoice ||
+    notes ||
+    lines.some((line) => Number(line.quantity) > 0)
+  );
+  const remaining = new Map(
+    order?.lines.map((line) => [line.productId, line.quantity - line.receivedQuantity]),
+  );
+  const canReceive = !order || order.status === "ordered" || order.status === "partially_received";
   const command = saved.command;
   const locked = send.isPending || !!command;
   const rejection =
@@ -341,7 +443,7 @@ function ReceiptEditor({
     <section className="space-y-4">
       <UnsavedGuard dirty={dirty && !command && !send.isPending} />
       <h3 id={heading} className="text-heading">
-        {t("inventory.receipts.new")}
+        {t(order ? "inventory.orders.receive" : "inventory.receipts.new")}
       </h3>
       <form
         aria-labelledby={heading}
@@ -350,16 +452,19 @@ function ReceiptEditor({
         onSubmit={async (event) => {
           event.preventDefault();
           if (busy.current || locked || saved.failed || !online) return;
-          const generation = lines[0]?.product.inventoryGeneration;
+          if (!canReceive) return;
+          const included = order ? lines.filter((line) => Number(line.quantity) !== 0) : lines;
+          const generation = order?.generation ?? included[0]?.product.inventoryGeneration;
           const payload = stockReceiptInputSchema.safeParse({
             receivedOn,
-            supplierId: supplier?.id ?? null,
+            supplierId: order?.supplierId ?? supplier?.id ?? null,
+            ...(order ? { purchaseOrder: { id: order.id, version: order.version } } : {}),
             invoiceReference: invoice.trim() || null,
             notes: notes.trim() || null,
             actorUserId: userId,
             generation,
             idempotencyKey: crypto.randomUUID(),
-            lines: lines.map(({ product, quantity }) => ({
+            lines: included.map(({ product, quantity }) => ({
               productId: product.id,
               version: product.version,
               quantity: Number(quantity),
@@ -368,9 +473,10 @@ function ReceiptEditor({
           if (
             !payload.success ||
             supplier?.active === false ||
-            lines.some(
+            included.some(
               ({ product, quantity }) =>
-                !product.active ||
+                (!order && !product.active) ||
+                (order && Number(quantity) > (remaining.get(product.id) ?? 0)) ||
                 product.inventoryGeneration !== generation ||
                 product.stockOnHand + Number(quantity) > 999999999,
             )
@@ -380,7 +486,7 @@ function ReceiptEditor({
           }
           busy.current = true;
           try {
-            const pending = await preserveReceiptRequest(key, payload.data);
+            const pending = await receiptRequests.preserve(key, payload.data);
             setError(false);
             setSaved({ command: pending, failed: false });
             if (pending.idempotencyKey === payload.data.idempotencyKey) {
@@ -392,6 +498,11 @@ function ReceiptEditor({
           }
         }}
       >
+        {order && (
+          <p className="text-muted break-words">
+            {t("inventory.orders.number", { number: order.number })} · {order.supplierName}
+          </p>
+        )}
         {command ? (
           <div className="space-y-2 rounded-xl border border-line bg-surface p-4">
             <p role="status">{t("inventory.receipts.pending")}</p>
@@ -420,46 +531,52 @@ function ReceiptEditor({
                 value={invoice}
                 onChange={(event) => setInvoice(event.target.value)}
               />
-              <TextField
-                name="supplierSearch"
-                label={t("inventory.suppliers.search")}
-                value={supplierSearch}
-                maxLength={100}
-                onChange={(event) => {
-                  setSupplierSearch(event.target.value);
-                  setSupplierPage(1);
-                }}
-                className="min-w-0"
-              />
-              <SelectField
-                name="supplier"
-                label={t("inventory.receipts.supplier")}
-                value={supplier?.id ?? ""}
-                onChange={(value) =>
-                  setSupplier(suppliers.data?.suppliers.find((entry) => entry.id === value) ?? null)
-                }
-                options={[
-                  { value: "", label: t("inventory.receipts.noSupplier") },
-                  ...(supplier &&
-                  !suppliers.data?.suppliers.some((option) => option.id === supplier.id)
-                    ? [{ value: supplier.id, label: supplier.name, disabled: !supplier.active }]
-                    : []),
-                  ...(suppliers.data?.suppliers.map((option) => ({
-                    value: option.id,
-                    label: [option.name, option.taxId ?? option.email ?? option.phone]
-                      .filter(Boolean)
-                      .join(" · "),
-                  })) ?? []),
-                ]}
-              />
+              {!order && (
+                <>
+                  <TextField
+                    name="supplierSearch"
+                    label={t("inventory.suppliers.search")}
+                    value={supplierSearch}
+                    maxLength={100}
+                    onChange={(event) => {
+                      setSupplierSearch(event.target.value);
+                      setSupplierPage(1);
+                    }}
+                    className="min-w-0"
+                  />
+                  <SelectField
+                    name="supplier"
+                    label={t("inventory.receipts.supplier")}
+                    value={supplier?.id ?? ""}
+                    onChange={(value) =>
+                      setSupplier(
+                        suppliers.data?.suppliers.find((entry) => entry.id === value) ?? null,
+                      )
+                    }
+                    options={[
+                      { value: "", label: t("inventory.receipts.noSupplier") },
+                      ...(supplier &&
+                      !suppliers.data?.suppliers.some((option) => option.id === supplier.id)
+                        ? [{ value: supplier.id, label: supplier.name, disabled: !supplier.active }]
+                        : []),
+                      ...(suppliers.data?.suppliers.map((option) => ({
+                        value: option.id,
+                        label: [option.name, option.taxId ?? option.email ?? option.phone]
+                          .filter(Boolean)
+                          .join(" · "),
+                      })) ?? []),
+                    ]}
+                  />
+                </>
+              )}
             </div>
-            {suppliers.data && (
+            {!order && suppliers.data && (
               <SupplierPickerPager
                 pagination={suppliers.data.pagination}
                 onChange={setSupplierPage}
               />
             )}
-            {suppliers.isError && (
+            {!order && suppliers.isError && (
               <ErrorState error={suppliers.error} onRetry={() => void suppliers.refetch()} />
             )}
             <TextAreaField
@@ -469,7 +586,7 @@ function ReceiptEditor({
               value={notes}
               onChange={(event) => setNotes(event.target.value)}
             />
-            {lines.length < MAX_STOCK_RECEIPT_LINES && (
+            {!order && lines.length < MAX_STOCK_RECEIPT_LINES && (
               <TextField
                 name="productSearch"
                 label={t("inventory.search")}
@@ -482,7 +599,7 @@ function ReceiptEditor({
               <ErrorState error={products.error} onRetry={() => void products.refetch()} />
             )}
             {pick.isError && <ErrorState error={pick.error} />}
-            {productSearch && lines.length < MAX_STOCK_RECEIPT_LINES && (
+            {!order && productSearch && lines.length < MAX_STOCK_RECEIPT_LINES && (
               <SelectField
                 label={t("inventory.receipts.addProduct")}
                 name="productPick"
@@ -512,6 +629,15 @@ function ReceiptEditor({
                 </legend>
                 <p className="text-muted">
                   {t("inventory.onHand", { count: line.product.stockOnHand })}
+                  {order && (
+                    <>
+                      {" "}
+                      ·{" "}
+                      {t("inventory.orders.remaining", {
+                        count: remaining.get(line.product.id) ?? 0,
+                      })}
+                    </>
+                  )}
                   {!line.product.active && <> · {t("inventory.inactive")}</>}
                 </p>
                 <div className="flex flex-wrap items-end gap-2">
@@ -532,17 +658,19 @@ function ReceiptEditor({
                       )
                     }
                   />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    onClick={() =>
-                      setLines((current) =>
-                        current.filter((row) => row.product.id !== line.product.id),
-                      )
-                    }
-                  >
-                    {t("inventory.receipts.removeLine")}
-                  </Button>
+                  {!order && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() =>
+                        setLines((current) =>
+                          current.filter((row) => row.product.id !== line.product.id),
+                        )
+                      }
+                    >
+                      {t("inventory.receipts.removeLine")}
+                    </Button>
+                  )}
                 </div>
               </fieldset>
             ))}
@@ -586,7 +714,10 @@ function ReceiptEditor({
               </Button>
             </>
           ) : (
-            <Button type="submit" disabled={!online || saved.failed || pick.isPending}>
+            <Button
+              type="submit"
+              disabled={!online || !canReceive || saved.failed || pick.isPending}
+            >
               {t("inventory.receipts.save")}
             </Button>
           )}
@@ -615,9 +746,10 @@ function ReceiptEditor({
         onConfirm={async () => {
           if (confirm === "discard" && command) {
             try {
-              await clearReceiptRequest(key, command);
+              await receiptRequests.clear(key, command);
               setSaved({ command: null, failed: false });
-              setLines([]);
+              if (order) onClose();
+              else setLines([]);
               send.reset();
             } catch {
               setSaved({ command, failed: true });

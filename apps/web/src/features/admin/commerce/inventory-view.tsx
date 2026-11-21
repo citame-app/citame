@@ -24,6 +24,7 @@ import { useInventoryLiveRevision } from "../calendar/live-provider";
 import { UnsavedGuard } from "../unsaved-guard";
 import { useDebounced } from "../use-debounced";
 import { type InventoryNavigation, inventoryTabs } from "./inventory-navigation";
+import { InventoryOrders } from "./inventory-orders";
 import { InventoryReceipts } from "./inventory-receipts";
 import { InventorySuppliers } from "./inventory-suppliers";
 import { centsInput, inputCents } from "./money";
@@ -223,7 +224,9 @@ export function InventoryView({
                       ? "pos.stockCount"
                       : value === "receipts"
                         ? "inventory.receipts.title"
-                        : "inventory.suppliers.title",
+                        : value === "orders"
+                          ? "inventory.orders.title"
+                          : "inventory.suppliers.title",
               )}
             </button>
           ))}
@@ -236,9 +239,18 @@ export function InventoryView({
           userId={userId}
           picked={receiptId}
           onPick={(id) => go({ ...activeNavigation, receipt: id ?? undefined })}
+          onOrder={(order) => go({ inventoryTab: "orders", order })}
           onEditingChange={setInventoryEditor}
           page={activeNavigation.inventoryPage ?? 1}
           onPageChange={(inventoryPage) => go({ ...activeNavigation, inventoryPage })}
+        />
+      ) : currentSection === "orders" ? (
+        <InventoryOrders
+          canWrite={writeInventory}
+          userId={userId}
+          navigation={activeNavigation}
+          onNavigation={go}
+          onEditingChange={setInventoryEditor}
         />
       ) : currentSection === "suppliers" && writeInventory ? (
         <InventorySuppliers

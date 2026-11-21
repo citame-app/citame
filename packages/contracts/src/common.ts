@@ -1,6 +1,14 @@
 import { z } from "zod";
 
 export const idSchema = z.uuid();
+export const requiredTextSchema = (max: number) =>
+  z
+    .string()
+    .trim()
+    .min(1)
+    .max(max)
+    .refine((value) => !value.includes("\u0000"));
+
 export const syncGenerationSchema = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
 
 /**

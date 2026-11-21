@@ -13,6 +13,7 @@ import { requirePermission } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { getSalonSettings } from "../settings/service";
+import { prepareOrderDelivery, recordOrderDelivery } from "./orders";
 import {
   fingerprint,
   moveStock,
@@ -122,6 +123,7 @@ const receiptHeader = {
   receivedOn: stockReceipt.receivedOn,
   supplierId: stockReceipt.supplierId,
   supplierName: stockReceipt.supplierName,
+  purchaseOrderId: stockReceipt.purchaseOrderId,
   invoiceReference: stockReceipt.invoiceReference,
   notes: stockReceipt.notes,
   lineCount: stockReceipt.lineCount,
@@ -130,11 +132,22 @@ const receiptHeader = {
 function receiptView(row: typeof stockReceipt.$inferSelect, principal: Principal): StockReceipt {
   const { lines, createdAt, createdBy: _, idempotencyKey: __, requestHash: ___, ...header } = row;
   return {
-    ...header,
-    createdAt: createdAt.toISOString(),
+    ...receiptHeaderView({ ...header, createdAt }),
     lines: permissionsFor(principal.role, principal.accessPreset).readCosts
       ? lines
       : lines.map(({ unitCostCents: _, ...line }) => line),
+  };
+}
+
+function receiptHeaderView({
+  purchaseOrderId,
+  createdAt,
+  ...header
+}: Pick<typeof stockReceipt.$inferSelect, keyof typeof receiptHeader>) {
+  return {
+    ...header,
+    ...(purchaseOrderId ? { purchaseOrderId } : {}),
+    createdAt: createdAt.toISOString(),
   };
 }
 
@@ -155,7 +168,7 @@ export async function listStockReceipts(
         .offset((page - 1) * pageSize);
       const [total] = await tx.select({ total: count() }).from(stockReceipt);
       return {
-        receipts: rows.map((row) => ({ ...row, createdAt: row.createdAt.toISOString() })),
+        receipts: rows.map(receiptHeaderView),
         pagination: { page, pageSize, total: total?.total ?? 0 },
       };
     },
@@ -203,14 +216,15 @@ export async function receiveStockDocument(
     const today = Temporal.Now.plainDateISO(timezone).toString();
     if (input.receivedOn > today)
       throw new DomainError("invalid_state", "The delivered stock date cannot be in the future");
-    let supplierName = null;
+    const delivery = await prepareOrderDelivery(tx, input);
+    let supplierName: string | null = null;
     if (input.supplierId) {
       const [supplier] = await tx
         .select()
         .from(inventorySupplier)
         .where(eq(inventorySupplier.id, input.supplierId))
         .for("share");
-      if (!supplier?.active)
+      if (!supplier || (!supplier.active && !delivery))
         throw new DomainError("version_conflict", "Review the supplier for this receipt");
       supplierName = supplier.name;
     }
@@ -221,7 +235,7 @@ export async function receiveStockDocument(
     const snapshot = new Map<string, (typeof stockReceipt.$inferSelect)["lines"][number]>();
     for (const line of ordered) {
       const product = await productRow(tx, line.productId, true);
-      if (!product.active || product.version !== line.version)
+      if ((!product.active && !delivery) || product.version !== line.version)
         throw new DomainError(
           "version_conflict",
           "A product changed; review all lines before receiving",
@@ -240,6 +254,7 @@ export async function receiveStockDocument(
         ...(requestedId ? { id: requestedId } : {}),
         supplierId: input.supplierId,
         supplierName,
+        purchaseOrderId: delivery?.order.id,
         receivedOn: input.receivedOn,
         invoiceReference: input.invoiceReference,
         notes: input.notes,
@@ -268,12 +283,17 @@ export async function receiveStockDocument(
         receipt.id,
       );
     }
+    if (delivery) await recordOrderDelivery(tx, delivery, new Date());
     await recordAudit(tx, {
       actorUserId: principal.userId,
       action: "inventory.stock_receipt_recorded",
       entity: "stock_receipt",
       entityId: receipt.id,
-      metadata: { number: receipt.number, lineCount: receipt.lineCount },
+      metadata: {
+        number: receipt.number,
+        lineCount: receipt.lineCount,
+        ...(delivery ? { purchaseOrderId: delivery.order.id } : {}),
+      },
     });
     return receiptView(receipt, current);
   });
