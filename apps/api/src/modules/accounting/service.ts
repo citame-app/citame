@@ -18,6 +18,7 @@ import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
 import { multiplyDivide, storedValuePaymentMethods } from "../commerce/money";
+import { recordedCheckoutMovements } from "../commerce/report-movements";
 import { getSalonSettings } from "../settings/service";
 import { requireStaff } from "../staff/admin";
 import { redeemedAtSettlement, settledSales } from "./settled-families";
@@ -322,12 +323,18 @@ export async function salesReport(db: Database, query: ReportQuery, principal: P
   return db.transaction(
     async (tx) => {
       const staff = query.staffId ? sql`and c.staff_id = ${query.staffId}` : sql``;
-      const payments = await tx.execute<{ method: string; amount: string | number }>(
-        sql`select p.method::text as method, sum(p.amount_cents)::bigint as amount from checkout_payment p join checkout c on c.id = p.checkout_id where p.status in ('succeeded','reconciliation') and p.updated_at >= ${fromAt} and p.updated_at < ${toAt} ${staff} group by p.method`,
-      );
-      const refunds = await tx.execute<{ method: string; amount: string | number }>(
-        sql`select p.method::text as method, sum(r.amount_cents)::bigint as amount from checkout_refund r join checkout_payment p on p.id = r.payment_id join checkout c on c.id = p.checkout_id where r.status = 'succeeded' and r.updated_at >= ${fromAt} and r.updated_at < ${toAt} ${staff} group by p.method`,
-      );
+      const movements = await tx.execute<{
+        method: string;
+        collected: string | number;
+        refunded: string | number;
+      }>(sql`
+        select method::text,
+          coalesce(sum(amount) filter (where not refund), 0)::bigint as collected,
+          coalesce(sum(amount) filter (where refund), 0)::bigint as refunded
+        from (${recordedCheckoutMovements(fromAt, toAt, query.staffId)}) movements
+        group by method::text
+        order by method::text
+      `);
       const sales = await settledSales(tx, fromAt, toAt, query.staffId);
       const [costs] = await tx.execute<{ cost: string | number; unknown: number }>(
         sql`select coalesce(sum(l.quantity * l.unit_cost_cents::bigint),0)::bigint as cost, count(*) filter (where l.unit_cost_cents is null)::int as unknown from checkout_line l join checkout c on c.id = l.checkout_id where l.kind = 'product' and c.fulfilled_at >= ${fromAt} and c.fulfilled_at < ${toAt} ${staff}`,
@@ -355,13 +362,11 @@ export async function salesReport(db: Database, query: ReportQuery, principal: P
             .from(cashSession)
             .where(and(gte(cashSession.openedAt, fromAt), lt(cashSession.openedAt, toAt)))
             .orderBy(desc(cashSession.openedAt));
-      const methods = [...new Set([...payments, ...refunds].map((row) => row.method))]
-        .sort()
-        .map((method) => ({
-          method,
-          collectedCents: Number(payments.find((row) => row.method === method)?.amount ?? 0),
-          refundedCents: Number(refunds.find((row) => row.method === method)?.amount ?? 0),
-        }));
+      const methods = movements.map(({ method, collected, refunded }) => ({
+        method,
+        collectedCents: Number(collected),
+        refundedCents: Number(refunded),
+      }));
       const collectedCents = methods
         .filter((row) => !storedValuePaymentMethods.includes(row.method))
         .reduce((sum, row) => sum + row.collectedCents, 0);

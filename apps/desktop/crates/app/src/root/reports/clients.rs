@@ -412,7 +412,11 @@ mod tests {
                     "rows": [{ "date": expected_query.to, "newClients": 2, "returningClients": 3 }],
                     "groups": [{ "name": "vip", "clients": 2 }, { "name": "=group", "clients": 1 }],
                     "frequency": { "one": 2, "two": 0, "threeOrMore": 3 },
-                    "topCollections": [{ "name": "=Example, customer", "netCents": 9500 }],
+                    "topCollections": [{
+                        "clientId": "0198f5a0-7b1c-7000-8000-000000000201",
+                        "name": "=Example, customer",
+                        "netCents": 9500
+                    }],
                 }))
                 .unwrap(),
             );

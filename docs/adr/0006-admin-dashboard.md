@@ -74,6 +74,10 @@ All copy goes through the existing catalogs, split per area under `src/i18n/mess
 
 Strict TDD in three layers, test first for every unit: pure logic (`bun test`: nav, zoned time, calendar layout, drag geometry, keyboard moves, hours model, price parsing, report ranges and CSV), components (`bun test` with happy-dom and Testing Library against a stubbed `fetch`), and Playwright against the real production stack at a phone and a desktop viewport (role matrix, walk-in booking, outcomes, drag and keyboard moves, conflict recovery, client search/sort/paging, service CRUD, hours with conflict warnings, time off, deactivation flow, report numbers and CSV against a seeded fixture, settings reflected in availability, i18n, dark mode, no horizontal scroll, axe on every route in both themes).
 
+### Client net collections
+
+Cloud and Desktop use the same client report and export the ten highest positive net collections in EUR. The calculation uses recorded external payments and completed refunds in the selected salon-local dates and the checkout's staff scope. It groups historical checkouts under the current client identity after merges. Anonymous sales, deleted client profiles and redemptions of stored value are outside the ranking. The report requires financial and client directory permissions.
+
 ## Consequences
 
 - Two new runtime dependencies in `apps/web`: `@tanstack/react-table` 9.3.1 and `recharts` 3.10.1 (plus `react-is` 19.3.1, a Recharts peer).

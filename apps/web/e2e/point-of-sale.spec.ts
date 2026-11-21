@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import { RECURRING_FIXTURE as fixture } from "../../api/test/recurring-values";
 import { expectNoHorizontalScroll } from "./admin-helpers";
@@ -84,3 +85,57 @@ for (const scheme of ["light", "dark"] as const) {
     });
   });
 }
+
+test("client collections report shows and exports net payments", async ({ page }) => {
+  await signInThroughUi(page, fixture.ownerEmail, "/admin/reports?preset=today");
+  await expect(page).toHaveURL(/\/admin\/reports/);
+  const headers = { Origin: fixture.baseURL };
+  const clientId = crypto.randomUUID();
+  const clientName = `Collections ${clientId}`;
+  const client = await page.request.post("/api/admin/clients", {
+    headers,
+    data: { id: clientId, name: clientName },
+  });
+  expect(client.status(), await client.text()).toBe(201);
+  const sale = await page.request.post("/api/admin/commerce/checkouts", {
+    headers,
+    data: {
+      clientId,
+      lines: [
+        { kind: "custom", description: "Collections fixture", quantity: 1, unitAmountCents: 12345 },
+      ],
+      idempotencyKey: crypto.randomUUID(),
+    },
+  });
+  expect(sale.status(), await sale.text()).toBe(201);
+  const { id: checkoutId } = await sale.json();
+  const paid = await page.request.post(`/api/admin/commerce/checkouts/${checkoutId}/payments`, {
+    headers,
+    data: { method: "external_card", amountCents: 12345, idempotencyKey: crypto.randomUUID() },
+  });
+  expect(paid.status(), await paid.text()).toBe(201);
+  const { payment } = await paid.json();
+  await page
+    .getByRole("navigation", { name: "Reports" })
+    .getByRole("button", { name: "Clients" })
+    .click();
+  const ranking = page.getByRole("table", { name: "Top 10 clients by net collections" });
+  const row = ranking.getByRole("row").filter({ hasText: clientName });
+  await expect(row.getByRole("cell")).toHaveText("€123.45");
+
+  const refund = await page.request.post(`/api/admin/commerce/payments/${payment.id}/refunds`, {
+    headers,
+    data: { amountCents: 2345, reason: "Fixture refund", idempotencyKey: crypto.randomUUID() },
+  });
+  expect(refund.status(), await refund.text()).toBe(201);
+
+  await expect(row.getByRole("cell")).toHaveText("€100");
+  await expectNoHorizontalScroll(page);
+  const downloading = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export net collections CSV" }).click();
+  const download = await downloading;
+  expect(download.suggestedFilename()).toMatch(/^client-net-collections-.*\.csv$/);
+  const csv = await readFile(await download.path(), "utf8");
+  expect(csv).toMatch(/^client,net_cents,currency\r\n/);
+  expect(csv).toContain(`${clientName},10000,EUR\r\n`);
+});
