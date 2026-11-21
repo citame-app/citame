@@ -1,7 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 import { RECURRING_FIXTURE as fixture } from "../../api/test/recurring-values";
 import { expectNoHorizontalScroll } from "./admin-helpers";
-import { expectNoSeriousA11yViolations, signInThroughUi } from "./helpers";
+import { expectNoSeriousA11yViolations, signInThroughUi, switchLocale } from "./helpers";
 
 const path = "/admin/calendar?date=2026-11-17";
 async function selectCalendarView(page: Page, value: "day" | "week" | "month" | "list") {
@@ -425,4 +425,77 @@ test("service badges preserve private notes, explicit professional preference an
   ).toBeChecked();
   await expectNoSeriousA11yViolations(page);
   await expectNoHorizontalScroll(page);
+});
+
+test("an imported price review leaves collection locked until its partial payment is reconciled", async ({
+  page,
+}, info) => {
+  const mobile = info.project.name === "mobile";
+  const id = fixture.importedBillingAppointments[mobile ? 0 : 1];
+  await page.emulateMedia({ colorScheme: mobile ? "dark" : "light" });
+  await signInThroughUi(
+    page,
+    fixture.ownerEmail,
+    `/admin/calendar?date=${fixture.importedBillingDate}&appointment=${id}`,
+  );
+  if (mobile) await switchLocale(page, "Español");
+  const text = mobile
+    ? {
+        price: "Confirmar importes importados",
+        reference: "Referencia del justificante",
+        save: "Guardar importes comprobados",
+        invoice: "Marcada como facturada en Booksy",
+        partial: "Conciliar pago parcial de Booksy",
+        amount: "Importe ya pagado (EUR)",
+        confirm: "Guardar pago parcial y saldo pendiente",
+        collect: "Crear cobro",
+      }
+    : {
+        price: "Confirm imported amounts",
+        reference: "Evidence reference",
+        save: "Save verified amounts",
+        invoice: "Marked as invoiced in Booksy",
+        partial: "Reconcile partial Booksy payment",
+        amount: "Amount already paid (EUR)",
+        confirm: "Save partial payment and remaining balance",
+        collect: "Create checkout",
+      };
+  const details = page.getByRole("dialog", { name: "Cliente de demostración", exact: true });
+  const price = details.getByRole("form", { name: text.price, exact: true });
+  const collect = details.getByRole("button", { name: text.collect, exact: true });
+  await expect(price).toBeVisible();
+  await expect(collect).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+  await expectNoSeriousA11yViolations(page);
+  await page.screenshot({
+    path: info.outputPath("imported-price-review.png"),
+    animations: "disabled",
+  });
+
+  await price.getByLabel(/Haircut.*EUR/).fill("36.50");
+  await price.getByLabel(text.reference, { exact: true }).fill("Synthetic quote");
+  await price.getByRole("button", { name: text.save }).click();
+  await expect(price).toHaveCount(0);
+  await expect(details.getByText(text.invoice, { exact: true })).toBeVisible();
+  await expect(collect).toHaveCount(0);
+
+  await details.getByText(text.partial, { exact: true }).click();
+  const partial = details.getByRole("form", { name: text.partial, exact: true });
+  await partial.getByLabel(text.amount, { exact: true }).fill("10");
+  await partial.getByLabel(text.reference, { exact: true }).fill("Synthetic deposit receipt");
+  await partial.getByRole("button", { name: text.confirm }).click();
+  await expect(collect).toBeVisible();
+  const receipt = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/admin/commerce/checkouts") &&
+      response.request().method() === "POST",
+  );
+  await collect.click();
+  const opened = await receipt;
+  expect(opened.status(), await opened.text()).toBe(201);
+  expect(await opened.json()).toMatchObject({
+    totalCents: 2650,
+    paidCents: 0,
+    lines: [{ kind: "external_balance", unitAmountCents: 2650 }],
+  });
 });

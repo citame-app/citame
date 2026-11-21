@@ -12,6 +12,7 @@ import {
   workingHours,
 } from "@sob/db";
 import { eq } from "drizzle-orm";
+import { RECURRING_FIXTURE as fixture } from "./recurring-values";
 
 /** Synthetic calendar only. Called by the guarded local recurring-browser test executable. */
 export async function seedCalendarFixture(db: Database) {
@@ -107,6 +108,37 @@ export async function seedCalendarFixture(db: Database) {
         minute += duration + (index % 2 ? 15 : 5);
       }
     }
+  for (const [index, id] of fixture.importedBillingAppointments.entries()) {
+    const professional = staff[index];
+    if (!professional) throw new Error("Missing professional for imported billing");
+    const start = new Date(`${fixture.importedBillingDate}T12:00:00+01:00`);
+    await db.insert(appointment).values({
+      id,
+      staffId: professional.id,
+      clientId: client.id,
+      startsAt: start,
+      endsAt: new Date(start.getTime() + haircut.durationMinutes * 60000),
+    });
+    await db.insert(appointmentService).values({
+      appointmentId: id,
+      position: 0,
+      serviceId: haircut.id,
+      name: haircut.name,
+      durationMinutes: haircut.durationMinutes,
+      bufferMinutes: 0,
+      priceCents: 0,
+      currency: "EUR",
+      sourceUnpriced: true,
+    });
+    await db.insert(appointmentContext).values({
+      appointmentId: id,
+      servicePosition: 0,
+      invoiced: true,
+      paid: true,
+      source: "booksy",
+      sourceRef: `synthetic-billing:${id}`,
+    });
+  }
   await db.insert(timeOff).values({
     staffId: staff[0]?.id ?? "",
     startsAt: new Date("2026-11-17T14:00:00Z"),
