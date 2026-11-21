@@ -614,11 +614,12 @@ WITH reviewed_account AS (
 INSERT INTO client_profile (id, user_id, name, email)
 SELECT uuidv7(), id, name, email FROM reviewed_account;
 SQL
-  # Suspend the worker while replacing the synthetic SMTP configuration with a mock credential.
+  # Suspend the existing worker while testing synthetic SMTP settings.
+  worker_id="$("${COMPOSE[@]}" ps -q worker)"
   "${COMPOSE[@]}" stop worker || fail "stop the synthetic delivery worker"
   desktop_tests native_email_delivery_uses_the_owner_revision_through_the_proxy --exact ||
     fail "native email settings integration failed"
-  "${COMPOSE[@]}" start worker || fail "restart the synthetic delivery worker"
+  docker start "$worker_id" >/dev/null || fail "restart the synthetic delivery worker"
   SOB_TEST_UNLINKED_ACCOUNT_EMAIL="smoke-role-review@example.test" \
     desktop_tests native_unlinked_account_review_through_the_proxy --exact ||
     fail "native reviewed account integration failed"
