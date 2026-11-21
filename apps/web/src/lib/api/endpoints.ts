@@ -223,6 +223,7 @@ export function createEndpoints(client: ApiClient) {
             intakeViews: "1",
             bookingPolicy: "1",
             emailDelivery: "1",
+            marketingViews: "1",
             whatsappDesk: "1",
             whatsappSettings: "1",
             resourceCatalogue: "1",

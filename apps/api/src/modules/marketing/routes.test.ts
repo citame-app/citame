@@ -6,7 +6,7 @@ import {
   marketingConsentSchema,
   syncPullResponseSchema,
 } from "@sob/contracts";
-import { appointment, clientProfile, marketingDelivery } from "@sob/db";
+import { appointment, clientProfile, marketingCampaign, marketingDelivery } from "@sob/db";
 import { eq, sql } from "drizzle-orm";
 import {
   type Actor,
@@ -216,11 +216,22 @@ test("marketing refresh is scoped and restored desktop generations cannot queue"
   const campaign = await create({ name: "Synthetic private campaign" });
   const audience = await preview(campaign);
   const since = `/sync/pull?since=${previous.headSeq}`;
-  const ownerPull = syncPullResponseSchema.parse(await (await call(owner, since)).json());
-  const staffPull = syncPullResponseSchema.parse(await (await call(staff, since)).json());
+  const legacy = syncPullResponseSchema.parse(await (await call(owner, since)).json());
+  expect(legacy.refresh ?? []).not.toContain("marketing");
+  const enabled = `${since}&marketingViews=1`;
+  const ownerPull = syncPullResponseSchema.parse(await (await call(owner, enabled)).json());
+  const staffPull = syncPullResponseSchema.parse(await (await call(staff, enabled)).json());
   expect(ownerPull.refresh).toContain("marketing");
   expect(staffPull.refresh ?? []).not.toContain("marketing");
   expect(JSON.stringify(ownerPull)).not.toContain(campaign.name);
+  await t.db
+    .update(marketingCampaign)
+    .set({ evaluatedAt: clock })
+    .where(eq(marketingCampaign.id, campaign.id));
+  const quiet = syncPullResponseSchema.parse(
+    await (await call(owner, `/sync/pull?since=${ownerPull.headSeq}&marketingViews=1`)).json(),
+  );
+  expect(quiet.refresh ?? []).not.toContain("marketing");
   const confirm = (generation: string) =>
     t.app.request(`/admin/marketing/campaigns/${campaign.id}/queue`, {
       method: "POST",

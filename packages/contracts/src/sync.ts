@@ -506,6 +506,7 @@ export const syncPullQuerySchema = z.object({
   intakeViews: z.literal("1").optional(),
   bookingPolicy: z.literal("1").optional(),
   emailDelivery: z.literal("1").optional(),
+  marketingViews: z.literal("1").optional(),
   whatsappDesk: z.literal("1").optional(),
   whatsappSettings: z.literal("1").optional(),
   resourceCatalogue: z.literal("1").optional(),

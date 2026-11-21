@@ -8,10 +8,13 @@ use sob_core::sync::TransportError;
 
 pub(super) struct Desk {
     identity: Arc<()>,
+    request: Option<Arc<()>>,
+    refreshing: bool,
     list: Option<CampaignPage>,
     detail: Option<(Campaign, DeliveryPage)>,
     review: Option<(Preview, Capabilities)>,
     search: Entity<TextField>,
+    applied_search: String,
     schedule: Entity<TextField>,
     status: Option<Status>,
     action: Option<CampaignAction>,
@@ -21,6 +24,27 @@ pub(super) struct Desk {
     observed: Option<i64>,
     generation: Option<String>,
     error: Option<Key>,
+}
+
+impl Desk {
+    fn install_detail(
+        &mut self,
+        campaign: Campaign,
+        deliveries: DeliveryPage,
+        generation: Option<String>,
+        cx: &mut Context<Root>,
+    ) {
+        if self.generation != generation
+            || self.detail.as_ref().is_none_or(|(previous, _)| {
+                previous.id != campaign.id || previous.version != campaign.version
+            })
+        {
+            self.review = None;
+            self.schedule.update(cx, |field, cx| field.set_text("", cx));
+        }
+        self.detail = Some((campaign, deliveries));
+        self.generation = generation;
+    }
 }
 
 enum Request {
@@ -93,11 +117,14 @@ impl Root {
         let schedule = self.t(Key::MarketingDateHint);
         self.overlay = Overlay::Marketing(Box::new(Desk {
             identity: Arc::new(()),
+            request: None,
+            refreshing: false,
             list: None,
             detail: None,
             review: None,
             action: None,
             search: cx.new(|cx| TextField::new(search, false, cx)),
+            applied_search: String::new(),
             schedule: cx.new(|cx| TextField::new(schedule, false, cx)),
             status: None,
             uncertain: false,
@@ -123,7 +150,11 @@ impl Root {
         let Some(desk) = self.marketing_desk() else {
             return;
         };
-        if desk.busy || desk.action.is_some() || (!reconnected && desk.observed == observed) {
+        if desk.busy
+            || desk.refreshing
+            || desk.action.is_some()
+            || (!reconnected && desk.observed == observed)
+        {
             return;
         }
         let request = match &desk.detail {
@@ -132,7 +163,7 @@ impl Root {
             }
             None => Request::List(desk.list.as_ref().map_or(1, |list| list.pagination.page)),
         };
-        self.request_marketing(request, cx);
+        self.load_marketing(request, true, cx);
     }
 
     pub(super) fn dismiss_marketing(&mut self, cx: &mut Context<Self>) {
@@ -152,6 +183,10 @@ impl Root {
     }
 
     fn request_marketing(&mut self, request: Request, cx: &mut Context<Self>) {
+        self.load_marketing(request, false, cx);
+    }
+
+    fn load_marketing(&mut self, request: Request, background: bool, cx: &mut Context<Self>) {
         let Some(transport) = self
             .svc
             .transport()
@@ -166,13 +201,19 @@ impl Root {
             return;
         };
         let identity = desk.identity.clone();
-        let search = desk.search.read(cx).text().trim().to_owned();
+        let token = Arc::new(());
+        desk.request = Some(token.clone());
+        if !background && matches!(request, Request::List(_)) {
+            desk.applied_search = desk.search.read(cx).text().trim().to_owned();
+        }
+        let search = desk.applied_search.clone();
         let status = desk.status;
         let writing = matches!(request, Request::Write(_));
         if matches!(request, Request::Review(_)) {
             desk.review = None;
         }
-        desk.busy = true;
+        desk.busy = !background;
+        desk.refreshing = background;
         desk.error = None;
         cx.notify();
         cx.spawn(async move |root, cx| {
@@ -202,13 +243,18 @@ impl Root {
                 {
                     return;
                 }
-                let Some(desk) = root
-                    .marketing_desk()
-                    .filter(|desk| Arc::ptr_eq(&identity, &desk.identity))
-                else {
+                let Some(desk) = root.marketing_desk().filter(|desk| {
+                    Arc::ptr_eq(&identity, &desk.identity)
+                        && desk
+                            .request
+                            .as_ref()
+                            .is_some_and(|current| Arc::ptr_eq(&token, current))
+                }) else {
                     return;
                 };
                 desk.busy = false;
+                desk.refreshing = false;
+                desk.request = None;
                 desk.observed = observed;
                 let reload = match result {
                     Ok(Loaded::List(list)) => {
@@ -218,14 +264,7 @@ impl Root {
                         None
                     }
                     Ok(Loaded::Detail(campaign, deliveries)) => {
-                        if desk.detail.as_ref().is_none_or(|(previous, _)| {
-                            previous.id != campaign.id || previous.version != campaign.version
-                        }) {
-                            desk.review = None;
-                            desk.schedule.update(cx, |field, cx| field.set_text("", cx));
-                        }
-                        desk.detail = Some((campaign, deliveries));
-                        desk.generation = generation;
+                        desk.install_detail(campaign, deliveries, generation, cx);
                         None
                     }
                     Ok(Loaded::Review(preview, capabilities)) => {
@@ -323,19 +362,23 @@ impl Root {
         };
         if cancel {
             desk.action = CampaignAction::cancel(campaign, generation);
-        } else if let Some((preview, capabilities)) = &desk.review {
-            if capabilities.can_deliver(campaign.channel) {
-                let Some(scheduled) = parse_schedule(tz, desk.schedule.read(cx).text()) else {
-                    desk.error = Some(Key::MarketingDateInvalid);
-                    cx.notify();
-                    return;
-                };
-                desk.action = CampaignAction::queue(campaign, preview, generation, scheduled);
-            }
+        } else if let Some((preview, capabilities)) = &desk.review
+            && capabilities.can_deliver(campaign.channel)
+        {
+            let Some(scheduled) = parse_schedule(tz, desk.schedule.read(cx).text())
+                .filter(|time| time.is_none_or(|date| date > Utc::now()))
+            else {
+                desk.error = Some(Key::MarketingDateInvalid);
+                cx.notify();
+                return;
+            };
+            desk.action = CampaignAction::queue(campaign, preview, generation, scheduled);
         }
         if desk.action.is_some() {
             desk.error = None;
             desk.confirm_exit = false;
+            desk.request = None;
+            desk.refreshing = false;
         }
         cx.notify();
     }
@@ -350,6 +393,16 @@ impl Root {
         };
         if generation.as_deref() != Some(action.generation.as_str()) {
             desk.error = Some(Key::BookingIntakeRestore);
+            cx.notify();
+            return;
+        }
+        if !desk.uncertain
+            && action
+                .scheduled_for()
+                .is_some_and(|date| date <= Utc::now())
+        {
+            desk.action = None;
+            desk.error = Some(Key::MarketingDateInvalid);
             cx.notify();
             return;
         }
@@ -514,7 +567,7 @@ impl Root {
                     "campaigns",
                     page,
                     list.pagination.has_next(),
-                    |page| Request::List(page),
+                    Request::List,
                     cx,
                 ));
             }
@@ -652,6 +705,9 @@ impl Root {
                         self.t(channel_key(sample.channel))
                     ))
                 }))
+                .when(campaign.trigger != Trigger::Manual, |panel| {
+                    panel.child(self.t(Key::MarketingAutomationAudience))
+                })
                 .when(!capabilities.can_deliver(campaign.channel), |panel| {
                     panel.child(self.t(Key::MarketingDeliveryDisabled))
                 });
@@ -661,11 +717,19 @@ impl Root {
                 && (campaign.trigger != Trigger::Manual || preview.eligible > 0)
             {
                 body = body
-                    .child(self.label(Key::MarketingDateHint))
+                    .child(self.label(if campaign.trigger == Trigger::Manual {
+                        Key::MarketingDateHint
+                    } else {
+                        Key::MarketingActivationDateHint
+                    }))
                     .child(desk.schedule.clone())
                     .child(self.marketing_button(
                         "prepare-marketing-send",
-                        Key::MarketingReviewSend,
+                        if campaign.trigger == Trigger::Manual {
+                            Key::MarketingReviewSend
+                        } else {
+                            Key::MarketingReviewActivation
+                        },
                         Kind::Primary,
                         |root, cx| root.prepare_marketing_action(false, cx),
                         cx,
@@ -684,8 +748,10 @@ impl Root {
                     .gap_2()
                     .child(self.t(if action.is_cancel() {
                         Key::MarketingConfirmCancel
-                    } else {
+                    } else if campaign.trigger == Trigger::Manual {
                         Key::MarketingConfirmSend
+                    } else {
+                        Key::MarketingConfirmActivation
                     }))
                     .when(!action.is_cancel(), |box_| {
                         box_.child(
@@ -790,13 +856,11 @@ impl Root {
                         .id(SharedString::from(format!("delivery-{}", row.id)))
                         .text_sm()
                         .child(format!(
-                            "{} · {} · {}{}",
+                            "{} · {} · {} · {}",
                             row.client_name,
                             self.t(channel_key(row.channel)),
                             self.t(delivery_key(row.status)),
-                            row.sent_at
-                                .map(|date| format!(" · {}", self.date_time_label(date)))
-                                .unwrap_or_default()
+                            self.date_time_label(row.sent_at.unwrap_or(row.created_at))
                         ))
                 }),
             );
@@ -869,12 +933,21 @@ mod tests {
             let desk = root.marketing_desk().unwrap();
             assert!(desk.action.is_none());
             desk.review.as_mut().unwrap().0.version = 2;
-            desk.schedule.update(cx, |field, cx| field.set_text("2027-01-08 10:00", cx));
+            let first = format!("{} 10:00", (Utc::now() + Span::days(2)).with_timezone(&tz).date_naive());
+            let second = format!("{} 10:00", (Utc::now() + Span::days(3)).with_timezone(&tz).date_naive());
+            desk.schedule.update(cx, |field, cx| field.set_text(&first, cx));
             root.prepare_marketing_action(false, cx);
             let desk = root.marketing_desk().unwrap();
-            desk.schedule.update(cx, |field, cx| field.set_text("2027-01-09 10:00", cx));
-            assert_eq!(desk.action.as_ref().unwrap().scheduled_for(), parse_schedule(tz, "2027-01-08 10:00").unwrap());
+            desk.schedule.update(cx, |field, cx| field.set_text(&second, cx));
+            assert_eq!(desk.action.as_ref().unwrap().scheduled_for(), parse_schedule(tz, &first).unwrap());
             assert!(!desk.uncertain);
+            desk.action = None;
+            let same_campaign = desk.detail.as_ref().unwrap().0.clone();
+            let new_deliveries = serde_json::from_value(json!({
+                "deliveries": [], "pagination": {"page":1,"pageSize":20,"total":0}
+            })).unwrap();
+            desk.install_detail(same_campaign, new_deliveries, Some("restored".into()), cx);
+            assert!(desk.review.is_none());
             assert!(root.svc.store.outbox(5).unwrap().is_empty());
         });
     }

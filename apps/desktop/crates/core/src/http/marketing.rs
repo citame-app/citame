@@ -120,6 +120,7 @@ pub struct Delivery {
     pub client_name: String,
     pub channel: Channel,
     pub status: DeliveryStatus,
+    pub created_at: DateTime<Utc>,
     pub sent_at: Option<DateTime<Utc>>,
 }
 
@@ -341,7 +342,7 @@ impl HttpTransport {
                 (400, Some("validation_error")) | (409, Some("invalid_state")) => {
                     MutationError::Rejected
                 }
-                _ => classify_status(status, retry_after, body, false).into(),
+                _ => review_transport_error(status, retry_after, body).into(),
             }
         })
     }
