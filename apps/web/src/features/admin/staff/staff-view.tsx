@@ -62,12 +62,14 @@ export function StaffView({
   onSearchChange,
   role,
   ownStaffId,
+  actorUserId,
   accessPreset,
 }: {
   search: StaffSearch;
   onSearchChange: (search: StaffSearch) => void;
   role: UserRole;
   ownStaffId: string | null;
+  actorUserId?: string;
   accessPreset?: StaffAccessPreset | null;
 }) {
   const { t } = useI18n();
@@ -117,7 +119,7 @@ export function StaffView({
         <StaffPortraitEditor key={`portrait-${member.id}`} member={member} />
       )}
       {permissions.manageAccounts && (
-        <AccessPanel staffId={member.id} staffName={member.displayName} />
+        <AccessPanel staffId={member.id} staffName={member.displayName} actorUserId={actorUserId} />
       )}
       <CapacityPanel key={member.id} staffId={member.id} editable={permissions.editSchedules} />
       <Tabs

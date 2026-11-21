@@ -1,6 +1,6 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import type { ReviewedStaffAccess } from "@sob/contracts";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderApp } from "../../../../test/render";
 import { AccessPanel } from "./access-panel";
 
@@ -15,6 +15,64 @@ const fetchBefore = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = fetchBefore;
 });
+
+test.each(["current", "changed", "self"] as const)(
+  "the Web role confirmation respects a %s account review",
+  async (scenario) => {
+    const writes: unknown[] = [];
+    let latest = initial;
+    globalThis.fetch = mock(async (_input, init) => {
+      if (init?.method === "PUT") {
+        writes.push(JSON.parse(String(init.body)));
+        latest = { ...initial, access: { ...initial.access, version: 2, accountRole: "client" } };
+      }
+      return Response.json(latest);
+    }) as unknown as typeof fetch;
+    const { queryClient } = renderApp(
+      <AccessPanel
+        staffId={staffId}
+        staffName="Ana"
+        actorUserId={scenario === "self" ? (initial.accountId ?? "") : "reviewing-owner"}
+      />,
+    );
+    await screen.findByText("Linked account: original@example.test");
+    if (scenario === "self") {
+      expect(screen.queryByRole("button", { name: "Review role change" })).not.toBeInTheDocument();
+      return;
+    }
+    fireEvent.change(screen.getByRole("combobox", { name: "New account role" }), {
+      target: { value: "client" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Review role change" }));
+    const dialog = within(await screen.findByRole("dialog"));
+    await waitFor(() => expect(dialog.getByRole("button", { name: "Cancel" })).toHaveFocus());
+    const confirm = dialog.getByRole("button", { name: "Confirm role change" });
+    if (scenario === "changed") {
+      await act(async () => {
+        queryClient.setQueryData(["admin", "staff-access", staffId], {
+          ...initial,
+          accountId: "changed-account",
+          access: { ...initial.access, version: 2 },
+        });
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+      expect(confirm).toBeDisabled();
+      expect(writes).toEqual([]);
+      return;
+    }
+    fireEvent.click(confirm);
+    expect(await screen.findByText("Account role changed")).toBeInTheDocument();
+    expect(writes).toEqual([
+      {
+        generation: "initial",
+        accountId: initial.accountId,
+        expectedRole: "staff",
+        version: 1,
+        role: "client",
+      },
+    ]);
+  },
+);
 
 test("owner chooses an access profile with the reviewed version", async () => {
   let body: unknown;

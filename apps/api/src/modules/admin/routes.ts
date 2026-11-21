@@ -46,9 +46,6 @@ export function adminRoutes(deps: AppDeps, auth: Auth) {
         const principal = c.get("principal");
         const userId = c.req.param("id");
         const { role } = parseOrThrow(changeRoleRequestSchema, await readJson(c));
-        if (userId === principal.userId) {
-          throw new DomainError("forbidden", "You cannot change your own role");
-        }
         const result = await assignRole(
           db,
           userId,
@@ -61,14 +58,15 @@ export function adminRoutes(deps: AppDeps, auth: Auth) {
       })
       .put("/staff/:id/account-role/reviewed", ownerOnly, async (c) => {
         const principal = c.get("principal");
-        const staffId = parseOrThrow(idSchema, c.req.param("id"));
-        const input = parseOrThrow(reviewedStaffRoleInputSchema, await readJson(c));
-        if (input.accountId === principal.userId)
-          throw new DomainError("forbidden", "You cannot change your own role");
+        const staffId = parseOrThrow(idSchema, c.req.param("id")).toLowerCase();
+        const { accountId, role, ...input } = parseOrThrow(
+          reviewedStaffRoleInputSchema,
+          await readJson(c),
+        );
         const result = await assignRole(
           db,
-          input.accountId,
-          input.role,
+          accountId,
+          role,
           { actorUserId: principal.userId },
           {
             now: now(),

@@ -6,6 +6,38 @@ import { expectNoSeriousA11yViolations, PASSWORD } from "./helpers";
 for (const scheme of ["light", "dark"] as const) {
   test.describe(`staff access profiles — ${scheme}`, () => {
     test.use({ colorScheme: scheme });
+    test("owner reviews a linked account role and deactivates then restores its calendar", async ({
+      page,
+    }) => {
+      const email = `role-${crypto.randomUUID()}@example.com`;
+      const owner = await asOwner();
+      try {
+        const created = await owner.post("/api/admin/staff-accounts", {
+          data: { name: "Synthetic role transfer", email, password: PASSWORD },
+        });
+        expect(created.ok()).toBe(true);
+        const { staffId } = await created.json();
+        await signInAs(page, OWNER_EMAIL, `/admin/staff?member=${staffId}`);
+        const role = page.getByRole("combobox", { name: "New account role" });
+        const review = page.getByRole("button", { name: "Review role change" });
+        const dialog = page.getByRole("dialog", { name: "Change account role" });
+        await role.selectOption("client");
+        await review.click();
+        await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
+        await expect(dialog).toContainText(email);
+        await expectNoHorizontalScroll(page);
+        await expectNoSeriousA11yViolations(page, `role change ${scheme}`);
+        await dialog.getByRole("button", { name: "Confirm role change" }).click();
+        await expect(page.getByText("Account role: Client", { exact: true })).toBeVisible();
+        await role.selectOption("staff");
+        await review.click();
+        await dialog.getByRole("button", { name: "Confirm role change" }).click();
+        await expect(page.getByText("Account role: Staff", { exact: true })).toBeVisible();
+      } finally {
+        await owner.dispose();
+      }
+    });
+
     test("owner restricts staff access, then upgrades the existing session to operational manager", async ({
       page,
     }) => {

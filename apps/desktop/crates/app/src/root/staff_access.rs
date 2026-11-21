@@ -841,7 +841,7 @@ impl Root {
             .flex()
             .flex_col()
             .gap_2()
-            .child(div().text_sm().child(current))
+            .when(editable, |body| body.child(div().text_sm().child(current)))
             .when_some(editor.latest.account_email.as_ref(), |body, email| {
                 body.child(div().text_sm().child(i18n::fill(
                     self.t(Key::AccessLinkedAccount),

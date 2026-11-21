@@ -114,6 +114,9 @@ impl HttpTransport {
         else {
             return Err(StaffAccountError::InvalidDetails);
         };
+        if previous == role.as_str() {
+            return Err(StaffAccountError::InvalidDetails);
+        }
         let id = parse_id(&reviewed.access.staff_id)?.to_string();
         let path = format!("/admin/staff/{id}/account-role/reviewed");
         let body = serde_json::json!({

@@ -22,8 +22,28 @@ export const accessEn = {
   "access.review": "Review current access",
   "access.reload": "Reload access",
   "access.error": "Could not save. Reload the current profile before trying again.",
-  "access.accountRole":
-    "These presets apply to staff accounts. Owner and client account roles are managed separately.",
+  "access.accountRole": "Access profiles apply to staff accounts.",
+  "access.currentRole": "Account role: {role}",
+  "access.newRole": "New account role",
+  "access.chooseRole": "Choose a role",
+  "access.role.owner": "Owner",
+  "access.role.staff": "Staff",
+  "access.role.client": "Client",
+  "access.reviewRole": "Review role change",
+  "access.changeRole": "Change account role",
+  "access.confirmRole": "Confirm role change",
+  "access.roleReview": "Set the role of {email} to {role}?",
+  "access.roleImpact.owner":
+    "This account will have full control of the centre, including account permissions.",
+  "access.roleImpact.staff":
+    "This account will use its staff access profile and its calendar will be activated.",
+  "access.roleImpact.client":
+    "This account will lose staff access and its calendar will be deactivated. Past appointments will be kept.",
+  "access.roleUpcoming":
+    "This calendar still has upcoming appointments. Reassign them before changing the role to client.",
+  "access.roleFailed":
+    "Could not confirm the role change. Review the current account before trying again.",
+  "access.roleSaved": "Account role changed",
   "access.noAccount":
     "No login is linked to this calendar. The preset is ready for a linked staff account.",
 } as const;
@@ -51,8 +71,27 @@ export const accessEsAR: Record<keyof typeof accessEn, string> = {
   "access.review": "Revisar acceso actual",
   "access.reload": "Recargar acceso",
   "access.error": "No se pudo guardar. Recarga el perfil actual antes de intentarlo de nuevo.",
-  "access.accountRole":
-    "Estos perfiles se aplican a cuentas del equipo. Los roles de propietaria y cliente se gestionan por separado.",
+  "access.accountRole": "Los perfiles de acceso se aplican a las cuentas del equipo.",
+  "access.currentRole": "Rol de la cuenta: {role}",
+  "access.newRole": "Nuevo rol de la cuenta",
+  "access.chooseRole": "Elige un rol",
+  "access.role.owner": "Propietaria",
+  "access.role.staff": "Profesional",
+  "access.role.client": "Cliente",
+  "access.reviewRole": "Revisar cambio de rol",
+  "access.changeRole": "Cambiar rol de la cuenta",
+  "access.confirmRole": "Confirmar cambio de rol",
+  "access.roleReview": "¿Cambiar el rol de {email} a {role}?",
+  "access.roleImpact.owner":
+    "Esta cuenta tendrá control total del centro, incluidos los permisos de otras cuentas.",
+  "access.roleImpact.staff": "Esta cuenta usará su perfil de acceso y se activará su agenda.",
+  "access.roleImpact.client":
+    "Esta cuenta perderá el acceso del equipo y se desactivará su agenda. Se conservarán las citas anteriores.",
+  "access.roleUpcoming":
+    "Esta agenda tiene citas próximas. Reasígnalas antes de cambiar el rol a cliente.",
+  "access.roleFailed":
+    "No se pudo confirmar el cambio de rol. Revisa la cuenta antes de volver a intentarlo.",
+  "access.roleSaved": "Rol de la cuenta actualizado",
   "access.noAccount":
     "Esta agenda no tiene una cuenta vinculada. El perfil queda preparado para una cuenta del equipo.",
 };

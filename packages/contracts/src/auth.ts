@@ -76,7 +76,11 @@ export const reviewedStaffRoleInputSchema = changeRoleRequestSchema
     expectedRole: userRoleSchema,
     version: z.number().int().positive(),
   })
-  .strict();
+  .strict()
+  .refine(({ role, expectedRole }) => role !== expectedRole, {
+    message: "Choose a different account role",
+    path: ["role"],
+  });
 export type ReviewedStaffRoleInput = z.infer<typeof reviewedStaffRoleInputSchema>;
 
 export const changeRoleResponseSchema = z.object({

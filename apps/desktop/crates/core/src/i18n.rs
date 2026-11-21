@@ -222,7 +222,7 @@ keys! {
     AccessRestricted => ("Restricted — own calendar, read only", "Restringido — agenda propia, solo lectura"),
     AccessOnline => ("Connect to review and change staff access.", "Conéctate para revisar y cambiar el acceso del equipo."),
     AccessNoAccount => ("No login is linked. This prepares access for a future staff account.", "No hay una cuenta vinculada. El perfil queda preparado para una futura cuenta del equipo."),
-    AccessOtherRole => ("Owner and client account roles are managed separately.", "Los roles de propietaria y cliente se gestionan por separado."),
+    AccessOtherRole => ("Access profiles apply to staff accounts.", "Los perfiles de acceso se aplican a las cuentas del equipo."),
     AccessRoleCurrent => ("Account role: {role}", "Rol de la cuenta: {role}"),
     AccessRoleChange => ("Change account role", "Cambiar rol de la cuenta"),
     AccessRoleOwner => ("Owner", "Propietaria"),

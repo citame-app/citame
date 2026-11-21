@@ -20,7 +20,7 @@ export async function lockScheduling(tx: Tx) {
  * never race the rule it is validated against.
  */
 export async function lockCalendars(tx: Pick<Tx, "execute">, staffIds: string[]) {
-  for (const id of [...new Set(staffIds)].sort()) {
+  for (const id of [...new Set(staffIds.map((value) => value.toLowerCase()))].sort()) {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${id}, 0))`);
   }
 }

@@ -92,6 +92,7 @@ function StaffPage() {
           role={session.user.role}
           accessPreset={session.accessPreset}
           ownStaffId={session.staffId}
+          actorUserId={session.user.id}
         />
       )}
       {section === "resources" && permissions.editCatalog && (

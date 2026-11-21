@@ -287,33 +287,34 @@ export async function assignRole(
   audit?: { actorUserId: string },
   options: {
     now?: Date;
-    review?: { staffId: string; generation: string; input: ReviewedStaffRoleInput };
+    review?: {
+      staffId: string;
+      generation: string;
+      input: Pick<ReviewedStaffRoleInput, "generation" | "expectedRole" | "version">;
+    };
   } = {},
 ) {
+  const review = options.review;
+  if (review && !audit)
+    throw new DomainError("forbidden", "Only the owner can change account roles");
+  if (audit?.actorUserId === userId)
+    throw new DomainError("forbidden", "You cannot change your own role");
+  if (review && review.input.generation !== review.generation)
+    throw new DomainError("sync_generation_changed", "The centre was restored; review access");
+  if (review?.input.expectedRole === role)
+    throw new DomainError("validation_error", "Choose a different account role");
+
   return db.transaction(async (tx) => {
-    const review = options.review;
-    // Demoting to client deactivates the calendar, which must not strand upcoming bookings.
-    if (review) {
-      if (review.input.generation !== review.generation)
-        throw new DomainError("sync_generation_changed", "The centre was restored; review access");
-      // Keep calendar, user, and profile locks in the same order used by scheduling and access writes.
-      await lockCalendars(tx, [review.staffId]);
-    } else if (role === "client") {
+    let calendarId = review?.staffId;
+    if (!review && role !== "owner") {
       const [calendar] = await tx
         .select({ id: staffProfile.id })
         .from(staffProfile)
-        .where(
-          and(
-            eq(staffProfile.userId, userId),
-            eq(staffProfile.active, true),
-            isNull(staffProfile.deletedAt),
-          ),
-        );
-      if (calendar) {
-        await lockCalendars(tx, [calendar.id]);
-        await assertNoFutureAppointments(tx, calendar.id, options.now ?? new Date());
-      }
+        .where(eq(staffProfile.userId, userId));
+      calendarId = calendar?.id;
     }
+    // Take calendar locks before locks on users and profiles.
+    if (calendarId) await lockCalendars(tx, [calendarId]);
 
     const accounts = await tx
       .select()
@@ -325,22 +326,31 @@ export async function assignRole(
       throw new DomainError("forbidden", "Only the owner can change account roles");
     const row = accounts.find((account) => account.id === userId);
     if (!row) throw new DomainError("not_found", `User ${userId} not found`);
-    if (review) {
+    let calendarChanged = false;
+    if (review || role !== "owner") {
       const [staff] = await tx
         .select()
         .from(staffProfile)
-        .where(eq(staffProfile.id, review.staffId))
+        .where(review ? eq(staffProfile.id, review.staffId) : eq(staffProfile.userId, userId))
         .for("update");
       if (
-        !staff ||
-        staff.deletedAt ||
-        staff.userId !== userId ||
-        staff.accessVersion !== review.input.version ||
-        row.role !== review.input.expectedRole
+        review &&
+        (!staff ||
+          staff.deletedAt ||
+          staff.userId !== userId ||
+          staff.accessVersion !== review.input.version ||
+          row.role !== review.input.expectedRole)
       )
         throw new DomainError("version_conflict", "The linked account changed; review access");
-      if (role === "client" && staff.active)
+      // A concurrent promotion may have created a calendar while we waited for the account.
+      if (staff && staff.id !== calendarId)
+        throw new DomainError("version_conflict", "The staff calendar changed; reload its access");
+      if (role === "client" && staff?.active && !staff.deletedAt)
         await assertNoFutureAppointments(tx, staff.id, options.now ?? new Date());
+      calendarChanged =
+        role === "staff"
+          ? staff !== undefined && (!staff.active || staff.deletedAt !== null)
+          : role === "client" && staff?.active === true;
     }
     await tx.update(user).set({ role }).where(eq(user.id, userId));
 
@@ -349,7 +359,7 @@ export async function assignRole(
       await ensureClientProfile(tx, userId, row.name, row.email);
       await tx.update(staffProfile).set({ active: false }).where(eq(staffProfile.userId, userId));
     }
-    if (row.role !== role) {
+    if (row.role !== role || calendarChanged) {
       await tx
         .update(staffProfile)
         .set({ accessVersion: sql`${staffProfile.accessVersion} + 1` })

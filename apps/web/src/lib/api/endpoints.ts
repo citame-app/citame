@@ -53,6 +53,7 @@ import {
   ownerSalonSettingsSchema,
   type ReportOutcomesQuery,
   type ReviewedStaffAccessInput,
+  type ReviewedStaffRoleInput,
   reportClientsSchema,
   reportOutcomesPageSchema,
   reportSummarySchema,
@@ -355,6 +356,8 @@ export function createEndpoints(client: ApiClient) {
           client.get(`/admin/staff/${id}/access/reviewed`, reviewedStaffAccessSchema, { signal }),
         setAccess: (id: string, body: ReviewedStaffAccessInput) =>
           client.put(`/admin/staff/${id}/access/reviewed`, body, reviewedStaffAccessSchema),
+        setRole: (id: string, body: ReviewedStaffRoleInput) =>
+          client.put(`/admin/staff/${id}/account-role/reviewed`, body, reviewedStaffAccessSchema),
         list: (signal?: AbortSignal) =>
           client.get("/admin/staff", listAdminStaffResponseSchema, { signal }),
         create: (request: CreateStaffAccountRequest) =>

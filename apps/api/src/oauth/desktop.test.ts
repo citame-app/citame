@@ -337,7 +337,8 @@ test("Desktop changes a linked role only against the current account and calenda
   expect((await request(path, owner.access)).status).toBe(403);
   expect((await put({ ...reviewed, generation: "earlier-database" })).status).toBe(409);
   expect((await put({ ...reviewed, accountId: owner.who.userId })).status).toBe(403);
-  expect((await put({ ...reviewed, expectedRole: "client" })).status).toBe(409);
+  expect((await put({ ...reviewed, expectedRole: "client" })).status).toBe(400);
+  expect((await put({ ...reviewed, expectedRole: "client", role: "owner" })).status).toBe(409);
   const other = await actor(t, "client", "role-other-account@example.com");
   expect((await put({ ...reviewed, accountId: other.userId })).status).toBe(409);
   const visit = Bun.randomUUIDv7();
@@ -357,7 +358,13 @@ test("Desktop changes a linked role only against the current account and calenda
     original,
   );
   await t.db.update(appointment).set({ status: "cancelled" }).where(eq(appointment.id, visit));
-  const demoted = await put(reviewed);
+  const demoted = await json(
+    t.app,
+    `/admin/staff/${original.access.staffId.toUpperCase()}/account-role/reviewed`,
+    "PUT",
+    reviewed,
+    owner.who.cookie,
+  );
   expect(demoted.status).toBe(200);
   const current = reviewedStaffAccessSchema.parse(await demoted.json());
   expect(current.access).toMatchObject({

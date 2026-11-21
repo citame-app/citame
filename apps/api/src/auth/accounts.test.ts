@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { meResponseSchema } from "@sob/contracts";
-import { account, auditLog, clientProfile, staffProfile, user } from "@sob/db";
-import { eq } from "drizzle-orm";
-import { json, PASSWORD, setupApiTest, signIn, signUp } from "../../test/helpers";
+import { account, appointment, auditLog, clientProfile, staffProfile, user } from "@sob/db";
+import { eq, sql } from "drizzle-orm";
+import { json, NOW, PASSWORD, setupApiTest, signIn, signUp } from "../../test/helpers";
 import { DomainError } from "../errors";
+import { lockCalendars } from "../tx";
 import { assignRole, bootstrapOwner, createAccount, ownerFromEnv } from "./accounts";
 import { createAuth } from "./auth";
 
@@ -174,6 +175,74 @@ describe("assignRole", () => {
       meResponseSchema.parse(await (await json(t.app, "/me", "GET", undefined, cookie)).json()).user
         .role,
     ).toBe("owner");
+  });
+
+  test("reactivating an inactive calendar with the same legacy role advances its review version", async () => {
+    const member = await createAccount(deps, {
+      email: "reactivate-same-role@example.com",
+      name: "Synthetic calendar",
+      password: PASSWORD,
+      role: "staff",
+    });
+    const [inactive] = await t.db
+      .update(staffProfile)
+      .set({ active: false })
+      .where(eq(staffProfile.userId, member.userId))
+      .returning();
+    if (!inactive) throw new Error("Missing test calendar");
+    await assignRole(t.db, member.userId, "staff");
+    const [active] = await t.db.select().from(staffProfile).where(eq(staffProfile.id, inactive.id));
+    expect(active).toMatchObject({ active: true, accessVersion: inactive.accessVersion + 1 });
+  });
+
+  test("a legacy demotion rechecks bookings after a previously inactive calendar reopens", async () => {
+    const member = await createAccount(deps, {
+      email: "legacy-demotion-race@example.com",
+      name: "Synthetic calendar",
+      password: PASSWORD,
+      role: "staff",
+    });
+    const client = await assignRole(t.db, member.userId, "client", undefined, { now: NOW });
+    if (!member.staffId || !client.clientId) throw new Error("Missing test profiles");
+    const { staffId } = member;
+    const { clientId } = client;
+    const locked = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const reopen = t.db.transaction(async (tx) => {
+      await lockCalendars(tx, [staffId.toUpperCase()]);
+      locked.resolve();
+      await release.promise;
+      await tx.update(staffProfile).set({ active: true }).where(eq(staffProfile.id, staffId));
+      await tx.insert(appointment).values({
+        staffId,
+        clientId,
+        startsAt: new Date(NOW.getTime() + 3600000),
+        endsAt: new Date(NOW.getTime() + 7200000),
+      });
+    });
+    await locked.promise;
+    const demotion = assignRole(t.db, member.userId, "client", undefined, { now: NOW }).catch(
+      (error: unknown) => error,
+    );
+    try {
+      let waited = false;
+      for (let attempt = 0; attempt < 50 && !waited; attempt++) {
+        const [row] = await t.db.execute<{ waiting: boolean }>(sql`
+          select exists (
+            select 1 from pg_locks l join pg_stat_activity a on a.pid=l.pid
+            where l.locktype='advisory' and not l.granted and a.datname=current_database()
+          ) as waiting
+        `);
+        waited = row?.waiting === true;
+        if (!waited) await Bun.sleep(20);
+      }
+      expect(waited).toBe(true);
+    } finally {
+      release.resolve();
+      await reopen;
+    }
+    expect(await demotion).toMatchObject({ code: "has_future_appointments" });
+    expect((await profilesOf(member.userId)).staff).toMatchObject([{ id: staffId, active: true }]);
   });
 
   test("an unknown user is not_found", async () => {
