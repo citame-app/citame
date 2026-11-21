@@ -153,8 +153,7 @@ jobs:
           exit 1
       - run: bunx playwright install --with-deps chromium
         working-directory: apps/web
-      # The admin screenshot recording is reviewed with the manual visual QA procedure.
-      - run: bun run --cwd apps/web e2e --grep-invert 'admin screenshots'
+      - run: bun run --cwd apps/web e2e
         env:
           E2E_OWNER_EMAIL: ci-owner@example.com
           E2E_OWNER_PASSWORD: correct horse battery staple

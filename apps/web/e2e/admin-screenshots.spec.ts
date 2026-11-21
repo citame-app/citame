@@ -14,7 +14,7 @@ import {
   signInAs,
   weekdayOf,
 } from "./admin-helpers";
-import { createClient } from "./helpers";
+import { createClient, switchLocale } from "./helpers";
 
 const MANICURE = "0198f5a0-7b1c-7000-8000-000000000104";
 
@@ -192,11 +192,13 @@ test.describe("admin screenshots", () => {
     await page.keyboard.press("?");
     await shoot(page, project, "calendar-shortcuts", false);
     await page.keyboard.press("Escape");
+    const filters = page.getByRole("button", { name: "Calendar filters" });
+    if (mobile) await filters.click();
     await page.getByRole("checkbox", { name: "Show cancelled" }).check();
     await shoot(page, project, "calendar-with-cancelled");
-    await page.getByRole("button", { name: "Team members" }).click();
+    await expect(page.getByRole("checkbox", { name: "Stylist A" })).toBeVisible();
     await shoot(page, project, "calendar-staff-filter", false);
-    await page.keyboard.press("Escape");
+    if (mobile) await filters.click();
 
     // conflict banner on a real future day: a fresh page, so its clock is the real one
     page = realPage;
@@ -229,13 +231,16 @@ test.describe("admin screenshots", () => {
     await page.keyboard.press("Escape");
 
     // loading and error states (the API is delayed, then fails)
+    await page.goto(dayUrl);
+    const refresh = page.getByRole("button", { name: "Refresh calendar" });
     await page.route("**/api/appointments/calendar**", async (route) => {
       await new Promise((r) => setTimeout(r, 4000));
       await route.continue().catch(() => {});
     });
-    await page.goto(`/admin/calendar?date=${day}`);
-    await expect(page.getByRole("status", { name: "Loading" })).toBeVisible();
+    await refresh.click();
+    await expect(refresh).toHaveAttribute("aria-busy", "true");
     await shoot(page, project, "calendar-loading", false);
+    await expect(refresh).toHaveAttribute("aria-busy", "false");
     await page.unroute("**/api/appointments/calendar**");
     await page.route("**/api/appointments/calendar**", (route) =>
       route.fulfill({
@@ -244,7 +249,7 @@ test.describe("admin screenshots", () => {
         body: JSON.stringify({ error: { code: "internal_error", message: "boom" } }),
       }),
     );
-    await page.goto(`/admin/calendar?date=${day}`);
+    await refresh.click();
     await expect(page.getByRole("alert").first()).toBeVisible({ timeout: 15_000 });
     await shoot(page, project, "calendar-error", false);
     await page.unroute("**/api/appointments/calendar**");
@@ -262,6 +267,7 @@ test.describe("admin screenshots", () => {
       .filter({ visible: true })
       .first()
       .click();
+    await page.getByRole("button", { name: "Profile", exact: true }).click();
     await expect(page.getByLabel("Private notes")).toBeVisible();
     await page.getByLabel("Private notes").fill("Prefers the window chair. Allergic to latex.");
     await shoot(page, project, "client-detail-unsaved");
@@ -284,11 +290,12 @@ test.describe("admin screenshots", () => {
     await shoot(page, project, "services-create-errors", false);
     await page.getByRole("dialog").getByLabel("Name").fill("Gel manicure");
     await page.getByRole("dialog").getByLabel("Duration (minutes)").fill("75");
-    await page.getByRole("dialog").getByLabel("Price").fill("12000");
+    await page.getByRole("dialog").getByLabel("Price", { exact: true }).fill("12000");
     await page
       .getByRole("dialog")
       .getByLabel("Description (optional)")
       .fill("Long-lasting gel polish with nail prep.");
+    await page.getByRole("button", { name: "How clients see it", exact: true }).click();
     await shoot(page, project, "services-preview", false);
     await page.keyboard.press("Escape");
     await page
@@ -365,6 +372,7 @@ test.describe("admin screenshots", () => {
     await page.goto("/admin/settings");
     await expect(page.getByLabel("Salon name")).toBeVisible();
     await shoot(page, project, "settings");
+    await page.goto("/admin/settings?section=booking");
     await page.getByLabel("Minimum notice (minutes)").fill("90");
     await page
       .getByRole("link", { name: "Clients" })
@@ -407,7 +415,7 @@ test.describe("admin screenshots", () => {
     }
     page = await pinnedPage("light");
     await page.goto(dayUrl);
-    await page.getByLabel("Español").check({ force: true });
+    await switchLocale(page, "Español");
     await expect(page.getByRole("heading", { level: 1, name: "Agenda" })).toBeVisible();
     await page.waitForLoadState("networkidle");
     await shoot(page, project, "es-calendar-day");
@@ -436,7 +444,7 @@ test.describe("admin screenshots", () => {
 
     // ---- staff role: own schedule and the forbidden notice ----
     await page.goto("/admin");
-    await page.getByLabel("English").check({ force: true });
+    await switchLocale(page, "English");
     await page.context().clearCookies();
     await signInAs(page, "e2e-staff@example.com");
     await page.goto("/admin/services");
@@ -444,7 +452,7 @@ test.describe("admin screenshots", () => {
       page.getByRole("alert").filter({ hasText: "You do not have access" }),
     ).toBeVisible();
     await shoot(page, project, "staff-forbidden-notice", false);
-    await page.getByLabel("Español").check({ force: true });
+    await switchLocale(page, "Español");
     await page.goto("/admin/services");
     await expect(page.getByRole("alert").filter({ hasText: "No tienes acceso" })).toBeVisible();
     await shoot(page, project, "es-staff-forbidden-notice", false);

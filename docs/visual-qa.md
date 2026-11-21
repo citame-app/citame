@@ -2,7 +2,7 @@
 
 Screenshots come from Playwright specs run against production builds (API in production mode behind the web server, Mailpit, a fresh migrated and seeded database): `admin-screenshots.spec.ts` (50 states per viewport), `screenshots.spec.ts` (18 public and account states), and `public-screenshots.spec.ts` (19 screens x English/es-AR x light/dark = 76 per viewport: sign in, empty and wrong-password states, sign up, forgot password, reset form and mismatch, invalid links, notification preferences, OAuth consent, unsubscribe pages, 404). `touch-targets.spec.ts` measures interactive elements under 44 px on a phone. Images are git-ignored; regenerate with `bunx playwright test screenshots touch-targets`. Phone = Pixel 7, desktop = 1440x900.
 
-Run `bunx playwright test admin-screenshots` to record the admin walkthrough for manual review. The CI browser run executes the calendar and admin assertions independently of this recording.
+Run `bun run --cwd apps/web e2e admin-screenshots` from the repository root to record the admin walkthrough for manual review. The same screens are exercised by the functional assertions in `admin-access`, `admin-a11y`, `admin-calendar`, and `admin-sections`.
 
 Method: each image was opened (many as contact sheets of 3 to 4 screens side by side, downscaled), not only the thumbnails. "Looked" means opened and inspected for overlap, clipping, contrast, spacing, truncation, untranslated strings and focus visibility. It is a human-eye pass by one reviewer, not a pixel diff or a contrast tool; axe (in the e2e suite) covers contrast rules separately.
 
