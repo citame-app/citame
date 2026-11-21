@@ -1255,10 +1255,7 @@ test("transaction summaries match visible local months when clocks roll back acr
     return checkoutListSchema.parse(await response.json());
   };
   const october = { period: "2009-10-01", receipts: 1, paidCents: 0, refundedCents: 0 };
-  const totals = [
-    { period: "2009-11-01", receipts: 1, paidCents: 0, refundedCents: 0 },
-    october,
-  ];
+  const totals = [{ period: "2009-11-01", receipts: 1, paidCents: 0, refundedCents: 0 }, october];
   expect((await list("")).groupTotals?.rows).toEqual(totals);
   expect((await list("&pageSize=1")).groupTotals?.rows).toEqual([october]);
 });

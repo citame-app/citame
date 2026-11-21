@@ -85,7 +85,16 @@ test("transaction totals include all filtered receipts and update after a remote
       },
     });
   try {
-    let unpaid = "";
+    const salon = await owner.get("/api/salon");
+    expect(salon.ok()).toBe(true);
+    const { timezone } = await salon.json();
+    const dateFormatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const receipts: { id: string; date: string; paid: boolean }[] = [];
     for (let index = 1; index <= 26; index++) {
       const sale = await owner.post("/api/admin/commerce/checkouts", {
         data: {
@@ -96,9 +105,10 @@ test("transaction totals include all filtered receipts and update after a remote
         },
       });
       expect(sale.status(), await sale.text()).toBe(201);
-      const { id } = await sale.json();
-      if (index === 26) unpaid = id;
-      else expect((await pay(id)).status()).toBe(201);
+      const { id, createdAt } = await sale.json();
+      const paid = index !== 26;
+      if (paid) expect((await pay(id)).status()).toBe(201);
+      receipts.unshift({ id, date: dateFormatter.format(new Date(createdAt)), paid });
     }
     await signInAs(page, OWNER_EMAIL, "/admin/commerce?view=transactions");
     const view = page.getByRole("region", { name: "Transactions", exact: true });
@@ -107,19 +117,36 @@ test("transaction totals include all filtered receipts and update after a remote
     const payments = totals
       .getByText("Recorded payments", { exact: true })
       .locator("xpath=following-sibling::dd");
-    await expect(payments).toHaveText("€300");
-    await expect(totals.getByText("26", { exact: true })).toBeVisible();
+    const expectPayments = async (page: typeof receipts, month: boolean) => {
+      const key = ({ date }: (typeof receipts)[number]) => (month ? date.slice(0, 7) : date);
+      const expected = [...new Set(page.map(key))]
+        .sort()
+        .reverse()
+        .map(
+          (period) =>
+            `€${receipts.filter((receipt) => receipt.paid && key(receipt) === period).length * 12}`,
+        );
+      await expect(payments).toHaveText(expected);
+    };
+    await expect(view.getByText("Showing 1-25 of 26")).toBeVisible();
+    await expectPayments(receipts.slice(0, 25), false);
     await view.getByRole("button", { name: "Next page", exact: true }).click();
     await expect(view.getByText("Showing 26-26 of 26")).toBeVisible();
-    await expect(payments).toHaveText("€300");
+    await expectPayments(receipts.slice(25), false);
     await view.getByRole("button", { name: "Months", exact: true }).click();
     await expect(view.getByRole("button", { name: "Months", exact: true })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-    await expect(payments).toHaveText("€300");
-    expect((await pay(unpaid)).status()).toBe(201);
-    await expect(payments).toHaveText("€312");
+    await expectPayments(receipts.slice(25), true);
+    await view.getByRole("button", { name: "Previous page", exact: true }).click();
+    await expect(view.getByText("Showing 1-25 of 26")).toBeVisible();
+    await expectPayments(receipts.slice(0, 25), true);
+    const unpaid = receipts[0];
+    if (!unpaid) throw new Error("Missing unpaid receipt");
+    expect((await pay(unpaid.id)).status()).toBe(201);
+    unpaid.paid = true;
+    await expectPayments(receipts.slice(0, 25), true);
     await expectNoHorizontalScroll(page);
     await expectNoSeriousA11yViolations(page, "transaction period totals");
   } finally {

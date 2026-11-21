@@ -96,5 +96,8 @@ export function liveQueryKeys(changes?: Iterable<SyncEntity | SyncLiveView>) {
   const unique = new Map<string, readonly string[]>();
   for (const entity of changes ?? (Object.keys(shared) as (SyncEntity | SyncLiveView)[]))
     for (const key of shared[entity]) unique.set(JSON.stringify(key), key);
+  if (unique.has(JSON.stringify(["commerce"]))) {
+    unique.delete(JSON.stringify(["commerce", "transactions"]));
+  }
   return unique.values();
 }

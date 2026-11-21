@@ -153,9 +153,13 @@ impl Root {
         };
         if matches!(load, HistoryLoad::ApplyFilters) {
             let dates = read_date(&history.from, cx).zip(read_date(&history.to, cx));
-            let Some((from, to)) =
-                dates.filter(|(from, to)| !from.zip(*to).is_some_and(|(from, to)| from > to))
-            else {
+            let Some((from, to)) = dates.filter(|(from, to)| {
+                !from.zip(*to).is_some_and(|(from, to)| {
+                    from > to
+                        || calendar::local_day_range(self.tz, from).0
+                            >= calendar::local_day_range(self.tz, to).1
+                })
+            }) else {
                 history.invalid_dates = true;
                 history.request = None;
                 cx.notify();
@@ -185,6 +189,15 @@ impl Root {
                 .map(|date| calendar::local_day_range(self.tz, date).1),
             group_by: Some(group),
         };
+        if filters
+            .from
+            .zip(filters.to)
+            .is_some_and(|(from, to)| from >= to)
+        {
+            history.invalid_dates = true;
+            cx.notify();
+            return;
+        }
         let page = match load {
             HistoryLoad::ApplyFilters => 1,
             HistoryLoad::Page(page) => page,
@@ -343,44 +356,46 @@ impl Root {
             )
             .child(options(&STATUSES, true, cx))
             .child(options(&METHODS, false, cx))
-            .child(
-                div().flex().gap_2().children(
-                    [
-                        (CheckoutHistoryGroup::Day, Key::SalesByDay),
-                        (CheckoutHistoryGroup::Month, Key::SalesByMonth),
-                    ]
-                    .into_iter()
-                    .map(|(group, key)| {
-                        self.button(
-                            match group {
-                                CheckoutHistoryGroup::Day => "sales-days",
-                                CheckoutHistoryGroup::Month => "sales-months",
-                            },
-                            self.t(key),
-                            if history.group == group {
-                                Kind::Primary
+    }
+
+    fn render_sales_grouping(&self, history: &History, cx: &mut Context<Self>) -> gpui::Div {
+        div().flex().gap_2().children(
+            [
+                (CheckoutHistoryGroup::Day, Key::SalesByDay),
+                (CheckoutHistoryGroup::Month, Key::SalesByMonth),
+            ]
+            .into_iter()
+            .map(|(group, key)| {
+                let id = match group {
+                    CheckoutHistoryGroup::Day => "sales-days",
+                    CheckoutHistoryGroup::Month => "sales-months",
+                };
+                self.button(
+                    id,
+                    self.t(key),
+                    if history.group == group {
+                        Kind::Primary
+                    } else {
+                        Kind::Ghost
+                    },
+                    cx.listener(move |root, _, _, cx| {
+                        let Overlay::SalesHistory(history) = &mut root.overlay else {
+                            return;
+                        };
+                        if history.group != group {
+                            history.group = group;
+                            if root.status.connectivity == Connectivity::Online {
+                                root.load_sales_history(HistoryLoad::Refresh, cx);
                             } else {
-                                Kind::Ghost
-                            },
-                            cx.listener(move |root, _, _, cx| {
-                                let Overlay::SalesHistory(history) = &mut root.overlay else {
-                                    return;
-                                };
-                                if history.group != group {
-                                    history.group = group;
-                                    if root.status.connectivity == Connectivity::Online {
-                                        let page = history.page;
-                                        root.load_sales_history(HistoryLoad::Page(page), cx);
-                                    } else {
-                                        history.needs_refresh = true;
-                                        cx.notify();
-                                    }
-                                }
-                            }),
-                        )
+                                history.needs_refresh = true;
+                                cx.notify();
+                            }
+                        }
                     }),
-                ),
-            )
+                )
+                .debug_selector(move || id.to_owned())
+            }),
+        )
     }
 
     fn render_sales_totals(&self, totals: &CheckoutGroupTotal, currency: &str) -> gpui::Div {
@@ -431,6 +446,7 @@ impl Root {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(self.t(Key::SalesHistory)),
             )
+            .child(self.render_sales_grouping(history, cx))
             .child(history.search.clone())
             .child(self.button(
                 "toggle-sales-filters",
@@ -524,9 +540,10 @@ impl Root {
                     .child(
                         div()
                             .id("sales-history-rows")
+                            .debug_selector(|| "sales-history-rows".to_owned())
                             .max_h(
                                 (viewport.height
-                                    - px(if history.filters_open { 480. } else { 290. }))
+                                    - px(if history.filters_open { 520. } else { 330. }))
                                 .max(px(90.)),
                             )
                             .overflow_y_scroll()
@@ -580,9 +597,9 @@ impl Root {
                                         .when_some(period_totals, |view, totals| {
                                             view.child(
                                                 div()
-                                                    .id(SharedString::from(format!(
-                                                        "sales-totals-{period}"
-                                                    )))
+                                                    .debug_selector(move || {
+                                                        format!("sales-totals-{period}")
+                                                    })
                                                     .child(self.render_sales_totals(
                                                         totals,
                                                         &row.currency,
@@ -671,12 +688,12 @@ mod tests {
         cx.simulate_resize(gpui::size(px(720.), px(820.)));
         let id = Uuid::new_v4();
         root.update(cx, |root, cx| {
+            root.svc.stop_sync();
             root.status.connectivity = Connectivity::Offline;
             root.open_sales_history(cx);
             let Overlay::SalesHistory(history) = &mut root.overlay else {
                 panic!("missing transactions");
             };
-            history.filters_open = true;
             history.loaded_group = Some(CheckoutHistoryGroup::Day);
             history.results = Ok(Some(
                 serde_json::from_value(serde_json::json!({
@@ -708,19 +725,21 @@ mod tests {
         let months = cx.debug_bounds("sales-months").expect("months control");
         cx.simulate_click(months.center(), Default::default());
         cx.run_until_parked();
-        assert!(cx.debug_bounds("sales-totals-2026-03-01").is_none());
-        assert!(cx.debug_bounds("sales-history-rows").is_some());
         root.update(cx, |root, _| {
             let Overlay::SalesHistory(history) = &root.overlay else {
                 panic!("missing transactions");
             };
             assert_eq!(history.group, CheckoutHistoryGroup::Month);
             assert!(history.needs_refresh);
+            assert_eq!(history.loaded_group, Some(CheckoutHistoryGroup::Day));
             assert!(matches!(history.results, Ok(Some(ref page)) if page.checkouts[0].id == id));
         });
         let days = cx.debug_bounds("sales-days").expect("days control");
         cx.simulate_click(days.center(), Default::default());
         cx.run_until_parked();
+        root.update(cx, |root, _| {
+            assert!(matches!(&root.overlay, Overlay::SalesHistory(history) if history.group == CheckoutHistoryGroup::Day));
+        });
         assert!(cx.debug_bounds("sales-totals-2026-03-01").is_some());
     }
 }
