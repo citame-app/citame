@@ -214,7 +214,8 @@ impl SyncRunner {
                             break 'outer;
                         }
                     }
-                    deadline = Instant::now() + core.run_cycle();
+                    let wait = core.run_cycle();
+                    deadline = Instant::now() + wait;
                 }
             })
             .expect("spawn sync thread");
