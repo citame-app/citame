@@ -19,7 +19,7 @@ import { totalBlockMinutes } from "../availability/compute";
 import { findAvailability } from "../availability/service";
 import { serviceWorkWindows } from "../availability/work-windows";
 import { getBookingPolicy } from "../booking-protection/policy";
-import { protectionView } from "../booking-protection/value";
+import { assertProtectedPriceBasis, protectionView } from "../booking-protection/value";
 import { assertClientCanBook } from "../clients/controls";
 import { prepareBookingIntake } from "../clients/intake-booking";
 import { filterResourceAvailability } from "../resources/reservations";
@@ -191,6 +191,8 @@ async function reviewDesktopVisit(
       startsAt: startsAt.toISOString(),
     });
     const services = await getBookableServices(tx, part.serviceIds, part.serviceQuotes);
+    const priceCents = services.reduce((price, service) => price + service.priceCents, 0);
+    if (policy.enabled) assertProtectedPriceBasis(services, priceCents);
     if (policy.enabled && part.protectionWaiverReason && !canWaive)
       throw new DomainError("forbidden", "Only managers may waive a booking deposit");
     for (const service of services) currencies.add(service.currency);
@@ -224,8 +226,8 @@ async function reviewDesktopVisit(
       id: part.id,
       startsAt: startsAt.toISOString(),
       endsAt: endsAt.toISOString(),
-      priceCents: services.reduce((price, service) => price + service.priceCents, 0),
-      priceStatus: services.some((s) => s.priceType === "variable" || s.priceType === "hidden")
+      priceCents,
+      priceStatus: services.some((s) => s.priceType === "variable")
         ? "pending"
         : services.some((s) => s.priceType === "from")
           ? "from"

@@ -106,6 +106,23 @@ export async function calendarProtections(db: Connection, appointmentIds: string
   }
   return result;
 }
+export function assertProtectedPriceBasis(
+  services: readonly { currency: string; priceType?: string | null }[],
+  subtotalCents: number,
+) {
+  if (
+    !services.length ||
+    services.some((service) => service.currency !== "EUR") ||
+    (subtotalCents <= 0 &&
+      !services.some((service) => service.priceType === "variable") &&
+      !services.every((service) => service.priceType === "free"))
+  )
+    throw new DomainError(
+      "validation_error",
+      "Protected bookings need a positive EUR service total",
+    );
+}
+
 export async function createProtection(
   tx: Tx,
   booking: Booking,
@@ -186,12 +203,8 @@ export async function createProtection(
       "invalid_state",
       "Service prices changed; review the current total and accept again",
     );
-  if (
-    !snapshots.length ||
-    snapshots.some((s) => s.currency !== "EUR") ||
-    (subtotalCents <= 0 && !unknownPrice && !snapshots.every((s) => s.priceType === "free")) ||
-    totalCents > 999999999
-  )
+  assertProtectedPriceBasis(snapshots, subtotalCents);
+  if (totalCents > 999999999)
     throw new DomainError(
       "validation_error",
       "Protected bookings need a positive EUR service total",

@@ -114,6 +114,7 @@ test("pausing online booking blocks new public visits and preserves staff bookin
 
 test("Desktop commits only the reviewed itinerary and never leaves a partially booked visit", async () => {
   await t.db.update(service).set({ currency: "EUR" });
+  await t.db.update(service).set({ priceType: "hidden" }).where(eq(service.id, f.haircutId));
   await t.db.update(service).set({ priceType: "from" }).where(eq(service.id, f.colorId));
   const path = "/appointments/desktop-visits";
   const base = packet();
