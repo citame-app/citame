@@ -1,6 +1,6 @@
 use super::*;
 use crate::loyalty::stamps::{
-    Card, Cards, Command, RewardInboxReply, RewardNoticeRead, RewardNotices,
+    Card, Cards, Command, RewardInboxReply, RewardNoticeRead, RewardNotices, bulk,
     programme::{Programme, Review},
 };
 use crate::loyalty::{
@@ -50,6 +50,40 @@ impl HttpTransport {
             false,
         )?;
         Ok(result.clients)
+    }
+
+    pub fn review_stamp_batch(&self, scope: bulk::Scope) -> Result<bulk::Review, TransportError> {
+        let response = self.get(
+            &self.agent,
+            &format!("{STAMPS}/bulk/preview?scope={}", scope.as_str()),
+            Some("application/json"),
+        )?;
+        let preview: bulk::Review = read_response(response, false)?;
+        if preview.scope != scope
+            || preview.total
+                != preview
+                    .counts
+                    .active
+                    .saturating_add(preview.counts.completed)
+                    .saturating_add(preview.counts.issued)
+                    .saturating_add(preview.counts.expired)
+        {
+            return Err(TransportError::Server(
+                "Unexpected stamp card batch review".into(),
+            ));
+        }
+        Ok(preview)
+    }
+
+    pub fn void_stamp_batch(&self, input: &bulk::Request) -> Result<bulk::Result, TransportError> {
+        let response = self.send_json(&format!("{STAMPS}/bulk"), input)?;
+        let result: bulk::Result = read_response_with(response, review_transport_error)?;
+        if !input.acknowledges(&result) {
+            return Err(TransportError::Server(
+                "Unexpected stamp card batch acknowledgement".into(),
+            ));
+        }
+        Ok(result)
     }
 
     pub fn stamp_notices(

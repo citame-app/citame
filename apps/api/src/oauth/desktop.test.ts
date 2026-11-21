@@ -104,6 +104,12 @@ test("desktop stamp programme and card access preserves role and method restrict
   expect((await request(`${path}/cards`, owner.access)).status).toBe(403);
   expect((await request(`${path}/notices?summary=true`, owner.access)).status).toBe(200);
   expect((await request(`${path}/notices/read`, owner.access)).status).toBe(403);
+  expect((await request(`${path}/bulk/preview?scope=all`, owner.access)).status).toBe(200);
+  expect((await request(`${path}/bulk/preview?scope=all`, staff.access)).status).toBe(403);
+  expect((await request(`${path}/bulk`, owner.access)).status).toBe(403);
+  expect((await mutate(`${path}/bulk/preview`, "POST", owner.access, {})).status).toBe(403);
+  expect((await mutate(`${path}/bulk`, "POST", owner.access, {})).status).toBe(400);
+
   expect((await mutate(`${path}/notices`, "POST", owner.access, {})).status).toBe(403);
   expect((await mutate(`${path}/notices/read`, "POST", owner.access, {})).status).toBe(400);
 

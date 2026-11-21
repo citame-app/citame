@@ -52,7 +52,7 @@ const initialProgram: StampProgramTerms = {
   reward: { kind: "other", name: "Loyalty reward", targetId: null, discountBasisPoints: null },
 };
 
-async function currentProgram(db: Connection): Promise<Program> {
+export async function currentProgram(db: Connection): Promise<Program> {
   const [row] = await db.select().from(stampProgram).where(eq(stampProgram.id, 1));
   return row
     ? {
@@ -64,8 +64,16 @@ async function currentProgram(db: Connection): Promise<Program> {
     : { version: 1, minimumCardVersion: 1, program: initialProgram, lastRequest: null };
 }
 
+export async function lockStampProgram(tx: Tx, shared = false) {
+  await tx.execute(
+    shared
+      ? sql`select pg_advisory_xact_lock_shared(hashtextextended('stamp-program', 0))`
+      : sql`select pg_advisory_xact_lock(hashtextextended('stamp-program', 0))`,
+  );
+}
+
 async function lockProgramForCard(tx: Tx) {
-  await tx.execute(sql`select pg_advisory_xact_lock_shared(hashtextextended('stamp-program', 0))`);
+  await lockStampProgram(tx, true);
   return currentProgram(tx);
 }
 
@@ -81,7 +89,7 @@ export async function updateStampProgram(
 ) {
   requireRole(principal, "owner");
   return db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('stamp-program', 0))`);
+    await lockStampProgram(tx);
     const existing = await currentProgram(tx);
     const requestHash = rewardHash({ actor: principal.userId, input });
     if (existing.version === input.version + 1 && existing.lastRequest === requestHash) {
@@ -535,6 +543,7 @@ export async function syncCheckoutStamp(
     return;
   }
   if (value.eligibleRetained >= value.eligibleOriginal) return;
+  await lockStampProgram(tx, true);
   const [event] = await tx
     .select()
     .from(stampCardEvent)
@@ -612,6 +621,7 @@ export async function reverseAppointmentStamp(
     .where(condition);
   if (!observed) return;
   await lockClientRoot(tx, visit.clientId, true);
+  await lockStampProgram(tx, true);
   const [event] = await tx.select().from(stampCardEvent).where(condition);
   if (event) await revokeStamp(tx, await cardById(tx, event.cardId), event, now);
 }

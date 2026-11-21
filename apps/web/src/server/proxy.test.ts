@@ -52,6 +52,8 @@ describe("route mapping", () => {
       "/admin/rewards/stamps/program",
       "/admin/rewards/stamps/notices?summary=true",
       "/admin/rewards/stamps/notices/read",
+      "/admin/rewards/stamps/bulk/preview?scope=all",
+      "/admin/rewards/stamps/bulk",
       "/admin/rewards/stamps/clients/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
       "/admin/rewards/stamps/cards",
       "/admin/rewards/stamps/cards/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",

@@ -187,6 +187,120 @@ test("a reward notice is private, read per account, and withdrawn after a refund
   expect(await list(customer)).toMatchObject({ unreadCount: 0, entries: [{ read: true }] });
 });
 
+test("bulk annulment is owner-only and keeps every reviewed card in the ledger", async () => {
+  const staff = await actor(t, "staff", "bulk-staff@stamps.test");
+  expect((await save({ automaticIssue: false })).status).toBe(200);
+  const issue = async (clientId: string | null, initialStamps: number, expiresAt?: string) => {
+    const response = await call(owner, `${path}/cards`, "POST", {
+      clientId,
+      initialStamps,
+      expiresAt,
+      programVersion: 2,
+      ...command(),
+    });
+    expect(response.status, await response.clone().text()).toBe(201);
+    return (await response.json()) as { id: string; version: number };
+  };
+  const earned = await issue(customer.clientId, 2);
+  const expired = await issue(fixtures.clientId, 0, "2020-01-01T00:00:00.000Z");
+  const used = await issue(other.clientId, 2);
+  const reward = await call(owner, `${path}/cards/${used.id}`, "POST", {
+    type: "issue_reward",
+    version: used.version,
+    ...command(),
+  });
+  expect(reward.status).toBe(200);
+  expect(
+    (
+      await call(owner, `${path}/cards/${used.id}`, "POST", {
+        type: "redeem",
+        version: used.version + 1,
+        ...command(),
+      })
+    ).status,
+  ).toBe(200);
+  const active = await issue(other.clientId, 0);
+  const bulk = `${path}/bulk`;
+  expect((await call(staff, `${bulk}/preview?scope=all`)).status).toBe(403);
+  const review = async (scope: string) => {
+    const result = await call(owner, `${bulk}/preview?scope=${scope}`);
+    expect(result.status, await result.clone().text()).toBe(200);
+    return (await result.json()) as {
+      generation: string;
+      reviewFingerprint: string;
+      total: number;
+    };
+  };
+  const execute = (input: unknown) => call(owner, bulk, "POST", input);
+  expect(await review("all")).toMatchObject({
+    total: 3,
+    counts: { active: 1, expired: 1, completed: 1, issued: 0 },
+  });
+  const preview = await review("completed");
+  const input = {
+    ...command(),
+    scope: "completed",
+    reviewFingerprint: preview.reviewFingerprint,
+    reason: "Reviewed batch of completed cards",
+  };
+  expect((await call(staff, bulk, "POST", input)).status).toBe(403);
+  expect(
+    (
+      await call(owner, `${path}/cards/${earned.id}`, "POST", {
+        type: "edit",
+        version: earned.version,
+        stamps: 2,
+        expiresAt: null,
+        reason: "Concurrent reviewed change",
+        ...command(),
+      })
+    ).status,
+  ).toBe(200);
+  expect((await execute(input)).status).toBe(409);
+  const next = { ...input, reviewFingerprint: (await review("completed")).reviewFingerprint };
+  const first = await execute(next);
+  expect(first.status).toBe(200);
+  const receipt = await first.json();
+  expect(receipt).toMatchObject({ total: 1, scope: "completed" });
+  expect(await (await execute(next)).json()).toEqual(receipt);
+  expect((await execute({ ...next, reason: "A different reason is not a retry" })).status).toBe(
+    409,
+  );
+  const expire = await review("expired");
+  expect(expire.total).toBe(1);
+  expect(
+    (
+      await execute({
+        ...command(),
+        scope: "expired",
+        reviewFingerprint: expire.reviewFingerprint,
+        reason: "Reviewed expired card disposal",
+      })
+    ).status,
+  ).toBe(200);
+  const rest = await review("all");
+  expect(rest.total).toBe(1);
+  expect(
+    (
+      await execute({
+        ...command(),
+        scope: "all",
+        reviewFingerprint: rest.reviewFingerprint,
+        reason: "Reviewed outstanding card disposal",
+      })
+    ).status,
+  ).toBe(200);
+  expect(await cards(customer)).toMatchObject([{ id: earned.id, state: "void" }]);
+  expect(await cards(other)).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ id: active.id, state: "void" }),
+      expect.objectContaining({ id: used.id, state: "redeemed" }),
+    ]),
+  );
+  const previous = await call(owner, `${path}/clients/${fixtures.clientId}`);
+  expect(await previous.json()).toMatchObject({ cards: [{ id: expired.id, state: "void" }] });
+});
+
 test("qualified settled treatments add one stamp per visit and require reviewed reward issuance", async () => {
   const saved = await save({ qualifyingServiceIds: [fixtures.haircutId] });
   expect(saved.status, await saved.clone().text()).toBe(200);

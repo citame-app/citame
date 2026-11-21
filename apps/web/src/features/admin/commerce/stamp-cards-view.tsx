@@ -24,6 +24,7 @@ import { addDaysLocal, formatDateWithYear, localDateOf } from "~/lib/format";
 import { zonedInstant } from "~/lib/zoned";
 import { UnsavedGuard } from "../unsaved-guard";
 import { useDebounced } from "../use-debounced";
+import { StampBulkForm } from "./stamp-bulk-form";
 import { StampProgramForm } from "./stamp-program-form";
 
 const cardStyles = {
@@ -68,7 +69,12 @@ export function StampCardsView({
     return clientId ? <CustomerCards clientId={clientId} visible={visible} /> : null;
   return (
     <section className="space-y-6" aria-label={t("stamps.title")}>
-      {role === "owner" && !clientId && <StampProgramForm />}
+      {role === "owner" && !clientId && (
+        <>
+          <StampProgramForm />
+          <StampBulkForm />
+        </>
+      )}
       {permissions.clients && !clientId && (
         <div className="grid gap-3 rounded-xl border border-line bg-surface p-4 sm:grid-cols-2">
           <TextField

@@ -159,3 +159,40 @@ export const stampNoticesSchema = pageInfoSchema.extend({
   unreadCount: z.number().int().nonnegative(),
   entries: z.array(stampNoticeSchema),
 });
+
+export const stampBulkScopeSchema = z.enum(["expired", "completed", "all"]);
+export type StampBulkScope = z.infer<typeof stampBulkScopeSchema>;
+
+const bulkCount = z.number().int().nonnegative();
+export const stampBulkReviewSchema = z.object({
+  scope: stampBulkScopeSchema,
+  generation: syncGenerationSchema,
+  reviewFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  total: bulkCount,
+  counts: z.object({
+    active: bulkCount,
+    completed: bulkCount,
+    issued: bulkCount,
+    expired: bulkCount,
+  }),
+});
+export type StampBulkReview = z.infer<typeof stampBulkReviewSchema>;
+
+export const stampBulkInputSchema = z
+  .object({
+    ...command,
+    scope: stampBulkScopeSchema,
+    reviewFingerprint: stampBulkReviewSchema.shape.reviewFingerprint,
+    reason: z.string().trim().min(8).max(300),
+  })
+  .strict();
+export type StampBulkInput = z.infer<typeof stampBulkInputSchema>;
+
+export const stampBulkResultSchema = z.object({
+  scope: stampBulkScopeSchema,
+  generation: syncGenerationSchema,
+  idempotencyKey: idSchema,
+  total: bulkCount,
+  voidedAt: instantSchema,
+});
+export type StampBulkResult = z.infer<typeof stampBulkResultSchema>;

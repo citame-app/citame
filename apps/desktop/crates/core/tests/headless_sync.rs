@@ -190,6 +190,36 @@ fn native_stamp_programme_shares_revision_and_card_terms_through_the_proxy() {
                 .any(|entry| entry["cardId"] == serde_json::json!(card.id))
         );
 
+        use sob_core::loyalty::stamps::bulk::Scope;
+        let reviewed = device
+            .transport
+            .review_stamp_batch(Scope::Completed)
+            .unwrap();
+        assert_eq!(
+            reviewed.total, 1,
+            "only the synthetic card should match this isolated stack"
+        );
+        let request = reviewed
+            .prepare("Synthetic reviewed bulk annulment")
+            .unwrap();
+        let receipt = device.transport.void_stamp_batch(&request).unwrap();
+        assert_eq!(receipt.total, 1);
+        assert_eq!(
+            device
+                .transport
+                .void_stamp_batch(&request)
+                .unwrap()
+                .voided_at,
+            receipt.voided_at
+        );
+        assert_eq!(
+            device.transport.stamp_cards(client).unwrap().cards[0].state,
+            State::Void
+        );
+        assert_eq!(
+            web.rest_get("/admin/rewards/stamps/bulk/preview?scope=completed")["total"],
+            0
+        );
         web.sync();
         assert!(web.store.live_view_revision(LIVE_TOPIC).unwrap() > marker);
     }));

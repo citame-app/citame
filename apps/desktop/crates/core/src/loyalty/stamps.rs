@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use uuid::Uuid;
 
+pub mod bulk;
 pub mod programme;
 
 #[derive(Deserialize)]

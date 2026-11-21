@@ -16,6 +16,10 @@ import {
   type StampNoticeQuery,
   type StampNoticeRead,
   type StampProgramInput,
+  type StampBulkInput,
+  type StampBulkScope,
+  stampBulkReviewSchema,
+  stampBulkResultSchema,
   stampCardSchema,
   stampCardsSchema,
   stampNoticeReadResultSchema,
@@ -36,6 +40,13 @@ const noticePath = (mode: CommerceMode) =>
 const policyPath = "/admin/rewards/policy/reviewed";
 export function rewardEndpoints(client: ApiClient) {
   return {
+    reviewStampBatch: (scope: StampBulkScope) =>
+      client.get("/admin/rewards/stamps/bulk/preview", stampBulkReviewSchema, {
+        query: { scope },
+        cache: "no-store",
+      }),
+    voidStampBatch: (input: StampBulkInput) =>
+      client.post("/admin/rewards/stamps/bulk", input, stampBulkResultSchema),
     stampNotices: (mode: CommerceMode, query: StampNoticeQuery, signal?: AbortSignal) =>
       client.get(noticePath(mode), stampNoticesSchema, { query, signal }),
     readStampNotice: (mode: CommerceMode, input: StampNoticeRead) =>

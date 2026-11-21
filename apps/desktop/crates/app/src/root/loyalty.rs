@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 mod policy;
+mod stamp_bulk;
 mod stamp_programme;
 mod stamps;
 pub(super) use stamps::PendingStamp;
@@ -29,6 +30,7 @@ pub(super) struct Desk {
     observed: Option<i64>,
     policy: Option<policy::Editor>,
     stamp_programme: Option<stamp_programme::Editor>,
+    stamp_bulk: Option<stamp_bulk::Desk>,
     retry: Option<(Instant, Duration)>,
     points: Entity<TextField>,
     reason: Entity<TextField>,
@@ -105,6 +107,7 @@ impl Root {
             observed: None,
             policy: None,
             stamp_programme: None,
+            stamp_bulk: None,
             retry: None,
             points: cx.new(|cx| TextField::new("", false, cx)),
             reason: cx.new(|cx| TextField::new("", false, cx)),
@@ -281,6 +284,13 @@ impl Root {
 
     pub(super) fn refresh_loyalty(&mut self, reconnected: bool, cx: &mut Context<Self>) {
         if !matches!(self.overlay, Overlay::Loyalty(_)) {
+            return;
+        }
+        if self
+            .loyalty_desk()
+            .is_some_and(|desk| desk.stamp_bulk.is_some())
+        {
+            self.refresh_stamp_bulk(cx);
             return;
         }
         let observed = self.svc.store.live_view_revision(LIVE_TOPIC).ok();
@@ -671,6 +681,13 @@ impl Root {
     pub(super) fn dismiss_loyalty(&mut self, confirm: bool, cx: &mut Context<Self>) {
         if self
             .loyalty_desk()
+            .is_some_and(|desk| desk.stamp_bulk.is_some())
+        {
+            self.close_stamp_bulk(confirm, cx);
+            return;
+        }
+        if self
+            .loyalty_desk()
             .is_some_and(|desk| desk.stamp_programme.is_some())
         {
             self.close_stamp_programme(confirm, cx);
@@ -734,6 +751,9 @@ impl Root {
         viewport: gpui::Size<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        if let Some(desk) = &desk.stamp_bulk {
+            return self.render_stamp_bulk(desk, viewport, cx);
+        }
         if let Some(editor) = &desk.stamp_programme {
             return self.render_stamp_programme(editor, viewport, cx);
         }
@@ -816,6 +836,13 @@ impl Root {
                         Key::StampProgramme,
                         Kind::Ghost,
                         Root::open_stamp_programme,
+                        cx,
+                    ))
+                    .child(self.loyalty_button(
+                        "loyalty-stamp-bulk",
+                        Key::StampBulkTitle,
+                        Kind::Ghost,
+                        Root::open_stamp_bulk,
                         cx,
                     ))
                 })

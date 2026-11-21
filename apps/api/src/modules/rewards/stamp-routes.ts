@@ -7,6 +7,8 @@ import {
   stampNoticeReadResultSchema,
   stampNoticeReadSchema,
   stampProgramInputSchema,
+  stampBulkScopeSchema,
+  stampBulkInputSchema,
 } from "@sob/contracts";
 import { Hono } from "hono";
 import type { AppDeps } from "../../app";
@@ -14,6 +16,7 @@ import { requirePermission, requireRole } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
+import { bulkVoidStampCards, reviewBulkStampCards } from "./stamp-bulk";
 import { listStampNotices, readStampNotice } from "./stamp-notices";
 import {
   changeStampCard,
@@ -71,6 +74,25 @@ export function stampAdminRoutes(deps: AppDeps) {
       await next();
     })
     .route("/notices", noticeRoutes(deps, "admin"))
+    .get("/bulk/preview", async (c) =>
+      c.json(
+        await reviewBulkStampCards(
+          db,
+          c.get("principal"),
+          parseOrThrow(stampBulkScopeSchema, c.req.query("scope")),
+          generation,
+          now(),
+        ),
+      ),
+    )
+    .post("/bulk", async (c) => {
+      const principal = c.get("principal");
+      requireRole(principal, "owner");
+      const input = parseOrThrow(stampBulkInputSchema, await readJson(c));
+      ensureGeneration(input.generation, generation);
+      return c.json(await bulkVoidStampCards(db, principal, input, now()));
+    })
+
     .get("/program", async (c) => {
       requireRole(c.get("principal"), "owner");
       return c.json(await getStampProgram(db, generation));
