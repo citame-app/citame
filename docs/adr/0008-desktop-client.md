@@ -59,9 +59,9 @@ The SSE listener (`GET /sync/stream`) reconnects with the same backoff. ureq bou
 
 Appointments are server-authoritative. A rejected appointment mutation becomes a conflict the user resolves in the UI:
 
-- **Pick another time** (and staff): a rejected create is re-sent as a new `appointment.create` with the same appointment id and a NEW `mutationId` (rejections are final server-side); a rejected move becomes a new reschedule with the fresh server version.
-- **Drop the booking / cancel the appointment**: a rejected create is just discarded; for an existing appointment a cancel is queued.
-- **Dismiss**: close the notice (for example a stale `conflict` on an edit; the calendar already shows the server copy).
+- **Pick another time** opens the proposal for a rejected booking. Retrying uses the same appointment ID and a new `mutationId`.
+- **Review current appointment** opens the current details of an existing booking. Desktop retains the proposed changes and checks the reviewed appointment again before saving. Cancellation requires confirmation inside those details. The queue and the conflict are updated together.
+- **Drop the booking** discards a rejected booking proposal. **Dismiss** closes the notice and keeps the appointment shown on the calendar.
 
 Bookings are validated locally against the synced catalog before queueing (unknown service or client, a staff member who does not perform every selected service), so avoidable rejections never leave the desk. The server stays the judge for everything else.
 
