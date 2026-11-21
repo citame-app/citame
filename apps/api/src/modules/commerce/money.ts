@@ -1,3 +1,11 @@
+import type { checkoutPayment } from "@sob/db";
+
+export const recordedPaymentStatuses: ReadonlyArray<typeof checkoutPayment.$inferSelect.status> = [
+  "succeeded",
+  "reconciliation",
+];
+export const completedRefundStatus = "succeeded";
+
 /** Integer floor of a*b/divisor without floating-point loss of minor currency units. */
 export function multiplyDivide(a: number, b: number, divisor: number): number {
   if (![a, b, divisor].every(Number.isSafeInteger) || a < 0 || b < 0 || divisor <= 0)

@@ -1120,6 +1120,8 @@ keys! {
     SalesByDay => ("By day", "Por día"),
     SalesByMonth => ("By month", "Por mes"),
     SalesTotalsHelp => ("Totals include all payments and refunds on receipts matching the filters.", "Los totales incluyen todos los pagos y devoluciones de los recibos que coinciden con los filtros."),
+    SalesRefreshFailed => ("Could not update transactions. Showing the last loaded results.", "No se pudieron actualizar las transacciones. Se muestran los últimos resultados cargados."),
+    SalesReload => ("Reload transactions", "Actualizar transacciones"),
     SalesReceipts => ("Receipts", "Recibos"),
     SalesRecordedPayments => ("Recorded payments", "Pagos registrados"),
     SalesRefunds => ("Refunds", "Devoluciones"),

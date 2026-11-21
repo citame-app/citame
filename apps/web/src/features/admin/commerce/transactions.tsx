@@ -9,6 +9,7 @@ import { EmptyState, ErrorState, Skeleton } from "~/components/ui/states";
 import { useI18n } from "~/i18n/react";
 import { api } from "~/lib/api/instance";
 import { addDaysLocal, formatDateLong, formatMoney, formatTime, localDateOf } from "~/lib/format";
+import { salonQuery } from "~/lib/queries";
 import { localDayBounds } from "~/lib/zoned";
 import { useDebounced } from "../use-debounced";
 
@@ -19,7 +20,9 @@ export function Transactions({
   onOpen: (id: string) => void;
   clientId?: string;
 }) {
-  const { t, locale, timeZone } = useI18n();
+  const { t, locale, timeZone: fallbackTimeZone } = useI18n();
+  const salon = useQuery(salonQuery);
+  const timeZone = salon.data?.timezone ?? fallbackTimeZone;
   const [search, setSearch] = useState("");
   const term = useDebounced(search.trim(), 250);
   const [status, setStatus] = useState<CheckoutListQuery["status"]>();
@@ -80,18 +83,15 @@ export function Transactions({
           <h2 className="text-heading">{t("commerce.history")}</h2>
           <p className="mt-1 text-sm text-muted">{t("pos.transactionsHelp")}</p>
         </div>
-        <div
-          className="commerce-section-nav commerce-transaction-grouping"
-          role="group"
-          aria-label={t("pos.transactionGrouping")}
-        >
+        <fieldset className="commerce-section-nav commerce-transaction-grouping">
+          <legend className="sr-only">{t("pos.transactionGrouping")}</legend>
           <button type="button" aria-pressed={group === "day"} onClick={() => setGroup("day")}>
             {t("pos.days")}
           </button>
           <button type="button" aria-pressed={group === "month"} onClick={() => setGroup("month")}>
             {t("pos.months")}
           </button>
-        </div>
+        </fieldset>
       </div>
       <div className="commerce-transaction-filters">
         <TextField
@@ -172,69 +172,71 @@ export function Transactions({
       ) : (
         <div className="space-y-5">
           {groupTotals && <p className="text-sm text-muted">{t("pos.transactionTotalsHelp")}</p>}
-          {[...grouped].map(([date, sales]) => {
-            const totals = totalsByPeriod.get(date);
-            return (
-              <section className="commerce-transaction-group" key={date}>
-                <h3>
-                  {group === "day"
-                    ? formatDateLong(date, locale)
-                    : new Intl.DateTimeFormat(locale, {
-                        month: "long",
-                        year: "numeric",
-                        timeZone: "UTC",
-                      }).format(new Date(`${date}T12:00:00Z`))}
-                </h3>
-                {totals && (
-                  <dl className="commerce-transaction-totals">
-                    <div>
-                      <dt>{t("pos.transactionReceipts")}</dt>
-                      <dd>{totals.receipts.toLocaleString(locale)}</dd>
-                    </div>
-                    {(
-                      [
-                        ["pos.transactionPaid", totals.paidCents],
-                        ["pos.transactionRefunded", totals.refundedCents],
-                        ["pos.transactionNet", totals.paidCents - totals.refundedCents],
-                      ] as const
-                    ).map(([label, amount]) => (
-                      <div key={label}>
-                        <dt>{t(label)}</dt>
-                        <dd>{formatMoney(amount, "EUR", locale)}</dd>
+          {[...grouped]
+            .sort(([left], [right]) => right.localeCompare(left))
+            .map(([date, sales]) => {
+              const totals = totalsByPeriod.get(date);
+              return (
+                <section className="commerce-transaction-group" key={date}>
+                  <h3>
+                    {group === "day"
+                      ? formatDateLong(date, locale)
+                      : new Intl.DateTimeFormat(locale, {
+                          month: "long",
+                          year: "numeric",
+                          timeZone: "UTC",
+                        }).format(new Date(`${date}T12:00:00Z`))}
+                  </h3>
+                  {totals && (
+                    <dl className="commerce-transaction-totals">
+                      <div>
+                        <dt>{t("pos.transactionReceipts")}</dt>
+                        <dd>{totals.receipts.toLocaleString(locale)}</dd>
                       </div>
-                    ))}
-                  </dl>
-                )}
-                {/* biome-ignore lint/a11y/noRedundantRoles: Safari needs this role when list markers are hidden. */}
-                <ol role="list">
-                  {sales.map((sale) => (
-                    <li key={sale.id}>
-                      <button
-                        type="button"
-                        className="commerce-transaction-row"
-                        onClick={() => onOpen(sale.id)}
-                      >
-                        <div>
-                          <span className="text-xs text-muted">
-                            {formatTime(sale.createdAt, receiptTimezone, locale)} ·{" "}
-                            {sale.id.slice(-8).toUpperCase()}
-                          </span>
-                          <strong>{sale.lines.map((line) => line.description).join(", ")}</strong>
+                      {(
+                        [
+                          ["pos.transactionPaid", totals.paidCents],
+                          ["pos.transactionRefunded", totals.refundedCents],
+                          ["pos.transactionNet", totals.paidCents - totals.refundedCents],
+                        ] as const
+                      ).map(([label, amount]) => (
+                        <div key={label}>
+                          <dt>{t(label)}</dt>
+                          <dd>{formatMoney(amount, "EUR", locale)}</dd>
                         </div>
-                        <span className="commerce-transaction-status">
-                          {t(`commerce.status.${sale.status}`)}
-                        </span>
-                        <strong className="tabular-nums">
-                          {formatMoney(sale.totalCents, sale.currency, locale)}
-                        </strong>
-                        <ChevronRightIcon width={18} height={18} />
-                      </button>
-                    </li>
-                  ))}
-                </ol>
-              </section>
-            );
-          })}
+                      ))}
+                    </dl>
+                  )}
+                  {/* biome-ignore lint/a11y/noRedundantRoles: Safari needs this role when list markers are hidden. */}
+                  <ol role="list">
+                    {sales.map((sale) => (
+                      <li key={sale.id}>
+                        <button
+                          type="button"
+                          className="commerce-transaction-row"
+                          onClick={() => onOpen(sale.id)}
+                        >
+                          <div>
+                            <span className="text-xs text-muted">
+                              {formatTime(sale.createdAt, receiptTimezone, locale)} ·{" "}
+                              {sale.id.slice(-8).toUpperCase()}
+                            </span>
+                            <strong>{sale.lines.map((line) => line.description).join(", ")}</strong>
+                          </div>
+                          <span className="commerce-transaction-status">
+                            {t(`commerce.status.${sale.status}`)}
+                          </span>
+                          <strong className="tabular-nums">
+                            {formatMoney(sale.totalCents, sale.currency, locale)}
+                          </strong>
+                          <ChevronRightIcon width={18} height={18} />
+                        </button>
+                      </li>
+                    ))}
+                  </ol>
+                </section>
+              );
+            })}
         </div>
       )}
       {total > 0 && !invalidRange && (

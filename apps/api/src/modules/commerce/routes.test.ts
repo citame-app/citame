@@ -1230,6 +1230,39 @@ test("transaction summaries cover the whole filtered local period with scoped pa
   expect((await call(client, `${path}&groupBy=month`)).status).toBe(403);
 });
 
+test("transaction summaries match visible local months when clocks roll back across midnight", async () => {
+  await t.db.update(salonSettings).set({ timezone: "America/Goose_Bay" });
+  const later = await checkout();
+  const response = await call(owner, "/admin/commerce/checkouts", "POST", {
+    lines: [{ kind: "custom", description: "Test receipt", quantity: 1, unitAmountCents: 100 }],
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(response.status).toBe(201);
+  const earlier = checkoutSchema.parse(await response.json());
+  await t.db
+    .update(checkoutTable)
+    .set({ createdAt: new Date("2009-11-01T03:01:30Z") })
+    .where(eq(checkoutTable.id, later.id));
+  await t.db
+    .update(checkoutTable)
+    .set({ createdAt: new Date("2009-11-01T03:00:30Z") })
+    .where(eq(checkoutTable.id, earlier.id));
+
+  const path = "/admin/commerce/checkouts?groupBy=month";
+  const list = async (query: string) => {
+    const response = await call(owner, `${path}${query}`);
+    expect(response.status).toBe(200);
+    return checkoutListSchema.parse(await response.json());
+  };
+  const october = { period: "2009-10-01", receipts: 1, paidCents: 0, refundedCents: 0 };
+  const totals = [
+    { period: "2009-11-01", receipts: 1, paidCents: 0, refundedCents: 0 },
+    october,
+  ];
+  expect((await list("")).groupTotals?.rows).toEqual(totals);
+  expect((await list("&pageSize=1")).groupTotals?.rows).toEqual([october]);
+});
+
 test("unpaid appointments stay settled beyond the latest hundred sales and respect staff scope", async () => {
   const range = "/admin/commerce/unpaid?from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z";
   const otherAppointment = await t.db

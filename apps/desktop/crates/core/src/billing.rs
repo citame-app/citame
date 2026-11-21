@@ -491,7 +491,7 @@ pub struct CheckoutHistoryFilters {
     pub group_by: Option<CheckoutHistoryGroup>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CheckoutHistoryGroup {
     Day,
     Month,

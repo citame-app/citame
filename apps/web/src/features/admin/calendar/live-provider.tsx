@@ -66,6 +66,8 @@ export function CalendarLiveProvider({
             queryKey[0] === "portfolio" ||
             queryKey[0] === "intake" ||
             queryKey[0] === "booking-policy" ||
+            queryKey[0] === "salon" ||
+            (queryKey[0] === "commerce" && queryKey[1] === "transactions") ||
             (queryKey[0] === "admin" &&
               (queryKey[1] === "calendar" ||
                 queryKey[1] === "staff" ||

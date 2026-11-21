@@ -10,17 +10,35 @@ pub(super) struct History {
     from: Entity<TextField>,
     to: Entity<TextField>,
     _search_events: Vec<Subscription>,
-    submitted: CheckoutHistoryFilters,
+    submitted: HistorySubmission,
     status: Option<&'static str>,
     method: Option<&'static str>,
     filters_open: bool,
     invalid_dates: bool,
-    group_by_month: bool,
+    group: CheckoutHistoryGroup,
+    loaded_group: Option<CheckoutHistoryGroup>,
     pub(super) page: u32,
     results: Result<Option<CheckoutPage>, ()>,
     request: Option<Arc<()>>,
-    observed_revision: Option<i64>,
+    observation: Option<HistoryObservation>,
+    needs_refresh: bool,
+    refresh_failed: bool,
     pub(super) receipt: Option<CheckoutReview>,
+}
+
+#[derive(Default)]
+struct HistorySubmission {
+    search: String,
+    status: Option<&'static str>,
+    method: Option<&'static str>,
+    from: Option<NaiveDate>,
+    to: Option<NaiveDate>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct HistoryObservation {
+    timezone: Tz,
+    revision: Option<i64>,
 }
 
 pub(super) enum HistoryLoad {
@@ -51,19 +69,12 @@ pub(super) const METHODS: [(Option<&str>, Key); 8] = [
     (Some("membership"), Key::SalesMembership),
 ];
 
-fn boundary(
-    field: &Entity<TextField>,
-    upper: bool,
-    tz: Tz,
-    cx: &App,
-) -> Option<Option<DateTime<Utc>>> {
+fn read_date(field: &Entity<TextField>, cx: &App) -> Option<Option<NaiveDate>> {
     let text = field.read(cx).text().trim();
     if text.is_empty() {
         return Some(None);
     }
-    let date = reports::parse_report_date(text)?;
-    let (start, end) = calendar::local_day_range(tz, date);
-    Some(Some(if upper { end } else { start }))
+    reports::parse_report_date(text).map(Some)
 }
 
 impl Root {
@@ -86,27 +97,44 @@ impl Root {
             from,
             to,
             _search_events: events,
-            submitted: CheckoutHistoryFilters::default(),
+            submitted: HistorySubmission::default(),
             status: None,
             method: None,
             filters_open: false,
             invalid_dates: false,
-            group_by_month: false,
+            group: CheckoutHistoryGroup::Day,
+            loaded_group: None,
             page: 1,
             results: Ok(None),
             request: None,
-            observed_revision: None,
+            observation: None,
+            needs_refresh: false,
+            refresh_failed: false,
             receipt: None,
         }));
         self.load_sales_history(HistoryLoad::ApplyFilters, cx);
     }
 
     pub(super) fn refresh_sales_history(&mut self, reconnected: bool, cx: &mut Context<Self>) {
-        if self.status.connectivity == Connectivity::Online
-            && matches!(&self.overlay, Overlay::SalesHistory(history)
-                if history.receipt.is_none() && history.request.is_none() && !history.invalid_dates
-                    && (reconnected || (matches!(history.results, Ok(Some(_)))
-                        && history.observed_revision != self.svc.store.live_view_revision("commerce").ok())))
+        let Overlay::SalesHistory(history) = &mut self.overlay else {
+            return;
+        };
+        history.needs_refresh |= reconnected;
+        if self.status.connectivity != Connectivity::Online
+            || history.receipt.is_some()
+            || history.request.is_some()
+            || history.invalid_dates
+        {
+            return;
+        }
+        let observation = HistoryObservation {
+            timezone: self.tz,
+            revision: self.svc.store.live_view_revision("commerce").ok(),
+        };
+        if history.needs_refresh
+            || history
+                .observation
+                .is_some_and(|before| before != observation)
         {
             self.load_sales_history(HistoryLoad::Refresh, cx);
         }
@@ -124,14 +152,9 @@ impl Root {
             return;
         };
         if matches!(load, HistoryLoad::ApplyFilters) {
-            let dates = boundary(&history.from, false, self.tz, cx).zip(boundary(
-                &history.to,
-                true,
-                self.tz,
-                cx,
-            ));
+            let dates = read_date(&history.from, cx).zip(read_date(&history.to, cx));
             let Some((from, to)) =
-                dates.filter(|(from, to)| !from.zip(*to).is_some_and(|(from, to)| from >= to))
+                dates.filter(|(from, to)| !from.zip(*to).is_some_and(|(from, to)| from > to))
             else {
                 history.invalid_dates = true;
                 history.request = None;
@@ -139,21 +162,29 @@ impl Root {
                 return;
             };
             history.invalid_dates = false;
-            history.submitted = CheckoutHistoryFilters {
+            history.submitted = HistorySubmission {
                 search: history.search.read(cx).text().trim().into(),
                 status: history.status,
                 method: history.method,
                 from,
                 to,
-                group_by: None,
             };
         }
-        let mut filters = history.submitted.clone();
-        filters.group_by = Some(if history.group_by_month {
-            CheckoutHistoryGroup::Month
-        } else {
-            CheckoutHistoryGroup::Day
-        });
+        let group = history.group;
+        let filters = CheckoutHistoryFilters {
+            search: history.submitted.search.clone(),
+            status: history.submitted.status,
+            method: history.submitted.method,
+            from: history
+                .submitted
+                .from
+                .map(|date| calendar::local_day_range(self.tz, date).0),
+            to: history
+                .submitted
+                .to
+                .map(|date| calendar::local_day_range(self.tz, date).1),
+            group_by: Some(group),
+        };
         let page = match load {
             HistoryLoad::ApplyFilters => 1,
             HistoryLoad::Page(page) => page,
@@ -161,10 +192,15 @@ impl Root {
         };
         if !matches!(load, HistoryLoad::Refresh) {
             history.results = Ok(None);
+            history.refresh_failed = false;
         }
+        history.needs_refresh = false;
         let request = Arc::new(());
         history.request = Some(request.clone());
-        history.observed_revision = self.svc.store.live_view_revision("commerce").ok();
+        history.observation = Some(HistoryObservation {
+            timezone: self.tz,
+            revision: self.svc.store.live_view_revision("commerce").ok(),
+        });
         history.page = page;
         let session = self.svc.session.clone();
         cx.notify();
@@ -188,7 +224,20 @@ impl Root {
                     return;
                 }
                 history.request = None;
-                history.results = result.map(Some).map_err(|_| ());
+                match result {
+                    Ok(receipts) => {
+                        history.results = Ok(Some(receipts));
+                        history.loaded_group = Some(group);
+                        history.refresh_failed = false;
+                    }
+                    Err(_)
+                        if matches!(load, HistoryLoad::Refresh)
+                            && matches!(history.results, Ok(Some(_))) =>
+                    {
+                        history.refresh_failed = true;
+                    }
+                    Err(_) => history.results = Err(()),
+                }
                 cx.notify();
             });
         })
@@ -296,31 +345,40 @@ impl Root {
             .child(options(&METHODS, false, cx))
             .child(
                 div().flex().gap_2().children(
-                    [(false, Key::SalesByDay), (true, Key::SalesByMonth)]
-                        .into_iter()
-                        .map(|(month, key)| {
-                            self.button(
-                                if month { "sales-months" } else { "sales-days" },
-                                self.t(key),
-                                if history.group_by_month == month {
-                                    Kind::Primary
-                                } else {
-                                    Kind::Ghost
-                                },
-                                cx.listener(move |root, _, _, cx| {
-                                    let Overlay::SalesHistory(history) = &mut root.overlay else {
-                                        return;
-                                    };
-                                    if history.group_by_month != month
-                                        && root.status.connectivity == Connectivity::Online
-                                    {
-                                        history.group_by_month = month;
+                    [
+                        (CheckoutHistoryGroup::Day, Key::SalesByDay),
+                        (CheckoutHistoryGroup::Month, Key::SalesByMonth),
+                    ]
+                    .into_iter()
+                    .map(|(group, key)| {
+                        self.button(
+                            match group {
+                                CheckoutHistoryGroup::Day => "sales-days",
+                                CheckoutHistoryGroup::Month => "sales-months",
+                            },
+                            self.t(key),
+                            if history.group == group {
+                                Kind::Primary
+                            } else {
+                                Kind::Ghost
+                            },
+                            cx.listener(move |root, _, _, cx| {
+                                let Overlay::SalesHistory(history) = &mut root.overlay else {
+                                    return;
+                                };
+                                if history.group != group {
+                                    history.group = group;
+                                    if root.status.connectivity == Connectivity::Online {
                                         let page = history.page;
                                         root.load_sales_history(HistoryLoad::Page(page), cx);
+                                    } else {
+                                        history.needs_refresh = true;
+                                        cx.notify();
                                     }
-                                }),
-                            )
-                        }),
+                                }
+                            }),
+                        )
+                    }),
                 ),
             )
     }
@@ -412,6 +470,19 @@ impl Root {
                 ))
             })
             .when(!online, |view| view.child(self.t(Key::CheckoutOffline)));
+        let body = body.when(history.refresh_failed, |view| {
+            view.child(self.label(Key::SalesRefreshFailed))
+                .when(online, |view| {
+                    view.child(self.button(
+                        "reload-sales",
+                        self.t(Key::SalesReload),
+                        Kind::Ghost,
+                        cx.listener(|root, _, _, cx| {
+                            root.load_sales_history(HistoryLoad::Refresh, cx)
+                        }),
+                    ))
+                })
+        });
 
         let timezone = history
             .results
@@ -423,7 +494,7 @@ impl Root {
             .unwrap_or(self.tz);
         let period_of = |instant: DateTime<Utc>| {
             let day = instant.with_timezone(&timezone).date_naive();
-            if history.group_by_month {
+            if history.group == CheckoutHistoryGroup::Month {
                 day.with_day(1).unwrap_or(day)
             } else {
                 day
@@ -434,14 +505,22 @@ impl Root {
         } else {
             match &history.results {
                 Err(()) => body.child(self.t(Key::CheckoutUnavailable)),
-                Ok(Some(page)) => body
-                    .when(page.checkouts.is_empty(), |view| {
+                Ok(Some(page)) => {
+                    let mut rows: Vec<_> = page
+                        .checkouts
+                        .iter()
+                        .map(|row| (period_of(row.created_at), row))
+                        .collect();
+                    rows.sort_by_key(|(period, _)| std::cmp::Reverse(*period));
+                    let totals = (history.loaded_group == Some(history.group))
+                        .then_some(page.group_totals.as_ref())
+                        .flatten();
+                    body.when(page.checkouts.is_empty(), |view| {
                         view.child(self.t(Key::SalesNoResults))
                     })
-                    .when(
-                        !page.checkouts.is_empty() && page.group_totals.is_some(),
-                        |body| body.child(self.label(Key::SalesTotalsHelp)),
-                    )
+                    .when(!rows.is_empty() && totals.is_some(), |body| {
+                        body.child(self.label(Key::SalesTotalsHelp))
+                    })
                     .child(
                         div()
                             .id("sales-history-rows")
@@ -452,24 +531,18 @@ impl Root {
                             )
                             .overflow_y_scroll()
                             .child(div().flex().flex_col().gap_2().children(
-                                page.checkouts.iter().enumerate().map(|(index, row)| {
-                                    let period = period_of(row.created_at);
-                                    let previous = index.checked_sub(1).map(|previous| {
-                                        period_of(page.checkouts[previous].created_at)
-                                    });
+                                rows.iter().enumerate().map(|(index, &(period, row))| {
+                                    let previous =
+                                        index.checked_sub(1).map(|previous| rows[previous].0);
                                     let group = (previous != Some(period)).then(|| {
-                                        if history.group_by_month {
+                                        if history.group == CheckoutHistoryGroup::Month {
                                             period.format("%Y-%m").to_string()
                                         } else {
                                             i18n::date_label(self.locale, period)
                                         }
                                     });
-                                    let totals = group.as_ref().and_then(|_| {
-                                        page.group_totals
-                                            .as_ref()?
-                                            .rows
-                                            .iter()
-                                            .find(|row| row.period == period)
+                                    let period_totals = group.as_ref().and_then(|_| {
+                                        totals?.rows.iter().find(|row| row.period == period)
                                     });
                                     let id = row.id;
                                     let title = row
@@ -504,9 +577,16 @@ impl Root {
                                                     .child(label),
                                             )
                                         })
-                                        .when_some(totals, |view, totals| {
+                                        .when_some(period_totals, |view, totals| {
                                             view.child(
-                                                self.render_sales_totals(totals, &row.currency),
+                                                div()
+                                                    .id(SharedString::from(format!(
+                                                        "sales-totals-{period}"
+                                                    )))
+                                                    .child(self.render_sales_totals(
+                                                        totals,
+                                                        &row.currency,
+                                                    )),
                                             )
                                         })
                                         .child(self.button(
@@ -557,7 +637,8 @@ impl Root {
                                     ))
                                 },
                             ),
-                    ),
+                    )
+                }
                 Ok(None) => body,
             }
         };
@@ -573,5 +654,73 @@ impl Root {
             (viewport.height - px(24.)).max(px(180.)),
             None,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    async fn cached_receipts_can_change_group_offline_without_reusing_daily_totals(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, config) = super::super::tests::desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        cx.simulate_resize(gpui::size(px(720.), px(820.)));
+        let id = Uuid::new_v4();
+        root.update(cx, |root, cx| {
+            root.status.connectivity = Connectivity::Offline;
+            root.open_sales_history(cx);
+            let Overlay::SalesHistory(history) = &mut root.overlay else {
+                panic!("missing transactions");
+            };
+            history.filters_open = true;
+            history.loaded_group = Some(CheckoutHistoryGroup::Day);
+            history.results = Ok(Some(
+                serde_json::from_value(serde_json::json!({
+                    "total": 26,
+                    "checkouts": [{
+                        "id": id,
+                        "createdAt": "2026-02-28T23:30:00Z",
+                        "currency": "EUR",
+                        "status": "paid",
+                        "totalCents": 2000,
+                        "lines": []
+                    }],
+                    "groupTotals": {
+                        "timezone": "Europe/Madrid",
+                        "rows": [{
+                            "period": "2026-03-01",
+                            "receipts": 26,
+                            "paidCents": 52000,
+                            "refundedCents": 1000
+                        }]
+                    }
+                }))
+                .unwrap(),
+            ));
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("sales-totals-2026-03-01").is_some());
+        let months = cx.debug_bounds("sales-months").expect("months control");
+        cx.simulate_click(months.center(), Default::default());
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("sales-totals-2026-03-01").is_none());
+        assert!(cx.debug_bounds("sales-history-rows").is_some());
+        root.update(cx, |root, _| {
+            let Overlay::SalesHistory(history) = &root.overlay else {
+                panic!("missing transactions");
+            };
+            assert_eq!(history.group, CheckoutHistoryGroup::Month);
+            assert!(history.needs_refresh);
+            assert!(matches!(history.results, Ok(Some(ref page)) if page.checkouts[0].id == id));
+        });
+        let days = cx.debug_bounds("sales-days").expect("days control");
+        cx.simulate_click(days.center(), Default::default());
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("sales-totals-2026-03-01").is_some());
     }
 }

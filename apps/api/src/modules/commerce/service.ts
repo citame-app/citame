@@ -69,7 +69,7 @@ import { getSalonSettings } from "../settings/service";
 import { assertAppointmentBillable, importedPartialPayments } from "./appointment-billing";
 import { checkoutServices } from "./catalog";
 import { checkoutGroupTotals } from "./history-totals";
-import { allocateDiscount } from "./money";
+import { allocateDiscount, completedRefundStatus, recordedPaymentStatuses } from "./money";
 
 type Connection = Database | Tx;
 const hash = (data: unknown) => createHash("sha256").update(JSON.stringify(data)).digest("hex");
@@ -179,10 +179,10 @@ async function snapshot(
         )
     : [];
   const paidCents = payments
-    .filter((p) => p.status === "succeeded" || p.status === "reconciliation")
+    .filter((p) => recordedPaymentStatuses.includes(p.status))
     .reduce((a, b) => a + b.amountCents, 0);
   const refundedCents = refunds
-    .filter((refund) => refund.status === "succeeded")
+    .filter((refund) => refund.status === completedRefundStatus)
     .reduce((a, b) => a + b.amountCents, 0);
   const balanceCents = row.status === "void" ? 0 : Math.max(0, row.totalCents - paidCents);
   const protection = row.appointmentId ? await protectionView(db, row.appointmentId) : null;

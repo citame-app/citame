@@ -74,6 +74,7 @@ const shared: Record<SyncEntity | SyncLiveView, readonly (readonly string[])[]> 
     ["admin", "settings"],
     ["admin", "report"],
     ["salon"],
+    ["commerce", "transactions"],
     teamShiftWeekKey,
   ],
   commerce: [...commerce, ["admin", "calendar"], ["admin", "appointment-context"]],
