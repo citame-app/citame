@@ -1,5 +1,22 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+enum ClientReportBreakdown {
+    Groups,
+    Frequency,
+}
+
+struct ClientBreakdownTable {
+    title: Key,
+    basis: Key,
+    row_heading: Key,
+    empty: Key,
+    export: Key,
+    table_id: &'static str,
+    export_id: &'static str,
+    rows: Vec<(SharedString, u64)>,
+}
+
 impl Root {
     pub(super) fn render_client_report(
         &self,
@@ -135,82 +152,139 @@ impl Root {
             .when(pages > 1, |view| {
                 view.child(self.render_report_pager(page, pages, cx))
             })
-            .when_some(report.groups.as_ref(), |view, groups| {
-                view.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .child(
-                            div()
-                                .flex()
-                                .flex_wrap()
-                                .justify_between()
-                                .items_center()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child(self.t(Key::ReportClientGroups)),
-                                )
-                                .when(
-                                    !groups.is_empty()
-                                        && !desk.export_pending
-                                        && desk.request.is_none()
-                                        && desk.error.is_none(),
-                                    |row| {
-                                        row.child(self.button(
-                                            "client-group-report-export",
-                                            self.t(Key::ReportExportClientGroups),
-                                            Kind::Ghost,
-                                            cx.listener(|root, _, _, cx| {
-                                                root.save_client_groups(cx)
-                                            }),
-                                        ))
-                                    },
-                                ),
-                        )
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(theme::muted())
-                                .child(self.t(Key::ReportClientGroupsBasis)),
-                        )
-                        .when(groups.is_empty(), |view| {
-                            view.child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme::muted())
-                                    .child(self.t(Key::ReportClientGroupsEmpty)),
-                            )
-                        })
-                        .when(!groups.is_empty(), |view| {
-                            view.child(
-                                div()
-                                    .id("client-group-report-table")
-                                    .debug_selector(|| "client-group-report-table".to_string())
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(theme::line())
-                                    .child(self.render_client_group_row(
-                                        self.t(Key::ReportClientGroup).into(),
-                                        self.t(Key::ReportClients).into(),
-                                        true,
-                                    ))
-                                    .children(groups.iter().map(|entry| {
-                                        self.render_client_group_row(
-                                            entry.name.clone().into(),
-                                            entry.clients.to_string().into(),
-                                            false,
-                                        )
-                                    })),
-                            )
-                        }),
-                )
-            })
+            .children(self.render_client_breakdown(ClientReportBreakdown::Groups, desk, report, cx))
+            .children(self.render_client_breakdown(
+                ClientReportBreakdown::Frequency,
+                desk,
+                report,
+                cx,
+            ))
     }
 
-    fn render_client_group_row(
+    fn render_client_breakdown(
+        &self,
+        kind: ClientReportBreakdown,
+        desk: &Desk,
+        report: &ClientReport,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Div> {
+        let ClientBreakdownTable {
+            title,
+            basis,
+            row_heading,
+            empty,
+            export,
+            table_id,
+            export_id,
+            rows,
+        } = match kind {
+            ClientReportBreakdown::Groups => ClientBreakdownTable {
+                title: Key::ReportClientGroups,
+                basis: Key::ReportClientGroupsBasis,
+                row_heading: Key::ReportClientGroup,
+                empty: Key::ReportClientGroupsEmpty,
+                export: Key::ReportExportClientGroups,
+                table_id: "client-group-report-table",
+                export_id: "client-group-report-export",
+                rows: report
+                    .groups
+                    .as_ref()?
+                    .iter()
+                    .map(|entry| (entry.name.clone().into(), entry.clients))
+                    .collect(),
+            },
+            ClientReportBreakdown::Frequency => {
+                let frequency = report.frequency.as_ref()?;
+                ClientBreakdownTable {
+                    title: Key::ReportClientFrequency,
+                    basis: Key::ReportClientFrequencyBasis,
+                    row_heading: Key::ReportClientFrequencyVisits,
+                    empty: Key::ReportNoClients,
+                    export: Key::ReportExportClientFrequency,
+                    table_id: "client-frequency-report-table",
+                    export_id: "client-frequency-report-export",
+                    rows: [
+                        (Key::ReportClientFrequencyOne, frequency.one),
+                        (Key::ReportClientFrequencyTwo, frequency.two),
+                        (Key::ReportClientFrequencyThree, frequency.three_or_more),
+                    ]
+                    .into_iter()
+                    .map(|(label, count)| (self.t(label).into(), count))
+                    .collect(),
+                }
+            }
+        };
+        let has_clients = rows.iter().any(|(_, count)| *count > 0);
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .justify_between()
+                        .items_center()
+                        .gap_2()
+                        .child(div().font_weight(FontWeight::SEMIBOLD).child(self.t(title)))
+                        .when(
+                            has_clients
+                                && !desk.export_pending
+                                && desk.request.is_none()
+                                && desk.error.is_none(),
+                            |row| {
+                                row.child(self.button(
+                                    export_id,
+                                    self.t(export),
+                                    Kind::Ghost,
+                                    cx.listener(move |root, _, _, cx| {
+                                        root.save_client_breakdown(kind, cx)
+                                    }),
+                                ))
+                            },
+                        ),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::muted())
+                        .child(self.t(basis)),
+                )
+                .when(!has_clients, |view| {
+                    view.child(
+                        div()
+                            .text_sm()
+                            .text_color(theme::muted())
+                            .child(self.t(empty)),
+                    )
+                })
+                .when(has_clients, |view| {
+                    view.child(
+                        div()
+                            .id(table_id)
+                            .debug_selector(move || table_id.to_string())
+                            .rounded_md()
+                            .border_1()
+                            .border_color(theme::line())
+                            .child(self.render_client_breakdown_row(
+                                self.t(row_heading).into(),
+                                self.t(Key::ReportClients).into(),
+                                true,
+                            ))
+                            .children(rows.into_iter().map(|(label, count)| {
+                                self.render_client_breakdown_row(
+                                    label,
+                                    count.to_string().into(),
+                                    false,
+                                )
+                            })),
+                    )
+                }),
+        )
+    }
+
+    fn render_client_breakdown_row(
         &self,
         label: SharedString,
         count: SharedString,
@@ -233,7 +307,7 @@ impl Root {
             .child(div().flex_shrink_0().child(count))
     }
 
-    fn save_client_groups(&mut self, cx: &mut Context<Self>) {
+    fn save_client_breakdown(&mut self, kind: ClientReportBreakdown, cx: &mut Context<Self>) {
         let Overlay::Reports(desk) = &self.overlay else {
             return;
         };
@@ -247,11 +321,22 @@ impl Root {
         let Some(report) = desk.client_report.as_ref() else {
             return;
         };
-        let Some(csv) = report.groups_csv() else {
+        let (name, csv) = match kind {
+            ClientReportBreakdown::Groups => ("client-groups", report.groups_csv()),
+            ClientReportBreakdown::Frequency => (
+                "client-frequency",
+                report
+                    .frequency
+                    .as_ref()
+                    .filter(|band| !band.is_empty())
+                    .map(|band| band.to_csv()),
+            ),
+        };
+        let Some(csv) = csv else {
             return;
         };
         self.choose_report_export(
-            format!("client-groups-{}-{}.csv", report.from, report.to),
+            format!("{name}-{}-{}.csv", report.from, report.to),
             move |output| {
                 use std::io::Write;
                 output.write_all(csv.as_bytes())
@@ -295,6 +380,7 @@ mod tests {
                     "totals": { "newClients": 2, "returningClients": 3 },
                     "rows": [{ "date": expected_query.to, "newClients": 2, "returningClients": 3 }],
                     "groups": [{ "name": "vip", "clients": 2 }, { "name": "=group", "clients": 1 }],
+                    "frequency": { "one": 2, "two": 0, "threeOrMore": 3 },
                 }))
                 .unwrap(),
             );
@@ -302,11 +388,23 @@ mod tests {
                 desk.client_report.as_ref().unwrap().groups_csv().as_deref(),
                 Some("group,clients\r\nvip,2\r\n'=group,1\r\n")
             );
+            let frequency = desk
+                .client_report
+                .as_ref()
+                .unwrap()
+                .frequency
+                .as_ref()
+                .unwrap();
+            assert_eq!(
+                frequency.to_csv(),
+                "visit_frequency,clients\r\none,2\r\ntwo,0\r\nthreeOrMore,3\r\n"
+            );
             cx.notify();
         });
         cx.run_until_parked();
         assert!(cx.debug_bounds("client-report-table").is_some());
         assert!(cx.debug_bounds("client-group-report-table").is_some());
+        assert!(cx.debug_bounds("client-frequency-report-table").is_some());
         root.update(cx, |root, cx| {
             root.select_report_mode(ReportMode::Overview, cx);
             let Overlay::Reports(desk) = &root.overlay else {

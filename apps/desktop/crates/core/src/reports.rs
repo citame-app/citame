@@ -181,12 +181,34 @@ pub struct ClientGroupRow {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientVisitFrequency {
+    pub one: u64,
+    pub two: u64,
+    pub three_or_more: u64,
+}
+
+impl ClientVisitFrequency {
+    pub fn is_empty(&self) -> bool {
+        self.one == 0 && self.two == 0 && self.three_or_more == 0
+    }
+
+    pub fn to_csv(&self) -> String {
+        format!(
+            "visit_frequency,clients\r\none,{}\r\ntwo,{}\r\nthreeOrMore,{}\r\n",
+            self.one, self.two, self.three_or_more
+        )
+    }
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ClientReport {
     pub from: NaiveDate,
     pub to: NaiveDate,
     pub totals: ClientCounts,
     pub rows: Vec<ClientReportRow>,
     pub groups: Option<Vec<ClientGroupRow>>,
+    pub frequency: Option<ClientVisitFrequency>,
 }
 
 impl ClientReport {

@@ -22,7 +22,12 @@ import { api } from "~/lib/api/instance";
 import { formatDateWithYear, formatMoney, localDateOf } from "~/lib/format";
 import { useNow } from "../use-now";
 import { AppointmentOutcomes } from "./appointment-outcomes";
-import { ClientReportView, clientGroupReportCsv, clientReportCsv } from "./client-report";
+import {
+  ClientReportView,
+  clientFrequencyReportCsv,
+  clientGroupReportCsv,
+  clientReportCsv,
+} from "./client-report";
 import { formatRate, REPORT_PRESETS, reportToCsv } from "./logic";
 import { type ReportsSearch, rangeError, resolveRange } from "./range";
 
@@ -348,6 +353,10 @@ export function ReportsView({
             onExportGroups={() => {
               const groups = clients.data?.groups;
               if (groups?.length) downloadCsv(clientGroupReportCsv(groups), "client-groups");
+            }}
+            onExportFrequency={() => {
+              const frequency = clients.data?.frequency;
+              if (frequency) downloadCsv(clientFrequencyReportCsv(frequency), "client-frequency");
             }}
           />
         ))}

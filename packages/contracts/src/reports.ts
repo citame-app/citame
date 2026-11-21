@@ -40,6 +40,7 @@ export const reportClientsSchema = z.object({
   totals: reportClientCounts,
   rows: z.array(reportClientCounts.extend({ date: localDateSchema })),
   groups: z.array(z.object({ name: z.string().min(1), clients: count })).optional(),
+  frequency: z.object({ one: count, two: count, threeOrMore: count }).optional(),
 });
 export type ReportClients = z.infer<typeof reportClientsSchema>;
 export const reportOutcomeSchema = z.enum(["cancelled", "no_show"]);

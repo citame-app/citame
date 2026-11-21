@@ -81,6 +81,13 @@ Staff see every client (front-desk need); only the owner soft-deletes. `GET /adm
 - **Top services** are completed services ranked by count, then revenue, then name; the best 10.
 - Staff get the same report pinned to their own calendar.
 
+**Client visit frequency.** The client report groups canonical client identities by one, two, or
+three or more completed visits matching the selected dates and professional. Any matching completed
+line counts for its imported visit group, which is counted once per client. Appointments without a
+visit group count individually. The categories are exclusive and cover every client in the report,
+even if the client has no current group. The Web and native Desktop reports export the same category
+keys and counts in a separate CSV and use the existing financial-report permissions.
+
 ### Calendar read model
 
 `GET /appointments/calendar?from=&to=&staffIds=a,b` (instants, at most 42 days) returns, in one response: the columns (`staff`), appointments with `clientName` and `serviceNames` joined (cancelled included, check `status`), time off, and `workingWindows`, the recurring hours resolved to concrete instants through the timezone database (DST-correct). Without `staffIds` it covers all active staff; naming an inactive one explicitly is allowed. Staff are pinned to their own calendar.

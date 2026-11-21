@@ -192,6 +192,7 @@ test("customer reports count each merged profile once and use completed salon hi
     .values({ name: "New profile", tags: ["VIP", " ｖｉｐ ", "Other"] })
     .returning();
   const [alias] = await t.db.insert(clientProfile).values({ name: "Merged record" }).returning();
+  const visitGroupId = crypto.randomUUID();
   await t.db
     .update(clientProfile)
     .set({ tags: ["vip"] })
@@ -201,8 +202,17 @@ test("customer reports count each merged profile once and use completed salon hi
       clientId: alias!.id,
       staffId: f.anaId,
       status: "completed",
+      visitGroupId,
       startsAt: new Date("2026-03-10T23:00:00Z"),
       endsAt: new Date("2026-03-11T00:00:00Z"),
+    },
+    {
+      clientId: newClient!.id,
+      staffId: f.beaId,
+      status: "completed",
+      visitGroupId,
+      startsAt: new Date("2026-03-11T00:00:00Z"),
+      endsAt: new Date("2026-03-11T01:00:00Z"),
     },
     {
       clientId: newClient!.id,
@@ -243,6 +253,7 @@ test("customer reports count each merged profile once and use completed salon hi
   const result = reportClientsSchema.parse(await response.json());
   expect(result).toMatchObject({
     totals: { newClients: 1, returningClients: 1 },
+    frequency: { one: 0, two: 1, threeOrMore: 1 },
     groups: [
       { name: "vip", clients: 2 },
       { name: "other", clients: 1 },
@@ -253,7 +264,22 @@ test("customer reports count each merged profile once and use completed salon hi
     ],
   });
   const bea = await call(owner, `${path}&staffId=${f.beaId}`);
-  expect(reportClientsSchema.parse(await bea.json()).totals).toEqual(result.totals);
+  expect(reportClientsSchema.parse(await bea.json())).toMatchObject({
+    totals: result.totals,
+    frequency: { one: 0, two: 2, threeOrMore: 0 },
+  });
+  const anaOnly = await call(owner, `${path}&staffId=${f.anaId}`);
+  expect(reportClientsSchema.parse(await anaOnly.json()).frequency).toEqual({
+    one: 1,
+    two: 1,
+    threeOrMore: 0,
+  });
+  const empty = await call(owner, "/admin/reports/clients?from=2026-03-01&to=2026-03-01");
+  expect(reportClientsSchema.parse(await empty.json()).frequency).toEqual({
+    one: 0,
+    two: 0,
+    threeOrMore: 0,
+  });
   expect((await call(ana, path)).status).toBe(403);
   expect((await call(client, path)).status).toBe(403);
   expect((await call(null, path)).status).toBe(401);

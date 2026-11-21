@@ -18,17 +18,27 @@ export function clientGroupReportCsv(groups: NonNullable<ReportClients["groups"]
   return ["group,clients", ...rows, ""].join("\r\n");
 }
 
+const frequencyBands = ["one", "two", "threeOrMore"] as const;
+type Frequency = NonNullable<ReportClients["frequency"]>;
+
+export function clientFrequencyReportCsv(frequency: Frequency) {
+  const rows = frequencyBands.map((band) => [band, frequency[band]].join(","));
+  return ["visit_frequency,clients", ...rows, ""].join("\r\n");
+}
+
 export function ClientReportView({
   report,
   onExportGroups,
+  onExportFrequency,
 }: {
   report: ReportClients;
   onExportGroups: () => void;
+  onExportFrequency: () => void;
 }) {
   const { t, locale } = useI18n();
   const captionId = useId();
-  const groupsId = useId();
   const numbers = new Intl.NumberFormat(locale);
+  const frequency = report.frequency;
 
   return (
     <div className="space-y-4">
@@ -95,55 +105,102 @@ export function ClientReportView({
         <EmptyState title={t("reports.clients.empty")} />
       )}
       {report.groups && (
-        <section className="space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 id={groupsId} className="text-heading">
-              {t("reports.clients.groups")}
-            </h2>
-            {report.groups.length > 0 && (
-              <Button variant="secondary" onClick={onExportGroups}>
-                {t("reports.clients.exportGroups")}
-              </Button>
-            )}
-          </div>
-          <p className="text-sm text-muted">{t("reports.clients.groupsBasis")}</p>
-          {report.groups.length > 0 ? (
-            <section
-              aria-labelledby={groupsId}
-              // biome-ignore lint/a11y/noNoninteractiveTabindex: Keyboard users need to focus this scroll region.
-              tabIndex={0}
-              className="max-h-[28rem] overflow-auto rounded-xl border border-line bg-surface focus-visible:outline-2 focus-visible:outline-ring"
-            >
-              <table aria-labelledby={groupsId} className="w-full text-sm">
-                <thead className="sticky top-0 bg-surface text-muted">
-                  <tr>
-                    <th scope="col" className="px-3 py-3 text-start font-medium">
-                      {t("reports.clients.group")}
-                    </th>
-                    <th scope="col" className="px-3 py-3 text-end font-medium">
-                      {t("reports.clients")}
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {report.groups.map(({ name, clients }) => (
-                    <tr key={name} className="border-t border-line">
-                      <th scope="row" className="wrap-anywhere px-3 py-2.5 text-start font-medium">
-                        {name}
-                      </th>
-                      <td className="px-3 py-2.5 text-end tabular-nums">
-                        {numbers.format(clients)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </section>
-          ) : (
-            <EmptyState title={t("reports.clients.groupsEmpty")} />
-          )}
-        </section>
+        <ClientBreakdown
+          title={t("reports.clients.groups")}
+          basis={t("reports.clients.groupsBasis")}
+          rowHeading={t("reports.clients.group")}
+          empty={t("reports.clients.groupsEmpty")}
+          exportLabel={t("reports.clients.exportGroups")}
+          onExport={onExportGroups}
+          rows={report.groups}
+        />
+      )}
+      {frequency && (
+        <ClientBreakdown
+          title={t("reports.clients.frequency")}
+          basis={t("reports.clients.frequencyBasis")}
+          rowHeading={t("reports.clients.visits")}
+          empty={t("reports.clients.empty")}
+          exportLabel={t("reports.clients.exportFrequency")}
+          onExport={onExportFrequency}
+          rows={frequencyBands.map((band) => ({
+            name: t(`reports.clients.frequency.${band}`),
+            clients: frequency[band],
+          }))}
+        />
       )}
     </div>
+  );
+}
+
+function ClientBreakdown({
+  title,
+  basis,
+  rowHeading,
+  empty,
+  exportLabel,
+  onExport,
+  rows,
+}: {
+  title: string;
+  basis: string;
+  rowHeading: string;
+  empty: string;
+  exportLabel: string;
+  onExport: () => void;
+  rows: { name: string; clients: number }[];
+}) {
+  const { t, locale } = useI18n();
+  const headingId = useId();
+  const numbers = new Intl.NumberFormat(locale);
+  const hasClients = rows.some((row) => row.clients > 0);
+
+  return (
+    <section className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 id={headingId} className="text-heading">
+          {title}
+        </h2>
+        {hasClients && (
+          <Button variant="secondary" onClick={onExport}>
+            {exportLabel}
+          </Button>
+        )}
+      </div>
+      <p className="text-sm text-muted">{basis}</p>
+      {hasClients ? (
+        <section
+          aria-labelledby={headingId}
+          // biome-ignore lint/a11y/noNoninteractiveTabindex: Keyboard users need to focus this scroll region.
+          tabIndex={0}
+          className="max-h-[28rem] overflow-auto rounded-xl border border-line bg-surface focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          <table aria-labelledby={headingId} className="w-full text-sm">
+            <thead className="sticky top-0 bg-surface text-muted">
+              <tr>
+                <th scope="col" className="px-3 py-3 text-start font-medium">
+                  {rowHeading}
+                </th>
+                <th scope="col" className="px-3 py-3 text-end font-medium">
+                  {t("reports.clients")}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(({ name, clients }) => (
+                <tr key={name} className="border-t border-line">
+                  <th scope="row" className="wrap-anywhere px-3 py-2.5 text-start font-medium">
+                    {name}
+                  </th>
+                  <td className="px-3 py-2.5 text-end tabular-nums">{numbers.format(clients)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      ) : (
+        <EmptyState title={empty} />
+      )}
+    </section>
   );
 }

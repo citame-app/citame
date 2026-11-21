@@ -9,6 +9,14 @@ export const reportsEn = {
   "reports.clients.groupsBasis": "Uses current groups. A client can count in more than one group.",
   "reports.clients.groupsEmpty": "No clients in groups for these filters",
   "reports.clients.exportGroups": "Export groups CSV",
+  "reports.clients.frequency": "Clients by visit frequency",
+  "reports.clients.frequencyBasis":
+    "Counts completed visits within the selected dates and professional. A visit split across several professionals counts once.",
+  "reports.clients.visits": "Completed visits",
+  "reports.clients.frequency.one": "1 visit",
+  "reports.clients.frequency.two": "2 visits",
+  "reports.clients.frequency.threeOrMore": "3 or more visits",
+  "reports.clients.exportFrequency": "Export visit frequency CSV",
   "reports.clients.basis":
     "Each client counts once, on the date of their first completed appointment matching the filters. Returning clients had a completed appointment at the salon before the period began. Counts use the history available in Citame.",
   "reports.clients.new": "New",
@@ -96,6 +104,14 @@ export const reportsEsAR: Record<keyof typeof reportsEn, string> = {
     "Se usan los grupos actuales. Un cliente puede contar en varios grupos.",
   "reports.clients.groupsEmpty": "No hay clientes en grupos para estos filtros",
   "reports.clients.exportGroups": "Exportar grupos CSV",
+  "reports.clients.frequency": "Clientes por frecuencia de visita",
+  "reports.clients.frequencyBasis":
+    "Se cuentan las visitas realizadas dentro de las fechas y con el profesional seleccionado. Una visita repartida entre varios profesionales se cuenta una vez.",
+  "reports.clients.visits": "Visitas realizadas",
+  "reports.clients.frequency.one": "1 visita",
+  "reports.clients.frequency.two": "2 visitas",
+  "reports.clients.frequency.threeOrMore": "3 visitas o más",
+  "reports.clients.exportFrequency": "Exportar frecuencia de visitas CSV",
   "reports.clients.basis":
     "Cada cliente se cuenta una vez, en la fecha de su primera cita realizada dentro de los filtros. Es recurrente si ya tenía una cita realizada en el centro antes del período. El cálculo usa el historial disponible en Citame.",
   "reports.clients.new": "Nuevos",

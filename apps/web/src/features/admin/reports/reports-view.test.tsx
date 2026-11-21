@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { ReportSummary } from "@sob/contracts";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderApp } from "../../../../test/render";
-import { clientGroupReportCsv, clientReportCsv } from "./client-report";
+import { clientFrequencyReportCsv, clientGroupReportCsv, clientReportCsv } from "./client-report";
 import { ReportsView } from "./reports-view";
 
 const ANA = "0198f5a0-7b1c-7000-8000-000000000201";
@@ -17,6 +17,7 @@ const clientReport = {
     { name: "vip", clients: 2 },
     { name: "=group", clients: 1 },
   ],
+  frequency: { one: 2, two: 0, threeOrMore: 3 },
 };
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -139,6 +140,12 @@ describe("ReportsView", () => {
     );
     expect(clientReportCsv(clientReport)).toBe(
       "date,new_clients,returning_clients\r\n2026-03-09,3,2\r\n",
+    );
+    const frequencyTable = screen.getByRole("table", { name: "Clients by visit frequency" });
+    expect(within(frequencyTable).getByRole("row", { name: "3 or more visits 3" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Export visit frequency CSV" })).toBeEnabled();
+    expect(clientFrequencyReportCsv(clientReport.frequency)).toBe(
+      "visit_frequency,clients\r\none,2\r\ntwo,0\r\nthreeOrMore,3\r\n",
     );
   });
 
