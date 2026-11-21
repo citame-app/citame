@@ -11,6 +11,7 @@ import {
   resourceReservation,
   runMigrations,
   serviceResource,
+  staffReservation,
 } from "@sob/db";
 import { sql } from "drizzle-orm";
 import { MONDAY, MONDAY_0900, seedFixtures } from "../../../test/helpers";
@@ -39,6 +40,10 @@ test("the native rehearsal moves a resource-backed imported appointment in both 
           startsAt: new Date(MONDAY_0900),
           endsAt: new Date("2026-03-09T13:00:00Z"),
           status: "booked",
+          workWindows: [
+            { offsetMinutes: 0, endOffsetMinutes: 15 },
+            { offsetMinutes: 35, endOffsetMinutes: 60 },
+          ],
           visitGroupId: Bun.randomUUIDv7(),
         })
         .returning();
@@ -121,6 +126,16 @@ test("the native rehearsal moves a resource-backed imported appointment in both 
       const [moved] = await copy.db.select().from(appointment);
       expect(moved).toMatchObject({ id: visit.id, version: visit.version + 2 });
       expect(moved?.startsAt).toEqual(visit.startsAt);
+      const windows = await copy.db.select().from(staffReservation);
+      expect(windows).toHaveLength(2);
+      expect(
+        windows
+          .map(({ offsetMinutes, endOffsetMinutes }) => [offsetMinutes, endOffsetMinutes])
+          .sort((a, b) => a[0]! - b[0]!),
+      ).toEqual([
+        [0, 15],
+        [35, 60],
+      ]);
     } finally {
       await copy.close();
       // The test owns this randomly named database. Drain any session still closing after SSE.
