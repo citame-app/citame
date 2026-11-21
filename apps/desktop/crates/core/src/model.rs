@@ -292,6 +292,14 @@ pub enum ServiceOption {
     },
 }
 
+impl Service {
+    pub fn is_addon_target(&self, currency: &str) -> bool {
+        self.active
+            && self.currency == currency
+            && !matches!(self.catalog, Some(ServiceOption::Addon { .. }))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Staff {
@@ -490,6 +498,7 @@ impl OutboxEntry {
             && let Some(fields) = payload.as_object_mut()
         {
             fields.remove("_reviewed");
+            fields.remove("_reviewedCatalog");
         }
         WireMutation {
             mutation_id: self.mutation_id.clone(),

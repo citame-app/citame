@@ -13,6 +13,7 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 - The Desktop management menu opens permitted Cloud areas in the browser with the linked account.
 - Desktop edits existing service prices, timing, presentation and booking availability with the same catalogue permissions as Cloud. A stale draft must be reviewed before publishing.
 - The Desktop service editor saves service details and performer assignments together, including when the draft was edited offline.
+- Desktop edits variant labels and compatible services for add-ons in the same reviewed save.
 - Desktop can create services, variants and add-ons with professional assignments. New services use the persistent synchronization queue and are bookable once acknowledged by the server.
 - Desktop queues edits to existing service details offline. Cloud checks the version before applying the edit, and rejected drafts can be compared and resubmitted from Sync conflicts.
 

@@ -177,9 +177,14 @@ impl CatalogForm {
         )
     }
 
-    pub fn has_overlapping_groups(&self, before: &Self, latest: &Self) -> bool {
+    pub fn has_overlapping_edits(&self, before: &Self, latest: &Self) -> bool {
         (self.pricing_edited(before) && latest.pricing_edited(before))
             || (self.processing_edited(before) && latest.processing_edited(before))
+            || ServiceField::ALL.iter().any(|&field| {
+                self.text(field) != before.text(field)
+                    && latest.text(field) != before.text(field)
+                    && self.text(field) != latest.text(field)
+            })
     }
 
     /// Keep edits to money and processing together. The editor explicitly chooses
@@ -194,7 +199,10 @@ impl CatalogForm {
             let keep = match field {
                 Price | Currency => price_edited,
                 ProcessingStart | ProcessingLength => processing_edited,
-                _ => self.text(field) != before.text(field),
+                _ => {
+                    self.text(field) != before.text(field)
+                        && (keep_draft_groups || latest.text(field) == before.text(field))
+                }
             };
             if !keep {
                 self.fields[field.index()] = latest.fields[field.index()].clone();
@@ -246,9 +254,68 @@ fn parse_catalogue_amount(input: &str) -> Option<u32> {
     parse_reviewed_amount(input)
 }
 
+impl crate::model::ServiceOption {
+    pub fn label_overlaps(&self, before: Option<&Self>, current: Option<&Self>) -> bool {
+        matches!(
+            (self, before, current),
+            (Self::Variant { option_label, .. },
+             Some(Self::Variant { option_label: first, .. }),
+             Some(Self::Variant { option_label: latest, .. }))
+                if option_label != first && latest != first && option_label != latest
+        )
+    }
+
+    pub fn review_change(
+        self,
+        before: Option<&Self>,
+        current: Option<Self>,
+        keep_draft: bool,
+    ) -> Option<Self> {
+        match (self, before, current) {
+            (
+                Self::Variant { option_label, .. },
+                Some(Self::Variant {
+                    option_label: first,
+                    ..
+                }),
+                Some(Self::Variant {
+                    parent_service_id,
+                    option_label: latest,
+                }),
+            ) => Some(Self::Variant {
+                parent_service_id,
+                option_label: if &option_label != first && (keep_draft || &latest == first) {
+                    option_label
+                } else {
+                    latest
+                },
+            }),
+            (
+                Self::Addon {
+                    allowed_service_ids,
+                },
+                Some(Self::Addon {
+                    allowed_service_ids: first,
+                }),
+                Some(Self::Addon {
+                    allowed_service_ids: latest,
+                }),
+            ) => Some(Self::Addon {
+                allowed_service_ids: crate::store::ServiceAssignment::reapply(
+                    first,
+                    &allowed_service_ids,
+                    &latest,
+                ),
+            }),
+            (_, _, current) => current,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_catalogue_amount;
+    use crate::model::ServiceOption;
 
     #[test]
     fn grouped_prices_match_the_web_catalogue() {
@@ -257,5 +324,19 @@ mod tests {
         assert_eq!(parse_catalogue_amount("12.345"), Some(1234500));
         assert_eq!(parse_catalogue_amount("1,23,50"), None);
         assert_eq!(parse_catalogue_amount("2.50"), Some(250));
+    }
+
+    #[test]
+    fn an_extra_draft_reapplies_local_eligibility_changes_without_replacing_the_cloud_set() {
+        let extra = |ids: &[&str]| ServiceOption::Addon {
+            allowed_service_ids: ids.iter().map(|id| (*id).into()).collect(),
+        };
+        let cloud = extra(&["keep", "remove", "cloud"]);
+        let before = extra(&["keep", "remove", "remote-removal"]);
+        let draft = extra(&["keep", "local", "remote-removal"]);
+        assert_eq!(
+            draft.review_change(Some(&before), Some(cloud), false),
+            Some(extra(&["keep", "local", "cloud"]))
+        );
     }
 }

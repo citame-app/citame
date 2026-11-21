@@ -9,6 +9,7 @@ import {
   salonResponseSchema,
   updateSalonSettingsRequestSchema,
 } from "./salon";
+import { serviceCatalogUpdateSchema } from "./service-options";
 import {
   createServiceRequestSchema,
   serviceSchema,
@@ -206,6 +207,7 @@ const serviceConfigure = z.object({
       id: idSchema,
       version: z.number().int().positive(),
       service: updateServiceRequestSchema.optional(),
+      catalog: serviceCatalogUpdateSchema.optional(),
       assignment: z
         .strictObject({
           staffIds: setServiceStaffRequestSchema.shape.staffIds.max(200),
@@ -213,9 +215,13 @@ const serviceConfigure = z.object({
         })
         .optional(),
     })
-    .refine((value) => value.service !== undefined || value.assignment !== undefined, {
-      message: "Provide service details or assignments",
-    }),
+    .refine(
+      (value) =>
+        value.service !== undefined ||
+        value.assignment !== undefined ||
+        value.catalog !== undefined,
+      { message: "Provide service details, assignments or option terms" },
+    ),
 });
 
 const serviceStaffReplace = z.object({

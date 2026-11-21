@@ -78,6 +78,7 @@ fn a_reviewed_offline_service_edit_reopens_without_mutating_the_booking_replica(
                 original,
                 &proposed,
                 &original.staff_ids,
+                None,
                 None
             )
             .is_err()
@@ -92,6 +93,7 @@ fn a_reviewed_offline_service_edit_reopens_without_mutating_the_booking_replica(
                 original,
                 &proposed,
                 &original.staff_ids,
+                None,
                 None
             )
             .unwrap()
@@ -113,6 +115,7 @@ fn a_reviewed_offline_service_edit_reopens_without_mutating_the_booking_replica(
                 original,
                 &proposed,
                 &original.staff_ids,
+                None,
                 None
             )
             .is_err()
@@ -164,6 +167,7 @@ fn a_reviewed_offline_service_edit_reopens_without_mutating_the_booking_replica(
             original,
             &proposed,
             &original.staff_ids,
+            None,
             Some(&entry.mutation_id)
         ),
         Err(crate::error::CoreError::CatalogueVersionChanged)
@@ -177,6 +181,7 @@ fn a_reviewed_offline_service_edit_reopens_without_mutating_the_booking_replica(
                 row,
                 &proposed,
                 &row.staff_ids,
+                None,
                 Some(&entry.mutation_id)
             )
             .unwrap()
@@ -200,7 +205,14 @@ fn a_combined_conflict_can_be_reviewed_when_only_its_team_catches_up() {
     let base = &original.services[0];
     let local_team = [ANA.into()].into();
     store
-        .queue_service_edit(&original.generation, base, &base.details, &local_team, None)
+        .queue_service_edit(
+            &original.generation,
+            base,
+            &base.details,
+            &local_team,
+            None,
+            None,
+        )
         .unwrap();
     let draft = store.outbox(1).unwrap().pop().unwrap();
     assert!(draft.to_wire().payload.get("service").is_none());
@@ -222,6 +234,7 @@ fn a_combined_conflict_can_be_reviewed_when_only_its_team_catches_up() {
             base,
             &base.details,
             &local_team,
+            None,
             replace
         ),
         Err(crate::error::CoreError::CatalogueVersionChanged)
@@ -251,6 +264,7 @@ fn a_combined_conflict_can_be_reviewed_when_only_its_team_catches_up() {
             current,
             &current.details,
             &reviewed_team,
+            None,
             replace,
         )
         .unwrap();

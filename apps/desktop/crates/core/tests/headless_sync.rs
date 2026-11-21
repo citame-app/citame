@@ -140,7 +140,130 @@ fn native_team_access_uses_reviewed_permissions_through_the_proxy() {
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
-fn native_catalogue_creation_queues_offline_and_publishes_an_assigned_variant_once() {
+fn native_extra_eligibility_preserves_concurrent_edits_through_the_proxy() {
+    let device = proxy_device();
+    let web = Device::sign_in();
+    let parent = |name| {
+        web.rest_post(
+            "/admin/services",
+            json!({"name":name,"durationMinutes":30,"priceCents":2500,"currency":"EUR"}),
+        )["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let first = parent("Synthetic original compatible service");
+    let local = parent("Synthetic Desktop compatible service");
+    let cloud = parent("Synthetic Cloud compatible service");
+    let created = web.rest_post("/admin/services", json!({
+        "name":"Synthetic editable extra", "durationMinutes":0,"priceCents":350,"currency":"EUR",
+        "catalog":{"kind":"addon","allowedServiceIds":[&first]}
+    }));
+    let id = created["id"].as_str().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("option-replica.sqlite");
+    let mut store = Store::open(&path).unwrap();
+    sync::pull_all(&mut store, &*device.transport).unwrap();
+    let original = store.reviewed_catalogue().unwrap();
+    let base = original.services.iter().find(|row| row.id == id).unwrap();
+    let mut foreign = base.details.clone();
+    foreign.currency = "CHF".into();
+    assert!(
+        store
+            .queue_service_edit(
+                &original.generation,
+                base,
+                &foreign,
+                &base.staff_ids,
+                base.catalog.as_ref(),
+                None
+            )
+            .is_err()
+    );
+    assert!(store.pending_service_edits().unwrap().is_empty());
+    let proposed = ServiceOption::Addon {
+        allowed_service_ids: [first.clone(), local.clone()].into(),
+    };
+    store
+        .queue_service_edit(
+            &original.generation,
+            base,
+            &base.details,
+            &base.staff_ids,
+            Some(&proposed),
+            None,
+        )
+        .unwrap();
+    drop(store);
+
+    let prefix = std::env::var("SOB_TEST_REST_PREFIX").unwrap_or_default();
+    ureq::put(&format!("{}{prefix}/admin/services/{id}/catalog", web.base))
+        .header("Cookie", &web.cookie)
+        .header("Origin", &web.base)
+        .content_type("application/json")
+        .send(
+            json!({"kind":"addon","version":base.version,"allowedServiceIds":[&cloud]}).to_string(),
+        )
+        .unwrap();
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(
+        store.pending_service_edits().unwrap()[0]
+            .options_proposal()
+            .unwrap(),
+        Some(proposed)
+    );
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .rejected,
+        1
+    );
+    let rejection = store.conflicts().unwrap().pop().unwrap();
+    let current = store.reviewed_catalogue().unwrap();
+    let updated = current.services.iter().find(|row| row.id == id).unwrap();
+    assert_eq!(
+        updated.catalog,
+        Some(ServiceOption::Addon {
+            allowed_service_ids: [cloud.clone()].into()
+        })
+    );
+    let reviewed = ServiceOption::Addon {
+        allowed_service_ids: [cloud, local].into(),
+    };
+    store
+        .queue_service_edit(
+            &current.generation,
+            updated,
+            &updated.details,
+            &updated.staff_ids,
+            Some(&reviewed),
+            Some(&rejection.mutation_id),
+        )
+        .unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let saved = store.reviewed_catalogue().unwrap();
+    assert_eq!(
+        saved
+            .services
+            .iter()
+            .find(|row| row.id == id)
+            .unwrap()
+            .catalog,
+        Some(reviewed)
+    );
+    assert!(store.conflicts().unwrap().is_empty());
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_catalogue_creation_replays_an_assigned_variant_through_the_proxy() {
     use sob_core::http::ServiceCreation;
     let device = proxy_device();
     let mut web = Device::sign_in();
@@ -197,7 +320,7 @@ fn native_catalogue_creation_queues_offline_and_publishes_an_assigned_variant_on
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
-fn an_offline_catalogue_edit_keeps_the_cloud_version_until_the_operator_reviews_it() {
+fn native_catalogue_edit_requires_explicit_review_through_the_proxy() {
     use sob_core::store::PendingServiceEdit;
 
     let device = proxy_device();
@@ -221,7 +344,14 @@ fn an_offline_catalogue_edit_keeps_the_cloud_version_until_the_operator_reviews_
     let mut proposed = row.details.clone();
     proposed.price_cents = 3200;
     store
-        .queue_service_edit(&base.generation, row, &proposed, &proposed_staff, None)
+        .queue_service_edit(
+            &base.generation,
+            row,
+            &proposed,
+            &proposed_staff,
+            None,
+            None,
+        )
         .unwrap();
     drop(store);
 
@@ -266,6 +396,7 @@ fn an_offline_catalogue_edit_keeps_the_cloud_version_until_the_operator_reviews_
             row,
             &review,
             &reviewed_team,
+            None,
             Some(&rejected.mutation_id),
         )
         .unwrap();
@@ -2099,7 +2230,7 @@ fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
 
 #[test]
 #[ignore = "requires smoke stack"]
-fn native_gift_card_redemption_and_refund_update_cloud_balance_once() {
+fn native_gift_card_redeems_and_refunds_once_through_the_proxy() {
     use sob_core::billing::{SaleItem, WalkInSale};
 
     let browser = Device::sign_in();
@@ -2187,7 +2318,7 @@ fn native_gift_card_redemption_and_refund_update_cloud_balance_once() {
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
-fn native_redeems_and_restores_the_reviewed_pass_visit_once() {
+fn native_redeems_and_restores_a_pass_visit_once_through_the_proxy() {
     let mut browser = Device::sign_in();
     browser.sync();
     let catalog = catalog(&browser);
@@ -2553,7 +2684,7 @@ fn imported_settlement_replays_safely_and_reopens_offline() {
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
-fn native_unpaid_appointments_are_available_to_a_linked_device() {
+fn native_unpaid_appointments_are_available_through_the_proxy() {
     let mut owner = Device::sign_in();
     let appointment = imported_eur_booking(&mut owner, 10000);
     let zone = salon_tz(&owner.store).unwrap();

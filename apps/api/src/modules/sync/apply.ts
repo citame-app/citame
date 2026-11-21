@@ -227,17 +227,8 @@ export async function applyMutation(
     }
     case "service.configure": {
       authorizeServiceAdmin(principal);
-      const { id, version, service: patch, assignment } = mutation.payload;
-      if (assignment) {
-        await updateServiceConfiguration(
-          db,
-          id,
-          { version, ...(patch ? { service: patch } : {}), ...assignment },
-          actor,
-        );
-      } else if (patch) {
-        await updateService(db, id, patch, actor, version);
-      }
+      const { id, assignment, ...configuration } = mutation.payload;
+      await updateServiceConfiguration(db, id, { ...configuration, ...assignment }, actor);
       return;
     }
     case "service.update": {

@@ -7,6 +7,9 @@ use sob_core::sync::TransportError;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod creation;
+mod options_edit;
+use options_edit::OptionsEditor;
+use sob_core::model::ServiceOption;
 
 const FIELDS: [Key; ServiceField::COUNT] = [
     Key::CatalogName,
@@ -110,6 +113,7 @@ struct Editor {
     visible: bool,
     active: bool,
     assigned: BTreeSet<String>,
+    options: Option<OptionsEditor>,
     creation: Option<creation::Draft>,
     recovery: Option<Recovery>,
 }
@@ -126,12 +130,14 @@ impl Editor {
             let index = field.index();
             catalogue_lines(field, labels[index], &baseline.fields[index], cx)
         });
+        let options = base.catalog.clone().map(|row| OptionsEditor::new(row, cx));
         Self {
             generation,
             price_type: baseline.price_type,
             visible: baseline.online_booking,
             active: baseline.active,
             assigned: base.staff_ids.clone(),
+            options,
             base,
             baseline,
             fields,
@@ -156,7 +162,13 @@ impl Editor {
     }
 
     fn dirty(&self, cx: &App) -> bool {
-        self.form(cx) != self.baseline || self.assigned != self.base.staff_ids
+        self.form(cx) != self.baseline
+            || self.assigned != self.base.staff_ids
+            || self.options_value(cx) != self.base.catalog
+    }
+
+    fn options_value(&self, cx: &App) -> Option<ServiceOption> {
+        self.options.as_ref().map(|options| options.value(cx))
     }
 
     fn review(&mut self, generation: String, current: CatalogService, cx: &mut Context<Root>) {
@@ -189,6 +201,17 @@ impl Editor {
         self.active = reviewed.active;
         self.assigned =
             ServiceAssignment::reapply(&self.base.staff_ids, &self.assigned, &current.staff_ids);
+        let options = match &self.options {
+            Some(options) => options.value(cx).review_change(
+                self.base.catalog.as_ref(),
+                current.catalog.clone(),
+                keep_draft_groups,
+            ),
+            None => current.catalog.clone(),
+        };
+        if options != self.options_value(cx) {
+            self.options = options.map(|options| OptionsEditor::new(options, cx));
+        }
         self.generation = generation;
         self.base = current;
     }
@@ -216,6 +239,7 @@ pub(super) struct Desk {
     notice: Option<Key>,
     pending_creations: Vec<sob_core::http::ServiceCreation>,
     pending_edits: Vec<PendingServiceEdit>,
+    pending_preview: Option<String>,
     pending_version: Option<i64>,
 }
 
@@ -252,6 +276,11 @@ impl Desk {
 
     fn pending_edit(&self, id: &str) -> bool {
         self.pending_edits.iter().any(|row| row.id == id)
+    }
+
+    fn previewed_edit(&self) -> Option<&PendingServiceEdit> {
+        let id = self.pending_preview.as_ref()?;
+        self.pending_edits.iter().find(|row| &row.id == id)
     }
 
     fn latest(&self) -> Option<(&str, &CatalogService)> {
@@ -351,6 +380,7 @@ impl Root {
                 .pending_service_creations()
                 .unwrap_or_default(),
             pending_edits: self.svc.store.pending_service_edits().unwrap_or_default(),
+            pending_preview: None,
             pending_version: self.data_version,
         }));
         self.request_service_catalog(cx);
@@ -405,6 +435,9 @@ impl Root {
                 .pending_service_creations()
                 .unwrap_or_default();
             desk.pending_edits = self.svc.store.pending_service_edits().unwrap_or_default();
+            if desk.previewed_edit().is_none() {
+                desk.pending_preview = None;
+            }
             desk.replica = (!desk.denied && authorized)
                 .then(|| self.svc.store.reviewed_catalogue().ok())
                 .flatten();
@@ -552,6 +585,9 @@ impl Root {
         let Ok(proposed) = edit.proposal() else {
             return;
         };
+        let Ok(proposed_options) = edit.options_proposal() else {
+            return;
+        };
         let labels = FIELDS.map(|key| self.t(key));
         self.open_service_catalog(cx);
         let Overlay::ServiceCatalog(desk) = &mut self.overlay else {
@@ -568,7 +604,7 @@ impl Root {
                 id: edit.id,
                 version: edit.version,
                 details: edit.reviewed,
-                catalog: None,
+                catalog: edit.reviewed_catalog,
                 staff_ids: edit
                     .assignment
                     .as_ref()
@@ -596,6 +632,9 @@ impl Root {
             .map(|team| team.reviewed_staff_ids.clone());
         if let Some(team) = edit.assignment {
             editor.assigned = team.staff_ids;
+        }
+        if let Some(proposed) = proposed_options {
+            editor.options = Some(OptionsEditor::new(proposed, cx));
         }
         editor.recovery = Some(Recovery {
             mutation_id: mutation_id.into(),
@@ -663,6 +702,7 @@ impl Root {
             &editor.base,
             &input,
             &editor.assigned,
+            editor.options_value(cx).as_ref(),
             replaces,
         ) {
             Ok(queued) => {
@@ -695,6 +735,10 @@ impl Root {
         let Overlay::ServiceCatalog(desk) = &mut self.overlay else {
             return;
         };
+        if desk.pending_preview.take().is_some() {
+            cx.notify();
+            return;
+        }
         if desk.editor.as_ref().is_some_and(|editor| {
             editor.dirty(cx)
                 || editor.recovery.is_some()
@@ -719,6 +763,9 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let online = self.status.connectivity == Connectivity::Online;
+        let preview = desk
+            .previewed_edit()
+            .filter(|_| !desk.denied && self.can_create_catalogue_item());
         let body = div()
             .flex()
             .flex_col()
@@ -775,7 +822,10 @@ impl Root {
                 .when_some(desk.editor.as_ref(), |body, editor| {
                     body.child(self.render_catalog_editor(desk, editor, cx))
                 })
-                .when(desk.editor.is_none(), |body| {
+                .when_some(preview, |body, edit| {
+                    body.child(self.render_pending_catalogue_edit(edit))
+                })
+                .when(desk.editor.is_none() && preview.is_none(), |body| {
                     body.child(self.render_catalog_list(desk, cx))
                 })
             });
@@ -852,9 +902,26 @@ impl Root {
                             )
                         };
                         if desk.pending_edit(&id) {
-                            return div()
-                                .text_sm()
-                                .child(format!("{label} · {}", self.t(Key::CatalogPending)))
+                            let label = format!("{label} · {}", self.t(Key::CatalogPending));
+                            if desk.denied || !self.can_create_catalogue_item() {
+                                return div().text_sm().child(label).into_any_element();
+                            }
+                            return self
+                                .button(
+                                    SharedString::from(format!("catalog-pending-{id}")),
+                                    label,
+                                    Kind::Ghost,
+                                    cx.listener(move |root, _, _, cx| {
+                                        if root.can_create_catalogue_item()
+                                            && let Overlay::ServiceCatalog(desk) = &mut root.overlay
+                                            && !desk.denied
+                                            && desk.pending_edit(&id)
+                                        {
+                                            desk.pending_preview = Some(id.clone());
+                                        }
+                                        cx.notify();
+                                    }),
+                                )
                                 .into_any_element();
                         }
                         if !editable {
@@ -872,6 +939,89 @@ impl Root {
                         .into_any_element()
                     })),
             )
+    }
+
+    fn render_pending_catalogue_edit(&self, edit: &PendingServiceEdit) -> impl IntoElement {
+        let proposed = edit.proposal().ok();
+        let before = CatalogForm::from(&edit.reviewed);
+        let option = edit.options_proposal().ok().flatten();
+        div()
+            .id("pending-catalogue-edit")
+            .min_h_0()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div().font_weight(FontWeight::SEMIBOLD).child(
+                    proposed
+                        .as_ref()
+                        .map_or(&edit.reviewed.name, |draft| &draft.name)
+                        .clone(),
+                ),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme::muted())
+                    .child(self.t(Key::CatalogPending)),
+            )
+            .when_some(proposed.as_ref(), |body, draft| {
+                let form = CatalogForm::from(draft);
+                body.children(ServiceField::ALL.iter().filter_map(|field| {
+                    let index = field.index();
+                    let value = &form.fields[index];
+                    (value != &before.fields[index])
+                        .then(|| self.pending_catalogue_field(FIELDS[index], value.clone()))
+                }))
+                .when(draft.price_type != edit.reviewed.price_type, |body| {
+                    body.child(self.t(price_label(draft.price_type)))
+                })
+                .when(
+                    draft.online_booking != edit.reviewed.online_booking,
+                    |body| body.child(self.t(visibility_label(draft.online_booking))),
+                )
+                .when(draft.active != edit.reviewed.active, |body| {
+                    body.child(self.t(activity_label(draft.active)))
+                })
+            })
+            .when_some(edit.assignment.as_ref(), |body, team| {
+                body.child(
+                    self.pending_catalogue_field(
+                        Key::Staff,
+                        team.staff_ids
+                            .iter()
+                            .map(|id| self.staff_name(id))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ),
+                )
+            })
+            .when_some(option, |body, option| {
+                let key = match option {
+                    ServiceOption::Variant { .. } => Key::CatalogOptionLabel,
+                    ServiceOption::Addon { .. } => Key::CatalogEligible,
+                };
+                body.child(self.pending_catalogue_field(key, self.catalogue_options_value(&option)))
+            })
+    }
+
+    fn pending_catalogue_field(&self, key: Key, value: String) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme::muted())
+                    .child(self.t(key)),
+            )
+            .child(if value.is_empty() {
+                "—".into()
+            } else {
+                value
+            })
     }
 
     fn edit_catalogue_line(&mut self, field: ServiceField, add: bool, cx: &mut Context<Self>) {
@@ -925,6 +1075,15 @@ impl Root {
                     })
                     .when(editor.creation.is_none(), |body| {
                         body.child(self.render_catalog_team(desk, editor, current_service, cx))
+                            .when_some(editor.options.as_ref(), |body, options| {
+                                body.child(self.render_existing_options(
+                                    editor,
+                                    options,
+                                    current_service,
+                                    !desk.denied && self.can_create_catalogue_item(),
+                                    cx,
+                                ))
+                            })
                     })
                     .children(ServiceField::ALL.map(|field| {
                         let index = field.index();
@@ -1086,7 +1245,13 @@ impl Root {
                                 let latest = CatalogForm::from(&row.details);
                                 let overlap = editor
                                     .form(cx)
-                                    .has_overlapping_groups(&editor.baseline, &latest);
+                                    .has_overlapping_edits(&editor.baseline, &latest)
+                                    || editor.options.as_ref().is_some_and(|options| {
+                                        options.value(cx).label_overlaps(
+                                            editor.base.catalog.as_ref(),
+                                            row.catalog.as_ref(),
+                                        )
+                                    });
                                 let label = if overlap {
                                     Key::CatalogKeepDraftGroups
                                 } else {
@@ -1349,7 +1514,7 @@ mod tests {
                 let current = CatalogForm::from(&newer.details);
                 let original_form = CatalogForm::from(&editor.base.details);
                 let local_form = editor.form(cx);
-                assert!(local_form.has_overlapping_groups(&original_form, &current));
+                assert!(local_form.has_overlapping_edits(&original_form, &current));
                 let cloud = local_form
                     .review(&original_form, current, false)
                     .details(&newer.details)

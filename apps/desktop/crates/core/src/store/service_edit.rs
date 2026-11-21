@@ -1,5 +1,6 @@
 use super::*;
 use crate::http::{CatalogService, ReviewedCatalog, ServiceDetails};
+use crate::model::ServiceOption;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -72,6 +73,23 @@ pub struct ConfigurationTeam {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ConfigurationOptions {
+    Variant {
+        version: u64,
+        option_label: String,
+    },
+    Addon {
+        version: u64,
+        allowed_service_ids: BTreeSet<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingServiceEdit {
     pub id: String,
     pub version: u64,
@@ -79,8 +97,16 @@ pub struct PendingServiceEdit {
     pub service: serde_json::Map<String, Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignment: Option<ConfigurationTeam>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<ConfigurationOptions>,
     #[serde(rename = "_reviewed")]
     pub reviewed: ServiceDetails,
+    #[serde(
+        rename = "_reviewedCatalog",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub reviewed_catalog: Option<ServiceOption>,
 }
 
 impl PendingServiceEdit {
@@ -94,15 +120,103 @@ impl PendingServiceEdit {
     }
 
     pub fn affects_booking(&self) -> bool {
-        self.assignment.is_some()
+        self.catalog.is_some()
+            || self.assignment.is_some()
             || self
                 .service
                 .keys()
                 .any(|key| !matches!(key.as_str(), "sortOrder" | "onlineBooking"))
     }
+
+    pub fn options_proposal(&self) -> Result<Option<ServiceOption>> {
+        match (&self.catalog, &self.reviewed_catalog) {
+            (
+                Some(ConfigurationOptions::Variant { option_label, .. }),
+                Some(ServiceOption::Variant {
+                    parent_service_id, ..
+                }),
+            ) => Ok(Some(ServiceOption::Variant {
+                parent_service_id: parent_service_id.clone(),
+                option_label: option_label.clone(),
+            })),
+            (
+                Some(ConfigurationOptions::Addon {
+                    allowed_service_ids,
+                    ..
+                }),
+                Some(ServiceOption::Addon { .. }),
+            ) => Ok(Some(ServiceOption::Addon {
+                allowed_service_ids: allowed_service_ids.clone(),
+            })),
+            (None, _) => Ok(None),
+            _ => Err(CoreError::Invalid(
+                "Invalid reviewed service options".into(),
+            )),
+        }
+    }
 }
 
 impl Store {
+    fn service_options_patch(
+        &self,
+        current: &CatalogService,
+        proposed: Option<&ServiceOption>,
+        currency: &str,
+    ) -> Result<Option<ConfigurationOptions>> {
+        let options_changed = current.catalog.as_ref() != proposed;
+        if let Some(ServiceOption::Addon {
+            allowed_service_ids,
+        }) = proposed
+            && (options_changed || currency != current.details.currency)
+        {
+            let services = self.services()?;
+            if !allowed_service_ids.iter().all(|id| {
+                services
+                    .iter()
+                    .any(|row| &row.id == id && row.is_addon_target(currency))
+            }) {
+                return Err(CoreError::Invalid(
+                    "Review the active eligible services and their currency".into(),
+                ));
+            }
+        }
+        if !options_changed {
+            return Ok(None);
+        }
+        let version = current.version;
+        match (current.catalog.as_ref(), proposed) {
+            (
+                Some(ServiceOption::Variant {
+                    parent_service_id: before,
+                    ..
+                }),
+                Some(ServiceOption::Variant {
+                    parent_service_id,
+                    option_label,
+                }),
+            ) if before == parent_service_id
+                && (1..=80).contains(&option_label.trim().encode_utf16().count()) =>
+            {
+                Ok(Some(ConfigurationOptions::Variant {
+                    version,
+                    option_label: option_label.trim().into(),
+                }))
+            }
+            (
+                Some(ServiceOption::Addon { .. }),
+                Some(ServiceOption::Addon {
+                    allowed_service_ids,
+                }),
+            ) if (1..=100).contains(&allowed_service_ids.len()) => {
+                Ok(Some(ConfigurationOptions::Addon {
+                    version,
+                    allowed_service_ids: allowed_service_ids.clone(),
+                }))
+            }
+            _ => Err(CoreError::Invalid("Review the service options".into())),
+        }
+    }
+
     /// Older unversioned rows stay usable for booking; they cannot authorize a catalogue write.
     pub fn reviewed_catalogue(&self) -> Result<ReviewedCatalog> {
         let tx = self.conn.unchecked_transaction()?;
@@ -147,6 +261,7 @@ impl Store {
         before: &CatalogService,
         proposed: &ServiceDetails,
         staff_ids: &BTreeSet<String>,
+        options: Option<&ServiceOption>,
         replaces: Option<&str>,
     ) -> Result<bool> {
         self.write_transaction(|store| {
@@ -168,6 +283,7 @@ impl Store {
                 || before.version != current.version
                 || before.details != current.details
                 || before.staff_ids != current.staff_ids
+                || before.catalog != current.catalog
             {
                 return Err(CoreError::CatalogueVersionChanged);
             }
@@ -218,13 +334,16 @@ impl Store {
                     staff_ids: staff_ids.clone(),
                 })
             };
-            let queued = !service.is_empty() || assignment.is_some();
+            let catalog = store.service_options_patch(&current, options, &proposed.currency)?;
+            let queued = !service.is_empty() || assignment.is_some() || catalog.is_some();
             if queued {
                 let edit = PendingServiceEdit {
                     id: id.clone(),
                     version: before.version,
                     service,
                     assignment,
+                    reviewed_catalog: catalog.as_ref().and(current.catalog),
+                    catalog,
                     reviewed: before.details.clone(),
                 };
                 store.enqueue(SERVICE_EDIT_KIND, id, serde_json::to_value(edit)?)?;

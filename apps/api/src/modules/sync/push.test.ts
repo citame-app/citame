@@ -193,6 +193,107 @@ test("native service configuration commits the service and its performers togeth
   expect(await details()).toMatchObject({ version: 4, priceCents: 8300, staffIds: [f.anaId] });
 });
 
+test("native service configuration applies option terms with other edits in one transaction", async () => {
+  const addon = await json(
+    t.app,
+    "/admin/services",
+    "POST",
+    {
+      name: "Extra",
+      durationMinutes: 0,
+      priceCents: 300,
+      staffIds: [],
+      catalog: { kind: "addon", allowedServiceIds: [f.haircutId] },
+    },
+    owner.cookie,
+  );
+  expect(addon.status).toBe(201);
+  const initial = adminServiceSchema.parse(await addon.json());
+  const id = initial.id;
+  const save = (eligible: string) => ({
+    mutationId: mid(),
+    createdAt: new Date().toISOString(),
+    kind: "service.configure",
+    payload: {
+      id,
+      version: 1,
+      service: { priceCents: 500 },
+      assignment: { staffIds: [f.anaId], reviewedStaffIds: [] },
+      catalog: { kind: "addon", version: 1, allowedServiceIds: [eligible] },
+    },
+  });
+  const active = async () =>
+    listAdminServicesResponseSchema
+      .parse(await (await json(t.app, "/admin/services", "GET", undefined, owner.cookie)).json())
+      .services.find((row) => row.id === id);
+
+  expect((await push(t, owner, [save(id)])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "invalid",
+  });
+  expect(await active()).toEqual(initial);
+  const valid = save(f.colorId);
+  expect((await push(t, owner, [valid])).body.results[0]).toMatchObject({ status: "applied" });
+  expect((await push(t, owner, [valid])).body.results[0]).toMatchObject({
+    status: "applied",
+    replayed: true,
+  });
+  expect(await active()).toMatchObject({
+    version: 4,
+    priceCents: 500,
+    staffIds: [f.anaId],
+    catalog: { kind: "addon", version: 4, allowedServiceIds: [f.colorId] },
+  });
+  const changed = await active();
+  const foreignCurrency = changed?.currency === "CHF" ? "EUR" : "CHF";
+  const currencyOnly = mutation("service.configure", {
+    id,
+    version: 4,
+    service: { currency: foreignCurrency },
+  });
+  expect((await push(t, owner, [currencyOnly])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "invalid",
+  });
+  expect(await active()).toEqual(changed);
+});
+
+test("native service configuration can rename a variant without changing its parent", async () => {
+  const response = await json(
+    t.app,
+    "/admin/services",
+    "POST",
+    {
+      name: "Cut variant",
+      durationMinutes: 40,
+      priceCents: 2400,
+      catalog: { kind: "variant", parentServiceId: f.haircutId, optionLabel: "Short" },
+    },
+    owner.cookie,
+  );
+  expect(response.status).toBe(201);
+  const initial = adminServiceSchema.parse(await response.json());
+  const save = mutation("service.configure", {
+    id: initial.id,
+    version: 1,
+    catalog: { kind: "variant", optionLabel: "Medium", version: 1 },
+  });
+  expect((await push(t, ana, [save])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "forbidden",
+  });
+  const approved = { ...save, mutationId: mid() };
+  expect((await push(t, owner, [approved])).body.results[0]).toMatchObject({ status: "applied" });
+  const services = listAdminServicesResponseSchema.parse(
+    await (await json(t.app, "/admin/services", "GET", undefined, owner.cookie)).json(),
+  ).services;
+  expect(services.find((row) => row.id === initial.id)).toEqual({
+    ...initial,
+    version: 2,
+    catalog: { kind: "variant", parentServiceId: f.haircutId, optionLabel: "Medium", version: 2 },
+  });
+});
+
 describe("authorization and envelope", () => {
   test("a restored generation rejects legacy and stale batches before writing or recording them", async () => {
     const restored = await setupApiTest({

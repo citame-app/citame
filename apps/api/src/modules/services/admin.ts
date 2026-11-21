@@ -448,6 +448,15 @@ export async function setServiceStaff(
   });
 }
 
+async function validateAddonCurrency(tx: Tx, currency: string, allowedServiceIds: string[]) {
+  const targets = await catalogTargets(tx, { kind: "addon", allowedServiceIds });
+  if (targets.some((row) => row.currency !== currency))
+    throw new DomainError(
+      "validation_error",
+      "Add-ons and eligible services must use the same currency",
+    );
+}
+
 export async function updateServiceCatalog(
   db: CatalogConnection,
   id: string,
@@ -467,12 +476,7 @@ export async function updateServiceCatalog(
     if (row.catalogVersion !== input.version)
       throw new DomainError("version_conflict", "Service options changed; reload before saving");
     if (input.kind === "addon") {
-      const targets = await catalogTargets(tx, input);
-      if (targets.some((r) => r.currency !== row.currency))
-        throw new DomainError(
-          "validation_error",
-          "Add-ons and eligible services must use the same currency",
-        );
+      await validateAddonCurrency(tx, row.currency, input.allowedServiceIds);
       await tx.delete(serviceAddon).where(eq(serviceAddon.addonId, id));
       await tx
         .insert(serviceAddon)
@@ -503,8 +507,9 @@ export async function updateServiceCatalog(
 export async function updateServiceConfiguration(
   db: CatalogConnection,
   id: string,
-  input: Omit<ServiceConfiguration, "service"> & {
+  input: Pick<ServiceConfiguration, "version" | "catalog"> & {
     service?: UpdateServiceRequest;
+    staffIds?: string[];
     reviewedStaffIds?: readonly string[];
   },
   actor: AdminActor,
@@ -519,22 +524,32 @@ export async function updateServiceConfiguration(
       );
     if (input.catalog && input.catalog.version !== input.version)
       throw new DomainError("validation_error", "Review all service options at the same revision");
-    const reviewedStaffIds = input.reviewedStaffIds ?? (await loadStaffIds(tx, [id])).get(id) ?? [];
-    if (input.service) await updateService(tx, id, input.service, actor);
-    let saved = await setServiceStaff(
-      tx,
-      id,
-      { staffIds: input.staffIds },
-      actor,
-      reviewedStaffIds,
-    );
+    const currency = input.service?.currency;
+    if (
+      !input.catalog &&
+      current.catalogKind === "addon" &&
+      currency &&
+      currency !== current.currency
+    ) {
+      const addon = (await catalogMetadata(tx, [current])).get(id);
+      if (addon?.kind === "addon" && addon.allowedServiceIds.length > 0)
+        await validateAddonCurrency(tx, currency, addon.allowedServiceIds);
+    }
+    let saved: AdminService | undefined;
+    if (input.service) saved = await updateService(tx, id, input.service, actor);
+    if (input.staffIds) {
+      const reviewedStaffIds =
+        input.reviewedStaffIds ?? (await loadStaffIds(tx, [id])).get(id) ?? [];
+      saved = await setServiceStaff(tx, id, { staffIds: input.staffIds }, actor, reviewedStaffIds);
+    }
     if (input.catalog)
       saved = await updateServiceCatalog(
         tx,
         id,
-        { ...input.catalog, version: saved.version ?? input.version },
+        { ...input.catalog, version: saved?.version ?? input.version },
         actor,
       );
+    if (!saved) throw new DomainError("validation_error", "Provide at least one change");
     return saved;
   });
 }
