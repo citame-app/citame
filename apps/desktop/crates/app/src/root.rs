@@ -729,6 +729,7 @@ impl Root {
                 && !self.preserve_open_product_form(generation.as_deref())
                 && !self.preserve_open_product_photo()
                 && !self.preserve_open_inventory_documents()
+                && !self.preserve_warehouse_panel()
             {
                 self.overlay = Overlay::None;
             }
@@ -3322,6 +3323,8 @@ impl Root {
                 sob_core::inventory_documents::SUPPLIER_SAVE => Key::InventorySuppliers,
                 sob_core::inventory_documents::RECEIVE_STOCK => Key::InventoryReceipts,
                 sob_core::purchase_orders::PURCHASE_ORDER_WRITE => Key::InventoryOrders,
+                sob_core::warehouses::SAVE => Key::InventoryWarehouses,
+                sob_core::warehouses::TRANSFER => Key::InventoryWarehouseTransfer,
                 _ => Key::ConflictOther,
             });
             let when = c
@@ -3568,6 +3571,24 @@ impl Root {
                                     Kind::Primary,
                                     cx.listener(move |root, _, _, cx| {
                                         root.open_inventory_document_conflict(&id, cx)
+                                    }),
+                                ))
+                            },
+                        )
+                        .when(
+                            matches!(
+                                c.kind.as_str(),
+                                sob_core::warehouses::SAVE | sob_core::warehouses::TRANSFER
+                            ) && self.svc.store.can_queue_product_edits()
+                                && self.status.connectivity == Connectivity::Online,
+                            |row| {
+                                let id = c.mutation_id.clone();
+                                row.child(self.button(
+                                    ("review-warehouse", i),
+                                    self.t(Key::InventoryDocumentReview),
+                                    Kind::Primary,
+                                    cx.listener(move |root, _, _, cx| {
+                                        root.open_warehouse_conflict(&id, cx)
                                     }),
                                 ))
                             },

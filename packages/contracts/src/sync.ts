@@ -6,6 +6,7 @@ import { dateShiftRangesSchema } from "./date-shifts";
 import { createProductSchema, productPhotoInputSchema, updateProductSchema } from "./inventory";
 import { purchaseOrderSyncPayloadSchema } from "./inventory-orders";
 import { stockReceiptInputSchema, supplierInputSchema } from "./inventory-receipts";
+import { stockTransferSyncPayloadSchema, warehouseInputSchema } from "./inventory-warehouses";
 import {
   resourceCreateSchema,
   resourceSchema,
@@ -317,6 +318,20 @@ const purchaseOrderWrite = z.object({
   payload: purchaseOrderSyncPayloadSchema,
 });
 
+const warehouseSave = z.object({
+  ...envelope,
+  kind: z.literal("warehouse.save"),
+  payload: warehouseInputSchema.omit({ generation: true }).extend({
+    id: idSchema.transform((id) => id.toLowerCase()),
+  }),
+});
+
+const warehouseTransfer = z.object({
+  ...envelope,
+  kind: z.literal("warehouse.transfer"),
+  payload: stockTransferSyncPayloadSchema,
+});
+
 const staffUpdate = z.object({
   ...envelope,
   kind: z.literal("staff.update"),
@@ -360,6 +375,8 @@ export const syncMutationSchema = z.discriminatedUnion("kind", [
   supplierSave,
   stockReceipt,
   purchaseOrderWrite,
+  warehouseSave,
+  warehouseTransfer,
   staffUpdate,
   settingsUpdate,
 ]);

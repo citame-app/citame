@@ -32,6 +32,7 @@ pub mod store;
 pub mod sync;
 pub mod team_shifts;
 pub mod waitlist;
+pub mod warehouses;
 
 fn trim_like_javascript(text: &str) -> &str {
     // JavaScript's String.trim treats BOM as whitespace and keeps NEXT LINE.

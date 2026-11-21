@@ -33,6 +33,7 @@ import { writePurchaseOrder } from "../inventory/orders";
 import { saveProductPhoto } from "../inventory/photo";
 import { receiveStockDocument, saveSupplier } from "../inventory/receipts";
 import { createProduct, updateProduct } from "../inventory/service";
+import { saveWarehouse, transferStock } from "../inventory/warehouses";
 import { createResource, setServiceResources, updateResource } from "../resources/catalog";
 import {
   createService,
@@ -333,6 +334,28 @@ export async function applyMutation(
         principal,
         ctx.generation,
         id,
+      );
+      return;
+    }
+    case "warehouse.save": {
+      const { id, ...input } = mutation.payload;
+      await saveWarehouse(
+        db,
+        id,
+        { ...input, generation: ctx.generation },
+        principal,
+        ctx.generation,
+      );
+      return;
+    }
+    case "warehouse.transfer": {
+      const { id, ...input } = mutation.payload;
+      await transferStock(
+        db,
+        id,
+        { ...input, generation: ctx.generation },
+        principal,
+        ctx.generation,
       );
       return;
     }

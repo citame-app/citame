@@ -58,6 +58,7 @@ mod service_catalog_form;
 mod service_resources;
 mod staff_access;
 mod staff_portraits;
+mod warehouses;
 pub use crate::model::{CatalogPrice, ServiceOption};
 pub use service_catalog::{
     CatalogService, CatalogWriteError, NewCatalogService, ReviewedCatalog, ServiceCreation,

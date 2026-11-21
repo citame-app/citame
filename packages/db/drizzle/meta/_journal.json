@@ -673,6 +673,13 @@
       "when": 1795213487923,
       "tag": "0095_inventory_warehouses",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1795213487924,
+      "tag": "0096_warehouse_sync_acknowledgements",
+      "breakpoints": true
     }
   ]
 }

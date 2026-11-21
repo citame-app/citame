@@ -63,19 +63,28 @@ const stockTransferLine = z.strictObject({
 });
 
 export const MAX_STOCK_TRANSFER_LINES = 50;
-export const stockTransferInputSchema = z
-  .strictObject({
-    sourceId: warehouseLocation,
-    destinationId: warehouseLocation,
-    reason: requiredTextSchema(300),
-    generation: syncGenerationSchema,
-    lines: z
-      .array(stockTransferLine)
-      .min(1)
-      .max(MAX_STOCK_TRANSFER_LINES)
-      .refine((lines) => new Set(lines.map((line) => line.productId)).size === lines.length),
-  })
-  .refine((input) => input.sourceId !== input.destinationId, { path: ["destinationId"] });
+const stockTransferFields = z.strictObject({
+  sourceId: warehouseLocation,
+  destinationId: warehouseLocation,
+  reason: requiredTextSchema(300),
+  lines: z
+    .array(stockTransferLine)
+    .min(1)
+    .max(MAX_STOCK_TRANSFER_LINES)
+    .refine((lines) => new Set(lines.map((line) => line.productId)).size === lines.length),
+});
+
+function distinctWarehouses(input: z.infer<typeof stockTransferFields>) {
+  return input.sourceId !== input.destinationId;
+}
+
+export const stockTransferInputSchema = stockTransferFields
+  .extend({ generation: syncGenerationSchema })
+  .refine(distinctWarehouses, { path: ["destinationId"] });
+
+export const stockTransferSyncPayloadSchema = stockTransferFields
+  .extend({ id: idSchema.transform((id) => id.toLowerCase()) })
+  .refine(distinctWarehouses, { path: ["destinationId"] });
 
 export const stockTransferSchema = z.object({
   id: idSchema,

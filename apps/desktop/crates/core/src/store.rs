@@ -1578,6 +1578,8 @@ impl Store {
                                 | crate::inventory_documents::SUPPLIER_SAVE
                                 | crate::inventory_documents::RECEIVE_STOCK
                                 | crate::purchase_orders::PURCHASE_ORDER_WRITE
+                                | crate::warehouses::SAVE
+                                | crate::warehouses::TRANSFER
                         )
                     {
                         Self::set_meta_at(
@@ -1605,6 +1607,8 @@ impl Store {
                                 | crate::inventory_documents::SUPPLIER_SAVE
                                 | crate::inventory_documents::RECEIVE_STOCK
                                 | crate::purchase_orders::PURCHASE_ORDER_WRITE
+                                | crate::warehouses::SAVE
+                                | crate::warehouses::TRANSFER
                         )
                     {
                         Self::apply_inventory_access_at(&tx, false)?;
@@ -1727,6 +1731,7 @@ mod resource_pools;
 mod resource_requirements;
 mod service_creation;
 mod service_edit;
+mod warehouses;
 pub use service_creation::SERVICE_CREATION_KIND;
 pub use service_edit::{PendingServiceEdit, SERVICE_EDIT_KIND};
 

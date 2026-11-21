@@ -13,6 +13,7 @@ mod ledger;
 mod product_form;
 mod product_photo;
 mod stock;
+mod warehouses;
 
 pub(super) struct Desk {
     search: Entity<TextField>,
@@ -27,6 +28,7 @@ pub(super) struct Desk {
     product_form: Option<Box<product_form::Panel>>,
     product_photo: Option<Box<product_photo::Panel>>,
     documents: Option<Box<documents::Panel>>,
+    warehouses: Option<Box<warehouses::Panel>>,
     stock: Option<stock::Panel>,
     request: Option<Arc<()>>,
     saving: bool,
@@ -83,6 +85,13 @@ impl Desk {
     }
 
     pub(super) fn dismiss_editor(&mut self, cx: &App) -> bool {
+        if let Some(panel) = &mut self.warehouses {
+            if panel.dismiss() {
+                self.warehouses = None;
+                self.observed_revision = -1;
+            }
+            return true;
+        }
         if let Some(photo) = &mut self.product_photo {
             if photo.dismiss() {
                 self.product_photo = None;
@@ -225,6 +234,7 @@ impl Root {
             product_form: None,
             product_photo: None,
             documents: None,
+            warehouses: None,
             stock: None,
             request: None,
             saving: false,
@@ -267,7 +277,9 @@ impl Root {
     }
 
     pub(super) fn refresh_inventory(&mut self, reconnected: bool, cx: &mut Context<Self>) {
-        if self.refresh_inventory_documents(reconnected, cx) {
+        if self.refresh_warehouses(reconnected, cx)
+            || self.refresh_inventory_documents(reconnected, cx)
+        {
             return;
         }
         if self.refresh_product_photo(reconnected, cx) {
@@ -675,7 +687,8 @@ impl Root {
                     && desk.stock.is_none()
                     && desk.product_form.is_none()
                     && desk.product_photo.is_none()
-                    && desk.documents.is_none(),
+                    && desk.documents.is_none()
+                    && desk.warehouses.is_none(),
                 |header| {
                     header.child(self.button(
                         "inventory-refresh",
@@ -693,7 +706,9 @@ impl Root {
                     cx.listener(|root, _, _, cx| root.dismiss_overlay(cx)),
                 ))
             });
-        let content = if let Some(documents) = &desk.documents {
+        let content = if let Some(warehouses) = &desk.warehouses {
+            self.render_warehouses(warehouses, cx)
+        } else if let Some(documents) = &desk.documents {
             self.render_inventory_documents(documents, cx)
         } else if let Some(photo) = &desk.product_photo {
             self.render_product_photo(photo, cx)
@@ -785,6 +800,12 @@ impl Root {
                     .flex()
                     .flex_wrap()
                     .gap_2()
+                    .child(self.button(
+                        "inventory-warehouses",
+                        self.t(Key::InventoryWarehouses),
+                        Kind::Ghost,
+                        cx.listener(|root, _, _, cx| root.open_warehouses(cx)),
+                    ))
                     .child(self.button(
                         "inventory-receipts",
                         self.t(Key::InventoryReceipts),

@@ -5297,3 +5297,151 @@ fn native_purchase_orders_survive_restart_and_rebase_a_concurrent_cloud_delivery
     );
     assert!(reopened.pending_inventory_documents().unwrap().is_empty());
 }
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_warehouse_transfers_survive_restart_and_reject_stale_stock() {
+    use sob_core::warehouses::{TransferLine, WarehouseEdit, WarehouseTransfer};
+    use uuid::Uuid;
+
+    let desktop = proxy_device();
+    let web = Device::sign_in();
+    let product = web.rest_post(
+        "/admin/inventory/products",
+        json!({
+            "name": "Native warehouse fixture", "sku": "NATIVE-WAREHOUSE", "priceCents": 100,
+            "openingStock": 12, "idempotencyKey": Uuid::now_v7(),
+        }),
+    );
+    let product_id = product["id"].as_str().unwrap().parse().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("warehouse.sqlite");
+    let mut store = Store::open(&path).unwrap();
+    sync::pull_all(&mut store, &*desktop.transport).unwrap();
+    let generation = store.verified_reviewed_generation().unwrap();
+    let list = desktop.transport.inventory_warehouses().unwrap();
+    let main = desktop
+        .transport
+        .inventory_warehouse_stock(None, "NATIVE-WAREHOUSE", 1)
+        .unwrap();
+    let warehouse = Uuid::now_v7();
+    store
+        .cache_warehouses(&list, &main, "NATIVE-WAREHOUSE")
+        .unwrap();
+    store
+        .queue_warehouse_edit(
+            &generation,
+            WarehouseEdit {
+                id: warehouse,
+                name: "Native test stockroom".into(),
+                active: true,
+                version: 0,
+            },
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*desktop.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let list = desktop.transport.inventory_warehouses().unwrap();
+    store
+        .cache_warehouses(&list, &main, "NATIVE-WAREHOUSE")
+        .unwrap();
+    let balance = main
+        .products
+        .iter()
+        .find(|row| row.product_id == product_id)
+        .unwrap();
+    let transfer = WarehouseTransfer {
+        id: Uuid::now_v7(),
+        source_id: None,
+        destination_id: Some(warehouse),
+        reason: "Offline transfer".into(),
+        lines: vec![TransferLine {
+            product_id,
+            quantity: 4,
+            version: balance.version,
+        }],
+    };
+    let before = store.live_view_revision("commerce").unwrap();
+    store
+        .queue_warehouse_transfer(&generation, transfer.clone(), None)
+        .unwrap();
+    assert!(matches!(
+        store.queue_warehouse_transfer(&generation, transfer.clone(), None),
+        Err(sob_core::error::CoreError::CatalogueEditPending)
+    ));
+    drop(store);
+    let mut store = Store::open(&path).unwrap();
+    assert!(
+        store
+            .cached_warehouse_stock(None, "NATIVE-WAREHOUSE", 1)
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*desktop.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    assert!(store.live_view_revision("commerce").unwrap() > before);
+    let remote = web.rest_get(&format!("/admin/inventory/transfers/{}", transfer.id));
+    assert_eq!(remote["lines"][0]["quantity"], 4);
+    let main = desktop
+        .transport
+        .inventory_warehouse_stock(None, "NATIVE-WAREHOUSE", 1)
+        .unwrap();
+    let secondary = desktop
+        .transport
+        .inventory_warehouse_stock(Some(warehouse), "NATIVE-WAREHOUSE", 1)
+        .unwrap();
+    assert_eq!(main.products[0].on_hand, 8);
+    assert_eq!(secondary.products[0].on_hand, 4);
+    store
+        .cache_warehouses(&list, &main, "NATIVE-WAREHOUSE")
+        .unwrap();
+    let stale = WarehouseTransfer {
+        id: Uuid::now_v7(),
+        lines: vec![TransferLine {
+            version: main.products[0].version,
+            ..transfer.lines[0].clone()
+        }],
+        ..transfer
+    };
+    store
+        .queue_warehouse_transfer(&generation, stale.clone(), None)
+        .unwrap();
+    web.rest_post(
+        &format!("/admin/inventory/products/{product_id}/movements"),
+        json!({
+            "kind": "receive", "quantity": 1, "reason": "Concurrent Cloud delivery", "warehouseId": "main",
+            "version": main.products[0].version, "generation": generation, "idempotencyKey": Uuid::now_v7(),
+        }),
+    );
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*desktop.transport)
+            .unwrap()
+            .push
+            .rejected,
+        1
+    );
+    assert!(
+        store
+            .conflicts()
+            .unwrap()
+            .iter()
+            .any(|conflict| conflict.entity_id == stale.id.to_string()
+                && conflict.reason == "version_conflict")
+    );
+    let secondary = desktop
+        .transport
+        .inventory_warehouse_stock(Some(warehouse), "NATIVE-WAREHOUSE", 1)
+        .unwrap();
+    assert_eq!(secondary.products[0].on_hand, 4);
+}
