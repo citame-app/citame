@@ -566,13 +566,16 @@ impl Root {
         let footer = div().flex().flex_wrap().gap_2().when(!desk.busy, |row| {
             if let Some(promotions) = &desk.promotions {
                 return row.when_some(self.promotion_back_key(promotions), |row, label| {
-                    row.child(self.marketing_button(
-                        "back-from-promotions",
-                        label,
-                        Kind::Ghost,
-                        |root, cx| root.back_from_promotions(true, cx),
-                        cx,
-                    ))
+                    row.child(
+                        self.marketing_button(
+                            "back-from-promotions",
+                            label,
+                            Kind::Ghost,
+                            |root, cx| root.back_from_promotions(true, cx),
+                            cx,
+                        )
+                        .debug_selector(|| "back-from-promotions".to_owned()),
+                    )
                 });
             }
             let close = if desk.choose_template || desk.links.is_some() {
@@ -680,13 +683,16 @@ impl Root {
                             Root::open_booking_links,
                             cx,
                         ))
-                        .child(self.marketing_button(
-                            "marketing-promotions",
-                            Key::PromoTitle,
-                            Kind::Ghost,
-                            Root::open_promotions,
-                            cx,
-                        )),
+                        .child(
+                            self.marketing_button(
+                                "marketing-promotions",
+                                Key::PromoTitle,
+                                Kind::Ghost,
+                                Root::open_promotions,
+                                cx,
+                            )
+                            .debug_selector(|| "marketing-promotions".to_owned()),
+                        ),
                 )
                 .child(div().flex().gap_2().child(desk.search.clone()).child(
                     self.marketing_button(
