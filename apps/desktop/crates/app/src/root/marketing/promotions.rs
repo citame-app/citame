@@ -377,7 +377,7 @@ impl Root {
         let Some(editor) = desk.editor.as_mut().filter(|editor| !editor.stale) else {
             return;
         };
-        if editor.time_zone != zone && editor.pending.is_none() {
+        if editor.time_zone != zone {
             editor.stale = true;
             desk.error = Some(Key::PromoTimeZoneChanged);
             cx.notify();
@@ -674,7 +674,7 @@ impl Root {
                     cx,
                 ));
         }
-        if editor.pending.is_some() {
+        if editor.pending.is_some() && !editor.stale {
             return div().when(ready, |view| {
                 view.child(self.marketing_button(
                     "retry-promotion",
