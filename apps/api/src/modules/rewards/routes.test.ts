@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
+import { adminLoyaltyStatementSchema } from "@sob/contracts";
 import {
   appointment,
   appointmentService,
@@ -7,6 +8,7 @@ import {
   checkoutReward,
   loyaltyLot,
   service,
+  staffProfile,
 } from "@sob/db";
 import { eq } from "drizzle-orm";
 import {
@@ -235,6 +237,48 @@ test("voiding an unpaid redemption returns points with their original expiry ins
   const [lot] = await t.db.select().from(loyaltyLot);
   expect(lot).toMatchObject({ remainingPoints: 0, spentPoints: 0, expiredPoints: 100 });
 });
+test("desktop loyalty statements are private and reviewed point adjustments replay only once", async () => {
+  await call(owner, "/admin/rewards/policy", "PUT", { ...policy });
+  const path = `/admin/rewards/clients/${f.clientId}`;
+  const receptionist = await actor(t, "staff", "loyalty-reception@example.test", {
+    staffProfileId: f.anaId,
+  });
+  await t.db
+    .update(staffProfile)
+    .set({ accessPreset: "receptionist" })
+    .where(eq(staffProfile.id, f.anaId));
+  const desk = await call(owner, path);
+  expect(desk.headers.get("cache-control")).toBe("private, no-store");
+  const statement = adminLoyaltyStatementSchema.parse(await desk.json());
+  expect(statement.canAdjust).toBe(true);
+  expect(statement.availablePoints).toBe(0);
+  const limited = adminLoyaltyStatementSchema.parse(await (await call(receptionist, path)).json());
+  expect(limited.canAdjust).toBe(false);
+  expect((await call(client, path)).status).toBe(403);
+
+  const packet = { points: 50, reason: "Synthetic desk adjustment", idempotencyKey: key() };
+  const save = (generation: string, who = owner, payload = packet) =>
+    t.app.request(`${path}/adjustments`, {
+      method: "POST",
+      headers: {
+        origin: "http://localhost:3000",
+        cookie: who.cookie,
+        "content-type": "application/json",
+        "x-citame-generation": generation,
+      },
+      body: JSON.stringify(payload),
+    });
+  expect((await save("previous-history")).status).toBe(409);
+  expect((await save(statement.generation, receptionist)).status).toBe(403);
+  const first = await save(statement.generation);
+  expect(first.status, await first.clone().text()).toBe(201);
+  expect(await (await save(statement.generation)).json()).toEqual(await first.json());
+  expect((await save(statement.generation, owner, { ...packet, points: 90 })).status).toBe(409);
+  const current = adminLoyaltyStatementSchema.parse(await (await call(owner, path)).json());
+  expect(current.availablePoints).toBe(50);
+  expect(current.movements).toHaveLength(1);
+});
+
 test("a coupon has current terms, dates, per-customer/global limits and concurrent reservation protection", async () => {
   const code = `WELCOME_${key().slice(0, 8).toUpperCase()}`;
   const promo = await call(owner, "/admin/rewards/promotions", "POST", {

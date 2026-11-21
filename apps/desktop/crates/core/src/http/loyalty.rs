@@ -1,0 +1,37 @@
+use super::*;
+use crate::loyalty::{Adjustment, AdjustmentResult, Statement};
+use uuid::Uuid;
+
+const PATH: &str = "/admin/rewards/clients";
+
+impl HttpTransport {
+    pub fn loyalty_statement(&self, client: Uuid, page: u32) -> Result<Statement, TransportError> {
+        let response = self.get(
+            &self.agent,
+            &format!("{PATH}/{client}?page={page}"),
+            Some("application/json"),
+        )?;
+        read_response(response, false)
+    }
+
+    pub fn adjust_loyalty(
+        &self,
+        adjustment: &Adjustment,
+    ) -> Result<AdjustmentResult, TransportError> {
+        let mut request = self.agent.post(&format!(
+            "{}{PATH}/{}/adjustments",
+            self.base_url, adjustment.client_id
+        ));
+        for (key, value) in self.headers()? {
+            request = request.header(key, value);
+        }
+        let body = serde_json::to_string(adjustment)
+            .map_err(|error| TransportError::BadRequest(error.to_string()))?;
+        let response = request
+            .header("x-citame-generation", &adjustment.generation)
+            .content_type("application/json")
+            .send(body)
+            .map_err(|error| TransportError::Offline(error.to_string()))?;
+        read_response_with(response, review_transport_error)
+    }
+}

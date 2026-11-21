@@ -309,6 +309,24 @@ impl Root {
                             ))
                         },
                     ))
+                    .when(
+                        desk.areas.as_ref().is_some_and(|areas| {
+                            areas
+                                .iter()
+                                .any(|area| matches!(area, BrowserWorkspace::Sales))
+                        }),
+                        |list| {
+                            list.child(
+                                self.button(
+                                    "manage-loyalty",
+                                    self.t(Key::LoyaltyTitle),
+                                    Kind::Ghost,
+                                    cx.listener(|root, _, _, cx| root.open_loyalty(cx)),
+                                )
+                                .debug_selector(|| "manage-loyalty".to_owned()),
+                            )
+                        },
+                    )
                     .when(desk.areas.is_none() && desk.loading.is_none(), |list| {
                         list.child(self.button(
                             "cloud-reload",

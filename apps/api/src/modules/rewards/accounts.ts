@@ -166,6 +166,7 @@ export async function adjustRewards(
   principal: Principal,
 ) {
   requirePermission(principal, "refunds");
+  authorizeRewardClient(principal, clientId);
   return db.transaction(async (tx) => {
     const eventKey = `loyalty-adjustment:${principal.userId}:${input.idempotencyKey}`;
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${eventKey},0))`);

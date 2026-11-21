@@ -64,6 +64,43 @@ fn proxy_device() -> ProxyDevice {
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_loyalty_reads_and_guards_adjustments_through_the_proxy() {
+    let mut web = Device::sign_in();
+    web.sync();
+    let client = ops::create_client(&mut web.store, "Synthetic loyalty desk client", None).unwrap();
+    web.sync();
+    let id = client.parse().unwrap();
+    let device = proxy_device();
+    let statement = device.transport.loyalty_statement(id, 1).unwrap();
+    assert_eq!(statement.available_points, 0);
+    assert!(statement.can_adjust);
+    assert_eq!(
+        statement.generation,
+        web.store.verified_reviewed_generation().ok()
+    );
+    let request = sob_core::loyalty::Adjustment::prepare(
+        id,
+        "old-history".into(),
+        "25",
+        "Synthetic desk adjustment",
+    )
+    .unwrap();
+    assert!(matches!(
+        device.transport.adjust_loyalty(&request),
+        Err(TransportError::ReplicaGenerationChanged)
+    ));
+    assert!(
+        device
+            .transport
+            .loyalty_statement(id, 1)
+            .unwrap()
+            .movements
+            .is_empty()
+    );
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
 fn desktop_opens_cloud_management_with_the_linked_users_web_session_through_the_proxy() {
     use sob_core::auth::BrowserWorkspace;
     let device = proxy_device();

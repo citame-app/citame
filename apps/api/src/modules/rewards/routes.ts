@@ -2,6 +2,7 @@ import {
   applyRewardInputSchema,
   idSchema,
   loyaltyPolicyInputSchema,
+  permissionsFor,
   promotionInputSchema,
   rewardAdjustmentInputSchema,
   rewardChoiceSchema,
@@ -19,10 +20,13 @@ import { listPromotions, savePromotion } from "./promotions";
 import { returnCheckoutPoints } from "./value";
 
 const pageSchema = z.coerce.number().int().min(1).max(100000).default(1);
-function promotionGeneration(c: Context<AppEnv>, current: string) {
+function reviewedGeneration(c: Context<AppEnv>, current: string) {
   const generation = c.req.header("x-citame-generation");
   if ((c.get("desktopRequest") || generation !== undefined) && generation !== current)
-    throw new DomainError("sync_generation_changed", "Review promotions on the restored server");
+    throw new DomainError(
+      "sync_generation_changed",
+      "Review the current rewards data on the restored server",
+    );
   return generation !== undefined;
 }
 export function rewardsAdminRoutes({ db, config }: AppDeps) {
@@ -47,7 +51,7 @@ export function rewardsAdminRoutes({ db, config }: AppDeps) {
       );
     })
     .post("/promotions", async (c) => {
-      promotionGeneration(c, config.syncReplicaGeneration);
+      reviewedGeneration(c, config.syncReplicaGeneration);
       return c.json(
         await savePromotion(
           db,
@@ -59,7 +63,7 @@ export function rewardsAdminRoutes({ db, config }: AppDeps) {
       );
     })
     .put("/promotions/:id", async (c) => {
-      const allowIdenticalReplay = promotionGeneration(c, config.syncReplicaGeneration);
+      const allowIdenticalReplay = reviewedGeneration(c, config.syncReplicaGeneration);
       return c.json(
         await savePromotion(
           db,
@@ -79,18 +83,24 @@ export function rewardsAdminRoutes({ db, config }: AppDeps) {
         ),
       ),
     )
-    .get("/clients/:id", async (c) =>
-      c.json(
-        await loyaltyStatement(
-          db,
-          parseOrThrow(idSchema, c.req.param("id")),
-          c.get("principal"),
-          parseOrThrow(pageSchema, c.req.query("page")),
-        ),
-      ),
-    )
-    .post("/clients/:id/adjustments", async (c) =>
-      c.json(
+    .get("/clients/:id", async (c) => {
+      c.header("Cache-Control", "private, no-store");
+      const principal = c.get("principal");
+      const statement = await loyaltyStatement(
+        db,
+        parseOrThrow(idSchema, c.req.param("id")),
+        principal,
+        parseOrThrow(pageSchema, c.req.query("page")),
+      );
+      return c.json({
+        ...statement,
+        generation: config.syncReplicaGeneration,
+        canAdjust: permissionsFor(principal.role, principal.accessPreset).refunds,
+      });
+    })
+    .post("/clients/:id/adjustments", async (c) => {
+      reviewedGeneration(c, config.syncReplicaGeneration);
+      return c.json(
         await adjustRewards(
           db,
           parseOrThrow(idSchema, c.req.param("id")),
@@ -98,8 +108,8 @@ export function rewardsAdminRoutes({ db, config }: AppDeps) {
           c.get("principal"),
         ),
         201,
-      ),
-    );
+      );
+    });
 }
 export function rewardsClientRoutes({ db }: AppDeps) {
   return new Hono<AppEnv>().get("/rewards", async (c) => {

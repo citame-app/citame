@@ -692,6 +692,16 @@ impl Root {
                                 cx,
                             )
                             .debug_selector(|| "marketing-promotions".to_owned()),
+                        )
+                        .child(
+                            self.marketing_button(
+                                "marketing-loyalty",
+                                Key::LoyaltyTitle,
+                                Kind::Ghost,
+                                Root::open_loyalty,
+                                cx,
+                            )
+                            .debug_selector(|| "marketing-loyalty".to_owned()),
                         ),
                 )
                 .child(div().flex().gap_2().child(desk.search.clone()).child(

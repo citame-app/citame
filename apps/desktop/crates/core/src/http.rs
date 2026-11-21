@@ -66,6 +66,7 @@ mod booking_links;
 pub mod client_controls;
 pub mod email_delivery;
 mod inventory_documents;
+mod loyalty;
 pub mod marketing;
 mod portfolio;
 mod promotions;

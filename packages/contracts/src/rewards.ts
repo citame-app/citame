@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { idSchema, instantSchema, pageInfoSchema } from "./common";
+import { idSchema, instantSchema, pageInfoSchema, syncGenerationSchema } from "./common";
 import { appointmentPromotionTimingSchema, promotionTimingSchema } from "./promotion-timing";
 
 const points = z.number().int().min(0).max(1000000000);
@@ -104,6 +104,10 @@ export const loyaltyStatementSchema = z.object({
     }),
   ),
   pagination: pageInfoSchema,
+});
+export const adminLoyaltyStatementSchema = loyaltyStatementSchema.extend({
+  generation: syncGenerationSchema,
+  canAdjust: z.boolean(),
 });
 export const promotionInputSchema = z
   .object({

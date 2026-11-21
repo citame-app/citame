@@ -55,6 +55,7 @@ mod intake_editor;
 mod intake_live;
 mod intake_record;
 mod inventory;
+mod loyalty;
 mod marketing;
 mod notices;
 mod reports;
@@ -288,6 +289,7 @@ enum Overlay {
     SalonConfiguration(Box<salon_configuration::Desk>),
     EmailDelivery(Box<email_delivery::Desk>),
     Marketing(Box<marketing::Desk>),
+    Loyalty(Box<loyalty::Desk>),
     Whatsapp(Box<whatsapp::Desk>),
     BookingPolicy(Box<booking_policy::Desk>),
     IntakeForms(Box<form_admin::Desk>),
@@ -776,6 +778,7 @@ impl Root {
         self.refresh_combinations(cx);
         self.refresh_email_delivery(reconnected, cx);
         self.refresh_marketing(reconnected, cx);
+        self.refresh_loyalty(reconnected, cx);
         self.refresh_whatsapp_desk(reconnected, cx);
         if reconnected {
             self.refresh_weekly_conflicts_if_ready(cx);
@@ -2596,6 +2599,7 @@ impl Root {
             Overlay::SalonConfiguration(_) => self.close_salon_configuration(cx),
             Overlay::EmailDelivery(_) => self.dismiss_email_delivery(cx),
             Overlay::Marketing(_) => self.dismiss_marketing(cx),
+            Overlay::Loyalty(_) => self.dismiss_loyalty(false, cx),
             Overlay::Whatsapp(_) => self.close_whatsapp_desk(cx),
             Overlay::BookingPolicy(_) => self.dismiss_booking_policy(cx),
             Overlay::ServiceAssignments(_) => self.close_service_assignment(cx),
@@ -4149,6 +4153,9 @@ impl Render for Root {
                         Overlay::Blocks => Some(self.render_time_off_list(cx)),
                         Overlay::Inbox(inbox) => Some(self.render_inbox(inbox, cx)),
                         Overlay::Cash(desk) => Some(self.render_cash_register(desk, cx)),
+                        Overlay::Loyalty(desk) => {
+                            Some(self.render_loyalty(desk, window.viewport_size(), cx))
+                        }
                         Overlay::WalkIn(sale) => {
                             Some(self.render_walk_in(sale, window.viewport_size(), cx))
                         }

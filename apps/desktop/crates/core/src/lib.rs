@@ -17,6 +17,7 @@ pub mod intake;
 pub mod inventory;
 pub mod inventory_classifications;
 pub mod inventory_documents;
+pub mod loyalty;
 pub mod model;
 pub mod ops;
 pub mod pkce;
