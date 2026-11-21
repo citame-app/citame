@@ -24,9 +24,9 @@ use crate::intake::{
     recovered_form,
 };
 use crate::inventory::{
-    ContentWriteError, LedgerPage, LedgerQuery, MovementPage, PRODUCTS_PATH, PackageContent,
-    PendingStock, Product, ProductId, ProductPage, ProductQuery, StockReturnAttempt,
-    StockWriteError,
+    ContentWriteError, InventoryFacets, InventoryReport, LedgerPage, LedgerQuery, MovementPage,
+    PRODUCTS_PATH, PackageContent, PendingStock, Product, ProductId, ProductPage, ProductQuery,
+    StockReturnAttempt, StockWriteError,
 };
 use crate::model::*;
 use crate::reports::{ClientReport, Outcome, OutcomePage, ReportQuery, ReportSummary};
@@ -1110,7 +1110,35 @@ impl HttpTransport {
         query: &ProductQuery,
         page: u32,
     ) -> Result<ProductPage, TransportError> {
-        self.load_inventory_page(&format!("{}&resellable=true", query.path(page)), page)
+        self.inventory_products(
+            &ProductQuery {
+                resellable: Some(true),
+                ..query.clone()
+            },
+            page,
+        )
+    }
+
+    pub fn inventory_facets(&self) -> Result<InventoryFacets, TransportError> {
+        read_response(
+            self.get(&self.agent, "/admin/inventory/facets", None)?,
+            false,
+        )
+    }
+
+    pub fn inventory_report(
+        &self,
+        query: &ProductQuery,
+    ) -> Result<InventoryReport, TransportError> {
+        read_response(self.get(&self.agent, &query.report_path(), None)?, false)
+    }
+
+    pub fn write_inventory_products_csv(
+        &self,
+        query: &ProductQuery,
+        output: &mut impl std::io::Write,
+    ) -> Result<(), TransportError> {
+        self.write_csv(&query.export_path(), output)
     }
 
     fn load_inventory_page(&self, path: &str, page: u32) -> Result<ProductPage, TransportError> {

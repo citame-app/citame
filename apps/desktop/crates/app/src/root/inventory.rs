@@ -1,11 +1,13 @@
 use super::*;
 use sob_core::backoff::Backoff;
 use sob_core::inventory::{
-    ContentWriteError, LIVE_TOPIC, LedgerPage, LedgerQuery, MovementPage, PackageContent,
-    PendingStock, Product, ProductId, ProductPage, ProductQuery, StockWriteError,
+    ContentWriteError, InventoryFacets, InventoryReport, LIVE_TOPIC, LedgerPage, LedgerQuery,
+    MovementPage, PackageContent, PendingStock, Product, ProductActivity, ProductId, ProductPage,
+    ProductPageSize, ProductQuery, ProductSort, StockWriteError,
 };
 use sob_core::sync::TransportError;
 
+mod catalogue;
 mod ledger;
 mod stock;
 
@@ -15,6 +17,7 @@ pub(super) struct Desk {
     query: ProductQuery,
     page: u32,
     catalog: Option<ProductPage>,
+    catalogue_tools: catalogue::Tools,
     ledger: Option<ledger::Panel>,
     product: Option<Product>,
     editor: Option<Editor>,
@@ -25,6 +28,7 @@ pub(super) struct Desk {
     conflict: bool,
     error: Option<Key>,
     observed_revision: i64,
+    observed_staff_revision: i64,
     retry: Option<(Instant, Action)>,
     backoff: Backoff,
 }
@@ -45,6 +49,33 @@ impl Editor {
 }
 
 impl Desk {
+    fn redact_costs(&mut self) {
+        self.catalogue_tools.report = None;
+        if let Some(page) = &mut self.catalog {
+            for product in &mut page.products {
+                product.cost_cents = None;
+            }
+        }
+        if let Some(product) = &mut self.product {
+            product.cost_cents = None;
+        }
+    }
+
+    fn retry_after(&mut self, action: Action, error: &TransportError) -> bool {
+        let minimum = match error {
+            TransportError::RateLimited(minimum) => *minimum,
+            TransportError::Offline(_) | TransportError::Server(_) => None,
+            _ => return false,
+        };
+        let delay = self.backoff.next_delay().max(Duration::from_millis(500));
+        let now = Instant::now();
+        let deadline = now
+            .checked_add(Backoff::at_least(delay, minimum))
+            .unwrap_or(now + Duration::from_secs(60));
+        self.retry = Some((deadline, action));
+        true
+    }
+
     pub(super) fn dismiss_editor(&mut self, cx: &App) -> bool {
         if self.stock.is_some() {
             if !self.saving {
@@ -112,11 +143,32 @@ enum Action {
 }
 
 enum Loaded {
-    Catalog(ProductPage),
+    Catalog {
+        page: ProductPage,
+        facets: Option<InventoryFacets>,
+        report: Option<InventoryReport>,
+        auxiliary_error: Option<TransportError>,
+    },
     Ledger(LedgerQuery, u32, LedgerPage),
     Product(Box<Product>),
     Movements(MovementPage),
     Stock(PendingStock, Result<Box<Product>, StockWriteError>),
+}
+
+fn optional_catalogue_result<T>(
+    result: Result<T, TransportError>,
+    auxiliary_error: &mut Option<TransportError>,
+) -> Result<Option<T>, TransportError> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(error @ (TransportError::Forbidden(_) | TransportError::Unauthorized)) => Err(error),
+        Err(error) => {
+            if auxiliary_error.is_none() || matches!(error, TransportError::RateLimited(_)) {
+                *auxiliary_error = Some(error);
+            }
+            Ok(None)
+        }
+    }
 }
 
 fn text_input(value: &str, placeholder: &'static str, cx: &mut Context<TextField>) -> TextField {
@@ -131,7 +183,7 @@ impl Root {
         let search = cx.new(|cx| TextField::new(prompt, false, cx));
         let subscription = cx.subscribe(&search, |root, _, event, cx| {
             if matches!(event, FieldEvent::Submit) {
-                root.search_inventory(false, cx);
+                root.filter_inventory_catalogue(|_| {}, cx);
             }
         });
         let query = ProductQuery::default();
@@ -141,6 +193,7 @@ impl Root {
             query: query.clone(),
             page: 1,
             catalog: None,
+            catalogue_tools: catalogue::Tools::default(),
             ledger: None,
             product: None,
             editor: None,
@@ -151,25 +204,10 @@ impl Root {
             conflict: false,
             error: None,
             observed_revision: 0,
+            observed_staff_revision: -1,
             retry: None,
             backoff: Backoff::default(),
         }));
-        self.request_inventory(Action::Catalog(query, 1), cx);
-    }
-
-    fn search_inventory(&mut self, toggle_archived: bool, cx: &mut Context<Self>) {
-        let Overlay::Inventory(desk) = &mut self.overlay else {
-            return;
-        };
-        if desk.request.is_some() || desk.product.is_some() || desk.ledger.is_some() {
-            return;
-        }
-        let archived = desk.query.include_archived ^ toggle_archived;
-        let Some(query) = ProductQuery::new(desk.search.read(cx).text(), archived) else {
-            desk.error = Some(Key::InventorySearchInvalid);
-            cx.notify();
-            return;
-        };
         self.request_inventory(Action::Catalog(query, 1), cx);
     }
 
@@ -200,18 +238,32 @@ impl Root {
     }
 
     pub(super) fn refresh_inventory(&mut self, reconnected: bool, cx: &mut Context<Self>) {
+        let Overlay::Inventory(desk) = &mut self.overlay else {
+            return;
+        };
+        let staff_revision = self
+            .svc
+            .store
+            .staff_directory_revision()
+            .unwrap_or_default();
+        let access_changed = staff_revision != desk.observed_staff_revision;
+        if access_changed {
+            desk.redact_costs();
+        }
         if self.svc.status().connectivity == Connectivity::Online
-            && let Overlay::Inventory(desk) = &self.overlay
             && desk.request.is_none()
             && desk.editor.is_none()
             && (reconnected
                 || match &desk.retry {
                     Some((deadline, _)) => Instant::now() >= *deadline,
-                    None => self
-                        .svc
-                        .store
-                        .live_view_revision(LIVE_TOPIC)
-                        .is_ok_and(|revision| revision != desk.observed_revision),
+                    None => {
+                        access_changed
+                            || self
+                                .svc
+                                .store
+                                .live_view_revision(LIVE_TOPIC)
+                                .is_ok_and(|revision| revision != desk.observed_revision)
+                    }
                 })
         {
             if let Some(panel) = &desk.stock {
@@ -253,6 +305,14 @@ impl Root {
             .store
             .live_view_revision(LIVE_TOPIC)
             .unwrap_or_default();
+        let staff_revision = self
+            .svc
+            .store
+            .staff_directory_revision()
+            .unwrap_or_default();
+        if staff_revision != desk.observed_staff_revision {
+            desk.redact_costs();
+        }
         let request = Arc::new(());
         desk.request = Some(request.clone());
         desk.retry = None;
@@ -276,7 +336,23 @@ impl Root {
                     match action {
                         Action::Catalog(query, page) => transport
                             .inventory_products(&query, page)
-                            .map(Loaded::Catalog)
+                            .and_then(|page| {
+                                let mut auxiliary_error = None;
+                                let facets = optional_catalogue_result(
+                                    transport.inventory_facets(),
+                                    &mut auxiliary_error,
+                                )?;
+                                let report = optional_catalogue_result(
+                                    transport.inventory_report(&query),
+                                    &mut auxiliary_error,
+                                )?;
+                                Ok(Loaded::Catalog {
+                                    page,
+                                    facets,
+                                    report,
+                                    auxiliary_error,
+                                })
+                            })
                             .map_err(ContentWriteError::from),
                         Action::Ledger(query, page) => transport
                             .inventory_ledger(&query, page)
@@ -324,12 +400,29 @@ impl Root {
                 }
                 desk.request = None;
                 desk.saving = false;
+                let stale_access =
+                    root.svc.store.staff_directory_revision().ok() != Some(staff_revision);
+                if stale_access {
+                    desk.redact_costs();
+                }
                 if result.is_ok() && !keeping_stock {
                     desk.observed_revision = revision;
-                    desk.backoff.reset();
+                    desk.observed_staff_revision = staff_revision;
+                    if !matches!(
+                        result,
+                        Ok(Loaded::Catalog {
+                            auxiliary_error: Some(_),
+                            ..
+                        })
+                    ) {
+                        desk.backoff.reset();
+                    }
                 }
                 match result {
-                    Ok(Loaded::Stock(pending, outcome)) => {
+                    Ok(Loaded::Stock(pending, mut outcome)) => {
+                        if stale_access && let Ok(product) = &mut outcome {
+                            product.cost_cents = None;
+                        }
                         root.finish_stock_movement(pending, outcome, cx);
                         return;
                     }
@@ -349,13 +442,27 @@ impl Root {
                             }
                         }
                     }
-                    Ok(Loaded::Catalog(loaded)) => {
+                    Ok(Loaded::Catalog {
+                        page: loaded,
+                        facets,
+                        report,
+                        auxiliary_error,
+                    }) => {
                         if let Some((query, page)) = catalog {
                             desk.query = query;
                             desk.page = page;
                         }
                         desk.product = None;
                         desk.catalog = Some(loaded);
+                        desk.catalogue_tools.facets = facets;
+                        desk.catalogue_tools.report = report;
+                        if stale_access {
+                            desk.redact_costs();
+                        }
+                        if let Some(error) = auxiliary_error {
+                            desk.error = Some(Key::InventoryCatalogueIncomplete);
+                            desk.retry_after(attempted, &error);
+                        }
                     }
                     Ok(Loaded::Ledger(mut query, page, loaded)) => {
                         if let Some(panel) = &mut desk.ledger {
@@ -366,7 +473,10 @@ impl Root {
                             panel.results = Some(loaded);
                         }
                     }
-                    Ok(Loaded::Product(product)) => {
+                    Ok(Loaded::Product(mut product)) => {
+                        if stale_access {
+                            product.cost_cents = None;
+                        }
                         if reviewing && product.can_manage {
                             if let Some(editor) = desk.editor.as_mut() {
                                 editor.original = product.package_content.clone();
@@ -404,7 +514,9 @@ impl Root {
                         TransportError::Forbidden(_) | TransportError::Unauthorized,
                     )) => {
                         desk.observed_revision = revision;
+                        desk.observed_staff_revision = staff_revision;
                         desk.catalog = None;
+                        desk.catalogue_tools = catalogue::Tools::default();
                         desk.ledger = None;
                         desk.product = None;
                         desk.editor = None;
@@ -423,25 +535,9 @@ impl Root {
                         } else {
                             Key::InventoryUnavailable
                         });
-                        match error {
-                            TransportError::Offline(_)
-                            | TransportError::Server(_)
-                            | TransportError::RateLimited(_)
-                                if !reviewing =>
-                            {
-                                let minimum = match error {
-                                    TransportError::RateLimited(minimum) => minimum,
-                                    _ => None,
-                                };
-                                let delay =
-                                    desk.backoff.next_delay().max(Duration::from_millis(500));
-                                let now = Instant::now();
-                                let deadline = now
-                                    .checked_add(Backoff::at_least(delay, minimum))
-                                    .unwrap_or(now + Duration::from_secs(60));
-                                desk.retry = Some((deadline, attempted));
-                            }
-                            _ => desk.observed_revision = revision,
+                        if reviewing || !desk.retry_after(attempted, &error) {
+                            desk.observed_revision = revision;
+                            desk.observed_staff_revision = staff_revision;
                         }
                     }
                 }
@@ -618,17 +714,9 @@ impl Root {
                             "inventory-search",
                             self.t(Key::InventoryFind),
                             Kind::Primary,
-                            cx.listener(|root, _, _, cx| root.search_inventory(false, cx)),
-                        ))
-                        .child(self.button(
-                            "inventory-archived",
-                            self.t(if desk.query.include_archived {
-                                Key::InventoryActive
-                            } else {
-                                Key::InventoryArchived
+                            cx.listener(|root, _, _, cx| {
+                                root.filter_inventory_catalogue(|_| {}, cx)
                             }),
-                            Kind::Ghost,
-                            cx.listener(|root, _, _, cx| root.search_inventory(true, cx)),
                         ))
                         .when(desk.catalog.is_some(), |row| {
                             row.child(self.button(
@@ -640,6 +728,7 @@ impl Root {
                         })
                     }),
             )
+            .child(self.render_catalogue_tools(desk, ready, cx))
             .when_some(desk.catalog.as_ref(), |body, page| {
                 body.when(page.products.is_empty(), |body| {
                     body.child(self.t(Key::InventoryEmpty))
@@ -664,7 +753,15 @@ impl Root {
                             div()
                                 .flex_1()
                                 .child(title)
-                                .child(div().text_sm().text_color(theme::muted()).child(summary)),
+                                .child(div().text_sm().text_color(theme::muted()).child(summary))
+                                .when(product.low_stock, |card| {
+                                    card.child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(theme::conflict_fg())
+                                            .child(self.t(Key::InventoryLowStock)),
+                                    )
+                                }),
                         )
                         .when(ready, |row| {
                             row.child(self.button(
@@ -744,9 +841,36 @@ impl Root {
                 body.child(self.t(Key::InventoryArchivedProduct))
             })
             .child(self.amount_label(product.price_cents, &product.currency))
+            .child(self.t(if product.resellable {
+                Key::InventoryRetail
+            } else {
+                Key::InventoryInternal
+            }))
+            .child(format!(
+                "{} · {}{}{:02} %",
+                self.t(Key::InventoryTax),
+                product.tax_basis_points / 100,
+                if self.locale == Locale::EsAr {
+                    ','
+                } else {
+                    '.'
+                },
+                product.tax_basis_points % 100,
+            ))
+            .when_some(product.cost_cents, |body, cents| {
+                body.child(format!(
+                    "{} · {}",
+                    self.t(Key::InventoryUnitCost),
+                    self.amount_label(cents, &product.currency)
+                ))
+            })
             .child(amount(Key::InventoryOnHand, product.stock_on_hand))
             .child(amount(Key::InventoryReserved, product.stock_reserved))
             .child(amount(Key::InventoryAvailable, product.available))
+            .child(amount(Key::InventoryThreshold, product.low_stock_threshold))
+            .when_some(product.target_stock, |body, target| {
+                body.child(amount(Key::InventoryTarget, target))
+            })
             .child(format!("{} · {pack}", self.t(Key::InventoryContent)));
         if let Some(stock) = &desk.stock {
             return details.child(self.render_stock_panel(

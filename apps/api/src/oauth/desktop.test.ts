@@ -125,6 +125,41 @@ test("the desktop proxy permits only reviewed catalogue operations and enforces 
   expect((await request(resources, manager.access)).status).toBe(403);
 });
 
+test("desktop inventory tools enforce read permissions without exposing costs or allowing writes", async () => {
+  const owner = await tokens("owner", "inventory-tools-owner");
+  const worker = await tokens("staff", "inventory-tools-staff");
+  if (!worker.who.staffId) throw new Error("Missing staff fixture");
+  const setAccess = (accessPreset: "restricted" | "receptionist") =>
+    t.db.update(staffProfile).set({ accessPreset }).where(eq(staffProfile.id, worker.who.staffId!));
+  await setAccess("restricted");
+  const report = "/admin/inventory/products/report";
+  const exportPath = "/admin/inventory/products/export";
+  const paths = ["/admin/inventory/facets", report, exportPath];
+  for (const path of paths) {
+    const allowed = await request(path, owner.access);
+    expect(allowed.status).toBe(200);
+    await allowed.text();
+    expect((await request(path, worker.access)).status).toBe(403);
+    expect(
+      (
+        await t.app.request(path, {
+          method: "POST",
+          headers: { authorization: `Bearer ${owner.access}` },
+        })
+      ).status,
+    ).toBe(403);
+  }
+  expect(await (await request(report, owner.access)).json()).toHaveProperty("valuation");
+  await setAccess("receptionist");
+  for (const path of paths) {
+    const allowed = await request(path, worker.access);
+    expect(allowed.status).toBe(200);
+    await allowed.text();
+  }
+  expect(await (await request(report, worker.access)).json()).not.toHaveProperty("valuation");
+  expect(await (await request(exportPath, worker.access)).text()).not.toContain("unit_cost_cents");
+});
+
 test("desktop staff provisioning is owner-only and preserves the existing profile", async () => {
   const owner = await tokens("owner", "provision-staff-owner");
   const member = await tokens("staff", "provision-staff-member");

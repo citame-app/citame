@@ -88,6 +88,9 @@ describe("route mapping", () => {
       "/admin/reviews/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/moderation",
       "/admin/reviews/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/reply",
       "/admin/inventory/products?search=repair",
+      "/admin/inventory/facets",
+      "/admin/inventory/products/report?lowStock=true",
+      "/admin/inventory/products/export?sort=stock_asc",
       "/admin/inventory/movements?kind=receive&search=A%26B&page=2",
       "/admin/inventory/movements/export?kind=receive&search=A%26B",
       "/admin/inventory/products/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
@@ -125,7 +128,10 @@ describe("route mapping", () => {
     expect(proxy.matches(new URL("http://web/admin/reports/summary/private"))).toBe(false);
     expect(proxy.matches(new URL("http://web/admin/reports/clients/private"))).toBe(false);
     expect(proxy.matches(new URL("http://web/admin/reports/outcomes/private"))).toBe(false);
-    expect(proxy.matches(new URL("http://web/admin/inventory/products/export"))).toBe(false);
+    expect(proxy.matches(new URL("http://web/admin/inventory/products/export/private"))).toBe(
+      false,
+    );
+    expect(proxy.matches(new URL("http://web/admin/inventory/facets/private"))).toBe(false);
     expect(proxy.matches(new URL("http://web/admin/inventory/movements/export/private"))).toBe(
       false,
     );

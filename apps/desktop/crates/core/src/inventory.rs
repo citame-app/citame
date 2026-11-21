@@ -49,36 +49,150 @@ impl StockReturnAttempt {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ProductActivity {
+    #[default]
+    Active,
+    Archived,
+    All,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ProductSort {
+    #[default]
+    NameAscending,
+    NameDescending,
+    Updated,
+    Stock,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ProductPageSize {
+    #[default]
+    Twenty,
+    Fifty,
+    Hundred,
+}
+
+impl ProductPageSize {
+    pub const fn number(self) -> u32 {
+        match self {
+            Self::Twenty => 20,
+            Self::Fifty => 50,
+            Self::Hundred => 100,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProductQuery {
     pub search: String,
-    pub include_archived: bool,
+    pub activity: ProductActivity,
+    pub category: Option<String>,
+    pub brand: Option<String>,
+    pub resellable: Option<bool>,
+    pub low_stock: bool,
+    pub sort: ProductSort,
+    pub page_size: ProductPageSize,
 }
 
 impl ProductQuery {
     pub fn new(search: &str, include_archived: bool) -> Option<Self> {
-        let search = search.trim();
-        (search.encode_utf16().count() <= 100).then(|| Self {
-            search: search.to_owned(),
-            include_archived,
-        })
+        let query = Self {
+            activity: if include_archived {
+                ProductActivity::All
+            } else {
+                ProductActivity::Active
+            },
+            ..Self::default()
+        };
+        query.with_search(search)
+    }
+
+    pub fn with_search(mut self, search: &str) -> Option<Self> {
+        let search = crate::trim_like_javascript(search);
+        if search.encode_utf16().count() > 100 || search.contains('\0') {
+            return None;
+        }
+        self.search = search.to_owned();
+        Some(self)
+    }
+
+    fn parameters(&self, ordered: bool) -> String {
+        let mut query = form_urlencoded::Serializer::new(String::new());
+        query.append_pair("search", &self.search).append_pair(
+            "active",
+            match self.activity {
+                ProductActivity::Active => "active",
+                ProductActivity::Archived => "inactive",
+                ProductActivity::All => "all",
+            },
+        );
+        if let Some(category) = &self.category {
+            query.append_pair("category", category);
+        }
+        if let Some(brand) = &self.brand {
+            query.append_pair("brand", brand);
+        }
+        if let Some(resellable) = self.resellable {
+            query.append_pair("resellable", if resellable { "true" } else { "false" });
+        }
+        if self.low_stock {
+            query.append_pair("lowStock", "true");
+        }
+        if ordered {
+            query.append_pair(
+                "sort",
+                match self.sort {
+                    ProductSort::NameAscending => "name_asc",
+                    ProductSort::NameDescending => "name_desc",
+                    ProductSort::Updated => "updated_desc",
+                    ProductSort::Stock => "stock_asc",
+                },
+            );
+        }
+        query.finish()
     }
 
     pub(crate) fn path(&self, page: u32) -> String {
-        let query = form_urlencoded::Serializer::new(String::new())
-            .append_pair("search", &self.search)
-            .append_pair("page", &page.to_string())
-            .append_pair(
-                "active",
-                if self.include_archived {
-                    "all"
-                } else {
-                    "active"
-                },
-            )
-            .finish();
-        format!("{PRODUCTS_PATH}?{query}")
+        format!(
+            "{PRODUCTS_PATH}?{}&page={page}&pageSize={}",
+            self.parameters(true),
+            self.page_size.number()
+        )
     }
+
+    pub(crate) fn export_path(&self) -> String {
+        format!("{PRODUCTS_PATH}/export?{}", self.parameters(true))
+    }
+
+    pub(crate) fn report_path(&self) -> String {
+        format!("{PRODUCTS_PATH}/report?{}", self.parameters(false))
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InventoryReport {
+    pub products: u64,
+    pub on_hand: u64,
+    pub reserved: u64,
+    pub low_stock_products: u64,
+    pub valuation: Option<InventoryValuation>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InventoryValuation {
+    pub currency: String,
+    pub known_cost_cents: String,
+    pub products_missing_cost: u64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct InventoryFacets {
+    pub categories: Vec<String>,
+    pub brands: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -189,6 +303,16 @@ pub struct Product {
     pub unit_label: String,
     pub package_content: Option<PackageContent>,
     pub price_cents: i64,
+    pub cost_cents: Option<i64>,
+    #[serde(default)]
+    pub tax_basis_points: u32,
+    #[serde(default)]
+    pub resellable: bool,
+    pub target_stock: Option<u32>,
+    #[serde(default)]
+    pub low_stock_threshold: u32,
+    #[serde(default)]
+    pub low_stock: bool,
     pub currency: String,
     pub active: bool,
     pub version: u32,
@@ -353,6 +477,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn product_export_shares_filters_and_order_without_page_limits() {
+        let mut query = ProductQuery::new("kit & foil", false).unwrap();
+        query.category = Some("Manos / Pies".into());
+        query.brand = Some("Marca +".into());
+        query.resellable = Some(false);
+        query.activity = ProductActivity::Archived;
+        query.low_stock = true;
+        query.sort = ProductSort::Stock;
+        query.page_size = ProductPageSize::Hundred;
+        let export = query.export_path();
+        let list = query.path(4);
+        let params = export.split_once('?').unwrap().1;
+        assert_eq!(
+            params,
+            "search=kit+%26+foil&active=inactive&category=Manos+%2F+Pies&brand=Marca+%2B&resellable=false&lowStock=true&sort=stock_asc"
+        );
+        assert_eq!(
+            list,
+            format!("{PRODUCTS_PATH}?{params}&page=4&pageSize=100")
+        );
+        assert!(!query.report_path().contains("sort"));
+    }
+
+    #[test]
     fn package_content_validates_like_the_web_contract() {
         assert_eq!(PackageContent::parse("", "   "), Ok(None));
         assert_eq!(
@@ -391,7 +539,7 @@ mod tests {
         let query = ProductQuery::new("  A&B / 2  ", true).unwrap();
         assert_eq!(
             query.path(2),
-            "/admin/inventory/products?search=A%26B+%2F+2&page=2&active=all"
+            "/admin/inventory/products?search=A%26B+%2F+2&active=all&sort=name_asc&page=2&pageSize=20"
         );
     }
 

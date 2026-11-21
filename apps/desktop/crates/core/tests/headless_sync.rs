@@ -1966,6 +1966,85 @@ fn native_moderation_publishes_replies_and_hides_through_the_proxy() {
 
 #[test]
 #[ignore = "needs the synthetic product from the production smoke test"]
+fn native_inventory_filters_match_totals_and_the_full_csv_through_the_proxy() {
+    use sob_core::inventory::{ProductActivity, ProductPageSize, ProductSort};
+
+    let device = proxy_device();
+    let web = Device::sign_in();
+    let prefix = format!("Proxy inventory {}", uuid::Uuid::now_v7());
+    let category = format!("{prefix} category");
+    for number in 1..=22 {
+        web.rest_post(
+            "/admin/inventory/products",
+            json!({
+                "name": format!("{prefix} {number:02}"),
+                "category": category,
+                "brand": "Native catalogue QA",
+                "openingStock": number,
+                "lowStockThreshold": 21,
+                "costCents": 123,
+                "priceCents": 246,
+                "resellable": number != 22,
+                "idempotencyKey": uuid::Uuid::now_v7().to_string(),
+            }),
+        );
+    }
+
+    let mut query = ProductQuery::new(&prefix, false).unwrap();
+    query.category = Some(category.clone());
+    query.brand = Some("Native catalogue QA".into());
+    query.resellable = Some(true);
+    query.low_stock = true;
+    query.sort = ProductSort::NameDescending;
+    let facets = device.transport.inventory_facets().unwrap();
+    assert!(facets.categories.contains(&category));
+    assert!(facets.brands.contains(&"Native catalogue QA".into()));
+    let first = device.transport.inventory_products(&query, 1).unwrap();
+    assert_eq!(first.pagination.total, 21);
+    assert_eq!(first.products.len(), 20);
+    assert_eq!(first.products[0].name, format!("{prefix} 21"));
+    assert_eq!(first.products[0].stock_on_hand, 21);
+    let second = device.transport.inventory_products(&query, 2).unwrap();
+    assert_eq!(second.products[0].name, format!("{prefix} 01"));
+    let report = device.transport.inventory_report(&query).unwrap();
+    assert_eq!(report.products, 21);
+    assert_eq!(report.low_stock_products, 21);
+    assert_eq!(report.on_hand, (1..=21).sum::<u64>());
+    assert_eq!(
+        report.valuation.unwrap().known_cost_cents,
+        ((1..=21).sum::<u64>() * 123).to_string()
+    );
+    let mut bytes = Vec::new();
+    device
+        .transport
+        .write_inventory_products_csv(&query, &mut bytes)
+        .unwrap();
+    let csv = String::from_utf8(bytes).unwrap();
+    assert_eq!(csv.lines().count(), 22);
+    assert!(
+        csv.find(&format!("{prefix} 21")).unwrap() < csv.find(&format!("{prefix} 01")).unwrap()
+    );
+    assert!(!csv.contains(&format!("{prefix} 22")));
+
+    query.page_size = ProductPageSize::Fifty;
+    assert_eq!(
+        device
+            .transport
+            .inventory_products(&query, 1)
+            .unwrap()
+            .products
+            .len(),
+        21
+    );
+    query.activity = ProductActivity::Archived;
+    assert_eq!(
+        device.transport.inventory_report(&query).unwrap().products,
+        0
+    );
+}
+
+#[test]
+#[ignore = "needs the synthetic product from the production smoke test"]
 fn native_inventory_round_trips_pack_and_stock_through_the_proxy() {
     let id = env("SOB_TEST_INVENTORY_PRODUCT").parse().unwrap();
     let device = proxy_device();
