@@ -54,7 +54,16 @@ describe("sync_change recording (database triggers)", () => {
     await t.db.execute(sql`update client_profile set name = 'Lu' where id = ${row.id}`);
     await t.db.execute(sql`update client_profile set deleted_at = now() where id = ${row.id}`);
     await t.db.execute(sql`delete from client_profile where id = ${row.id}`);
-    expect((await changes()).map((c) => c.op)).toEqual(["upsert", "upsert", "delete", "delete"]);
+    const recorded = await changes();
+    expect(recorded.filter((c) => c.entity === "client").map((c) => [c.row_id, c.op])).toEqual([
+      [row.id, "upsert"],
+      [row.id, "upsert"],
+      [row.id, "delete"],
+      [row.id, "delete"],
+    ]);
+    expect(recorded.filter((c) => c.entity !== "client")).toEqual([
+      { seq: expect.any(Number), entity: "live_view", row_id: "intake_records", op: "upsert" },
+    ]);
   });
 
   test("a rolled back transaction records nothing", async () => {
