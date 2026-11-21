@@ -3,10 +3,11 @@ import { type Database, retailProductPhoto } from "@sob/db";
 import { and, eq } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
-import { loadPrincipal, type Principal } from "../../auth/principal";
+import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
+import type { Tx } from "../../tx";
 import { normalizeClientPhoto } from "../clients/photo-image";
-import { productRow } from "./service";
+import { productRow, requireCurrentInventoryWriter } from "./service";
 
 export async function readProductPhoto(
   db: Database,
@@ -28,7 +29,7 @@ export async function readProductPhoto(
 }
 
 export async function saveProductPhoto(
-  db: Database,
+  db: Database | Tx,
   productId: string,
   input: ProductPhotoInput,
   principal: Principal,
@@ -37,10 +38,8 @@ export async function saveProductPhoto(
   await productRow(db, productId);
   const photo = input.imageBase64 ? await normalizeClientPhoto(input.imageBase64) : null;
   return db.transaction(async (tx) => {
+    await requireCurrentInventoryWriter(tx, principal.userId);
     await productRow(tx, productId, true);
-    const live = await loadPrincipal(tx, principal.userId);
-    if (!live) throw new DomainError("forbidden", "This account is no longer available");
-    requirePermission(live, "writeInventory");
     const [current] = await tx
       .select({ version: retailProductPhoto.version })
       .from(retailProductPhoto)

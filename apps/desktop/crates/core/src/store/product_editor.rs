@@ -1,8 +1,93 @@
 use super::*;
 use crate::inventory::{Product, ProductId};
-use crate::product_editor::{ACCESS, CREATE, ProductDraft, ProductProposal, ProductReview, UPDATE};
+use crate::product_editor::{
+    ACCESS, CREATE, PHOTO, ProductDraft, ProductPhotoProposal, ProductProposal, ProductReview,
+    UPDATE,
+};
 
 impl Store {
+    pub fn queued_product_photo(&self, id: ProductId) -> Result<Option<ProductPhotoProposal>> {
+        if !self.can_queue_product_edits() {
+            return Ok(None);
+        }
+        let payload = self
+            .conn
+            .query_row(
+                "SELECT payload FROM outbox WHERE entity_id = ?1 AND kind = ?2 LIMIT 1",
+                params![id.to_string(), PHOTO],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        payload
+            .map(|value| Ok(serde_json::from_str(&value)?))
+            .transpose()
+    }
+
+    pub fn conflicted_product_photo(
+        &self,
+        mutation_id: &str,
+    ) -> Result<Option<ProductPhotoProposal>> {
+        if !self.can_queue_product_edits() {
+            return Ok(None);
+        }
+        self.conflict(mutation_id)?
+            .filter(|row| row.kind == PHOTO)
+            .map(|row| Ok(serde_json::from_value(row.payload)?))
+            .transpose()
+    }
+
+    pub fn discard_product_photo_conflict(&mut self, mutation_id: &str) -> Result<()> {
+        self.product_photo_conflict_id(mutation_id)?
+            .ok_or_else(|| CoreError::NotFound("product photo proposal".into()))?;
+        self.resolve_conflict(mutation_id, "discarded")
+    }
+
+    pub fn product_photo_conflict_id(&self, mutation_id: &str) -> Result<Option<ProductId>> {
+        Ok(self
+            .conflict(mutation_id)?
+            .filter(|row| row.kind == PHOTO)
+            .and_then(|row| row.entity_id.parse().ok()))
+    }
+
+    pub fn pending_product_photo(&self, id: ProductId) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM outbox WHERE entity_id = ?1 AND kind = ?2)",
+            params![id.to_string(), PHOTO],
+            |row| row.get(0),
+        )?)
+    }
+
+    pub fn queue_product_photo(
+        &mut self,
+        generation: &str,
+        proposal: ProductPhotoProposal,
+        replaces: Option<&str>,
+    ) -> Result<()> {
+        proposal.image()?;
+        self.write_transaction(|store| {
+            Self::ensure_generation(&store.conn, Some(generation))?;
+            if !store.can_queue_product_edits() {
+                return Err(CoreError::Invalid(
+                    "Inventory editing is unavailable".into(),
+                ));
+            }
+            if store.pending_product_photo(proposal.id)? {
+                return Err(CoreError::CatalogueEditPending);
+            }
+            let id = proposal.id.to_string();
+            if let Some(previous) = replaces {
+                store
+                    .conflict(previous)?
+                    .filter(|entry| entry.kind == PHOTO && entry.entity_id == id)
+                    .ok_or_else(|| CoreError::NotFound("product photo proposal".into()))?;
+            }
+            store.enqueue(PHOTO, &id, serde_json::to_value(proposal)?)?;
+            if let Some(previous) = replaces {
+                store.resolve_conflict(previous, "resubmitted")?;
+            }
+            Ok(())
+        })
+    }
     pub(super) fn apply_inventory_access_at(conn: &Connection, granted: bool) -> Result<()> {
         if granted {
             Self::set_meta_at(conn, ACCESS, &Self::generation_at(conn)?)?;

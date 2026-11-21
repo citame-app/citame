@@ -169,7 +169,7 @@ export async function listProducts(db: Database, query: ProductQuery, principal:
     { isolationLevel: "repeatable read", accessMode: "read only" },
   );
 }
-async function requireCurrentInventoryWriter(tx: Tx, id: string) {
+export async function requireCurrentInventoryWriter(tx: Tx, id: string) {
   // Hold the account and profile locks in the order used by staff access changes.
   const [account] = await tx
     .select({ role: user.role })

@@ -685,12 +685,24 @@ impl Root {
                 view.child(self.label(Key::InventoryOfflineProducts))
                     .children(offline_items.into_iter().map(|product| {
                         let id = product.id;
-                        self.button(
-                            SharedString::from(format!("inventory-edit-cached-{id}")),
-                            product.name,
-                            Kind::Ghost,
-                            cx.listener(move |root, _, _, cx| root.edit_cached_product(id, cx)),
-                        )
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap_2()
+                            .child(self.button(
+                                SharedString::from(format!("inventory-edit-cached-{id}")),
+                                product.name,
+                                Kind::Ghost,
+                                cx.listener(move |root, _, _, cx| root.edit_cached_product(id, cx)),
+                            ))
+                            .child(self.button(
+                                SharedString::from(format!("inventory-photo-cached-{id}")),
+                                self.t(Key::InventoryProductPhoto),
+                                Kind::Ghost,
+                                cx.listener(move |root, _, _, cx| {
+                                    root.open_cached_product_photo(id, cx)
+                                }),
+                            ))
                     }))
             })
     }

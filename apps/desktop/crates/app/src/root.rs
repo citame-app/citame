@@ -727,6 +727,7 @@ impl Root {
                 && !self.preserve_open_resource_pools(generation.as_deref())
                 && !self.preserve_open_combinations(generation.as_deref())
                 && !self.preserve_open_product_form(generation.as_deref())
+                && !self.preserve_open_product_photo()
             {
                 self.overlay = Overlay::None;
             }
@@ -3313,6 +3314,7 @@ impl Root {
                 sob_core::product_editor::CREATE | sob_core::product_editor::UPDATE => {
                     Key::InventoryProductDetails
                 }
+                sob_core::product_editor::PHOTO => Key::InventoryProductPhoto,
                 _ => Key::ConflictOther,
             });
             let when = c
@@ -3527,14 +3529,27 @@ impl Root {
                                 ))
                             },
                         )
-                        .child(self.button(
-                            ("c-dismiss", i),
-                            self.t(Key::ConflictDismiss),
-                            Kind::Ghost,
-                            cx.listener(move |this, _, _, cx| {
-                                this.resolve(&m, Resolution::Dismiss, cx)
-                            }),
-                        )),
+                        .when(c.kind == sob_core::product_editor::PHOTO, |row| {
+                            let id = c.mutation_id.clone();
+                            row.child(self.button(
+                                ("review-product-photo", i),
+                                self.t(Key::InventoryPhotoReview),
+                                Kind::Primary,
+                                cx.listener(move |root, _, _, cx| {
+                                    root.open_product_photo_conflict(&id, cx)
+                                }),
+                            ))
+                        })
+                        .when(c.kind != sob_core::product_editor::PHOTO, |row| {
+                            row.child(self.button(
+                                ("c-dismiss", i),
+                                self.t(Key::ConflictDismiss),
+                                Kind::Ghost,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.resolve(&m, Resolution::Dismiss, cx)
+                                }),
+                            ))
+                        }),
                 );
             }
             if let Some(dr) = draft {

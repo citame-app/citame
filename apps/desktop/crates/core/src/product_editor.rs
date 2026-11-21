@@ -1,11 +1,13 @@
 use crate::billing::parse_reviewed_amount;
 use crate::inventory::{PackageContent, Product, ProductId};
 use crate::{error::*, trim_like_javascript};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 pub const CREATE: &str = "product.create";
 pub const UPDATE: &str = "product.update";
+pub const PHOTO: &str = "product.photo";
 pub(crate) const ACCESS: &str = "inventory_write_access";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -256,6 +258,46 @@ pub struct ProductProposal {
     pub fields: ProductDraft,
     #[serde(rename = "_reviewed")]
     pub reviewed: Option<ProductReview>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductPhotoProposal {
+    pub id: ProductId,
+    pub version: Option<uuid::Uuid>,
+    image_base64: Option<String>,
+}
+
+impl ProductPhotoProposal {
+    fn valid_jpeg(bytes: &[u8]) -> bool {
+        bytes.len() <= crate::staff_portrait_image::INPUT_LIMIT
+            && crate::staff_portrait_image::is_bounded_jpeg(bytes)
+    }
+
+    pub fn new(id: ProductId, version: Option<uuid::Uuid>, jpeg: Option<&[u8]>) -> Result<Self> {
+        if jpeg.is_some_and(|bytes| !Self::valid_jpeg(bytes)) {
+            return Err(invalid());
+        }
+        Ok(Self {
+            id,
+            version,
+            image_base64: jpeg.map(|bytes| STANDARD.encode(bytes)),
+        })
+    }
+
+    pub fn image(&self) -> Result<Option<Vec<u8>>> {
+        let Some(encoded) = &self.image_base64 else {
+            return Ok(None);
+        };
+        if encoded.len() > 4 * crate::staff_portrait_image::INPUT_LIMIT.div_ceil(3) {
+            return Err(invalid());
+        }
+        let bytes = STANDARD.decode(encoded).map_err(|_| invalid())?;
+        if !Self::valid_jpeg(&bytes) {
+            return Err(invalid());
+        }
+        Ok(Some(bytes))
+    }
 }
 
 #[cfg(test)]

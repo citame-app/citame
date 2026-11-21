@@ -117,17 +117,51 @@ for (const scheme of ["light", "dark"] as const) {
       await page.getByLabel("Low stock threshold", { exact: true }).fill("1");
       await page.getByRole("button", { name: "Save product", exact: true }).click();
       await expect(page.getByRole("heading", { name: "Stock history", exact: true })).toBeVisible();
-      await page.getByLabel("Choose a product photo", { exact: true }).setInputFiles({
+      const photoInput = page.getByLabel("Choose a product photo", { exact: true });
+      const imageBytes = await clientPhotoFixture();
+      const upload = {
         name: "synthetic-product.jpg",
         mimeType: "image/jpeg",
-        buffer: await clientPhotoFixture(),
-      });
-      await page.getByRole("button", { name: "Save photo", exact: true }).click();
+        buffer: imageBytes,
+      };
+      await photoInput.setInputFiles(upload);
+      const savePhoto = page.getByRole("button", { name: "Save photo", exact: true });
+      await savePhoto.click();
       const photo = page.getByRole("img", { name, exact: true });
       await expect(photo).toBeVisible();
       await expect
         .poll(() => photo.evaluate((img) => (img as HTMLImageElement).naturalWidth))
         .toBeGreaterThan(0);
+      if (scheme === "light") {
+        const currentUrl = (await photo.getAttribute("src"))!;
+        await photoInput.setInputFiles(upload);
+        const write = await page.request.put(currentUrl.replace(/\/[^/]+$/, ""), {
+          headers: { origin: new URL(page.url()).origin },
+          data: {
+            version: currentUrl.split("/").at(-1),
+            imageBase64: imageBytes.toString("base64"),
+          },
+        });
+        expect(write.status(), await write.text()).toBe(200);
+        await expect(photo).not.toHaveAttribute("src", currentUrl);
+        await expect(
+          page.getByText("The photo changed. Check the current photo and try again."),
+        ).toBeVisible();
+        await expect(savePhoto).toBeDisabled();
+        await page.getByRole("button", { name: "Keep my selected file", exact: true }).click();
+        const saved = page.waitForResponse(
+          (response) => response.request().method() === "PUT" && response.url().endsWith("/photo"),
+        );
+        await savePhoto.click();
+        const applied = await saved;
+        expect(applied.status(), await applied.text()).toBe(200);
+        expect((await applied.json()).version).not.toBe((await write.json()).version);
+        await expect(photo).toHaveAttribute(
+          "src",
+          new RegExp(`/${(await applied.json()).version}$`),
+        );
+        await expect(savePhoto).toBeDisabled();
+      }
       const oldPhotoUrl = (await photo.getAttribute("src"))!;
       await page.getByRole("button", { name: "Remove photo", exact: true }).click();
       await expect(photo).toHaveCount(0);

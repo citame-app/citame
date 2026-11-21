@@ -95,6 +95,7 @@ describe("route mapping", () => {
       "/admin/inventory/movements/export?kind=receive&search=A%26B",
       "/admin/inventory/products/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
       "/admin/inventory/products/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/package-content",
+      "/admin/inventory/products/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/photo/bbbbbbbb-1111-4111-8111-bbbbbbbbbbbb",
       "/intake/requirements?serviceIds=example",
       "/admin/intake-forms",
       "/admin/intake-forms?view=summary",

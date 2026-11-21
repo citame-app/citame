@@ -1,11 +1,9 @@
 use super::*;
-use crate::staff_portrait_image::{INPUT_LIMIT, is_bounded_jpeg};
+use crate::staff_portrait_image::INPUT_LIMIT;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Deserialize;
-use std::io::Read;
 
 const STAFF: &str = "/admin/staff";
-const PREVIEW_LIMIT: u64 = 256 * 1024;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,29 +58,7 @@ impl HttpTransport {
             parse_id(id)?,
             parse_id(version)?
         );
-        let mut response = self.get(&self.agent, &path, Some("image/jpeg"))?;
-        let status = response.status().as_u16();
-        if status != 200 {
-            return Err(classify_status(status, None, "Portrait unavailable", false));
-        }
-        if response
-            .headers()
-            .get("content-type")
-            .is_none_or(|mime| mime != "image/jpeg")
-        {
-            return Err(TransportError::Server("Unexpected portrait format".into()));
-        }
-        let mut bytes = Vec::new();
-        response
-            .body_mut()
-            .as_reader()
-            .take(PREVIEW_LIMIT + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|error| TransportError::Offline(error.to_string()))?;
-        if bytes.len() as u64 > PREVIEW_LIMIT || !is_bounded_jpeg(&bytes) {
-            return Err(TransportError::Server("Invalid portrait".into()));
-        }
-        Ok(bytes)
+        self.read_private_jpeg(&path)
     }
 
     pub fn set_staff_portrait(

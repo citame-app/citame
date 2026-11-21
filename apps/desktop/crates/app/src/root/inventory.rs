@@ -10,6 +10,7 @@ use sob_core::sync::TransportError;
 mod catalogue;
 mod ledger;
 mod product_form;
+mod product_photo;
 mod stock;
 
 pub(super) struct Desk {
@@ -23,6 +24,7 @@ pub(super) struct Desk {
     product: Option<Product>,
     editor: Option<Editor>,
     product_form: Option<Box<product_form::Panel>>,
+    product_photo: Option<Box<product_photo::Panel>>,
     stock: Option<stock::Panel>,
     request: Option<Arc<()>>,
     saving: bool,
@@ -79,6 +81,13 @@ impl Desk {
     }
 
     pub(super) fn dismiss_editor(&mut self, cx: &App) -> bool {
+        if let Some(photo) = &mut self.product_photo {
+            if photo.dismiss() {
+                self.product_photo = None;
+                self.observed_revision = -1;
+            }
+            return true;
+        }
         if let Some(form) = &mut self.product_form {
             if form.dismiss(cx) {
                 self.product_form = None;
@@ -212,6 +221,7 @@ impl Root {
             product: None,
             editor: None,
             product_form: None,
+            product_photo: None,
             stock: None,
             request: None,
             saving: false,
@@ -246,6 +256,7 @@ impl Root {
         if let Overlay::Inventory(desk) = &self.overlay
             && desk.editor.is_none()
             && desk.product_form.is_none()
+            && desk.product_photo.is_none()
             && desk.stock.is_none()
         {
             self.request_inventory(desk.reload_action(), cx);
@@ -253,6 +264,9 @@ impl Root {
     }
 
     pub(super) fn refresh_inventory(&mut self, reconnected: bool, cx: &mut Context<Self>) {
+        if self.refresh_product_photo(reconnected, cx) {
+            return;
+        }
         let Overlay::Inventory(desk) = &mut self.overlay else {
             return;
         };
@@ -653,7 +667,8 @@ impl Root {
                 ready
                     && desk.editor.is_none()
                     && desk.stock.is_none()
-                    && desk.product_form.is_none(),
+                    && desk.product_form.is_none()
+                    && desk.product_photo.is_none(),
                 |header| {
                     header.child(self.button(
                         "inventory-refresh",
@@ -671,7 +686,9 @@ impl Root {
                     cx.listener(|root, _, _, cx| root.dismiss_overlay(cx)),
                 ))
             });
-        let content = if let Some(form) = &desk.product_form {
+        let content = if let Some(photo) = &desk.product_photo {
+            self.render_product_photo(photo, cx)
+        } else if let Some(form) = &desk.product_form {
             self.render_product_form(form, cx)
         } else {
             match &desk.product {
@@ -1000,6 +1017,17 @@ impl Root {
                         Kind::Ghost,
                         cx.listener(|root, _, _, cx| root.open_stock_panel(cx)),
                     ))
+                    .when(
+                        product.photo_version.is_some() || self.svc.store.can_queue_product_edits(),
+                        |row| {
+                            row.child(self.button(
+                                "inventory-open-product-photo",
+                                self.t(Key::InventoryProductPhoto),
+                                Kind::Ghost,
+                                cx.listener(|root, _, _, cx| root.open_product_photo(cx)),
+                            ))
+                        },
+                    )
                     .when(
                         product.can_manage && self.svc.store.can_queue_product_edits(),
                         |row| {

@@ -1154,6 +1154,49 @@ impl HttpTransport {
             .ok_or_else(|| TransportError::BadRequest("Product not found".into()))
     }
 
+    pub fn inventory_product_photo(
+        &self,
+        id: ProductId,
+        version: uuid::Uuid,
+    ) -> Result<Vec<u8>, TransportError> {
+        self.read_private_jpeg(&format!("{PRODUCTS_PATH}/{id}/photo/{version}"))
+    }
+
+    fn read_private_jpeg(&self, path: &str) -> Result<Vec<u8>, TransportError> {
+        use std::io::Read;
+        const LIMIT: u64 = 256 * 1024;
+        let mut response = self.get(&self.agent, path, Some("image/jpeg"))?;
+        let status = response.status().as_u16();
+        if status != 200 {
+            return Err(classify_status(
+                status,
+                None,
+                "Private image unavailable",
+                false,
+            ));
+        }
+        if response
+            .headers()
+            .get("content-type")
+            .is_none_or(|mime| mime != "image/jpeg")
+        {
+            return Err(TransportError::Server(
+                "Unexpected private image format".into(),
+            ));
+        }
+        let mut bytes = Vec::new();
+        response
+            .body_mut()
+            .as_reader()
+            .take(LIMIT + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|error| TransportError::Offline(error.to_string()))?;
+        if bytes.len() as u64 > LIMIT || !crate::staff_portrait_image::is_bounded_jpeg(&bytes) {
+            return Err(TransportError::Server("Invalid private JPEG".into()));
+        }
+        Ok(bytes)
+    }
+
     pub fn lookup_inventory_product(
         &self,
         id: ProductId,

@@ -29,6 +29,7 @@ import {
   updateAppointment,
 } from "../appointments/service";
 import { updateClient } from "../clients/admin";
+import { saveProductPhoto } from "../inventory/photo";
 import { createProduct, updateProduct } from "../inventory/service";
 import { createResource, setServiceResources, updateResource } from "../resources/catalog";
 import {
@@ -291,6 +292,11 @@ export async function applyMutation(
     case "product.update": {
       const { id, changes } = mutation.payload;
       await updateProduct(db, id, changes, principal);
+      return;
+    }
+    case "product.photo": {
+      const { id, ...photo } = mutation.payload;
+      await saveProductPhoto(db, id, photo, principal);
       return;
     }
     case "staff.update": {

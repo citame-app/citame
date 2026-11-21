@@ -93,6 +93,8 @@ El catálogo de inventario de Desktop usa los mismos filtros, orden y tamaños d
 
 Desktop también permite crear, reordenar, editar y archivar combinaciones de servicios y extras. Las propuestas guardadas sin conexión conservan sus versiones revisadas y se pueden comparar con los cambios de Cloud desde Conflictos de sincronización.
 
+Desktop también permite consultar, sustituir y quitar fotos privadas de producto. Los cambios se pueden encolar sin conexión. Si cambia la foto antes de sincronizar, la propuesta conserva el archivo seleccionado para revisarlo con la versión actual.
+
 Para este cotejo pasaron 245 pruebas de API y 150 pruebas web con Bun sobre datos sintéticos, además de la comprobación de tipos de ambos proyectos. La cobertura incluye permisos y publicación de retratos, promociones revisadas al reservar, consentimiento comercial, catálogo y movimientos de stock, informes, tarjetas, bonos, caja y ajustes. En Booksy se consultaron las ocho rutas en lectura. En GPUI se contrastaron los flujos presentes en el código.
 
 ### Verificación del 18/11/2026

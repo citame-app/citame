@@ -9,6 +9,7 @@ import { retailProduct } from "@sob/db";
 import { eq, sql } from "drizzle-orm";
 import sharp from "sharp";
 import { type Actor, actor, json, seedFixtures, setupApiTest } from "../../../test/helpers";
+import { mid, pull, push } from "../../../test/sync";
 
 let t: Awaited<ReturnType<typeof setupApiTest>>;
 let owner: Actor;
@@ -131,6 +132,63 @@ test("product photos are private, normalized and protected against stale writes"
   expect(
     productSchema.parse(await (await call(staff, productPath)).json()).photoVersion,
   ).toBeUndefined();
+});
+
+test("desktop photo writes are private, replay safely and emit a commerce refresh", async () => {
+  const item = await product();
+  const path = `/admin/inventory/products/${item.id}`;
+  const raster = await sharp({
+    create: { width: 32, height: 32, channels: 3, background: "#87556a" },
+  })
+    .png()
+    .toBuffer();
+  const create = {
+    mutationId: mid(),
+    createdAt: new Date().toISOString(),
+    kind: "product.photo",
+    payload: { id: item.id, version: null, imageBase64: raster.toString("base64") },
+  };
+  const before = await pull(t, owner);
+  expect((await push(t, staff, [{ ...create, mutationId: mid() }])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "forbidden",
+  });
+  expect((await push(t, owner, [create])).body.results[0]).toMatchObject({
+    status: "applied",
+    appliedSeq: expect.any(Number),
+  });
+  expect((await push(t, owner, [create])).body.results[0]).toMatchObject({
+    status: "applied",
+    replayed: true,
+  });
+  expect((await pull(t, owner, { since: before.headSeq })).refresh).toContain("commerce");
+  const created = productSchema.parse(await (await call(staff, path)).json());
+  expect(created).toMatchObject({
+    version: item.version,
+    stockOnHand: item.stockOnHand,
+    photoVersion: expect.any(String),
+  });
+  const imagePath = `${path}/photo/${created.photoVersion}`;
+  expect((await call(staff, imagePath)).headers.get("cache-control")).toBe("private, no-store");
+  expect((await call(client, imagePath)).status).toBe(403);
+  expect((await push(t, owner, [{ ...create, mutationId: mid() }])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "conflict",
+  });
+  const remove = {
+    ...create,
+    mutationId: mid(),
+    payload: {
+      id: item.id,
+      version: created.photoVersion,
+      imageBase64: null,
+    },
+  };
+  expect((await push(t, owner, [remove])).body.results[0]).toMatchObject({
+    status: "applied",
+    appliedSeq: expect.any(Number),
+  });
+  expect((await call(staff, imagePath)).status).toBe(404);
 });
 
 test("package content is optional, versioned and independent of stock", async () => {

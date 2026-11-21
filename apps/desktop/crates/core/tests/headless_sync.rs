@@ -1966,6 +1966,139 @@ fn native_moderation_publishes_replies_and_hides_through_the_proxy() {
 
 #[test]
 #[ignore = "needs the synthetic product from the production smoke test"]
+fn native_product_photo_replays_after_restart_and_checks_the_current_photo_version() {
+    use sob_core::product_editor::ProductPhotoProposal;
+    use sob_core::staff_portrait_image::prepare_photo;
+
+    let device = proxy_device();
+    let web = Device::sign_in();
+    let product = web.rest_post(
+        "/admin/inventory/products",
+        json!({
+            "name": "Native photo fixture", "priceCents": 950, "openingStock": 3,
+            "idempotencyKey": uuid::Uuid::now_v7().to_string(),
+        }),
+    );
+    let id: uuid::Uuid = product["id"].as_str().unwrap().parse().unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let raster = temporary.path().join("fixture.png");
+    image::RgbImage::from_pixel(64, 32, image::Rgb([120, 64, 90]))
+        .save(&raster)
+        .unwrap();
+    let jpeg = prepare_photo(&raster).unwrap();
+    let path = temporary.path().join("product-photo.sqlite");
+    let mut store = Store::open(&path).unwrap();
+    sync::pull_all(&mut store, &*device.transport).unwrap();
+    let generation = store.verified_reviewed_generation().unwrap();
+    store
+        .queue_product_photo(
+            &generation,
+            ProductPhotoProposal::new(id, None, Some(&jpeg)).unwrap(),
+            None,
+        )
+        .unwrap();
+    drop(store);
+    let mut store = Store::open(&path).unwrap();
+    assert!(store.pending_product_photo(id).unwrap());
+    assert_eq!(
+        store
+            .queued_product_photo(id)
+            .unwrap()
+            .unwrap()
+            .image()
+            .unwrap(),
+        Some(jpeg.clone())
+    );
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let confirmed = device.transport.inventory_product(id).unwrap();
+    let first = confirmed.photo_version.unwrap();
+    assert!(
+        !device
+            .transport
+            .inventory_product_photo(id, first)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(confirmed.stock_on_hand, 3);
+    assert_eq!(confirmed.version, 1);
+    assert!(!store.pending_product_photo(id).unwrap());
+    assert!(store.queued_product_photo(id).unwrap().is_none());
+    store
+        .queue_product_photo(
+            &generation,
+            ProductPhotoProposal::new(id, Some(first), None).unwrap(),
+            None,
+        )
+        .unwrap();
+
+    let prefix = std::env::var("SOB_TEST_REST_PREFIX").unwrap_or_default();
+    let mut replacement =
+        serde_json::to_value(ProductPhotoProposal::new(id, Some(first), Some(&jpeg)).unwrap())
+            .unwrap();
+    replacement.as_object_mut().unwrap().remove("id");
+    ureq::put(&format!(
+        "{}{prefix}/admin/inventory/products/{id}/photo",
+        web.base
+    ))
+    .header("Cookie", &web.cookie)
+    .header("Origin", &web.base)
+    .content_type("application/json")
+    .send(replacement.to_string())
+    .unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .rejected,
+        1
+    );
+    let conflict = store.conflicts().unwrap().pop().unwrap();
+    assert_eq!(conflict.reason, "conflict");
+    let latest = device
+        .transport
+        .inventory_product(id)
+        .unwrap()
+        .photo_version
+        .unwrap();
+    assert_ne!(latest, first);
+    assert!(device.transport.inventory_product_photo(id, first).is_err());
+    store
+        .queue_product_photo(
+            &generation,
+            ProductPhotoProposal::new(id, Some(latest), None).unwrap(),
+            Some(&conflict.mutation_id),
+        )
+        .unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let removed = device.transport.inventory_product(id).unwrap();
+    assert!(removed.photo_version.is_none());
+    assert_eq!(removed.stock_on_hand, 3);
+    assert_eq!(removed.version, 1);
+    assert_eq!(
+        device
+            .transport
+            .inventory_movements(id, 1)
+            .unwrap()
+            .pagination
+            .total,
+        1
+    );
+}
+
+#[test]
+#[ignore = "needs the synthetic product from the production smoke test"]
 fn native_product_creation_and_edits_resume_without_touching_stock_history() {
     use sob_core::product_editor::{ProductDraft, ProductProposal, ProductReview};
 

@@ -291,6 +291,7 @@ impl PackageContent {
 pub struct Product {
     pub id: ProductId,
     pub name: String,
+    pub photo_version: Option<Uuid>,
     pub sku: String,
     pub barcode: Option<String>,
     pub category: Option<String>,

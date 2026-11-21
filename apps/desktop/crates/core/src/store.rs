@@ -1568,6 +1568,7 @@ impl Store {
                                 | crate::combinations::UPDATE
                                 | crate::product_editor::CREATE
                                 | crate::product_editor::UPDATE
+                                | crate::product_editor::PHOTO
                         )
                     {
                         Self::set_meta_at(
@@ -1589,7 +1590,9 @@ impl Store {
                     if reason == "forbidden"
                         && matches!(
                             s.kind.as_str(),
-                            crate::product_editor::CREATE | crate::product_editor::UPDATE
+                            crate::product_editor::CREATE
+                                | crate::product_editor::UPDATE
+                                | crate::product_editor::PHOTO
                         )
                     {
                         Self::apply_inventory_access_at(&tx, false)?;
@@ -1691,7 +1694,8 @@ impl Store {
 
     fn resolve_conflict_at(conn: &Connection, mutation_id: &str, resolution: &str) -> Result<()> {
         let n = conn.execute(
-            "UPDATE conflict SET resolved_at = ?2, resolution = ?3
+            "UPDATE conflict SET resolved_at = ?2, resolution = ?3,
+             payload = CASE WHEN kind = 'product.photo' THEN json_remove(payload, '$.imageBase64') ELSE payload END
              WHERE mutation_id = ?1 AND resolved_at IS NULL",
             params![mutation_id, now_iso(), resolution],
         )?;

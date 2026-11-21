@@ -631,6 +631,13 @@
       "when": 1795213487917,
       "tag": "0089_product_sync_acknowledgements",
       "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1795213487918,
+      "tag": "0090_product_photo_live_view",
+      "breakpoints": true
     }
   ]
 }

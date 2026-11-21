@@ -3,7 +3,7 @@ import { appointmentSchema, createAppointmentBaseSchema } from "./appointments";
 import { calendarAppointmentSchema } from "./calendar";
 import { idSchema, instantSchema, LIMITS, localDateSchema, syncGenerationSchema } from "./common";
 import { dateShiftRangesSchema } from "./date-shifts";
-import { createProductSchema, updateProductSchema } from "./inventory";
+import { createProductSchema, productPhotoInputSchema, updateProductSchema } from "./inventory";
 import {
   resourceCreateSchema,
   resourceSchema,
@@ -289,6 +289,12 @@ const productUpdate = z.object({
   payload: z.strictObject({ id: idSchema, changes: updateProductSchema }),
 });
 
+const productPhoto = z.object({
+  ...envelope,
+  kind: z.literal("product.photo"),
+  payload: productPhotoInputSchema.extend({ id: idSchema }),
+});
+
 const staffUpdate = z.object({
   ...envelope,
   kind: z.literal("staff.update"),
@@ -328,6 +334,7 @@ export const syncMutationSchema = z.discriminatedUnion("kind", [
   combinationUpdate,
   productCreate,
   productUpdate,
+  productPhoto,
   staffUpdate,
   settingsUpdate,
 ]);
