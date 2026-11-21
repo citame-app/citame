@@ -13,7 +13,7 @@ enum Action {
 
 pub(super) enum Edit {
     Loading(Arc<()>),
-    Ready(Editor),
+    Ready(Box<Editor>),
 }
 
 pub(super) struct Editor {
@@ -142,7 +142,7 @@ impl Root {
                         };
                         let refresh_statement = matches!(action, Action::Payout) && desk.statement.as_ref()
                             .and_then(|statement| statement.generation.as_deref()) != Some(policy.generation.as_str());
-                        desk.editor = Some(Edit::Ready(Editor { instance: request, staff_id, generation: policy.generation, fields, sending: false, error: None }));
+                        desk.editor = Some(Edit::Ready(Box::new(Editor { instance: request, staff_id, generation: policy.generation, fields, sending: false, error: None })));
                         if refresh_statement {
                             root.load_commissions(root.status.cursor, cx);
                         }
