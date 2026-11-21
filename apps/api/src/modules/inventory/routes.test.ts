@@ -1161,3 +1161,58 @@ test("catalog metadata, internal-use sales guard, facets and paginated stock led
   expect(ledger.movements[0]?.unitCostCents).toBeUndefined();
   expect((await call(client, "/admin/inventory/movements")).status).toBe(403);
 });
+
+test("sync replays only the exact reviewed stock count and preserves its physical target", async () => {
+  const item = await product();
+  const id = crypto.randomUUID();
+  const path = `/admin/inventory/stock-adjustments/${id}`;
+  const count = {
+    kind: "warehouse.adjust",
+    mutationId: mid(),
+    createdAt: new Date().toISOString(),
+    payload: {
+      id,
+      productId: item.id,
+      warehouseId: "main",
+      kind: "count",
+      quantity: 3,
+      reason: "Reviewed physical count",
+      version: item.version,
+      reviewedOnHand: 5,
+    },
+  };
+  expect((await push(t, staff, [{ ...count, mutationId: mid() }])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "forbidden",
+  });
+  expect((await push(t, owner, [count])).body.results[0]).toMatchObject({
+    status: "applied",
+    appliedSeq: expect.any(Number),
+  });
+  expect((await push(t, owner, [{ ...count, mutationId: mid() }])).body.results[0]).toMatchObject({
+    status: "applied",
+  });
+  const differentReview = {
+    ...count,
+    mutationId: mid(),
+    payload: { ...count.payload, reviewedOnHand: 4 },
+  };
+  expect((await push(t, owner, [differentReview])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "invalid_state",
+  });
+  expect((await call(client, path)).status).toBe(403);
+  const reader = await call(staff, path);
+  expect(reader.status).toBe(200);
+  const movement = await reader.json();
+  expect(movement).toMatchObject({
+    id,
+    productId: item.id,
+    kind: "count",
+    quantityDelta: -2,
+    review: { version: item.version, onHand: 5, quantity: 3 },
+  });
+  expect(movement).not.toHaveProperty("unitCostCents");
+  const current = await call(owner, `/admin/inventory/products/${item.id}`);
+  expect(productSchema.parse(await current.json()).stockOnHand).toBe(3);
+});
