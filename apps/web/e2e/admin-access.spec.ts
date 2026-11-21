@@ -1,6 +1,11 @@
 import { expect, test } from "@playwright/test";
 import { ensureStaff, OWNER_EMAIL, signInAs } from "./admin-helpers";
-import { createClient, expectNoSeriousA11yViolations, signInThroughUi } from "./helpers";
+import {
+  createClient,
+  expectNoSeriousA11yViolations,
+  signInThroughUi,
+  switchLocale,
+} from "./helpers";
 
 const STAFF_EMAIL = "e2e-staff@example.com";
 
@@ -62,6 +67,11 @@ test.describe("role access matrix", () => {
       await expect(page).toHaveURL(new RegExp(`${path}`));
       await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     }
+    await switchLocale(page, "Español");
+    await page.goto("/admin/settings");
+    await expect(
+      page.getByRole("alert").filter({ hasText: "No tienes acceso a esa página" }),
+    ).toBeVisible();
   });
 
   test("the owner reaches every section", async ({ page }) => {

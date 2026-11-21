@@ -56,6 +56,32 @@ test.describe("admin accessibility (axe: zero serious or critical violations)", 
         await expect(page.getByRole("button", { name: new RegExp(clientName) })).toBeVisible();
         // Same settle step as every other audit here: the grid keeps fetching after the first block paints.
         await page.waitForLoadState("networkidle");
+        const avatars = page.locator(".calendar-avatar");
+        await expect(avatars.first()).toBeVisible();
+        const contrast = await avatars.evaluateAll((elements) => {
+          const sample = document.createElement("canvas").getContext("2d");
+          if (!sample) throw new Error("Canvas is required to sample the rendered colors");
+          const luminance = (color: string) => {
+            sample.clearRect(0, 0, 1, 1);
+            sample.fillStyle = color;
+            sample.fillRect(0, 0, 1, 1);
+            const [r = 0, g = 0, b = 0] = sample.getImageData(0, 0, 1, 1).data;
+            const linear = (channel: number) => {
+              const value = channel / 255;
+              return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+            };
+            return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+          };
+          return elements.map((element) => {
+            const style = getComputedStyle(element);
+            const foreground = luminance(style.color);
+            const background = luminance(style.backgroundColor);
+            return (
+              (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05)
+            );
+          });
+        });
+        expect(Math.min(...contrast)).toBeGreaterThanOrEqual(4.5);
         await expectNoSeriousA11yViolations(page, `calendar (${scheme})`);
         await page.getByRole("button", { name: new RegExp(clientName) }).click();
         await expect(page.getByRole("dialog", { name: clientName, exact: true })).toBeVisible();

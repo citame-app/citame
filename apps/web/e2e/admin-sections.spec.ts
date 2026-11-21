@@ -17,7 +17,7 @@ import {
   TZ,
   weekdayOf,
 } from "./admin-helpers";
-import { createClient, PASSWORD } from "./helpers";
+import { createClient, PASSWORD, switchLocale } from "./helpers";
 
 const stamp = Date.now().toString(36);
 const STAFF_EMAIL = "e2e-staff@example.com";
@@ -59,11 +59,13 @@ test.describe("clients", () => {
     const client = await createClient(request, baseURL as string, { name: `Notes ${stamp}` });
     await signInAs(page, OWNER_EMAIL, `/admin/clients?q=${encodeURIComponent(client.name)}`);
     await page.getByRole("button", { name: client.name }).first().click();
+    await page.getByRole("button", { name: "Profile", exact: true }).click();
     await page.getByLabel("Phone").fill("+54 9 11 5555-1234");
     await page.getByLabel("Private notes").fill("Prefers the window chair");
     await page.getByRole("button", { name: "Save changes" }).click();
     await expect(page.getByText("Client updated")).toBeVisible();
     await page.reload();
+    await page.getByRole("button", { name: "Profile", exact: true }).click();
     await expect(page.getByLabel("Private notes")).toHaveValue("Prefers the window chair");
   });
 });
@@ -78,7 +80,8 @@ test.describe("services", () => {
     await expect(dialog.getByText("Enter a whole number greater than zero")).toBeVisible();
     await dialog.getByLabel("Name").fill(name);
     await dialog.getByLabel("Duration (minutes)").fill("30");
-    await dialog.getByLabel("Price").fill("12000");
+    await dialog.getByLabel("Price", { exact: true }).fill("12000");
+    await dialog.getByRole("button", { name: "How clients see it", exact: true }).click();
     await expect(
       dialog.getByRole("region", { name: "How clients see it" }).getByText(name),
     ).toBeVisible();
@@ -93,7 +96,7 @@ test.describe("services", () => {
     await page.goto("/admin/services");
     await page.getByRole("button", { name }).first().click();
     const edit = page.getByRole("dialog", { name: "Edit service" });
-    await edit.getByLabel("Price").fill("13000");
+    await edit.getByLabel("Price", { exact: true }).fill("13000");
     await edit.getByRole("button", { name: "Save changes" }).click();
     await expect(page.getByText("Service saved")).toBeVisible();
     await expect(
@@ -287,12 +290,12 @@ test.describe("reports", () => {
     const path = await file.path();
     const csv = readFileSync(path as string, "utf8");
     expect(csv.split("\r\n")[0]).toBe(
-      "date,appointments,booked,completed,cancelled,no_show,revenue",
+      "date,appointments,booked,completed,cancelled,no_show,revenue,currency",
     );
-    expect(csv).toContain(`${past},3,0,2,0,1,40000.00`);
-    expect(csv).toContain("Haircut,2,30000.00");
-    expect(csv).toContain("Blow dry,1,10000.00");
-    expect(csv).toContain("Stylist A,3,2,1,0.3333,40000.00");
+    expect(csv).toContain(`${past},3,0,2,0,1,40000.00,ARS`);
+    expect(csv).toContain("Haircut,2,30000.00,ARS");
+    expect(csv).toContain("Blow dry,1,10000.00,ARS");
+    expect(csv).toContain("Stylist A,3,2,1,0.3333,40000.00,ARS");
   });
 
   test("an empty period shows a clear empty state", async ({ page }) => {
@@ -324,7 +327,7 @@ test.describe("settings", () => {
       const body = (await res.json()) as { slots: { startsAt: string }[] };
       return new Set(body.slots.map((s) => new Date(s.startsAt).getUTCMinutes()));
     };
-    await signInAs(page, OWNER_EMAIL, "/admin/settings");
+    await signInAs(page, OWNER_EMAIL, "/admin/settings?section=booking");
     await page.getByLabel("Time slot interval").selectOption("30");
     await page.getByRole("button", { name: "Save settings" }).click();
     await expect(page.getByText("Settings saved").first()).toBeVisible();
@@ -337,7 +340,7 @@ test.describe("settings", () => {
 
   test("the salon name is editable and an unsaved form asks before leaving", async ({ page }) => {
     await signInAs(page, OWNER_EMAIL, "/admin/settings");
-    await page.getByLabel("Salon name").fill("Sisters of Beauty ");
+    await page.getByLabel("Salon name").fill(`Provisional salon name ${stamp}`);
     await page.getByRole("link", { name: "Clients" }).first().click();
     await expect(page.getByRole("dialog", { name: "Discard your changes?" })).toBeVisible();
     await page.getByRole("button", { name: "Keep editing" }).click();
@@ -348,15 +351,16 @@ test.describe("settings", () => {
 test.describe("preferences and layout", () => {
   test("the language switch translates the dashboard", async ({ page }) => {
     await signInAs(page, OWNER_EMAIL, "/admin/calendar");
-    await page.getByLabel("Español").check({ force: true });
+    await switchLocale(page, "Español");
     await expect(page.getByRole("heading", { level: 1, name: "Agenda" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Nuevo turno" })).toBeVisible();
-    await page.getByLabel("English").check({ force: true });
+    await expect(page.getByRole("button", { name: "Añadir a la agenda" })).toBeVisible();
+    await switchLocale(page, "English");
     await expect(page.getByRole("heading", { level: 1, name: "Calendar" })).toBeVisible();
   });
 
   test("dark mode applies to the dashboard", async ({ page }) => {
     await signInAs(page, OWNER_EMAIL, "/admin");
+    await page.getByRole("button", { name: "Account and preferences" }).click();
     await page.getByRole("button", { name: "Switch to dark mode" }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   });
