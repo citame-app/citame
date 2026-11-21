@@ -63,6 +63,7 @@ mod settlement;
 mod slots;
 mod staff_access;
 mod staff_portraits;
+mod team_calendar;
 mod team_shifts;
 mod transactions;
 mod unpaid;
@@ -264,6 +265,7 @@ enum Overlay {
     Unpaid(Box<unpaid::Desk>),
     Inventory(Box<inventory::Desk>),
     Reports(Box<reports::Desk>),
+    CalendarDate(calendar_overview::DatePicker),
     TeamShifts(Box<team_shifts::Desk>),
     StaffPortraits(Box<staff_portraits::Desk>),
     StaffAccess(Box<staff_access::Desk>),
@@ -318,6 +320,8 @@ pub struct Root {
     horizontal_scroll: scrollbar::Scrollbar,
     vertical_scroll: scrollbar::Scrollbar,
     week_staff_id: String,
+    week_team: bool,
+    team_calendar_scroll: gpui::ScrollHandle,
     time_off_scope: String,
     calendar_scope: Option<String>,
     replica_generation: Option<String>,
@@ -400,6 +404,8 @@ impl Root {
             horizontal_scroll: scrollbar::Scrollbar::default(),
             vertical_scroll: scrollbar::Scrollbar::default(),
             week_staff_id: String::new(),
+            week_team: false,
+            team_calendar_scroll: gpui::ScrollHandle::new(),
             time_off_scope: String::new(),
             calendar_scope: None,
             replica_generation: None,
@@ -576,6 +582,7 @@ impl Root {
             .unwrap_or_else(|| Utc::now().with_timezone(&self.tz).date_naive());
         self.calendar_mode = CalendarMode::Day;
         self.week_staff_id.clear();
+        self.week_team = false;
         self.overview_staff.clear();
         self.overview_search
             .update(cx, |field, cx| field.set_text("", cx));
@@ -788,7 +795,7 @@ impl Root {
         }
         self.period_views = self
             .calendar_mode
-            .period(store, self.date)
+            .period(store, self.date, self.week_team)
             .unwrap_or_default();
         self.view = if self.calendar_mode == CalendarMode::Day {
             calendar::day_view(store, self.date).ok()
@@ -827,8 +834,20 @@ impl Root {
             .filter(|member| member.active)
             .cloned()
             .collect();
-        self.overview_staff
-            .retain(|id| self.staff.iter().any(|member| &member.id == id));
+        let visible_staff = self.team_calendar_visible().then(|| {
+            self.period_views
+                .first()
+                .into_iter()
+                .flat_map(|day| &day.columns)
+                .map(|column| column.staff.id.as_str())
+                .collect::<BTreeSet<_>>()
+        });
+        self.overview_staff.retain(|id| {
+            self.staff.iter().any(|member| &member.id == id)
+                && visible_staff
+                    .as_ref()
+                    .is_none_or(|visible| visible.contains(id.as_str()))
+        });
         let catalogue = store.services().unwrap_or_default();
         self.service_colors = catalogue
             .iter()
@@ -882,7 +901,12 @@ impl Root {
     fn set_week_staff(&mut self, id: String, cx: &mut Context<Self>) {
         self.calendar_layout.take();
         self.week_staff_id = id;
-        cx.notify();
+        if self.week_team {
+            self.week_team = false;
+            self.reload(cx);
+        } else {
+            cx.notify();
+        }
     }
 
     fn set_theme(&mut self, dark: bool, cx: &mut Context<Self>) {
@@ -895,7 +919,17 @@ impl Root {
     }
 
     fn calendar_columns(&self) -> Vec<(NaiveDate, &calendar::StaffColumn)> {
-        if self.calendar_mode == CalendarMode::Week {
+        if self.team_calendar_visible() {
+            self.period_views
+                .iter()
+                .flat_map(|day| {
+                    day.columns
+                        .iter()
+                        .filter(|column| self.includes_calendar_staff(&column.staff.id))
+                        .map(|column| (day.date, column))
+                })
+                .collect()
+        } else if self.calendar_mode == CalendarMode::Week {
             self.period_views
                 .iter()
                 .filter_map(|view| {
@@ -988,7 +1022,13 @@ impl Root {
             selected_end: None,
             staff_id: self
                 .preferred_calendar_staff()
-                .or_else(|| self.staff.first().map(|s| s.id.as_str()))
+                .or_else(|| {
+                    if self.team_calendar_visible() {
+                        None
+                    } else {
+                        self.staff.first().map(|member| member.id.as_str())
+                    }
+                })
                 .map(str::to_owned),
             services: vec![],
             selected_quotes: Default::default(),
@@ -1663,9 +1703,12 @@ impl Root {
         query
             .append_pair("date", &self.date.to_string())
             .append_pair("view", self.calendar_mode.route_name());
-        if self.calendar_mode == CalendarMode::Week && !self.week_staff_id.is_empty() {
+        if self.calendar_mode == CalendarMode::Week
+            && !self.week_team
+            && !self.week_staff_id.is_empty()
+        {
             query.append_pair("staff", &self.week_staff_id);
-        } else if self.calendar_mode != CalendarMode::Week && !self.overview_staff.is_empty() {
+        } else if !self.overview_staff.is_empty() {
             query.append_pair(
                 "staff",
                 &self
@@ -1722,23 +1765,7 @@ impl Root {
                         Kind::Ghost,
                         cx.listener(|this, _, _, cx| this.shift_day(1, cx)),
                     ))
-                    .child(
-                        div()
-                            .ml_2()
-                            .text_base()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(SharedString::from(
-                                if self.calendar_mode == CalendarMode::Month {
-                                    format!(
-                                        "{} {}",
-                                        i18n::month_short(self.locale, self.date.month()),
-                                        self.date.year()
-                                    )
-                                } else {
-                                    i18n::date_label(self.locale, self.date)
-                                },
-                            )),
-                    ),
+                    .child(self.calendar_date_button(cx)),
             )
             .child(
                 div()
@@ -3957,6 +3984,9 @@ impl Render for Root {
                         Overlay::Reports(desk) => {
                             Some(self.render_reports(desk, window.viewport_size(), cx))
                         }
+                        Overlay::CalendarDate(picker) => {
+                            Some(self.render_calendar_date(picker, window.viewport_size(), cx))
+                        }
                         Overlay::TeamShifts(desk) => {
                             Some(self.render_team_shifts(desk, window.viewport_size(), cx))
                         }
@@ -3998,35 +4028,31 @@ impl Render for Root {
                     base.flex()
                         .flex_col()
                         .child(self.render_header(cx))
-                        .when(self.calendar_mode == CalendarMode::Week, |d| {
-                            d.child(
-                                div()
-                                    .px_4()
-                                    .py_2()
-                                    .bg(theme::panel())
-                                    .child(self.staff_chips(
-                                        &self.staff,
-                                        "week-staff",
-                                        &self.week_staff_id,
-                                        cx,
-                                        |this, id, cx| this.set_week_staff(id, cx),
-                                    )),
-                            )
+                        .when(self.calendar_mode == CalendarMode::Week, |frame| {
+                            frame.child(self.render_week_controls(cx))
+                        })
+                        .when(self.team_calendar_visible(), |frame| {
+                            frame
+                                .child(self.render_overview_filter(cx))
+                                .child(self.render_team_calendar(window.viewport_size().width, cx))
                         })
                         .when(self.calendar_mode.is_overview(), |frame| {
                             frame
                                 .child(self.render_overview_filter(cx))
                                 .child(self.render_calendar_overview(cx))
                         })
-                        .when(!self.calendar_mode.is_overview(), |frame| {
-                            frame
-                                .when(
-                                    self.calendar_mode == CalendarMode::Day
-                                        && !self.overview_staff.is_empty(),
-                                    |frame| frame.child(self.render_overview_staff_filter(cx)),
-                                )
-                                .child(self.render_calendar(window.viewport_size().height, cx))
-                        })
+                        .when(
+                            !self.calendar_mode.is_overview() && !self.team_calendar_visible(),
+                            |frame| {
+                                frame
+                                    .when(
+                                        self.calendar_mode == CalendarMode::Day
+                                            && !self.overview_staff.is_empty(),
+                                        |frame| frame.child(self.render_overview_staff_filter(cx)),
+                                    )
+                                    .child(self.render_calendar(window.viewport_size().height, cx))
+                            },
+                        )
                         .when(!self.notices.is_empty(), |d| {
                             d.child(self.render_notices(cx))
                         })

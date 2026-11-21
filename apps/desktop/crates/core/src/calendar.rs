@@ -99,6 +99,7 @@ pub struct StaffColumn {
     pub staff: Staff,
     pub items: Vec<CalendarItem>,
     pub blocks: Vec<CalendarBlock>,
+    pub working: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -480,6 +481,30 @@ pub fn overview_days(store: &Store, first_day: NaiveDate, days: u32) -> Result<V
     calendar_period(store, first_day, days, true)
 }
 
+/// A full roster week with the same appointment, absence and schedule boundaries as the team desk.
+pub fn team_calendar_week(store: &Store, first_day: NaiveDate) -> Result<Vec<DayView>> {
+    store.read_snapshot(|store| {
+        let end = first_day
+            .checked_add_signed(Duration::days(7))
+            .ok_or_else(|| CoreError::Invalid("Invalid calendar week".into()))?;
+        let schedule = crate::team_shifts::ScheduleRanges::load(store, first_day, end)?;
+        let scope = store.get_meta("calendar_scope")?;
+        let mut week = overview_days(store, first_day, 7)?;
+        for day in &mut week {
+            day.columns.retain(|column| {
+                scope
+                    .as_deref()
+                    .is_none_or(|scope| scope == "all" || column.staff.id == scope)
+            });
+            for column in &mut day.columns {
+                let (_, ranges) = schedule.for_day(&column.staff.id, day.date);
+                column.working = Some(!ranges.is_empty());
+            }
+        }
+        Ok(week)
+    })
+}
+
 fn calendar_period(
     store: &Store,
     first_day: NaiveDate,
@@ -534,6 +559,7 @@ fn calendar_period(
             staff,
             items: Vec::new(),
             blocks: Vec::new(),
+            working: None,
         })
         .collect();
     let mut views: Vec<_> = dates

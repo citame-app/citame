@@ -20,11 +20,7 @@ pub(super) struct Desk {
 }
 
 fn parse_team_date(input: &str) -> Option<NaiveDate> {
-    let input = input.trim();
-    let date = NaiveDate::parse_from_str(input, "%Y-%m-%d").ok()?;
-    (input.len() == 10 && date.to_string() == input)
-        .then_some(date)
-        .and_then(week_start)
+    calendar_overview::parse_calendar_date(input).and_then(week_start)
 }
 
 fn absence_label(locale: Locale, timezone: Tz, absence: &Absence) -> String {
@@ -152,6 +148,7 @@ impl Root {
         }
         self.overlay = Overlay::None;
         self.calendar_mode = CalendarMode::Week;
+        self.week_team = false;
         self.date = week;
         self.week_staff_id = staff_id.to_owned();
         self.pending_local_today = false;

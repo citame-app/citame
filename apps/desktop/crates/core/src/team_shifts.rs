@@ -38,6 +38,53 @@ pub struct Absence {
     pub pending: bool,
 }
 
+pub(crate) struct ScheduleRanges {
+    weekly: HashMap<(String, i64), Vec<DateShiftRange>>,
+    dated: HashMap<(String, String), Vec<DateShiftRange>>,
+}
+
+impl ScheduleRanges {
+    pub(crate) fn load(store: &Store, first: NaiveDate, end: NaiveDate) -> Result<Self> {
+        let mut weekly = HashMap::<_, Vec<_>>::new();
+        for row in store.working_hours()? {
+            weekly
+                .entry((row.staff_id, row.weekday))
+                .or_default()
+                .push(DateShiftRange {
+                    start_time: row.start_time,
+                    end_time: row.end_time,
+                });
+        }
+        for ranges in weekly.values_mut() {
+            ranges.sort_by(|a, b| {
+                a.start_time
+                    .cmp(&b.start_time)
+                    .then(a.end_time.cmp(&b.end_time))
+            });
+        }
+        let dated = store
+            .date_shifts_between(&first.to_string(), &end.to_string())?
+            .into_iter()
+            .filter_map(|row| row.ranges.map(|ranges| ((row.staff_id, row.date), ranges)))
+            .collect();
+        Ok(Self { weekly, dated })
+    }
+
+    pub(crate) fn for_day(&self, staff_id: &str, day: NaiveDate) -> (bool, &[DateShiftRange]) {
+        if let Some(dated) = self.dated.get(&(staff_id.to_owned(), day.to_string())) {
+            (true, dated)
+        } else {
+            let day = i64::from(day.weekday().num_days_from_sunday());
+            (
+                false,
+                self.weekly
+                    .get(&(staff_id.to_owned(), day))
+                    .map_or(&[], Vec::as_slice),
+            )
+        }
+    }
+}
+
 pub fn week_start(date: NaiveDate) -> Option<NaiveDate> {
     let week = date.checked_sub_days(Days::new(date.weekday().num_days_from_monday().into()))?;
     let until = week.checked_add_days(Days::new(7))?;
@@ -64,28 +111,7 @@ pub fn team_week(store: &Store, date: NaiveDate) -> Result<TeamWeek> {
             Some("none") | None => None,
             staff_id => staff_id,
         };
-        let mut weekly = HashMap::<_, Vec<_>>::new();
-        for row in store.working_hours()? {
-            weekly
-                .entry((row.staff_id, row.weekday))
-                .or_default()
-                .push(DateShiftRange {
-                    start_time: row.start_time,
-                    end_time: row.end_time,
-                });
-        }
-        for ranges in weekly.values_mut() {
-            ranges.sort_by(|a, b| {
-                a.start_time
-                    .cmp(&b.start_time)
-                    .then(a.end_time.cmp(&b.end_time))
-            });
-        }
-        let mut overrides: HashMap<_, _> = store
-            .date_shifts_between(&week.to_string(), &next_week.to_string())?
-            .into_iter()
-            .filter_map(|row| row.ranges.map(|ranges| ((row.staff_id, row.date), ranges)))
-            .collect();
+        let schedule = ScheduleRanges::load(store, week, next_week)?;
         let boundaries: Vec<_> = days
             .iter()
             .map(|day| local_day_range(timezone, *day))
@@ -109,16 +135,7 @@ pub fn team_week(store: &Store, date: NaiveDate) -> Result<TeamWeek> {
                     .iter()
                     .zip(&boundaries)
                     .map(|(day, &(start, end))| {
-                        let dated = overrides.remove(&(staff.id.clone(), day.to_string()));
-                        let custom = dated.is_some();
-                        let ranges = dated.unwrap_or_else(|| {
-                            weekly
-                                .remove(&(
-                                    staff.id.clone(),
-                                    day.weekday().num_days_from_sunday().into(),
-                                ))
-                                .unwrap_or_default()
-                        });
+                        let (custom, ranges) = schedule.for_day(&staff.id, *day);
                         let absences = staff_blocks
                             .iter()
                             .filter_map(|block| {
@@ -133,7 +150,7 @@ pub fn team_week(store: &Store, date: NaiveDate) -> Result<TeamWeek> {
                             })
                             .collect();
                         ShiftDay {
-                            ranges,
+                            ranges: ranges.to_vec(),
                             custom,
                             absences,
                         }
