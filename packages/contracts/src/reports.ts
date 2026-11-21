@@ -34,6 +34,7 @@ export type ReportQuery = z.infer<typeof reportQuerySchema>;
 
 const count = z.number().int().min(0);
 const reportClientCounts = z.object({ newClients: count, returningClients: count });
+export const REPORT_CLIENT_COLLECTIONS_LIMIT = 10;
 export const reportClientsSchema = z.object({
   from: localDateSchema,
   to: localDateSchema,
@@ -41,6 +42,13 @@ export const reportClientsSchema = z.object({
   rows: z.array(reportClientCounts.extend({ date: localDateSchema })),
   groups: z.array(z.object({ name: z.string().min(1), clients: count })).optional(),
   frequency: z.object({ one: count, two: count, threeOrMore: count }).optional(),
+  /** Positive external collections net of recorded refunds, in checkout currency (EUR). */
+  topCollections: z
+    .array(
+      z.object({ clientId: idSchema, name: z.string(), netCents: z.number().int().positive() }),
+    )
+    .max(REPORT_CLIENT_COLLECTIONS_LIMIT)
+    .optional(),
 });
 export type ReportClients = z.infer<typeof reportClientsSchema>;
 export const reportOutcomeSchema = z.enum(["cancelled", "no_show"]);

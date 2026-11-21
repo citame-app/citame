@@ -1,10 +1,19 @@
-import type { ReportClients, ReportQuery } from "@sob/contracts";
+import {
+  REPORT_CLIENT_COLLECTIONS_LIMIT,
+  type ReportClients,
+  type ReportQuery,
+} from "@sob/contracts";
 import type { Database } from "@sob/db";
 import { sql } from "drizzle-orm";
 import { groupName } from "../clients/groups";
+import {
+  completedRefundStatus,
+  recordedPaymentStatuses,
+  storedValuePaymentMethods,
+} from "../commerce/money";
 import { reportDateScope } from "./service";
 
-/** Count each identity once, grouped by its first completed visit within the selected scope. */
+/** Completed visits and net recorded collections for the selected salon-local period. */
 export function reportClients(db: Database, query: ReportQuery): Promise<ReportClients> {
   return db.transaction(
     async (tx) => {
@@ -58,6 +67,45 @@ export function reportClients(db: Database, query: ReportQuery): Promise<ReportC
           ) from first_in_scope) as frequency
       `);
       const { rows, groups, frequency } = result[0] as ClientBreakdown;
+      const paymentStatuses = sql.join(
+        recordedPaymentStatuses.map((status) => sql`${status}`),
+        sql`, `,
+      );
+      const storedValueMethods = sql.join(
+        storedValuePaymentMethods.map((method) => sql`${method}`),
+        sql`, `,
+      );
+      const receiptScope = sql`c.client_id is not null
+        and p.method not in (${storedValueMethods})
+        ${query.staffId ? sql`and c.staff_id = ${query.staffId}` : sql``}`;
+      const collections = await tx.execute<{
+        clientId: string;
+        name: string;
+        netCents: string;
+      }>(sql`
+        with movements as (
+          select c.client_id, sum(p.amount_cents)::bigint as cents
+          from checkout_payment p join checkout c on c.id = p.checkout_id
+          where ${receiptScope} and p.status in (${paymentStatuses})
+            and p.updated_at >= ${fromAt}::timestamptz and p.updated_at < ${toAt}::timestamptz
+          group by c.client_id
+          union all
+          select c.client_id, -sum(r.amount_cents)::bigint as cents
+          from checkout_refund r join checkout_payment p on p.id = r.payment_id
+          join checkout c on c.id = p.checkout_id
+          where ${receiptScope} and r.status = ${completedRefundStatus}
+            and r.updated_at >= ${fromAt}::timestamptz and r.updated_at < ${toAt}::timestamptz
+          group by c.client_id
+        ), ranked as (
+          select client_root_id(client_id) as profile_id, sum(cents)::bigint as net_cents
+          from movements group by 1 having sum(cents) > 0
+        )
+        select profile.id as "clientId", profile.name, ranked.net_cents as "netCents"
+        from ranked join client_profile profile on profile.id = ranked.profile_id
+        where profile.deleted_at is null
+        order by ranked.net_cents desc, profile.name, profile.id
+        limit ${REPORT_CLIENT_COLLECTIONS_LIMIT}
+      `);
       const totals = rows.reduce(
         (sum, row) => ({
           newClients: sum.newClients + row.newClients,
@@ -65,7 +113,19 @@ export function reportClients(db: Database, query: ReportQuery): Promise<ReportC
         }),
         { newClients: 0, returningClients: 0 },
       );
-      return { from: query.from, to: query.to, totals, rows, groups, frequency };
+      return {
+        from: query.from,
+        to: query.to,
+        totals,
+        rows,
+        groups,
+        frequency,
+        topCollections: collections.map(({ clientId, name, netCents }) => ({
+          clientId,
+          name,
+          netCents: Number(netCents),
+        })),
+      };
     },
     { isolationLevel: "repeatable read", accessMode: "read only" },
   );

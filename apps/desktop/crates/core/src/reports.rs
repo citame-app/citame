@@ -210,6 +210,14 @@ impl ClientVisitFrequency {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientNetCollections {
+    pub name: String,
+    pub net_cents: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClientReport {
     pub from: NaiveDate,
     pub to: NaiveDate,
@@ -217,9 +225,29 @@ pub struct ClientReport {
     pub rows: Vec<ClientReportRow>,
     pub groups: Option<Vec<ClientGroupRow>>,
     pub frequency: Option<ClientVisitFrequency>,
+    pub top_collections: Option<Vec<ClientNetCollections>>,
 }
 
 impl ClientReport {
+    pub fn collections_csv(&self) -> Option<String> {
+        let collections = self
+            .top_collections
+            .as_ref()
+            .filter(|rows| !rows.is_empty())?;
+        let mut csv = String::from("client,net_cents,currency\r\n");
+        for entry in collections {
+            csv_row(
+                &mut csv,
+                [
+                    entry.name.as_str(),
+                    &entry.net_cents.to_string(),
+                    financial::CURRENCY,
+                ],
+            );
+        }
+        Some(csv)
+    }
+
     pub fn groups_csv(&self) -> Option<String> {
         let groups = self.groups.as_ref().filter(|groups| !groups.is_empty())?;
         let mut csv = String::from("group,clients\r\n");

@@ -5,6 +5,7 @@ export const recordedPaymentStatuses: ReadonlyArray<typeof checkoutPayment.$infe
   "reconciliation",
 ];
 export const completedRefundStatus = "succeeded";
+export const storedValuePaymentMethods: readonly string[] = ["gift_card", "package", "membership"];
 
 /** Integer floor of a*b/divisor without floating-point loss of minor currency units. */
 export function multiplyDivide(a: number, b: number, divisor: number): number {

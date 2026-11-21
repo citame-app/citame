@@ -24,6 +24,7 @@ import { useNow } from "../use-now";
 import { AppointmentOutcomes } from "./appointment-outcomes";
 import {
   ClientReportView,
+  clientCollectionsReportCsv,
   clientFrequencyReportCsv,
   clientGroupReportCsv,
   clientReportCsv,
@@ -357,6 +358,11 @@ export function ReportsView({
             onExportFrequency={() => {
               const frequency = clients.data?.frequency;
               if (frequency) downloadCsv(clientFrequencyReportCsv(frequency), "client-frequency");
+            }}
+            onExportCollections={() => {
+              const collections = clients.data?.topCollections;
+              if (collections?.length)
+                downloadCsv(clientCollectionsReportCsv(collections), "client-net-collections");
             }}
           />
         ))}

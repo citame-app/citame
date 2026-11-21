@@ -5,7 +5,16 @@ import {
   reportOutcomesPageSchema,
   reportSummarySchema,
 } from "@sob/contracts";
-import { appointment, appointmentService, clientProfile, service, staffProfile } from "@sob/db";
+import {
+  appointment,
+  appointmentService,
+  checkout,
+  checkoutPayment,
+  checkoutRefund,
+  clientProfile,
+  service,
+  staffProfile,
+} from "@sob/db";
 import { eq, inArray } from "drizzle-orm";
 import {
   type Actor,
@@ -116,6 +125,107 @@ async function seedReportFixture() {
 }
 
 const RANGE = "from=2026-03-09&to=2026-03-11";
+
+async function mergeProfiles(sourceId: string, targetId: string) {
+  const pair = { sourceId, targetId };
+  const preview = await json(t.app, "/admin/clients/merge/preview", "POST", pair, owner.cookie);
+  expect(preview.status).toBe(200);
+  const review = (await preview.json()) as { reviewHash: string };
+  const merged = await json(
+    t.app,
+    "/admin/clients/merge",
+    "POST",
+    {
+      ...pair,
+      reviewHash: review.reviewHash,
+      confirmedSamePerson: true,
+      idempotencyKey: crypto.randomUUID(),
+    },
+    owner.cookie,
+  );
+  const body = await merged.text();
+  expect(merged.ok, body).toBe(true);
+}
+
+test("ranks clients by net recorded collections in the salon period and staff scope", async () => {
+  const [other, alias] = await t.db
+    .insert(clientProfile)
+    .values([{ name: "Second client" }, { name: "Historical profile" }])
+    .returning({ id: clientProfile.id });
+  if (!other || !alias) throw new Error("Missing client fixture");
+
+  async function receipt(clientId: string | null, staffId: string) {
+    const [sale] = await t.db
+      .insert(checkout)
+      .values({
+        clientId,
+        staffId,
+        subtotalCents: 20000,
+        totalCents: 20000,
+        idempotencyKey: crypto.randomUUID(),
+        requestHash: "fixture",
+      })
+      .returning({ id: checkout.id });
+    if (!sale) throw new Error("Missing checkout fixture");
+    return sale.id;
+  }
+
+  const firstReceipt = await receipt(f.clientId, f.anaId);
+  const laterReceipt = await receipt(alias.id, f.beaId);
+  const otherReceipt = await receipt(other.id, f.anaId);
+  const anonymousReceipt = await receipt(null, f.anaId);
+  const inRange = new Date("2026-03-12T02:59:59Z");
+  const end = new Date("2026-03-12T03:00:00Z");
+  const payment = (checkoutId: string, amountCents: number, updatedAt = inRange) => ({
+    checkoutId,
+    amountCents,
+    updatedAt,
+    status: "succeeded" as const,
+    method: "cash" as const,
+    idempotencyKey: crypto.randomUUID(),
+    requestHash: "fixture",
+  });
+  const [paid] = await t.db
+    .insert(checkoutPayment)
+    .values([
+      payment(firstReceipt, 10000),
+      { ...payment(firstReceipt, 5000), method: "package" },
+      { ...payment(firstReceipt, 4000), status: "pending" },
+      payment(laterReceipt, 3000),
+      payment(otherReceipt, 9000),
+      payment(otherReceipt, 15000, end),
+      payment(anonymousReceipt, 19000),
+    ])
+    .returning({ id: checkoutPayment.id });
+  if (!paid) throw new Error("Missing payment fixture");
+  const refund = (amountCents: number, updatedAt: Date) => ({
+    paymentId: paid.id,
+    amountCents,
+    updatedAt,
+    status: "succeeded" as const,
+    reason: "Fixture return",
+    idempotencyKey: crypto.randomUUID(),
+    requestHash: "fixture",
+  });
+  await t.db.insert(checkoutRefund).values([refund(2000, inRange), refund(3000, end)]);
+  await mergeProfiles(alias.id, f.clientId);
+
+  const path = `/admin/reports/clients?${RANGE}`;
+  const ranked = async (url: string) => {
+    const response = await call(owner, url);
+    expect(response.status).toBe(200);
+    return reportClientsSchema.parse(await response.json()).topCollections;
+  };
+  expect(await ranked(path)).toEqual([
+    expect.objectContaining({ clientId: f.clientId, netCents: 11000 }),
+    { clientId: other.id, name: "Second client", netCents: 9000 },
+  ]);
+  expect(await ranked(`${path}&staffId=${f.anaId}`)).toEqual([
+    { clientId: other.id, name: "Second client", netCents: 9000 },
+    expect.objectContaining({ clientId: f.clientId, netCents: 8000 }),
+  ]);
+  expect((await call(ana, path)).status).toBe(403);
+});
 
 test("completed imported services contribute their reviewed price to every report breakdown", async () => {
   const appointmentId = await insert("ana", "2026-03-15T12:00:00Z", "completed", [
@@ -229,23 +339,7 @@ test("customer reports count each merged profile once and use completed salon hi
       endsAt: new Date("2026-03-08T16:00:00Z"),
     },
   ]);
-  const pair = { sourceId: alias!.id, targetId: newClient!.id };
-  const preview = await json(t.app, "/admin/clients/merge/preview", "POST", pair, owner.cookie);
-  expect(preview.status).toBe(200);
-  const review = (await preview.json()) as { reviewHash: string };
-  const merged = await json(
-    t.app,
-    "/admin/clients/merge",
-    "POST",
-    {
-      ...pair,
-      reviewHash: review.reviewHash,
-      confirmedSamePerson: true,
-      idempotencyKey: crypto.randomUUID(),
-    },
-    owner.cookie,
-  );
-  expect(merged.ok, await merged.text()).toBe(true);
+  await mergeProfiles(alias!.id, newClient!.id);
   const path = `/admin/reports/clients?${RANGE}`;
   const response = await call(owner, path);
   expect(response.status).toBe(200);

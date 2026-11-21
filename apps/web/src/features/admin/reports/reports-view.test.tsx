@@ -18,6 +18,7 @@ const clientReport = {
     { name: "=group", clients: 1 },
   ],
   frequency: { one: 2, two: 0, threeOrMore: 3 },
+  topCollections: [{ clientId: ANA, name: "=example, customer", netCents: 9500 }],
 };
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -161,6 +162,30 @@ describe("ReportsView", () => {
     } finally {
       click.mockRestore();
       createUrl.mockRestore();
+    }
+    const collections = screen.getByRole("table", { name: "Top 10 clients by net collections" });
+    expect(
+      within(collections).getByRole("rowheader", { name: "=example, customer" }),
+    ).toBeVisible();
+    expect(within(collections).getByRole("cell")).toHaveTextContent("€95");
+    const collectionsClick = spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
+      function checkFilename(this: HTMLAnchorElement) {
+        expect(this.download).toBe("client-net-collections-2026-02-17-2026-03-18.csv");
+      },
+    );
+    const collectionsUrl = spyOn(URL, "createObjectURL").mockImplementation((blob) => {
+      if (blob instanceof Blob) blobs.push(blob);
+      return "blob:collections";
+    });
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Export net collections CSV" }));
+      expect(collectionsClick).toHaveBeenCalledTimes(1);
+      expect(await blobs[1]?.text()).toBe(
+        'client,net_cents,currency\r\n"\'=example, customer",9500,EUR\r\n',
+      );
+    } finally {
+      collectionsClick.mockRestore();
+      collectionsUrl.mockRestore();
     }
   });
 

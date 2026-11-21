@@ -4,17 +4,19 @@ use super::*;
 enum ClientReportBreakdown {
     Groups,
     Frequency,
+    NetCollections,
 }
 
 struct ClientBreakdownTable {
     title: Key,
     basis: Key,
     row_heading: Key,
+    value_heading: Key,
     empty: Key,
     export: Key,
     table_id: &'static str,
     export_id: &'static str,
-    rows: Vec<(SharedString, u64)>,
+    rows: Vec<(SharedString, SharedString)>,
 }
 
 impl Root {
@@ -159,6 +161,12 @@ impl Root {
                 report,
                 cx,
             ))
+            .children(self.render_client_breakdown(
+                ClientReportBreakdown::NetCollections,
+                desk,
+                report,
+                cx,
+            ))
     }
 
     fn render_client_breakdown(
@@ -172,6 +180,7 @@ impl Root {
             title,
             basis,
             row_heading,
+            value_heading,
             empty,
             export,
             table_id,
@@ -182,6 +191,7 @@ impl Root {
                 title: Key::ReportClientGroups,
                 basis: Key::ReportClientGroupsBasis,
                 row_heading: Key::ReportClientGroup,
+                value_heading: Key::ReportClients,
                 empty: Key::ReportClientGroupsEmpty,
                 export: Key::ReportExportClientGroups,
                 table_id: "client-group-report-table",
@@ -190,7 +200,7 @@ impl Root {
                     .groups
                     .as_ref()?
                     .iter()
-                    .map(|entry| (entry.name.clone().into(), entry.clients))
+                    .map(|entry| (entry.name.clone().into(), entry.clients.to_string().into()))
                     .collect(),
             },
             ClientReportBreakdown::Frequency => {
@@ -199,6 +209,7 @@ impl Root {
                     title: Key::ReportClientFrequency,
                     basis: Key::ReportClientFrequencyBasis,
                     row_heading: Key::ReportClientFrequencyVisits,
+                    value_heading: Key::ReportClients,
                     empty: Key::ReportNoClients,
                     export: Key::ReportExportClientFrequency,
                     table_id: "client-frequency-report-table",
@@ -209,10 +220,35 @@ impl Root {
                         (Key::ReportClientFrequencyThree, frequency.three_or_more),
                     ]
                     .into_iter()
-                    .map(|(label, count)| (self.t(label).into(), count))
+                    .map(|(label, count)| (self.t(label).into(), count.to_string().into()))
                     .collect(),
                 }
             }
+            ClientReportBreakdown::NetCollections => ClientBreakdownTable {
+                title: Key::ReportClientCollections,
+                basis: Key::ReportClientCollectionsBasis,
+                row_heading: Key::ReportOutcomeClient,
+                value_heading: Key::ReportClientCollectionsNet,
+                empty: Key::ReportClientCollectionsEmpty,
+                export: Key::ReportExportClientCollections,
+                table_id: "client-collections-report-table",
+                export_id: "client-collections-report-export",
+                rows: report
+                    .top_collections
+                    .as_ref()?
+                    .iter()
+                    .map(|entry| {
+                        (
+                            entry.name.clone().into(),
+                            self.amount_label(
+                                entry.net_cents,
+                                sob_core::reports::financial::CURRENCY,
+                            )
+                            .into(),
+                        )
+                    })
+                    .collect(),
+            },
         };
         let has_rows = !rows.is_empty();
         Some(
@@ -269,15 +305,11 @@ impl Root {
                             .border_color(theme::line())
                             .child(self.render_client_breakdown_row(
                                 self.t(row_heading).into(),
-                                self.t(Key::ReportClients).into(),
+                                self.t(value_heading).into(),
                                 true,
                             ))
-                            .children(rows.into_iter().map(|(label, count)| {
-                                self.render_client_breakdown_row(
-                                    label,
-                                    count.to_string().into(),
-                                    false,
-                                )
+                            .children(rows.into_iter().map(|(label, value)| {
+                                self.render_client_breakdown_row(label, value, false)
                             })),
                     )
                 }),
@@ -327,6 +359,9 @@ impl Root {
                 "client-frequency",
                 report.frequency.as_ref().map(|band| band.to_csv()),
             ),
+            ClientReportBreakdown::NetCollections => {
+                ("client-net-collections", report.collections_csv())
+            }
         };
         let Some(csv) = csv else {
             return;
@@ -377,6 +412,7 @@ mod tests {
                     "rows": [{ "date": expected_query.to, "newClients": 2, "returningClients": 3 }],
                     "groups": [{ "name": "vip", "clients": 2 }, { "name": "=group", "clients": 1 }],
                     "frequency": { "one": 2, "two": 0, "threeOrMore": 3 },
+                    "topCollections": [{ "name": "=Example, customer", "netCents": 9500 }],
                 }))
                 .unwrap(),
             );
@@ -392,6 +428,7 @@ mod tests {
         assert!(cx.debug_bounds("client-report-table").is_some());
         assert!(cx.debug_bounds("client-group-report-table").is_some());
         assert!(cx.debug_bounds("client-frequency-report-table").is_some());
+        assert!(cx.debug_bounds("client-collections-report-table").is_some());
         let export = dir.path().join("frequency.csv");
         root.update(cx, |root, cx| {
             root.save_client_breakdown(ClientReportBreakdown::Frequency, cx)
@@ -401,6 +438,16 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&export).unwrap(),
             "visit_frequency,clients\r\none,2\r\ntwo,0\r\nthreeOrMore,3\r\n"
+        );
+        let export = dir.path().join("collections.csv");
+        root.update(cx, |root, cx| {
+            root.save_client_breakdown(ClientReportBreakdown::NetCollections, cx)
+        });
+        cx.simulate_new_path_selection(|_| Some(export.clone()));
+        cx.run_until_parked();
+        assert_eq!(
+            std::fs::read_to_string(&export).unwrap(),
+            "client,net_cents,currency\r\n\"'=Example, customer\",9500,EUR\r\n"
         );
         root.update(cx, |root, cx| {
             root.select_report_mode(ReportMode::Overview, cx);

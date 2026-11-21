@@ -25,6 +25,7 @@ export function reportRoutes({ db }: AppDeps) {
     .get("/clients", async (c) => {
       const principal = c.get("principal");
       requirePermission(principal, "financialReports");
+      authorizeClientAccess(principal);
       const query = parseOrThrow(reportQuerySchema, c.req.query());
       const scoped = authorizeReportQuery(principal, query);
       return c.json(await reportClients(db, scoped), 200, { "Cache-Control": "private, no-store" });

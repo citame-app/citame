@@ -17,7 +17,7 @@ import { requirePermission } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
-import { multiplyDivide } from "../commerce/money";
+import { multiplyDivide, storedValuePaymentMethods } from "../commerce/money";
 import { getSalonSettings } from "../settings/service";
 import { requireStaff } from "../staff/admin";
 import { redeemedAtSettlement, settledSales } from "./settled-families";
@@ -363,10 +363,10 @@ export async function salesReport(db: Database, query: ReportQuery, principal: P
           refundedCents: Number(refunds.find((row) => row.method === method)?.amount ?? 0),
         }));
       const collectedCents = methods
-        .filter((row) => !["gift_card", "package", "membership"].includes(row.method))
+        .filter((row) => !storedValuePaymentMethods.includes(row.method))
         .reduce((sum, row) => sum + row.collectedCents, 0);
       const refundedCents = methods
-        .filter((row) => !["gift_card", "package", "membership"].includes(row.method))
+        .filter((row) => !storedValuePaymentMethods.includes(row.method))
         .reduce((sum, row) => sum + row.refundedCents, 0);
       return {
         from: query.from,

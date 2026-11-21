@@ -3,7 +3,7 @@ import { useId } from "react";
 import { Button } from "~/components/ui/button";
 import { EmptyState } from "~/components/ui/states";
 import { useI18n } from "~/i18n/react";
-import { formatDateWithYear } from "~/lib/format";
+import { formatDateWithYear, formatMoney } from "~/lib/format";
 import { csvCell } from "./logic";
 
 export function clientReportCsv(report: ReportClients) {
@@ -26,14 +26,23 @@ export function clientFrequencyReportCsv(frequency: Frequency) {
   return ["visit_frequency,clients", ...rows, ""].join("\r\n");
 }
 
+export function clientCollectionsReportCsv(
+  collections: NonNullable<ReportClients["topCollections"]>,
+) {
+  const rows = collections.map(({ name, netCents }) => [csvCell(name), netCents, "EUR"].join(","));
+  return ["client,net_cents,currency", ...rows, ""].join("\r\n");
+}
+
 export function ClientReportView({
   report,
   onExportGroups,
   onExportFrequency,
+  onExportCollections,
 }: {
   report: ReportClients;
   onExportGroups: () => void;
   onExportFrequency: () => void;
+  onExportCollections: () => void;
 }) {
   const { t, locale } = useI18n();
   const captionId = useId();
@@ -112,7 +121,12 @@ export function ClientReportView({
           empty={t("reports.clients.groupsEmpty")}
           exportLabel={t("reports.clients.exportGroups")}
           onExport={onExportGroups}
-          rows={report.groups}
+          valueHeading={t("reports.clients")}
+          rows={report.groups.map(({ name, clients }) => ({
+            key: name,
+            name,
+            value: numbers.format(clients),
+          }))}
         />
       )}
       {frequency && (
@@ -123,9 +137,27 @@ export function ClientReportView({
           empty={t("reports.clients.empty")}
           exportLabel={t("reports.clients.exportFrequency")}
           onExport={onExportFrequency}
+          valueHeading={t("reports.clients")}
           rows={frequencyBands.map((band) => ({
+            key: band,
             name: t(`reports.clients.frequency.${band}`),
-            clients: frequency[band],
+            value: numbers.format(frequency[band]),
+          }))}
+        />
+      )}
+      {report.topCollections && (
+        <ClientBreakdown
+          title={t("reports.clients.collections")}
+          basis={t("reports.clients.collectionsBasis")}
+          rowHeading={t("reports.clients.customer")}
+          valueHeading={t("reports.clients.netCollections")}
+          empty={t("reports.clients.collectionsEmpty")}
+          exportLabel={t("reports.clients.exportCollections")}
+          onExport={onExportCollections}
+          rows={report.topCollections.map(({ clientId, name, netCents }) => ({
+            key: clientId,
+            name,
+            value: formatMoney(netCents, "EUR", locale),
           }))}
         />
       )}
@@ -137,6 +169,7 @@ function ClientBreakdown({
   title,
   basis,
   rowHeading,
+  valueHeading,
   empty,
   exportLabel,
   onExport,
@@ -145,14 +178,13 @@ function ClientBreakdown({
   title: string;
   basis: string;
   rowHeading: string;
+  valueHeading: string;
   empty: string;
   exportLabel: string;
   onExport: () => void;
-  rows: { name: string; clients: number }[];
+  rows: { key: string; name: string; value: string }[];
 }) {
-  const { t, locale } = useI18n();
   const headingId = useId();
-  const numbers = new Intl.NumberFormat(locale);
   const hasRows = rows.length > 0;
 
   return (
@@ -182,17 +214,17 @@ function ClientBreakdown({
                   {rowHeading}
                 </th>
                 <th scope="col" className="px-3 py-3 text-end font-medium">
-                  {t("reports.clients")}
+                  {valueHeading}
                 </th>
               </tr>
             </thead>
             <tbody>
-              {rows.map(({ name, clients }) => (
-                <tr key={name} className="border-t border-line">
+              {rows.map(({ key, name, value }) => (
+                <tr key={key} className="border-t border-line">
                   <th scope="row" className="wrap-anywhere px-3 py-2.5 text-start font-medium">
                     {name}
                   </th>
-                  <td className="px-3 py-2.5 text-end tabular-nums">{numbers.format(clients)}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-end tabular-nums">{value}</td>
                 </tr>
               ))}
             </tbody>
