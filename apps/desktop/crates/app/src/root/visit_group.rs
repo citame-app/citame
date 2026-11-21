@@ -3,6 +3,7 @@ use super::*;
 fn can_switch(details: &Details) -> bool {
     details.start == details.reviewed.starts_at
         && details.staff_id == details.reviewed.staff_id
+        && !matches!(details.return_to, Some(AppointmentReturn::Conflict(_)))
         && !details.confirm_cancel
         && details.price_review.is_none()
         && details.settlement_review.is_none()
