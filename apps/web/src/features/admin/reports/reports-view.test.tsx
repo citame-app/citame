@@ -143,11 +143,10 @@ describe("ReportsView", () => {
     );
     const frequencyTable = screen.getByRole("table", { name: "Clients by visit frequency" });
     expect(within(frequencyTable).getByRole("row", { name: "3 or more visits 3" })).toBeVisible();
-    const click = spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
-      function (this: HTMLAnchorElement) {
-        expect(this.download).toBe("client-frequency-2026-02-17-2026-03-18.csv");
-      },
-    );
+    function checkFilename(this: HTMLAnchorElement) {
+      expect(this.download).toBe("client-frequency-2026-02-17-2026-03-18.csv");
+    }
+    const click = spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(checkFilename);
     const blobs: Blob[] = [];
     const createUrl = spyOn(URL, "createObjectURL").mockImplementation((blob) => {
       if (blob instanceof Blob) blobs.push(blob);
