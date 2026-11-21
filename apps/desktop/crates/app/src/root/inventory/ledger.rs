@@ -10,6 +10,8 @@ pub(super) struct Panel {
     pub(super) results: Option<LedgerPage>,
     export: Option<Arc<()>>,
     export_notice: Option<Key>,
+    locations_request: Option<Arc<()>>,
+    locations_error: bool,
 }
 
 const FILTERS: [(Option<LedgerKind>, Key); 8] = [
@@ -55,7 +57,11 @@ impl Root {
         let Overlay::Inventory(desk) = &mut self.overlay else {
             return;
         };
-        if desk.request.is_some() || desk.product.is_some() || desk.ledger.is_some() {
+        if desk.request.is_some()
+            || desk.product.is_some()
+            || desk.ledger.is_some()
+            || (warehouse.is_none() && desk.catalog.is_none())
+        {
             return;
         }
         let search = cx.new(|cx| TextField::new(label, false, cx));
@@ -75,6 +81,8 @@ impl Root {
             results: None,
             export: None,
             export_notice: None,
+            locations_request: None,
+            locations_error: false,
         });
         self.request_inventory(Action::Ledger(query, 1), cx);
         self.load_ledger_warehouse_names(cx);
@@ -84,7 +92,7 @@ impl Root {
         let Some(transport) = self
             .svc
             .transport()
-            .filter(|_| self.status.connectivity == Connectivity::Online)
+            .filter(|_| self.svc.status().connectivity == Connectivity::Online)
         else {
             return;
         };
@@ -94,24 +102,67 @@ impl Root {
             .store
             .staff_directory_revision()
             .unwrap_or_default();
+        let revision = self
+            .svc
+            .store
+            .live_view_revision(LIVE_TOPIC)
+            .unwrap_or_default();
+        let Overlay::Inventory(desk) = &mut self.overlay else {
+            return;
+        };
+        let Some(panel) = &mut desk.ledger else {
+            return;
+        };
+        if panel.locations_request.is_some() {
+            return;
+        }
+        let token = Arc::new(());
+        panel.locations_request = Some(token.clone());
+        panel.locations_error = false;
+        cx.notify();
         cx.spawn(async move |handle, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move { transport.inventory_warehouses() })
                 .await;
             let _ = handle.update(cx, |root, cx| {
-                if Arc::ptr_eq(&root.svc.session, &session)
-                    && root
-                        .svc
-                        .store
-                        .staff_directory_revision()
-                        .unwrap_or_default()
-                        == staff
-                    && let Ok(locations) = result
-                    && root.svc.store.cache_warehouse_list(&locations).is_ok()
-                {
-                    cx.notify();
+                if !Arc::ptr_eq(&root.svc.session, &session) {
+                    return;
                 }
+                let Overlay::Inventory(desk) = &mut root.overlay else {
+                    return;
+                };
+                let Some(panel) = &mut desk.ledger else {
+                    return;
+                };
+                if !panel
+                    .locations_request
+                    .as_ref()
+                    .is_some_and(|request| Arc::ptr_eq(request, &token))
+                {
+                    return;
+                }
+                panel.locations_request = None;
+                if root
+                    .svc
+                    .store
+                    .live_view_revision(LIVE_TOPIC)
+                    .unwrap_or_default()
+                    != revision
+                {
+                    root.load_ledger_warehouse_names(cx);
+                    return;
+                }
+                panel.locations_error = root
+                    .svc
+                    .store
+                    .staff_directory_revision()
+                    .unwrap_or_default()
+                    != staff
+                    || result.ok().is_none_or(|locations| {
+                        root.svc.store.cache_warehouse_list(&locations).is_err()
+                    });
+                cx.notify();
             });
         })
         .detach();
@@ -316,9 +367,7 @@ impl Root {
                         .map(|row| {
                             (
                                 Some(WarehouseLocation(row.id)),
-                                row.name.clone().unwrap_or_else(|| {
-                                    self.t(Key::InventoryWarehouseMain).to_owned()
-                                }),
+                                self.warehouse_name(row).to_owned(),
                             )
                         }),
                 );
@@ -345,6 +394,32 @@ impl Root {
                         )),
                 )
             })
+            .when(
+                ready && (locations.is_none() || panel.locations_error),
+                |body| {
+                    body.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .when(panel.locations_request.is_some(), |row| {
+                                row.child(self.t(Key::InventoryLoading))
+                            })
+                            .when(panel.locations_request.is_none(), |row| {
+                                row.child(self.t(Key::InventoryWarehouseUnavailable)).child(
+                                    self.button(
+                                        "ledger-retry-warehouses",
+                                        self.t(Key::InventoryRefreshWarehouses),
+                                        Kind::Ghost,
+                                        cx.listener(|root, _, _, cx| {
+                                            root.load_ledger_warehouse_names(cx)
+                                        }),
+                                    ),
+                                )
+                            }),
+                    )
+                },
+            )
             .when_some(panel.export_notice, |view, notice| {
                 view.child(
                     div()
@@ -495,8 +570,9 @@ mod tests {
                 .unwrap(),
             );
             root.open_inventory_ledger(cx);
-            let query =
+            let mut query =
                 LedgerQuery::new("cotton", Some(LedgerKind::Movement(StockKind::Consume))).unwrap();
+            query.warehouse = Some(WarehouseLocation(None));
             let Overlay::Inventory(desk) = &mut root.overlay else {
                 panic!("inventory should be open");
             };

@@ -429,7 +429,7 @@ impl Root {
         cx.notify();
     }
 
-    fn warehouse_name<'a>(&self, row: &'a Warehouse) -> &'a str {
+    pub(super) fn warehouse_name<'a>(&self, row: &'a Warehouse) -> &'a str {
         row.name
             .as_deref()
             .unwrap_or_else(|| self.t(Key::InventoryWarehouseMain))

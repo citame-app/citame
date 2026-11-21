@@ -657,7 +657,7 @@ impl Root {
                     .when(online && !busy, |row| {
                         row.child(self.button(
                             "receipt-load-warehouses",
-                            self.t(Key::InventoryReceiptLoadWarehouses),
+                            self.t(Key::InventoryRefreshWarehouses),
                             Kind::Ghost,
                             cx.listener(|root, _, _, cx| {
                                 root.request_document(Request::Warehouses, cx)
