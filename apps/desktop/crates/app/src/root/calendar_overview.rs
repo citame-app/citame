@@ -641,6 +641,10 @@ mod tests {
                 row.id = uuid::Uuid::now_v7().to_string();
                 row.starts_at += Span::hours(position);
                 row.ends_at += Span::hours(position);
+                if position == 1 {
+                    row.services[0].currency = "EUR".to_owned();
+                    row.services[0].price_cents = 2_540;
+                }
                 if position == 3 {
                     row.status = AppointmentStatus::Cancelled;
                 }
@@ -672,10 +676,9 @@ mod tests {
                 items.last().unwrap().1.appointment.status,
                 AppointmentStatus::Cancelled
             );
-            assert_eq!(
-                calendar::scheduled_value(items.iter().map(|(_, item)| *item))["ARS"],
-                3
-            );
+            let totals = calendar::scheduled_value(items.iter().map(|(_, item)| *item));
+            assert_eq!(totals["ARS"], 2);
+            assert_eq!(totals["EUR"], 2_540);
         });
     }
 
