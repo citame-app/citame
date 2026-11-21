@@ -14,6 +14,7 @@ import { createApp } from "../app";
 import { createAccount } from "../auth/accounts";
 import { createAuth } from "../auth/auth";
 import { loadConfig } from "../config";
+import { restoreLegacyBooksyPaymentEvidence } from "../modules/booksy-transfer/operational-rehearsal";
 import { loadBooksySourceModel } from "../modules/booksy-transfer/source-store";
 import { privateCliError, privateWrite } from "../modules/booksy-transfer/vault";
 
@@ -67,7 +68,10 @@ if (import.meta.main) {
     const db = await connectToNamedDatabase(connection);
     closeDatabase = db.close;
     const snapshot = await loadBooksySourceModel(db.db, snapshotHash);
-    if (desktopTest) await runMigrations(db.db, { allowReviewDatabase: true });
+    if (desktopTest) {
+      await runMigrations(db.db, { allowReviewDatabase: true });
+      await restoreLegacyBooksyPaymentEvidence(db.db, snapshotHash);
+    }
     const credentialFile = resolve(root, "local-owner.json");
     let credentials: { email: string; password: string; secret: string };
     try {

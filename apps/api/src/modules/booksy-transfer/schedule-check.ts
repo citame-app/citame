@@ -3,6 +3,7 @@ import {
   appointment,
   appointmentContext,
   appointmentService,
+  booksyRestoreDatabase,
   checkout,
   clientProfile,
   type Database,
@@ -497,7 +498,7 @@ export async function rehearseRestoredSchedule(db: Database, date: string) {
   try {
     await db.transaction(async (tx) => {
       const [identity] = await tx.execute<{ name: string }>(sql`select current_database() as name`);
-      if (!/^sob_booksy_restorecheck_\d{8}_\d+$/.test(identity?.name ?? ""))
+      if (!booksyRestoreDatabase.test(identity?.name ?? ""))
         throw new Error("Schedule rehearsal requires a private restore");
       await lockScheduling(tx);
       proof = await checkCapacity(tx, date);

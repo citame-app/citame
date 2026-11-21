@@ -2,6 +2,8 @@ import {
   appointment,
   appointmentContext,
   appointmentService,
+  booksyDesktopTestDatabase,
+  booksyRestoreDatabase,
   type Database,
   resourcePool,
   resourceReservation,
@@ -741,13 +743,17 @@ async function verifyNativePaymentEvidence(tx: Tx, plan: NativePlan) {
     throw new Error("Native payment holds differ from the archived reservation evidence");
 }
 
-/** Fill payment provenance missing from a pre-0101 archive on its isolated restoration only. */
+/** Fill missing payment provenance from archived evidence on the isolated local copies. */
 export async function restoreLegacyBooksyPaymentEvidence(db: Database, snapshotHash: string) {
   return db.transaction(async (tx) => {
     const [identity] = await tx.execute<{ name: string }>(sql`select current_database() as name`);
-    if (!/^sob_booksy_restorecheck_\d{8}_\d+$/.test(identity?.name ?? ""))
+    const name = identity?.name ?? "";
+    const desktopTest = booksyDesktopTestDatabase.test(name);
+    if (!desktopTest && !booksyRestoreDatabase.test(name))
       throw new Error("Payment evidence repair requires an isolated Booksy restoration");
-    const model = await loadBooksySourceModel(tx, snapshotHash, { exclusiveExtensions: true });
+    const model = await loadBooksySourceModel(tx, snapshotHash, {
+      exclusiveExtensions: !desktopTest,
+    });
     const plan = planNativeRehearsal(model);
     const unverified = plan.visits.filter((v) => v.sourcePaymentUnverified).map((v) => v.item.id);
     if (unverified.length) {
@@ -776,7 +782,7 @@ export async function restoreLegacyBooksyPaymentEvidence(db: Database, snapshotH
         `);
       }
     }
-    await verifyNativePaymentEvidence(tx, plan);
+    if (!desktopTest) await verifyNativePaymentEvidence(tx, plan);
   });
 }
 
@@ -986,7 +992,7 @@ export async function rehearseNativeBooksy(
 ) {
   const [identity] = await db.execute<{ name: string }>(sql`select current_database() as name`);
   const targetName =
-    mode === "prepare" ? /^sob_booksy_candidate_\d{8}_\d+$/ : /^sob_booksy_restorecheck_\d{8}_\d+$/;
+    mode === "prepare" ? /^sob_booksy_candidate_\d{8}_\d+$/ : booksyRestoreDatabase;
   if (!targetName.test(identity?.name ?? ""))
     throw new Error("The operation requires a separate local copy for the selected mode");
   const model = await loadBooksySourceModel(db, snapshotHash);

@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import type { Database } from "./client";
 
 export const booksyDesktopTestDatabase = /^sob_booksy_desktop_test_\d{8}$/;
+export const booksyRestoreDatabase = /^sob_booksy_restorecheck_\d{8}_\d+$/;
 
 function assertOperationalName(name: string) {
   if (
