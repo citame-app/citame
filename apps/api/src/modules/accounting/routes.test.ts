@@ -156,7 +156,9 @@ test("payout records are idempotent and later refunds carry a negative balance f
   const first = await call(owner, `${path}/reviewed`, "POST", reviewed);
   expect(first.status).toBe(201);
   expect(first.headers.get("cache-control")).toBe("private, no-store");
-  const recorded = commissionPayoutSchema.parse(await first.json());
+  const firstBody: unknown = await first.json();
+  expect(firstBody).toMatchObject({ idempotencyKey: payout.idempotencyKey });
+  const recorded = commissionPayoutSchema.parse(firstBody);
   const refreshPath = `/sync/pull?since=${cursor}`;
   const changes = syncPullResponseSchema.parse(await (await call(owner, refreshPath)).json());
   expect(changes.refresh).toContain("commerce");

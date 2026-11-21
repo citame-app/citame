@@ -41,7 +41,27 @@ fn reviewed_commission_payout_survives_restart_and_clears_only_the_acknowledged_
             .unwrap(),
         Some(saved.clone())
     );
+    let rebound = store
+        .rebind_commission_payout(&saved, "restored")
+        .unwrap()
+        .unwrap();
+    assert_eq!(rebound.review.idempotency_key, saved.review.idempotency_key);
+    assert_eq!(rebound.review.amount_cents, saved.review.amount_cents);
+    assert_eq!(rebound.review.reference, saved.review.reference);
+    assert!(
+        store
+            .rebind_commission_payout(&saved, "another")
+            .unwrap()
+            .is_none()
+    );
     store.clear_commission_payout(&saved).unwrap();
+    assert_eq!(
+        store
+            .pending_commission_payout(saved.staff_id, "manager")
+            .unwrap(),
+        Some(rebound.clone())
+    );
+    store.clear_commission_payout(&rebound).unwrap();
     assert!(
         store
             .pending_commission_payout(saved.staff_id, "manager")

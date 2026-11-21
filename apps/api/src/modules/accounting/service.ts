@@ -218,6 +218,7 @@ export async function recordPayout(
   staffId: string,
   input: CommissionPayoutInput,
   principal: Principal,
+  keyConflictCode: "invalid_state" | "version_conflict" = "invalid_state",
 ) {
   requirePermission(principal, "manageCommissions");
   await requireStaff(db, staffId);
@@ -239,7 +240,7 @@ export async function recordPayout(
       );
     if (previous) {
       if (previous.requestHash !== requestHash)
-        throw new DomainError("version_conflict", "Payout key belongs to another request");
+        throw new DomainError(keyConflictCode, "Payout key belongs to another request");
       return payoutView(previous);
     }
     const totals = await balances(tx, staffId);

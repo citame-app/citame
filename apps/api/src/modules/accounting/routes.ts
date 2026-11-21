@@ -89,8 +89,11 @@ export function accountingRoutes(deps: AppDeps) {
         parseOrThrow(idSchema, c.req.param("id")),
         input,
         principal,
+        "version_conflict",
       );
-      return c.json(payout, 201, { "Cache-Control": "private, no-store" });
+      return c.json({ ...payout, idempotencyKey: input.idempotencyKey }, 201, {
+        "Cache-Control": "private, no-store",
+      });
     })
     .put("/staff/:id/policy", async (c) =>
       c.json(
@@ -105,15 +108,16 @@ export function accountingRoutes(deps: AppDeps) {
     .get("/staff/:id/statement", async (c) => {
       const query = parseOrThrow(pages, c.req.query());
       c.header("Cache-Control", "private, no-store");
-      return c.json(
-        await commissionStatement(
+      return c.json({
+        ...(await commissionStatement(
           deps.db,
           parseOrThrow(idSchema, c.req.param("id")),
           c.get("principal"),
           query.page,
           query.payoutPage,
-        ),
-      );
+        )),
+        generation,
+      });
     })
     .post("/staff/:id/payouts", async (c) =>
       c.json(

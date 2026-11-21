@@ -1419,7 +1419,7 @@ impl HttpTransport {
                 &format!("/admin/intake-forms/{}", parse_id(id)?),
                 Some("application/json"),
             )?,
-            intake_read_error,
+            review_transport_error,
         )?;
         if form.id != id {
             return Err(TransportError::Server("Unexpected form detail".into()));
@@ -1596,19 +1596,19 @@ impl HttpTransport {
         let response = self.send_json(&path, &payout.review)?;
         let recorded: RecordedCommissionPayout =
             read_response_with(response, |status, retry_after, body| {
-                if status == 409
-                    && serde_json::from_str::<serde_json::Value>(body).is_ok_and(|value| {
-                        value
-                            .pointer("/error/code")
-                            .and_then(serde_json::Value::as_str)
-                            == Some("invalid_state")
-                    })
-                {
-                    return CommissionPayoutError::BalanceChanged;
+                let error = serde_json::from_str::<serde_json::Value>(body).ok();
+                let code = error
+                    .as_ref()
+                    .and_then(|value| value.pointer("/error/code"))
+                    .and_then(serde_json::Value::as_str);
+                match (status, code) {
+                    (409, Some("invalid_state")) => CommissionPayoutError::BalanceChanged,
+                    (400, Some("validation_error")) => CommissionPayoutError::InvalidReview,
+                    _ => review_transport_error(status, retry_after, body).into(),
                 }
-                intake_read_error(status, retry_after, body).into()
             })?;
         if recorded.staff_id != payout.staff_id
+            || recorded.idempotency_key != payout.review.idempotency_key
             || recorded.amount_cents != payout.review.amount_cents
             || recorded.reference != payout.review.reference
         {
@@ -1991,7 +1991,7 @@ pub fn classify_status(
     }
 }
 
-fn intake_read_error(status: u16, retry_after: Option<&str>, body: &str) -> TransportError {
+fn review_transport_error(status: u16, retry_after: Option<&str>, body: &str) -> TransportError {
     if status == 408 {
         return TransportError::Offline("Timed out waiting for Cloud".into());
     }
@@ -2010,7 +2010,7 @@ fn intake_write_error(status: u16, retry_after: Option<&str>, body: &str) -> For
         _ if (400..500).contains(&status) && !matches!(status, 401 | 403 | 408 | 429) => {
             FormWriteError::Invalid
         }
-        _ => intake_read_error(status, retry_after, body).into(),
+        _ => review_transport_error(status, retry_after, body).into(),
     }
 }
 

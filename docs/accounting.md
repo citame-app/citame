@@ -30,8 +30,9 @@ in Desktop. Rates use the version and database generation read when the editor w
 conflict requires reopening the current policy. Desktop saves the reviewed payout with its request
 key before sending it. If the outcome is uncertain, reopen the payout for the same professional
 and retry the saved request. That retry uses the original reference, amount and key. A database
-restore requires reconciliation against the current payment history before discarding an old
-request. Recording a payout only adds an accounting entry.
+restore requires reviewing the statement from the current generation before retrying the old
+request. Confirm the reconciliation to bind the same payment and key to the restored generation.
+Recording a payout only adds an accounting entry.
 
 ## Financial summary
 

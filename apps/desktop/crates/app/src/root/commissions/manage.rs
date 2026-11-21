@@ -140,7 +140,12 @@ impl Root {
                                 pending,
                             },
                         };
+                        let refresh_statement = matches!(action, Action::Payout) && desk.statement.as_ref()
+                            .and_then(|statement| statement.generation.as_deref()) != Some(policy.generation.as_str());
                         desk.editor = Some(Edit::Ready(Editor { instance: request, staff_id, generation: policy.generation, fields, sending: false, error: None }));
+                        if refresh_statement {
+                            root.load_commissions(root.status.cursor, cx);
+                        }
                     }
                     Err(TransportError::Forbidden(_) | TransportError::Unauthorized) => {
                         desk.can_manage = false;
@@ -214,28 +219,28 @@ impl Root {
                 reference,
                 pending,
             } => {
+                if statement.generation.as_deref() != Some(editor.generation.as_str()) {
+                    editor.error = Some(Key::CommissionPayoutGenerationChanged);
+                    cx.notify();
+                    return;
+                }
                 if pending.is_none() {
-                    let reference = reference.read(cx).text().trim();
-                    let Some(cents) = parse_reviewed_amount(amount.read(cx).text())
-                        .filter(|cents| {
-                            *cents > 0 && i64::from(*cents) <= statement.outstanding_cents
+                    let Some(review) = parse_reviewed_amount(amount.read(cx).text())
+                        .filter(|cents| i64::from(*cents) <= statement.outstanding_cents)
+                        .and_then(|cents| {
+                            CommissionPayoutReview::new(
+                                actor.user_id.clone(),
+                                editor.generation.clone(),
+                                cents,
+                                reference.read(cx).text(),
+                            )
                         })
-                        .filter(|_| (8..=300).contains(&reference.encode_utf16().count()))
                     else {
                         editor.error = Some(Key::CommissionPayoutInvalid);
                         cx.notify();
                         return;
                     };
-                    let review = SavedCommissionPayout {
-                        staff_id,
-                        review: CommissionPayoutReview {
-                            actor_user_id: actor.user_id.clone(),
-                            generation: editor.generation.clone(),
-                            amount_cents: cents,
-                            reference: reference.to_owned(),
-                            idempotency_key: uuid::Uuid::now_v7(),
-                        },
-                    };
+                    let review = SavedCommissionPayout { staff_id, review };
                     match self.svc.store.reserve_commission_payout(&review) {
                         Ok(true) => *pending = Some(review),
                         Ok(false) => {
@@ -305,7 +310,11 @@ impl Root {
                 }
                 let confirmed_or_rejected = matches!(
                     &result,
-                    WriteResult::Payout(Ok(()) | Err(CommissionPayoutError::BalanceChanged))
+                    WriteResult::Payout(
+                        Ok(())
+                            | Err(CommissionPayoutError::BalanceChanged
+                                | CommissionPayoutError::InvalidReview)
+                    )
                 );
                 let clear_failed = confirmed_or_rejected
                     && payout.as_ref().is_some_and(|saved| {
@@ -335,6 +344,9 @@ impl Root {
                         }
                         WriteResult::Payout(Err(CommissionPayoutError::BalanceChanged)) => {
                             Some(Key::CommissionPayoutBalanceChanged)
+                        }
+                        WriteResult::Payout(Err(CommissionPayoutError::InvalidReview)) => {
+                            Some(Key::CommissionPayoutInvalid)
                         }
                         WriteResult::Rates(Err(
                             TransportError::BadRequest(_)
@@ -379,29 +391,45 @@ impl Root {
         .detach();
     }
 
-    fn discard_reconciled_payout(&mut self, cx: &mut Context<Self>) {
+    fn retry_reconciled_payout(&mut self, cx: &mut Context<Self>) {
+        if self.svc.status().connectivity != Connectivity::Online {
+            return;
+        }
         let Overlay::Commissions(desk) = &mut self.overlay else {
             return;
         };
+        if !desk.can_manage || desk.request.is_some() {
+            return;
+        }
         let Some(Edit::Ready(editor)) = &mut desk.editor else {
             return;
         };
-        let Fields::Payout {
-            pending: Some(pending),
-            ..
-        } = &editor.fields
-        else {
+        let Fields::Payout { pending, .. } = &mut editor.fields else {
             return;
         };
-        if editor.sending || pending.review.generation == editor.generation {
+        let Some(saved) = pending.as_ref() else {
+            return;
+        };
+        if editor.sending
+            || saved.review.generation == editor.generation
+            || !desk.statement.as_ref().is_some_and(|statement| {
+                statement.staff_id.parse::<uuid::Uuid>().ok() == Some(editor.staff_id)
+                    && statement.generation.as_deref() == Some(editor.generation.as_str())
+            })
+        {
             return;
         }
-        match self.svc.store.clear_commission_payout(pending) {
-            Ok(()) => {
-                desk.editor = None;
-                self.load_commissions(self.status.cursor, cx);
+        match self
+            .svc
+            .store
+            .rebind_commission_payout(saved, &editor.generation)
+        {
+            Ok(Some(reviewed)) => {
+                *pending = Some(reviewed);
+                editor.error = None;
+                self.save_commission_editor(cx);
             }
-            Err(_) => editor.error = Some(Key::CommissionLocalSaveError),
+            Ok(None) | Err(_) => editor.error = Some(Key::CommissionLocalSaveError),
         }
         cx.notify();
     }
@@ -447,7 +475,11 @@ impl Root {
             ),
             Some(Edit::Loading(_)) => row.child(self.t(Key::ReportLoading)),
             Some(Edit::Ready(editor)) => {
-                row.child(self.render_commission_editor(editor, ready, cx))
+                let statement_generation = desk
+                    .statement
+                    .as_ref()
+                    .and_then(|s| s.generation.as_deref());
+                row.child(self.render_commission_editor(editor, ready, statement_generation, cx))
             }
             None => row,
         }
@@ -457,6 +489,7 @@ impl Root {
         &self,
         editor: &Editor,
         ready: bool,
+        statement_generation: Option<&str>,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let field = |key, input: &Entity<TextField>| {
@@ -495,8 +528,12 @@ impl Root {
                 reference,
             } => {
                 action = Key::CommissionSavePayout;
+                confirm = statement_generation == Some(editor.generation.as_str());
                 panel
                     .child(self.t(Key::CommissionPayoutBasis))
+                    .when(!confirm, |view| {
+                        view.child(self.t(Key::CommissionPayoutRefresh))
+                    })
                     .child(field(Key::CommissionPayoutAmount, amount))
                     .child(field(Key::CommissionPayoutReference, reference))
             }
@@ -505,7 +542,9 @@ impl Root {
                 ..
             } => {
                 action = Key::CommissionPayoutRetry;
-                confirm = pending.review.generation == editor.generation
+                let current = statement_generation == Some(editor.generation.as_str());
+                confirm = current
+                    && pending.review.generation == editor.generation
                     && editor.error != Some(Key::CommissionPayoutGenerationChanged);
                 let value = self.amount_label(i64::from(pending.review.amount_cents), CURRENCY);
                 panel
@@ -516,13 +555,16 @@ impl Root {
                         Key::CommissionPayoutGenerationChanged
                     }))
                     .when(
-                        pending.review.generation != editor.generation && !editor.sending,
+                        ready
+                            && current
+                            && pending.review.generation != editor.generation
+                            && !editor.sending,
                         |view| {
                             view.child(self.button(
-                                "commission-discard-stale",
-                                self.t(Key::CommissionPayoutDiscard),
+                                "commission-retry-reconciled",
+                                self.t(Key::CommissionPayoutReconciled),
                                 Kind::Ghost,
-                                cx.listener(|root, _, _, cx| root.discard_reconciled_payout(cx)),
+                                cx.listener(|root, _, _, cx| root.retry_reconciled_payout(cx)),
                             ))
                         },
                     )

@@ -50,6 +50,7 @@ export const commissionScopeSchema = z.object({
 export type CommissionScope = z.infer<typeof commissionScopeSchema>;
 export const commissionStatementSchema = z.object({
   staffId: idSchema,
+  generation: syncGenerationSchema.optional(),
   earnedCents: aggregateMoney,
   paidCents: aggregateMoney,
   outstandingCents: signedMoney,

@@ -737,6 +737,25 @@ impl Store {
         Ok(())
     }
 
+    pub fn rebind_commission_payout(
+        &self,
+        saved: &SavedCommissionPayout,
+        generation: &str,
+    ) -> Result<Option<SavedCommissionPayout>> {
+        let key = pending_commission_payout_key(saved.staff_id, &saved.review.actor_user_id);
+        let mut reviewed = saved.clone();
+        reviewed.review.generation = generation.to_owned();
+        let replaced = self.conn.execute(
+            "UPDATE meta SET value = ?3 WHERE key = ?1 AND value = ?2",
+            params![
+                key,
+                serde_json::to_string(saved)?,
+                serde_json::to_string(&reviewed)?
+            ],
+        )? == 1;
+        Ok(replaced.then_some(reviewed))
+    }
+
     pub fn reserve_bank_refund(&self, saved: &SavedBankRefund) -> Result<bool> {
         let review = &saved.request.review;
         let key = pending_bank_refund_key(review.checkout_id, &review.actor_user_id);

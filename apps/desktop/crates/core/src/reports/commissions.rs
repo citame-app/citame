@@ -43,6 +43,23 @@ pub struct CommissionPayoutReview {
     pub idempotency_key: uuid::Uuid,
 }
 
+impl CommissionPayoutReview {
+    pub fn new(
+        actor_user_id: String,
+        generation: String,
+        amount_cents: u32,
+        reference: &str,
+    ) -> Option<Self> {
+        let reference = crate::trim_like_javascript(reference);
+        (amount_cents > 0 && (8..=300).contains(&reference.encode_utf16().count())).then(|| Self {
+            actor_user_id,
+            generation,
+            amount_cents,
+            reference: reference.into(),
+            idempotency_key: uuid::Uuid::now_v7(),
+        })
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedCommissionPayout {
     pub staff_id: uuid::Uuid,
@@ -52,7 +69,9 @@ pub struct SavedCommissionPayout {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordedCommissionPayout {
+    pub id: uuid::Uuid,
     pub staff_id: uuid::Uuid,
+    pub idempotency_key: uuid::Uuid,
     pub amount_cents: u32,
     pub reference: String,
 }
@@ -61,6 +80,8 @@ pub struct RecordedCommissionPayout {
 pub enum CommissionPayoutError {
     #[error("Commission balance changed")]
     BalanceChanged,
+    #[error("Commission payout review rejected by validation")]
+    InvalidReview,
     #[error(transparent)]
     Transport(#[from] crate::sync::TransportError),
 }
@@ -69,6 +90,7 @@ pub enum CommissionPayoutError {
 #[serde(rename_all = "camelCase")]
 pub struct CommissionStatement {
     pub staff_id: String,
+    pub generation: Option<String>,
     pub earned_cents: i64,
     pub paid_cents: i64,
     pub outstanding_cents: i64,
@@ -133,5 +155,23 @@ impl CommissionStatement {
             );
         }
         csv
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn payout_review_trims_references_the_same_way_as_the_api() {
+        let make = |reference| {
+            CommissionPayoutReview::new("owner".into(), "initial".into(), 1200, reference)
+        };
+        assert_eq!(make("\u{feff}12345678 ").unwrap().reference, "12345678");
+        assert!(make("\u{feff}1234567 ").is_none());
+        assert_eq!(
+            make("\u{0085}12345678").unwrap().reference,
+            "\u{0085}12345678"
+        );
     }
 }
