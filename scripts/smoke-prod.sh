@@ -387,7 +387,8 @@ if [ "${SMOKE_EMAIL:-0}" = 1 ]; then
       fail "native owner SMTP test"
   else
     curl -fsS --max-time 8 -b "$jar" -X POST -H "origin: $PUBLIC_URL" \
-      "$BASE/api/admin/email-delivery/test" >/dev/null || fail "owner SMTP test"
+      -H 'content-type: application/json' -d '{"revision":null}' \
+      "$BASE/api/admin/email-delivery/test-reviewed" >/dev/null || fail "owner SMTP test"
   fi
   await_mail "$OWNER_EMAIL" 'Citame · Prueba de correo' 0 || fail "owner test delivery"
 

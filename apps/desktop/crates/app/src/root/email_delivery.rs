@@ -130,6 +130,8 @@ pub(super) struct Desk {
     identity: Arc<()>,
     editor: Option<Editor>,
     busy: bool,
+    refreshing: bool,
+    retry_after: Option<std::time::Instant>,
     blocked: bool,
     observed: Option<i64>,
     message: Option<Key>,
@@ -152,6 +154,8 @@ impl Root {
             identity: Arc::new(()),
             editor: None,
             busy: false,
+            refreshing: false,
+            retry_after: None,
             blocked: false,
             observed: None,
             message: None,
@@ -173,25 +177,21 @@ impl Root {
             return;
         }
         let current = self.svc.store.live_view_revision(LIVE_TOPIC).ok();
-        if current == desk.observed && !reconnected {
-            return;
-        }
-        if desk.editor.as_ref().is_some_and(|editor| editor.dirty(cx)) {
-            if current != desk.observed {
-                desk.blocked = true;
-                desk.message = Some(Key::EmailDeliveryConflict);
-                cx.notify();
+        if !reconnected {
+            match desk.retry_after {
+                Some(retry) if std::time::Instant::now() < retry => return,
+                None if current == desk.observed => return,
+                _ => {}
             }
-        } else {
-            self.request_email_delivery(Operation::Refresh, cx);
         }
+        self.request_email_delivery(Operation::Refresh, cx);
     }
 
     pub(super) fn dismiss_email_delivery(&mut self, cx: &mut Context<Self>) {
         let Overlay::EmailDelivery(desk) = &mut self.overlay else {
             return;
         };
-        if desk.busy {
+        if desk.busy && !desk.refreshing {
             return;
         }
         if desk.discard.take().is_none() {
@@ -225,12 +225,14 @@ impl Root {
         let saving = matches!(operation, Operation::Save(_));
         let identity = desk.identity.clone();
         let session = self.svc.session.clone();
+        let observed = self.svc.store.live_view_revision(LIVE_TOPIC).ok();
         desk.busy = true;
-        desk.observed = self.svc.store.live_view_revision(LIVE_TOPIC).ok();
+        desk.refreshing = refreshing;
+        desk.retry_after = None;
         if !refreshing {
             desk.message = None;
+            cx.notify();
         }
-        cx.notify();
         cx.spawn(async move |root, cx| {
             let result = cx
                 .background_executor()
@@ -257,16 +259,27 @@ impl Root {
                     return;
                 }
                 desk.busy = false;
-                desk.message = match result {
-                    Ok(Some(saved))
-                        if refreshing
-                            && desk
-                                .editor
-                                .as_ref()
-                                .is_some_and(|editor| editor.saved.revision == saved.revision) =>
-                    {
-                        desk.message
+                desk.refreshing = false;
+                match &result {
+                    Ok(_) => desk.observed = observed,
+                    Err(SaveError::Transport(
+                        TransportError::Offline(_)
+                        | TransportError::Server(_)
+                        | TransportError::RateLimited(_),
+                    )) if refreshing => {
+                        let delay = match &result {
+                            Err(SaveError::Transport(TransportError::RateLimited(Some(retry)))) => {
+                                *retry
+                            }
+                            _ => std::time::Duration::from_secs(3),
+                        };
+                        desk.retry_after = std::time::Instant::now().checked_add(delay);
                     }
+                    Err(_) if refreshing => desk.observed = observed,
+                    Err(_) => {}
+                }
+                desk.message = match result {
+                    Ok(Some(saved)) if refreshing => desk.apply_refresh(saved, root.locale, cx),
                     Ok(Some(saved)) => {
                         desk.editor = Some(Editor::new(saved, root.locale, cx));
                         desk.blocked = false;
@@ -350,7 +363,7 @@ impl Root {
             .when_some(desk.message, |body, message| {
                 body.child(div().text_sm().child(self.t(message)))
             });
-        let body = if desk.busy {
+        let body = if desk.busy && !desk.refreshing {
             body.child(self.t(Key::EmailDeliveryWorking))
         } else if let Some(discard) = desk.discard {
             body.child(self.t(Key::SalonConfirmDiscard)).child(
@@ -578,6 +591,26 @@ impl Root {
 }
 
 impl Desk {
+    fn apply_refresh(
+        &mut self,
+        saved: EmailDelivery,
+        locale: Locale,
+        cx: &mut Context<Root>,
+    ) -> Option<Key> {
+        if let Some(editor) = &mut self.editor {
+            if editor.saved.revision == saved.revision {
+                editor.saved.server_email_enabled = saved.server_email_enabled;
+                return self.message;
+            }
+            if editor.dirty(cx) {
+                self.blocked = true;
+                return Some(Key::EmailDeliveryConflict);
+            }
+        }
+        self.editor = Some(Editor::new(saved, locale, cx));
+        None
+    }
+
     fn clear_credential(&mut self, cx: &mut Context<Root>) {
         if let Some(editor) = &self.editor {
             editor.credential.update(cx, |field, cx| field.clear(cx));
@@ -624,12 +657,33 @@ mod tests {
                 desk.editor = Some(editor);
                 root.save_email_delivery(cx);
                 assert_eq!(root.svc.store.outbox_len().unwrap(), 0);
-                root.status.connectivity = Connectivity::Online;
-                root.svc.store.set_meta("live_view:email_delivery", "11").unwrap();
-                root.refresh_email_delivery(false, cx);
-                assert!(matches!(&root.overlay, Overlay::EmailDelivery(desk)
-                    if desk.blocked && matches!(desk.message, Some(Key::EmailDeliveryConflict))
-                        && desk.editor.as_ref().unwrap().credential.read(cx).text() == "re_sample"));
+                let Overlay::EmailDelivery(desk) = &mut root.overlay else {
+                    panic!("Email settings closed");
+                };
+                let editor = desk.editor.as_ref().unwrap();
+                let refreshed = |revision| EmailDelivery {
+                    revision: Some(revision),
+                    settings: editor.saved.settings.clone(),
+                    has_secret: true,
+                    server_email_enabled: false,
+                };
+                let same = refreshed("revision".into());
+                let newer = refreshed("another-revision".into());
+                assert!(matches!(
+                    desk.apply_refresh(same, root.locale, cx),
+                    Some(Key::EmailDeliveryNeedsConnection)
+                ));
+                assert!(!desk.blocked);
+                assert!(!desk.editor.as_ref().unwrap().saved.server_email_enabled);
+                assert!(matches!(
+                    desk.apply_refresh(newer, root.locale, cx),
+                    Some(Key::EmailDeliveryConflict)
+                ));
+                assert!(desk.blocked);
+                assert_eq!(
+                    desk.editor.as_ref().unwrap().credential.read(cx).text(),
+                    "re_sample"
+                );
                 root.dismiss_email_delivery(cx);
                 assert!(matches!(&root.overlay, Overlay::EmailDelivery(desk)
                     if matches!(desk.discard, Some(Discard::Close))));

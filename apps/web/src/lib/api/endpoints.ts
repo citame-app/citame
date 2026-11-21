@@ -262,7 +262,11 @@ export function createEndpoints(client: ApiClient) {
         save: (input: EmailDeliveryInput) =>
           client.put("/admin/email-delivery", input, emailDeliverySettingsSchema),
         test: (revision: EmailDeliverySettings["revision"]) =>
-          client.post("/admin/email-delivery/test", { revision }, emailDeliveryTestReceiptSchema),
+          client.post(
+            "/admin/email-delivery/test-reviewed",
+            { revision },
+            emailDeliveryTestReceiptSchema,
+          ),
       },
       whatsapp: {
         get: () => client.get("/admin/whatsapp", whatsappSettingsSchema),

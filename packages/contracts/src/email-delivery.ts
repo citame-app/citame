@@ -51,5 +51,5 @@ export const emailDeliverySettingsSchema = z.strictObject({
 });
 export type EmailDeliverySettings = z.infer<typeof emailDeliverySettingsSchema>;
 
-export const emailDeliveryTestInputSchema = z.object({ revision: idSchema.nullable().optional() });
+export const emailDeliveryTestInputSchema = z.object({ revision: idSchema.nullable() });
 export const emailDeliveryTestReceiptSchema = z.object({ ok: z.literal(true) });

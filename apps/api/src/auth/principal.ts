@@ -142,7 +142,7 @@ export function requireAuth(
               ? "GET"
               : "PUT")) ||
         (path === "/admin/email-delivery" && method !== "GET" && method !== "PUT") ||
-        (path === "/admin/email-delivery/test" && method !== "POST") ||
+        (path === "/admin/email-delivery/test-reviewed" && method !== "POST") ||
         (path === "/admin/settings/desktop" && method !== "GET" && method !== "PUT") ||
         (path === "/admin/settings/booking-policy/reviewed" &&
           method !== "GET" &&

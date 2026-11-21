@@ -82,7 +82,7 @@ test("client group projection uses Cloud normalization and respects directory vi
     expect(projected?.data).toMatchObject({ groupNames: ["vip"] });
     const raw = await call(who, "GET", `/sync/pull?since=${cursor}&clientGroups=1`);
     expect(raw.status).toBe(200);
-    const body: Awaited<ReturnType<typeof pull>> = await raw.json();
+    const body = (await raw.json()) as Awaited<ReturnType<typeof pull>>;
     const rawClient = clientChange(body);
     expect(rawClient?.data).toMatchObject({ groupNames: ["vip"] });
     expect(rawClient?.data).not.toHaveProperty("tags");

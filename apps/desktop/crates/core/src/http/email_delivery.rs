@@ -249,18 +249,10 @@ impl HttpTransport {
         struct ReviewedTest {
             revision: Option<String>,
         }
-        let mut request = self
-            .agent
-            .post(&format!("{}/admin/email-delivery/test", self.base_url));
-        for (name, value) in self.headers()? {
-            request = request.header(name, value);
-        }
-        let body = serde_json::to_string(&ReviewedTest { revision })
-            .map_err(|_| TransportError::BadRequest("Invalid email test revision".into()))?;
-        let response = request
-            .content_type("application/json")
-            .send(body)
-            .map_err(|error| TransportError::Offline(error.to_string()))?;
+        let response = self.send_json(
+            "/admin/email-delivery/test-reviewed",
+            &ReviewedTest { revision },
+        )?;
         let receipt: Receipt = read_response_with(response, delivery_error)?;
         if !receipt.ok {
             return Err(TransportError::Server("Email test was not confirmed".into()).into());

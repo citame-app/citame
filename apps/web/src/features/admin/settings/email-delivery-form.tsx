@@ -37,7 +37,10 @@ export function EmailDelivery({ email }: { email: string }) {
           latestRevision={query.data?.revision}
           email={email}
           onSaved={(settings) => {
-            client.setQueryData(queryKey, settings);
+            client.setQueryData<EmailDeliverySettings>(queryKey, (current) =>
+              !current || current.revision === initial.revision ? settings : current,
+            );
+            void client.invalidateQueries({ queryKey });
             setDraftBase(null);
             setSavedMessage(true);
           }}
@@ -98,6 +101,7 @@ function DeliveryFields({
     | null
   >(null);
   const [tested, setTested] = useState(false);
+  const [reloadFailed, setReloadFailed] = useState(false);
   const busy = useRef(false);
   const active = provider !== "inherit" && provider !== "disabled";
   const sender =
@@ -108,7 +112,10 @@ function DeliveryFields({
     provider === "smtp" && initial.settings.provider === "smtp" ? initial.settings : null;
   const needsSecret = !initial.hasSecret || provider !== initial.settings.provider;
   const stale = dirty && latestRevision !== initial.revision;
-  const canTest = !dirty && (active || (provider === "inherit" && initial.serverEmailEnabled));
+  const canTest =
+    !dirty &&
+    error !== "emailDelivery.conflict" &&
+    (active || (provider === "inherit" && initial.serverEmailEnabled));
 
   function edited() {
     setDirty(true);
@@ -351,6 +358,11 @@ function DeliveryFields({
           {t(stale ? "emailDelivery.conflict" : (error ?? "emailDelivery.failed"))}
         </p>
       )}
+      {reloadFailed && (
+        <p role="status" className="text-sm text-danger-fg">
+          {t("emailDelivery.failed")}
+        </p>
+      )}
       {(stale || error === "emailDelivery.conflict") && (
         <Button
           type="button"
@@ -359,7 +371,7 @@ function DeliveryFields({
           onClick={async () => {
             setPending("reload");
             try {
-              if (!(await onReload())) setError("emailDelivery.failed");
+              setReloadFailed(!(await onReload()));
             } finally {
               setPending(null);
             }

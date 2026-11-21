@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
-import { emailDeliverySettingsSchema } from "@sob/contracts";
+import { emailDeliverySettingsSchema, syncPullResponseSchema } from "@sob/contracts";
 import { auditLog, clientProfile, emailDelivery, reminder } from "@sob/db";
 import { eq } from "drizzle-orm";
 import { actor, json, MONDAY_0900, NOW, seedFixtures, setupApiTest } from "../../test/helpers";
@@ -99,7 +99,7 @@ test("only owners configure delivery, credentials stay encrypted, and stale writ
 test("email settings invalidate only opted-in owner replicas and stale tests do not send", async () => {
   const staff = await actor(t, "staff", "pro@example.com", { staffProfileId: f.anaId });
   const head = await json(t.app, "/sync/pull", "GET", undefined, owner.cookie);
-  const { headSeq } = await head.json();
+  const { headSeq } = syncPullResponseSchema.parse(await head.json());
   const saved = await save();
   const pull = (cookie: string, optIn: boolean) =>
     json(
@@ -110,21 +110,24 @@ test("email settings invalidate only opted-in owner replicas and stale tests do 
       cookie,
     );
   const visible = await pull(owner.cookie, true);
-  const page = await visible.json();
+  const raw = await visible.json();
+  const page = syncPullResponseSchema.parse(raw);
   expect(page.refresh).toContain("email_delivery");
   expect(page.changes).toEqual([]);
-  expect(JSON.stringify(page)).not.toContain(secret);
+  expect(JSON.stringify(raw)).not.toContain(secret);
   for (const [cookie, optIn] of [
     [owner.cookie, false],
     [staff.cookie, true],
   ] as const) {
     const hidden = await pull(cookie, optIn);
     expect(hidden.status).toBe(200);
-    expect((await hidden.json()).refresh ?? []).not.toContain("email_delivery");
+    expect(syncPullResponseSchema.parse(await hidden.json()).refresh ?? []).not.toContain(
+      "email_delivery",
+    );
   }
 
   const testDelivery = (revision: string | null) =>
-    json(t.app, `${path}/test`, "POST", { revision }, owner.cookie);
+    json(t.app, `${path}/test-reviewed`, "POST", { revision }, owner.cookie);
   const stale = await testDelivery(null);
   expect(stale.status).toBe(409);
   expect(await stale.json()).toMatchObject({ error: { code: "version_conflict" } });
