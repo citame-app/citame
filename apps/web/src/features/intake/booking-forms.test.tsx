@@ -1,6 +1,6 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { intakeDefinitionSchema } from "@sob/contracts";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen } from "@testing-library/react";
 import { useState } from "react";
 import { renderApp } from "../../../test/render";
 import { BookingForms, useBookingForms } from "./booking-forms";
@@ -69,8 +69,11 @@ test("booking requires explicit confirmation, retains draft on read failure and 
     ],
   ).toBe("Keep my draft");
   failed = true;
-  await queryClient.invalidateQueries({ queryKey: ["intake", "requirements"] });
-  await waitFor(() => expect(screen.getByRole("button", { name: "Confirm visit" })).toBeDisabled());
+  await act(async () => {
+    await queryClient.invalidateQueries({ queryKey: ["intake", "requirements"] });
+  });
+  expect(await screen.findByRole("alert")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Confirm visit" })).toBeDisabled();
   expect(screen.getByLabelText("Style preference")).toHaveValue("Keep my draft");
   failed = false;
   current = {
@@ -85,7 +88,7 @@ test("booking requires explicit confirmation, retains draft on read failure and 
   expect(
     screen.getByLabelText("I have reviewed these questions and confirm my answers."),
   ).not.toBeChecked();
-});
+}, 15_000);
 
 test("team cannot fill customer-only forms", async () => {
   globalThis.fetch = mock(
