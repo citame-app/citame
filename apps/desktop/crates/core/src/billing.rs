@@ -165,12 +165,17 @@ pub struct AppointmentCheckout {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReceiptReward {
-    pub kind: String,
+    pub kind: crate::loyalty::checkout::RewardKind,
     pub name: String,
     pub code: Option<String>,
     pub points_used: u32,
     #[serde(default)]
     pub returned_points: u32,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub discount_cents: u32,
+    pub appointment_timing: Option<crate::loyalty::checkout::AppointmentTiming>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,6 +185,33 @@ pub enum PaymentAttention {
 }
 
 impl AppointmentCheckout {
+    pub fn reward_client(&self) -> Option<Uuid> {
+        (self.status == "open"
+            && self.total_cents > 0
+            && self.fulfilled_at.is_none()
+            && self.external_balance.is_none()
+            && self.reward.is_none()
+            && self.payments.is_empty()
+            && self.lines.iter().all(|line| !line.price_pending)
+            && self
+                .lines
+                .iter()
+                .any(|line| matches!(line.kind.as_str(), "service" | "product" | "custom")))
+        .then_some(self.client_id)
+        .flatten()
+    }
+
+    pub fn can_return_points(&self) -> bool {
+        self.can_refund
+            && self.fulfilled_at.is_some()
+            && self.refunded_cents >= self.paid_cents
+            && self.reward.as_ref().is_some_and(|reward| {
+                reward.kind == crate::loyalty::checkout::RewardKind::Points
+                    && reward.state == "applied"
+                    && reward.points_used > reward.returned_points
+            })
+    }
+
     pub fn reconcilable_bank_payments(
         &self,
         now: DateTime<Utc>,

@@ -63,6 +63,7 @@ pub struct HttpTransport {
 }
 
 mod booking_links;
+mod checkout_rewards;
 pub mod client_controls;
 pub mod email_delivery;
 mod inventory_documents;
@@ -1997,11 +1998,23 @@ impl HttpTransport {
         path: &str,
         input: &impl serde::Serialize,
     ) -> Result<ureq::http::Response<ureq::Body>, TransportError> {
+        self.send_json_with_headers(path, input, &[])
+    }
+
+    fn send_json_with_headers(
+        &self,
+        path: &str,
+        input: &impl serde::Serialize,
+        extra_headers: &[(&str, &str)],
+    ) -> Result<ureq::http::Response<ureq::Body>, TransportError> {
         let body =
             serde_json::to_string(input).map_err(|e| TransportError::BadRequest(e.to_string()))?;
         let mut request = self.agent.post(&format!("{}{path}", self.base_url));
         for (key, value) in self.headers()? {
             request = request.header(key, value);
+        }
+        for &(name, value) in extra_headers {
+            request = request.header(name, value);
         }
         request
             .content_type("application/json")

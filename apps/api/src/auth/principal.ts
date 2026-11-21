@@ -155,6 +155,8 @@ export function requireAuth(
         (path === "/admin/intake-forms" && method === "GET" && c.req.query("view") !== "summary") ||
         !DESKTOP_PROXY_ROUTE.test(path) ||
         (path.startsWith("/admin/rewards/") && !rewardsAllowed) ||
+        (/^\/admin\/commerce\/checkouts\/[\da-f-]+\/reward(?:\/|$)/.test(path) &&
+          method !== "POST") ||
         (path.startsWith("/admin/marketing/") &&
           (method === "GET" ? /\/(?:queue|cancel)$/.test(path) : !campaignMutation)) ||
         (method !== "POST" &&

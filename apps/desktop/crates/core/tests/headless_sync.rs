@@ -64,7 +64,8 @@ fn proxy_device() -> ProxyDevice {
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
-fn native_loyalty_reads_and_guards_adjustments_through_the_proxy() {
+fn native_loyalty_reviews_adjustments_and_checkout_rewards_through_the_proxy() {
+    use sob_core::loyalty::checkout::{Application, Choice, ReturnPoints, RewardError};
     use sob_core::loyalty::{LIVE_TOPIC, Policy};
     let mut web = Device::sign_in();
     web.sync();
@@ -114,6 +115,8 @@ fn native_loyalty_reads_and_guards_adjustments_through_the_proxy() {
     );
     let mut changed = reviewed.policy.clone();
     changed.enabled = true;
+    changed.redeem_value_cents = 1;
+    changed.maximum_discount_basis_points = 10_000;
     assert!(matches!(
         device
             .transport
@@ -146,6 +149,116 @@ fn native_loyalty_reads_and_guards_adjustments_through_the_proxy() {
         assert_eq!(after.available_points, 25);
         assert_eq!(after.movements.len(), 1);
         assert_eq!(after.movements[0].id, first.id);
+
+        let catalogue = catalog(&web);
+        let create_receipt = |cents| {
+            let receipt = web.rest_post(
+                "/admin/commerce/checkouts",
+                json!({
+                    "clientId": id,
+                    "staffId": catalogue.staff,
+                    "lines": [{
+                        "kind": "custom", "description": "Synthetic reviewed reward",
+                        "quantity": 1, "unitAmountCents": cents
+                    }]
+                }),
+            );
+            let receipt: sob_core::billing::AppointmentCheckout =
+                serde_json::from_value(receipt).unwrap();
+            receipt
+        };
+        let receipt = create_receipt(25);
+        let choice = Choice::points("25").unwrap();
+        let quote = device
+            .transport
+            .quote_checkout_reward(&receipt, &choice)
+            .unwrap();
+        assert_eq!(quote.discount_cents, 25);
+        let application = Application::reviewed(choice, &quote, receipt.total_cents).unwrap();
+        assert!(matches!(
+            device
+                .transport
+                .apply_checkout_reward(&receipt, &application, "old-history"),
+            Err(RewardError::Transport(
+                TransportError::ReplicaGenerationChanged
+            ))
+        ));
+        for _ in 0..2 {
+            let paid = device
+                .transport
+                .apply_checkout_reward(&receipt, &application, &reviewed.generation)
+                .unwrap();
+            assert_eq!(paid.status, "paid");
+            assert_eq!(paid.paid_cents, 0);
+            assert_eq!(paid.total_cents, 0);
+            assert!(paid.can_return_points());
+        }
+        let request = ReturnPoints::reviewed("Synthetic return paid only in points").unwrap();
+        for _ in 0..2 {
+            let returned = device
+                .transport
+                .return_checkout_points(&receipt, &request, &reviewed.generation)
+                .unwrap();
+            assert_eq!(returned.status, "refunded");
+            assert_eq!(returned.refunded_cents, 0);
+            assert_eq!(returned.reward.unwrap().returned_points, 25);
+        }
+        assert_eq!(
+            device
+                .transport
+                .loyalty_statement(id, 1)
+                .unwrap()
+                .available_points,
+            25
+        );
+
+        let code = format!(
+            "TEST-{}",
+            uuid::Uuid::now_v7().simple().to_string()[20..].to_uppercase()
+        );
+        let promotion = web.rest_post(
+            "/admin/rewards/promotions",
+            json!({
+                "code": code, "name": "Synthetic checkout promotion", "kind": "fixed", "value": 500
+            }),
+        );
+        let sale = create_receipt(2_000);
+        let choice = Choice::promotion(&code).unwrap();
+        let quote = device
+            .transport
+            .quote_checkout_reward(&sale, &choice)
+            .unwrap();
+        assert_eq!(quote.new_total_cents, 1_500);
+        let application = Application::reviewed(choice.clone(), &quote, sale.total_cents).unwrap();
+        let path = format!(
+            "/admin/rewards/promotions/{}",
+            promotion["id"].as_str().unwrap()
+        );
+        ureq::put(&format!("{}{prefix}{path}", web.base))
+            .header("Cookie", &web.cookie)
+            .content_type("application/json")
+            .send(json!({
+                "code": code, "name": "Synthetic checkout promotion", "kind": "fixed", "value": 600,
+                "version": promotion["version"]
+            }).to_string())
+            .unwrap();
+        assert!(matches!(
+            device
+                .transport
+                .apply_checkout_reward(&sale, &application, &reviewed.generation),
+            Err(RewardError::Conflict)
+        ));
+        let quote = device
+            .transport
+            .quote_checkout_reward(&sale, &choice)
+            .unwrap();
+        let application = Application::reviewed(choice, &quote, sale.total_cents).unwrap();
+        let applied = device
+            .transport
+            .apply_checkout_reward(&sale, &application, &reviewed.generation)
+            .unwrap();
+        assert_eq!(applied.collectible_cents(), 1_400);
+        assert_eq!(applied.reward.unwrap().code.as_deref(), Some(code.as_str()));
     }));
     let mut restore = reviewed.policy;
     restore.version = enabled.policy.version;

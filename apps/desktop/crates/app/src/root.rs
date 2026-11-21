@@ -2560,6 +2560,9 @@ impl Root {
     // ---------------------------------------------------------------- render: overlays
 
     fn dismiss_overlay(&mut self, cx: &mut Context<Self>) {
+        if self.leave_checkout_reward(cx) {
+            return;
+        }
         if let Overlay::Directory(desk) = &mut self.overlay
             && desk.close_group_picker()
         {

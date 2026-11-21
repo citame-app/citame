@@ -166,11 +166,12 @@ export function rewardsClientRoutes({ db }: AppDeps) {
   });
 }
 /** Mounted beneath both existing receipt scopes; the common sale authorization still applies. */
-export function checkoutRewardRoutes({ db }: AppDeps) {
+export function checkoutRewardRoutes({ db, config }: AppDeps) {
   return new Hono<AppEnv>()
     .post("/:id/reward/quote", async (c) => {
       const id = parseOrThrow(idSchema, c.req.param("id"));
       const input = parseOrThrow(rewardChoiceSchema, await readJson(c));
+      c.header("Cache-Control", "private, no-store");
       return c.json(
         await db.transaction((tx) => quoteCheckoutReward(tx, id, input, c.get("principal")), {
           isolationLevel: "repeatable read",
@@ -180,6 +181,7 @@ export function checkoutRewardRoutes({ db }: AppDeps) {
     })
     .post("/:id/reward/return", async (c) => {
       requirePermission(c.get("principal"), "refunds");
+      reviewedGeneration(c, config.syncReplicaGeneration);
       const id = parseOrThrow(idSchema, c.req.param("id"));
       const input = parseOrThrow(
         z.object({ reason: z.string().trim().min(8).max(300) }).strict(),
@@ -192,6 +194,7 @@ export function checkoutRewardRoutes({ db }: AppDeps) {
       );
     })
     .post("/:id/reward", async (c) => {
+      reviewedGeneration(c, config.syncReplicaGeneration);
       const id = parseOrThrow(idSchema, c.req.param("id"));
       const input = parseOrThrow(applyRewardInputSchema, await readJson(c));
       return c.json(

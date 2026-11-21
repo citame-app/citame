@@ -12,6 +12,7 @@ mod passes;
 mod print;
 mod reconciliation;
 mod refunds;
+mod rewards;
 mod stock_return;
 
 pub(super) enum CheckoutReview {
@@ -42,6 +43,7 @@ impl CheckoutReview {
             request: None,
             pass_picker: None,
             refund: None,
+            reward_editor: None,
             reconciliation: None,
             bank_outcome_changed: false,
             stock_return: None,
@@ -63,6 +65,7 @@ impl CheckoutReview {
     pub(super) fn can_go_back(&self) -> bool {
         !matches!(self, Self::Receipt(form) if form.busy
             || form.request.is_some()
+            || form.reward_editor.is_some()
             || form.refund.as_ref().is_some_and(|editor| editor.has_attempt()))
     }
 }
@@ -80,6 +83,7 @@ pub(super) struct ReceiptForm {
     _amount_changed: Subscription,
     price_fields: Vec<PriceField>,
     refund: Option<refunds::RefundEditor>,
+    reward_editor: Option<rewards::Editor>,
     reconciliation: Option<reconciliation::BankTransactionReview>,
     bank_outcome_changed: bool,
     stock_return: Option<stock_return::ReturnEditor>,
@@ -197,6 +201,7 @@ impl Root {
             || form.refreshing
             || form.stock_return.is_some()
             || form.request.is_some()
+            || form.reward_editor.is_some()
             || form
                 .refund
                 .as_ref()
@@ -281,6 +286,7 @@ impl Root {
             || form.reconciliation.is_some()
             || form.stock_return.is_some()
             || form.confirming_void
+            || form.reward_editor.is_some()
             || collectible == 0
         {
             return;
@@ -374,6 +380,7 @@ impl Root {
             || form.refund.is_some()
             || form.stock_return.is_some()
             || form.confirming_void
+            || form.reward_editor.is_some()
         {
             return;
         }
@@ -477,6 +484,9 @@ impl Root {
         let body = match review {
             CheckoutReview::Loading(_) => body.child(self.t(Key::CheckoutLoading)),
             CheckoutReview::Failed => body.child(self.t(Key::CheckoutUnavailable)),
+            CheckoutReview::Receipt(form) if form.reward_editor.is_some() => {
+                body.child(self.render_reward_editor(form, cx))
+            }
             CheckoutReview::Receipt(form) => {
                 let receipt = &form.receipt;
                 let due = self.amount_label(i64::from(receipt.balance_cents), &receipt.currency);
@@ -561,6 +571,7 @@ impl Root {
                     )
                 });
                 let body = body
+                    .child(self.render_checkout_reward(form, cx))
                     .child(self.render_bank_transaction_review(form, cx))
                     .when(form.reconciliation.is_none(), |view| {
                         view.child(self.render_refunds(form, cx))
@@ -781,6 +792,7 @@ impl ReceiptForm {
         !self.busy
             && self.request.is_none()
             && self.refund.is_none()
+            && self.reward_editor.is_none()
             && self.reconciliation.is_none()
             && self.stock_return.is_none()
             && !self.confirming_void
@@ -888,6 +900,7 @@ mod tests {
                     request: None,
                     pass_picker: None,
                     refund: None,
+                    reward_editor: None,
                     reconciliation: None,
                     bank_outcome_changed: false,
                     stock_return: None,
@@ -938,6 +951,7 @@ mod tests {
                     request: None,
                     pass_picker: None,
                     refund: None,
+                    reward_editor: None,
                     reconciliation: None,
                     bank_outcome_changed: false,
                     stock_return: None,

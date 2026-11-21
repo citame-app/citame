@@ -79,14 +79,18 @@ pub enum PromotionWriteError {
     Transport(#[from] crate::sync::TransportError),
 }
 
+pub(crate) fn valid_code(code: &str) -> bool {
+    let code = code.as_bytes();
+    (3..=40).contains(&code.len())
+        && code[0].is_ascii_alphanumeric()
+        && code.iter().all(|byte| {
+            byte.is_ascii_uppercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
+}
+
 impl Terms {
     pub fn valid(&self) -> bool {
-        let code = self.code.as_bytes();
-        if !(3..=40).contains(&code.len())
-            || !code[0].is_ascii_alphanumeric()
-            || !code.iter().all(|byte| {
-                byte.is_ascii_uppercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
-            })
+        if !valid_code(&self.code)
             || self.name.is_empty()
             || self.name.encode_utf16().count() > 100
             || self.value == 0

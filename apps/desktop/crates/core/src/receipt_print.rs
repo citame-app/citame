@@ -267,7 +267,7 @@ tr,dl>div{{break-inside:avoid}}
     }
     out.push_str("</dl>");
     if let Some(reward) = &sale.reward {
-        let name = if reward.kind == "points" {
+        let name = if reward.kind == crate::loyalty::checkout::RewardKind::Points {
             label(Key::PrintReceiptPoints)
         } else {
             &reward.name
