@@ -46,7 +46,7 @@ Tests: `sync.test.ts` (db) asserts commit-order seqs and that a concurrent polle
 
 Unexpected errors (database down, bugs) are not stored: the mutation comes back as `retry`, the rest of the batch is also `retry` (order is preserved), and the client resends the same mutation with backoff.
 
-Mutations in a batch run in outbox order, each in its own transaction. Desktop waits for the receipt before sending a second edit to the same appointment. If the first edit is rejected, Desktop moves the dependent edits to its conflict inbox. The server also rejects later edits based on a higher version after a rejection for that appointment in an older client's batch. A change for an appointment that has yet to be created is rejected as `not_found`.
+Mutations in a batch run in outbox order, each in its own transaction. Desktop waits for the receipt before sending a second edit to the same appointment. If the first edit is rejected, Desktop moves the dependent edits to its conflict inbox. The server also rejects later edits based on a higher version after a rejection for that appointment in an older client's batch. An independent edit for an appointment that has yet to be created is rejected as `not_found`.
 
 ## Conflict policy
 

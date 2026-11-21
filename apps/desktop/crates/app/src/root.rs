@@ -124,6 +124,10 @@ fn step_appointment_time(tz: Tz, start: DateTime<Utc>, minutes: i64) -> Option<D
     }
 }
 
+fn conflict_requested_start(conflict: &Conflict) -> Option<DateTime<Utc>> {
+    conflict.payload.get("startsAt")?.as_str()?.parse().ok()
+}
+
 fn appointment_bounds(item: &CalendarItem, day: NaiveDate, tz: Tz) -> (f32, f32) {
     let appointment = &item.appointment;
     let wall_minute = |instant: DateTime<Utc>| {
@@ -224,6 +228,7 @@ struct NewForm {
 enum AppointmentReturn {
     TeamShifts(Box<team_shifts::Desk>),
     Unpaid(Box<unpaid::Desk>),
+    Conflict(String),
 }
 
 struct Details {
@@ -239,6 +244,16 @@ struct Details {
     checkout: Option<checkout::CheckoutReview>,
     annotations: Option<annotations::Annotations>,
     annotations_requested_version: Option<i64>,
+}
+
+impl Details {
+    fn conflict_to_resolve(&self) -> Option<&str> {
+        if let Some(AppointmentReturn::Conflict(mutation_id)) = &self.return_to {
+            Some(mutation_id)
+        } else {
+            None
+        }
+    }
 }
 
 struct ConflictDraft {
@@ -1242,6 +1257,10 @@ impl Root {
                 desk.needs_refresh = true;
                 Overlay::Unpaid(desk)
             }
+            Some(AppointmentReturn::Conflict(_)) => Overlay::Conflicts {
+                editing: None,
+                error: None,
+            },
             None => Overlay::None,
         };
         self.reload_team_shifts();
@@ -1261,6 +1280,7 @@ impl Root {
                 starts_at: start,
                 staff_id: staff.as_deref(),
             },
+            d.conflict_to_resolve(),
         );
         self.finish_appointment_edit(result, cx);
     }
@@ -1298,6 +1318,7 @@ impl Root {
             &d.id,
             &d.reviewed,
             ops::AppointmentEdit::Cancel,
+            d.conflict_to_resolve(),
         );
         self.finish_appointment_edit(result, cx);
     }
@@ -1316,6 +1337,7 @@ impl Root {
             &d.id,
             &d.reviewed,
             ops::AppointmentEdit::Outcome { status, now },
+            d.conflict_to_resolve(),
         );
         self.finish_appointment_edit(result, cx);
     }
@@ -1371,30 +1393,40 @@ impl Root {
     }
 
     fn start_conflict_edit(&mut self, c: &Conflict, cx: &mut Context<Self>) {
-        let start = c
-            .payload
-            .get("startsAt")
-            .and_then(|v| v.as_str())
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|d| d.with_timezone(&Utc))
-            .or_else(|| {
-                calendar::effective_appointment(&self.svc.store, &c.entity_id)
-                    .ok()
-                    .flatten()
-                    .map(|a| a.starts_at)
-            })
-            .unwrap_or_else(Utc::now);
+        if c.kind != "appointment.create" {
+            let appointment_changed = self.t(Key::AppointmentChanged);
+            let Ok(Some(current)) = calendar::effective_appointment(&self.svc.store, &c.entity_id)
+            else {
+                if let Overlay::Conflicts { error, .. } = &mut self.overlay {
+                    *error = Some(appointment_changed.into());
+                }
+                cx.notify();
+                return;
+            };
+            self.show_appointment_details(
+                current,
+                Some(AppointmentReturn::Conflict(c.mutation_id.clone())),
+                cx,
+            );
+            if c.kind == "appointment.reschedule"
+                && let Overlay::Details(d) = &mut self.overlay
+            {
+                if let Some(start) = conflict_requested_start(c) {
+                    d.start = start;
+                }
+                if let Some(staff) = c.payload.get("staffId").and_then(|value| value.as_str()) {
+                    d.staff_id = staff.into();
+                }
+            }
+            cx.notify();
+            return;
+        }
+        let start = conflict_requested_start(c).unwrap_or_else(Utc::now);
         let staff_id = c
             .payload
             .get("staffId")
             .and_then(|v| v.as_str())
             .map(str::to_owned)
-            .or_else(|| {
-                calendar::effective_appointment(&self.svc.store, &c.entity_id)
-                    .ok()
-                    .flatten()
-                    .map(|a| a.staff_id)
-            })
             .or_else(|| self.staff.first().map(|s| s.id.clone()))
             .unwrap_or_default();
         self.overlay = Overlay::Conflicts {
@@ -3406,6 +3438,7 @@ impl Root {
                             self.t(match d.return_to {
                                 Some(AppointmentReturn::TeamShifts(_)) => Key::ShiftBackToSchedule,
                                 Some(AppointmentReturn::Unpaid(_)) => Key::DueBack,
+                                Some(AppointmentReturn::Conflict(_)) => Key::Back,
                                 None => Key::Close,
                             }),
                             Kind::Ghost,
@@ -3877,36 +3910,34 @@ impl Root {
                     );
             }
             let (m1, m2, m3) = (mid.clone(), mid.clone(), c.clone());
-            let drop_label = if c.kind == "appointment.create" {
-                Key::ConflictDropBooking
-            } else {
-                Key::ConflictCancelAppointment
-            };
-            let can_reschedule = matches!(
-                c.kind.as_str(),
-                "appointment.create" | "appointment.reschedule"
-            ) && !(c.kind == "appointment.create" && c.reason == "conflict");
+            let new_booking = c.kind == "appointment.create";
             card.child(
                 div()
                     .flex()
                     .flex_wrap()
                     .gap_2()
-                    .when(can_reschedule, |x| {
+                    .when(!new_booking || c.reason != "conflict", |x| {
                         x.child(self.button(
                             ("c-resched", i),
-                            self.t(Key::ConflictPickNewTime),
+                            self.t(if new_booking {
+                                Key::ConflictPickNewTime
+                            } else {
+                                Key::ReviewCurrentAppointment
+                            }),
                             Kind::Primary,
                             cx.listener(move |this, _, _, cx| this.start_conflict_edit(&m3, cx)),
                         ))
                     })
-                    .child(self.button(
-                        ("c-cancel", i),
-                        self.t(drop_label),
-                        Kind::Danger,
-                        cx.listener(move |this, _, _, cx| {
-                            this.resolve(&m1, Resolution::Cancel, cx)
-                        }),
-                    ))
+                    .when(new_booking, |x| {
+                        x.child(self.button(
+                            ("c-cancel", i),
+                            self.t(Key::ConflictDropBooking),
+                            Kind::Danger,
+                            cx.listener(move |this, _, _, cx| {
+                                this.resolve(&m1, Resolution::Cancel, cx)
+                            }),
+                        ))
+                    })
                     .child(self.button(
                         ("c-dismiss", i),
                         self.t(Key::ConflictDismiss),
@@ -5209,6 +5240,53 @@ mod tests {
             let queued = root.svc.store.outbox(5).unwrap();
             assert_eq!(queued.len(), 1);
             assert_eq!(queued[0].payload["version"], json!(cloud.version));
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    async fn reviewing_a_conflict_queues_only_the_intended_change_after_review(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, win) = open(cx);
+        win.update(cx, |root, _, cx| {
+            let proposed = "2026-03-09T17:00:00Z".parse().unwrap();
+            ops::reschedule_appointment(&mut root.svc.store, EXISTING, Some(proposed), None)
+                .unwrap();
+            let sent = root.svc.store.outbox(1).unwrap();
+            root.svc
+                .store
+                .apply_push_results(
+                    &sent,
+                    &[MutationResult::Rejected {
+                        mutation_id: sent[0].mutation_id.clone(),
+                        reason: "conflict".into(),
+                        message: "Cloud appointment moved".into(),
+                        replayed: false,
+                    }],
+                )
+                .unwrap();
+            let conflict = root.svc.store.conflicts().unwrap().remove(0);
+            root.start_conflict_edit(&conflict, cx);
+            assert!(matches!(&root.overlay, Overlay::Details(d) if d.start == proposed));
+            let mut cloud = root.svc.store.appointment(EXISTING).unwrap().unwrap();
+            cloud.version += 1;
+            cloud.starts_at += Span::hours(4);
+            cloud.ends_at += Span::hours(4);
+            root.svc
+                .store
+                .apply_page(&[up(10, "appointment", EXISTING, json!(&cloud))], 10)
+                .unwrap();
+            root.apply_move(cx);
+            assert!(root.svc.store.outbox(1).unwrap().is_empty());
+            assert_eq!(root.svc.store.conflicts().unwrap().len(), 1);
+            root.review_updated_appointment(cx);
+            root.apply_move(cx);
+            assert!(matches!(root.overlay, Overlay::Conflicts { .. }));
+            assert!(root.svc.store.conflicts().unwrap().is_empty());
+            let next = root.svc.store.outbox(1).unwrap().remove(0);
+            assert_eq!(next.payload["version"], json!(cloud.version));
+            assert!(next.payload.get("staffId").is_none());
         })
         .unwrap();
     }

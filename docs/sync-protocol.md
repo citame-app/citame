@@ -18,8 +18,8 @@ Guarantee: if you have seen `seq = n`, you have seen every change that will ever
 ## Client algorithm
 
 1. **Write locally first.** Apply the user's action to local SQLite, append a mutation to the outbox, show the row as "pending sync".
-2. **Push** the outbox head (up to 100 mutations, in creation order) with `POST /sync/push`. Only ONE push may be in flight at a time (dependent mutations must arrive in order).
-3. On each result: `applied` removes the mutation from the outbox and clears "pending"; `rejected` removes it and shows the reason to the user (never discard silently); `retry` leaves it in the outbox for backoff.
+2. **Push** the outbox head (up to 100 mutations, in creation order) with `POST /sync/push`. Keep one request in flight. Wait for an applied receipt before sending another edit that depends on it for the same appointment.
+3. On `applied`, remove the mutation from the outbox. On `rejected`, move it and any dependent appointment edits to the conflict inbox for review. On `retry`, keep the mutation and its dependents in the outbox for backoff.
 4. **Pull** with `GET /sync/pull?since=<cursor>`; apply the changes and store `nextCursor` in the same local transaction; repeat immediately while `hasMore` is true.
 5. Keep `GET /sync/stream` open; on every `change` event, pull. Also pull on startup, on reconnect, and every 60 s as a safety net.
 
@@ -104,6 +104,8 @@ Response `200`:
 ```
 
 One result per mutation, in request order. `appliedSeq` is the last log seq the mutation wrote (null if it changed nothing); once your cursor reaches it, your pull has seen the mutation's effect. `replayed: true` means the server already had a result for this `mutationId` and returned it unchanged.
+
+For clients that send several edits to the same appointment in one batch, the server responds with `conflict` for later edits based on a higher version than a rejected edit in that batch. Upgrade Desktop clients before moving live appointment editing to Citame so their local outboxes also protect edits across requests.
 
 Free text is capped (the same limits as the REST API, counted in UTF-16 code units, so an emoji counts as two): names (client `name`, inline client `name`, staff `displayName`) 200, `phone` 32, `email` 254, `notes` 2000, time-off `reason` 500. A longer value makes the mutation `invalid`. The whole request body is capped at 1 MiB (`HTTP_MAX_BODY_BYTES`): bigger bodies are answered `413`.
 

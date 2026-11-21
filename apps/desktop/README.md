@@ -164,7 +164,7 @@ This client covers the appointment desk, notifications, waitlist requests, appoi
 
 If an open appointment changes in Cloud, Desktop asks you to review the current appointment before moving it, cancelling it or recording the outcome. Reviewing keeps any proposed time and professional changes. Cancellation requires confirmation again.
 
-If Cloud rejects an appointment edit, Desktop keeps any later queued edits to that appointment in **Sync conflicts**. You can review each proposal against the appointment currently in Cloud.
+If Cloud rejects an appointment edit, Desktop keeps any later queued edits to that appointment in **Sync conflicts**. Open the current appointment from that inbox. Desktop keeps the proposed changes and checks the appointment again before saving. The original conflict stays in the inbox until the new edit is queued or you dismiss it.
 
 In the service catalogue, **Service photos** opens the gallery for an existing service. Choose an image, review its preview, and enter a caption and alternative text. Saving creates a private draft. Publishing requires a separate confirmation. Saving changes to published metadata returns the photo to draft. Requests check both the catalogue generation and the photo's reviewed version. New private drafts saved in Desktop survive restart and upload when it reconnects to a Cloud server that advertises portfolio uploads. Rejected uploads appear in sync conflicts. You can review the original draft and save a local copy of the image if the service is unavailable. Editing or publishing an existing photo requires a connection.
 

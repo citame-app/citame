@@ -484,10 +484,18 @@ pub fn queue_reviewed_appointment_edit(
     id: &str,
     reviewed: &ReviewedAppointment,
     edit: AppointmentEdit<'_>,
+    conflict_to_resolve: Option<&str>,
 ) -> Result<()> {
     store.write_transaction(|store| {
         if effective_appointment(store, id)?.is_none_or(|a| !reviewed.matches(&a)) {
             return Err(CoreError::AppointmentChanged);
+        }
+        if let Some(mutation_id) = conflict_to_resolve
+            && store
+                .conflict(mutation_id)?
+                .is_none_or(|conflict| conflict.entity_id != id)
+        {
+            return Err(CoreError::NotFound(format!("open conflict {mutation_id}")));
         }
         match edit {
             AppointmentEdit::Move {
@@ -498,7 +506,11 @@ pub fn queue_reviewed_appointment_edit(
             AppointmentEdit::Outcome { status, now } => {
                 set_appointment_status(store, id, status, now)
             }
+        }?;
+        if let Some(mutation_id) = conflict_to_resolve {
+            store.resolve_conflict(mutation_id, "reviewed")?;
         }
+        Ok(())
     })
 }
 

@@ -887,7 +887,7 @@ fn a_rejected_move_preserves_dependent_appointment_edits_for_review_instead_of_s
     s.apply_page(&[up(20, "appointment", EXISTING, json!(cloud))], 20)
         .unwrap();
     assert!(matches!(
-        queue_reviewed_appointment_edit(&mut s, EXISTING, &review, AppointmentEdit::Cancel),
+        queue_reviewed_appointment_edit(&mut s, EXISTING, &review, AppointmentEdit::Cancel, None),
         Err(crate::error::CoreError::AppointmentChanged)
     ));
     assert!(s.outbox(10).unwrap().is_empty());
