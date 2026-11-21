@@ -378,6 +378,7 @@ impl Root {
             &filename,
             move |root| {
                 Arc::ptr_eq(&session, &root.svc.session)
+                    && root.svc.status().connectivity != Connectivity::AuthRequired
                     && matches!(&root.overlay, Overlay::Reports(current)
                     if Arc::ptr_eq(&expected_instance, &current.instance)
                         && current.mode == mode && current.submitted == query
