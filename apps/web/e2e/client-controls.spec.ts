@@ -45,6 +45,7 @@ for (const scheme of ["light", "dark"] as const) {
         });
         expect(cancelled.ok(), await cancelled.text()).toBe(true);
         await signInAs(page, OWNER_EMAIL, `/admin/clients/${booking.clientId}`);
+        await page.getByRole("button", { name: "Profile", exact: true }).click();
         const controls = page.getByRole("region", {
           name: "Client tags & booking access",
           exact: true,
@@ -86,6 +87,7 @@ for (const scheme of ["light", "dark"] as const) {
         expect((await (await filtered).json()).total).toBe(1);
         await expect(page.getByRole("button", { name, exact: true })).toBeVisible();
         await page.goto(`/admin/clients/${booking.clientId}`);
+        await page.getByRole("button", { name: "Profile", exact: true }).click();
         await controls.getByLabel("Booking access", { exact: true }).selectOption("trusted");
         await controls
           .getByLabel("Access change reason", { exact: true })
