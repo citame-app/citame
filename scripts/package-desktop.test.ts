@@ -162,6 +162,7 @@ if [ "$1" = --check-installation ]; then
 fi
 test "$SOB_API_URL" = http://127.0.0.1:1 && test -n "$SOB_DATA_DIR" && test "$SOB_STARTUP_TIMINGS" = 1 || exit 2
 if [ "$MACOS_GUI_RESULT" = failure ]; then exit 3; fi
+if [ "$MACOS_GUI_RESULT" = ignore-term ]; then trap '' TERM; fi
 if [ "$MACOS_GUI_RESULT" != timeout ]; then printf 'citame startup first frame callback: 24 ms\n'; fi
 exec /bin/sleep 30
 `,
@@ -179,6 +180,7 @@ exec /bin/sleep 30
       destination = output,
     ) =>
       Bun.spawnSync(["bash", "scripts/package-desktop-macos.sh", binary, destination], {
+        timeout: 10_000,
         env: {
           ...process.env,
           PATH: `${dir}:${process.env.PATH}`,
@@ -260,9 +262,18 @@ exec /bin/sleep 30
     expect(timedOut.exitCode).not.toBe(0);
     expect(timedOut.stderr.toString()).toContain("did not open its first window");
     expect(readdirSync(output)).toEqual([]);
-    const window = run("Accepted", "", "15.0", "valid", adHocVerification, adHocOutput);
+    const start = performance.now();
+    const window = run(
+      "Accepted",
+      "",
+      "15.0",
+      "valid",
+      { ...adHocVerification, MACOS_GUI_RESULT: "ignore-term" },
+      adHocOutput,
+    );
     expect(window.exitCode, window.stderr.toString()).toBe(0);
     expect(window.stdout.toString()).toContain("citame startup first frame callback: 24 ms");
+    expect(performance.now() - start).toBeLessThan(10_000);
 
     const intel = run(
       "Accepted",
@@ -299,4 +310,4 @@ exec /bin/sleep 30
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-});
+}, 20_000);

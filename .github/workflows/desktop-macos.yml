@@ -53,6 +53,7 @@ jobs:
         working-directory: apps/desktop
         run: cargo build --release --locked -p sob-desktop
       - name: Package and verify the local signature and executable
+        timeout-minutes: 5
         env:
           RELEASE_REVISION: ${{ github.sha }}
           CITAME_MAC_VERIFY_GUI: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_gui && '1' || '0' }}

@@ -10,20 +10,41 @@ case "$arch" in x86_64|arm64) ;; *) echo "Unsupported architecture: $arch" >&2; 
 
 work="$(mktemp -d)"
 app_pid=""
+probe_running() {
+  # The probe is the only background job. Resolve it through Bash's job table.
+  [[ "$(jobs -pr)" == "$app_pid" || "$(jobs -ps)" == "$app_pid" ]]
+}
+
+wait_for_probe_exit() {
+  local seconds="$1" attempt
+  for ((attempt=0; attempt<seconds; attempt++)); do
+    probe_running || return 0
+    sleep 1
+  done
+  ! probe_running
+}
+
 cleanup() {
+  local cleanup_failed=0
   if [ -n "$app_pid" ]; then
-    kill "$app_pid" 2>/dev/null || true
-    # A stuck window process must not keep the packaging job in wait.
-    for ((attempt=0; attempt<3; attempt++)); do
-      kill -0 "$app_pid" 2>/dev/null || break
-      sleep 1
-    done
-    if kill -0 "$app_pid" 2>/dev/null; then
-      kill -KILL "$app_pid" 2>/dev/null || true
+    if probe_running; then
+      kill %+ 2>/dev/null || true
     fi
-    wait "$app_pid" 2>/dev/null || true
+    if ! wait_for_probe_exit 3; then
+      kill -KILL %+ 2>/dev/null || true
+      if ! wait_for_probe_exit 2; then
+        echo "The packaged application's test process did not exit" >&2
+        cleanup_failed=1
+      fi
+    fi
+    if [ "$cleanup_failed" = 0 ]; then
+      wait "$app_pid" 2>/dev/null || true
+    fi
   fi
   rm -rf "$work"
+  if [ "$cleanup_failed" != 0 ]; then
+    exit "$cleanup_failed"
+  fi
 }
 trap cleanup EXIT
 
@@ -68,11 +89,11 @@ if [ "${CITAME_MAC_VERIFY_GUI:-0}" = 1 ]; then
     "$binary" > "$work/startup.log" 2>&1 &
   app_pid=$!
   for (( elapsed=0; elapsed<=30; elapsed++ )); do
-    if kill -0 "$app_pid" 2>/dev/null &&
+    if probe_running &&
         grep -m 1 '^citame startup first frame callback: [0-9][0-9]* ms$' "$work/startup.log"; then
       exit 0
     fi
-    if (( elapsed == 30 )) || ! kill -0 "$app_pid" 2>/dev/null; then break; fi
+    if (( elapsed == 30 )) || ! probe_running; then break; fi
     sleep 1
   done
   cat "$work/startup.log" >&2

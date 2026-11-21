@@ -56,6 +56,8 @@ Configure the GitHub Actions environment `macos-release` with these values.
 
 Both workflows verify that the metadata inside the final ZIP matches the expected version and clean checkout revision. A manual run of **macOS desktop verification** can also enable `verify_gui`, which unpacks the new ZIP, opens Citame with a temporary profile and requires the packaged app to report its first GPUI frame within 30 seconds. Leave the option off when the runner lacks Metal rendering support. The frame callback is a launch check. Interactive testing on an Intel Mac and an Apple Silicon Mac remains a separate release verification.
 
+The verifier gives its temporary app three seconds to close after sending `SIGTERM`. If the app stays open, it sends `SIGKILL` to the same job and fails verification if the process is still running two seconds later. The signing and launch check in the manual workflow has a five-minute limit.
+
 ## Local verification — 2026-11-18
 
 Release checks passed 47 tests on the workflow's Bun 1.4.4 binary. They covered moved tags, tags outside `main`, unsigned and stale assets, and reusing differently notarized published archives. The workflow files passed actionlint. A disposable registry received a synthetic Linux amd64 and arm64 image by digest and served byte-identical OCI index content after promotion to a tag. The Compose configuration resolved the pinned API digest for migration, API, worker and owner bootstrap, and the pinned web digest for the gateway. The ordinary production smoke test passed. The remote tag and macOS release environment are still pending, so GitHub provenance and actual signing await a hosted release run.
