@@ -2044,6 +2044,7 @@ fn native_inventory_documents_survive_restart_and_rebase_a_concurrent_cloud_deli
     }
     let id = uuid::Uuid::now_v7();
     let mut receipt = Delivery {
+        purchase_order: None,
         id,
         received_on: "2026-01-30".into(),
         supplier_id: Some(supplier.id),
@@ -2096,6 +2097,7 @@ fn native_inventory_documents_survive_restart_and_rebase_a_concurrent_cloud_deli
         .find(|row| row.entity_id == id.to_string())
         .unwrap();
     let request = DeliveryReviewRequest {
+        purchase_order: None,
         id,
         supplier_id: Some(supplier.id),
         product_ids: vec![left_id, right_id],
@@ -2103,6 +2105,7 @@ fn native_inventory_documents_survive_restart_and_rebase_a_concurrent_cloud_deli
     let DeliveryReview::Current {
         products,
         supplier: Some(reviewed_supplier),
+        ..
     } = device.transport.review_delivery(&request).unwrap()
     else {
         panic!("a rejected receipt must remain available for review");
@@ -5028,4 +5031,269 @@ fn native_books_with_current_intake_and_an_inline_client_through_the_proxy() {
             .get("intakeResponses")
             .is_none()
     );
+}
+
+#[test]
+#[ignore = "needs the real API, OAuth, Postgres and Valkey (see README)"]
+fn native_purchase_orders_survive_restart_and_rebase_a_concurrent_cloud_delivery() {
+    use sob_core::inventory_documents::{
+        Delivery, DeliveryLine, DeliveryReview, DeliveryReviewRequest, DocumentProposal, Supplier,
+    };
+    use sob_core::purchase_orders::{
+        PurchaseOrderAction, PurchaseOrderFields, PurchaseOrderLink, PurchaseOrderProposal,
+        PurchaseOrderStatus, RequestedProduct,
+    };
+    use uuid::Uuid;
+
+    let desktop = proxy_device();
+    let web = Device::sign_in();
+    let actor = web.rest_get("/me")["user"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let product = web.rest_post(
+        "/admin/inventory/products",
+        json!({
+            "name": "Native purchase order fixture", "priceCents": 1000, "openingStock": 0,
+            "idempotencyKey": Uuid::now_v7(),
+        }),
+    );
+    let product_id = product["id"].as_str().unwrap().parse().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("orders.db");
+    let mut store = Store::open(&file).unwrap();
+    sync::pull_all(&mut store, &*desktop.transport).unwrap();
+    let generation = store.verified_reviewed_generation().unwrap();
+    let mut supplier = Supplier::new();
+    supplier.fields.name = "Purchase order offline supplier".into();
+    store
+        .queue_inventory_document(
+            &generation,
+            DocumentProposal::Supplier(supplier.clone()),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*desktop.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let current = desktop
+        .transport
+        .inventory_supplier(supplier.id)
+        .unwrap()
+        .unwrap();
+    store
+        .cache_reviewed_supplier(&current.value, &current.generation)
+        .unwrap();
+    let product = desktop.transport.inventory_product(product_id).unwrap();
+    store.remember_reviewed_product(&product).unwrap();
+    let id = Uuid::now_v7();
+    let order_path = format!("/admin/inventory/orders/{id}");
+    let initial_revision = store.live_view_revision("commerce").unwrap();
+    store
+        .queue_inventory_document(
+            &generation,
+            DocumentProposal::PurchaseOrder(PurchaseOrderProposal {
+                id,
+                version: 0,
+                action: PurchaseOrderAction::Save(PurchaseOrderFields {
+                    supplier_id: supplier.id,
+                    supplier_reference: Some("OFFLINE-ORDER".into()),
+                    expected_on: None,
+                    notes: None,
+                    lines: vec![RequestedProduct {
+                        product_id,
+                        quantity: 6,
+                    }],
+                }),
+            }),
+            None,
+        )
+        .unwrap();
+    drop(store);
+    let mut store = Store::open(&file).unwrap();
+    assert_eq!(store.pending_inventory_documents().unwrap()[0].id(), id);
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*desktop.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    assert!(store.live_view_revision("commerce").unwrap() > initial_revision);
+    assert!(store.pending_inventory_documents().unwrap().is_empty());
+    assert_eq!(web.rest_get(&order_path)["status"], "draft");
+    assert_eq!(
+        desktop
+            .transport
+            .inventory_product(product_id)
+            .unwrap()
+            .stock_on_hand,
+        0
+    );
+    let current = desktop
+        .transport
+        .inventory_purchase_order(id)
+        .unwrap()
+        .unwrap();
+    store
+        .cache_purchase_order(&current.value, &current.generation)
+        .unwrap();
+    let page = desktop
+        .transport
+        .inventory_purchase_orders("OFFLINE-ORDER", Some(PurchaseOrderStatus::Draft), 1)
+        .unwrap();
+    assert!(page.orders.iter().any(|row| row.id == id));
+    store.cache_purchase_order_page(&page).unwrap();
+
+    store
+        .queue_inventory_document(
+            &generation,
+            DocumentProposal::PurchaseOrder(PurchaseOrderProposal {
+                id,
+                version: current.value.header.version,
+                action: PurchaseOrderAction::Order,
+            }),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*desktop.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let current = desktop
+        .transport
+        .inventory_purchase_order(id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.value.header.status, PurchaseOrderStatus::Ordered);
+    store
+        .cache_purchase_order(&current.value, &current.generation)
+        .unwrap();
+    let receipt_id = Uuid::now_v7();
+    let link = PurchaseOrderLink {
+        id,
+        version: current.value.header.version,
+    };
+    let mut delivery = Delivery {
+        id: receipt_id,
+        supplier_id: Some(supplier.id),
+        received_on: "2026-01-29".into(),
+        notes: None,
+        invoice_reference: Some("OFFLINE-DOC".into()),
+        actor_user_id: actor.clone(),
+        lines: vec![DeliveryLine::reviewed(&product, "2", &generation).unwrap()],
+        purchase_order: Some(link),
+    };
+    store
+        .queue_inventory_document(
+            &generation,
+            DocumentProposal::Receipt(delivery.clone()),
+            None,
+        )
+        .unwrap();
+    let cloud = web.rest_post(
+        "/admin/inventory/receipts",
+        json!({
+            "actorUserId": actor, "generation": generation, "receivedOn": "2026-01-29",
+            "supplierId": supplier.id, "invoiceReference": null, "notes": null,
+            "idempotencyKey": Uuid::now_v7(), "purchaseOrder": link,
+            "lines": [{ "productId": product_id, "version": product.version, "quantity": 1 }],
+        }),
+    );
+    assert_eq!(cloud["purchaseOrderId"], id.to_string());
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*desktop.transport)
+            .unwrap()
+            .push
+            .rejected,
+        1
+    );
+    let conflict = store
+        .conflicts()
+        .unwrap()
+        .into_iter()
+        .find(|row| row.entity_id == receipt_id.to_string())
+        .unwrap();
+    let DeliveryReview::Current {
+        products,
+        supplier,
+        order: Some(order),
+    } = desktop
+        .transport
+        .review_delivery(&DeliveryReviewRequest {
+            id: receipt_id,
+            supplier_id: delivery.supplier_id,
+            product_ids: vec![product_id],
+            purchase_order: Some(link),
+        })
+        .unwrap()
+    else {
+        panic!("order and stock versions remain available for manual review");
+    };
+    assert_eq!(order.value.lines[0].remaining(), 5);
+    store
+        .cache_delivery_review(&generation, &[product_id], &products, supplier.as_ref())
+        .unwrap();
+    store
+        .cache_purchase_order(&order.value, &order.generation)
+        .unwrap();
+    delivery.purchase_order = Some(PurchaseOrderLink {
+        id,
+        version: order.value.header.version,
+    });
+    delivery.lines =
+        vec![DeliveryLine::reviewed(products[0].as_ref().unwrap(), "2", &generation).unwrap()];
+    store
+        .queue_inventory_document(
+            &generation,
+            DocumentProposal::Receipt(delivery),
+            Some(&conflict.mutation_id),
+        )
+        .unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*desktop.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    assert_eq!(web.rest_get(&order_path)["lines"][0]["receivedQuantity"], 3);
+    assert_eq!(
+        desktop
+            .transport
+            .inventory_product(product_id)
+            .unwrap()
+            .stock_on_hand,
+        3
+    );
+    assert_eq!(
+        desktop
+            .transport
+            .inventory_receipt(receipt_id)
+            .unwrap()
+            .unwrap()
+            .value
+            .header
+            .purchase_order_id,
+        Some(id)
+    );
+    drop(store);
+    let reopened = Store::open(&file).unwrap();
+    assert_eq!(
+        reopened
+            .cached_purchase_order(id)
+            .unwrap()
+            .unwrap()
+            .header
+            .id,
+        id
+    );
+    assert!(reopened.pending_inventory_documents().unwrap().is_empty());
 }

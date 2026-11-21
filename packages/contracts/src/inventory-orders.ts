@@ -24,24 +24,31 @@ const revision = {
   version: z.number().int().min(0).max(2147483646),
   idempotencyKey: idempotencyKeySchema,
 };
+const saveOrder = z.strictObject({
+  ...revision,
+  action: z.literal("save"),
+  supplierId: id,
+  supplierReference: requiredTextSchema(100).nullable(),
+  expectedOn: localDateSchema.nullable(),
+  notes: requiredTextSchema(1000).nullable(),
+  lines: z
+    .array(z.strictObject({ productId: id, quantity }))
+    .min(1)
+    .max(MAX_PURCHASE_ORDER_LINES)
+    .refine((lines) => new Set(lines.map((line) => line.productId)).size === lines.length),
+});
+const transitionOrder = z.strictObject({
+  ...revision,
+  action: z.enum(["order", "cancel"]),
+});
 export const purchaseOrderCommandSchema = z.discriminatedUnion("action", [
-  z.strictObject({
-    ...revision,
-    action: z.literal("save"),
-    supplierId: id,
-    supplierReference: requiredTextSchema(100).nullable(),
-    expectedOn: localDateSchema.nullable(),
-    notes: requiredTextSchema(1000).nullable(),
-    lines: z
-      .array(z.strictObject({ productId: id, quantity }))
-      .min(1)
-      .max(MAX_PURCHASE_ORDER_LINES)
-      .refine((lines) => new Set(lines.map((line) => line.productId)).size === lines.length),
-  }),
-  z.strictObject({
-    ...revision,
-    action: z.enum(["order", "cancel"]),
-  }),
+  saveOrder,
+  transitionOrder,
+]);
+const syncOrder = { id };
+export const purchaseOrderSyncPayloadSchema = z.discriminatedUnion("action", [
+  saveOrder.omit({ generation: true, idempotencyKey: true }).extend(syncOrder),
+  transitionOrder.omit({ generation: true, idempotencyKey: true }).extend(syncOrder),
 ]);
 export const purchaseOrderLinkSchema = z.strictObject({ id, version: revision.version.positive() });
 const header = z.object({

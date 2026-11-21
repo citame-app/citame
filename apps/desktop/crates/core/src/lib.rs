@@ -19,6 +19,7 @@ pub mod model;
 pub mod ops;
 pub mod pkce;
 pub mod product_editor;
+pub mod purchase_orders;
 pub mod receipt_print;
 pub mod reports;
 pub mod resource_pools;

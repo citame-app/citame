@@ -140,6 +140,7 @@ struct PullMetadata<'a> {
     resource_pools: Option<&'a [crate::resource_pools::ManagedPool]>,
     combinations: Option<&'a [crate::combinations::ManagedCombination]>,
     inventory_access: Option<bool>,
+    inventory_read_access: Option<bool>,
 }
 
 /// What `apply_push_results` did.
@@ -889,6 +890,7 @@ impl Store {
                 resource_pools: page.resource_pools.as_deref(),
                 combinations: page.combinations.as_deref(),
                 inventory_access: page.viewer_write_inventory,
+                inventory_read_access: page.viewer_read_inventory.or(page.viewer_write_inventory),
             },
         )
     }
@@ -928,6 +930,9 @@ impl Store {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         Self::ensure_generation(&tx, metadata.generation)?;
+        if let Some(allowed) = metadata.inventory_read_access {
+            Self::apply_inventory_read_access_at(&tx, allowed)?;
+        }
         if let Some(allowed) = metadata.inventory_access {
             Self::apply_inventory_access_at(&tx, allowed)?;
         }
@@ -1118,6 +1123,7 @@ impl Store {
         )?;
         tx.execute("DELETE FROM local_booking_confirmation", [])?;
         Self::apply_inventory_access_at(tx, false)?;
+        Self::apply_inventory_read_access_at(tx, false)?;
         Ok(())
     }
 
@@ -1571,6 +1577,7 @@ impl Store {
                                 | crate::product_editor::PHOTO
                                 | crate::inventory_documents::SUPPLIER_SAVE
                                 | crate::inventory_documents::RECEIVE_STOCK
+                                | crate::purchase_orders::PURCHASE_ORDER_WRITE
                         )
                     {
                         Self::set_meta_at(
@@ -1597,6 +1604,7 @@ impl Store {
                                 | crate::product_editor::PHOTO
                                 | crate::inventory_documents::SUPPLIER_SAVE
                                 | crate::inventory_documents::RECEIVE_STOCK
+                                | crate::purchase_orders::PURCHASE_ORDER_WRITE
                         )
                     {
                         Self::apply_inventory_access_at(&tx, false)?;

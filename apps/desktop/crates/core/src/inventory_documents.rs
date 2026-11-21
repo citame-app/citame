@@ -4,12 +4,15 @@ use uuid::Uuid;
 
 use crate::error::{CoreError, Result};
 use crate::inventory::{Pagination, Product};
+use crate::purchase_orders::{
+    PURCHASE_ORDER_WRITE, PurchaseOrder, PurchaseOrderLink, PurchaseOrderProposal,
+};
 use crate::trim_like_javascript;
 
 pub const SUPPLIER_SAVE: &str = "supplier.save";
 pub const RECEIVE_STOCK: &str = "stock.receipt";
 pub const MAX_LINES: usize = 50;
-const MAX_STOCK: u32 = 999_999_999;
+pub(crate) const MAX_STOCK: u32 = 999_999_999;
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -100,6 +103,8 @@ pub struct ReceiptHeader {
     pub invoice_reference: Option<String>,
     pub notes: Option<String>,
     pub line_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub purchase_order_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -137,6 +142,7 @@ pub enum DeliveryReview {
     Current {
         products: Vec<Option<Product>>,
         supplier: Option<ReviewedDocument<Supplier>>,
+        order: Option<Box<ReviewedDocument<PurchaseOrder>>>,
     },
 }
 
@@ -145,6 +151,7 @@ pub struct DeliveryReviewRequest {
     pub id: Uuid,
     pub supplier_id: Option<Uuid>,
     pub product_ids: Vec<Uuid>,
+    pub purchase_order: Option<PurchaseOrderLink>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -157,6 +164,15 @@ pub struct DeliveryLine {
 
 impl DeliveryLine {
     pub fn reviewed(product: &Product, quantity: &str, generation: &str) -> Result<Self> {
+        Self::reviewed_for_delivery(product, quantity, generation, false)
+    }
+
+    pub fn reviewed_for_delivery(
+        product: &Product,
+        quantity: &str,
+        generation: &str,
+        linked: bool,
+    ) -> Result<Self> {
         let quantity: u32 = trim_like_javascript(quantity)
             .parse()
             .map_err(|_| invalid())?;
@@ -165,16 +181,16 @@ impl DeliveryLine {
             quantity,
             version: product.version,
         };
-        if !line.matches_review(product, generation) {
+        if !line.matches_review(product, generation, linked) {
             return Err(invalid());
         }
         Ok(line)
     }
 
-    pub(crate) fn matches_review(&self, product: &Product, generation: &str) -> bool {
+    pub(crate) fn matches_review(&self, product: &Product, generation: &str, linked: bool) -> bool {
         product.id == self.product_id
             && product.version == self.version
-            && product.active
+            && (product.active || linked)
             && product.can_manage
             && product.inventory_generation.as_deref() == Some(generation)
             && self.quantity > 0
@@ -192,6 +208,8 @@ pub struct Delivery {
     pub notes: Option<String>,
     pub actor_user_id: String,
     pub lines: Vec<DeliveryLine>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub purchase_order: Option<PurchaseOrderLink>,
 }
 
 impl Delivery {
@@ -206,6 +224,9 @@ impl Delivery {
         if self.received_on != parsed.to_string()
             || self.received_on.len() != 10
             || parsed.year() < 1
+            || self.purchase_order.is_some_and(|order| {
+                order.version == 0 || order.version >= i32::MAX as u32 || self.supplier_id.is_none()
+            })
             || self.actor_user_id.is_empty()
             || self.actor_user_id.encode_utf16().count() > 200
             || !(1..=MAX_LINES).contains(&self.lines.len())
@@ -227,6 +248,7 @@ impl Delivery {
 pub enum DocumentProposal {
     Supplier(Supplier),
     Receipt(Delivery),
+    PurchaseOrder(PurchaseOrderProposal),
 }
 
 impl DocumentProposal {
@@ -234,6 +256,7 @@ impl DocumentProposal {
         match self {
             Self::Supplier(row) => row.id,
             Self::Receipt(row) => row.id,
+            Self::PurchaseOrder(row) => row.id,
         }
     }
 
@@ -241,6 +264,7 @@ impl DocumentProposal {
         match self {
             Self::Supplier(_) => SUPPLIER_SAVE,
             Self::Receipt(_) => RECEIVE_STOCK,
+            Self::PurchaseOrder(_) => PURCHASE_ORDER_WRITE,
         }
     }
 
@@ -248,6 +272,7 @@ impl DocumentProposal {
         Ok(match self {
             Self::Supplier(row) => serde_json::to_value(row.normalized()?)?,
             Self::Receipt(row) => serde_json::to_value(row.normalized()?)?,
+            Self::PurchaseOrder(row) => serde_json::to_value(row.normalized()?)?,
         })
     }
 
@@ -255,12 +280,13 @@ impl DocumentProposal {
         match kind {
             SUPPLIER_SAVE => Ok(Self::Supplier(serde_json::from_value(payload)?)),
             RECEIVE_STOCK => Ok(Self::Receipt(serde_json::from_value(payload)?)),
+            PURCHASE_ORDER_WRITE => Ok(Self::PurchaseOrder(serde_json::from_value(payload)?)),
             _ => Err(invalid()),
         }
     }
 }
 
-fn invalid() -> CoreError {
+pub(crate) fn invalid() -> CoreError {
     CoreError::Invalid("Invalid inventory document fields".into())
 }
 
@@ -271,7 +297,7 @@ fn valid_text(value: &str, max: usize) -> Result<()> {
     Ok(())
 }
 
-fn clean_text(value: Option<String>, max: usize) -> Result<Option<String>> {
+pub(crate) fn clean_text(value: Option<String>, max: usize) -> Result<Option<String>> {
     let value = value
         .map(|text| trim_like_javascript(&text).to_owned())
         .filter(|text| !text.is_empty());

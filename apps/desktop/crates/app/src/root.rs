@@ -3321,6 +3321,7 @@ impl Root {
                 sob_core::product_editor::PHOTO => Key::InventoryProductPhoto,
                 sob_core::inventory_documents::SUPPLIER_SAVE => Key::InventorySuppliers,
                 sob_core::inventory_documents::RECEIVE_STOCK => Key::InventoryReceipts,
+                sob_core::purchase_orders::PURCHASE_ORDER_WRITE => Key::InventoryOrders,
                 _ => Key::ConflictOther,
             });
             let when = c
@@ -3406,6 +3407,7 @@ impl Root {
                                     c.kind.as_str(),
                                     sob_core::inventory_documents::SUPPLIER_SAVE
                                         | sob_core::inventory_documents::RECEIVE_STOCK
+                                        | sob_core::purchase_orders::PURCHASE_ORDER_WRITE
                                 ))
                                 || matches!(
                                     c.kind.as_str(),
@@ -3556,6 +3558,7 @@ impl Root {
                                 c.kind.as_str(),
                                 sob_core::inventory_documents::SUPPLIER_SAVE
                                     | sob_core::inventory_documents::RECEIVE_STOCK
+                                    | sob_core::purchase_orders::PURCHASE_ORDER_WRITE
                             ) && self.svc.store.can_queue_product_edits(),
                             |row| {
                                 let id = c.mutation_id.clone();

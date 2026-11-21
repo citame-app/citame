@@ -356,7 +356,12 @@ export async function pullChanges(
     clientDirectory: permissions.clients,
     viewerRole: principal.role === "owner" ? "owner" : "staff",
     viewerEditCatalogue: permissions.editCatalog,
-    ...(query.inventoryAccess === "1" ? { viewerWriteInventory: permissions.writeInventory } : {}),
+    ...(query.inventoryAccess === "1"
+      ? {
+          viewerWriteInventory: permissions.writeInventory,
+          viewerReadInventory: permissions.readInventory,
+        }
+      : {}),
     calendarScope: permissions.allCalendars ? "all" : (principal.staffId ?? "none"),
   };
 }

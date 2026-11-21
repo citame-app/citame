@@ -29,6 +29,7 @@ import {
   updateAppointment,
 } from "../appointments/service";
 import { updateClient } from "../clients/admin";
+import { writePurchaseOrder } from "../inventory/orders";
 import { saveProductPhoto } from "../inventory/photo";
 import { receiveStockDocument, saveSupplier } from "../inventory/receipts";
 import { createProduct, updateProduct } from "../inventory/service";
@@ -309,6 +310,18 @@ export async function applyMutation(
         { ...input, generation: ctx.generation },
         principal,
         ctx.generation,
+      );
+      return;
+    }
+    case "purchase_order.write": {
+      const { id, ...command } = mutation.payload;
+      await writePurchaseOrder(
+        db,
+        id,
+        { ...command, idempotencyKey: mutation.mutationId, generation: ctx.generation },
+        principal,
+        ctx.generation,
+        now,
       );
       return;
     }

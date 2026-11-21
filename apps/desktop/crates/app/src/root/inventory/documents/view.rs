@@ -1,3 +1,4 @@
+use super::orders::order_status_key;
 use super::*;
 
 impl Root {
@@ -57,7 +58,9 @@ impl Root {
             }
             return body.child(match editor {
                 Editor::Supplier(form) => self.render_supplier_editor(form, online, busy, cx),
-                Editor::Receipt(form) => self.render_receipt_editor(form, online, busy, cx),
+                Editor::Receipt(form) => {
+                    self.render_receipt_editor(form, panel.order.as_ref(), online, busy, cx)
+                }
             });
         }
         if let Some(receipt) = &panel.detail {
@@ -66,6 +69,32 @@ impl Root {
             } else {
                 div().child(self.t(Key::InventoryRestricted))
             });
+        }
+        if let Some(order) = &panel.order {
+            return body.child(if online || self.svc.store.can_read_cached_orders() {
+                self.render_order_detail(panel, order, writable, busy, cx)
+            } else {
+                div().child(self.t(Key::InventoryRestricted))
+            });
+        }
+        if let Some((_, draft)) = &panel.order_conflict {
+            let id = draft.id;
+            return body
+                .child(self.t(Key::InventoryDocumentChanged))
+                .child(self.button(
+                    "order-conflict-back",
+                    self.t(Key::Back),
+                    Kind::Ghost,
+                    cx.listener(|root, _, _, cx| root.dismiss_overlay(cx)),
+                ))
+                .when(online && !busy, |body| {
+                    body.child(self.button(
+                        "order-conflict-review",
+                        self.t(Key::InventoryDocumentReview),
+                        Kind::Primary,
+                        cx.listener(move |root, _, _, cx| root.open_order(id, cx)),
+                    ))
+                });
         }
         let cached = self.svc.store.cached_suppliers().unwrap_or_default();
         let pending = self
@@ -107,6 +136,12 @@ impl Root {
                             root.edit_inventory_supplier(Supplier::new(), None, cx)
                         }),
                     ),
+                    Tab::Orders => self.button(
+                        "order-new",
+                        self.t(Key::InventoryOrderNew),
+                        Kind::Primary,
+                        cx.listener(|root, _, _, cx| root.edit_order(None, cx)),
+                    ),
                     Tab::Receipts => self.button(
                         "receipt-new",
                         self.t(Key::InventoryReceiptNew),
@@ -120,12 +155,33 @@ impl Root {
             .children(pending.iter().filter_map(|entry| {
                 let label = match (panel.tab, entry) {
                     (Tab::Suppliers, DocumentProposal::Supplier(row)) => row.fields.name.clone(),
-                    (Tab::Receipts, DocumentProposal::Receipt(row)) => format!(
-                        "{} · {} · {}",
-                        row.received_on,
-                        row.invoice_reference.as_deref().unwrap_or(""),
-                        row.lines.len()
-                    ),
+                    (Tab::Orders, DocumentProposal::PurchaseOrder(row)) => match &row.action {
+                        PurchaseOrderAction::Save(fields) => fields
+                            .supplier_reference
+                            .clone()
+                            .unwrap_or_else(|| self.t(Key::InventoryOrderDraft).into()),
+                        PurchaseOrderAction::Order => self.t(Key::InventoryOrderPlace).into(),
+                        PurchaseOrderAction::Cancel => self.t(Key::InventoryOrderCancel).into(),
+                    },
+                    (Tab::Orders, DocumentProposal::Receipt(row))
+                        if row.purchase_order.is_some() =>
+                    {
+                        format!(
+                            "{} · {}",
+                            row.received_on,
+                            self.t(Key::InventoryOrderReceive)
+                        )
+                    }
+                    (Tab::Receipts, DocumentProposal::Receipt(row))
+                        if row.purchase_order.is_none() =>
+                    {
+                        format!(
+                            "{} · {} · {}",
+                            row.received_on,
+                            row.invoice_reference.as_deref().unwrap_or(""),
+                            row.lines.len()
+                        )
+                    }
                     _ => return None,
                 };
                 Some(div().p_2().bg(theme::panel()).child(format!(
@@ -134,6 +190,7 @@ impl Root {
                 )))
             }));
         match panel.tab {
+            Tab::Orders => body.child(self.render_order_list(panel, online, busy, cx)),
             Tab::Suppliers => {
                 let term = panel.search.read(cx).text().trim().to_lowercase();
                 let rows: Vec<_> = match (&panel.view, online) {
@@ -363,6 +420,18 @@ impl Root {
                     self.t(Key::InventoryInvoiceReference)
                 ))
             })
+            .when_some(header.purchase_order_id, |body, order| {
+                body.child(self.button(
+                    "receipt-linked-order",
+                    self.t(Key::InventoryOrderView),
+                    Kind::Ghost,
+                    cx.listener(move |root, _, _, cx| {
+                        if root.prepare_inventory_documents(Tab::Orders, cx) {
+                            root.open_order(order, cx);
+                        }
+                    }),
+                ))
+            })
             .when_some(header.notes.as_ref(), |body, notes| {
                 body.child(notes.clone())
             })
@@ -532,10 +601,17 @@ impl Root {
     fn render_receipt_editor(
         &self,
         form: &ReceiptForm,
+        reviewed_order: Option<&PurchaseOrder>,
         online: bool,
         busy: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        let draft_order = form.draft_order.is_some();
+        let closed = form
+            .purchase_order
+            .as_ref()
+            .is_some_and(|order| !order.header.status.allows_delivery());
+        let linked = form.link().is_some();
         let product_search = form.product_search.read(cx).text().trim().to_lowercase();
         let supplier_search = form.supplier_search.read(cx).text().trim().to_lowercase();
         let products = self.svc.store.reviewed_products().unwrap_or_default();
@@ -553,16 +629,20 @@ impl Root {
         let selected = form
             .supplier_id
             .and_then(|id| suppliers.iter().find(|supplier| supplier.id == id));
-        let supplier_name = selected.map_or_else(
-            || {
-                self.t(if form.supplier_id.is_some() {
-                    Key::InventoryDocumentMissing
-                } else {
-                    Key::InventoryNoSupplier
-                })
-            },
-            |supplier| supplier.fields.name.as_str(),
-        );
+        let supplier_name = if let Some(order) = &form.purchase_order {
+            order.header.supplier_name.as_str()
+        } else {
+            selected.map_or_else(
+                || {
+                    self.t(if form.supplier_id.is_some() {
+                        Key::InventoryDocumentMissing
+                    } else {
+                        Key::InventoryNoSupplier
+                    })
+                },
+                |supplier| supplier.fields.name.as_str(),
+            )
+        };
         let body = div()
             .flex()
             .flex_col()
@@ -570,15 +650,35 @@ impl Root {
             .child(
                 div()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(self.t(Key::InventoryReceiptNew)),
+                    .child(self.t(if draft_order {
+                        Key::InventoryOrderSave
+                    } else if linked {
+                        Key::InventoryOrderReceive
+                    } else {
+                        Key::InventoryReceiptNew
+                    })),
             )
             .child(
                 div()
                     .flex()
                     .flex_wrap()
                     .gap_2()
-                    .child(self.document_field(Key::InventoryDeliveryDate, &form.date))
-                    .child(self.document_field(Key::InventoryInvoiceReference, &form.invoice)),
+                    .child(self.document_field(
+                        if draft_order {
+                            Key::InventoryOrderExpected
+                        } else {
+                            Key::InventoryDeliveryDate
+                        },
+                        &form.date,
+                    ))
+                    .child(self.document_field(
+                        if draft_order {
+                            Key::InventoryOrderReference
+                        } else {
+                            Key::InventoryInvoiceReference
+                        },
+                        &form.invoice,
+                    )),
             )
             .child(self.document_field(Key::InventoryDocumentNotes, &form.notes))
             .child(
@@ -590,59 +690,64 @@ impl Root {
                         "{} · {supplier_name}",
                         self.t(Key::InventorySupplier)
                     ))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .gap_2()
-                            .items_center()
+                    .when(!linked, |picker| {
+                        picker
                             .child(
                                 div()
-                                    .flex_1()
-                                    .min_w(px(130.))
-                                    .child(form.supplier_search.clone()),
+                                    .flex()
+                                    .flex_wrap()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w(px(130.))
+                                            .child(form.supplier_search.clone()),
+                                    )
+                                    .when(online && !busy, |row| {
+                                        row.child(self.button(
+                                            "receipt-search-supplier",
+                                            self.t(Key::InventoryFind),
+                                            Kind::Ghost,
+                                            cx.listener(|root, _, _, cx| {
+                                                root.search_document_picker(true, 1, cx)
+                                            }),
+                                        ))
+                                    })
+                                    .when(form.supplier_id.is_some() && !busy, |row| {
+                                        row.child(self.button(
+                                            "receipt-clear-supplier",
+                                            self.t(Key::InventoryNoSupplier),
+                                            Kind::Ghost,
+                                            cx.listener(|root, _, _, cx| {
+                                                if let Some(panel) = root.document_panel()
+                                                    && let Some(Editor::Receipt(form)) =
+                                                        &mut panel.editor
+                                                {
+                                                    form.supplier_id = None;
+                                                }
+                                                cx.notify();
+                                            }),
+                                        ))
+                                    }),
                             )
-                            .when(online && !busy, |row| {
-                                row.child(self.button(
-                                    "receipt-search-supplier",
-                                    self.t(Key::InventoryFind),
-                                    Kind::Ghost,
-                                    cx.listener(|root, _, _, cx| {
-                                        root.search_document_picker(true, 1, cx)
-                                    }),
-                                ))
-                            })
-                            .when(form.supplier_id.is_some() && !busy, |row| {
-                                row.child(self.button(
-                                    "receipt-clear-supplier",
-                                    self.t(Key::InventoryNoSupplier),
-                                    Kind::Ghost,
-                                    cx.listener(|root, _, _, cx| {
-                                        if let Some(panel) = root.document_panel()
-                                            && let Some(Editor::Receipt(form)) = &mut panel.editor
-                                        {
-                                            form.supplier_id = None;
-                                        }
-                                        cx.notify();
-                                    }),
-                                ))
-                            }),
-                    )
-                    .children(
-                        supplier_results
-                            .iter()
-                            .filter(|row| {
-                                row.fields.active
-                                    && (online && form.supplier_page.is_some()
-                                        || row.matches_search(&supplier_search))
-                            })
-                            .take(20)
-                            .map(|row| {
-                                let id = row.id;
-                                div().when(!busy, |div| {
-                                    div.child(self.button(
-                                        SharedString::from(format!("receipt-supplier-{id}")),
-                                        format!(
+                            .children(
+                                supplier_results
+                                    .iter()
+                                    .filter(|row| {
+                                        row.fields.active
+                                            && (online && form.supplier_page.is_some()
+                                                || row.matches_search(&supplier_search))
+                                    })
+                                    .take(20)
+                                    .map(|row| {
+                                        let id = row.id;
+                                        div().when(!busy, |div| {
+                                            div.child(self.button(
+                                                SharedString::from(format!(
+                                                    "receipt-supplier-{id}"
+                                                )),
+                                                format!(
                                                 "{} · {}",
                                                 row.fields.name,
                                                 row.fields
@@ -651,96 +756,130 @@ impl Root {
                                                     .or(row.fields.email.as_deref())
                                                     .unwrap_or("")
                                             ),
-                                        if form.supplier_id == Some(id) {
-                                            Kind::Primary
-                                        } else {
-                                            Kind::Ghost
-                                        },
-                                        cx.listener(move |root, _, _, cx| {
-                                            if let Some(panel) = root.document_panel()
-                                                && let Some(Editor::Receipt(form)) =
-                                                    &mut panel.editor
-                                            {
-                                                form.supplier_id = Some(id);
-                                            }
-                                            cx.notify();
-                                        }),
-                                    ))
-                                })
-                            }),
-                    )
-                    .when(online && !busy && form.supplier_page.is_some(), |row| {
-                        row.child(self.document_pager(
-                            &form.supplier_page.as_ref().unwrap().pagination,
-                            Some(true),
-                            cx,
-                        ))
+                                                if form.supplier_id == Some(id) {
+                                                    Kind::Primary
+                                                } else {
+                                                    Kind::Ghost
+                                                },
+                                                cx.listener(move |root, _, _, cx| {
+                                                    if let Some(panel) = root.document_panel()
+                                                        && let Some(Editor::Receipt(form)) =
+                                                            &mut panel.editor
+                                                    {
+                                                        form.supplier_id = Some(id);
+                                                    }
+                                                    cx.notify();
+                                                }),
+                                            ))
+                                        })
+                                    }),
+                            )
+                            .when(online && !busy && form.supplier_page.is_some(), |row| {
+                                row.child(self.document_pager(
+                                    &form.supplier_page.as_ref().unwrap().pagination,
+                                    Some(true),
+                                    cx,
+                                ))
+                            })
                     }),
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(self.label(Key::InventoryProductName))
-                    .child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .items_center()
-                            .child(div().flex_1().child(form.product_search.clone()))
-                            .when(online && !busy && form.lines.len() < MAX_LINES, |row| {
-                                row.child(self.button(
-                                    "receipt-search-product",
-                                    self.t(Key::InventoryFind),
-                                    Kind::Ghost,
-                                    cx.listener(|root, _, _, cx| {
-                                        root.search_document_picker(false, 1, cx)
-                                    }),
-                                ))
-                            }),
-                    )
-                    .children(
-                        product_results
-                            .iter()
-                            .filter(|product| {
-                                product.active
-                                    && !form.lines.iter().any(|line| line.id == product.id)
-                                    && (online && form.product_page.is_some()
-                                        || product.name.to_lowercase().contains(&product_search)
-                                        || product.sku.to_lowercase().contains(&product_search))
-                            })
-                            .take(20)
-                            .map(|item| {
-                                let product = item.clone();
-                                div().when(!busy && form.lines.len() < MAX_LINES, |row| {
+            .when(!linked, |body| {
+                body.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(self.label(Key::InventoryProductName))
+                        .child(
+                            div()
+                                .flex()
+                                .gap_2()
+                                .items_center()
+                                .child(div().flex_1().child(form.product_search.clone()))
+                                .when(online && !busy && form.lines.len() < MAX_LINES, |row| {
                                     row.child(self.button(
-                                        SharedString::from(format!("receipt-product-{}", item.id)),
-                                        format!("{} · {}", item.name, item.sku),
+                                        "receipt-search-product",
+                                        self.t(Key::InventoryFind),
                                         Kind::Ghost,
-                                        cx.listener(move |root, _, _, cx| {
-                                            if root.svc.status().connectivity
-                                                == Connectivity::Online
-                                            {
-                                                root.request_document(
-                                                    Request::Product(product.id),
-                                                    cx,
-                                                );
-                                            } else {
-                                                root.add_document_product(product.clone(), cx);
-                                            }
+                                        cx.listener(|root, _, _, cx| {
+                                            root.search_document_picker(false, 1, cx)
                                         }),
                                     ))
+                                }),
+                        )
+                        .children(
+                            product_results
+                                .iter()
+                                .filter(|product| {
+                                    product.active
+                                        && !form.lines.iter().any(|line| line.id == product.id)
+                                        && (online && form.product_page.is_some()
+                                            || product
+                                                .name
+                                                .to_lowercase()
+                                                .contains(&product_search)
+                                            || product.sku.to_lowercase().contains(&product_search))
                                 })
-                            }),
+                                .take(20)
+                                .map(|item| {
+                                    let product = item.clone();
+                                    div().when(!busy && form.lines.len() < MAX_LINES, |row| {
+                                        row.child(self.button(
+                                            SharedString::from(format!(
+                                                "receipt-product-{}",
+                                                item.id
+                                            )),
+                                            format!("{} · {}", item.name, item.sku),
+                                            Kind::Ghost,
+                                            cx.listener(move |root, _, _, cx| {
+                                                if root.svc.status().connectivity
+                                                    == Connectivity::Online
+                                                {
+                                                    root.request_document(
+                                                        Request::Product(product.id),
+                                                        cx,
+                                                    );
+                                                } else {
+                                                    root.add_document_product(product.clone(), cx);
+                                                }
+                                            }),
+                                        ))
+                                    })
+                                }),
+                        )
+                        .when(online && !busy && form.product_page.is_some(), |row| {
+                            row.child(self.document_pager(
+                                &form.product_page.as_ref().unwrap().pagination,
+                                Some(false),
+                                cx,
+                            ))
+                        }),
+                )
+            })
+            .when(closed, |body| {
+                body.child(self.t(Key::InventoryDocumentChanged))
+            })
+            .when_some(
+                reviewed_order.filter(|_| draft_order && form.needs_confirmation),
+                |body, reviewed| {
+                    body.child(
+                        div()
+                            .p_2()
+                            .bg(theme::panel())
+                            .child(format!(
+                                "#{} · {} · {}",
+                                reviewed.header.number,
+                                reviewed.header.supplier_name,
+                                self.t(order_status_key(reviewed.header.status))
+                            ))
+                            .children(reviewed.header.supplier_reference.clone())
+                            .children(reviewed.header.expected_on.clone())
+                            .children(reviewed.header.notes.clone())
+                            .children(reviewed.lines.iter().map(|line| {
+                                div().child(format!("{} · {}", line.name, line.quantity))
+                            })),
                     )
-                    .when(online && !busy && form.product_page.is_some(), |row| {
-                        row.child(self.document_pager(
-                            &form.product_page.as_ref().unwrap().pagination,
-                            Some(false),
-                            cx,
-                        ))
-                    }),
+                },
             )
             .children(form.lines.iter().map(|line| {
                 let id = line.id;
@@ -753,7 +892,16 @@ impl Root {
                     .border_b_1()
                     .border_color(theme::line())
                     .child(line.current.as_ref().map_or_else(
-                        || format!("{id} · {}", self.t(Key::InventoryDocumentMissing)),
+                        || {
+                            reviewed_order
+                                .and_then(|order| {
+                                    order.lines.iter().find(|item| item.product_id == id)
+                                })
+                                .map_or_else(
+                                    || format!("{id} · {}", self.t(Key::InventoryDocumentMissing)),
+                                    |item| format!("{} · {}", item.name, item.sku),
+                                )
+                        },
                         |row| {
                             format!(
                                 "{} · {} · {} {}",
@@ -764,8 +912,21 @@ impl Root {
                             )
                         },
                     ))
+                    .when_some(
+                        form.purchase_order.as_ref().and_then(|order| {
+                            order.lines.iter().find(|item| item.product_id == id)
+                        }),
+                        |row, item| {
+                            row.child(format!(
+                                "{} · {}: {}",
+                                item.name,
+                                self.t(Key::InventoryOrderRemaining),
+                                item.remaining()
+                            ))
+                        },
+                    )
                     .child(self.document_field(Key::InventoryReceiptQuantity, &line.quantity))
-                    .when(!busy, |row| {
+                    .when(!busy && !linked, |row| {
                         row.child(self.button(
                             SharedString::from(format!("receipt-remove-{id}")),
                             self.t(Key::InventoryReceiptRemoveLine),
@@ -802,7 +963,7 @@ impl Root {
                     ))
                 })
                 .when(
-                    !busy && form.needs_confirmation && form.generation.is_some(),
+                    !busy && !closed && form.needs_confirmation && form.generation.is_some(),
                     |row| {
                         row.child(self.button(
                             "receipt-approve-review",
@@ -814,18 +975,316 @@ impl Root {
                 )
                 .when(
                     !busy
+                        && !closed
                         && !form.needs_confirmation
                         && form.generation.is_some()
                         && !form.lines.is_empty(),
                     |row| {
                         row.child(self.button(
                             "receipt-save",
-                            self.t(Key::InventoryReceiptSave),
+                            self.t(if draft_order {
+                                Key::InventoryOrderSave
+                            } else {
+                                Key::InventoryReceiptSave
+                            }),
                             Kind::Primary,
                             cx.listener(|root, _, _, cx| root.save_inventory_document(false, cx)),
                         ))
                     },
                 ),
         )
+    }
+}
+
+impl Root {
+    fn render_order_list(
+        &self,
+        panel: &Panel,
+        online: bool,
+        busy: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let entries = match &panel.view {
+            Some(View::Orders(page)) => page.orders.as_slice(),
+            _ => &[],
+        };
+        let rows = entries.iter();
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .items_center()
+                    .child(div().flex_1().min_w(px(170.)).child(panel.search.clone()))
+                    .when(!busy, |row| {
+                        row.child(self.button(
+                            "order-search",
+                            self.t(Key::InventoryFind),
+                            Kind::Ghost,
+                            cx.listener(|root, _, _, cx| root.load_document_list(1, cx)),
+                        ))
+                    }),
+            )
+            .child(
+                div().flex().flex_wrap().gap_2().children(
+                    [
+                        None,
+                        Some(PurchaseOrderStatus::Draft),
+                        Some(PurchaseOrderStatus::Ordered),
+                        Some(PurchaseOrderStatus::PartiallyReceived),
+                        Some(PurchaseOrderStatus::Received),
+                        Some(PurchaseOrderStatus::Cancelled),
+                    ]
+                    .into_iter()
+                    .map(|status| {
+                        self.button(
+                            SharedString::from(format!("order-filter-{status:?}")),
+                            self.t(status.map_or(Key::InventoryOrderAll, order_status_key)),
+                            if status == panel.order_filter {
+                                Kind::Primary
+                            } else {
+                                Kind::Ghost
+                            },
+                            cx.listener(move |root, _, _, cx| {
+                                if let Some(panel) = root.document_panel()
+                                    && panel.request.is_none()
+                                {
+                                    panel.order_filter = status;
+                                    root.load_document_list(1, cx);
+                                }
+                            }),
+                        )
+                    }),
+                ),
+            )
+            .when(!busy && rows.clone().next().is_none(), |body| {
+                body.child(self.t(Key::InventoryOrderEmpty))
+            })
+            .children(rows.map(|order| {
+                let id = order.id;
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .justify_between()
+                    .items_center()
+                    .gap_2()
+                    .border_b_1()
+                    .border_color(theme::line())
+                    .py_2()
+                    .child(format!(
+                        "#{} · {} · {}",
+                        order.number,
+                        order.supplier_name,
+                        self.t(order_status_key(order.status))
+                    ))
+                    .when(
+                        !busy
+                            && (online
+                                || self
+                                    .svc
+                                    .store
+                                    .cached_purchase_order(id)
+                                    .ok()
+                                    .flatten()
+                                    .is_some()),
+                        |row| {
+                            row.child(self.button(
+                                SharedString::from(format!("order-{id}")),
+                                self.t(Key::InventoryOrderView),
+                                Kind::Ghost,
+                                cx.listener(move |root, _, _, cx| root.open_order(id, cx)),
+                            ))
+                        },
+                    )
+            }))
+            .when(!busy && panel.view.is_some(), |body| {
+                body.child(self.document_pager(panel.view.as_ref().unwrap().page(), None, cx))
+            })
+    }
+
+    fn render_order_detail(
+        &self,
+        panel: &Panel,
+        order: &PurchaseOrder,
+        writable: bool,
+        busy: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let status = order.header.status;
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(self.button(
+                "order-back",
+                self.t(Key::Back),
+                Kind::Ghost,
+                cx.listener(|root, _, _, cx| root.dismiss_overlay(cx)),
+            ))
+            .child(div().font_weight(FontWeight::SEMIBOLD).child(format!(
+                "#{} · {} · {}",
+                order.header.number,
+                order.header.supplier_name,
+                self.t(order_status_key(status))
+            )))
+            .children(order.header.expected_on.clone())
+            .children(order.header.supplier_reference.clone())
+            .children(order.header.notes.clone())
+            .children(order.lines.iter().map(|line| {
+                div()
+                    .p_2()
+                    .border_b_1()
+                    .border_color(theme::line())
+                    .child(format!("{} · {}", line.name, line.sku))
+                    .child(div().text_sm().child(format!(
+                        "{}: {} · {}: {} · {}: {}",
+                        self.t(Key::InventoryOrderRequested),
+                        line.quantity,
+                        self.t(Key::InventoryOrderDelivered),
+                        line.received_quantity,
+                        self.t(Key::InventoryOrderRemaining),
+                        if status == PurchaseOrderStatus::Cancelled {
+                            0
+                        } else {
+                            line.remaining()
+                        },
+                    )))
+            }))
+            .children(order.receipts.iter().map(|receipt| {
+                let id = receipt.id;
+                self.button(
+                    SharedString::from(format!("order-receipt-{id}")),
+                    format!(
+                        "{} #{} · {}",
+                        self.t(Key::InventoryReceipts),
+                        receipt.number,
+                        receipt.received_on
+                    ),
+                    Kind::Ghost,
+                    cx.listener(move |root, _, _, cx| root.open_linked_inventory_receipt(id, cx)),
+                )
+            }));
+        if !writable || busy {
+            return body;
+        }
+        if self
+            .svc
+            .store
+            .has_pending_purchase_order(order.header.id)
+            .unwrap_or(true)
+        {
+            return body.child(self.t(Key::InventoryOrderPending));
+        }
+        if let Some((_, proposal)) = &panel.order_conflict {
+            body = body.child(self.t(match proposal.action {
+                PurchaseOrderAction::Save(_) => Key::InventoryOrderEdit,
+                PurchaseOrderAction::Order => Key::InventoryOrderPlace,
+                PurchaseOrderAction::Cancel => Key::InventoryOrderCancel,
+            }));
+        }
+        if let Some((_, action)) = &panel.order_transition {
+            let cancel = matches!(action, PurchaseOrderAction::Cancel);
+            return body
+                .child(self.t(if cancel {
+                    Key::InventoryOrderCancelConfirm
+                } else {
+                    Key::InventoryOrderPlaceConfirm
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .child(self.button(
+                            "order-transition-back",
+                            self.t(Key::Back),
+                            Kind::Ghost,
+                            cx.listener(|root, _, _, cx| root.dismiss_overlay(cx)),
+                        ))
+                        .child(self.button(
+                            "order-transition-confirm",
+                            self.t(if cancel {
+                                Key::InventoryOrderCancel
+                            } else {
+                                Key::InventoryOrderPlace
+                            }),
+                            if cancel { Kind::Danger } else { Kind::Primary },
+                            cx.listener(|root, _, _, cx| root.confirm_order_transition(cx)),
+                        )),
+                );
+        }
+        let order_version = PurchaseOrderLink {
+            id: order.header.id,
+            version: order.header.version,
+        };
+        let action_at_issue = panel
+            .order_conflict
+            .as_ref()
+            .map(|(_, proposal)| &proposal.action);
+        if status == PurchaseOrderStatus::Draft && action_at_issue.is_none() {
+            let reviewed = order.clone();
+            body = body.child(self.button(
+                "order-edit",
+                self.t(Key::InventoryOrderEdit),
+                Kind::Ghost,
+                cx.listener(move |root, _, _, cx| root.edit_order(Some(reviewed.clone()), cx)),
+            ));
+            body = body.child(self.button(
+                "order-place",
+                self.t(Key::InventoryOrderPlace),
+                Kind::Primary,
+                cx.listener(move |root, _, _, cx| {
+                    if let Some(panel) = root.document_panel() {
+                        panel.order_transition = Some((order_version, PurchaseOrderAction::Order));
+                    }
+                    cx.notify();
+                }),
+            ));
+        }
+        if status == PurchaseOrderStatus::Draft
+            && matches!(action_at_issue, Some(PurchaseOrderAction::Order))
+        {
+            body = body.child(self.button(
+                "order-place-retry",
+                self.t(Key::InventoryOrderPlace),
+                Kind::Primary,
+                cx.listener(move |root, _, _, cx| {
+                    if let Some(panel) = root.document_panel() {
+                        panel.order_transition = Some((order_version, PurchaseOrderAction::Order));
+                    }
+                    cx.notify();
+                }),
+            ));
+        }
+        if status.allows_delivery() && action_at_issue.is_none() {
+            let reviewed = order.clone();
+            body = body.child(self.button(
+                "order-receive",
+                self.t(Key::InventoryOrderReceive),
+                Kind::Primary,
+                cx.listener(move |root, _, _, cx| root.start_order_delivery(reviewed.clone(), cx)),
+            ));
+        }
+        if status.allows_cancel()
+            && (action_at_issue.is_none()
+                || matches!(action_at_issue, Some(PurchaseOrderAction::Cancel)))
+        {
+            body = body.child(self.button(
+                "order-cancel",
+                self.t(Key::InventoryOrderCancel),
+                Kind::Ghost,
+                cx.listener(move |root, _, _, cx| {
+                    if let Some(panel) = root.document_panel() {
+                        panel.order_transition = Some((order_version, PurchaseOrderAction::Cancel));
+                    }
+                    cx.notify();
+                }),
+            ));
+        }
+        body
     }
 }

@@ -793,6 +793,14 @@ impl Root {
                             root.open_inventory_documents(documents::Tab::Receipts, cx)
                         }),
                     ))
+                    .child(self.button(
+                        "inventory-orders",
+                        self.t(Key::InventoryOrders),
+                        Kind::Ghost,
+                        cx.listener(|root, _, _, cx| {
+                            root.open_inventory_documents(documents::Tab::Orders, cx)
+                        }),
+                    ))
                     .when(self.svc.store.can_queue_product_edits(), |row| {
                         row.child(self.button(
                             "inventory-suppliers",

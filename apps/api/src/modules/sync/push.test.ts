@@ -76,8 +76,14 @@ test("native product creation and versioned editing preserve inventory and apply
   };
   const submit = async (operator: Actor, operation: typeof create | Record<string, unknown>) =>
     (await push(t, operator, [operation])).body.results[0];
-  expect((await pull(t, owner, { inventoryAccess: "1" })).viewerWriteInventory).toBe(true);
-  expect((await pull(t, ana, { inventoryAccess: "1" })).viewerWriteInventory).toBe(false);
+  expect(await pull(t, owner, { inventoryAccess: "1" })).toMatchObject({
+    viewerReadInventory: true,
+    viewerWriteInventory: true,
+  });
+  expect(await pull(t, ana, { inventoryAccess: "1" })).toMatchObject({
+    viewerReadInventory: true,
+    viewerWriteInventory: false,
+  });
   expect(await pull(t, owner)).not.toHaveProperty("viewerWriteInventory");
   expect(await submit(ana, { ...create, mutationId: mid() })).toMatchObject({
     status: "rejected",

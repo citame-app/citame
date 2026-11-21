@@ -5,12 +5,17 @@ use sob_core::inventory_documents::{
     Delivery, DeliveryLine, DeliveryReview, DeliveryReviewRequest, DocumentProposal, MAX_LINES,
     Receipt, ReceiptPage, ReviewedDocument, Supplier, SupplierFields, SupplierPage,
 };
+use sob_core::purchase_orders::{
+    PurchaseOrder, PurchaseOrderAction, PurchaseOrderFields, PurchaseOrderLink, PurchaseOrderPage,
+    PurchaseOrderProposal, PurchaseOrderStatus, RequestedProduct,
+};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Tab {
     Suppliers,
     Receipts,
+    Orders,
 }
 
 impl Tab {
@@ -18,6 +23,7 @@ impl Tab {
         match self {
             Self::Suppliers => Key::InventorySuppliers,
             Self::Receipts => Key::InventoryReceipts,
+            Self::Orders => Key::InventoryOrders,
         }
     }
 }
@@ -25,6 +31,7 @@ impl Tab {
 enum View {
     Suppliers(SupplierPage),
     Receipts(ReceiptPage),
+    Orders(PurchaseOrderPage),
 }
 
 impl View {
@@ -32,6 +39,7 @@ impl View {
         match self {
             Self::Suppliers(page) => &page.pagination,
             Self::Receipts(page) => &page.pagination,
+            Self::Orders(page) => &page.pagination,
         }
     }
 }
@@ -47,6 +55,12 @@ enum Request {
     Receipts(u32),
     Supplier(Uuid),
     Receipt(Uuid),
+    Orders {
+        search: String,
+        status: Option<PurchaseOrderStatus>,
+        page: u32,
+    },
+    Order(Uuid),
     Products(ProductQuery, u32),
     Product(Uuid),
     ReviewDelivery(DeliveryReviewRequest),
@@ -57,6 +71,8 @@ enum Response {
     Receipts(ReviewedDocument<ReceiptPage>),
     Supplier(ReviewedDocument<Option<Supplier>>),
     Receipt(Option<ReviewedDocument<Receipt>>),
+    Orders(PurchaseOrderPage),
+    Order(Uuid, Option<ReviewedDocument<PurchaseOrder>>),
     Products(ProductPage),
     Product(Box<Product>),
     Delivery(DeliveryReview),
@@ -76,6 +92,16 @@ impl Request {
             Self::Receipts(page) => api.inventory_receipts(page).map(Response::Receipts),
             Self::Supplier(id) => api.review_supplier(id).map(Response::Supplier),
             Self::Receipt(id) => api.inventory_receipt(id).map(Response::Receipt),
+            Self::Orders {
+                search,
+                status,
+                page,
+            } => api
+                .inventory_purchase_orders(&search, status, page)
+                .map(Response::Orders),
+            Self::Order(id) => api
+                .inventory_purchase_order(id)
+                .map(|row| Response::Order(id, row)),
             Self::Products(query, page) => {
                 api.inventory_products(&query, page).map(Response::Products)
             }
@@ -92,9 +118,13 @@ pub(super) struct Panel {
     tab: Tab,
     search: Entity<TextField>,
     supplier_filter: Option<bool>,
+    order_filter: Option<PurchaseOrderStatus>,
     page: u32,
     view: Option<View>,
     detail: Option<Receipt>,
+    order: Option<PurchaseOrder>,
+    order_conflict: Option<(String, PurchaseOrderProposal)>,
+    order_transition: Option<(PurchaseOrderLink, PurchaseOrderAction)>,
     editor: Option<Editor>,
     request: Option<Arc<()>>,
     notice: Option<Key>,
@@ -107,8 +137,8 @@ pub(super) struct Panel {
 }
 
 enum Editor {
-    Supplier(SupplierForm),
-    Receipt(ReceiptForm),
+    Supplier(Box<SupplierForm>),
+    Receipt(Box<ReceiptForm>),
 }
 
 struct SupplierForm {
@@ -157,13 +187,41 @@ struct ReceiptForm {
     lines: Vec<LineEdit>,
     conflict: Option<(String, Delivery)>,
     needs_confirmation: bool,
+    purchase_order: Option<PurchaseOrder>,
+    draft_order: Option<PurchaseOrderProposal>,
+    draft_conflict: Option<String>,
 }
 
 impl ReceiptForm {
     fn dirty(&self, cx: &App) -> bool {
+        if let Some(draft) = &self.draft_order
+            && let PurchaseOrderAction::Save(fields) = &draft.action
+        {
+            return self.draft_conflict.is_some()
+                || self.supplier_id.unwrap_or_default() != fields.supplier_id
+                || optional(&self.date, cx) != fields.expected_on
+                || optional(&self.invoice, cx) != fields.supplier_reference
+                || optional(&self.notes, cx) != fields.notes
+                || self.lines.len() != fields.lines.len()
+                || self
+                    .lines
+                    .iter()
+                    .zip(&fields.lines)
+                    .any(|(line, original)| {
+                        line.id != original.product_id
+                            || line.quantity.read(cx).text().trim().parse::<u32>().ok()
+                                != Some(original.quantity)
+                    });
+        }
+        let line_changed = if self.link().is_some() {
+            self.lines
+                .iter()
+                .any(|line| line.quantity.read(cx).text().trim() != "0")
+        } else {
+            !self.lines.is_empty() || self.supplier_id.is_some()
+        };
         self.conflict.is_some()
-            || !self.lines.is_empty()
-            || self.supplier_id.is_some()
+            || line_changed
             || self.date.read(cx).text() != self.default_date
             || optional(&self.invoice, cx).is_some()
             || optional(&self.notes, cx).is_some()
@@ -183,6 +241,9 @@ fn optional(field: &Entity<TextField>, cx: &App) -> Option<String> {
 
 impl Panel {
     pub(super) fn dismiss(&mut self, cx: &App) -> bool {
+        if self.order_transition.take().is_some() {
+            return false;
+        }
         if self.confirm_discard {
             self.confirm_discard = false;
             return false;
@@ -202,7 +263,11 @@ impl Panel {
         }
         self.request = None;
         self.notice = None;
-        if self.editor.take().is_some() || self.detail.take().is_some() {
+        if self.editor.take().is_some()
+            || self.detail.take().is_some()
+            || self.order.take().is_some()
+            || self.order_conflict.take().is_some()
+        {
             return false;
         }
         true
@@ -217,6 +282,11 @@ impl Panel {
                 picker: false,
             },
             Tab::Receipts => Request::Receipts(self.page),
+            Tab::Orders => Request::Orders {
+                search: self.search.read(cx).text().trim().into(),
+                status: self.order_filter,
+                page: self.page,
+            },
         }
     }
 }
@@ -229,10 +299,17 @@ impl Root {
         let Some(panel) = self.document_panel() else {
             return false;
         };
-        let leaving_detail = panel.detail.is_some() || panel.editor.is_some();
+        let leaving_detail = panel.detail.is_some()
+            || panel.editor.is_some()
+            || panel.order.is_some()
+            || panel.order_conflict.is_some();
         let close = panel.dismiss(cx);
         let page = panel.page;
-        let show_list = leaving_detail && panel.detail.is_none() && panel.editor.is_none();
+        let show_list = leaving_detail
+            && panel.detail.is_none()
+            && panel.editor.is_none()
+            && panel.order.is_none()
+            && panel.order_conflict.is_none();
         if close {
             if let Overlay::Inventory(desk) = &mut self.overlay {
                 desk.documents = None;
@@ -287,9 +364,13 @@ impl Root {
             tab,
             search: cx.new(|cx| TextField::new("", false, cx)),
             supplier_filter: None,
+            order_filter: None,
             page: 1,
             view: None,
             detail: None,
+            order: None,
+            order_conflict: None,
+            order_transition: None,
             editor: None,
             request: None,
             notice: None,
@@ -311,10 +392,33 @@ impl Root {
         if panel.request.is_some() {
             return;
         }
+        if panel.tab == Tab::Orders
+            && panel.search.read(cx).text().trim().encode_utf16().count() > 100
+        {
+            panel.notice = Some(Key::InventorySearchInvalid);
+            cx.notify();
+            return;
+        }
         panel.page = page;
         let request = panel.list_request(cx);
         if online {
             self.request_document(request, cx);
+        } else if let Request::Orders {
+            search,
+            status,
+            page,
+        } = request
+        {
+            let cached = self
+                .svc
+                .store
+                .cached_purchase_orders(&search, status, page)
+                .ok()
+                .flatten();
+            if let Some(panel) = self.document_panel() {
+                panel.view = cached.map(View::Orders);
+            }
+            cx.notify();
         } else if matches!(request, Request::Receipts(_)) {
             let restored = self.svc.store.cached_receipt_page(page).ok().flatten();
             if let Some(panel) = self.document_panel() {
@@ -332,6 +436,8 @@ impl Root {
         };
         panel.view = None;
         panel.detail = None;
+        panel.order = None;
+        panel.order_transition = None;
         panel.request = None;
         panel.revision = -1;
         panel.retry = None;
@@ -381,10 +487,28 @@ impl Root {
             panel.writable = writable;
             panel.view = None;
             panel.detail = None;
+            panel.order = None;
+            panel.order_transition = None;
             panel.revision = -1;
             if let Some(Editor::Receipt(form)) = &mut panel.editor {
                 form.supplier_page = None;
                 form.product_page = None;
+            }
+        }
+        if online
+            && panel.request.is_none()
+            && panel.editor.is_some()
+            && (reconnecting || panel.revision != revision)
+            && let Some(Editor::Receipt(form)) = &mut panel.editor
+        {
+            if form.link().is_some() {
+                form.generation = None;
+                self.review_document_draft(cx);
+                return true;
+            }
+            if form.draft_order.is_some() {
+                self.review_document_draft(cx);
+                return true;
             }
         }
         if online
@@ -397,7 +521,12 @@ impl Root {
                 ))
         {
             let request = panel.detail.as_ref().map_or_else(
-                || panel.list_request(cx),
+                || {
+                    panel.order.as_ref().map_or_else(
+                        || panel.list_request(cx),
+                        |order| Request::Order(order.header.id),
+                    )
+                },
                 |receipt| Request::Receipt(receipt.header.id),
             );
             self.request_document(request, cx);
@@ -472,6 +601,8 @@ impl Root {
                 if current_staff != staff {
                     panel.view = None;
                     panel.detail = None;
+                    panel.order = None;
+                    panel.order_transition = None;
                     panel.revision = -1;
                     cx.notify();
                     return;
@@ -489,6 +620,8 @@ impl Root {
                             ) {
                                 panel.view = None;
                                 panel.detail = None;
+                                panel.order = None;
+                                panel.order_transition = None;
                                 Key::InventoryRestricted
                             } else {
                                 if matches!(
@@ -540,6 +673,24 @@ impl Root {
                     .cache_receipt_page(&page.value, &page.generation);
                 if let Some(panel) = self.document_panel() {
                     panel.view = Some(View::Receipts(page.value));
+                }
+            }
+            Response::Orders(page) if valid(&page.generation) => {
+                let _ = self.svc.store.cache_purchase_order_page(&page);
+                if let Some(panel) = self.document_panel() {
+                    panel.view = Some(View::Orders(page));
+                }
+            }
+            Response::Order(id, Some(reviewed)) if valid(&reviewed.generation) => {
+                let _ = self
+                    .svc
+                    .store
+                    .cache_purchase_order(&reviewed.value, &reviewed.generation);
+                self.apply_order_review(id, Some(reviewed.value), &reviewed.generation, cx);
+            }
+            Response::Order(id, None) => {
+                if let Some(generation) = generation.as_deref() {
+                    self.apply_order_review(id, None, generation, cx);
                 }
             }
             Response::Receipt(Some(receipt)) if valid(&receipt.generation) => {
@@ -631,7 +782,7 @@ impl Root {
             return;
         };
         let fields = &supplier.fields;
-        panel.editor = Some(Editor::Supplier(SupplierForm {
+        panel.editor = Some(Editor::Supplier(Box::new(SupplierForm {
             name: cx.new(|cx| text_input(&fields.name, "", cx)),
             email: cx.new(|cx| text_input(fields.email.as_deref().unwrap_or(""), "", cx)),
             phone: cx.new(|cx| text_input(fields.phone.as_deref().unwrap_or(""), "", cx)),
@@ -643,7 +794,7 @@ impl Root {
             original: supplier,
             reviewed: None,
             confirm_archive: false,
-        }));
+        })));
         panel.request = None;
         panel.notice = None;
         cx.notify();
@@ -666,7 +817,7 @@ impl Root {
         let Some(panel) = self.document_panel() else {
             return;
         };
-        panel.editor = Some(Editor::Receipt(ReceiptForm {
+        panel.editor = Some(Editor::Receipt(Box::new(ReceiptForm {
             id: draft.map_or_else(Uuid::now_v7, |draft| draft.id),
             generation,
             date: cx.new(|cx| text_input(draft.map_or(&today, |draft| &draft.received_on), "", cx)),
@@ -705,7 +856,10 @@ impl Root {
             }),
             conflict,
             needs_confirmation: false,
-        }));
+            purchase_order: None,
+            draft_order: None,
+            draft_conflict: None,
+        })));
         panel.request = None;
         panel.notice = None;
         cx.notify();
@@ -725,8 +879,24 @@ impl Root {
                 self.prepare_inventory_documents(Tab::Suppliers, cx);
                 self.edit_inventory_supplier(supplier, Some(mutation.into()), cx);
             }
+            DocumentProposal::PurchaseOrder(draft) => {
+                self.prepare_inventory_documents(Tab::Orders, cx);
+                let id = draft.id;
+                if let Some(panel) = self.document_panel() {
+                    panel.order_conflict = Some((mutation.to_owned(), draft));
+                }
+                self.request_document(Request::Order(id), cx);
+            }
             DocumentProposal::Receipt(draft) => {
-                self.prepare_inventory_documents(Tab::Receipts, cx);
+                let link = draft.purchase_order;
+                self.prepare_inventory_documents(
+                    if link.is_some() {
+                        Tab::Orders
+                    } else {
+                        Tab::Receipts
+                    },
+                    cx,
+                );
                 self.edit_inventory_receipt(Some((mutation.into(), draft)), cx);
             }
         }
@@ -801,7 +971,11 @@ impl Root {
                     self.reload(cx);
                 }
             }
-            DeliveryReview::Current { products, supplier } => {
+            DeliveryReview::Current {
+                products,
+                supplier,
+                order,
+            } => {
                 let ids = self.document_panel().and_then(|panel| match &panel.editor {
                     Some(Editor::Receipt(form)) => {
                         Some(form.lines.iter().map(|line| line.id).collect::<Vec<_>>())
@@ -814,10 +988,21 @@ impl Root {
                         .cache_delivery_review(generation, &ids, &products, supplier.as_ref())
                         .is_ok()
                 });
+                let order =
+                    order.filter(|reviewed| Some(reviewed.generation.as_str()) == generation);
+                if let Some(reviewed) = &order {
+                    let _ = self
+                        .svc
+                        .store
+                        .cache_purchase_order(&reviewed.value, &reviewed.generation);
+                }
                 if let Some(panel) = self.document_panel()
                     && let Some(Editor::Receipt(form)) = &mut panel.editor
                 {
-                    if valid {
+                    if valid && (form.link().is_none() || order.is_some()) {
+                        if let Some(reviewed) = order {
+                            form.purchase_order = Some(reviewed.value);
+                        }
                         for (line, product) in form.lines.iter_mut().zip(products) {
                             line.current = product;
                         }
@@ -884,15 +1069,33 @@ impl Root {
                 else {
                     return;
                 };
+                if let Some(proposal) = &form.draft_order {
+                    let draft = proposal.clone();
+                    let replaces = form.draft_conflict.clone();
+                    if let Some(proposal) = form.order_proposal(draft, cx) {
+                        self.queue_order_proposal(proposal, &generation, replaces.as_deref(), cx);
+                    } else if let Some(panel) = self.document_panel() {
+                        panel.notice = Some(Key::InventoryDocumentInvalid);
+                        cx.notify();
+                    }
+                    return;
+                }
+                let link = form.link();
                 let lines = form
                     .lines
                     .iter()
+                    .filter(|line| link.is_none() || line.quantity.read(cx).text().trim() != "0")
                     .map(|line| {
                         let product = line
                             .current
                             .as_ref()
                             .ok_or_else(|| CoreError::Invalid("Missing review".into()))?;
-                        DeliveryLine::reviewed(product, line.quantity.read(cx).text(), &generation)
+                        DeliveryLine::reviewed_for_delivery(
+                            product,
+                            line.quantity.read(cx).text(),
+                            &generation,
+                            link.is_some(),
+                        )
                     })
                     .collect::<Result<Vec<_>, _>>();
                 let Ok(lines) = lines else {
@@ -908,6 +1111,7 @@ impl Root {
                     notes: optional(&form.notes, cx),
                     actor_user_id: actor,
                     lines,
+                    purchase_order: link,
                 };
                 (
                     DocumentProposal::Receipt(row),
@@ -997,10 +1201,17 @@ impl Root {
         };
         let request = match &panel.editor {
             Some(Editor::Supplier(form)) => Request::Supplier(form.original.id),
+            Some(Editor::Receipt(form)) if form.draft_order.is_some() => {
+                let Some(draft) = &form.draft_order else {
+                    return;
+                };
+                Request::Order(draft.id)
+            }
             Some(Editor::Receipt(form)) => Request::ReviewDelivery(DeliveryReviewRequest {
                 id: form.id,
                 supplier_id: form.supplier_id,
                 product_ids: form.lines.iter().map(|line| line.id).collect(),
+                purchase_order: form.link(),
             }),
             None => return,
         };
@@ -1030,6 +1241,7 @@ impl Root {
     }
 }
 
+mod orders;
 mod view;
 
 #[cfg(test)]
@@ -1076,6 +1288,79 @@ mod tests {
                 let rows = root.svc.store.pending_inventory_documents().unwrap();
                 assert_eq!(rows.len(), 1);
                 assert_eq!(rows[0].id(), id);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    async fn native_order_editor_queues_a_reviewed_offline_draft_without_recording_a_delivery(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, window) = crate::root::tests::open(cx);
+        window
+            .update(cx, |root, _, cx| {
+                let generation = root.svc.store.verified_reviewed_generation().unwrap();
+                root.svc
+                    .store
+                    .set_meta("inventory_write_access", &generation)
+                    .unwrap();
+                let mut supplier = Supplier::new();
+                supplier.version = 1;
+                supplier.fields.name = "Local supplier".into();
+                root.svc
+                    .store
+                    .cache_reviewed_supplier(&supplier, &generation)
+                    .unwrap();
+                let product: Product = serde_json::from_value(serde_json::json!({
+                    "id": Uuid::now_v7(), "name": "Synthetic stock", "sku": "ORDER-TEST",
+                    "stockOnHand": 3, "stockReserved": 1, "available": 2, "unitLabel": "pack",
+                    "priceCents": 1200, "currency": "EUR", "active": true, "version": 1,
+                    "canManage": true, "inventoryGeneration": generation,
+                }))
+                .unwrap();
+                root.svc.store.remember_reviewed_product(&product).unwrap();
+                root.open_inventory(cx);
+                root.open_inventory_documents(Tab::Orders, cx);
+                root.edit_order(None, cx);
+                let Some(Editor::Receipt(form)) = root
+                    .document_panel()
+                    .and_then(|panel| panel.editor.as_mut())
+                else {
+                    panic!("purchase order editor did not open");
+                };
+                assert!(!form.dirty(cx));
+                form.supplier_id = Some(supplier.id);
+                root.add_document_product(product.clone(), cx);
+                let Some(Editor::Receipt(form)) = root
+                    .document_panel()
+                    .and_then(|panel| panel.editor.as_mut())
+                else {
+                    panic!("purchase order editor closed");
+                };
+                form.lines[0]
+                    .quantity
+                    .update(cx, |field, cx| field.set_text("7", cx));
+                assert!(form.dirty(cx));
+                root.save_inventory_document(false, cx);
+                let proposals = root.svc.store.pending_inventory_documents().unwrap();
+                let [DocumentProposal::PurchaseOrder(proposal)] = proposals.as_slice() else {
+                    panic!("expected a draft order");
+                };
+                let PurchaseOrderAction::Save(fields) = &proposal.action else {
+                    panic!("expected a save");
+                };
+                assert_eq!(fields.supplier_id, supplier.id);
+                assert_eq!(
+                    fields.lines,
+                    vec![RequestedProduct {
+                        product_id: product.id,
+                        quantity: 7
+                    }]
+                );
+                assert_eq!(
+                    root.svc.store.reviewed_products().unwrap()[0].stock_on_hand,
+                    3
+                );
             })
             .unwrap();
     }

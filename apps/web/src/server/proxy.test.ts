@@ -91,6 +91,8 @@ describe("route mapping", () => {
       "/admin/inventory/facets",
       "/admin/inventory/suppliers?search=A%26B&page=2",
       "/admin/inventory/suppliers/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "/admin/inventory/orders?status=partially_received&page=2",
+      "/admin/inventory/orders/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
       "/admin/inventory/receipts?page=2",
       "/admin/inventory/receipts/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
       "/admin/inventory/products/report?lowStock=true",

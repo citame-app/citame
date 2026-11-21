@@ -4,6 +4,7 @@ import { calendarAppointmentSchema } from "./calendar";
 import { idSchema, instantSchema, LIMITS, localDateSchema, syncGenerationSchema } from "./common";
 import { dateShiftRangesSchema } from "./date-shifts";
 import { createProductSchema, productPhotoInputSchema, updateProductSchema } from "./inventory";
+import { purchaseOrderSyncPayloadSchema } from "./inventory-orders";
 import { stockReceiptInputSchema, supplierInputSchema } from "./inventory-receipts";
 import {
   resourceCreateSchema,
@@ -306,8 +307,14 @@ const stockReceipt = z.object({
   ...envelope,
   kind: z.literal("stock.receipt"),
   payload: stockReceiptInputSchema
-    .omit({ generation: true, idempotencyKey: true, purchaseOrder: true })
+    .omit({ generation: true, idempotencyKey: true })
     .extend({ id: idSchema }),
+});
+
+const purchaseOrderWrite = z.object({
+  ...envelope,
+  kind: z.literal("purchase_order.write"),
+  payload: purchaseOrderSyncPayloadSchema,
 });
 
 const staffUpdate = z.object({
@@ -352,6 +359,7 @@ export const syncMutationSchema = z.discriminatedUnion("kind", [
   productPhoto,
   supplierSave,
   stockReceipt,
+  purchaseOrderWrite,
   staffUpdate,
   settingsUpdate,
 ]);
@@ -602,6 +610,7 @@ export const syncPullResponseSchema = z.object({
   viewerRole: z.enum(["owner", "staff"]).optional(),
   viewerEditCatalogue: z.boolean().optional(),
   viewerWriteInventory: z.boolean().optional(),
+  viewerReadInventory: z.boolean().optional(),
   calendarScope: z.union([z.literal("none"), z.literal("all"), idSchema]).optional(),
 });
 export type SyncPullResponse = z.infer<typeof syncPullResponseSchema>;

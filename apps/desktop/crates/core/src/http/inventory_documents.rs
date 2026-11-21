@@ -3,6 +3,7 @@ use crate::inventory_documents::{
     DeliveryReview, DeliveryReviewRequest, Receipt, ReceiptPage, ReviewedDocument, Supplier,
     SupplierPage,
 };
+use crate::purchase_orders::{PurchaseOrder, PurchaseOrderPage, PurchaseOrderStatus};
 use url::form_urlencoded;
 use uuid::Uuid;
 
@@ -23,7 +24,15 @@ impl HttpTransport {
             .iter()
             .map(|id| self.lookup_inventory_product(*id))
             .collect::<Result<_, _>>()?;
-        Ok(DeliveryReview::Current { products, supplier })
+        let order = match draft.purchase_order {
+            Some(link) => self.inventory_purchase_order(link.id)?.map(Box::new),
+            None => None,
+        };
+        Ok(DeliveryReview::Current {
+            products,
+            supplier,
+            order,
+        })
     }
 
     pub fn review_supplier(
@@ -105,6 +114,46 @@ impl HttpTransport {
             &format!("/admin/inventory/receipts/{id}"),
             id,
             |row: &Receipt| row.header.id,
+        )
+    }
+
+    pub fn inventory_purchase_orders(
+        &self,
+        search: &str,
+        status: Option<PurchaseOrderStatus>,
+        page: u32,
+    ) -> Result<PurchaseOrderPage, TransportError> {
+        let mut query = form_urlencoded::Serializer::new(String::new());
+        query
+            .append_pair("search", search)
+            .append_pair("page", &page.to_string());
+        if let Some(status) = status {
+            query.append_pair("status", status.query_value());
+        }
+        let result: PurchaseOrderPage = read_response(
+            self.get(
+                &self.agent,
+                &format!("/admin/inventory/orders?{}", query.finish()),
+                None,
+            )?,
+            false,
+        )?;
+        if result.pagination.page != page {
+            return Err(TransportError::Server(
+                "Unexpected purchase order page".into(),
+            ));
+        }
+        Ok(result)
+    }
+
+    pub fn inventory_purchase_order(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<ReviewedDocument<PurchaseOrder>>, TransportError> {
+        self.read_inventory_document(
+            &format!("/admin/inventory/orders/{id}"),
+            id,
+            |row: &PurchaseOrder| row.header.id,
         )
     }
 

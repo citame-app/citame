@@ -410,6 +410,8 @@ pub struct PullResponse {
     pub combinations: Option<Vec<crate::combinations::ManagedCombination>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub viewer_write_inventory: Option<bool>,
+    #[serde(default)]
+    pub viewer_read_inventory: Option<bool>,
 }
 
 /// A mutation exactly as sent in `POST /sync/push`.
