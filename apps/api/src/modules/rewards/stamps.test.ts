@@ -220,6 +220,17 @@ test("bulk annulment is owner-only and keeps every reviewed card in the ledger",
     ).status,
   ).toBe(200);
   const active = await issue(other.clientId, 0);
+  const issuedClient = await actor(t, "client", "bulk-issued@stamps.test");
+  const issued = await issue(issuedClient.clientId, 2);
+  expect(
+    (
+      await call(owner, `${path}/cards/${issued.id}`, "POST", {
+        type: "issue_reward",
+        version: issued.version,
+        ...command(),
+      })
+    ).status,
+  ).toBe(200);
   const bulk = `${path}/bulk`;
   expect((await call(staff, `${bulk}/preview?scope=all`)).status).toBe(403);
   const review = async (scope: string) => {
@@ -233,8 +244,8 @@ test("bulk annulment is owner-only and keeps every reviewed card in the ledger",
   };
   const execute = (input: unknown) => call(owner, bulk, "POST", input);
   expect(await review("all")).toMatchObject({
-    total: 3,
-    counts: { active: 1, expired: 1, completed: 1, issued: 0 },
+    total: 4,
+    counts: { active: 1, expired: 1, completed: 1, issued: 1 },
   });
   const preview = await review("completed");
   const input = {
@@ -258,6 +269,9 @@ test("bulk annulment is owner-only and keeps every reviewed card in the ledger",
   ).toBe(200);
   expect((await execute(input)).status).toBe(409);
   const next = { ...input, reviewFingerprint: (await review("completed")).reviewFingerprint };
+  expect((await execute({ ...next, reason: "A reason with an invalid \0 character" })).status).toBe(
+    400,
+  );
   const first = await execute(next);
   expect(first.status).toBe(200);
   const receipt = await first.json();
@@ -279,7 +293,7 @@ test("bulk annulment is owner-only and keeps every reviewed card in the ledger",
     ).status,
   ).toBe(200);
   const rest = await review("all");
-  expect(rest.total).toBe(1);
+  expect(rest).toMatchObject({ total: 2, counts: { active: 1, issued: 1 } });
   expect(
     (
       await execute({
@@ -297,6 +311,7 @@ test("bulk annulment is owner-only and keeps every reviewed card in the ledger",
       expect.objectContaining({ id: used.id, state: "redeemed" }),
     ]),
   );
+  expect(await cards(issuedClient)).toMatchObject([{ id: issued.id, state: "void" }]);
   const previous = await call(owner, `${path}/clients/${fixtures.clientId}`);
   expect(await previous.json()).toMatchObject({ cards: [{ id: expired.id, state: "void" }] });
 });

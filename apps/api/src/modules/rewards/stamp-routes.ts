@@ -90,7 +90,7 @@ export function stampAdminRoutes(deps: AppDeps) {
       requireRole(principal, "owner");
       const input = parseOrThrow(stampBulkInputSchema, await readJson(c));
       ensureGeneration(input.generation, generation);
-      return c.json(await bulkVoidStampCards(db, principal, input, now()));
+      return c.json(await bulkVoidStampCards(db, principal, input, now));
     })
 
     .get("/program", async (c) => {

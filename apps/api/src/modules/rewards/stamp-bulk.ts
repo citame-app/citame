@@ -109,7 +109,7 @@ export async function bulkVoidStampCards(
   db: Database,
   principal: Principal,
   input: StampBulkInput,
-  now: Date,
+  clock: () => Date,
 ) {
   requireRole(principal, "owner");
   return db.transaction(async (tx) => {
@@ -137,6 +137,7 @@ export async function bulkVoidStampCards(
       return stampBulkResultSchema.parse(previous.metadata.receipt);
     }
 
+    const now = clock();
     const { review, cards } = await reviewIn(tx, principal, input.scope, input.generation, now);
     if (review.reviewFingerprint !== input.reviewFingerprint)
       throw new DomainError(

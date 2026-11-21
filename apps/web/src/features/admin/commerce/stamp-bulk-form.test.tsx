@@ -23,6 +23,8 @@ test("preview has no write effect and an uncertain request reuses the reviewed p
     packets.push(packet);
     if (packets.length === 1)
       return Response.json({ error: { code: "internal_error" } }, { status: 503 });
+    if (packets.length === 2)
+      return Response.json({ error: { code: "rate_limited" } }, { status: 429 });
     return Response.json({
       scope: packet.scope,
       generation: packet.generation,
@@ -42,9 +44,12 @@ test("preview has no write effect and an uncertain request reuses the reviewed p
   const retry = await screen.findByRole("button", { name: "Retry the same request" });
   expect(reason).toBeDisabled();
   fireEvent.click(retry);
+  await screen.findByText(/too many|rate limit/i);
+  fireEvent.click(screen.getByRole("button", { name: "Retry the same request" }));
   expect(await screen.findByText("Cards voided · 2")).toBeVisible();
-  expect(packets).toHaveLength(2);
+  expect(packets).toHaveLength(3);
   expect(packets[1]).toEqual(packets[0]);
+  expect(packets[2]).toEqual(packets[0]);
   expect(packets[0]).toMatchObject({
     scope: "expired",
     generation: "tested",

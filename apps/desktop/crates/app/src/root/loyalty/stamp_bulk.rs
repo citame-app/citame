@@ -213,9 +213,10 @@ impl Root {
                         desk.packet = None;
                         desk.feedback = Some(Key::StampBulkChanged);
                     }
-                    Err(TransportError::Forbidden(_) | TransportError::Unauthorized) => {
+                    Err(TransportError::Forbidden(_) | TransportError::Unauthorized)
+                        if desk.packet.is_none() =>
+                    {
                         desk.review = None;
-                        desk.packet = None;
                         desk.feedback = Some(Key::StampBulkUnavailable);
                     }
                     Err(error) => {

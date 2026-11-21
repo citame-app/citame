@@ -35,7 +35,17 @@ export function StampBulkForm() {
     },
   });
   const apply = useMutation({
-    mutationFn: (input: StampBulkInput) => api().rewards.voidStampBatch(input),
+    mutationFn: async (input: StampBulkInput) => {
+      const receipt = await api().rewards.voidStampBatch(input);
+      if (
+        receipt.idempotencyKey !== input.idempotencyKey ||
+        receipt.generation !== input.generation ||
+        receipt.scope !== input.scope ||
+        receipt.total !== review?.total
+      )
+        throw new Error("Unexpected stamp card batch acknowledgement");
+      return receipt;
+    },
     onSuccess: () => {
       setReview(undefined);
       setPacket(undefined);
@@ -43,7 +53,11 @@ export function StampBulkForm() {
       void queries.invalidateQueries({ queryKey: ["rewards", "stamps"] });
     },
     onError: (error) => {
-      if (error instanceof ApiError && error.status < 500 && error.status !== 408) {
+      if (
+        error instanceof ApiError &&
+        error.status < 500 &&
+        ![401, 403, 408, 429].includes(error.status)
+      ) {
         setPacket(undefined);
         if (error.status === 409) {
           setReview(undefined);

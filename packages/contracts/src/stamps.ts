@@ -183,7 +183,12 @@ export const stampBulkInputSchema = z
     ...command,
     scope: stampBulkScopeSchema,
     reviewFingerprint: stampBulkReviewSchema.shape.reviewFingerprint,
-    reason: z.string().trim().min(8).max(300),
+    reason: z
+      .string()
+      .trim()
+      .min(8)
+      .max(300)
+      .refine((value) => !value.includes("\0"), "Reason contains an invalid character"),
   })
   .strict();
 export type StampBulkInput = z.infer<typeof stampBulkInputSchema>;
