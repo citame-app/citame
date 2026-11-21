@@ -6,6 +6,7 @@ import {
   appointmentService,
   createDb,
   DEFAULT_DATABASE_URL,
+  dbOptionsFromEnv,
   resourcePool,
   resourceReservation,
   runMigrations,
@@ -20,7 +21,8 @@ import { operationalProbePrefix, pauseBooksyCopyBooking } from "./operational-co
 test("the native rehearsal can optionally move a resource-backed imported appointment", async () => {
   const name = `${operationalProbePrefix}${randomBytes(8).toString("hex")}`;
   const url = new URL(process.env.DATABASE_URL ?? DEFAULT_DATABASE_URL);
-  const admin = createDb(url.href);
+  // PostgreSQL may wait for a checkpoint while dropping a database under parallel test load.
+  const admin = createDb(url.href, { ...dbOptionsFromEnv(), statementTimeoutMs: 30_000 });
   const cache = await createTestValkey("booksy-operational-app");
   try {
     await admin.db.execute(sql`create database ${sql.identifier(name)}`);
@@ -123,4 +125,4 @@ test("the native rehearsal can optionally move a resource-backed imported appoin
   } finally {
     await Promise.all([admin.close(), cache.close()]);
   }
-}, 25_000);
+}, 50_000);
