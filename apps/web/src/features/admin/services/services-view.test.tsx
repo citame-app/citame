@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { type AdminService, listAdminServicesResponseSchema } from "@sob/contracts";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { createRef, type Ref, useImperativeHandle, useState } from "react";
 import { renderApp } from "../../../../test/render";
-import { ServicesView } from "./services-view";
+import { ServiceSheet, ServicesView } from "./services-view";
 
 const ANA = "0198f5a0-7b1c-7000-8000-000000000201";
 const BEA = "0198f5a0-7b1c-7000-8000-000000000202";
@@ -26,6 +28,30 @@ let calls: { method: string; path: string; body: unknown }[];
 let fail: { status: number; body: unknown } | null;
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+function ServiceEditorFixture({
+  service,
+  initial,
+  ref,
+}: {
+  service: AdminService;
+  initial: AdminService[];
+  ref: Ref<(rows: AdminService[]) => void>;
+}) {
+  const [catalogue, setCatalogue] = useState(initial);
+  useImperativeHandle(ref, () => setCatalogue, []);
+  return (
+    <ServiceSheet
+      service={service}
+      catalog={catalogue}
+      onClose={() => {}}
+      onSaved={() => {}}
+      onReload={async () => {}}
+      onRelated={() => {}}
+      onOpenRelated={() => {}}
+    />
+  );
+}
 
 test("service merchandising edits are included in the reviewed atomic submission", async () => {
   open();
@@ -296,28 +322,30 @@ describe("ServicesView", () => {
   });
 
   test("assignment refresh updates a clean team and preserves a busy editor's draft", async () => {
-    const { queryClient } = open();
-    const replaceTeam = (staffIds: string[], version: number) => {
-      services = services.map((row) => (row.id === CUT ? { ...row, staffIds, version } : row));
-      act(() => queryClient.setQueryData(["admin", "services"], services));
-    };
-    fireEvent.click(
-      within(await screen.findByRole("table", { name: "Services" })).getByRole("button", {
-        name: "Haircut",
-      }),
-    );
+    const { services: initial } = listAdminServicesResponseSchema.parse({ services });
+    const service = initial.find((row) => row.id === CUT);
+    if (!service) throw new Error("Missing fixture service");
+    const catalogue = createRef<(rows: AdminService[]) => void>();
+    function replaceTeam(staffIds: string[], version: number) {
+      const updated = listAdminServicesResponseSchema.parse({
+        services: initial.map((row) => (row.id === CUT ? { ...row, staffIds, version } : row)),
+      });
+      if (!catalogue.current) throw new Error("Missing catalogue fixture control");
+      act(() => catalogue.current?.(updated.services));
+    }
+    renderApp(<ServiceEditorFixture service={service} initial={initial} ref={catalogue} />);
     const dialog = within(await screen.findByRole("dialog", { name: "Edit service" }));
-    const ana = dialog.getByRole("checkbox", { name: "Ana" });
+    const ana = await dialog.findByRole("checkbox", { name: "Ana" });
     const bea = dialog.getByRole("checkbox", { name: "Bea" });
     const price = dialog.getByLabelText("Price");
     fireEvent.change(price, { target: { value: "16000" } });
     expect(bea).toBeChecked();
     replaceTeam([ANA], 2);
-    await waitFor(() => expect(bea).not.toBeChecked());
+    expect(dialog.getByRole("checkbox", { name: "Bea" })).not.toBeChecked();
     expect(price).toHaveValue("16000");
     fireEvent.click(ana);
     replaceTeam([ANA, BEA], 3);
-    await dialog.findByRole("status");
+    expect(dialog.getByRole("status")).toBeInTheDocument();
     const save = dialog.getByRole("button", { name: "Save changes" });
     expect(save).toBeDisabled();
     fireEvent.click(dialog.getByRole("button", { name: "Review updated assignments" }));

@@ -352,7 +352,7 @@ function withoutStaffRevision({
   return JSON.stringify({ ...fields, catalog: terms });
 }
 
-function ServiceSheet({
+export function ServiceSheet({
   service,
   onClose,
   onSaved,
