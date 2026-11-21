@@ -67,6 +67,28 @@ impl Desk {
         self.current = Some(current);
         self.must_reload = false;
     }
+
+    fn apply_response(
+        &mut self,
+        current: ClientControls,
+        saving: bool,
+        requested_revision: Option<u64>,
+        observed_revision: Option<u64>,
+        cx: &mut App,
+    ) -> bool {
+        if !saving && observed_revision.is_some_and(|version| current.version < version) {
+            if observed_revision != requested_revision {
+                // Retry the read that was overtaken by the replica without rebasing the draft.
+                return true;
+            }
+            self.must_reload = true;
+            self.message = Some(Key::ClientControlChanged);
+            return false;
+        }
+        self.apply_snapshot(current, !saving, cx);
+        self.message = saving.then_some(Key::ClientControlSaved);
+        false
+    }
 }
 
 impl Root {
@@ -224,19 +246,24 @@ impl Root {
                 };
                 desk.busy = false;
                 let observed_revision = mirrored_revision(&directory.clients, &desk.client_id);
-                let loaded = matches!(result, Ok(Some(_)));
-                desk.message = match result {
-                    Ok(Some(current)) => {
-                        let behind =
-                            observed_revision.is_some_and(|version| current.version < version);
-                        desk.apply_snapshot(current, !saving, cx);
-                        if behind && !saving && observed_revision == requested_revision {
-                            desk.must_reload = true;
-                            Some(Key::ClientControlChanged)
-                        } else {
-                            saving.then_some(Key::ClientControlSaved)
-                        }
+                if let Ok(Some(current)) = result {
+                    let retry = desk.apply_response(
+                        current,
+                        saving,
+                        requested_revision,
+                        observed_revision,
+                        cx,
+                    );
+                    cx.notify();
+                    if retry {
+                        root.request_client_controls(None, cx);
+                    } else {
+                        root.refresh_client_controls(cx);
                     }
+                    return;
+                }
+                desk.message = match result {
+                    Ok(Some(_)) => unreachable!(),
                     Ok(None) => {
                         desk.must_reload = true;
                         Some(Key::ClientControlChanged)
@@ -259,9 +286,6 @@ impl Root {
                     Err(_) => Some(Key::ClientControlUnavailable),
                 };
                 cx.notify();
-                if loaded {
-                    root.refresh_client_controls(cx);
-                }
             });
         })
         .detach();
@@ -502,6 +526,18 @@ mod tests {
                     directory.form.as_ref().unwrap().notes.read(cx).text(),
                     "Unsaved contact notes"
                 );
+
+                desk.apply_snapshot(snapshot(3, BookingAccess::Normal), false, cx);
+                desk.access = BookingAccess::Blocked;
+                desk.reason.update(cx, |field, cx| field.set_text("Keep this reason", cx));
+                assert!(desk.apply_response(snapshot(4, BookingAccess::Blocked), false, Some(3), Some(5), cx));
+                assert!(!desk.apply_response(snapshot(4, BookingAccess::Blocked), false, Some(5), Some(5), cx));
+                assert!(desk.must_reload);
+                assert_eq!(desk.current.as_ref().unwrap().version, 3);
+                assert!(!desk.apply_response(snapshot(5, BookingAccess::Trusted), false, Some(5), Some(5), cx));
+                let change = desk.change(cx).unwrap();
+                assert_eq!(change.booking_access, Some(BookingAccess::Blocked));
+                assert_eq!(change.reason.as_deref(), Some("Keep this reason"));
             })
             .unwrap();
     }
