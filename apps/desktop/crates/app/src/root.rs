@@ -383,6 +383,7 @@ pub struct Root {
     focus: gpui::FocusHandle,
     overlay: Overlay,
     pending_loyalty: Option<loyalty::Pending>,
+    pending_stamp: Option<loyalty::PendingStamp>,
     data_version: Option<i64>,
     notice_cursor: i64,
     notices: Vec<(Appointment, Instant)>,
@@ -469,6 +470,7 @@ impl Root {
             focus: cx.focus_handle(),
             overlay: Overlay::None,
             pending_loyalty: None,
+            pending_stamp: None,
             data_version: None,
             notice_cursor: 0,
             notices: vec![],
@@ -705,6 +707,7 @@ impl Root {
 
     fn sign_out(&mut self, cx: &mut Context<Self>) {
         self.pending_loyalty = None;
+        self.pending_stamp = None;
         if let Some(session) = self.svc.sign_out() {
             let auth = self.svc.auth.clone();
             cx.background_executor()

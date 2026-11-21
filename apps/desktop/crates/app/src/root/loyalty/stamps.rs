@@ -1,35 +1,81 @@
 use super::*;
-use sob_core::loyalty::stamps::{Appearance, Card, Cards, State};
+use sob_core::loyalty::stamps::{Appearance, Card, Cards, Operation, Reward, RewardKind, State};
 
 mod commands;
-use commands::{Form, Operation, can_issue};
+use commands::{Form, can_issue, operation_label};
+
+pub(in crate::root) struct PendingStamp {
+    session: sob_core::auth::SessionHandle,
+    form: Form,
+    resolving: bool,
+}
 
 #[derive(Default)]
 pub(super) struct CardList {
     pub(super) visible: bool,
     cards: Option<Cards>,
     form: Option<Form>,
-    saved: bool,
+    saved_generation: Option<String>,
 }
 
 impl Root {
+    pub(super) fn pending_stamp(&self) -> Option<&PendingStamp> {
+        self.pending_stamp
+            .as_ref()
+            .filter(|pending| Arc::ptr_eq(&pending.session, &self.svc.session))
+    }
+
     pub(super) fn show_stamp_cards(&mut self, cx: &mut Context<Self>) {
-        let Some(desk) = self.loyalty_desk().filter(|desk| desk.selected.is_some()) else {
+        let Some(client) = self
+            .loyalty_desk()
+            .and_then(|desk| desk.selected.as_ref().map(|(client, _)| *client))
+        else {
+            return;
+        };
+        let pending = if self
+            .pending_stamp()
+            .is_some_and(|pending| !pending.resolving && pending.form.client == client)
+        {
+            self.pending_stamp.take()
+        } else {
+            None
+        };
+        let Some(desk) = self.loyalty_desk() else {
             return;
         };
         desk.stamps.visible = true;
-        desk.error = None;
+        desk.stamps.form = pending.map(|pending| pending.form);
+        desk.error = desk.stamps.form.is_some().then_some(Key::StampUnconfirmed);
         self.load_stamp_cards(false, cx);
         cx.notify();
     }
 
     pub(super) fn hide_stamp_cards(&mut self, cx: &mut Context<Self>) {
-        if self.cancel_stamp_operation(cx) {
+        let session = self.svc.session.clone();
+        let Some(desk) = self.loyalty_desk().filter(|desk| !desk.saving) else {
+            return;
+        };
+        let unresolved = desk
+            .stamps
+            .form
+            .as_ref()
+            .is_some_and(|form| form.must_reconcile(desk.stamps.cards.as_ref()));
+        if !unresolved && self.cancel_stamp_operation(cx) {
             return;
         }
         let Some(desk) = self.loyalty_desk() else {
             return;
         };
+        let pending = desk
+            .stamps
+            .form
+            .take()
+            .filter(|_| unresolved)
+            .map(|form| PendingStamp {
+                session,
+                form,
+                resolving: false,
+            });
         desk.stamps = CardList::default();
         desk.request = None;
         desk.error = None;
@@ -37,6 +83,9 @@ impl Root {
             .statement
             .as_ref()
             .map_or(1, |statement| statement.pagination.page);
+        if let Some(pending) = pending {
+            self.pending_stamp = Some(pending);
+        }
         self.load_loyalty(page, false, cx);
         cx.notify();
     }
@@ -92,6 +141,15 @@ impl Root {
                 desk.refresh_at = Instant::now() + Duration::from_secs(10);
                 match result {
                     Ok(cards) => {
+                        if desk
+                            .stamps
+                            .saved_generation
+                            .as_ref()
+                            .is_some_and(|generation| generation != &cards.generation)
+                        {
+                            desk.stamps.saved_generation = None;
+                            desk.error = Some(Key::StampStale);
+                        }
                         desk.stamps.cards = Some(cards);
                         if desk.error == Some(Key::StampLoadFailed) {
                             desk.error = None;
@@ -110,7 +168,9 @@ impl Root {
                         {
                             desk.stamps.cards = None;
                         }
-                        desk.error = Some(Key::StampLoadFailed);
+                        if desk.error != Some(Key::StampUnconfirmed) {
+                            desk.error = Some(Key::StampLoadFailed);
+                        }
                     }
                 }
                 cx.notify();
@@ -126,7 +186,10 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let list = desk.stamps.cards.as_ref();
-        let can_act = ready && desk.request.is_none() && list.is_some_and(|list| list.can_edit);
+        let can_act = ready
+            && desk.request.is_none()
+            && self.pending_stamp().is_none()
+            && list.is_some_and(|list| list.can_edit);
         let body = div()
             .flex()
             .flex_col()
@@ -138,20 +201,26 @@ impl Root {
                     .justify_between()
                     .gap_2()
                     .child(self.label(Key::StampCards))
-                    .child(self.loyalty_button(
-                        "stamp-cards-back",
-                        Key::Back,
-                        Kind::Ghost,
-                        Root::hide_stamp_cards,
-                        cx,
-                    )),
+                    .child(
+                        self.loyalty_button(
+                            "stamp-cards-back",
+                            Key::Back,
+                            Kind::Ghost,
+                            Root::hide_stamp_cards,
+                            cx,
+                        )
+                        .debug_selector(|| "stamp-cards-back".to_owned()),
+                    ),
             )
             .when_some(desk.selected.as_ref(), |body, (_, name)| {
                 body.child(div().font_weight(FontWeight::SEMIBOLD).child(name.clone()))
             })
-            .when(desk.stamps.saved, |body| {
-                body.child(self.t(Key::StampSaved))
-            });
+            .when(
+                list.is_some_and(|list| {
+                    desk.stamps.saved_generation.as_ref() == Some(&list.generation)
+                }),
+                |body| body.child(self.t(Key::StampSaved)),
+            );
         if let Some(form) = &desk.stamps.form {
             return body.child(self.render_stamp_command(form, desk, ready, cx));
         }
@@ -166,13 +235,16 @@ impl Root {
         })
         .when_some(list, |body, list| {
             body.when(can_act && can_issue(list), |body| {
-                body.child(self.loyalty_button(
-                    "stamp-issue",
-                    Key::StampIssue,
-                    Kind::Primary,
-                    |root, cx| root.select_stamp_operation(Operation::Issue, None, cx),
-                    cx,
-                ))
+                body.child(
+                    self.loyalty_button(
+                        "stamp-issue",
+                        Key::StampIssue,
+                        Kind::Primary,
+                        |root, cx| root.select_stamp_operation(Operation::Issue, None, cx),
+                        cx,
+                    )
+                    .debug_selector(|| "stamp-issue".to_owned()),
+                )
             })
             .when(list.cards.is_empty(), |body| {
                 body.child(self.t(Key::StampEmpty))
@@ -184,6 +256,25 @@ impl Root {
                     .collect::<Vec<_>>(),
             )
         })
+    }
+
+    fn render_stamp_reward(&self, reward: &Reward) -> gpui::Div {
+        let kind = match reward.kind {
+            RewardKind::Service => Key::StampServiceReward,
+            RewardKind::Product => Key::StampProductReward,
+            RewardKind::Other => Key::StampOtherReward,
+        };
+        div()
+            .flex()
+            .flex_wrap()
+            .gap_1()
+            .child(format!("{} · {}", self.t(kind), reward.name))
+            .when_some(reward.discount_basis_points, |body, discount| {
+                body.child(self.t(Key::StampDiscount).replace(
+                    "{discount}",
+                    &sob_core::reports::decimal_amount(u64::from(discount)),
+                ))
+            })
     }
 
     fn render_stamp_card(
@@ -258,16 +349,7 @@ impl Root {
                             })
                     })),
             )
-            .child(card.program.reward.name.clone())
-            .when_some(
-                card.program.reward.discount_basis_points,
-                |body, discount| {
-                    body.child(self.t(Key::StampDiscount).replace(
-                        "{discount}",
-                        &sob_core::reports::decimal_amount(u64::from(discount)),
-                    ))
-                },
-            )
+            .child(self.render_stamp_reward(&card.program.reward))
             .when_some(expiry, |body, expiry| {
                 let day = (expiry - chrono::Duration::milliseconds(1))
                     .with_timezone(&self.tz)
@@ -290,7 +372,7 @@ impl Root {
                 .map(|(index, operation)| {
                     self.loyalty_button(
                         SharedString::from(format!("stamp-operation-{id}-{index}")),
-                        operation.label(),
+                        operation_label(operation),
                         Kind::Ghost,
                         move |root, cx| root.select_stamp_operation(operation, Some(id), cx),
                         cx,
@@ -338,7 +420,7 @@ mod tests {
                         "generation":"fixture", "programVersion":2, "canEdit":false, "cards":[],
                         "program":{
                             "enabled":true, "welcomeStamps":1, "name":"Fixture card", "goal":3,
-                            "appearance":"mint", "terms":"", "reward":{"name":"Treatment"}
+                            "appearance":"mint", "terms":"", "reward":{"name":"Treatment","kind":"service"}
                         }
                     }))
                     .unwrap(),
@@ -349,8 +431,10 @@ mod tests {
         });
         cx.simulate_resize(gpui::size(px(1100.), px(720.)));
         cx.run_until_parked();
+        assert!(cx.debug_bounds("stamp-cards-back").is_some());
         assert!(cx.debug_bounds("stamp-issue").is_none());
         root.update(cx, |root, cx| {
+            root.status.connectivity = Connectivity::Online;
             root.loyalty_desk()
                 .unwrap()
                 .stamps
@@ -380,7 +464,34 @@ mod tests {
             cx.notify();
         });
         cx.run_until_parked();
-        assert!(cx.debug_bounds("stamp-confirm-action").is_none());
+        root.update(cx, |root, cx| {
+            root.confirm_stamp_operation(cx);
+            let desk = root.loyalty_desk().unwrap();
+            let form = desk.stamps.form.as_ref().unwrap();
+            assert!(!form.valid_source(desk.stamps.cards.as_ref().unwrap()));
+            assert!(!desk.saving);
+        });
         assert!(cx.debug_bounds("stamp-cancel-action").is_some());
+        root.update(cx, |root, cx| {
+            let desk = root.loyalty_desk().unwrap();
+            desk.stamps.cards.as_mut().unwrap().generation = "fixture".into();
+            desk.stamps.form.as_mut().unwrap().uncertain = true;
+            root.status.connectivity = Connectivity::Offline;
+            root.hide_stamp_cards(cx);
+            assert!(root.pending_stamp().is_some());
+            assert!(!root.loyalty_desk().unwrap().stamps.visible);
+
+            root.show_stamp_cards(cx);
+            assert!(root.pending_stamp().is_none());
+            assert!(
+                root.loyalty_desk()
+                    .unwrap()
+                    .stamps
+                    .form
+                    .as_ref()
+                    .unwrap()
+                    .must_reconcile(None)
+            );
+        });
     }
 }

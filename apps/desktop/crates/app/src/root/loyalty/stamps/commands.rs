@@ -1,47 +1,21 @@
 use super::*;
-use sob_core::loyalty::stamps::{Action, Change, Command, Issue};
+use sob_core::loyalty::stamps::{Command, Draft, Operation, Reward, expiry_date};
 use std::sync::Arc;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Operation {
-    Issue,
-    Edit,
-    IssueReward,
-    Redeem,
-    Void,
-}
-
-impl Operation {
-    pub(super) fn label(self) -> Key {
-        match self {
-            Self::Issue => Key::StampIssue,
-            Self::Edit => Key::StampEdit,
-            Self::IssueReward => Key::StampIssueReward,
-            Self::Redeem => Key::StampRedeem,
-            Self::Void => Key::StampCancelCard,
-        }
-    }
-
-    pub(super) fn can_apply(self, card: &Card) -> bool {
-        match self {
-            Self::Issue => false,
-            Self::Edit => {
-                card.reward_issued_at.is_none()
-                    && matches!(
-                        card.state,
-                        State::Active | State::Queued | State::Completed | State::Expired
-                    )
-            }
-            Self::IssueReward => card.state == State::Completed && !card.needs_review,
-            Self::Redeem => card.state == State::Issued && !card.needs_review,
-            Self::Void => !matches!(card.state, State::Void | State::Redeemed),
-        }
+pub(super) fn operation_label(operation: Operation) -> Key {
+    match operation {
+        Operation::Issue => Key::StampIssue,
+        Operation::Edit => Key::StampEdit,
+        Operation::IssueReward => Key::StampIssueReward,
+        Operation::Redeem => Key::StampRedeem,
+        Operation::Void => Key::StampCancelCard,
     }
 }
 
+#[derive(Clone)]
 pub(super) struct Form {
     operation: Operation,
-    client: Uuid,
+    pub(super) client: Uuid,
     card: Option<Card>,
     generation: String,
     program_version: u32,
@@ -50,97 +24,32 @@ pub(super) struct Form {
     stamps: Entity<TextField>,
     expiry: Entity<TextField>,
     reason: Entity<TextField>,
-    original_day: String,
+    reward: Reward,
     command: Option<Command>,
-    uncertain: bool,
-}
-
-fn expiry_date(value: DateTime<Utc>, tz: Tz) -> String {
-    (value - chrono::Duration::milliseconds(1))
-        .with_timezone(&tz)
-        .format("%Y-%m-%d")
-        .to_string()
-}
-
-fn end_of_day(value: &str, tz: Tz) -> Option<DateTime<Utc>> {
-    let day = NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()?;
-    let midnight = day.succ_opt()?.and_hms_opt(0, 0, 0)?;
-    // Choose the earlier boundary if midnight occurs twice.
-    tz.from_local_datetime(&midnight)
-        .earliest()
-        .map(|value| value.with_timezone(&Utc))
+    pub(super) uncertain: bool,
 }
 
 impl Form {
-    fn show_count(&self) -> bool {
-        matches!(self.operation, Operation::Issue | Operation::Edit)
-    }
-
-    fn show_reason(&self) -> bool {
-        matches!(self.operation, Operation::Edit | Operation::Void)
-    }
-
     fn prepare(&self, tz: Tz, cx: &App) -> Option<Command> {
-        let generation = self.generation.clone();
-        let idempotency_key = Uuid::now_v7();
-        let stamps = if self.show_count() {
-            let raw = self.stamps.read(cx).text().trim();
-            if !raw.bytes().all(|digit| digit.is_ascii_digit()) {
-                return None;
-            }
-            raw.parse::<u32>()
-                .ok()
-                .filter(|count| *count <= self.goal)?
-        } else {
-            0
-        };
-        let expiry = self.expiry.read(cx).text().trim();
-        let expires_at = if expiry.is_empty() {
-            None
-        } else if expiry == self.original_day {
-            self.card.as_ref().and_then(|card| card.stamp_expires_at)
-        } else {
-            Some(end_of_day(expiry, tz)?)
-        };
-        let reason = self.reason.read(cx).text().trim();
-        if self.show_reason() && !(8..=300).contains(&reason.encode_utf16().count()) {
-            return None;
+        Draft {
+            operation: self.operation,
+            client: self.client,
+            card: self.card.as_ref(),
+            generation: &self.generation,
+            program_version: self.program_version,
+            goal: self.goal,
+            stamps: self.stamps.read(cx).text(),
+            expiry: self.expiry.read(cx).text(),
+            reason: self.reason.read(cx).text(),
         }
-        let Some(card) = &self.card else {
-            return Some(Command::Issue(Issue {
-                generation,
-                idempotency_key,
-                client_id: self.client,
-                program_version: self.program_version,
-                initial_stamps: stamps,
-                expires_at,
-            }));
-        };
-        let action = match self.operation {
-            Operation::Issue => return None,
-            Operation::Edit => Action::Edit {
-                stamps,
-                expires_at,
-                reason: reason.to_owned(),
-            },
-            Operation::IssueReward => Action::IssueReward,
-            Operation::Redeem => Action::Redeem,
-            Operation::Void => Action::Void {
-                reason: reason.to_owned(),
-            },
-        };
-        Some(Command::Change(
-            card.id,
-            Change {
-                generation,
-                idempotency_key,
-                version: card.version,
-                action,
-            },
-        ))
+        .prepare(tz)
     }
 
-    fn valid_source(&self, list: &Cards) -> bool {
+    pub(super) fn must_reconcile(&self, cards: Option<&Cards>) -> bool {
+        self.uncertain && !cards.is_some_and(|cards| cards.generation != self.generation)
+    }
+
+    pub(super) fn valid_source(&self, list: &Cards) -> bool {
         list.can_edit
             && list.generation == self.generation
             && (self.uncertain
@@ -170,6 +79,9 @@ impl Root {
         id: Option<Uuid>,
         cx: &mut Context<Self>,
     ) {
+        if self.pending_stamp().is_some() {
+            return;
+        }
         let tz = self.tz;
         let Some(desk) = self
             .loyalty_desk()
@@ -212,7 +124,7 @@ impl Root {
             field
         });
         let expiry = cx.new(|cx| {
-            let mut field = TextField::new("AAAA-MM-DD / YYYY-MM-DD", false, cx);
+            let mut field = TextField::new("", false, cx);
             field.set_text(&original_day, cx);
             field
         });
@@ -226,13 +138,13 @@ impl Root {
             stamps,
             expiry,
             reason: cx.new(|cx| TextField::new("", false, cx)),
+            reward: program.reward.clone(),
             card,
-            original_day,
             command: None,
             uncertain: false,
         });
         desk.error = None;
-        desk.stamps.saved = false;
+        desk.stamps.saved_generation = None;
         cx.notify();
     }
 
@@ -240,13 +152,19 @@ impl Root {
         let Some(desk) = self.loyalty_desk() else {
             return false;
         };
-        if desk.saving || desk.stamps.form.as_ref().is_some_and(|form| form.uncertain) {
+        if desk.saving
+            || desk
+                .stamps
+                .form
+                .as_ref()
+                .is_some_and(|form| form.must_reconcile(desk.stamps.cards.as_ref()))
+        {
             return true;
         }
         let Some(form) = desk.stamps.form.as_mut() else {
             return false;
         };
-        if form.command.take().is_none() {
+        if form.command.take().is_none() || form.uncertain {
             desk.stamps.form = None;
         }
         desk.error = None;
@@ -271,27 +189,15 @@ impl Root {
         cx.notify();
     }
 
-    fn acknowledge_stamp_operation(&mut self, cx: &mut Context<Self>) {
-        let Some(desk) = self
-            .loyalty_desk()
-            .filter(|desk| !desk.saving && desk.request.is_none())
-        else {
-            return;
-        };
-        if desk.stamps.form.as_ref().is_some_and(|form| form.uncertain) {
-            desk.stamps.form = None;
-            desk.error = None;
-            self.load_stamp_cards(false, cx);
-            cx.notify();
-        }
-    }
-
-    fn confirm_stamp_operation(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn confirm_stamp_operation(&mut self, cx: &mut Context<Self>) {
         let Some(transport) = self.svc.transport().filter(|_| {
             self.status.connectivity == Connectivity::Online && self.directory_enabled()
         }) else {
             return;
         };
+        if self.pending_stamp().is_some() {
+            return;
+        }
         let session = self.svc.session.clone();
         let Some(desk) = self
             .loyalty_desk()
@@ -307,8 +213,15 @@ impl Root {
             return;
         };
         let identity = desk.identity.clone();
+        let generation = form.generation.clone();
+        let pending = PendingStamp {
+            session: session.clone(),
+            form: form.clone(),
+            resolving: true,
+        };
         desk.saving = true;
         desk.error = None;
+        self.pending_stamp = Some(pending);
         cx.notify();
         cx.spawn(async move |root, cx| {
             let result = cx
@@ -316,39 +229,51 @@ impl Root {
                 .spawn(async move { transport.change_stamp_card(&command) })
                 .await;
             let _ = root.update(cx, |root, cx| {
-                if !Arc::ptr_eq(&session, &root.svc.session)
-                    || root.svc.current_session().is_none()
-                    || !root.directory_enabled()
+                if !Arc::ptr_eq(&session, &root.svc.session) || root.svc.current_session().is_none()
                 {
                     return;
                 }
-                let Some(desk) = root
-                    .loyalty_desk()
-                    .filter(|desk| Arc::ptr_eq(&identity, &desk.identity))
-                else {
+                let pending = root.pending_stamp.take();
+                let unknown = matches!(
+                    result,
+                    Err(TransportError::Offline(_) | TransportError::Server(_))
+                );
+                if !root.directory_enabled()
+                    || !root
+                        .loyalty_desk()
+                        .is_some_and(|desk| Arc::ptr_eq(&identity, &desk.identity))
+                {
+                    if let Some(mut pending) = pending
+                        .filter(|pending| result.is_err() && (pending.form.uncertain || unknown))
+                    {
+                        pending.form.uncertain = true;
+                        pending.resolving = false;
+                        root.pending_stamp = Some(pending);
+                    }
+                    cx.notify();
+                    return;
+                }
+                let Some(desk) = root.loyalty_desk() else {
                     return;
                 };
                 desk.saving = false;
                 match result {
                     Ok(_) => {
                         desk.stamps.form = None;
-                        desk.stamps.saved = true;
+                        desk.stamps.saved_generation = Some(generation);
                         desk.stamps.cards = None;
                         root.load_stamp_cards(false, cx);
                     }
                     Err(error) => {
                         desk.delay_retry(&error);
-                        let unknown = matches!(
-                            error,
-                            TransportError::Offline(_) | TransportError::Server(_)
-                        );
-                        if let Some(form) = &mut desk.stamps.form {
+                        let unresolved = desk.stamps.form.as_mut().is_some_and(|form| {
                             form.uncertain |= unknown;
                             if !form.uncertain {
                                 form.command = None;
                             }
-                        }
-                        desk.error = Some(if unknown {
+                            form.uncertain
+                        });
+                        desk.error = Some(if unresolved {
                             Key::StampUnconfirmed
                         } else {
                             Key::StampRejected
@@ -379,83 +304,96 @@ impl Root {
             .flex()
             .flex_col()
             .gap_2()
-            .child(self.label(form.operation.label()))
-            .child(form.name.clone());
+            .child(self.label(operation_label(form.operation)))
+            .child(form.name.clone())
+            .child(self.render_stamp_reward(&form.reward));
         if form.command.is_some() {
-            if form.show_count() {
+            if form.operation.show_count() {
                 body = body.child(format!(
                     "{} · {}",
                     self.t(Key::StampCount),
                     form.stamps.read(cx).text()
                 ));
-                if !form.expiry.read(cx).text().trim().is_empty() {
-                    body = body.child(
-                        self.t(Key::StampExpiry)
-                            .replace("{date}", form.expiry.read(cx).text()),
-                    );
-                }
+                let expiry = form.expiry.read(cx).text().trim();
+                body = body.child(if !expiry.is_empty() {
+                    self.t(Key::StampExpiry).replace("{date}", expiry)
+                } else {
+                    self.t(if form.operation == Operation::Issue {
+                        Key::StampDefaultExpiry
+                    } else {
+                        Key::StampNoExpiry
+                    })
+                    .to_owned()
+                });
             }
-            if form.show_reason() {
+            if form.operation.show_reason() {
                 body = body.child(form.reason.read(cx).text().to_owned());
             }
             body = body.when(ready_to_write, |body| {
-                body.child(self.loyalty_button(
-                    "stamp-confirm-action",
-                    if form.uncertain {
-                        Key::MarketingRetry
-                    } else {
-                        Key::MarketingConfirm
-                    },
-                    Kind::Primary,
-                    Root::confirm_stamp_operation,
-                    cx,
-                ))
+                body.child(
+                    self.loyalty_button(
+                        "stamp-confirm-action",
+                        if form.uncertain {
+                            Key::MarketingRetry
+                        } else {
+                            Key::MarketingConfirm
+                        },
+                        Kind::Primary,
+                        Root::confirm_stamp_operation,
+                        cx,
+                    )
+                    .debug_selector(|| "stamp-confirm-action".to_owned()),
+                )
             });
         } else {
             body = body
-                .when(form.show_count(), |body| {
+                .when(form.operation.show_count(), |body| {
                     body.child(self.label(Key::StampCount))
                         .child(form.stamps.clone())
                         .child(self.label(Key::StampExpiryInput))
                         .child(form.expiry.clone())
+                        .child(self.t(if form.operation == Operation::Issue {
+                            Key::StampDefaultExpiry
+                        } else {
+                            Key::StampNoExpiry
+                        }))
                 })
-                .when(form.show_reason(), |body| {
+                .when(form.operation.show_reason(), |body| {
                     body.child(self.label(Key::LoyaltyReason))
                         .child(form.reason.clone())
                 })
                 .when(ready_to_write, |body| {
-                    body.child(self.loyalty_button(
-                        "stamp-review-action",
-                        Key::StampReviewAction,
-                        Kind::Primary,
-                        Root::review_stamp_operation,
-                        cx,
-                    ))
+                    body.child(
+                        self.loyalty_button(
+                            "stamp-review-action",
+                            Key::StampReviewAction,
+                            Kind::Primary,
+                            Root::review_stamp_operation,
+                            cx,
+                        )
+                        .debug_selector(|| "stamp-review-action".to_owned()),
+                    )
                 });
         }
         body.when(!valid && desk.stamps.cards.is_some(), |body| {
             body.child(self.t(Key::StampStale))
         })
-        .when(!desk.saving, |body| {
-            if form.uncertain {
-                body.child(self.loyalty_button(
-                    "stamp-acknowledge",
-                    Key::StampReconcile,
-                    Kind::Ghost,
-                    Root::acknowledge_stamp_operation,
-                    cx,
-                ))
-            } else {
-                body.child(self.loyalty_button(
-                    "stamp-cancel-action",
-                    Key::Back,
-                    Kind::Ghost,
-                    |root, cx| {
-                        root.cancel_stamp_operation(cx);
-                    },
-                    cx,
-                ))
-            }
-        })
+        .when(
+            !desk.saving && !form.must_reconcile(desk.stamps.cards.as_ref()),
+            |body| {
+                body.child(
+                    self.loyalty_button(
+                        "stamp-cancel-action",
+                        Key::Back,
+                        Kind::Ghost,
+                        |root, cx| {
+                            root.cancel_stamp_operation(cx);
+                        },
+                        cx,
+                    )
+                    .debug_selector(|| "stamp-cancel-action".to_owned()),
+                )
+            },
+        )
     }
 }

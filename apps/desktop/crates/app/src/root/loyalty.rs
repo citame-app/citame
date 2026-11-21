@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 mod policy;
 mod stamps;
+pub(super) use stamps::PendingStamp;
 
 pub(super) struct Pending {
     session: sob_core::auth::SessionHandle,
@@ -716,6 +717,9 @@ impl Root {
                 self.pending_loyalty().is_some() && desk.adjustment.is_none(),
                 |body| body.child(self.t(Key::LoyaltyPending)),
             )
+            .when(self.pending_stamp().is_some(), |body| {
+                body.child(self.t(Key::StampPending))
+            })
             .when(!online, |body| {
                 body.child(self.t(if desk.stamps.visible {
                     Key::StampOffline

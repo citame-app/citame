@@ -1533,7 +1533,7 @@ fn stamp_card_transport_reads_access_and_reuses_the_exact_reviewed_command() {
     let program = serde_json::json!({
         "enabled": true, "name": "Treatment stamps", "goal": 3, "welcomeStamps": 1,
         "appearance": "rose", "terms": "Eligible treatment visits", "reward": {
-            "name": "Manicure", "discountBasisPoints": 2500
+            "name": "Manicure", "kind": "service", "discountBasisPoints": 2500
         }
     });
     let card = serde_json::json!({

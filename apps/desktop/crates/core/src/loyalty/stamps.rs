@@ -1,4 +1,5 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -43,6 +44,7 @@ pub struct Terms {
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Reward {
+    pub kind: RewardKind,
     pub name: String,
     pub discount_basis_points: Option<u32>,
 }
@@ -112,4 +114,140 @@ pub enum Action {
 pub enum Command {
     Issue(Issue),
     Change(Uuid, Change),
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RewardKind {
+    Service,
+    Product,
+    Other,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Operation {
+    Issue,
+    Edit,
+    IssueReward,
+    Redeem,
+    Void,
+}
+
+impl Operation {
+    pub fn show_count(self) -> bool {
+        matches!(self, Self::Issue | Self::Edit)
+    }
+
+    pub fn show_reason(self) -> bool {
+        matches!(self, Self::Edit | Self::Void)
+    }
+
+    pub fn can_apply(self, card: &Card) -> bool {
+        match self {
+            Self::Issue => false,
+            Self::Edit => {
+                card.reward_issued_at.is_none()
+                    && matches!(
+                        card.state,
+                        State::Active | State::Queued | State::Completed | State::Expired
+                    )
+            }
+            Self::IssueReward => card.state == State::Completed && !card.needs_review,
+            Self::Redeem => card.state == State::Issued && !card.needs_review,
+            Self::Void => !matches!(card.state, State::Void | State::Redeemed),
+        }
+    }
+}
+
+pub struct Draft<'a> {
+    pub operation: Operation,
+    pub client: Uuid,
+    pub card: Option<&'a Card>,
+    pub generation: &'a str,
+    pub program_version: u32,
+    pub goal: u32,
+    pub stamps: &'a str,
+    pub expiry: &'a str,
+    pub reason: &'a str,
+}
+pub fn expiry_date(value: DateTime<Utc>, tz: Tz) -> String {
+    (value - chrono::Duration::milliseconds(1))
+        .with_timezone(&tz)
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+fn end_of_day(value: &str, tz: Tz) -> Option<DateTime<Utc>> {
+    let day = NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()?;
+    let midnight = day.succ_opt()?.and_hms_opt(0, 0, 0)?;
+    // Choose the earlier boundary if midnight occurs twice.
+    tz.from_local_datetime(&midnight)
+        .earliest()
+        .map(|value| value.with_timezone(&Utc))
+}
+
+impl Draft<'_> {
+    pub fn prepare(&self, tz: Tz) -> Option<Command> {
+        let generation = self.generation.to_owned();
+        let idempotency_key = Uuid::now_v7();
+        let stamps = if self.operation.show_count() {
+            let raw = self.stamps.trim();
+            if !raw.bytes().all(|digit| digit.is_ascii_digit()) {
+                return None;
+            }
+            raw.parse::<u32>()
+                .ok()
+                .filter(|count| *count <= self.goal)?
+        } else {
+            0
+        };
+        let expiry = self.expiry.trim();
+        let original = self.card.and_then(|card| card.stamp_expires_at);
+        let expires_at = if expiry.is_empty() {
+            None
+        } else if original.is_some_and(|value| expiry_date(value, tz) == expiry) {
+            original
+        } else {
+            Some(end_of_day(expiry, tz)?)
+        };
+        let reason = self.reason.trim();
+        if self.operation.show_reason() && !(8..=300).contains(&reason.encode_utf16().count()) {
+            return None;
+        }
+        let Some(card) = self.card else {
+            if self.operation != Operation::Issue {
+                return None;
+            }
+            return Some(Command::Issue(Issue {
+                generation,
+                idempotency_key,
+                client_id: self.client,
+                program_version: self.program_version,
+                initial_stamps: stamps,
+                expires_at,
+            }));
+        };
+        let action = match self.operation {
+            Operation::Issue => return None,
+            Operation::Edit => Action::Edit {
+                stamps,
+                expires_at,
+                reason: reason.to_owned(),
+            },
+            Operation::IssueReward => Action::IssueReward,
+            Operation::Redeem => Action::Redeem,
+            Operation::Void => Action::Void {
+                reason: reason.to_owned(),
+            },
+        };
+        Some(Command::Change(
+            card.id,
+            Change {
+                generation,
+                idempotency_key,
+                version: card.version,
+                action,
+            },
+        ))
+    }
 }
