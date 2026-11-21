@@ -5456,7 +5456,9 @@ fn native_directory_replays_contacts_and_preserves_newer_edits() {
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_reviews_a_recurring_series_and_retries_the_same_request_through_the_proxy() {
-    use sob_core::booking::{BookingAttempt, BookingTerms, Cadence, Recurrence};
+    use sob_core::booking::{
+        BookingAttempt, BookingConfirmation, BookingTerms, Cadence, Recurrence,
+    };
     use sob_core::intake::IntakeSelection;
 
     let mut browser = Device::sign_in();
@@ -5506,11 +5508,11 @@ fn native_reviews_a_recurring_series_and_retries_the_same_request_through_the_pr
     request.check_before_dispatch(&mut browser.store).unwrap();
     assert_eq!(
         device.transport.create_booking_attempt(&request).unwrap(),
-        first
+        BookingConfirmation::Booked(first)
     );
     assert_eq!(
         device.transport.create_booking_attempt(&request).unwrap(),
-        first
+        BookingConfirmation::Booked(first)
     );
     browser.sync();
     let visits = browser
@@ -5533,6 +5535,24 @@ fn native_reviews_a_recurring_series_and_retries_the_same_request_through_the_pr
             .unwrap()
             .iter()
             .all(|(_, notice)| visits.iter().all(|visit| notice.id != visit.id))
+    );
+    let moved = free_slot_matching(&browser, &catalog.staff, |slot| {
+        slot != first && slot != second
+    });
+    ops::reschedule_appointment(&mut browser.store, &visits[0].id, Some(moved), None).unwrap();
+    browser.sync();
+    assert_eq!(
+        browser
+            .store
+            .appointment(&visits[0].id)
+            .unwrap()
+            .unwrap()
+            .starts_at,
+        moved
+    );
+    assert_eq!(
+        device.transport.create_booking_attempt(&request).unwrap(),
+        BookingConfirmation::SeriesChanged
     );
 }
 

@@ -140,7 +140,12 @@ export function requireAuth(
         (path.startsWith("/admin/intake-forms") && !intakeAllowed) ||
         (path === "/admin/intake-forms" && method === "GET" && c.req.query("view") !== "summary") ||
         !DESKTOP_PROXY_ROUTE.test(path) ||
-        (path === "/appointments/desktop-booking" && method !== "POST") ||
+        (method !== "POST" &&
+          [
+            "/appointments/desktop-booking",
+            "/appointments/desktop-series",
+            "/appointments/desktop-series/preview",
+          ].includes(path)) ||
         (path === "/admin/staff-accounts" && method !== "POST") ||
         (path === "/admin/accounts/lookup" && method !== "POST") ||
         (path === "/admin/accounts/role/reviewed" && method !== "PUT") ||

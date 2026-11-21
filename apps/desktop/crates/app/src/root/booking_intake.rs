@@ -1,8 +1,8 @@
 use super::intake_editor::{self, IntakeDraft};
 use super::*;
 use sob_core::booking::{
-    BookingAttempt, BookingError, BookingTerms, Cadence, Recurrence, ReviewedBooking,
-    ReviewedSeries, SeriesPreview,
+    BookingAttempt, BookingConfirmation, BookingError, BookingTerms, Cadence, Recurrence,
+    ReviewedBooking, ReviewedSeries, SeriesPreview,
 };
 use sob_core::sync::TransportError;
 
@@ -18,6 +18,7 @@ pub(super) struct BookingReview {
     waiver: Entity<TextField>,
     busy: bool,
     restored: bool,
+    saved_with_changes: bool,
     confirm_exit: bool,
 }
 
@@ -227,6 +228,7 @@ impl Root {
             waiver: cx.new(|cx| TextField::new(waiver_label, false, cx)),
             busy: false,
             restored: false,
+            saved_with_changes: false,
             confirm_exit: false,
         });
         self.fetch_booking_requirements(cx);
@@ -395,9 +397,13 @@ impl Root {
                 };
                 review.busy = false;
                 match result {
-                    Ok(starts_at) => {
+                    Ok(BookingConfirmation::Booked(starts_at)) => {
                         root.finish_new_booking(starts_at, cx);
                         return;
+                    }
+                    Ok(BookingConfirmation::SeriesChanged) => {
+                        review.saved_with_changes = true;
+                        review.submitted = None;
                     }
                     Err(BookingError::IntakeChanged) => {
                         review.submitted = None;
@@ -557,6 +563,26 @@ impl Root {
         viewport: gpui::Size<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        if review.saved_with_changes {
+            return self.modal_with_height(
+                div()
+                    .child(self.label(Key::SeriesSaved))
+                    .child(self.t(Key::SeriesSavedWithChanges))
+                    .child(
+                        self.button(
+                            "series-saved-close",
+                            self.t(Key::Close),
+                            Kind::Primary,
+                            cx.listener(|root, _, _, cx| root.dismiss_overlay(cx)),
+                        )
+                        .tab_index(0)
+                        .focus(|style| style.border_color(theme::text())),
+                    ),
+                (viewport.width - px(24.)).clamp(px(0.), px(440.)),
+                (viewport.height - px(24.)).clamp(px(0.), px(240.)),
+                None,
+            );
+        }
         let online = self.status.connectivity == Connectivity::Online;
         let awaiting = review.submitted.is_some();
         let mut body = div()
@@ -607,6 +633,14 @@ impl Root {
             let tz = preview.timezone.parse().unwrap_or(self.tz);
             let price = self.amount_label(preview.per_visit_cents, &preview.currency);
             body = body.child(i18n::fill(self.t(Key::SeriesPrice), &[("price", &price)]));
+            if preview.policy.enabled {
+                body = body.child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::muted())
+                        .child(self.t(Key::SeriesDepositPolicy)),
+                );
+            }
             body = body.children(preview.occurrences.iter().map(|visit| {
                 let local = visit.starts_at.with_timezone(&tz);
                 let end = visit.ends_at.with_timezone(&tz);
@@ -866,7 +900,7 @@ mod tests {
             assert!(root.svc.store.outbox(10).unwrap().is_empty());
             let preview: SeriesPreview = serde_json::from_value(json!({
                 "reviewHash": "a".repeat(64), "timezone": "Europe/Madrid",
-                "perVisitCents": 2500, "currency": "EUR",
+                "perVisitCents": 2500, "currency": "EUR", "policy": {"enabled": true},
                 "occurrences": [{
                     "startsAt": "2026-03-09T13:00:00Z", "endsAt": "2026-03-09T14:00:00Z", "available": false
                 }]

@@ -18,8 +18,8 @@ use crate::billing::{
     SavedBankRefundStatus, WalkInSale,
 };
 use crate::booking::{
-    BookingAttempt, BookingError, BookingTerms, ReviewedBooking, ReviewedSeries, SeriesPacket,
-    SeriesPreview,
+    BookingAttempt, BookingConfirmation, BookingError, BookingTerms, ReviewedBooking,
+    ReviewedSeries, SeriesPacket, SeriesPreview,
 };
 use crate::booking_policy::{PolicyWriteError, ReviewedBookingPolicy};
 use crate::intake::{
@@ -1906,11 +1906,11 @@ impl HttpTransport {
     pub fn create_booking_attempt(
         &self,
         attempt: &BookingAttempt,
-    ) -> Result<chrono::DateTime<chrono::Utc>, BookingError> {
+    ) -> Result<BookingConfirmation, BookingError> {
         match attempt {
             BookingAttempt::Single(packet) => self
                 .create_reviewed_booking(packet)
-                .map(|saved| saved.starts_at),
+                .map(|saved| BookingConfirmation::Booked(saved.starts_at)),
             BookingAttempt::Series(packet) => self.create_reviewed_series(packet),
         }
     }
@@ -1932,19 +1932,16 @@ impl HttpTransport {
     pub fn create_reviewed_series(
         &self,
         packet: &ReviewedSeries,
-    ) -> Result<chrono::DateTime<chrono::Utc>, BookingError> {
+    ) -> Result<BookingConfirmation, BookingError> {
         #[derive(serde::Deserialize)]
         struct Series {
+            #[serde(rename = "id")]
+            _id: uuid::Uuid,
             appointments: Vec<BookedAppointment>,
         }
         let response = self.send_json("/appointments/desktop-series", packet)?;
         let series: Series = read_response_with(response, classify_booking_error)?;
-        series
-            .appointments
-            .into_iter()
-            .next()
-            .map(|first| first.starts_at)
-            .ok_or_else(|| TransportError::Server("Empty series acknowledgement".into()).into())
+        packet.confirm(&series.appointments)
     }
 
     fn post_json<T: serde::de::DeserializeOwned>(

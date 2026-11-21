@@ -111,7 +111,13 @@ pub struct SeriesPreview {
     pub timezone: String,
     pub per_visit_cents: i64,
     pub currency: String,
+    pub policy: SeriesBookingPolicy,
     pub occurrences: Vec<SeriesOccurrence>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct SeriesBookingPolicy {
+    pub enabled: bool,
 }
 
 #[derive(Clone, Deserialize)]
@@ -130,12 +136,20 @@ pub struct ReviewedSeries {
     review_hash: String,
     idempotency_key: String,
     appointment_ids: Vec<String>,
+    #[serde(skip_serializing)]
+    reviewed_starts: Vec<DateTime<Utc>>,
 }
 
 #[derive(Clone)]
 pub enum BookingAttempt {
     Single(ReviewedBooking),
     Series(ReviewedSeries),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum BookingConfirmation {
+    Booked(DateTime<Utc>),
+    SeriesChanged,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -274,11 +288,39 @@ impl SeriesPacket {
             review_hash: preview.review_hash.clone(),
             idempotency_key: uuid::Uuid::now_v7().to_string(),
             appointment_ids,
+            reviewed_starts: preview
+                .occurrences
+                .iter()
+                .map(|visit| visit.starts_at)
+                .collect(),
         }
     }
 
     pub(crate) fn count(&self) -> usize {
         self.recurrence.count.into()
+    }
+}
+
+impl ReviewedSeries {
+    pub(crate) fn confirm(
+        &self,
+        appointments: &[crate::waitlist::BookedAppointment],
+    ) -> Result<BookingConfirmation, BookingError> {
+        if appointments
+            .iter()
+            .any(|visit| !self.appointment_ids.contains(&visit.id))
+        {
+            return Err(TransportError::Server("Unexpected series acknowledgement".into()).into());
+        }
+        let unchanged = appointments.len() == self.appointment_ids.len()
+            && appointments
+                .iter()
+                .zip(self.appointment_ids.iter().zip(&self.reviewed_starts))
+                .all(|(visit, (id, starts_at))| visit.id == *id && visit.starts_at == *starts_at);
+        if unchanged && let Some(first) = self.reviewed_starts.first() {
+            return Ok(BookingConfirmation::Booked(*first));
+        }
+        Ok(BookingConfirmation::SeriesChanged)
     }
 }
 
