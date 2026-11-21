@@ -43,6 +43,7 @@ pub(super) struct PromoDesk {
     generation: Option<String>,
     editor: Option<Editor>,
     loading: bool,
+    list_request: Option<Arc<()>>,
     saving: bool,
     refresh_after: Instant,
     observed: Option<i64>,
@@ -50,6 +51,12 @@ pub(super) struct PromoDesk {
     error: Option<Key>,
     saved: bool,
     confirm_exit: bool,
+}
+
+enum ListRequest {
+    Search,
+    Page(u32),
+    Refresh(u32),
 }
 
 struct Editor {
@@ -226,6 +233,7 @@ impl Root {
             generation: None,
             editor: None,
             loading: false,
+            list_request: None,
             saving: false,
             refresh_after: Instant::now(),
             observed: None,
@@ -234,7 +242,7 @@ impl Root {
             saved: false,
             confirm_exit: false,
         });
-        self.load_promotions(1, true, cx);
+        self.load_promotions(ListRequest::Search, cx);
         cx.notify();
     }
 
@@ -245,17 +253,22 @@ impl Root {
             return;
         };
         if desk.saving
-            || desk.loading
+            || desk.list_request.is_some()
             || desk.retry_after.is_some_and(|retry| retry > now)
             || (!reconnected && desk.observed == observed && now < desk.refresh_after)
         {
             return;
         }
         let page = desk.list.as_ref().map_or(1, |list| list.pagination.page);
-        self.load_promotions(page, false, cx);
+        self.load_promotions(ListRequest::Refresh(page), cx);
     }
 
-    fn load_promotions(&mut self, page: u32, use_search: bool, cx: &mut Context<Self>) {
+    fn load_promotions(&mut self, request: ListRequest, cx: &mut Context<Self>) {
+        let background = matches!(request, ListRequest::Refresh(_));
+        let page = match request {
+            ListRequest::Search => 1,
+            ListRequest::Page(page) | ListRequest::Refresh(page) => page,
+        };
         let Some(transport) = self
             .svc
             .transport()
@@ -272,7 +285,7 @@ impl Root {
         else {
             return;
         };
-        if use_search {
+        if matches!(request, ListRequest::Search) {
             let search = desk.search.read(cx).text().trim();
             if search.encode_utf16().count() > 100 {
                 desk.error = Some(Key::PromoInvalid);
@@ -282,7 +295,9 @@ impl Root {
             desk.applied_search = search.to_owned();
         }
         let search = desk.applied_search.clone();
-        desk.loading = true;
+        let list_request = Arc::new(());
+        desk.list_request = Some(list_request.clone());
+        desk.loading = !background;
         if desk.editor.is_none() {
             desk.error = None;
         }
@@ -298,13 +313,17 @@ impl Root {
                 {
                     return;
                 }
-                let Some(desk) = root
-                    .promotion_desk()
-                    .filter(|desk| Arc::ptr_eq(&identity, &desk.identity))
-                else {
+                let Some(desk) = root.promotion_desk().filter(|desk| {
+                    Arc::ptr_eq(&identity, &desk.identity)
+                        && desk
+                            .list_request
+                            .as_ref()
+                            .is_some_and(|current| Arc::ptr_eq(current, &list_request))
+                }) else {
                     return;
                 };
                 desk.loading = false;
+                desk.list_request = None;
                 desk.refresh_after = Instant::now() + Duration::from_secs(10);
                 match result {
                     Ok(list) => {
@@ -322,8 +341,15 @@ impl Root {
                         desk.confirm_exit = false;
                         desk.error = Some(Key::PromoLoadFailed);
                     }
-                    Err(_) => {
-                        desk.retry_after = Some(Instant::now() + Duration::from_secs(3));
+                    Err(error) => {
+                        let minimum = Duration::from_secs(3);
+                        let delay = match error {
+                            TransportError::RateLimited(Some(retry)) => {
+                                retry.clamp(minimum, Duration::from_secs(300))
+                            }
+                            _ => minimum,
+                        };
+                        desk.retry_after = Some(Instant::now() + delay);
                         desk.list = None;
                         desk.generation = None;
                         if desk.editor.is_none() {
@@ -417,6 +443,7 @@ impl Root {
         };
         editor.pending = Some(packet.clone());
         desk.saving = true;
+        desk.list_request = None;
         desk.error = None;
         let identity = desk.identity.clone();
         cx.notify();
@@ -441,7 +468,7 @@ impl Root {
                     Ok(_) => {
                         desk.editor = None;
                         desk.saved = true;
-                        root.load_promotions(1, false, cx);
+                        root.load_promotions(ListRequest::Page(1), cx);
                     }
                     Err(error) => {
                         let Some(editor) = desk.editor.as_mut() else {
@@ -499,7 +526,7 @@ impl Root {
             view.editor = None;
             view.error = None;
             view.confirm_exit = false;
-            self.load_promotions(1, false, cx);
+            self.load_promotions(ListRequest::Page(1), cx);
         } else {
             view.confirm_exit = !view.confirm_exit;
         }
@@ -539,7 +566,7 @@ impl Root {
                         "promo-search",
                         Key::PromoSearch,
                         Kind::Ghost,
-                        |root, cx| root.load_promotions(1, true, cx),
+                        |root, cx| root.load_promotions(ListRequest::Search, cx),
                         cx,
                     ))
                     .child(self.marketing_button(
@@ -628,7 +655,7 @@ impl Root {
                             "promo-prev",
                             Key::MarketingPreviousPage,
                             Kind::Ghost,
-                            move |root, cx| root.load_promotions(page - 1, false, cx),
+                            move |root, cx| root.load_promotions(ListRequest::Page(page - 1), cx),
                             cx,
                         ))
                     })
@@ -637,7 +664,7 @@ impl Root {
                             "promo-next",
                             Key::MarketingNextPage,
                             Kind::Ghost,
-                            move |root, cx| root.load_promotions(page + 1, false, cx),
+                            move |root, cx| root.load_promotions(ListRequest::Page(page + 1), cx),
                             cx,
                         ))
                     }),

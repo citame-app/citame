@@ -118,7 +118,7 @@ Owners and managers can open **Reports → Clients**. The period and team member
 
 Under **Management → Marketing → Booking links**, choose public services, compatible extras and an optional professional. Copy the reservation link or the website widget code, open either preview in a browser, share on WhatsApp or Facebook, and save the locally generated QR as a PNG. The generator loads the public catalogue from the connected Citame server. Public links contain only the selected catalogue IDs.
 
-Under **Management → Marketing → Promotions**, search and edit discount codes, change eligibility and usage limits, and set booking windows in the centre's time zone. Promotion saves require a connection and a reviewed version. The editor retains the exact request if Cloud cannot confirm a save.
+Under **Management → Marketing → Promotions**, search and edit discount codes, change eligibility and usage limits, and set booking windows in the centre's time zone. Promotion saves require a connection and a reviewed version. The editor retains the exact request if Cloud cannot confirm a save. The promotion list refreshes on live updates while preserving the open draft.
 
 **Reputation → Moderate reviews** shows the shared list and publication status. Owners and managers can publish, hide with a reason, write a public reply or remove one. Review changes need a connection. The desktop keeps the reviewed version and its draft after an unsuccessful save, and asks before discarding changes.
 
