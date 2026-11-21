@@ -179,7 +179,8 @@ test.describe("admin screenshots", () => {
     await shoot(page, project, "calendar-drawer", false);
     await page.keyboard.press("Escape");
 
-    await page.getByRole("button", { name: "New appointment" }).click();
+    await page.getByRole("button", { name: "Add to calendar" }).click();
+    await page.getByRole("button", { name: "New appointment", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "New appointment" });
     await dialog.getByRole("radio", { name: "New client" }).check();
     await dialog.getByLabel("Team member").selectOption({ label: "Stylist A" });

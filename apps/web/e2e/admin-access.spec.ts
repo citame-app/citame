@@ -27,23 +27,26 @@ test.describe("role access matrix", () => {
   }) => {
     await signInAs(page, STAFF_EMAIL);
     await expect(page.getByRole("heading", { level: 1, name: "Calendar" })).toBeVisible();
-    const nav = page.getByRole("navigation", { name: "Dashboard sections" });
-    const mobileNav = page.getByRole("navigation", { name: "Dashboard sections (mobile)" });
-    const visibleNav = (await nav.isVisible()) ? nav : mobileNav;
-    if (await nav.isVisible())
-      await expect(nav.getByRole("link", { name: "My schedule" })).toBeVisible();
-    else {
+    const nav = page.getByRole("navigation", { name: "Dashboard sections", exact: true });
+    const mobileNav = page.getByRole("navigation", {
+      name: "Dashboard sections (mobile)",
+      exact: true,
+    });
+    const desktop = await nav.isVisible();
+    if (!desktop) {
       await mobileNav.getByRole("button", { name: "More" }).click();
-      await expect(
-        page.getByRole("dialog", { name: "More" }).getByRole("link", { name: "My schedule" }),
-      ).toBeVisible();
-      await page.keyboard.press("Escape");
     }
-    await expect(visibleNav.getByRole("link", { name: "Services" })).toHaveCount(0);
-    await expect(visibleNav.getByRole("link", { name: "Settings" })).toHaveCount(0);
+    const staffMenu = desktop ? nav : page.getByRole("dialog", { name: "More" });
+    await expect(staffMenu.getByRole("link", { name: "My schedule" })).toBeVisible();
+    await expect(staffMenu.getByRole("link", { name: "Services" })).toHaveCount(0);
+    await expect(staffMenu.getByRole("link", { name: "Settings" })).toHaveCount(0);
+    if (!desktop) await page.keyboard.press("Escape");
     for (const path of ["/admin/services", "/admin/settings"]) {
       await page.goto(path);
-      await expect(page).toHaveURL(/\/admin\/calendar\?notice=forbidden$/);
+      await expect(page).toHaveURL(
+        (url) =>
+          url.pathname === "/admin/calendar" && url.searchParams.get("notice") === "forbidden",
+      );
       await expect(
         page.getByRole("alert").filter({ hasText: "You do not have access to that page" }),
       ).toBeVisible();

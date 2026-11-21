@@ -62,7 +62,8 @@ test.describe("admin accessibility (axe: zero serious or critical violations)", 
         await page.waitForLoadState("networkidle");
         await expectNoSeriousA11yViolations(page, `drawer (${scheme})`);
         await page.keyboard.press("Escape");
-        await page.getByRole("button", { name: "New appointment" }).click();
+        await page.getByRole("button", { name: "Add to calendar" }).click();
+        await page.getByRole("button", { name: "New appointment", exact: true }).click();
         await expect(page.getByRole("dialog", { name: "New appointment" })).toBeVisible();
         await expectNoSeriousA11yViolations(page, `new appointment (${scheme})`);
         await page.keyboard.press("Escape");

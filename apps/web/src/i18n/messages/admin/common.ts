@@ -12,7 +12,7 @@ export const commonEn = {
   "admin.nav.more": "More",
   "admin.nav.backToSite": "Back to the website",
   "admin.notice.forbidden":
-    "You do not have access to that page. You were sent back to the overview.",
+    "You do not have access to that page. You were sent back to the calendar.",
   "admin.role.owner": "Owner",
   "admin.role.staff": "Staff",
   "admin.save": "Save changes",
@@ -82,7 +82,7 @@ export const commonEsAR: Record<keyof typeof commonEn, string> = {
   "admin.nav.settings": "Ajustes",
   "admin.nav.more": "Más",
   "admin.nav.backToSite": "Volver al sitio",
-  "admin.notice.forbidden": "No tienes acceso a esa página. Te llevamos de vuelta al resumen.",
+  "admin.notice.forbidden": "No tienes acceso a esa página. Te llevamos de vuelta a la agenda.",
   "admin.role.owner": "Propietario",
   "admin.role.staff": "Personal",
   "admin.save": "Guardar cambios",

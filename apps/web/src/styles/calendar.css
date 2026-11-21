@@ -526,17 +526,29 @@
   background: var(--calendar-soft);
 }
 .calendar-avatar {
+  --avatar-tint: 35%;
+  --avatar-background: color-mix(
+    in srgb,
+    hsl(var(--person-hue, 18) 65% 75%) var(--avatar-tint),
+    var(--surface)
+  );
   display: grid;
   place-items: center;
   flex: none;
   width: 2rem;
   height: 2rem;
   border-radius: 50%;
-  background: color-mix(in srgb, hsl(var(--person-hue, 18) 65% 75%) 45%, var(--surface));
+  background: var(--avatar-background);
   font-size: 0.8125rem;
   font-weight: 700;
   color: var(--fg);
   text-transform: uppercase;
+}
+@supports (color: contrast-color(black)) {
+  .calendar-avatar {
+    --avatar-tint: 45%;
+    color: contrast-color(var(--avatar-background));
+  }
 }
 .calendar-closed {
   background: repeating-linear-gradient(

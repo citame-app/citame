@@ -34,7 +34,7 @@ test.describe("calendar", () => {
     await expect(page.getByText("Appointment created")).toBeVisible();
     await expect(
       page.getByRole("button", {
-        name: new RegExp(`${label(h)}.* Walk In ${stamp}, Haircut, Booked`),
+        name: new RegExp(`${label(h)}.* Walk In ${stamp} Haircut Booked`),
       }),
     ).toBeVisible();
   });
@@ -60,13 +60,13 @@ test.describe("calendar", () => {
     await page.getByRole("dialog").getByRole("button", { name: "Mark completed" }).click();
     await expect(page.getByText("Marked as completed")).toBeVisible();
     await expect(
-      page.getByRole("button", { name: new RegExp(`Past One ${stamp}, Haircut.*Completed`) }),
+      page.getByRole("button", { name: new RegExp(`Past One ${stamp} Haircut.*Completed`) }),
     ).toBeVisible();
     await page.getByRole("button", { name: new RegExp(`Past Two ${stamp}`) }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Mark no-show" }).click();
     await expect(page.getByText("Marked as no-show")).toBeVisible();
     await expect(
-      page.getByRole("button", { name: new RegExp(`Past Two ${stamp}, Haircut.*No-show`) }),
+      page.getByRole("button", { name: new RegExp(`Past Two ${stamp} Haircut.*No-show`) }),
     ).toBeVisible();
   });
 
@@ -163,6 +163,7 @@ test.describe("calendar", () => {
     await page.keyboard.press("?");
     await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
     await page.keyboard.press("Escape");
+    await expect(page.locator("[role='dialog']")).toHaveCount(0);
     await page.keyboard.press("w");
     await expect(page).toHaveURL(/view=week/);
     await page.keyboard.press("d");
