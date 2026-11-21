@@ -2,6 +2,12 @@
 
 The release workflow prepares Linux x86_64 and macOS 15+ builds for Intel and Apple Silicon, version 0.1.0. Local preparation needs no Git remote, registry account, domain or production credentials. Publishing from GitHub requires the release tag, registry access, and the configured macOS signing environment.
 
+## Local rehearsal for 2026-11-23
+
+Revision `2e99b97` restored the encrypted archive in an isolated database and verified 1,053 archived artifacts, 106 native tables and 113 migrations. The Monday agenda contained 38 lines across 33 visits, two staff blocks and 38 resource assignments. A resource-backed reschedule propagated in real time through both web and desktop APIs. The rehearsal checked stale-version rejection, idempotent replay and device revocation. The archive fingerprint matched and the receipt retains `canCutOver: false`.
+
+The local web gateway and the installed Linux SQLite replica matched all 38 lines by ID, professional, time, status and version. The local checkout queue showed the same 38 lines. Separate k6 runs used synthetic data through the same-origin proxy with zero HTTP errors across 8,712 requests. Availability p95 was 2.02 ms with up to 50 browsing users. The mixed workload p95 was 9.1 ms with 20 browsing users, two front-desk users and five health probes per second. These are local server measurements on this host.
+
 ## Local checks
 
 ```sh
