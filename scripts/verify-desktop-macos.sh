@@ -13,6 +13,14 @@ app_pid=""
 cleanup() {
   if [ -n "$app_pid" ]; then
     kill "$app_pid" 2>/dev/null || true
+    # A stuck window process must not keep the packaging job in wait.
+    for ((attempt=0; attempt<3; attempt++)); do
+      kill -0 "$app_pid" 2>/dev/null || break
+      sleep 1
+    done
+    if kill -0 "$app_pid" 2>/dev/null; then
+      kill -KILL "$app_pid" 2>/dev/null || true
+    fi
     wait "$app_pid" 2>/dev/null || true
   fi
   rm -rf "$work"
