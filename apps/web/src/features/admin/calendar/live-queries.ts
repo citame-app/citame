@@ -51,6 +51,7 @@ const shared: Record<SyncEntity | SyncLiveView, readonly (readonly string[])[]> 
     reviewRequestQueryKey,
     moderation,
     ["admin", "staff"],
+    ["admin", "staff-access"],
     ["admin", "staff-capacity"],
     ["admin", "report"],
     ["staff"],

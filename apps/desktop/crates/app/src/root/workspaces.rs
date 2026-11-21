@@ -213,6 +213,12 @@ impl Root {
                     Kind::Ghost,
                     cx.listener(|root, _, _, cx| root.open_service_assignments(None, cx)),
                 ))
+                .child(self.button(
+                    "staff-access",
+                    self.t(Key::StaffAccess),
+                    Kind::Ghost,
+                    cx.listener(|root, _, _, cx| root.open_staff_access(cx)),
+                ))
             })
             .when(online && desk.opening.is_none(), |view| {
                 let links = div()

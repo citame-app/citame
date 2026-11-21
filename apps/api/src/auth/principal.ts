@@ -146,7 +146,7 @@ export function requireAuth(
           method !== "POST") ||
         (path.startsWith("/admin/staff/") && path.includes("/date-shifts") && !dateShiftAllowed) ||
         (path.startsWith("/admin/staff/") &&
-          path.endsWith("/working-hours") &&
+          (path.endsWith("/working-hours") || path.endsWith("/access/reviewed")) &&
           method !== "GET" &&
           method !== "PUT")
       )

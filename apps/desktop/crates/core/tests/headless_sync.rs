@@ -77,6 +77,69 @@ fn desktop_opens_cloud_management_with_the_linked_users_web_session_through_the_
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_team_access_uses_reviewed_permissions_through_the_proxy() {
+    use sob_core::http::AccessPreset;
+
+    let device = proxy_device();
+    let mut web = Device::sign_in();
+    let created = web.rest_post(
+        "/admin/staff-accounts",
+        json!({
+            "name": "Synthetic access review staff",
+            "email": format!("access-{}@example.test", uuid::Uuid::now_v7()),
+            "password": env("SOB_TEST_PASSWORD"),
+        }),
+    );
+    let id = created["staffId"].as_str().unwrap();
+    web.sync();
+    let before_notice = web.store.staff_directory_revision().unwrap();
+    let reviewed = device.transport.staff_access(id).unwrap();
+    assert!(reviewed.access.editable());
+    let saved = device
+        .transport
+        .save_staff_access(&reviewed, AccessPreset::Receptionist)
+        .unwrap();
+    assert_eq!(saved.access.version, reviewed.access.version + 1);
+    let path = format!("/admin/staff/{id}/access/reviewed");
+    assert_eq!(web.rest_get(&path)["access"]["preset"], "receptionist");
+    assert!(
+        device
+            .transport
+            .save_staff_access(&reviewed, AccessPreset::Manager)
+            .is_err()
+    );
+    web.sync();
+    assert!(web.store.staff_directory_revision().unwrap() > before_notice);
+
+    let prefix = std::env::var("SOB_TEST_REST_PREFIX").unwrap_or_default();
+    ureq::put(&format!("{}{prefix}{path}", web.base))
+        .header("Cookie", &web.cookie)
+        .header("Origin", &web.base)
+        .content_type("application/json")
+        .send(
+            json!({
+                "generation": saved.generation,
+                "accountId": saved.account_id,
+                "version": saved.access.version,
+                "preset": "restricted",
+            })
+            .to_string(),
+        )
+        .unwrap();
+    assert!(
+        device
+            .transport
+            .save_staff_access(&saved, AccessPreset::Manager)
+            .is_err()
+    );
+    assert_eq!(
+        device.transport.staff_access(id).unwrap().access.preset,
+        AccessPreset::Restricted
+    );
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_policy_changes_reach_cloud_and_reject_old_reviews_through_the_proxy() {
     use sob_core::booking_policy::{LIVE_TOPIC, PolicyWriteError};
 

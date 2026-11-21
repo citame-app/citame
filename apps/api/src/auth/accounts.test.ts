@@ -108,6 +108,30 @@ describe("createAccount", () => {
 });
 
 describe("assignRole", () => {
+  test("concurrent audited role changes cannot remove both owners", async () => {
+    const addOwner = (name: string) =>
+      createAccount(deps, {
+        email: `${name}@example.test`,
+        name,
+        password: PASSWORD,
+        role: "owner",
+      });
+    const left = await addOwner("left");
+    const right = await addOwner("right");
+    const results = await Promise.allSettled([
+      assignRole(t.db, left.userId, "staff", { actorUserId: right.userId }),
+      assignRole(t.db, right.userId, "staff", { actorUserId: left.userId }),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results).toContainEqual(
+      expect.objectContaining({
+        status: "rejected",
+        reason: expect.objectContaining({ code: "forbidden" }),
+      }),
+    );
+    expect(await t.db.select().from(user).where(eq(user.role, "owner"))).toHaveLength(1);
+  });
+
   test("promoting a client to staff creates the calendar profile and keeps the booking profile", async () => {
     const { userId } = await signUp(t.app, "lucia@example.com", "Lucia");
     const result = await assignRole(t.db, userId, "staff");

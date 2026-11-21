@@ -10,6 +10,11 @@ export const accessEn = {
     "Changes apply to existing sessions on their next request. Only the owner can change access profiles or account roles.",
   "access.save": "Save access profile",
   "access.saved": "Access profile saved",
+  "access.current": "Current profile: {profile}",
+  "access.linkedAccount": "Linked account: {email}",
+  "access.changed":
+    "Access or the linked account changed. Review the current profile before saving your draft.",
+  "access.review": "Review current access",
   "access.reload": "Reload access",
   "access.error": "Could not save. Reload the current profile before trying again.",
   "access.accountRole":
@@ -29,6 +34,11 @@ export const accessEsAR: Record<keyof typeof accessEn, string> = {
     "Los cambios se aplican a las sesiones existentes en su siguiente petición. Solo la propietaria puede cambiar los perfiles de acceso o los roles de las cuentas.",
   "access.save": "Guardar perfil de acceso",
   "access.saved": "Perfil de acceso guardado",
+  "access.current": "Perfil actual: {profile}",
+  "access.linkedAccount": "Cuenta vinculada: {email}",
+  "access.changed":
+    "Cambió el acceso o la cuenta vinculada. Revisa el perfil actual antes de guardar tu borrador.",
+  "access.review": "Revisar acceso actual",
   "access.reload": "Recargar acceso",
   "access.error": "No se pudo guardar. Recarga el perfil actual antes de intentarlo de nuevo.",
   "access.accountRole":

@@ -12,7 +12,7 @@ The installation has five effective access levels. The owner account always reta
 
 Only the owner can create accounts, change account roles or change access presets. Manager access does not grant those permissions or salon-settings administration. Professionals and reception retain client-directory access; restricted accounts have no client-directory access and do not receive client contact details in the appointment drawer.
 
-Open **Team → professional → Staff access** as the owner. Choose the preset and save. Changes use an optimistic version so concurrent edits cannot silently overwrite each other. Existing sessions use the persisted profile on their next API request; signing in again is unnecessary. Reloading the web interface updates its navigation and controls. Owner/client account roles remain separate from staff presets; a staff preset cannot promote an account to owner.
+Open **Team → professional → Staff access** in the web app or **Management → Staff access** in Desktop as the owner. Choose the preset and save while connected. Both editors show the current preset and the linked email. The API checks the reviewed version, linked account and replica generation. A live change keeps an open draft available for review. Existing sessions use the persisted profile on their next API request. The connected web session refreshes its navigation and route guards when its staff profile changes. Owner and client roles are managed separately.
 
 Unlinked calendars can have their intended staff preset prepared, but a preset alone does not create a login. Accounts created through **Add staff** receive the professional preset by default. Changes are recorded in the audit log.
 

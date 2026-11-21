@@ -19,7 +19,15 @@ interface Notice {
   appointment: Appointment & { clientName?: string };
 }
 
-export function CalendarLiveProvider({ children }: { children: ReactNode }) {
+export function CalendarLiveProvider({
+  children,
+  staffId,
+  refreshAccess,
+}: {
+  children: ReactNode;
+  staffId?: string | null;
+  refreshAccess?: (signal: AbortSignal) => Promise<void>;
+}) {
   const queryClient = useQueryClient();
   const [live, setLive] = useState(false);
   const [inventoryRevision, setInventoryRevision] = useState(0);
@@ -29,6 +37,14 @@ export function CalendarLiveProvider({ children }: { children: ReactNode }) {
     const known = new Map<string, Appointment>();
     const versions = new Map<string, number>();
     let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+    let accessRequest: AbortController | undefined;
+    function refreshSession() {
+      if (!refreshAccess) return;
+      accessRequest?.abort();
+      const current = new AbortController();
+      accessRequest = current;
+      void refreshAccess(current.signal).catch(() => {});
+    }
     const pending = new Set<SyncEntity | SyncLiveView>();
     let reconcile = false;
     function refresh(entities?: (SyncEntity | SyncLiveView)[]) {
@@ -51,6 +67,7 @@ export function CalendarLiveProvider({ children }: { children: ReactNode }) {
             queryKey[0] === "booking-policy" ||
             (queryKey[0] === "admin" &&
               (queryKey[1] === "staff" ||
+                queryKey[1] === "staff-access" ||
                 queryKey[1] === "services" ||
                 queryKey[1] === "booking-policy"))
           ) {
@@ -72,9 +89,17 @@ export function CalendarLiveProvider({ children }: { children: ReactNode }) {
       networkTarget: window,
       pull: (since, signal) => api().sync.pull(since, signal),
       onConnection: setLive,
-      onRefresh: refresh,
+      onRefresh: () => {
+        refresh();
+        refreshSession();
+      },
+      onAccessExpired: refreshSession,
       onChanges: (changes, views) => {
         refresh([...changes.map(({ entity }) => entity), ...views]);
+        if (
+          changes.some((change) => change.entity === "staff" && (!staffId || change.id === staffId))
+        )
+          refreshSession();
         if (!changes.some(({ entity }) => entity === "appointment")) return;
         // Current caches provide the previous state, including optimistic local changes.
         for (const [, calendar] of queryClient.getQueriesData<CalendarResponse>({
@@ -123,9 +148,10 @@ export function CalendarLiveProvider({ children }: { children: ReactNode }) {
     return () => {
       closed = true;
       close();
+      accessRequest?.abort();
       if (refreshTimer) clearTimeout(refreshTimer);
     };
-  }, [queryClient]);
+  }, [queryClient, staffId, refreshAccess]);
   return (
     <LiveContext.Provider value={live}>
       <InventoryRevisionContext.Provider value={inventoryRevision}>

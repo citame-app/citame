@@ -1,5 +1,9 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
+import { reviewedStaffAccessSchema } from "@sob/contracts";
 import { type Actor, actor, json, seedFixtures, setupApiTest } from "../../../test/helpers";
+import { assignRole } from "../../auth/accounts";
+import { loadPrincipal } from "../../auth/principal";
+import { setStaffAccess } from "./access";
 
 let t: Awaited<ReturnType<typeof setupApiTest>>;
 let owner: Actor;
@@ -75,6 +79,47 @@ test("professionals see only their own receipts and cannot read the salon cash b
     ).status,
   ).toBe(404);
   expect((await call(member, "/admin/commerce/cash-sessions/current")).status).toBe(403);
+});
+
+test("role changes invalidate an access review even if the account returns to the staff role", async () => {
+  const path = `/admin/staff/${member.staffId}/access/reviewed`;
+  const before = reviewedStaffAccessSchema.parse(await (await call(owner, path)).json());
+  await assignRole(t.db, member.userId, "owner");
+  const promoted = reviewedStaffAccessSchema.parse(await (await call(owner, path)).json());
+  expect(promoted.access).toMatchObject({
+    version: before.access.version + 1,
+    accountRole: "owner",
+  });
+  await assignRole(t.db, member.userId, "staff");
+  const stale = await call(owner, path, "PUT", {
+    generation: before.generation,
+    accountId: before.accountId,
+    version: before.access.version,
+    preset: "manager",
+  });
+  expect(stale.status).toBe(409);
+});
+
+test("the access write rechecks the owner's authority inside its transaction", async () => {
+  const path = `/admin/staff/${member.staffId}/access/reviewed`;
+  const before = reviewedStaffAccessSchema.parse(await (await call(owner, path)).json());
+  const principal = await loadPrincipal(t.db, owner.userId);
+  if (!principal) throw new Error("Missing test owner");
+  await assignRole(t.db, owner.userId, "staff");
+  await expect(
+    setStaffAccess(
+      t.db,
+      before.access.staffId,
+      {
+        generation: before.generation,
+        accountId: before.accountId,
+        version: before.access.version,
+        preset: "manager",
+      },
+      principal,
+      before.generation,
+    ),
+  ).rejects.toMatchObject({ code: "forbidden" });
 });
 test("restricted access can read its calendar but cannot mutate bookings or enter sales, clients or inventory", async () => {
   expect((await access("restricted")).status).toBe(200);

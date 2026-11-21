@@ -55,6 +55,7 @@ mod scrollbar;
 mod service_assignments;
 mod settlement;
 mod slots;
+mod staff_access;
 mod staff_portraits;
 mod team_shifts;
 mod transactions;
@@ -259,6 +260,7 @@ enum Overlay {
     Reports(Box<reports::Desk>),
     TeamShifts(Box<team_shifts::Desk>),
     StaffPortraits(Box<staff_portraits::Desk>),
+    StaffAccess(Box<staff_access::Desk>),
     ServiceAssignments(Box<service_assignments::Desk>),
     Reviews(Box<reviews::Desk>),
     ReviewModeration(Box<review_moderation::Desk>),
@@ -682,6 +684,7 @@ impl Root {
         self.refresh_unpaid_if_changed(reconnected, cx);
         self.refresh_salon_configuration(reconnected, cx);
         self.refresh_booking_policy(reconnected, cx);
+        self.refresh_staff_access(reconnected, cx);
         if reconnected {
             self.refresh_weekly_conflicts_if_ready(cx);
             self.refresh_open_annotations(true, cx);
@@ -706,6 +709,7 @@ impl Root {
             if !self.preserve_open_salon_draft(cx)
                 && !self.preserve_open_booking_policy_draft(cx)
                 && !self.preserve_open_assignment_draft()
+                && !self.preserve_open_staff_access()
             {
                 self.overlay = Overlay::None;
             }
@@ -2369,6 +2373,7 @@ impl Root {
             Overlay::SalonConfiguration(_) => self.close_salon_configuration(cx),
             Overlay::BookingPolicy(_) => self.dismiss_booking_policy(cx),
             Overlay::ServiceAssignments(_) => self.close_service_assignment(cx),
+            Overlay::StaffAccess(_) => self.close_staff_access(cx),
             Overlay::Directory(desk) if desk.intake.is_some() => self.back_record(cx),
             Overlay::ReviewModeration(desk) => {
                 if !desk.dismiss_editor(cx) {
@@ -3610,6 +3615,9 @@ impl Render for Root {
                         }
                         Overlay::StaffPortraits(desk) => {
                             Some(self.render_staff_portraits(desk, window.viewport_size(), cx))
+                        }
+                        Overlay::StaffAccess(desk) => {
+                            Some(self.render_staff_access(desk, window.viewport_size(), cx))
                         }
                         Overlay::ServiceAssignments(desk) => {
                             Some(self.render_service_assignments(desk, window.viewport_size(), cx))

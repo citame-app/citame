@@ -6,6 +6,7 @@ import {
   idSchema,
   listTimeOffQuerySchema,
   permissionsFor,
+  reviewedStaffAccessInputSchema,
   setWorkingHoursRequestSchema,
   staffAccessInputSchema,
   staffCapacityInputSchema,
@@ -27,7 +28,7 @@ import {
 } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
-import { getStaffAccess, setStaffAccess } from "./access";
+import { getReviewedStaffAccess, setStaffAccess } from "./access";
 import { listAdminStaff, updateStaff } from "./admin";
 import { getStaffCapacity, setStaffCapacity } from "./capacity";
 import { commitDateShifts, getDateShifts, previewDateShifts } from "./date-shifts";
@@ -147,20 +148,53 @@ export function staffAdminRoutes({ db, config, now = () => new Date() }: AppDeps
         201,
       );
     })
-    .get("/:id/access", async (c) =>
-      c.json(await getStaffAccess(db, staffId(c.req.param("id")), c.get("principal"))),
-    )
-    .put("/:id/access", async (c) => {
+    .get("/:id/access/reviewed", async (c) => {
+      c.header("Cache-Control", "private, no-store");
+      return c.json(
+        await getReviewedStaffAccess(
+          db,
+          staffId(c.req.param("id")),
+          c.get("principal"),
+          config.syncReplicaGeneration,
+        ),
+      );
+    })
+    .put("/:id/access/reviewed", async (c) => {
       const principal = c.get("principal");
       requireRole(principal, "owner");
+      c.header("Cache-Control", "private, no-store");
       return c.json(
         await setStaffAccess(
           db,
           staffId(c.req.param("id")),
-          parseOrThrow(staffAccessInputSchema, await readJson(c)),
+          parseOrThrow(reviewedStaffAccessInputSchema, await readJson(c)),
           principal,
+          config.syncReplicaGeneration,
         ),
       );
+    })
+    .get("/:id/access", async (c) => {
+      c.header("Cache-Control", "private, no-store");
+      const { access } = await getReviewedStaffAccess(
+        db,
+        staffId(c.req.param("id")),
+        c.get("principal"),
+        config.syncReplicaGeneration,
+      );
+      return c.json(access);
+    })
+    .put("/:id/access", async (c) => {
+      const principal = c.get("principal");
+      requireRole(principal, "owner");
+      c.header("Cache-Control", "private, no-store");
+      const { access } = await setStaffAccess(
+        db,
+        staffId(c.req.param("id")),
+        parseOrThrow(staffAccessInputSchema, await readJson(c)),
+        principal,
+        config.syncReplicaGeneration,
+      );
+      return c.json(access);
     })
     .patch("/:id", async (c) => {
       const principal = c.get("principal");

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { UserRole } from "./auth";
+import { syncGenerationSchema } from "./common";
 export const staffAccessPresetSchema = z.enum([
   "manager",
   "receptionist",
@@ -76,6 +77,19 @@ export const staffAccessSchema = z.object({
   version: z.number().int().positive(),
   accountRole: z.enum(["owner", "staff", "client"]).nullable(),
 });
+const staffAccessReview = z.object({
+  generation: syncGenerationSchema,
+  accountId: z.string().min(1).max(256).nullable(),
+});
+export const reviewedStaffAccessSchema = staffAccessReview.extend({
+  accountEmail: z.string().min(1).max(320).nullable(),
+  access: staffAccessSchema,
+});
+export type ReviewedStaffAccess = z.infer<typeof reviewedStaffAccessSchema>;
+export const reviewedStaffAccessInputSchema = staffAccessInputSchema
+  .extend(staffAccessReview.shape)
+  .strict();
+export type ReviewedStaffAccessInput = z.infer<typeof reviewedStaffAccessInputSchema>;
 
 export const staffPermissionsSchema = z.object(
   Object.fromEntries(Object.keys(NONE).map((key) => [key, z.boolean()])) as {

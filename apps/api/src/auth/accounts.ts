@@ -1,6 +1,6 @@
 import type { UserRole } from "@sob/contracts";
 import { account, clientProfile, type Database, pgErrorCode, staffProfile, user } from "@sob/db";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { recordAudit } from "../audit";
 import type { AppConfig } from "../config";
@@ -206,9 +206,6 @@ export async function assignRole(
   options: { now?: Date } = {},
 ): Promise<AccountResult> {
   return db.transaction(async (tx) => {
-    const [row] = await tx.select().from(user).where(eq(user.id, userId));
-    if (!row) throw new DomainError("not_found", `User ${userId} not found`);
-
     // Demoting to client deactivates the calendar, which must not strand upcoming bookings.
     if (role === "client") {
       const [calendar] = await tx
@@ -227,12 +224,28 @@ export async function assignRole(
       }
     }
 
+    const accounts = await tx
+      .select()
+      .from(user)
+      .where(inArray(user.id, audit ? [userId, audit.actorUserId] : [userId]))
+      .orderBy(asc(user.id))
+      .for("no key update");
+    if (audit && accounts.find((row) => row.id === audit.actorUserId)?.role !== "owner")
+      throw new DomainError("forbidden", "Only the owner can change account roles");
+    const row = accounts.find((account) => account.id === userId);
+    if (!row) throw new DomainError("not_found", `User ${userId} not found`);
     await tx.update(user).set({ role }).where(eq(user.id, userId));
 
     if (role === "staff") await ensureStaffProfile(tx, userId, row.name);
     if (role === "client") {
       await ensureClientProfile(tx, userId, row.name, row.email);
       await tx.update(staffProfile).set({ active: false }).where(eq(staffProfile.userId, userId));
+    }
+    if (row.role !== role) {
+      await tx
+        .update(staffProfile)
+        .set({ accessVersion: sql`${staffProfile.accessVersion} + 1` })
+        .where(eq(staffProfile.userId, userId));
     }
 
     const [staff] = await tx

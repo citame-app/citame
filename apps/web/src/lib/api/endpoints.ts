@@ -50,17 +50,17 @@ import {
   optOutPreviewSchema,
   ownerSalonSettingsSchema,
   type ReportOutcomesQuery,
+  type ReviewedStaffAccessInput,
   reportClientsSchema,
   reportOutcomesPageSchema,
   reportSummarySchema,
+  reviewedStaffAccessSchema,
   type ServiceConfiguration,
   type SetServiceStaffRequest,
   type SetWorkingHoursRequest,
-  type StaffAccessPreset,
   type StaffPortraitInput,
   type StaffPortraitPublication,
   salonResponseSchema,
-  staffAccessSchema,
   staffAccountResponseSchema,
   staffPortraitResultSchema,
   syncPullResponseSchema,
@@ -178,7 +178,7 @@ export function createEndpoints(client: ApiClient) {
           signal,
         },
       ),
-    me: () => client.get("/me", meResponseSchema),
+    me: (signal?: AbortSignal) => client.get("/me", meResponseSchema, { signal }),
     oauthConnections: {
       list: () => client.get("/me/connections", oauthConnectionsSchema),
       revoke: (clientId: string) =>
@@ -318,9 +318,10 @@ export function createEndpoints(client: ApiClient) {
           client.put(`/admin/staff/${id}/portrait`, request, staffPortraitResultSchema),
         publishPortrait: (id: string, request: StaffPortraitPublication) =>
           client.put(`/admin/staff/${id}/portrait/publication`, request, staffPortraitResultSchema),
-        access: (id: string) => client.get(`/admin/staff/${id}/access`, staffAccessSchema),
-        setAccess: (id: string, body: { preset: StaffAccessPreset; version: number }) =>
-          client.put(`/admin/staff/${id}/access`, body, staffAccessSchema),
+        access: (id: string, signal?: AbortSignal) =>
+          client.get(`/admin/staff/${id}/access/reviewed`, reviewedStaffAccessSchema, { signal }),
+        setAccess: (id: string, body: ReviewedStaffAccessInput) =>
+          client.put(`/admin/staff/${id}/access/reviewed`, body, reviewedStaffAccessSchema),
         list: (signal?: AbortSignal) =>
           client.get("/admin/staff", listAdminStaffResponseSchema, { signal }),
         create: (request: CreateStaffAccountRequest) =>

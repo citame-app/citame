@@ -52,11 +52,15 @@ function useNavLabel() {
 export function AdminShell({
   role,
   accessPreset,
+  staffId,
+  refreshAccess,
   active,
   children,
 }: {
   role: UserRole;
   accessPreset?: StaffAccessPreset | null;
+  staffId?: string | null;
+  refreshAccess?: (signal: AbortSignal) => Promise<void>;
   active: AdminSection;
   children: ReactNode;
 }) {
@@ -78,7 +82,7 @@ export function AdminShell({
   }, []);
 
   return (
-    <CalendarLiveProvider>
+    <CalendarLiveProvider staffId={staffId} refreshAccess={refreshAccess}>
       <div className="admin-shell w-full md:grid" data-section={active}>
         <aside className="admin-sidebar hidden md:block">
           <Link

@@ -39,12 +39,14 @@ function harness(
   const onChanges = mock();
   const onRefresh = mock();
   const onConnection = mock();
+  const onAccessExpired = mock();
   const close = connectCalendarLive({
     open,
     pull,
     onChanges,
     onRefresh,
     onConnection,
+    onAccessExpired,
     fallbackMs,
   });
   cleanups.push(close);
@@ -57,6 +59,7 @@ function harness(
     onChanges,
     onRefresh,
     onConnection,
+    onAccessExpired,
     close,
     send: source.send,
   };
@@ -151,6 +154,7 @@ test("authorization failures close the stream and suppress further processing", 
   h.send(12);
   expect(pull).toHaveBeenCalledTimes(1);
   expect(h.onChanges).not.toHaveBeenCalled();
+  expect(h.onAccessExpired).toHaveBeenCalledTimes(1);
 });
 
 test("a marker-only page refreshes cash even without replica rows", async () => {

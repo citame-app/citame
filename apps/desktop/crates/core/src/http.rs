@@ -52,7 +52,9 @@ pub struct HttpTransport {
     token_store: Option<Arc<dyn TokenStore>>,
 }
 
+mod staff_access;
 mod staff_portraits;
+pub use staff_access::{AccessPreset, ReviewedStaffAccess, StaffAccess};
 pub use staff_portraits::{PortraitDirectory, PortraitStaff, PortraitUpdate};
 mod weekly_hours;
 pub use weekly_hours::{WeeklyHours, WeeklyRange, parse_weekly_hours};

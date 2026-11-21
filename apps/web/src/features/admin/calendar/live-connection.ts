@@ -24,6 +24,7 @@ export function connectCalendarLive(options: {
   onChanges: (changes: SyncChange[], refresh: SyncLiveView[]) => void;
   onRefresh: () => void;
   onConnection: (live: boolean) => void;
+  onAccessExpired?: () => void;
   fallbackMs?: number;
   networkTarget?: Pick<Window, "addEventListener" | "removeEventListener">;
 }) {
@@ -82,6 +83,7 @@ export function connectCalendarLive(options: {
       if (!stopped) {
         options.onConnection(false);
         if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+          options.onAccessExpired?.();
           stop();
         } else if (error instanceof ApiError && error.status === 429) {
           const retryMs = Math.max(1, error.retryAfterSeconds ?? DEFAULT_FALLBACK_MS / 1000) * 1000;
@@ -111,6 +113,7 @@ export function connectCalendarLive(options: {
       if (stopped || !networkAvailable || source !== current) return;
       connected = false;
       options.onConnection(false);
+      if (current.readyState === EVENT_SOURCE_CLOSED) options.onAccessExpired?.();
     };
     current.addEventListener("change", (event) => {
       if (stopped || !networkAvailable || source !== current) return;

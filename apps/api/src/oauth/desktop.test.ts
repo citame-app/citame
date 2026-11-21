@@ -16,6 +16,7 @@ import {
   listServicesResponseSchema,
   reviewedBookingPolicySchema,
   reviewedSalonSettingsSchema,
+  reviewedStaffAccessSchema,
   reviewPrivateSchema,
   startedPaymentSchema,
   syncPullResponseSchema,
@@ -80,6 +81,55 @@ async function tokens(role: "owner" | "client" | "staff", emailName: string = ro
 
 const request = (path: string, access: unknown) =>
   t.app.request(path, { headers: { authorization: `Bearer ${String(access)}` } });
+
+test("reviewed team access uses the same owner policy in Desktop and Cloud", async () => {
+  const owner = await tokens("owner", "team-access-review-owner");
+  const member = await tokens("staff", "team-access-review-member");
+  expect(member.who.staffId).toBeString();
+  const path = `/admin/staff/${member.who.staffId}/access/reviewed`;
+  const original = reviewedStaffAccessSchema.parse(
+    await (await request(path, owner.access)).json(),
+  );
+  const change = {
+    generation: original.generation,
+    accountId: original.accountId,
+    version: original.access.version,
+    preset: "restricted",
+  };
+  const put = (body: unknown, access = owner.access, method = "PUT") =>
+    t.app.request(path, {
+      method,
+      headers: { authorization: `Bearer ${access}`, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  expect((await request(path, member.access)).status).toBe(403);
+  expect((await put(change, member.access)).status).toBe(403);
+  expect((await put(change, owner.access, "PATCH")).status).toBe(403);
+  expect((await put({ ...change, generation: "prior-history" })).status).toBe(409);
+  expect((await put({ ...change, accountId: null })).status).toBe(409);
+  const cursor = syncPullResponseSchema.parse(
+    await (await request("/sync/pull", owner.access)).json(),
+  ).headSeq;
+  const saved = reviewedStaffAccessSchema.parse(await (await put(change)).json());
+  expect(saved.access).toMatchObject({
+    preset: "restricted",
+    version: original.access.version + 1,
+  });
+  expect((await put(change)).status).toBe(409);
+  expect(await (await request("/me", member.access)).json()).toMatchObject({
+    accessPreset: "restricted",
+  });
+  const changePage = syncPullResponseSchema.parse(
+    await (await request(`/sync/pull?since=${cursor}`, owner.access)).json(),
+  );
+  expect(changePage.changes).toContainEqual(
+    expect.objectContaining({
+      entity: "staff",
+      id: member.who.staffId,
+    }),
+  );
+  expect(await (await json(t.app, path, "GET", undefined, owner.who.cookie)).json()).toEqual(saved);
+});
 
 test("native booking protection shares the Cloud policy and only opted-in replicas see refreshes", async () => {
   const owner = await tokens("owner", "booking-policy-desktop-owner");
