@@ -109,9 +109,11 @@ impl HttpTransport {
         reviewed: &ReviewedStaffAccess,
         role: AccountRole,
     ) -> Result<ReviewedStaffAccess, StaffAccountError> {
-        let (Some(account_id), Some(previous)) =
-            (&reviewed.account_id, &reviewed.access.account_role)
-        else {
+        let (Some(account_id), Some(email), Some(previous)) = (
+            &reviewed.account_id,
+            &reviewed.account_email,
+            &reviewed.access.account_role,
+        ) else {
             return Err(StaffAccountError::InvalidDetails);
         };
         if previous == role.as_str() {
@@ -121,7 +123,7 @@ impl HttpTransport {
         let path = format!("/admin/staff/{id}/account-role/reviewed");
         let body = serde_json::json!({
             "generation": reviewed.generation, "accountId": account_id, "expectedRole": previous,
-            "version": reviewed.access.version, "role": role,
+            "expectedEmail": email, "version": reviewed.access.version, "role": role,
         });
         let saved: ReviewedStaffAccess = read_response_with(
             self.send_put_json(&path, &body)?,

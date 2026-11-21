@@ -7,7 +7,7 @@ import {
   userRoleSchema,
 } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Fragment, useId, useState } from "react";
+import { Fragment, useId, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { ConfirmDialog } from "~/components/ui/dialog";
 import { PasswordField, TextField } from "~/components/ui/field";
@@ -362,14 +362,18 @@ function StaffRoleForm({
   const online = useOnline();
   const queries = useQueryClient();
   const key = accessKey(latest.access.staffId);
+  const currentRoleLabel = useRef<HTMLParagraphElement>(null);
   const [choice, setChoice] = useState<UserRole | "">("");
   const [draft, setDraft] = useState<{ review: ReviewedStaffAccess; role: UserRole }>();
+  const [reviewOpen, setReviewOpen] = useState(false);
   const save = useMutation({
     mutationFn: async ({ review, role }: NonNullable<typeof draft>) => {
       const { staffId, version, accountRole } = review.access;
-      if (!review.accountId || !accountRole) throw new Error("No reviewed account");
+      if (!review.accountId || !review.accountEmail || !accountRole)
+        throw new Error("No reviewed account");
       const result = await api().admin.staff.setRole(staffId, {
         accountId: review.accountId,
+        expectedEmail: review.accountEmail,
         expectedRole: accountRole,
         version,
         role,
@@ -390,19 +394,20 @@ function StaffRoleForm({
       queries.setQueryData<ReviewedStaffAccess>(key, (current) =>
         !current || sameReview(review, current) ? saved : current,
       );
-      setDraft(undefined);
+      setReviewOpen(false);
       setChoice("");
-      void queries.invalidateQueries({ queryKey: ["admin", "staff"] });
-      void queries.invalidateQueries({ queryKey: key });
+      void queries.invalidateQueries({ queryKey: ["admin"] });
+      void queries.invalidateQueries({ queryKey: ["staff"] });
+      void queries.invalidateQueries({ queryKey: ["availability"] });
     },
     onError: () => void queries.invalidateQueries({ queryKey: key }),
   });
   const stale = draft && !sameReview(draft.review, latest);
   const ready = online && canChange && !blocked && !save.isPending;
-  const canSubmit = ready && !stale && !save.isError;
+  const canSubmit = reviewOpen && ready && !stale && !save.isError;
   return (
     <div className="space-y-3 border-t border-line pt-3">
-      <p className="text-sm">
+      <p ref={currentRoleLabel} tabIndex={-1} className="text-sm">
         {t("access.currentRole", { role: t(`access.role.${currentRole}`) })}
       </p>
       {canChange && (
@@ -434,6 +439,7 @@ function StaffRoleForm({
               if (!ready || !choice || choice === currentRole) return;
               save.reset();
               setDraft({ review: latest, role: choice });
+              setReviewOpen(true);
             }}
           >
             {t("access.reviewRole")}
@@ -447,25 +453,25 @@ function StaffRoleForm({
       )}
       {draft && (
         <ConfirmDialog
-          open
+          open={reviewOpen}
           title={t("access.changeRole")}
-          description={t("access.roleReview", {
+          description={`${t("access.roleReview", {
             email: draft.review.accountEmail ?? "",
             role: t(`access.role.${draft.role}`),
-          })}
+          })} ${t(`access.roleImpact.${draft.role}`)}`}
+          returnFocus={currentRoleLabel}
           destructive
           pending={save.isPending}
           confirmDisabled={!canSubmit}
           confirmLabel={t("access.confirmRole")}
           cancelLabel={t("admin.cancel")}
           onOpenChange={(open) => {
-            if (!open && !save.isPending) setDraft(undefined);
+            if (!open && !save.isPending) setReviewOpen(false);
           }}
           onConfirm={() => {
             if (canSubmit) save.mutate(draft);
           }}
         >
-          <p className="mt-2 text-sm">{t(`access.roleImpact.${draft.role}`)}</p>
           {(stale || save.isError) && (
             <p role="alert" className="mt-2 text-sm text-danger-fg">
               {stale

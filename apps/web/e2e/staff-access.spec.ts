@@ -25,14 +25,24 @@ for (const scheme of ["light", "dark"] as const) {
         await review.click();
         await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
         await expect(dialog).toContainText(email);
+        await expect(dialog).toHaveAccessibleDescription(/its calendar will be deactivated/);
         await expectNoHorizontalScroll(page);
         await expectNoSeriousA11yViolations(page, `role change ${scheme}`);
+        await dialog.getByRole("button", { name: "Cancel" }).click();
+        await expect(page.getByText("Account role: Staff", { exact: true })).toBeFocused();
+        await review.click();
         await dialog.getByRole("button", { name: "Confirm role change" }).click();
-        await expect(page.getByText("Account role: Client", { exact: true })).toBeVisible();
+        await expect(page.getByText("Account role: Client", { exact: true })).toBeFocused();
+        expect((await (await owner.get("/api/admin/staff")).json()).staff).toContainEqual(
+          expect.objectContaining({ id: staffId, active: false }),
+        );
         await role.selectOption("staff");
         await review.click();
         await dialog.getByRole("button", { name: "Confirm role change" }).click();
         await expect(page.getByText("Account role: Staff", { exact: true })).toBeVisible();
+        expect((await (await owner.get("/api/admin/staff")).json()).staff).toContainEqual(
+          expect.objectContaining({ id: staffId, active: true }),
+        );
       } finally {
         await owner.dispose();
       }

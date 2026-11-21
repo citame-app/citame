@@ -1,5 +1,5 @@
 import { Dialog } from "@base-ui/react/dialog";
-import { type ReactNode, useRef, useState } from "react";
+import { type ReactNode, type RefObject, useRef, useState } from "react";
 import { Button } from "./button";
 import { useSheetFooterInset } from "./sheet-footer-inset";
 
@@ -14,6 +14,7 @@ export interface ConfirmDialogProps {
   destructive?: boolean;
   pending?: boolean;
   confirmDisabled?: boolean;
+  returnFocus?: RefObject<HTMLElement | null>;
   children?: ReactNode;
 }
 
@@ -29,6 +30,7 @@ export function ConfirmDialog({
   destructive = false,
   pending = false,
   confirmDisabled = false,
+  returnFocus,
   children,
 }: ConfirmDialogProps) {
   const [actions, setActions] = useState<HTMLDivElement | null>(null);
@@ -41,6 +43,7 @@ export function ConfirmDialog({
         <Dialog.Viewport className="fixed inset-0 z-50 grid place-items-end sm:place-items-center">
           <Dialog.Popup
             initialFocus={destructive ? cancelButton : undefined}
+            finalFocus={returnFocus}
             className="sob-rise flex max-h-[92dvh] w-full max-w-md flex-col overflow-hidden rounded-t-xl border border-line bg-surface shadow-lg transition-[transform,opacity] duration-200 data-ending-style:translate-y-4 data-ending-style:opacity-0 data-starting-style:translate-y-4 sm:rounded-xl"
           >
             {/* biome-ignore lint/a11y/noNoninteractiveTabindex: a scroll region needs keyboard focus for Page Down and arrow navigation */}

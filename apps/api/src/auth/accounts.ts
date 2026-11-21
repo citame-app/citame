@@ -290,7 +290,10 @@ export async function assignRole(
     review?: {
       staffId: string;
       generation: string;
-      input: Pick<ReviewedStaffRoleInput, "generation" | "expectedRole" | "version">;
+      input: Pick<
+        ReviewedStaffRoleInput,
+        "generation" | "expectedEmail" | "expectedRole" | "version"
+      >;
     };
   } = {},
 ) {
@@ -339,6 +342,7 @@ export async function assignRole(
           staff.deletedAt ||
           staff.userId !== userId ||
           staff.accessVersion !== review.input.version ||
+          row.email !== review.input.expectedEmail ||
           row.role !== review.input.expectedRole)
       )
         throw new DomainError("version_conflict", "The linked account changed; review access");

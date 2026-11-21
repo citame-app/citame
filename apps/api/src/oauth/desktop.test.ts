@@ -323,6 +323,7 @@ test("Desktop changes a linked role only against the current account and calenda
   const reviewed = {
     generation: original.generation,
     accountId: original.accountId,
+    expectedEmail: original.accountEmail,
     expectedRole: original.access.accountRole,
     version: original.access.version,
     role: "client",
@@ -341,6 +342,7 @@ test("Desktop changes a linked role only against the current account and calenda
   expect((await put({ ...reviewed, expectedRole: "client", role: "owner" })).status).toBe(409);
   const other = await actor(t, "client", "role-other-account@example.com");
   expect((await put({ ...reviewed, accountId: other.userId })).status).toBe(409);
+  expect((await put({ ...reviewed, expectedEmail: "older-address@example.com" })).status).toBe(409);
   const visit = Bun.randomUUIDv7();
   if (!other.clientId) throw new Error("Missing test client");
   await t.db.insert(appointment).values({

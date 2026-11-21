@@ -66,6 +66,7 @@ test.each(["current", "changed", "self"] as const)(
       {
         generation: "initial",
         accountId: initial.accountId,
+        expectedEmail: initial.accountEmail,
         expectedRole: "staff",
         version: 1,
         role: "client",

@@ -73,6 +73,7 @@ export const reviewedStaffRoleInputSchema = changeRoleRequestSchema
   .extend({
     generation: syncGenerationSchema,
     accountId: z.string().min(1).max(256),
+    expectedEmail: z.email().max(LIMITS.email),
     expectedRole: userRoleSchema,
     version: z.number().int().positive(),
   })
