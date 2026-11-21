@@ -91,10 +91,6 @@ fn optional_amount(value: &str) -> Option<Option<u32>> {
     }
 }
 
-fn clock_label(minutes: u16) -> String {
-    format!("{:02}:{:02}", minutes / 60, minutes % 60)
-}
-
 fn input(text: &str, placeholder: &'static str, cx: &mut Context<Root>) -> Entity<TextField> {
     cx.new(|cx| {
         let mut field = TextField::new(placeholder, false, cx);
@@ -129,10 +125,10 @@ impl Editor {
             local_input(tz, terms.and_then(|t| t.starts_at)),
             local_input(tz, terms.and_then(|t| t.ends_at)),
             timing
-                .map(|t| clock_label(t.start_minute))
+                .map(|t| i18n::promotion_clock(t.start_minute))
                 .unwrap_or_default(),
             timing
-                .map(|t| clock_label(t.end_minute))
+                .map(|t| i18n::promotion_clock(t.end_minute))
                 .unwrap_or_default(),
             number(timing.and_then(|t| t.last_minute_hours).map(u32::from)),
         ];
@@ -616,21 +612,10 @@ impl Root {
                 ))
                 .when(!terms.active, |card| card.child(self.t(Key::PromoInactive)))
                 .when_some(terms.timing.as_ref(), |card, timing| {
-                    let days = timing
-                        .weekdays
-                        .iter()
-                        .filter_map(|day| {
-                            day.checked_sub(1)
-                                .and_then(|index| DAYS.get(usize::from(index)))
-                        })
-                        .map(|day| i18n::weekday_short(self.locale, *day))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    card.child(format!(
-                        "{days} · {}–{} · {}",
-                        clock_label(timing.start_minute),
-                        clock_label(timing.end_minute),
-                        self.tz
+                    card.child(i18n::promotion_timing_label(
+                        self.locale,
+                        timing,
+                        &self.tz.to_string(),
                     ))
                     .when_some(timing.last_minute_hours, |card, hours| {
                         card.child(format!("{} · {hours}", self.t(Key::PromoLead)))

@@ -64,7 +64,11 @@ import {
   voidCheckoutPasses,
 } from "../passes/value";
 import { assertRewardPayment, checkoutRewardView } from "../rewards/discounts";
-import { releaseCheckoutReward, syncCheckoutRewards } from "../rewards/value";
+import {
+  canReturnCheckoutPoints,
+  releaseCheckoutReward,
+  syncCheckoutRewards,
+} from "../rewards/value";
 import { getSalonSettings } from "../settings/service";
 import { assertAppointmentBillable, importedPartialPayments } from "./appointment-billing";
 import { checkoutServices } from "./catalog";
@@ -190,6 +194,7 @@ async function snapshot(
     row.appointmentId && lines.some((line) => line.kind === "external_balance")
       ? (await importedPartialPayments(db, [row.appointmentId])).get(row.appointmentId)
       : undefined;
+  const reward = await checkoutRewardView(db, row.id);
   return {
     ...(externalBalance ? { externalBalance } : {}),
     id: row.id,
@@ -209,7 +214,10 @@ async function snapshot(
     refundedCents,
     overpaidCents: Math.max(0, paidCents - refundedCents - row.totalCents),
     balanceCents,
-    reward: await checkoutRewardView(db, row.id),
+    reward,
+    ...(reward?.kind === "points"
+      ? { canReturnPoints: await canReturnCheckoutPoints(db, row, reward) }
+      : {}),
     ...(protection
       ? { protection, payableCents: await protectedPayable(db, row, balanceCents, now) }
       : {}),
@@ -817,8 +825,8 @@ export async function startPayment(
         );
       const mandateRequested = Boolean(
         recurring &&
-          input.method === "redsys_card" &&
-          (await needsCardMandate(tx, sale, input.amountCents, principal)),
+        input.method === "redsys_card" &&
+        (await needsCardMandate(tx, sale, input.amountCents, principal)),
       );
       for (let attempt = 0; attempt < 3; attempt++) {
         const order = bank ? `${randomInt(1000, 10000)}${randomBytes(4).toString("hex")}` : null;

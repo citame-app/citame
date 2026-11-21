@@ -201,7 +201,10 @@ impl Root {
             || form.refreshing
             || form.stock_return.is_some()
             || form.request.is_some()
-            || form.reward_editor.is_some()
+            || form
+                .reward_editor
+                .as_ref()
+                .is_some_and(rewards::Editor::uncertain)
             || form
                 .refund
                 .as_ref()
@@ -816,6 +819,11 @@ impl ReceiptForm {
     }
 
     fn replace_receipt(&mut self, receipt: AppointmentCheckout, cx: &mut Context<Root>) {
+        if let Some(editor) = &mut self.reward_editor
+            && !editor.reconcile_receipt(&self.receipt, &receipt)
+        {
+            self.reward_editor = None;
+        }
         if let Some(editor) = &mut self.refund {
             editor.receipt_changed(receipt.refund_review_generation.as_deref());
         }

@@ -1421,6 +1421,7 @@ keys! {
     CheckoutRewardRestored => ("The server was restored. Reopen the receipt before applying a discount.", "Se ha restaurado el servidor. Vuelve a abrir el recibo antes de aplicar un descuento."),
     CheckoutRewardTimingMismatch => ("This appointment is outside the promotion's conditions.", "Esta cita no cumple las condiciones de la promoción."),
     CheckoutRewardLastMinute => ("booked within {hours} h", "reserva con hasta {hours} h de antelación"),
+    CheckoutRewardReschedule => ("The discount only stays valid if a rescheduled visit still fits these conditions.", "El descuento se mantiene si la cita reprogramada sigue cumpliendo estas condiciones."),
     CheckoutRewardUnconfirmed => ("Cloud has not confirmed the operation. Retry the same review before charging.", "Cloud aún no ha confirmado la operación. Reintenta la misma revisión antes de cobrar."),
     CheckoutRewardRetryLater => ("Wait a moment before retrying.", "Espera un momento antes de reintentar."),
     CheckoutRewardRetry => ("Retry the same request", "Reintentar la misma solicitud"),
@@ -1846,6 +1847,34 @@ pub fn weekday_short(locale: Locale, day: chrono::Weekday) -> &'static str {
         Locale::En => EN[i],
         Locale::EsAr => ES[i],
     }
+}
+
+pub fn promotion_clock(minutes: u16) -> String {
+    format!("{:02}:{:02}", minutes / 60, minutes % 60)
+}
+
+pub fn promotion_timing_label(
+    locale: Locale,
+    timing: &crate::promotions::Timing,
+    time_zone: &str,
+) -> String {
+    use chrono::Weekday::{Fri, Mon, Sat, Sun, Thu, Tue, Wed};
+    let weekdays = [Mon, Tue, Wed, Thu, Fri, Sat, Sun];
+    let days = timing
+        .weekdays
+        .iter()
+        .filter_map(|day| {
+            weekdays
+                .get(usize::from(day.checked_sub(1)?))
+                .map(|&day| weekday_short(locale, day))
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{days} · {}–{} · {time_zone}",
+        promotion_clock(timing.start_minute),
+        promotion_clock(timing.end_minute)
+    )
 }
 
 /// Short month name (`Mar` / `mar`); `month` is 1-12.

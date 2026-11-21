@@ -61,6 +61,7 @@ describe("sync_change recording (database triggers)", () => {
     ]);
     expect(recorded.filter((c) => c.entity !== "client")).toEqual([
       { seq: expect.any(Number), entity: "live_view", row_id: "intake_records", op: "upsert" },
+      { seq: expect.any(Number), entity: "live_view", row_id: "loyalty", op: "upsert" },
     ]);
     await t.db.execute(sql`delete from client_profile where id = ${row.id}`);
     expect(await changes()).toEqual([

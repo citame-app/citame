@@ -5,6 +5,7 @@ import {
   loyaltyPolicyInputSchema,
   permissionsFor,
   promotionInputSchema,
+  returnCheckoutPointsInputSchema,
   reviewedLoyaltyPolicySchema,
   rewardAdjustmentInputSchema,
   rewardChoiceSchema,
@@ -183,10 +184,7 @@ export function checkoutRewardRoutes({ db, config }: AppDeps) {
       requirePermission(c.get("principal"), "refunds");
       reviewedGeneration(c, config.syncReplicaGeneration);
       const id = parseOrThrow(idSchema, c.req.param("id"));
-      const input = parseOrThrow(
-        z.object({ reason: z.string().trim().min(8).max(300) }).strict(),
-        await readJson(c),
-      );
+      const input = parseOrThrow(returnCheckoutPointsInputSchema, await readJson(c));
       return c.json(
         await db.transaction((tx) =>
           returnCheckoutPoints(tx, id, input.reason, c.get("principal")),

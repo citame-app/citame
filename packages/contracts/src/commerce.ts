@@ -283,6 +283,7 @@ export const checkoutPaymentSchema = z.object({
 export const checkoutSchema = z.object({
   externalBalance: externalBalanceSchema.optional(),
   canRefund: z.boolean().optional(),
+  canReturnPoints: z.boolean().optional(),
   canDispatchBankRefunds: z.boolean().optional(),
   refundReviewGeneration: syncGenerationSchema.optional(),
   stockReturnGeneration: syncGenerationSchema.optional(),

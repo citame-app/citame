@@ -1,4 +1,4 @@
-import { type Checkout, rewardChoiceSchema } from "@sob/contracts";
+import { type Checkout, returnCheckoutPointsInputSchema, rewardChoiceSchema } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Button } from "~/components/ui/button";
@@ -210,8 +210,10 @@ export function RewardReceipt({
   const online = useOnline();
   const queries = useQueryClient();
   const [reason, setReason] = useState("");
+  const reviewedReturn = returnCheckoutPointsInputSchema.safeParse({ reason });
   const returned = useMutation({
-    mutationFn: () => api().rewards.returnPoints(checkout.id, reason.trim(), mode),
+    mutationFn: (input: { reason: string }) =>
+      api().rewards.returnPoints(checkout.id, input.reason, mode),
     onSuccess: () => {
       setReason("");
       void invalidateCommerce(queries);
@@ -222,11 +224,12 @@ export function RewardReceipt({
   const canReturn =
     mode === "admin" &&
     canRefund &&
-    checkout.fulfilledAt &&
-    reward.kind === "points" &&
-    reward.state === "applied" &&
-    reward.returnedPoints < reward.pointsUsed &&
-    checkout.paidCents - checkout.refundedCents <= 0;
+    (checkout.canReturnPoints ??
+      (checkout.fulfilledAt &&
+        reward.kind === "points" &&
+        reward.state === "applied" &&
+        reward.returnedPoints < reward.pointsUsed &&
+        checkout.paidCents - checkout.refundedCents <= 0));
   return (
     <div className="space-y-2 rounded-xl border border-line bg-sunken p-4">
       <h3 className="font-semibold">
@@ -256,18 +259,21 @@ export function RewardReceipt({
             className="space-y-3"
             onSubmit={(e) => {
               e.preventDefault();
-              returned.mutate();
+              if (online && reviewedReturn.success && !returned.isPending)
+                returned.mutate(reviewedReturn.data);
             }}
           >
             <TextField
+              name="reason"
               label={t("loyalty.reason")}
               value={reason}
               maxLength={300}
+              disabled={returned.isPending}
               onChange={(e) => setReason(e.target.value)}
             />
             <Button
               type="submit"
-              disabled={!online || reason.trim().length < 8 || returned.isPending}
+              disabled={!online || !reviewedReturn.success || returned.isPending}
             >
               {t("loyalty.returnPoints")}
             </Button>

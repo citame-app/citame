@@ -107,6 +107,30 @@ test("the local window excludes its end even when the same code is otherwise val
   const { bill } = await visit("2026-03-08T13:00:00Z", "2026-03-09T13:00:00Z");
   expect((await quote(bill.id)).status).toBe(409);
 });
+test("removing the timing invalidates a reviewed quote even when the price stays the same", async () => {
+  const promotion = await createOffer();
+  const { bill } = await visit();
+  const first = await quote(bill.id);
+  expect(first.status).toBe(200);
+  const review = (await first.json()) as { discountCents: number; promotionVersion: number };
+  const changed = await call(`/admin/rewards/promotions/${promotion.id}`, "PUT", {
+    ...offer,
+    timing: undefined,
+    version: promotion.version,
+  });
+  expect(changed.status).toBe(200);
+  const attempt = await call(`/admin/commerce/checkouts/${bill.id}/reward`, "POST", {
+    kind: "promotion",
+    code: offer.code,
+    expectedTotalCents: bill.totalCents,
+    expectedDiscountCents: review.discountCents,
+    expectedPromotionVersion: review.promotionVersion,
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(attempt.status).toBe(409);
+  expect(await attempt.json()).toMatchObject({ error: { code: "version_conflict" } });
+  await apply(bill.id);
+});
 test("rescheduling keeps the original time conditions after the promotion is edited", async () => {
   const p = await createOffer();
   const { a, bill } = await visit();

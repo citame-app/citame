@@ -759,6 +759,7 @@ impl Root {
             self.refresh_register_if_changed(cx);
             self.refresh_inventory(reconnected, cx);
             self.refresh_checkout_if_changed(cx);
+            self.refresh_checkout_reward_balance(cx);
             self.refresh_waitlist_if_changed(reconnected, cx);
             self.refresh_review_requests(reconnected, cx);
             self.refresh_review_moderation(reconnected, cx);

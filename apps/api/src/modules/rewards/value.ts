@@ -45,7 +45,7 @@ async function expireLot(tx: Tx, lot: Lot, now: Date): Promise<Lot> {
   return updated ?? lot;
 }
 /** Gross customer value; prepaid services earn their original funded allocation, never face value. */
-async function retainedValue(tx: Tx, sale: typeof checkout.$inferSelect) {
+async function retainedValue(tx: Tx | Database, sale: typeof checkout.$inferSelect) {
   const lines = await tx.select().from(checkoutLine).where(eq(checkoutLine.checkoutId, sale.id));
   const redemptions = await tx
     .select()
@@ -108,6 +108,23 @@ async function retainedValue(tx: Tx, sale: typeof checkout.$inferSelect) {
     totalOriginal: cashRequired + prepaidOriginal,
     totalRetained: cashRetained + prepaidRetained,
   };
+}
+
+export async function canReturnCheckoutPoints(
+  tx: Tx | Database,
+  sale: typeof checkout.$inferSelect,
+  reward: Pick<
+    typeof checkoutReward.$inferSelect,
+    "kind" | "state" | "pointsUsed" | "returnedPoints"
+  > | null,
+) {
+  return Boolean(
+    reward?.kind === "points" &&
+    reward.state === "applied" &&
+    reward.returnedPoints < reward.pointsUsed &&
+    sale.fulfilledAt &&
+    (await retainedValue(tx, sale)).totalRetained === 0,
+  );
 }
 /** Return oldest allocations first so repeated partial returns are monotonic and cent-exact. */
 async function restoreRedemption(
@@ -347,8 +364,7 @@ export async function returnCheckoutPoints(
     return getCheckoutInTransaction(tx, id, principal);
   if (!sale.fulfilledAt || reward.state !== "applied")
     throw new DomainError("invalid_state", "Void an unpaid reward reservation instead");
-  const value = await retainedValue(tx, sale);
-  if (value.totalRetained > 0)
+  if (!(await canReturnCheckoutPoints(tx, sale, reward)))
     throw new DomainError(
       "invalid_state",
       "Return the captured payments before returning all points",

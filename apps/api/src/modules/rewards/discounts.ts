@@ -248,7 +248,8 @@ export async function rewardPricing(
       discountCents,
       currentTotalCents: row.totalCents,
       newTotalCents: row.totalCents - discountCents,
-      ...(appointmentTiming && promo ? { appointmentTiming, promotionVersion: promo.version } : {}),
+      ...(promo ? { promotionVersion: promo.version } : {}),
+      ...(appointmentTiming ? { appointmentTiming } : {}),
     },
   };
 }
@@ -292,8 +293,8 @@ export async function applyCheckoutReward(
       : { kind: "promotion", code: input.code };
   const priced = await rewardPricing(tx, row, choice, now, true);
   if (
-    priced.appointmentTiming &&
     input.kind === "promotion" &&
+    (priced.appointmentTiming || input.expectedPromotionVersion !== undefined) &&
     input.expectedPromotionVersion !== priced.promo?.version
   )
     throw new DomainError(

@@ -155,6 +155,8 @@ pub struct AppointmentCheckout {
     payments: Vec<CheckoutPayment>,
     #[serde(default)]
     pub can_refund: bool,
+    #[serde(default, rename = "canReturnPoints")]
+    points_returnable: bool,
     #[serde(default)]
     can_dispatch_bank_refunds: bool,
     pub refund_review_generation: Option<String>,
@@ -202,14 +204,7 @@ impl AppointmentCheckout {
     }
 
     pub fn can_return_points(&self) -> bool {
-        self.can_refund
-            && self.fulfilled_at.is_some()
-            && self.refunded_cents >= self.paid_cents
-            && self.reward.as_ref().is_some_and(|reward| {
-                reward.kind == crate::loyalty::checkout::RewardKind::Points
-                    && reward.state == "applied"
-                    && reward.points_used > reward.returned_points
-            })
+        self.can_refund && self.points_returnable
     }
 
     pub fn reconcilable_bank_payments(
@@ -333,6 +328,7 @@ impl AppointmentCheckout {
     pub fn allows_pass(&self) -> bool {
         self.appointment_id.is_some()
             && self.client_id.is_some()
+            && self.reward.is_none()
             && self.external_balance.is_none()
             && self.collectible_cents() > 0
             && !self

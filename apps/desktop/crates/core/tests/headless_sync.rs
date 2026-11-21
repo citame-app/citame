@@ -157,6 +157,7 @@ fn native_loyalty_reviews_adjustments_and_checkout_rewards_through_the_proxy() {
                 json!({
                     "clientId": id,
                     "staffId": catalogue.staff,
+                    "idempotencyKey": uuid::Uuid::now_v7(),
                     "lines": [{
                         "kind": "custom", "description": "Synthetic reviewed reward",
                         "quantity": 1, "unitAmountCents": cents

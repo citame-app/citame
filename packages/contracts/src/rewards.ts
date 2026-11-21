@@ -42,6 +42,9 @@ export const rewardChoiceSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
 ]);
+export const returnCheckoutPointsInputSchema = z
+  .object({ reason: z.string().trim().min(8).max(300) })
+  .strict();
 export const applyRewardInputSchema = z.discriminatedUnion("kind", [
   z
     .object({

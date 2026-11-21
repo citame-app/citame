@@ -4,8 +4,16 @@ use sob_core::loyalty::checkout::{
 };
 
 enum Review {
-    Apply(Application),
+    Apply {
+        application: Application,
+        quote: Quote,
+    },
     Return(ReturnPoints),
+}
+
+struct ReviewedReward {
+    command: Arc<Review>,
+    uncertain: bool,
 }
 
 enum Request {
@@ -28,14 +36,39 @@ pub(super) struct Editor {
     input: Entity<TextField>,
     _changed: Subscription,
     balance: Option<u64>,
-    quote: Option<Quote>,
-    review: Option<Arc<Review>>,
-    uncertain: bool,
+    review: Option<ReviewedReward>,
+    observed_balance: i64,
     retry_at: Option<Instant>,
     feedback: Option<Key>,
 }
 
 impl Editor {
+    pub(super) fn uncertain(&self) -> bool {
+        self.review.as_ref().is_some_and(|review| review.uncertain)
+    }
+
+    pub(super) fn reconcile_receipt(
+        &mut self,
+        previous: &AppointmentCheckout,
+        current: &AppointmentCheckout,
+    ) -> bool {
+        if self.returning {
+            if !current.can_return_points() {
+                return false;
+            }
+        } else if current.reward_client().is_none() {
+            return false;
+        }
+        if previous.total_cents != current.total_cents
+            || previous.pricing_version != current.pricing_version
+            || previous.reward_client() != current.reward_client()
+        {
+            self.reset_review();
+            self.feedback = Some(Key::CheckoutRewardChanged);
+        }
+        true
+    }
+
     fn choice(&self, cx: &App) -> Option<Choice> {
         let input = self.input.read(cx).text();
         match self.kind {
@@ -60,13 +93,40 @@ impl Editor {
     }
 
     fn reset_review(&mut self) {
-        self.quote = None;
         self.review = None;
         self.feedback = None;
     }
 }
 
 impl Root {
+    pub(in crate::root) fn refresh_checkout_reward_balance(&mut self, cx: &mut Context<Self>) {
+        let revision = self
+            .svc
+            .store
+            .live_view_revision(sob_core::loyalty::LIVE_TOPIC)
+            .unwrap_or_default();
+        let Some(form) = self
+            .reward_form()
+            .filter(|form| !form.busy && !form.refreshing)
+        else {
+            return;
+        };
+        let Some(editor) = form.reward_editor.as_ref().filter(|editor| {
+            !editor.returning
+                && !editor.uncertain()
+                && !editor.limited()
+                && editor.observed_balance != revision
+        }) else {
+            return;
+        };
+        if editor.feedback == Some(Key::CheckoutRewardRestored) {
+            return;
+        }
+        if let Some(client) = form.receipt.reward_client() {
+            self.request_checkout_reward(Request::Balance(client), cx);
+        }
+    }
+
     fn open_checkout_reward(&mut self, returning: bool, cx: &mut Context<Self>) {
         if self.status.connectivity != Connectivity::Online {
             return;
@@ -80,7 +140,6 @@ impl Root {
         let client = form.receipt.reward_client();
         if !form.is_idle()
             || form.refreshing
-            || form.pass_picker.is_some()
             || if returning {
                 !form.receipt.can_return_points()
             } else {
@@ -91,6 +150,7 @@ impl Root {
         }
         let input = cx.new(|cx| TextField::new("", false, cx));
         let changed = cx.observe(&input, |_, _, cx| cx.notify());
+        form.pass_picker = None;
         form.reward_editor = Some(Editor {
             identity: Arc::new(()),
             generation,
@@ -99,9 +159,8 @@ impl Root {
             input,
             _changed: changed,
             balance: None,
-            quote: None,
             review: None,
-            uncertain: false,
+            observed_balance: -1,
             retry_at: None,
             feedback: None,
         });
@@ -119,7 +178,7 @@ impl Root {
         let Some(editor) = &mut form.reward_editor else {
             return false;
         };
-        if !form.busy && !editor.uncertain {
+        if !form.busy && !editor.uncertain() {
             if editor.review.is_some() {
                 editor.reset_review();
             } else {
@@ -147,13 +206,16 @@ impl Root {
             return;
         };
         let Some(editor) = form.reward_editor.as_mut().filter(|editor| {
-            !form.busy && !editor.uncertain && editor.review.is_none() && !editor.limited()
+            !form.busy && !editor.uncertain() && editor.review.is_none() && !editor.limited()
         }) else {
             return;
         };
         if editor.returning {
             if let Some(review) = ReturnPoints::reviewed(editor.input.read(cx).text()) {
-                editor.review = Some(Arc::new(Review::Return(review)));
+                editor.review = Some(ReviewedReward {
+                    command: Arc::new(Review::Return(review)),
+                    uncertain: false,
+                });
                 cx.notify();
             }
         } else if let Some(choice) = editor.choice(cx) {
@@ -176,7 +238,15 @@ impl Root {
             .live_view_revision("commerce")
             .unwrap_or_default();
         let session = self.svc.session.clone();
-        let Some(form) = self.reward_form().filter(|form| !form.busy) else {
+        let balance_revision = self
+            .svc
+            .store
+            .live_view_revision(sob_core::loyalty::LIVE_TOPIC)
+            .unwrap_or_default();
+        let Some(form) = self
+            .reward_form()
+            .filter(|form| !form.busy && !form.refreshing)
+        else {
             return;
         };
         let Some(editor) = form
@@ -187,14 +257,17 @@ impl Root {
             return;
         };
         if generation.as_ref() != Some(&editor.generation) {
-            editor.uncertain = false;
             editor.reset_review();
             editor.feedback = Some(Key::CheckoutRewardRestored);
             cx.notify();
             return;
         }
         let writing = matches!(request, Request::Write);
-        let review = editor.review.clone();
+        let refreshing_balance = matches!(request, Request::Balance(_));
+        if refreshing_balance {
+            editor.observed_balance = balance_revision;
+        }
+        let review = editor.review.as_ref().map(|review| review.command.clone());
         if writing && review.is_none() {
             return;
         }
@@ -203,7 +276,9 @@ impl Root {
         let previous = form.receipt.clone();
         let receipt = previous.clone();
         form.busy = true;
-        editor.feedback = None;
+        if !refreshing_balance {
+            editor.feedback = None;
+        }
         cx.notify();
         cx.spawn(async move |root, cx| {
             let result = cx
@@ -227,11 +302,8 @@ impl Root {
                                 .as_deref()
                                 .expect("a submission has a frozen review")
                             {
-                                Review::Apply(application) => transport.apply_checkout_reward(
-                                    &receipt,
-                                    application,
-                                    &generation,
-                                ),
+                                Review::Apply { application, .. } => transport
+                                    .apply_checkout_reward(&receipt, application, &generation),
                                 Review::Return(input) => {
                                     transport.return_checkout_points(&receipt, input, &generation)
                                 }
@@ -261,13 +333,30 @@ impl Root {
                 };
                 form.busy = false;
                 match result {
-                    Ok(Response::Balance(balance)) => editor.balance = balance,
+                    Ok(Response::Balance(balance)) => {
+                        editor.balance = balance;
+                        if editor.kind == RewardKind::Points && editor.choice(cx).is_none() {
+                            if editor.review.is_some() {
+                                editor.reset_review();
+                                editor.feedback = Some(Key::CheckoutRewardChanged);
+                            }
+                            if !balance.is_some_and(|points| points > 0) {
+                                editor.kind = RewardKind::Promotion;
+                                editor.input.update(cx, |field, cx| field.clear(cx));
+                            }
+                        }
+                    }
                     Ok(Response::Quote(choice, quote)) => {
                         if let Some(review) =
                             Application::reviewed(choice, &quote, form.receipt.total_cents)
                         {
-                            editor.quote = Some(quote);
-                            editor.review = Some(Arc::new(Review::Apply(review)));
+                            editor.review = Some(ReviewedReward {
+                                command: Arc::new(Review::Apply {
+                                    application: review,
+                                    quote,
+                                }),
+                                uncertain: false,
+                            });
                         } else {
                             editor.feedback = Some(Key::CheckoutRewardChanged);
                         }
@@ -308,7 +397,7 @@ impl Root {
                         };
                         // Once a write was unconfirmed, a subsequent permission or validation
                         // failure cannot prove whether the previous attempt committed.
-                        if editor.uncertain
+                        if editor.uncertain()
                             && !matches!(
                                 feedback,
                                 Key::CheckoutRewardChanged | Key::CheckoutRewardRestored
@@ -316,7 +405,9 @@ impl Root {
                         {
                             uncertain = true;
                         }
-                        editor.uncertain = uncertain;
+                        if let Some(review) = &mut editor.review {
+                            review.uncertain = uncertain;
+                        }
                         if !uncertain {
                             editor.reset_review();
                         }
@@ -346,33 +437,8 @@ impl Root {
     }
 
     fn checkout_reward_timing(&self, condition: &AppointmentTiming) -> String {
-        let minutes = |value: u16| format!("{:02}:{:02}", value / 60, value % 60);
-        let days = condition
-            .timing
-            .weekdays
-            .iter()
-            .filter_map(|&day| {
-                let weekdays = [
-                    chrono::Weekday::Mon,
-                    chrono::Weekday::Tue,
-                    chrono::Weekday::Wed,
-                    chrono::Weekday::Thu,
-                    chrono::Weekday::Fri,
-                    chrono::Weekday::Sat,
-                    chrono::Weekday::Sun,
-                ];
-                weekdays
-                    .get(usize::from(day).checked_sub(1)?)
-                    .map(|&day| i18n::weekday_short(self.locale, day))
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        let hours = format!(
-            "{days} · {}–{} · {}",
-            minutes(condition.timing.start_minute),
-            minutes(condition.timing.end_minute),
-            condition.time_zone
-        );
+        let hours =
+            i18n::promotion_timing_label(self.locale, &condition.timing, &condition.time_zone);
         if let Some(last_minute) = condition.timing.last_minute_hours {
             format!(
                 "{hours} · {}",
@@ -393,7 +459,7 @@ impl Root {
     ) -> gpui::Div {
         let receipt = &form.receipt;
         let online = self.status.connectivity == Connectivity::Online;
-        let ready = online && form.is_idle() && !form.refreshing && form.pass_picker.is_none();
+        let ready = online && form.is_idle() && !form.refreshing;
         if let Some(reward) = &receipt.reward {
             let name = if reward.kind == RewardKind::Points {
                 self.t(Key::CheckoutRewardPoints)
@@ -411,6 +477,7 @@ impl Root {
                 .when_some(reward.code.as_ref(), |view, code| view.child(code.clone()))
                 .when_some(reward.appointment_timing.as_ref(), |view, timing| {
                     view.child(self.checkout_reward_timing(timing))
+                        .child(self.t(Key::CheckoutRewardReschedule))
                 })
                 .when(reward.points_used > 0, |view| {
                     view.child(i18n::fill(
@@ -454,7 +521,7 @@ impl Root {
             return div();
         };
         let online = self.status.connectivity == Connectivity::Online;
-        let ready = online && !form.busy;
+        let ready = online && !form.busy && !form.refreshing;
         let title = if editor.returning {
             Key::CheckoutRewardReturn
         } else {
@@ -470,9 +537,13 @@ impl Root {
             .when_some(editor.feedback, |view, key| {
                 view.child(div().text_color(theme::conflict_fg()).child(self.t(key)))
             });
-        if editor.review.is_some() {
+        if let Some(review) = &editor.review {
+            let quote = match review.command.as_ref() {
+                Review::Apply { quote, .. } => Some(quote),
+                Review::Return(_) => None,
+            };
             return body
-                .when_some(editor.quote.as_ref(), |view, quote| {
+                .when_some(quote, |view, quote| {
                     let name = if quote.kind == RewardKind::Points {
                         self.t(Key::CheckoutRewardPoints)
                     } else {
@@ -500,6 +571,7 @@ impl Root {
                         ))
                         .when_some(quote.appointment_timing.as_ref(), |view, timing| {
                             view.child(self.checkout_reward_timing(timing))
+                                .child(self.t(Key::CheckoutRewardReschedule))
                         })
                 })
                 .when(editor.returning, |view| {
@@ -509,7 +581,7 @@ impl Root {
                 .when(ready, |view| {
                     view.child(self.reward_button(
                         "checkout-confirm-reward",
-                        if editor.uncertain {
+                        if editor.uncertain() {
                             Key::CheckoutRewardRetry
                         } else if editor.returning {
                             Key::CheckoutRewardReturn
@@ -521,7 +593,7 @@ impl Root {
                         cx,
                     ))
                 })
-                .when(!form.busy && !editor.uncertain, |view| {
+                .when(!form.busy && !editor.uncertain(), |view| {
                     view.child(self.reward_button(
                         "checkout-reward-back",
                         Key::Back,
@@ -626,7 +698,7 @@ mod tests {
                 let receipt = serde_json::from_value(json!({
                     "id": Uuid::now_v7(), "currency": "EUR", "status": "paid",
                     "totalCents": 0, "discountCents": 100, "paidCents": 0, "balanceCents": 0,
-                    "payments": [], "canRefund": true, "fulfilledAt": "2026-11-21T10:00:00Z",
+                    "payments": [], "canRefund": true, "canReturnPoints": true, "fulfilledAt": "2026-11-21T10:00:00Z",
                     "reward": { "kind": "points", "name": "Points", "pointsUsed": 100,
                       "returnedPoints": 0, "discountCents": 100, "state": "applied" }
                 }))
@@ -639,19 +711,21 @@ mod tests {
                 });
                 root.preview_checkout_reward(cx);
                 let editor = root.reward_form().unwrap().reward_editor.as_mut().unwrap();
-                let review = editor.review.clone().unwrap();
-                editor.uncertain = true;
+                let review = editor.review.as_mut().unwrap();
+                review.uncertain = true;
+                let command = review.command.clone();
                 root.dismiss_overlay(cx);
                 let form = root.reward_form().unwrap();
                 assert!(!form.is_idle());
                 assert!(Arc::ptr_eq(
-                    form.reward_editor
+                    &form.reward_editor
                         .as_ref()
                         .unwrap()
                         .review
                         .as_ref()
-                        .unwrap(),
-                    &review
+                        .unwrap()
+                        .command,
+                    &command
                 ));
                 assert!(form.request.is_none());
             })
