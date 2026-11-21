@@ -587,7 +587,7 @@ impl Root {
                 .child(self.label(key))
                 .child(input.clone())
         };
-        let mut confirm = true;
+        let confirm;
         let mut action = Key::CommissionSaveRates;
         let mut panel = div()
             .flex()
