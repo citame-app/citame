@@ -496,6 +496,8 @@ Con la migración `0076`, el ensayo de escritura volvió a verificar 1.053 origi
 
 Un ensayo independiente de caja usó una cita sintética de 100 EUR con un abono externo verificado de 35 EUR. La agenda web y la réplica mostraron el mismo saldo de 65 EUR y el indicador de facturación de origen. La caja solo aceptó cobrar los 65 EUR y ambas vistas mostraron el cobro en Citame desde el cursor previo. La migración reanudó la proyección para una réplica que ya había recibido el abono. Las anotaciones originales y el justificante privado se conservaron en el servidor.
 
+El ensayo del 21/11/2026 restauró el respaldo local, verificó los 1.053 originales y cotejó las 787 líneas importadas. En la agenda del 26/11 verificó 26 líneas y probó la reprogramación en ambos sentidos con SSE, el reintento idempotente y el rechazo de la versión antigua. La comprobación del inventario funcionó antes y después de crear las clasificaciones a partir de las etiquetas archivadas. La huella del respaldo original coincidió y el comprobante sigue indicando `canCutOver: false`.
+
 ### Copia local para probar la agenda
 
 La web y la API de la copia editable de pruebas escuchan en `127.0.0.1` y arrancan sin proveedores de cobro ni de envío. Tras aplicar `0075` y `0076`, las huellas de citas, servicios reservados, anotaciones y dispositivos coincidieron. Los datos del personal también coincidieron al excluir la nueva columna de retratos. [Agenda local del 20/11/2026](http://127.0.0.1:4275/admin/calendar?date=2026-11-20&view=day)

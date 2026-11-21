@@ -69,6 +69,10 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 - This expansion remains in development. [The delivery checklist](docs/FEATURE-EXPANSION.md) tracks unfinished marketing, mobile and additional single-business features. Vendor credentials, a production domain and verified salon content remain external activation steps; no deployment or bank activation is implied.
 
+### Fixed
+
+- Booksy recovery verifies archived product fingerprints before inventory classification columns existed and after migrating their root labels, while rejecting changed links.
+
 ## [0.1.0] - 2026-11-15
 
 First release: a self-hostable booking and salon-management platform for one salon.
@@ -94,8 +98,6 @@ First release: a self-hostable booking and salon-management platform for one sal
 - **Dependencies**: pin transitive esbuild to 0.28.2; production and complete JavaScript audits report no vulnerabilities.
 
 ### Fixed
-
-- Booksy recovery verifies archived product fingerprints before inventory classification columns existed and after migrating their root labels, while rejecting changed links.
 
 - **Operations**: isolate production smoke runs with unique Compose projects and image tags, ignore deployment `.env` files, disable inherited SMS providers, clean up temporary credentials, and allow realistic backup/restore integration-test durations.
 - **Tooling**: preserve runtime configuration in `bun run dev` and custom service settings in the root E2E task; exclude Rust build outputs, browser traces, screenshots and backups from Docker contexts; remove unused timezone configuration and lint warnings.

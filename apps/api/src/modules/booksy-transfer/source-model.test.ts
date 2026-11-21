@@ -847,6 +847,10 @@ test("old product fingerprints verify before and after classification backfill",
       await expect(verifyBooksySourceModel(tx, model)).rejects.toThrow(
         "Native product/resource fields changed",
       );
+      await tx.execute(sql`delete from inventory_classification where id=${migrated?.categoryId}`);
+      await expect(verifyBooksySourceModel(tx, model)).rejects.toThrow(
+        "Native product/resource fields changed",
+      );
       tx.rollback();
     }),
   ).rejects.toThrow("Rollback");

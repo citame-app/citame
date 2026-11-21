@@ -52,11 +52,11 @@ function matchesExtensionFingerprint(row: Record<string, unknown>, expected: str
 }
 
 /** Derive only the root classifications backfilled from the frozen source labels. */
-async function classificationIdsByLabel(db: ReadSourceDb) {
+async function rootClassificationIdsByLabel(db: ReadSourceDb) {
   const [schema] = await db.execute<{ available: boolean }>(
     sql`select to_regclass('public.inventory_classification') is not null as available`,
   );
-  if (!schema?.available) return new Map<string, string>();
+  if (!schema?.available) return null;
   const rows = await db.execute<{ kind: string; label: string; id: string }>(sql`
     select kind, lower(name) as label, id from public.inventory_classification
     where parent_id is null
@@ -294,7 +294,7 @@ export async function verifyBooksySourceModel(
     sourceStockOpening: stockMovement,
     sourceResources: resourcePool,
   };
-  let classificationIds: Map<string, string> | undefined;
+  let rootClassificationIds: Map<string, string> | null | undefined;
   for (const r of extensions) {
     const table = tables[r.kind as keyof typeof tables];
     if (
@@ -331,11 +331,20 @@ export async function verifyBooksySourceModel(
           if (matchesExtensionFingerprint(stored, r.target_hash)) continue;
           const { categoryId, subcategoryId, brandId, ...legacy } = stored;
           if (matchesExtensionFingerprint(legacy, r.target_hash)) {
-            classificationIds ??= await classificationIdsByLabel(db);
+            if (rootClassificationIds === undefined)
+              rootClassificationIds = await rootClassificationIdsByLabel(db);
+            const expectedCategory =
+              rootClassificationIds && categoryLabel
+                ? rootClassificationIds.get(`category:${categoryLabel}`)
+                : null;
+            const expectedBrand =
+              rootClassificationIds && brandLabel
+                ? rootClassificationIds.get(`brand:${brandLabel}`)
+                : null;
             if (
               subcategoryId === null &&
-              categoryId === (classificationIds.get(`category:${categoryLabel ?? ""}`) ?? null) &&
-              brandId === (classificationIds.get(`brand:${brandLabel ?? ""}`) ?? null)
+              categoryId === expectedCategory &&
+              brandId === expectedBrand
             )
               continue;
           }
