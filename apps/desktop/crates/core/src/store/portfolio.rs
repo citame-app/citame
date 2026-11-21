@@ -114,7 +114,8 @@ mod tests {
             "changes": [{
                 "seq": 1, "entity": "service", "id": service, "op": "upsert",
                 "data": {"id": service, "name": "Treatment", "active": true, "durationMinutes": 30,
-                         "bufferMinutes": 0, "updatedAt": "2026-03-01T10:00:00Z"}
+                         "bufferMinutes": 0, "priceCents": 2000, "sortOrder": 1, "currency": "EUR",
+                         "onlineBooking": true, "updatedAt": "2026-03-01T10:00:00Z"}
             }],
             "nextCursor": 1,
             "headSeq": 1,
