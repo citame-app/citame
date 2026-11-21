@@ -435,6 +435,42 @@ fn editable(store: &Store, id: &str) -> Result<crate::model::Appointment> {
     Ok(a)
 }
 
+pub enum AppointmentEdit<'a> {
+    Move {
+        starts_at: Option<DateTime<Utc>>,
+        staff_id: Option<&'a str>,
+    },
+    Cancel,
+    Outcome {
+        status: AppointmentStatus,
+        now: DateTime<Utc>,
+    },
+}
+
+/// Uses the version shown to the operator, including earlier pending local edits.
+pub fn queue_reviewed_appointment_edit(
+    store: &mut Store,
+    id: &str,
+    reviewed_version: i64,
+    edit: AppointmentEdit<'_>,
+) -> Result<()> {
+    store.write_transaction(|store| {
+        if effective_appointment(store, id)?.is_none_or(|a| a.version != reviewed_version) {
+            return Err(CoreError::AppointmentChanged);
+        }
+        match edit {
+            AppointmentEdit::Move {
+                starts_at,
+                staff_id,
+            } => queue_reschedule(store, id, starts_at, staff_id),
+            AppointmentEdit::Cancel => cancel_appointment(store, id),
+            AppointmentEdit::Outcome { status, now } => {
+                set_appointment_status(store, id, status, now)
+            }
+        }
+    })
+}
+
 pub fn reschedule_appointment(
     store: &mut Store,
     id: &str,

@@ -1280,6 +1280,8 @@ keys! {
     MoveNextDay => ("+1 day", "+1 día"),
     MoveTo => ("Move to", "Mover a"),
     ApplyMove => ("Move appointment", "Mover turno"),
+    AppointmentChanged => ("This appointment changed. Review it before saving.", "Esta cita cambió. Revísala antes de guardar."),
+    ReviewCurrentAppointment => ("Review current appointment", "Revisar la cita actual"),
     CancelAppointment => ("Cancel appointment", "Cancelar turno"),
     MarkCompleted => ("Mark completed", "Marcar realizado"),
     MarkNoShow => ("Mark no-show", "Marcar inasistencia"),

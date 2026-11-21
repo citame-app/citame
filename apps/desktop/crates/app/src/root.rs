@@ -229,6 +229,7 @@ enum AppointmentReturn {
 struct Details {
     return_to: Option<AppointmentReturn>,
     id: String,
+    reviewed_version: i64,
     original_start: DateTime<Utc>,
     original_staff: String,
     start: DateTime<Utc>,
@@ -1210,6 +1211,7 @@ impl Root {
         self.overlay = Overlay::Details(Box::new(Details {
             return_to,
             id: a.id.clone(),
+            reviewed_version: a.version,
             original_start: a.starts_at,
             original_staff: a.staff_id.clone(),
             start: a.starts_at,
@@ -1252,12 +1254,21 @@ impl Root {
     fn apply_move(&mut self, cx: &mut Context<Self>) {
         let blocked = self.t(Key::TimeOffOverlap);
         let taken = self.t(Key::ConflictSlotTaken);
+        let appointment_changed = self.t(Key::AppointmentChanged);
         let Overlay::Details(d) = &mut self.overlay else {
             return;
         };
         let start = (d.start != d.original_start).then_some(d.start);
         let staff = (d.staff_id != d.original_staff).then(|| d.staff_id.clone());
-        match ops::reschedule_appointment(&mut self.svc.store, &d.id, start, staff.as_deref()) {
+        match ops::queue_reviewed_appointment_edit(
+            &mut self.svc.store,
+            &d.id,
+            d.reviewed_version,
+            ops::AppointmentEdit::Move {
+                starts_at: start,
+                staff_id: staff.as_deref(),
+            },
+        ) {
             Ok(()) => {
                 self.close_appointment_details(true);
                 self.edited(cx);
@@ -1266,6 +1277,7 @@ impl Root {
                 d.error = Some(match e {
                     CoreError::TimeOffOverlap => blocked.to_owned(),
                     CoreError::StaffCapacityExceeded => taken.to_owned(),
+                    CoreError::AppointmentChanged => appointment_changed.to_owned(),
                     e => e.to_string(),
                 });
                 cx.notify();
@@ -1273,7 +1285,29 @@ impl Root {
         }
     }
 
+    fn review_updated_appointment(&mut self, cx: &mut Context<Self>) {
+        let Overlay::Details(d) = &mut self.overlay else {
+            return;
+        };
+        let Ok(Some(current)) = calendar::effective_appointment(&self.svc.store, &d.id) else {
+            return;
+        };
+        if d.start == d.original_start {
+            d.start = current.starts_at;
+        }
+        if d.staff_id == d.original_staff {
+            d.staff_id = current.staff_id.clone();
+        }
+        d.original_start = current.starts_at;
+        d.original_staff = current.staff_id;
+        d.reviewed_version = current.version;
+        d.confirm_cancel = false;
+        d.error = None;
+        cx.notify();
+    }
+
     fn cancel_appointment(&mut self, cx: &mut Context<Self>) {
+        let appointment_changed = self.t(Key::AppointmentChanged);
         let Overlay::Details(d) = &mut self.overlay else {
             return;
         };
@@ -1282,13 +1316,21 @@ impl Root {
             cx.notify();
             return;
         }
-        match ops::cancel_appointment(&mut self.svc.store, &d.id) {
+        match ops::queue_reviewed_appointment_edit(
+            &mut self.svc.store,
+            &d.id,
+            d.reviewed_version,
+            ops::AppointmentEdit::Cancel,
+        ) {
             Ok(()) => {
                 self.close_appointment_details(true);
                 self.edited(cx);
             }
             Err(e) => {
-                d.error = Some(e.to_string());
+                d.error = Some(match e {
+                    CoreError::AppointmentChanged => appointment_changed.to_owned(),
+                    e => e.to_string(),
+                });
                 cx.notify();
             }
         }
@@ -1300,16 +1342,25 @@ impl Root {
         now: DateTime<Utc>,
         cx: &mut Context<Self>,
     ) {
+        let appointment_changed = self.t(Key::AppointmentChanged);
         let Overlay::Details(d) = &mut self.overlay else {
             return;
         };
-        match ops::set_appointment_status(&mut self.svc.store, &d.id, status, now) {
+        match ops::queue_reviewed_appointment_edit(
+            &mut self.svc.store,
+            &d.id,
+            d.reviewed_version,
+            ops::AppointmentEdit::Outcome { status, now },
+        ) {
             Ok(()) => {
                 self.close_appointment_details(true);
                 self.edited(cx);
             }
             Err(error) => {
-                d.error = Some(error.to_string());
+                d.error = Some(match error {
+                    CoreError::AppointmentChanged => appointment_changed.to_owned(),
+                    e => e.to_string(),
+                });
                 cx.notify();
             }
         }
@@ -3077,9 +3128,13 @@ impl Root {
             .as_ref()
             .map(|a| self.appointment_client_name(a))
             .unwrap_or_default();
-        let editable = current
+        let stale = current
             .as_ref()
-            .is_some_and(|a| a.status == AppointmentStatus::Booked);
+            .is_none_or(|a| a.version != d.reviewed_version);
+        let editable = !stale
+            && current
+                .as_ref()
+                .is_some_and(|a| a.status == AppointmentStatus::Booked);
         let can_set_outcome =
             editable && current.as_ref().is_some_and(|a| a.starts_at <= Utc::now());
         let changed = editable && (d.start != d.original_start || d.staff_id != d.original_staff);
@@ -3323,7 +3378,23 @@ impl Root {
                         )),
                 )
             })
-            .when_some(d.error.clone(), |x, e| {
+            .when(stale, |x| {
+                x.child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::conflict_fg())
+                        .child(self.t(Key::AppointmentChanged)),
+                )
+                .when(current.is_some(), |x| {
+                    x.child(self.button(
+                        "review-current-appointment",
+                        self.t(Key::ReviewCurrentAppointment),
+                        Kind::Ghost,
+                        cx.listener(|this, _, _, cx| this.review_updated_appointment(cx)),
+                    ))
+                })
+            })
+            .when_some(d.error.clone().filter(|_| !stale), |x, e| {
                 x.child(
                     div()
                         .text_sm()
@@ -5125,6 +5196,40 @@ mod tests {
                 root.view.as_ref().unwrap().columns[0].items.is_empty(),
                 "cancelled bookings leave the grid"
             );
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    async fn a_cloud_move_requires_review_before_saving_the_open_desktop_draft(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, win) = open(cx);
+        win.update(cx, |root, _, cx| {
+            root.open_details(EXISTING, cx);
+            root.cancel_appointment(cx);
+            let Overlay::Details(draft) = &mut root.overlay else {
+                panic!("missing appointment details");
+            };
+            draft.start += Span::minutes(15);
+            let proposed_start = draft.start;
+            let mut cloud = root.svc.store.appointment(EXISTING).unwrap().unwrap();
+            cloud.version += 1;
+            cloud.starts_at += Span::hours(2);
+            cloud.ends_at += Span::hours(2);
+            root.svc.store.apply_page(&[up(10, "appointment", EXISTING, json!(&cloud))], 10).unwrap();
+
+            root.cancel_appointment(cx);
+            root.apply_move(cx);
+            assert!(outbox_kinds(root).is_empty());
+            root.review_updated_appointment(cx);
+            assert!(matches!(&root.overlay, Overlay::Details(reviewed)
+                if !reviewed.confirm_cancel && reviewed.original_start == cloud.starts_at
+                    && reviewed.start == proposed_start && reviewed.reviewed_version == cloud.version));
+            root.apply_move(cx);
+            let queued = root.svc.store.outbox(5).unwrap();
+            assert_eq!(queued.len(), 1);
+            assert_eq!(queued[0].payload["version"], json!(cloud.version));
         })
         .unwrap();
     }

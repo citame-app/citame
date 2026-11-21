@@ -26,6 +26,8 @@ pub enum CoreError {
     PendingClient,
     #[error("the calendar must be refreshed after a restore")]
     CalendarGenerationChanged,
+    #[error("the reviewed appointment has changed")]
+    AppointmentChanged,
     #[error("not found: {0}")]
     NotFound(String),
     #[error("io error: {0}")]
