@@ -121,58 +121,65 @@ test("undoing a draft lets the next save use the live connection revision", asyn
   );
 });
 
-test("a renewed connection requires a new confirmation before disconnecting", async () => {
-  const setup = { appId: "123456", configId: "234567", version: "v27.0" };
-  let connection = {
-    phone: "+34 600 000 000",
-    revision: "a".repeat(64),
-    rules: [],
-    coexistence: true,
-    expiresAt: null,
-  } as { phone: string; revision: string; rules: []; coexistence: boolean; expiresAt: null } | null;
-  const requests: unknown[] = [];
-  globalThis.fetch = mock(async (input: URL | string, init?: RequestInit) => {
-    const url = new URL(String(input), "http://localhost");
-    if (url.pathname.endsWith("/deliveries"))
-      return Response.json([
-        {
-          id: "01965683-0000-7000-8000-000000000001",
-          kind: "confirmation",
-          scheduledFor: "2026-11-21T10:00:00.000Z",
-          status: "sent",
-          delivery: "read",
-          lastError: null,
-        },
-      ]);
-    if (url.pathname.endsWith("/disconnect/reviewed")) {
-      requests.push(JSON.parse(String(init?.body)));
-      connection = null;
-      return Response.json({ setup, connection, signupRevision: "c".repeat(64) });
+test.each(["stale", "current"] as const)(
+  "disconnecting checks a %s review and keeps delivery history",
+  async (review) => {
+    const setup = { appId: "123456", configId: "234567", version: "v27.0" };
+    const connection = {
+      phone: "+34 600 000 000",
+      revision: "a".repeat(64),
+      rules: [],
+      coexistence: true,
+      expiresAt: null,
+    };
+    const requests: unknown[] = [];
+    globalThis.fetch = mock(async (input: URL | string, init?: RequestInit) => {
+      const { pathname } = new URL(String(input), "http://localhost");
+      if (pathname.endsWith("/deliveries"))
+        return Response.json([
+          {
+            id: "01965683-0000-7000-8000-000000000001",
+            kind: "confirmation",
+            scheduledFor: "2026-11-21T10:00:00.000Z",
+            status: "sent",
+            delivery: "read",
+            lastError: null,
+          },
+        ]);
+      if (pathname.endsWith("/disconnect/reviewed")) {
+        requests.push(JSON.parse(String(init?.body)));
+        return Response.json({ setup, connection: null, signupRevision: "c".repeat(64) });
+      }
+      if (pathname.endsWith("/templates")) return Response.json([]);
+      if (requests.length > 0) return new Response(null, { status: 503 });
+      return Response.json({ setup, connection });
+    }) as unknown as typeof fetch;
+    const view = renderApp(<WhatsAppSettings />);
+    fireEvent.click(await screen.findByRole("button", { name: "Disconnect from Citame" }));
+    const dialog = within(
+      await screen.findByRole("dialog", { name: "Disconnect +34 600 000 000?" }),
+    );
+    const confirm = dialog.getByRole("button", { name: "Confirm disconnect" });
+    await waitFor(() => expect(dialog.getByRole("button", { name: "Cancel" })).toHaveFocus());
+    if (review === "stale") {
+      await act(async () => {
+        view.queryClient.setQueryData(["admin", "whatsapp", "connection"], {
+          setup,
+          connection: { ...connection, revision: "b".repeat(64) },
+        });
+        // TanStack Query publishes observer updates on the next task.
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+      expect(dialog.getByRole("button", { name: "Confirm disconnect" })).toBeDisabled();
+      expect(requests).toEqual([]);
+    } else {
+      fireEvent.click(confirm);
+      expect(await screen.findByRole("button", { name: "Load Meta sign-in" })).toBeEnabled();
+      expect(await screen.findByText("Read")).toBeInTheDocument();
+      expect(requests).toEqual([{ revision: connection.revision }]);
     }
-    if (url.pathname.endsWith("/templates")) return Response.json([]);
-    if (requests.length > 0) return new Response(null, { status: 503 });
-    return Response.json({ setup, connection });
-  }) as unknown as typeof fetch;
-  const view = renderApp(<WhatsAppSettings />);
-  fireEvent.click(await screen.findByRole("button", { name: "Disconnect from Citame" }));
-  let dialog = within(await screen.findByRole("dialog", { name: "Disconnect +34 600 000 000?" }));
-  expect(dialog.getByRole("button", { name: "Cancel" })).toHaveFocus();
-  connection = { ...connection!, revision: "b".repeat(64) };
-  await act(async () =>
-    view.queryClient.invalidateQueries({ queryKey: ["admin", "whatsapp", "connection"] }),
-  );
-  await waitFor(() =>
-    expect(dialog.getByRole("button", { name: "Confirm disconnect" })).toBeDisabled(),
-  );
-  expect(requests).toEqual([]);
-  fireEvent.click(dialog.getByRole("button", { name: "Cancel" }));
-  fireEvent.click(await screen.findByRole("button", { name: "Disconnect from Citame" }));
-  dialog = within(await screen.findByRole("dialog"));
-  fireEvent.click(dialog.getByRole("button", { name: "Confirm disconnect" }));
-  await waitFor(() => expect(requests).toEqual([{ revision: "b".repeat(64) }]));
-  expect(await screen.findByRole("button", { name: "Load Meta sign-in" })).toBeEnabled();
-  expect(await screen.findByText("Read")).toBeInTheDocument();
-});
+  },
+);
 
 test.each(["stale", "successful"] as const)(
   "Embedded Signup applies the result for a %s popup review",
