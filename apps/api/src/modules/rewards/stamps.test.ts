@@ -173,6 +173,18 @@ test("a reward notice is private, read per account, and withdrawn after a refund
   expect(refund.status).toBe(201);
   expect(await list(owner, team)).toMatchObject({ unreadCount: 0, entries: [] });
   expect(await list(customer)).toMatchObject({ unreadCount: 0, entries: [] });
+
+  await settle(fixtures.haircutId);
+  const restored = await list(customer);
+  const earnedAgain = restored.entries[0];
+  expect(restored.unreadCount).toBe(1);
+  expect(earnedAgain?.cardId).toBe(notice?.cardId);
+  expect(earnedAgain?.revision).toBe((notice?.revision ?? 0) + 1);
+  expect((await read(customer, inbox)).status).toBe(404);
+  expect((await read(customer, inbox, { ...input, revision: earnedAgain?.revision })).status).toBe(
+    200,
+  );
+  expect(await list(customer)).toMatchObject({ unreadCount: 0, entries: [{ read: true }] });
 });
 
 test("qualified settled treatments add one stamp per visit and require reviewed reward issuance", async () => {
