@@ -90,7 +90,7 @@ const LOCAL_CATEGORY_MIGRATION = 42;
 const MERGED_CATALOG_PRESENTATION = originLedger[0]?.timestamp;
 const CATEGORY_COLUMN = 'ALTER TABLE "service" ADD COLUMN "category" text;';
 const WHATSAPP_ENUM = 1794952499559;
-const WHATSAPP_TRIGGERS = 1795258520000;
+const WHATSAPP_ENUM_ADDITION = `ALTER TYPE "public"."notification_channel" ADD VALUE 'whatsapp';`;
 
 function recordMigration(
   db: Pick<Database, "execute">,
@@ -155,16 +155,17 @@ export async function runMigrations(
     `;
     const applied = journal?.initialized ? await readAppliedLedger(migrationDb) : [];
     const legacy = legacyOriginEntries(expected, applied);
-    // PostgreSQL requires the enum value added by 0047 to commit before 0103 uses it.
-    const beforeWhatsAppTriggers = expected.filter(
-      ({ folderMillis }) => folderMillis < WHATSAPP_TRIGGERS,
-    );
     if (legacy.length) {
       if (online)
         throw new Error("Merging the upstream migration history requires a maintenance upgrade.");
       const alreadyApplied = new Set(legacy.map(({ timestamp }) => timestamp));
+      // Commit only the enum value before the atomic legacy replay. Older code can still run
+      // if replay fails, and a retry can reuse the value while the old journal remains intact.
+      await migrationDb.execute(
+        sql`ALTER TYPE "public"."notification_channel" ADD VALUE IF NOT EXISTS 'whatsapp'`,
+      );
       await migrationDb.transaction(async (tx) => {
-        for (const migration of beforeWhatsAppTriggers.slice(COMMON_MIGRATION_COUNT)) {
+        for (const migration of expected.slice(COMMON_MIGRATION_COUNT)) {
           const hasUpstreamEntry = alreadyApplied.has(migration.folderMillis);
           // Reconcile the upstream constraint with the wider limit already supported locally.
           if (hasUpstreamEntry && migration.folderMillis !== MERGED_CATALOG_PRESENTATION) continue;
@@ -173,6 +174,12 @@ export async function runMigrations(
             if (
               migration === expected[LOCAL_CATEGORY_MIGRATION] &&
               statement.trim() === CATEGORY_COLUMN
+            ) {
+              continue;
+            }
+            if (
+              migration.folderMillis === WHATSAPP_ENUM &&
+              statement.trim() === WHATSAPP_ENUM_ADDITION
             ) {
               continue;
             }
@@ -186,11 +193,11 @@ export async function runMigrations(
             where hash = ${entry.legacyHash} and created_at = ${entry.legacyTimestamp}
           `);
         }
-        assertLedger(beforeWhatsAppTriggers, await readAppliedLedger(tx), "exact");
+        assertLedger(expected, await readAppliedLedger(tx), "exact");
       });
-    } else {
-      assertLedger(expected, applied, "before-migration");
+      return;
     }
+    assertLedger(expected, applied, "before-migration");
     if (online) {
       for (const { folderMillis } of expected.slice(applied.length)) {
         const maintenance = maintenanceMigrations.get(folderMillis);
@@ -198,11 +205,12 @@ export async function runMigrations(
       }
     }
     const latestTimestamp = Number(applied.at(-1)?.timestamp ?? 0);
-    if (!legacy.length && latestTimestamp > 0 && latestTimestamp < WHATSAPP_ENUM) {
+    if (latestTimestamp > 0 && latestTimestamp < WHATSAPP_ENUM) {
       // A fresh install creates the enum in the same transaction on PostgreSQL 18.
       // An existing schema must commit the addition before the triggers can use it.
       await migrationDb.transaction(async (tx) => {
-        for (const migration of beforeWhatsAppTriggers.slice(applied.length)) {
+        for (const migration of expected.slice(applied.length)) {
+          if (migration.folderMillis > WHATSAPP_ENUM) break;
           for (const statement of migration.sql) await tx.execute(sql.raw(statement));
           await recordMigration(tx, migration);
         }

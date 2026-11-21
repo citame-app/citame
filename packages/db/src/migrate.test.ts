@@ -236,6 +236,42 @@ for (const prefix of ["local", "before-whatsapp", "upstream-first", "upstream-fu
             where id=${id}
           `);
         }
+        if (prefix !== "local") {
+          const readJournal = () =>
+            target.db.execute<{ timestamp: string; hash: string }>(sql`
+            select created_at::text as timestamp, hash
+            from drizzle.__drizzle_migrations order by created_at
+          `);
+          const before = await readJournal();
+          await target.db.execute(sql`
+            create function reject_whatsapp_trigger_for_test() returns event_trigger
+            language plpgsql as $$
+            begin
+              if exists (select 1 from pg_trigger where tgname = 'sync_whatsapp_connection_live_view') then
+                raise exception 'Synthetic WhatsApp migration failure';
+              end if;
+            end;
+            $$
+          `);
+          await target.db.execute(sql`
+            create event trigger reject_whatsapp_trigger_for_test on ddl_command_end
+            when tag in ('CREATE TRIGGER') execute function reject_whatsapp_trigger_for_test()
+          `);
+          await expect(runMigrations(target.db)).rejects.toThrow(
+            "sync_whatsapp_connection_live_view",
+          );
+          const after = await readJournal();
+          expect(after.slice(0, before.length)).toEqual(before);
+          expect(after).toHaveLength(before.length + (prefix === "before-whatsapp" ? 1 : 0));
+          const [payment] = await target.db.execute(sql`
+            select exists (
+              select 1 from information_schema.columns
+              where table_name = 'appointment_context' and column_name = 'source_payment_unverified'
+            ) as applied
+          `);
+          expect(payment?.applied).toBe(false);
+          await target.db.execute(sql`drop event trigger reject_whatsapp_trigger_for_test`);
+        }
         await runMigrations(target.db);
         expect(await verifyMigrationLedger(target.db)).toEqual(getReleaseMigrationLedger());
         await runMigrations(target.db);
