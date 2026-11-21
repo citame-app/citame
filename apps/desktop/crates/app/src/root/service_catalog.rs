@@ -2,9 +2,9 @@ use super::*;
 use sob_core::http::{
     CatalogForm, CatalogPrice, CatalogService, ReviewedCatalog, ServiceDetails, ServiceField,
 };
-use sob_core::store::{PendingServiceEdit, SERVICE_EDIT_KIND};
+use sob_core::store::{PendingServiceEdit, SERVICE_EDIT_KIND, ServiceAssignment};
 use sob_core::sync::TransportError;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 mod creation;
 
@@ -109,6 +109,7 @@ struct Editor {
     price_type: CatalogPrice,
     visible: bool,
     active: bool,
+    assigned: BTreeSet<String>,
     creation: Option<creation::Draft>,
     recovery: Option<Recovery>,
 }
@@ -130,6 +131,7 @@ impl Editor {
             price_type: baseline.price_type,
             visible: baseline.online_booking,
             active: baseline.active,
+            assigned: base.staff_ids.clone(),
             base,
             baseline,
             fields,
@@ -154,7 +156,7 @@ impl Editor {
     }
 
     fn dirty(&self, cx: &App) -> bool {
-        self.form(cx) != self.baseline
+        self.form(cx) != self.baseline || self.assigned != self.base.staff_ids
     }
 
     fn review(&mut self, generation: String, current: CatalogService, cx: &mut Context<Root>) {
@@ -185,6 +187,8 @@ impl Editor {
         self.price_type = reviewed.price_type;
         self.visible = reviewed.online_booking;
         self.active = reviewed.active;
+        self.assigned =
+            ServiceAssignment::reapply(&self.base.staff_ids, &self.assigned, &current.staff_ids);
         self.generation = generation;
         self.base = current;
     }
@@ -195,6 +199,7 @@ struct Recovery {
     reviewed: bool,
     restored: bool,
     rejected_version: Option<u64>,
+    rejected_team: Option<BTreeSet<String>>,
 }
 
 pub(super) struct Desk {
@@ -233,7 +238,9 @@ impl Desk {
         {
             for local in &replica.services {
                 let remote = rows.get(local.id.as_str()).map(|(row, _)| *row);
-                if remote.is_none_or(|row| row.version <= local.version) {
+                if remote
+                    .is_none_or(|row| !row.supersedes_review(local.version, Some(&local.staff_ids)))
+                {
                     rows.insert(local.id.as_str(), (local, true));
                 }
             }
@@ -281,14 +288,9 @@ impl Desk {
         if local.generation != cloud.generation {
             return true;
         }
-        let from = |catalogue: &ReviewedCatalog| {
-            catalogue
-                .services
-                .iter()
-                .find(|row| row.id == id)
-                .map(|row| row.version)
-        };
-        matches!((from(local), from(cloud)), (Some(local), Some(cloud)) if cloud > local)
+        let local = local.services.iter().find(|row| row.id == id);
+        let cloud = cloud.services.iter().find(|row| row.id == id);
+        matches!((local, cloud), (Some(local), Some(cloud)) if cloud.supersedes_review(local.version, Some(&local.staff_ids)))
     }
 
     fn available_review(&self, editor: &Editor) -> Option<(&str, &CatalogService)> {
@@ -296,9 +298,9 @@ impl Desk {
         if self.cloud_ahead(&current.id)
             || editor.recovery.as_ref().is_some_and(|draft| {
                 !draft.restored
-                    && draft
-                        .rejected_version
-                        .is_some_and(|version| current.version <= version)
+                    && draft.rejected_version.is_some_and(|version| {
+                        !current.supersedes_review(version, draft.rejected_team.as_ref())
+                    })
             })
         {
             return None;
@@ -311,10 +313,11 @@ impl Desk {
         if restored
             && !self.list.as_ref().is_some_and(|list| {
                 list.generation == generation
-                    && list
-                        .services
-                        .iter()
-                        .any(|row| row.id == current.id && row.version == current.version)
+                    && list.services.iter().any(|row| {
+                        row.id == current.id
+                            && row.version == current.version
+                            && row.staff_ids == current.staff_ids
+                    })
             })
         {
             return None;
@@ -566,7 +569,11 @@ impl Root {
                 version: edit.version,
                 details: edit.reviewed,
                 catalog: None,
-                staff_ids: Default::default(),
+                staff_ids: edit
+                    .assignment
+                    .as_ref()
+                    .map(|team| team.reviewed_staff_ids.clone())
+                    .unwrap_or_default(),
             },
             generation,
             labels,
@@ -583,11 +590,19 @@ impl Root {
         editor.price_type = form.price_type;
         editor.visible = form.online_booking;
         editor.active = form.active;
+        let rejected_team = edit
+            .assignment
+            .as_ref()
+            .map(|team| team.reviewed_staff_ids.clone());
+        if let Some(team) = edit.assignment {
+            editor.assigned = team.staff_ids;
+        }
         editor.recovery = Some(Recovery {
             mutation_id: mutation_id.into(),
             reviewed: false,
             restored,
             rejected_version: is_version_conflict.then_some(edit.version),
+            rejected_team,
         });
         desk.editor = Some(editor);
         cx.notify();
@@ -643,11 +658,13 @@ impl Root {
             .recovery
             .as_ref()
             .map(|recovery| recovery.mutation_id.as_str());
-        match self
-            .svc
-            .store
-            .queue_service_edit(&editor.generation, &editor.base, &input, replaces)
-        {
+        match self.svc.store.queue_service_edit(
+            &editor.generation,
+            &editor.base,
+            &input,
+            &editor.assigned,
+            replaces,
+        ) {
             Ok(queued) => {
                 desk.editor = None;
                 desk.pending_edits = self.svc.store.pending_service_edits().unwrap_or_default();
@@ -661,6 +678,10 @@ impl Root {
             Err(CoreError::CatalogueVersionChanged | CoreError::CalendarGenerationChanged) => {
                 desk.replica = self.svc.store.reviewed_catalogue().ok();
                 desk.notice = Some(Key::CatalogChanged);
+                cx.notify();
+            }
+            Err(CoreError::CatalogueEditPending) => {
+                desk.notice = Some(Key::CatalogRevisionPending);
                 cx.notify();
             }
             Err(_) => {
@@ -879,10 +900,8 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let changed = desk.changed(editor);
-        let latest = desk
-            .latest()
-            .filter(|_| changed)
-            .map(|(_, row)| &row.details);
+        let current_service = desk.latest().filter(|_| changed).map(|(_, row)| row);
+        let latest = current_service.map(|row| &row.details);
         let current = latest.map(CatalogForm::from);
         let original = &editor.baseline.fields;
         div()
@@ -903,6 +922,9 @@ impl Root {
                     })
                     .when_some(editor.creation.as_ref(), |body, draft| {
                         body.child(self.render_creation_options(draft, cx))
+                    })
+                    .when(editor.creation.is_none(), |body| {
+                        body.child(self.render_catalog_team(desk, editor, current_service, cx))
                     })
                     .children(ServiceField::ALL.map(|field| {
                         let index = field.index();
@@ -1115,6 +1137,97 @@ impl Root {
                 },
             )
     }
+
+    fn render_catalog_team(
+        &self,
+        desk: &Desk,
+        editor: &Editor,
+        current: Option<&CatalogService>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let mut members: BTreeSet<_> = editor
+            .assigned
+            .union(&editor.base.staff_ids)
+            .cloned()
+            .collect();
+        members.extend(
+            self.report_staff_options
+                .iter()
+                .filter(|row| row.active)
+                .map(|row| row.id.clone()),
+        );
+        let selectable = !desk.denied && self.can_create_catalogue_item();
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(div().text_sm().child(self.t(Key::Staff)))
+            .when_some(
+                current.filter(|row| row.staff_ids != editor.base.staff_ids),
+                |body, row| {
+                    let names = row
+                        .staff_ids
+                        .iter()
+                        .map(|id| self.staff_name(id))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let assigned = if names.is_empty() {
+                        self.t(Key::AssignmentNoStaff)
+                    } else {
+                        &names
+                    };
+                    body.child(
+                        div()
+                            .text_sm()
+                            .text_color(theme::muted())
+                            .child(format!("{} {assigned}", self.t(Key::CatalogCurrent))),
+                    )
+                },
+            )
+            .when(members.is_empty(), |body| {
+                body.child(div().text_sm().child(self.t(Key::AssignmentNoStaff)))
+            })
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .children(members.into_iter().map(|id| {
+                        let assigned = editor.assigned.contains(&id);
+                        let active = self
+                            .report_staff_options
+                            .iter()
+                            .any(|row| row.id == id && row.active);
+                        let before = editor.base.staff_ids.contains(&id);
+                        let label = format!(
+                            "{} · {}",
+                            self.staff_name(&id),
+                            self.t(super::service_assignments::membership_label(
+                                before, assigned
+                            ))
+                        );
+                        if !selectable || !(active || assigned || before) {
+                            return div().p_2().text_sm().child(label).into_any_element();
+                        }
+                        self.button(
+                            SharedString::from(format!("configure-service-staff-{id}")),
+                            label,
+                            if assigned { Kind::Primary } else { Kind::Ghost },
+                            cx.listener(move |root, _, _, cx| {
+                                if let Overlay::ServiceCatalog(desk) = &mut root.overlay
+                                    && !desk.denied
+                                    && let Some(editor) = &mut desk.editor
+                                    && !editor.assigned.remove(&id)
+                                {
+                                    editor.assigned.insert(id.clone());
+                                }
+                                cx.notify();
+                            }),
+                        )
+                        .into_any_element()
+                    })),
+            )
+    }
 }
 
 fn price_label(price: CatalogPrice) -> Key {
@@ -1149,12 +1262,13 @@ mod tests {
     use gpui::TestAppContext;
 
     #[gpui::test]
-    async fn the_native_editor_uses_a_reviewed_replica_and_queues_a_price_edit_offline(
+    async fn the_native_editor_queues_one_offline_change_for_price_and_team(
         cx: &mut TestAppContext,
     ) {
         let (_directory, window) = super::super::tests::open(cx);
         window.update(cx, |root, _, cx| {
             let id = "0198f5a0-7b1c-7000-8000-000000000201";
+            let professional = "0198f5a0-7b1c-7000-8000-000000000202";
             root.svc.store.apply_page(&[RawChange {
                 seq: 1000, entity: "service".into(), id: id.into(), op: "upsert".into(),
                 data: Some(serde_json::json!({
@@ -1162,7 +1276,13 @@ mod tests {
                     "bufferMinutes": 0, "priceCents": 2000, "sortOrder": 1, "currency": "EUR",
                     "onlineBooking": true, "active": true, "updatedAt": "2026-03-01T10:00:00Z",
                 })),
-            }], 1000).unwrap();
+            }, RawChange {
+                seq: 1001, entity: "staff".into(), id: professional.into(), op: "upsert".into(),
+                data: Some(serde_json::json!({
+                    "id": professional, "displayName": "Professional", "active": true,
+                    "updatedAt": "2026-03-01T10:00:00Z",
+                })),
+            }], 1001).unwrap();
             root.status.connectivity = Connectivity::Offline;
             root.open_service_catalog(cx);
             root.select_catalog_service(id, cx);
@@ -1170,11 +1290,16 @@ mod tests {
             desk.editor.as_mut().unwrap().fields[ServiceField::Price.index()][0].input.update(
                 cx, |field, cx| field.set_text("27,50", cx)
             );
+            desk.editor.as_mut().unwrap().assigned.insert(professional.into());
             root.save_catalog_service(cx);
             let pending = root.svc.store.pending_service_edits().unwrap();
+            assert_eq!(pending.len(), 1);
             assert_eq!(pending[0].proposal().unwrap().price_cents, 2750);
             assert_eq!(pending[0].version, 3);
-            assert_eq!(root.svc.store.reviewed_catalogue().unwrap().services[0].details.price_cents, 2000);
+            assert_eq!(pending[0].assignment.as_ref().unwrap().staff_ids, [professional.into()].into());
+            let confirmed = root.svc.store.reviewed_catalogue().unwrap();
+            assert_eq!(confirmed.services[0].details.price_cents, 2000);
+            assert!(confirmed.services[0].staff_ids.is_empty());
         }).unwrap();
     }
 

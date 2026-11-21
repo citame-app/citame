@@ -2,6 +2,15 @@ use super::*;
 use sob_core::store::{AssignmentSnapshot, AssignmentWork, ServiceAssignment};
 use std::collections::BTreeSet;
 
+pub(super) fn membership_label(before: bool, assigned: bool) -> Key {
+    match (before, assigned) {
+        (true, true) => Key::AssignmentAssigned,
+        (false, false) => Key::AssignmentUnassigned,
+        (false, true) => Key::AssignmentWillAdd,
+        (true, false) => Key::AssignmentWillRemove,
+    }
+}
+
 pub(super) struct Desk {
     search: Entity<TextField>,
     catalogue: Vec<Service>,
@@ -374,12 +383,7 @@ impl Root {
                         let mut label = format!(
                             "{} · {}",
                             member.display_name,
-                            self.t(match (before, assigned) {
-                                (true, true) => Key::AssignmentAssigned,
-                                (false, false) => Key::AssignmentUnassigned,
-                                (false, true) => Key::AssignmentWillAdd,
-                                (true, false) => Key::AssignmentWillRemove,
-                            })
+                            self.t(membership_label(before, assigned))
                         );
                         if !member.active {
                             label.push_str(" · ");

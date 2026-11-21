@@ -73,7 +73,13 @@ fn a_reviewed_offline_service_edit_reopens_without_mutating_the_booking_replica(
     proposed.name = "🔔".repeat(101);
     assert!(
         store
-            .queue_service_edit(&review.generation, original, &proposed, None)
+            .queue_service_edit(
+                &review.generation,
+                original,
+                &proposed,
+                &original.staff_ids,
+                None
+            )
             .is_err()
     );
     assert!(store.outbox(1).unwrap().is_empty());
@@ -81,12 +87,34 @@ fn a_reviewed_offline_service_edit_reopens_without_mutating_the_booking_replica(
     proposed.price_cents = 2000;
     assert!(
         store
-            .queue_service_edit(&review.generation, original, &proposed, None)
+            .queue_service_edit(
+                &review.generation,
+                original,
+                &proposed,
+                &original.staff_ids,
+                None
+            )
             .unwrap()
+    );
+    let separate_assignment = crate::store::ServiceAssignment {
+        id: CUT.into(),
+        reviewed_staff_ids: original.staff_ids.clone(),
+        staff_ids: [ANA.into()].into(),
+    };
+    assert!(
+        store
+            .queue_service_assignment(&review.generation, &separate_assignment, None)
+            .is_err()
     );
     assert!(
         store
-            .queue_service_edit(&review.generation, original, &proposed, None)
+            .queue_service_edit(
+                &review.generation,
+                original,
+                &proposed,
+                &original.staff_ids,
+                None
+            )
             .is_err()
     );
     drop(store);
@@ -135,6 +163,7 @@ fn a_reviewed_offline_service_edit_reopens_without_mutating_the_booking_replica(
             &review.generation,
             original,
             &proposed,
+            &original.staff_ids,
             Some(&entry.mutation_id)
         ),
         Err(crate::error::CoreError::CatalogueVersionChanged)
@@ -147,6 +176,7 @@ fn a_reviewed_offline_service_edit_reopens_without_mutating_the_booking_replica(
                 &current.generation,
                 row,
                 &proposed,
+                &row.staff_ids,
                 Some(&entry.mutation_id)
             )
             .unwrap()
@@ -156,6 +186,80 @@ fn a_reviewed_offline_service_edit_reopens_without_mutating_the_booking_replica(
         2
     );
     assert!(reopened.conflicts().unwrap().is_empty());
+}
+
+#[test]
+fn a_combined_conflict_can_be_reviewed_when_only_its_team_catches_up() {
+    let mut store = seeded();
+    store.apply_page(&[up(8, "service", CUT, json!({
+        "id": CUT, "name": "Haircut", "durationMinutes": 45, "bufferMinutes": 15,
+        "priceCents": 1200, "currency": "ARS", "active": true, "updatedAt": T0, "version": 3,
+        "sortOrder": 0, "onlineBooking": true
+    }))], 8).unwrap();
+    let original = store.reviewed_catalogue().unwrap();
+    let base = &original.services[0];
+    let local_team = [ANA.into()].into();
+    store
+        .queue_service_edit(&original.generation, base, &base.details, &local_team, None)
+        .unwrap();
+    let draft = store.outbox(1).unwrap().pop().unwrap();
+    assert!(draft.to_wire().payload.get("service").is_none());
+    store
+        .apply_push_results(
+            std::slice::from_ref(&draft),
+            &[MutationResult::Rejected {
+                mutation_id: draft.mutation_id.clone(),
+                reason: "conflict".into(),
+                message: "Cloud team changed".into(),
+                replayed: false,
+            }],
+        )
+        .unwrap();
+    let replace = Some(draft.mutation_id.as_str());
+    assert!(matches!(
+        store.queue_service_edit(
+            &original.generation,
+            base,
+            &base.details,
+            &local_team,
+            replace
+        ),
+        Err(crate::error::CoreError::CatalogueVersionChanged)
+    ));
+
+    store
+        .apply_page(
+            &[up(
+                9,
+                "service_staff",
+                "bea-cut",
+                json!({
+                    "id": "bea-cut", "serviceId": CUT, "staffId": BEA,
+                }),
+            )],
+            9,
+        )
+        .unwrap();
+    let updated = store.reviewed_catalogue().unwrap();
+    let current = &updated.services[0];
+    assert_eq!(current.version, base.version);
+    let reviewed_team =
+        crate::store::ServiceAssignment::reapply(&base.staff_ids, &local_team, &current.staff_ids);
+    store
+        .queue_service_edit(
+            &updated.generation,
+            current,
+            &current.details,
+            &reviewed_team,
+            replace,
+        )
+        .unwrap();
+    let pending = store.pending_service_edits().unwrap().pop().unwrap();
+    assert_eq!(
+        pending.assignment.unwrap().staff_ids,
+        [ANA.into(), BEA.into()].into()
+    );
+    assert!(store.conflicts().unwrap().is_empty());
 }
 
 #[test]

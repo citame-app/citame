@@ -51,6 +51,14 @@ pub struct CatalogService {
     pub staff_ids: BTreeSet<String>,
 }
 
+impl CatalogService {
+    /// A pull can finish applying the team after the service revision has already arrived.
+    pub fn supersedes_review(&self, version: u64, team: Option<&BTreeSet<String>>) -> bool {
+        self.version > version
+            || (self.version == version && team.is_some_and(|team| team != &self.staff_ids))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewCatalogService {

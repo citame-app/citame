@@ -5,11 +5,24 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const SERVICE_EDIT_KIND: &str = "service.configure";
 
-fn valid_patch(proposed: &ServiceDetails, patch: &serde_json::Map<String, Value>) -> bool {
+fn valid_patch(
+    current: &CatalogService,
+    proposed: &ServiceDetails,
+    patch: &serde_json::Map<String, Value>,
+) -> bool {
     fn length(value: &str) -> usize {
         value.encode_utf16().count()
     }
 
+    let processing_fits = proposed.processing.as_ref().is_none_or(|time| {
+        time.starts_after_minutes.saturating_add(time.minutes)
+            < i64::from(proposed.duration_minutes)
+    });
+    if (patch.contains_key("durationMinutes") || patch.contains_key("processing"))
+        && !processing_fits
+    {
+        return false;
+    }
     patch.keys().all(|field| match field.as_str() {
         "name" => (1..=200).contains(&length(proposed.name.trim())),
         "category" => proposed
@@ -31,7 +44,14 @@ fn valid_patch(proposed: &ServiceDetails, patch: &serde_json::Map<String, Value>
         }),
         "currency" => length(&proposed.currency) == 3,
         "priceCents" => i32::try_from(proposed.price_cents).is_ok(),
-        "durationMinutes" => proposed.duration_minutes <= 1440,
+        "durationMinutes" => {
+            proposed.duration_minutes <= 1440
+                && (proposed.duration_minutes > 0
+                    || matches!(
+                        current.catalog,
+                        Some(crate::model::ServiceOption::Addon { .. })
+                    ))
+        }
         "bufferMinutes" => proposed.buffer_minutes <= 1440,
         "bookingIntervalMinutes" => proposed
             .booking_interval_minutes
@@ -45,10 +65,20 @@ fn valid_patch(proposed: &ServiceDetails, patch: &serde_json::Map<String, Value>
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigurationTeam {
+    pub reviewed_staff_ids: BTreeSet<String>,
+    pub staff_ids: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingServiceEdit {
     pub id: String,
     pub version: u64,
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub service: serde_json::Map<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment: Option<ConfigurationTeam>,
     #[serde(rename = "_reviewed")]
     pub reviewed: ServiceDetails,
 }
@@ -64,9 +94,11 @@ impl PendingServiceEdit {
     }
 
     pub fn affects_booking(&self) -> bool {
-        self.service
-            .keys()
-            .any(|key| !matches!(key.as_str(), "sortOrder" | "onlineBooking"))
+        self.assignment.is_some()
+            || self
+                .service
+                .keys()
+                .any(|key| !matches!(key.as_str(), "sortOrder" | "onlineBooking"))
     }
 }
 
@@ -101,11 +133,20 @@ impl Store {
         self.rows("SELECT payload FROM outbox WHERE kind = 'service.configure' ORDER BY seq")
     }
 
+    pub(super) fn has_pending_service_configuration(&self, id: &str) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM outbox WHERE kind = ?1 AND entity_id = ?2)",
+            params![SERVICE_EDIT_KIND, id],
+            |row| row.get(0),
+        )?)
+    }
+
     pub fn queue_service_edit(
         &mut self,
         generation: &str,
         before: &CatalogService,
         proposed: &ServiceDetails,
+        staff_ids: &BTreeSet<String>,
         replaces: Option<&str>,
     ) -> Result<bool> {
         self.write_transaction(|store| {
@@ -119,24 +160,21 @@ impl Store {
                     row.get(0)
                 })
                 .optional()?;
-            let current = raw
+            let mut current = raw
                 .and_then(|json| serde_json::from_str::<CatalogService>(&json).ok())
                 .ok_or_else(|| CoreError::NotFound("reviewed service".into()))?;
+            current.staff_ids = store.catalogue_target_staff(id)?;
             if current.version == 0
                 || before.version != current.version
                 || before.details != current.details
+                || before.staff_ids != current.staff_ids
             {
                 return Err(CoreError::CatalogueVersionChanged);
             }
-            let pending: bool = store.conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM outbox WHERE kind = ?1 AND entity_id = ?2)",
-                params![SERVICE_EDIT_KIND, id],
-                |row| row.get(0),
-            )?;
-            if pending {
-                return Err(CoreError::Invalid(
-                    "This service already has a pending edit".into(),
-                ));
+            if store.has_pending_service_configuration(id)?
+                || store.has_pending_service_assignment(id)?
+            {
+                return Err(CoreError::CatalogueEditPending);
             }
             if let Some(previous) = replaces {
                 let entry = store
@@ -149,21 +187,44 @@ impl Store {
                 }
                 if entry.reason == "conflict" {
                     let rejected: PendingServiceEdit = serde_json::from_value(entry.payload)?;
-                    if current.version <= rejected.version {
+                    let rejected_team = rejected
+                        .assignment
+                        .as_ref()
+                        .map(|team| &team.reviewed_staff_ids);
+                    if !current.supersedes_review(rejected.version, rejected_team) {
                         return Err(CoreError::CatalogueVersionChanged);
                     }
                 }
             }
             let service = before.details.patch(proposed)?;
-            if !valid_patch(proposed, &service) {
+            if !valid_patch(&current, proposed, &service) {
                 return Err(CoreError::Invalid("Invalid service details".into()));
             }
-            let queued = !service.is_empty();
+            let assignment = if &before.staff_ids == staff_ids {
+                None
+            } else {
+                let active = store.staff()?;
+                if staff_ids.len() > 200
+                    || staff_ids
+                        .difference(&before.staff_ids)
+                        .any(|id| !active.iter().any(|row| &row.id == id))
+                {
+                    return Err(CoreError::Invalid(
+                        "Only active staff can be assigned".into(),
+                    ));
+                }
+                Some(ConfigurationTeam {
+                    reviewed_staff_ids: before.staff_ids.clone(),
+                    staff_ids: staff_ids.clone(),
+                })
+            };
+            let queued = !service.is_empty() || assignment.is_some();
             if queued {
                 let edit = PendingServiceEdit {
                     id: id.clone(),
                     version: before.version,
                     service,
+                    assignment,
                     reviewed: before.details.clone(),
                 };
                 store.enqueue(SERVICE_EDIT_KIND, id, serde_json::to_value(edit)?)?;

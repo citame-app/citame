@@ -16,6 +16,20 @@ const id = () => Bun.randomUUIDv7();
 const base = () => ({ mutationId: id(), createdAt: "2026-03-09T12:00:00.000Z" });
 
 describe("syncMutationSchema", () => {
+  test("accepts a reduction of an existing large service team", () => {
+    const reviewedStaffIds = Array.from({ length: 201 }, id);
+    const parsed = syncMutationSchema.safeParse({
+      ...base(),
+      kind: "service.configure",
+      payload: {
+        id: id(),
+        version: 4,
+        assignment: { reviewedStaffIds, staffIds: reviewedStaffIds.slice(0, 200) },
+      },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
   test("accepts an appointment create with a client-assigned id", () => {
     const parsed = syncMutationSchema.safeParse({
       ...base(),

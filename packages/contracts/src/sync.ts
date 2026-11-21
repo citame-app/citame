@@ -201,11 +201,21 @@ const serviceCreate = z.object({
 const serviceConfigure = z.object({
   ...envelope,
   kind: z.literal("service.configure"),
-  payload: z.strictObject({
-    id: idSchema,
-    version: z.number().int().positive(),
-    service: updateServiceRequestSchema,
-  }),
+  payload: z
+    .strictObject({
+      id: idSchema,
+      version: z.number().int().positive(),
+      service: updateServiceRequestSchema.optional(),
+      assignment: z
+        .strictObject({
+          staffIds: setServiceStaffRequestSchema.shape.staffIds.max(200),
+          reviewedStaffIds: setServiceStaffRequestSchema.shape.staffIds,
+        })
+        .optional(),
+    })
+    .refine((value) => value.service !== undefined || value.assignment !== undefined, {
+      message: "Provide service details or assignments",
+    }),
 });
 
 const serviceStaffReplace = z.object({

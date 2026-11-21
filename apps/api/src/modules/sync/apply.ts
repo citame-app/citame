@@ -29,7 +29,12 @@ import {
   updateAppointment,
 } from "../appointments/service";
 import { updateClient } from "../clients/admin";
-import { createService, setServiceStaff, updateService } from "../services/admin";
+import {
+  createService,
+  setServiceStaff,
+  updateService,
+  updateServiceConfiguration,
+} from "../services/admin";
 import { getSalonSettings, updateReviewedSettings, updateSalonSettings } from "../settings/service";
 import { requireStaff, updateStaff } from "../staff/admin";
 import { createTimeOff, deleteTimeOff, updateTimeOff } from "../staff/schedule";
@@ -222,8 +227,17 @@ export async function applyMutation(
     }
     case "service.configure": {
       authorizeServiceAdmin(principal);
-      const { id, version, service: patch } = mutation.payload;
-      await updateService(db, id, patch, actor, version);
+      const { id, version, service: patch, assignment } = mutation.payload;
+      if (assignment) {
+        await updateServiceConfiguration(
+          db,
+          id,
+          { version, ...(patch ? { service: patch } : {}), ...assignment },
+          actor,
+        );
+      } else if (patch) {
+        await updateService(db, id, patch, actor, version);
+      }
       return;
     }
     case "service.update": {

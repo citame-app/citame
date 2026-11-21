@@ -501,9 +501,12 @@ export async function updateServiceCatalog(
 
 /** One reviewed editor submission: details, performers and option terms commit or roll back together. */
 export async function updateServiceConfiguration(
-  db: Database,
+  db: CatalogConnection,
   id: string,
-  input: ServiceConfiguration,
+  input: Omit<ServiceConfiguration, "service"> & {
+    service?: UpdateServiceRequest;
+    reviewedStaffIds?: readonly string[];
+  },
   actor: AdminActor,
 ) {
   return db.transaction(async (tx) => {
@@ -516,8 +519,8 @@ export async function updateServiceConfiguration(
       );
     if (input.catalog && input.catalog.version !== input.version)
       throw new DomainError("validation_error", "Review all service options at the same revision");
-    const reviewedStaffIds = (await loadStaffIds(tx, [id])).get(id) ?? [];
-    await updateService(tx, id, input.service, actor);
+    const reviewedStaffIds = input.reviewedStaffIds ?? (await loadStaffIds(tx, [id])).get(id) ?? [];
+    if (input.service) await updateService(tx, id, input.service, actor);
     let saved = await setServiceStaff(
       tx,
       id,

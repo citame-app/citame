@@ -213,12 +213,15 @@ fn an_offline_catalogue_edit_keeps_the_cloud_version_until_the_operator_reviews_
     let path = directory.path().join("catalogue-replica.sqlite");
     let mut store = Store::open(&path).unwrap();
     sync::sync_cycle(&mut store, &*device.transport).unwrap();
+    let staff = store.staff().unwrap();
+    let proposed_staff = [staff[0].id.clone()].into();
+    let remote_staff = staff[1].id.clone();
     let base = store.reviewed_catalogue().unwrap();
     let row = base.services.iter().find(|row| row.id == id).unwrap();
     let mut proposed = row.details.clone();
     proposed.price_cents = 3200;
     store
-        .queue_service_edit(&base.generation, row, &proposed, None)
+        .queue_service_edit(&base.generation, row, &proposed, &proposed_staff, None)
         .unwrap();
     drop(store);
 
@@ -228,6 +231,12 @@ fn an_offline_catalogue_edit_keeps_the_cloud_version_until_the_operator_reviews_
         .header("Origin", &web.base)
         .content_type("application/json")
         .send(json!({"description":"Cloud changed the description","priceCents":2900}).to_string())
+        .unwrap();
+    ureq::put(&format!("{}{prefix}/admin/services/{id}/staff", web.base))
+        .header("Cookie", &web.cookie)
+        .header("Origin", &web.base)
+        .content_type("application/json")
+        .send(json!({"staffIds":[&remote_staff]}).to_string())
         .unwrap();
     let mut reopened = Store::open(&path).unwrap();
     assert_eq!(
@@ -244,13 +253,19 @@ fn an_offline_catalogue_edit_keeps_the_cloud_version_until_the_operator_reviews_
     let current = reopened.reviewed_catalogue().unwrap();
     let row = current.services.iter().find(|row| row.id == id).unwrap();
     assert_eq!(row.details.price_cents, 2900);
+    assert_eq!(row.staff_ids, [remote_staff.clone()].into());
     let mut review = row.details.clone();
     review.price_cents = saved.proposal().unwrap().price_cents;
+    let team = saved.assignment.unwrap();
+    assert_eq!(team.staff_ids, proposed_staff);
+    let reviewed_team =
+        ServiceAssignment::reapply(&team.reviewed_staff_ids, &team.staff_ids, &row.staff_ids);
     reopened
         .queue_service_edit(
             &current.generation,
             row,
             &review,
+            &reviewed_team,
             Some(&rejected.mutation_id),
         )
         .unwrap();
@@ -259,6 +274,7 @@ fn an_offline_catalogue_edit_keeps_the_cloud_version_until_the_operator_reviews_
     let approved = reopened.reviewed_catalogue().unwrap();
     let row = approved.services.iter().find(|row| row.id == id).unwrap();
     assert_eq!(row.details, review);
+    assert_eq!(row.staff_ids, [staff[0].id.clone(), remote_staff].into());
     assert!(reopened.pending_service_edits().unwrap().is_empty());
     assert!(reopened.conflicts().unwrap().is_empty());
 }

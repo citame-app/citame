@@ -149,6 +149,50 @@ test("a reviewed native service edit cannot overwrite a newer Cloud version", as
   expect(row).toMatchObject({ catalogVersion: 3, priceCents: 4800 });
 });
 
+test("native service configuration commits the service and its performers together", async () => {
+  const id = f.haircutId;
+  const originalTeam = [f.anaId, f.beaId];
+  const edit = (version: number, staffIds: string[], reviewedStaffIds = originalTeam) =>
+    mutation("service.configure", {
+      id,
+      version,
+      service: { priceCents: 8300 },
+      assignment: { staffIds, reviewedStaffIds },
+    });
+  const details = async () => {
+    const rows = listAdminServicesResponseSchema.parse(
+      await (await json(t.app, "/admin/services", "GET", undefined, owner.cookie)).json(),
+    ).services;
+    return rows.find((row) => row.id === id);
+  };
+  const original = await details();
+  expect(original?.staffIds.sort()).toEqual(originalTeam.sort());
+  expect((await push(t, owner, [edit(1, [uuid()])])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "not_found",
+  });
+  expect(await details()).toEqual(original);
+  expect((await push(t, owner, [edit(1, [f.beaId], [])])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "conflict",
+  });
+  expect(await details()).toEqual(original);
+  const saved = edit(1, [f.beaId]);
+  expect((await push(t, owner, [saved])).body.results[0]).toMatchObject({ status: "applied" });
+  expect((await push(t, owner, [saved])).body.results[0]).toMatchObject({
+    status: "applied",
+    replayed: true,
+  });
+  expect(await details()).toMatchObject({ version: 3, priceCents: 8300, staffIds: [f.beaId] });
+  const onlyStaff = mutation("service.configure", {
+    id,
+    version: 3,
+    assignment: { reviewedStaffIds: [f.beaId], staffIds: [f.anaId] },
+  });
+  expect((await push(t, owner, [onlyStaff])).body.results[0]).toMatchObject({ status: "applied" });
+  expect(await details()).toMatchObject({ version: 4, priceCents: 8300, staffIds: [f.anaId] });
+});
+
 describe("authorization and envelope", () => {
   test("a restored generation rejects legacy and stale batches before writing or recording them", async () => {
     const restored = await setupApiTest({

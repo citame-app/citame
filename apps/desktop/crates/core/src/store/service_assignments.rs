@@ -15,10 +15,18 @@ pub struct ServiceAssignment {
 impl ServiceAssignment {
     /// Apply just the user's additions and removals to the current team.
     pub fn proposed_on(&self, current: &BTreeSet<String>) -> BTreeSet<String> {
+        Self::reapply(&self.reviewed_staff_ids, &self.staff_ids, current)
+    }
+
+    pub fn reapply(
+        reviewed: &BTreeSet<String>,
+        proposed: &BTreeSet<String>,
+        current: &BTreeSet<String>,
+    ) -> BTreeSet<String> {
         current
             .iter()
-            .filter(|id| !self.reviewed_staff_ids.contains(*id) || self.staff_ids.contains(*id))
-            .chain(self.staff_ids.difference(&self.reviewed_staff_ids))
+            .filter(|id| !reviewed.contains(*id) || proposed.contains(*id))
+            .chain(proposed.difference(reviewed))
             .cloned()
             .collect()
     }
@@ -52,6 +60,14 @@ impl AssignmentSnapshot {
 }
 
 impl Store {
+    pub(super) fn has_pending_service_assignment(&self, id: &str) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM outbox WHERE kind = ?1 AND entity_id = ?2)",
+            params![KIND, id],
+            |row| row.get(0),
+        )?)
+    }
+
     pub(crate) fn pending_service_assignments(&self) -> Result<Vec<ServiceAssignment>> {
         self.rows("SELECT payload FROM outbox WHERE kind = 'service.staff_replace' ORDER BY seq")
     }
@@ -157,6 +173,11 @@ impl Store {
         replaces: Option<&str>,
     ) -> Result<()> {
         self.write_transaction(|store| {
+            if store.has_pending_service_configuration(&change.id)? {
+                return Err(CoreError::Invalid(
+                    "This service already has a pending edit".into(),
+                ));
+            }
             let current = store.read_service_assignment(&change.id, replaces)?;
             if generation != current.generation {
                 return Err(CoreError::CalendarGenerationChanged);
