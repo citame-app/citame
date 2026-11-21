@@ -65,7 +65,8 @@ jobs:
           BETTER_AUTH_SECRET: ci-only-secret-ci-only-secret-0123456789
           OWNER_EMAIL: ci-owner@example.com
           OWNER_PASSWORD: ci-only-owner-password
-      - run: bunx turbo run typecheck lint test build
+      # Keep the browser unit suite and PostgreSQL integration tests from competing on this runner.
+      - run: bunx turbo run typecheck lint test build --concurrency=1
       # Backup and restore round trip (real pg_dump/pg_restore through the postgres container).
       - run: PG_MODE=docker PG_CONTAINER="$(docker ps -q --filter ancestor=postgres:18-alpine)" bun run test:scripts
       - name: Rust toolchain for production integration tests
