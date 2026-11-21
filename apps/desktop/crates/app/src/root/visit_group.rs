@@ -127,7 +127,7 @@ mod tests {
     ) {
         let (_dir, config) = crate::root::tests::desk();
         let (view, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
-        view.update(cx, |root, cx| {
+        let other_id = view.update(cx, |root, cx| {
             root.svc.stop_sync();
             root.status.connectivity = Connectivity::Offline;
             let mut current = root
@@ -174,11 +174,26 @@ mod tests {
             };
             assert_eq!(details.id, current.id);
             details.start = details.reviewed.starts_at;
+            details.return_to = Some(AppointmentReturn::Conflict("conflict".into()));
             root.open_related_visit(&other.id, cx);
+            let Overlay::Details(details) = &mut root.overlay else {
+                panic!("details");
+            };
+            assert_eq!(details.id, current.id);
+            details.return_to = None;
+            cx.notify();
+            other.id
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("tab");
+        cx.simulate_event(gpui::KeyUpEvent {
+            keystroke: gpui::Keystroke::parse("enter").unwrap(),
+        });
+        view.update(cx, |root, _| {
             let Overlay::Details(details) = &root.overlay else {
                 panic!("details");
             };
-            assert_eq!(details.id, other.id);
+            assert_eq!(details.id, other_id);
             assert!(root.svc.store.outbox(10).unwrap().is_empty());
         });
     }

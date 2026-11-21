@@ -983,6 +983,20 @@ fn visit_group_reads_only_related_cached_appointments_with_current_outcomes() {
     assert_eq!(group.len(), 1);
     assert_eq!(group[0].id, A2);
     assert_eq!(group[0].status, crate::model::AppointmentStatus::Cancelled);
+    store.set_meta("calendar_scope", "st1").unwrap();
+    store
+        .enqueue("appointment.reschedule", A2, json!({"staffId":"st2"}))
+        .unwrap();
+    assert!(
+        crate::calendar::related_visit_appointments(&store, &current)
+            .unwrap()
+            .is_empty()
+    );
+    store.set_meta("calendar_scope", "all").unwrap();
+    assert_eq!(
+        crate::calendar::related_visit_appointments(&store, &current).unwrap()[0].staff_id,
+        "st2"
+    );
     store
         .apply_page(&[tombstone(4, "appointment", A2)], 4)
         .unwrap();

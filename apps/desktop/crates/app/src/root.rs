@@ -3492,7 +3492,7 @@ impl Root {
                     }),
             );
         self.modal_with_height(
-            div().child(content).child(footer),
+            div().tab_group().child(content).child(footer),
             px(560.),
             (viewport_height - px(24.)).clamp(px(0.), px(720.)),
             (!changed && !matches!(d.annotations, Some(annotations::Annotations::Editing(_))))
@@ -4191,7 +4191,7 @@ impl Render for Root {
             .text_color(theme::text())
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 if event.keystroke.key == "tab"
-                    && (matches!(this.overlay, Overlay::Directory(_))
+                    && (matches!(this.overlay, Overlay::Directory(_) | Overlay::Details(_))
                         || this.checkout_review_mut().is_some())
                 {
                     if event.keystroke.modifiers.shift {
