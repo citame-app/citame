@@ -14,7 +14,7 @@ enum Reply {
 }
 
 impl Root {
-    fn open_whatsapp_automations(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn open_whatsapp_automations(&mut self, cx: &mut Context<Self>) {
         let Overlay::Whatsapp(desk) = &self.overlay else {
             return;
         };
@@ -56,6 +56,7 @@ impl Root {
         if desk.editing_request {
             return;
         }
+        let saving = matches!(&operation, Operation::Save(_));
         desk.editing_request = true;
         desk.editor_message = None;
         let identity = desk.identity.clone();
@@ -99,7 +100,7 @@ impl Root {
                             if let Some(editor) = &mut desk.editor {
                                 editor.templates = templates;
                             } else {
-                                desk.editor = Some(Editor::new(connection, revision, templates));
+                                desk.editor = Editor::new(connection, templates);
                             }
                         } else {
                             desk.editor_message = Some(Key::WhatsappRulesChanged);
@@ -114,8 +115,10 @@ impl Root {
                         desk.editor_message = Some(Key::WhatsappRulesChanged);
                         root.load_whatsapp_desk(true, cx);
                     }
+                    Err(_) if !saving => desk.editor_message = Some(Key::WhatsappTemplatesFailed),
                     Err(TransportError::BadRequest(_)) => {
-                        desk.editor_message = Some(Key::WhatsappRulesInvalid)
+                        desk.editor_message = Some(Key::WhatsappRulesInvalid);
+                        root.load_whatsapp_desk(true, cx);
                     }
                     Err(_) => {
                         desk.editor_message = Some(Key::WhatsappRulesUnconfirmed);

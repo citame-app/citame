@@ -153,7 +153,25 @@ impl Root {
                         {
                             desk.editor_message = None;
                         }
+                        let reopen = !desk.confirm_discard
+                            && !desk.editing_request
+                            && desk.editor.as_ref().is_some_and(|editor| {
+                                !editor.dirty()
+                                    && snapshot.configured
+                                    && snapshot.connection.as_ref().is_some_and(|connection| {
+                                        connection.revision.is_some()
+                                            && connection.revision.as_deref()
+                                                != Some(editor.revision.as_str())
+                                            && connection
+                                                .expires_at
+                                                .is_none_or(|expiry| expiry > Utc::now())
+                                    })
+                            });
                         desk.snapshot = Some(snapshot);
+                        if reopen {
+                            desk.editor = None;
+                            root.open_whatsapp_automations(cx);
+                        }
                     }
                     Err(error) => {
                         if !desk.refresh.failed(cursor, &error, Instant::now()) {
@@ -260,9 +278,10 @@ impl Root {
                     && desk.snapshot.as_ref().is_some_and(|snapshot| {
                         snapshot.configured
                             && snapshot.connection.as_ref().is_some_and(|connection| {
-                                connection
-                                    .expires_at
-                                    .is_none_or(|expires| expires > Utc::now())
+                                connection.revision.is_some()
+                                    && connection
+                                        .expires_at
+                                        .is_none_or(|expires| expires > Utc::now())
                             })
                     }),
                 |body| body.child(self.whatsapp_automation_button(cx)),
@@ -271,6 +290,11 @@ impl Root {
                 desk.snapshot.as_ref().filter(|_| desk.editor.is_none()),
                 |body, snapshot| {
                     body.when_some(snapshot.connection.as_ref(), |body, connection| {
+                        let body = body.when(
+                            snapshot.configured && connection.revision.is_none(),
+                            |body| body.child(self.t(Key::WhatsappUpgradeToEdit)),
+                        );
+
                         body.child(self.render_whatsapp_connection(connection))
                     })
                     .when(!snapshot.configured, |body| {

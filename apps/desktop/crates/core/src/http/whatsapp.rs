@@ -188,7 +188,8 @@ impl ReviewedAutomations {
         connection: &Connection,
         revision: String,
         templates: Vec<ApprovedTemplate>,
-    ) -> Self {
+    ) -> Option<Self> {
+        let revision = connection.revision.clone()?;
         let baseline = connection.editable_rules();
         let entries = EVENTS.map(|kind| {
             let saved = baseline.iter().find(|rule| rule.kind == kind)?;
@@ -197,13 +198,13 @@ impl ReviewedAutomations {
                 variables: saved.variables.iter().copied().map(Some).collect(),
             })
         });
-        Self {
+        Some(Self {
             revision,
             baseline,
             templates,
             entries,
             selected: 0,
-        }
+        })
     }
 
     fn draft_rules(&self) -> Option<Vec<RuleChange>> {
@@ -395,7 +396,7 @@ mod automation_tests {
             body: "Tu cita es a las {{ 1 }} con {{2}}.".into(),
             parameters: vec!["1".into(), "2".into()],
         };
-        let mut editor = ReviewedAutomations::new(&connection, "f".repeat(64), vec![template]);
+        let mut editor = ReviewedAutomations::new(&connection, vec![template]).unwrap();
         editor.select_template(Some(0));
         assert!(editor.dirty());
         assert!(editor.proposed().is_none());

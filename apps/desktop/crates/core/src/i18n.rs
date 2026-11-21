@@ -483,6 +483,8 @@ keys! {
     WhatsappOpenWeb => ("Open WhatsApp settings in Web", "Abrir ajustes de WhatsApp en Web"),
     WhatsappTemplate => ("Approved utility template", "Plantilla de utilidad aprobada"),
     WhatsappTemplateMissing => ("The saved template is no longer listed. Choose a current template or disable this rule.", "La plantilla guardada ya no aparece. Elige una plantilla actual o desactiva esta regla."),
+    WhatsappTemplatesFailed => ("Could not load the approved templates from Meta.", "No se pudieron cargar las plantillas aprobadas de Meta."),
+    WhatsappUpgradeToEdit => ("Update Cloud to edit automations from Desktop.", "Actualiza Cloud para editar las automatizaciones desde Desktop."),
     WhatsappRefreshTemplates => ("Refresh approved templates", "Actualizar plantillas aprobadas"),
     WhatsappRulesInvalid => ("A template or variable needs review. Refresh the approved templates before retrying.", "Revisa la plantilla o sus variables. Actualiza las plantillas aprobadas antes de reintentar."),
     WhatsappPreview => ("Preview with sample data", "Vista previa con datos de ejemplo"),

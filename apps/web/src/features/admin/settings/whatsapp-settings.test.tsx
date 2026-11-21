@@ -1,5 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderApp } from "../../../../test/render";
 import { WhatsAppSettings } from "./whatsapp-settings";
 
@@ -61,6 +61,62 @@ test("previews a professional and time and saves the chosen reminder mapping", a
         revision,
         rules: [{ kind: "reminder_24h", templateId: "345678", variables: ["time", "staff"] }],
       },
+    ]),
+  );
+});
+
+test("undoing a draft lets the next save use the live connection revision", async () => {
+  const setup = { appId: "123456", configId: "234567", version: "v27.0" };
+  const rule = { kind: "confirmation", templateId: "345678", variables: ["time"] };
+  let connection = {
+    revision: "a".repeat(64),
+    phone: "+34 600 000 000",
+    coexistence: true,
+    expiresAt: null,
+    rules: [rule],
+  };
+  const patches: unknown[] = [];
+  globalThis.fetch = mock(async (input: URL | string, init?: RequestInit) => {
+    const url = new URL(String(input), "http://localhost");
+    if (url.pathname.endsWith("/deliveries")) return Response.json([]);
+    if (url.pathname.endsWith("/templates"))
+      return Response.json([
+        {
+          id: rule.templateId,
+          name: "Confirmation",
+          language: "en",
+          body: "{{1}}",
+          parameters: ["1"],
+          named: false,
+        },
+      ]);
+    if (init?.method === "PATCH") {
+      const patch = JSON.parse(String(init.body));
+      patches.push(patch);
+      connection = { ...connection, revision: "c".repeat(64), rules: patch.rules };
+    }
+    return Response.json({ setup, connection });
+  }) as unknown as typeof fetch;
+  const view = renderApp(<WhatsAppSettings />);
+  const heading = await screen.findByRole("heading", { name: "Booking confirmation" });
+  const section = within(heading.closest("section")!);
+  const field = await section.findByLabelText("{{1}}");
+  fireEvent.change(field, { target: { value: "staff" } });
+  fireEvent.change(field, { target: { value: "time" } });
+  connection = {
+    ...connection,
+    revision: "b".repeat(64),
+    rules: [{ ...rule, variables: ["client"] }],
+  };
+  await act(async () =>
+    view.queryClient.invalidateQueries({ queryKey: ["admin", "whatsapp", "connection"] }),
+  );
+  await waitFor(() => expect(section.getByLabelText("{{1}}")).toHaveValue("client"));
+  fireEvent.change(section.getByLabelText("{{1}}"), { target: { value: "staff" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save automations" }));
+  await waitFor(() =>
+    expect(patches).toEqual([
+      { revision: "b".repeat(64), rules: [{ ...rule, variables: ["staff"] }] },
     ]),
   );
 });
