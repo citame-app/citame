@@ -38,6 +38,7 @@ export function connectCalendarLive(options: {
   let stopped = false;
   let forcePull = false;
   let connected = false;
+  let reconcileOnOpen = false;
   let networkAvailable = true;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -107,11 +108,16 @@ export function connectCalendarLive(options: {
       if (stopped || !networkAvailable || source !== current) return;
       connected = true;
       if (retryTimer === undefined) options.onConnection(true);
+      if (reconcileOnOpen) {
+        reconcileOnOpen = false;
+        options.onRefresh();
+      }
       void drain(true);
     };
     current.onerror = () => {
       if (stopped || !networkAvailable || source !== current) return;
       connected = false;
+      reconcileOnOpen ||= cursor !== null;
       options.onConnection(false);
       if (current.readyState === EVENT_SOURCE_CLOSED) options.onAccessExpired?.();
     };
@@ -139,6 +145,7 @@ export function connectCalendarLive(options: {
   const offline = () => {
     networkAvailable = false;
     connected = false;
+    reconcileOnOpen ||= cursor !== null;
     source.close();
     options.onConnection(false);
   };

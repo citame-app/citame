@@ -279,6 +279,17 @@ test("active queries refresh even when the first SSE event never arrives", async
   expect(pull).not.toHaveBeenCalled();
 });
 
+test("reopening SSE refreshes active views after their last marker was already consumed", async () => {
+  const h = harness(async () => ({ ...response(11), changes: [], refresh: ["promotions"] }));
+  h.send(10);
+  h.send(11);
+  await waitFor(() => expect(h.onChanges).toHaveBeenCalledWith([], ["promotions"]));
+  h.onRefresh.mockClear();
+  h.source.onerror?.(new Event("error"));
+  h.source.onopen?.(new Event("open"));
+  expect(h.onRefresh).toHaveBeenCalledTimes(1);
+});
+
 test("the fallback leaves a native reconnect alone and pulls from the old cursor after a terminal close", async () => {
   const pull = mock(async (_since: number) => response(11));
   const h = harness(pull, 50);
