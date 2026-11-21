@@ -1,7 +1,7 @@
 import {
+  type CommissionScope,
   commissionPayoutInputSchema,
   commissionPolicyInputSchema,
-  type CommissionScope,
   idSchema,
   permissionsFor,
   reportQuerySchema,
