@@ -75,17 +75,12 @@ impl Root {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let viewer = transport.commission_viewer()?;
-                    let can_choose = viewer.can_choose_staff();
-                    if !can_choose && !viewer.can_read_own() {
-                        return Err(TransportError::Forbidden(
-                            "Commission access required".into(),
-                        ));
-                    }
+                    let scope = transport.commission_scope()?;
+                    let can_choose = scope.can_choose_staff;
                     let target = if can_choose {
-                        selected.clone().or(viewer.staff_id)
+                        selected.clone().or(scope.staff_id)
                     } else {
-                        viewer.staff_id
+                        scope.staff_id
                     };
                     let (page, payout_page) = if target == selected {
                         (page, payout_page)
@@ -190,7 +185,8 @@ impl Root {
         let staff_id = statement.staff_id.clone();
         let page = statement.pagination.page;
         let filename = format!("commissions-{staff_id}-page-{page}.csv");
-        let csv = statement.accrual_csv();
+        let csv = Arc::<str>::from(statement.accrual_csv());
+        let expected_rows = csv.clone();
         let session = self.svc.session.clone();
         let instance = desk.instance.clone();
         let expected = instance.clone();
@@ -206,7 +202,8 @@ impl Root {
                         if Arc::ptr_eq(&expected, &current.instance)
                             && current.request.is_none() && current.error.is_none()
                             && current.statement.as_ref().is_some_and(|data|
-                                data.staff_id == staff_id && data.pagination.page == page))
+                                data.staff_id == staff_id && data.pagination.page == page
+                                    && data.accrual_csv() == expected_rows.as_ref()))
             },
             move |output| {
                 use std::io::Write;
@@ -567,6 +564,18 @@ mod tests {
         assert!(csv.contains("\"'  =service, \"\"name\"\"\""));
         assert!(csv.contains("\"2000\",\"1500\",\"300\",\"100\",\"EUR\""));
         assert!(!csv.contains("External payout"));
+
+        let refreshed = dir.path().join("refunded.csv");
+        root.update(cx, |root, cx| {
+            root.export_commissions(cx);
+            let Overlay::Commissions(desk) = &mut root.overlay else {
+                panic!("missing commissions");
+            };
+            desk.statement.as_mut().unwrap().accruals[0].adjusted_cents = 50;
+        });
+        cx.simulate_new_path_selection(|_| Some(refreshed.clone()));
+        cx.run_until_parked();
+        assert!(!refreshed.exists());
 
         let changed = dir.path().join("stale.csv");
         root.update(cx, |root, cx| {

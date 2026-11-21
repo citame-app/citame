@@ -88,6 +88,11 @@ test("desktop commissions reuse live statement permissions and never expose payo
   const owner = await tokens("owner", "commission-owner");
   const staff = await tokens("staff", "commission-staff");
   const colleague = await tokens("staff", "commission-colleague");
+  const scope = "/admin/accounting/statement-scope";
+  expect(await (await request(scope, staff.access)).json()).toMatchObject({
+    staffId: staff.who.staffId,
+    canChooseStaff: false,
+  });
   const target = `/admin/accounting/staff/${colleague.who.staffId}`;
   const path = `${target}/statement?page=2&payoutPage=3`;
   const own = await request(`/admin/accounting/staff/${staff.who.staffId}/statement`, staff.access);
@@ -100,6 +105,7 @@ test("desktop commissions reuse live statement permissions and never expose payo
     .returning();
   expect(manager).toHaveLength(1);
   for (const access of [owner.access, staff.access]) {
+    expect(await (await request(scope, access)).json()).toMatchObject({ canChooseStaff: true });
     const result = await request(path, access);
     expect(result.status).toBe(200);
     expect(result.headers.get("cache-control")).toBe("private, no-store");

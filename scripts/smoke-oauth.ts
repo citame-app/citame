@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert";
 import { createHash, generateKeyPairSync, randomBytes, sign } from "node:crypto";
 import {
   appointmentContextSchema,
+  commissionScopeSchema,
   commissionStatementSchema,
   DESKTOP_CLIENT_ID,
   DESKTOP_SIGN_IN_SCOPE,
@@ -422,6 +423,9 @@ assert(replicaChanges.some((row) => row.entity === "appointment" && row.id === b
 assert.equal((await desktopRequest("/mcp", receptionToken)).status, 401);
 
 const commissionPath = `/admin/accounting/staff/${professional.id}/statement?page=1&payoutPage=2`;
+const commissionScope = await desktopRequest("/admin/accounting/statement-scope", receptionToken);
+assert.equal(commissionScope.status, 200);
+assert.equal(commissionScopeSchema.parse(await commissionScope.json()).canChooseStaff, true);
 const nativeCommission = await desktopRequest(commissionPath, receptionToken);
 const webCommission = await request(`${origin}/api${commissionPath}`, { headers: { cookie } });
 assert.equal(nativeCommission.status, 200);

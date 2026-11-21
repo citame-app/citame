@@ -1,7 +1,9 @@
 import {
   commissionPayoutInputSchema,
   commissionPolicyInputSchema,
+  type CommissionScope,
   idSchema,
+  permissionsFor,
   reportQuerySchema,
 } from "@sob/contracts";
 import { Hono } from "hono";
@@ -22,6 +24,17 @@ export function accountingRoutes(deps: AppDeps) {
       requirePermission(c.get("principal"), "commerce");
       if (c.req.method !== "GET") requirePermission(c.get("principal"), "manageCommissions");
       await next();
+    })
+    .get("/statement-scope", (c) => {
+      const principal = c.get("principal");
+      return c.json<CommissionScope>(
+        {
+          staffId: principal.staffId,
+          canChooseStaff: permissionsFor(principal.role, principal.accessPreset).financialReports,
+        },
+        200,
+        { "Cache-Control": "private, no-store" },
+      );
     })
     .get("/staff/:id/policy", async (c) =>
       c.json(

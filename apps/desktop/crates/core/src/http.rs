@@ -29,7 +29,7 @@ use crate::inventory::{
     StockReturnAttempt, StockWriteError,
 };
 use crate::model::*;
-use crate::reports::commissions::{CommissionStatement, CommissionViewer};
+use crate::reports::commissions::{CommissionScope, CommissionStatement};
 use crate::reports::{
     ClientReport, Outcome, OutcomePage, ReportQuery, ReportSummary, financial::FinancialReport,
 };
@@ -1523,9 +1523,13 @@ impl HttpTransport {
         )
     }
 
-    pub fn commission_viewer(&self) -> Result<CommissionViewer, TransportError> {
+    pub fn commission_scope(&self) -> Result<CommissionScope, TransportError> {
         read_response(
-            self.get(&self.agent, "/me", Some("application/json"))?,
+            self.get(
+                &self.agent,
+                "/admin/accounting/statement-scope",
+                Some("application/json"),
+            )?,
             false,
         )
     }

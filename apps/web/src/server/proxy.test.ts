@@ -80,6 +80,7 @@ describe("route mapping", () => {
       "/admin/commerce/cash-sessions/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/close",
       "/admin/reports/summary?from=2026-11-18&to=2026-11-20",
       "/admin/accounting/sales?from=2026-11-18&to=2026-11-20",
+      "/admin/accounting/statement-scope",
       "/admin/accounting/staff/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/statement?page=1&payoutPage=2",
       "/admin/reports/clients?from=2026-11-18&to=2026-11-20",
       "/admin/reports/outcomes?from=2026-11-18&to=2026-11-20&status=cancelled",

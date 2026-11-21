@@ -417,6 +417,7 @@ impl Root {
             .child(
                 div()
                     .flex()
+                    .flex_wrap()
                     .items_center()
                     .justify_between()
                     .child(
@@ -425,12 +426,24 @@ impl Root {
                             .font_weight(FontWeight::BOLD)
                             .child(self.t(Key::Reports)),
                     )
-                    .child(self.button(
-                        "reports-close",
-                        self.t(Key::Close),
-                        Kind::Ghost,
-                        cx.listener(|root, _, _, cx| root.dismiss_overlay(cx)),
-                    )),
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(self.button(
+                                "commissions",
+                                self.t(Key::Commissions),
+                                Kind::Ghost,
+                                cx.listener(|root, _, _, cx| root.open_commissions(cx)),
+                            ))
+                            .child(self.button(
+                                "reports-close",
+                                self.t(Key::Close),
+                                Kind::Ghost,
+                                cx.listener(|root, _, _, cx| root.dismiss_overlay(cx)),
+                            )),
+                    ),
             )
             .child(
                 div()

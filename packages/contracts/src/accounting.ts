@@ -32,6 +32,11 @@ export const commissionPayoutSchema = z.object({
   reference: z.string(),
   createdAt: instantSchema,
 });
+export const commissionScopeSchema = z.object({
+  staffId: idSchema.nullable(),
+  canChooseStaff: z.boolean(),
+});
+export type CommissionScope = z.infer<typeof commissionScopeSchema>;
 export const commissionStatementSchema = z.object({
   staffId: idSchema,
   earnedCents: aggregateMoney,

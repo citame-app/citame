@@ -1907,12 +1907,6 @@ impl Root {
                 Kind::Ghost,
                 cx.listener(|this, _, _, cx| this.open_reports(cx)),
             ))
-            .child(self.button(
-                "commissions",
-                self.t(Key::Commissions),
-                Kind::Ghost,
-                cx.listener(|this, _, _, cx| this.open_commissions(cx)),
-            ))
             .child(
                 self.button(
                     "team-shifts",

@@ -7,25 +7,9 @@ use super::financial::{CURRENCY, csv_text};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CommissionViewer {
-    user: CommissionUser,
+pub struct CommissionScope {
     pub staff_id: Option<String>,
-    access_preset: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CommissionUser {
-    role: String,
-}
-
-impl CommissionViewer {
-    pub fn can_choose_staff(&self) -> bool {
-        self.user.role == "owner" || self.access_preset.as_deref() == Some("manager")
-    }
-
-    pub fn can_read_own(&self) -> bool {
-        self.user.role == "staff" && self.access_preset.as_deref() != Some("restricted")
-    }
+    pub can_choose_staff: bool,
 }
 
 #[derive(Debug, Deserialize)]
