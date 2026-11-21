@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import { RECURRING_FIXTURE as fixture } from "../../api/test/recurring-values";
-import { expectNoHorizontalScroll } from "./admin-helpers";
+import { expectNoHorizontalScroll, salonDate } from "./admin-helpers";
 import { expectNoSeriousA11yViolations, signInThroughUi } from "./helpers";
 import { addCustomItem, closeReceipt, reviewReceipt } from "./pos-helpers";
 
@@ -87,7 +87,13 @@ for (const scheme of ["light", "dark"] as const) {
 }
 
 test("client collections report shows and exports net payments", async ({ page }) => {
-  await signInThroughUi(page, fixture.ownerEmail, "/admin/reports?preset=today");
+  const from = salonDate(-1);
+  const to = salonDate(1);
+  await signInThroughUi(
+    page,
+    fixture.ownerEmail,
+    `/admin/reports?preset=custom&from=${from}&to=${to}`,
+  );
   await expect(page).toHaveURL(/\/admin\/reports/);
   const headers = { Origin: fixture.baseURL };
   const clientId = crypto.randomUUID();
@@ -134,7 +140,7 @@ test("client collections report shows and exports net payments", async ({ page }
   const downloading = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export net collections CSV" }).click();
   const download = await downloading;
-  expect(download.suggestedFilename()).toMatch(/^client-net-collections-.*\.csv$/);
+  expect(download.suggestedFilename()).toBe(`client-net-collections-${from}-${to}.csv`);
   const csv = await readFile(await download.path(), "utf8");
   expect(csv).toMatch(/^client,net_cents,currency\r\n/);
   expect(csv).toContain(`${clientName},10000,EUR\r\n`);
