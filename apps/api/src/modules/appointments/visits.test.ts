@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import { desktopVisitPreviewSchema, intakeRequirementsSchema, visitSchema } from "@sob/contracts";
-import { appointment, appointmentVisit } from "@sob/db";
+import { appointment, appointmentVisit, runMigrations, service, syncChange } from "@sob/db";
+import { asc, eq, gt, sql } from "drizzle-orm";
 import {
   type Actor,
   actor,
@@ -112,6 +113,8 @@ test("pausing online booking blocks new public visits and preserves staff bookin
 });
 
 test("Desktop commits only the reviewed itinerary and never leaves a partially booked visit", async () => {
+  await t.db.update(service).set({ currency: "EUR" });
+  await t.db.update(service).set({ priceType: "from" }).where(eq(service.id, f.colorId));
   const path = "/appointments/desktop-visits";
   const base = packet();
   const parts = await Promise.all(
@@ -157,6 +160,7 @@ test("Desktop commits only the reviewed itinerary and never leaves a partially b
   };
   const first = await readReview(input);
   expect(first.parts.every((part) => part.available)).toBe(true);
+  expect(first.parts.map((part) => part.priceStatus)).toEqual(["fixed", "from"]);
   expect(first.parts[1]?.startsAt).toBe(first.parts[0]?.endsAt);
   expect(await t.db.select().from(appointment)).toHaveLength(0);
   expect((await save({ ...input, reviewHash: "0".repeat(64) })).status).toBe(409);
@@ -191,8 +195,62 @@ test("Desktop commits only the reviewed itinerary and never leaves a partially b
   expect(visit.appointments.map((appointment) => appointment.id)).toEqual(
     input.parts.map((part) => part.id),
   );
+  expect(visit.appointments.every((appointment) => appointment.itineraryId === visit.id)).toBe(
+    true,
+  );
   expect((await save(request)).status).toBe(201);
   expect(await t.db.select().from(appointmentVisit)).toHaveLength(1);
+  expect(await t.db.select().from(appointment)).toHaveLength(3);
+
+  // Recreate the pre-0107 journal on this isolated database, with old visit rows
+  // already present and a replica cursor past their original changes.
+  const [head] = await t.db
+    .select({ seq: sql<number>`max(${syncChange.seq})`.mapWith(Number) })
+    .from(syncChange);
+  const cursor = head?.seq ?? 0;
+  const before = await t.db.select().from(appointment).orderBy(asc(appointment.id));
+  await t.db.execute(
+    sql`delete from drizzle.__drizzle_migrations where created_at = 1795285620000`,
+  );
+  await expect(runMigrations(t.db, { online: true })).rejects.toThrow(
+    "Migration 0107 requires a maintenance upgrade",
+  );
+  await runMigrations(t.db);
+  const announced = await t.db
+    .select({ id: syncChange.rowId })
+    .from(syncChange)
+    .where(gt(syncChange.seq, cursor));
+  expect(announced.map(({ id }) => id).sort()).toEqual(input.parts.map((part) => part.id).sort());
+  expect(await t.db.select().from(appointment).orderBy(asc(appointment.id))).toEqual(before);
+
+  const policy = await json(
+    t.app,
+    "/admin/settings/booking-policy",
+    "PUT",
+    {
+      enabled: true,
+      depositKind: "fixed",
+      depositValue: 500,
+      holdMinutes: 15,
+      cancellationWindowMinutes: 1440,
+      lateCancellationBasisPoints: 2500,
+      noShowBasisPoints: 5000,
+      trustedExempt: true,
+      version: 1,
+    },
+    owner.cookie,
+  );
+  expect(policy.status, await policy.clone().text()).toBe(200);
+  const protectedVisit = {
+    ...input,
+    id: crypto.randomUUID(),
+    startsAt: "2026-03-23T12:00:00.000Z",
+    parts: input.parts.map((part) => ({ ...part, id: crypto.randomUUID() })),
+  };
+  const protectedPreview = await readReview(protectedVisit);
+  expect(protectedPreview.parts.map((part) => part.depositWaiverRequired)).toEqual([true, true]);
+  const blockedDeposit = await save({ ...protectedVisit, reviewHash: protectedPreview.reviewHash });
+  expect(blockedDeposit.status).toBe(409);
   expect(await t.db.select().from(appointment)).toHaveLength(3);
 });
 

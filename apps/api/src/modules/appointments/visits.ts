@@ -20,6 +20,7 @@ import { findAvailability } from "../availability/service";
 import { serviceWorkWindows } from "../availability/work-windows";
 import { getBookingPolicy } from "../booking-protection/policy";
 import { protectionView } from "../booking-protection/value";
+import { assertClientCanBook } from "../clients/controls";
 import { prepareBookingIntake } from "../clients/intake-booking";
 import { filterResourceAvailability } from "../resources/reservations";
 import { assertOnlineServices, getBookableServices } from "../services/service";
@@ -118,12 +119,15 @@ export async function createVisit(
     await lockCalendars(tx, [...new Set(input.parts.map((part) => part.staffId))].sort());
     if (desktop) {
       // Match the policy that was shown before any part can make a change.
+      await getSalonSettings(tx, "share");
       await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('booking-policy',0))`);
-      const reviewed = await reviewDesktopVisit(tx, input, p, now);
+      const reviewed = await reviewDesktopVisit(tx, input, p, now, true);
       if (reviewed.reviewHash !== reviewHash)
         throw new DomainError("version_conflict", "The visit terms changed; review again");
       if (reviewed.parts.some((part) => !part.available))
         throw new DomainError("slot_taken", "At least one step of the visit is unavailable");
+      if (reviewed.parts.some((part) => part.depositWaiverRequired))
+        throw new DomainError("invalid_state", "An authorized deposit waiver is required");
     }
     await tx
       .insert(appointmentVisit)
@@ -163,10 +167,20 @@ async function reviewDesktopVisit(
   input: DesktopVisitInput,
   principal: Principal,
   now: Date,
+  lockClient = false,
 ): Promise<DesktopVisitPreview> {
   requirePermission(principal, "editCalendar");
   const settings = await getSalonSettings(tx);
   const policy = await getBookingPolicy(tx);
+  const client = await assertClientCanBook(tx, input.clientId, true, { lock: lockClient });
+  const canWaive = permissionsFor(principal.role, principal.accessPreset).refunds;
+  const depositApplies =
+    policy.enabled && !(policy.trustedExempt && client.bookingAccess === "trusted");
+  // Validate the complete catalogue selection as well as each individual step.
+  await getBookableServices(
+    tx,
+    input.parts.flatMap((part) => part.serviceIds),
+  );
   const parts: DesktopVisitPreview["parts"] = [];
   const currencies = new Set<string>();
   let startsAt = new Date(input.startsAt);
@@ -177,6 +191,8 @@ async function reviewDesktopVisit(
       startsAt: startsAt.toISOString(),
     });
     const services = await getBookableServices(tx, part.serviceIds, part.serviceQuotes);
+    if (policy.enabled && part.protectionWaiverReason && !canWaive)
+      throw new DomainError("forbidden", "Only managers may waive a booking deposit");
     for (const service of services) currencies.add(service.currency);
     if (!(await staffQualifiedFor(tx, part.serviceIds)).includes(part.staffId))
       throw new DomainError("validation_error", "The professional does not perform these services");
@@ -209,6 +225,12 @@ async function reviewDesktopVisit(
       startsAt: startsAt.toISOString(),
       endsAt: endsAt.toISOString(),
       priceCents: services.reduce((price, service) => price + service.priceCents, 0),
+      priceStatus: services.some((s) => s.priceType === "variable" || s.priceType === "hidden")
+        ? "pending"
+        : services.some((s) => s.priceType === "from")
+          ? "from"
+          : "fixed",
+      depositWaiverRequired: depositApplies && !(canWaive && part.protectionWaiverReason),
       available,
     });
     startsAt = endsAt;

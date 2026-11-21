@@ -2746,6 +2746,8 @@ impl Root {
                     s.id == selected,
                     cx.listener(move |this, _, _, cx| pick(this, id.clone(), cx)),
                 )
+                .tab_index(0)
+                .focus(|style| style.border_color(theme::text()))
             }))
     }
 
@@ -2815,6 +2817,7 @@ impl Root {
                         cx.notify();
                     }),
                 )
+                .tab_index(0)
                 .flex_none()
             }));
         let booking_fields = div()
@@ -2966,12 +2969,16 @@ impl Root {
             .when(
                 f.recurrence.is_none() && !f.services.is_empty() && f.visit_parts.len() < 7,
                 |list| {
-                    list.child(self.button(
-                        "visit-add-step",
-                        self.t(Key::VisitAddStep),
-                        Kind::Ghost,
-                        cx.listener(|root, _, _, cx| root.add_visit_part(cx)),
-                    ))
+                    list.child(
+                        self.button(
+                            "visit-add-step",
+                            self.t(Key::VisitAddStep),
+                            Kind::Ghost,
+                            cx.listener(|root, _, _, cx| root.add_visit_part(cx)),
+                        )
+                        .tab_index(0)
+                        .focus(|style| style.border_color(theme::text())),
+                    )
                 },
             )
             .when(offered.is_empty(), |section| {
@@ -3032,22 +3039,27 @@ impl Root {
                         Kind::Ghost,
                         cx.listener(|this, _, _, cx| this.dismiss_overlay(cx)),
                     ))
-                    .child(self.button(
-                        "new-book",
-                        self.t(if !f.visit_parts.is_empty() {
-                            Key::VisitReview
-                        } else if f.recurrence.is_some() {
-                            Key::SeriesReview
-                        } else {
-                            Key::Book
-                        }),
-                        Kind::Primary,
-                        cx.listener(|this, _, _, cx| this.book(cx)),
-                    )),
+                    .child(
+                        self.button(
+                            "new-book",
+                            self.t(if !f.visit_parts.is_empty() {
+                                Key::VisitReview
+                            } else if f.recurrence.is_some() {
+                                Key::SeriesReview
+                            } else {
+                                Key::Book
+                            }),
+                            Kind::Primary,
+                            cx.listener(|this, _, _, cx| this.book(cx)),
+                        )
+                        .tab_index(0)
+                        .focus(|style| style.border_color(theme::text())),
+                    ),
             );
         self.modal_with_height(
             div()
                 .debug_selector(|| "new-appointment-panel".to_string())
+                .tab_group()
                 .overflow_hidden()
                 .child(
                     div()
@@ -3106,6 +3118,8 @@ impl Root {
         }
         div()
             .id(SharedString::from(format!("new-service-{id}")))
+            .tab_index(0)
+            .focus(|row| row.border_color(theme::text()))
             .flex_none()
             .flex()
             .items_center()

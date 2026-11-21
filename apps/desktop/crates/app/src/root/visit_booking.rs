@@ -3,7 +3,7 @@ use super::*;
 use sob_core::booking::BookingError;
 use sob_core::booking::visit::{
     ReviewedVisit, VisitConfirmation, VisitPartReview, VisitPartSelection, VisitPreview,
-    VisitSelection, VisitTerms,
+    VisitPriceStatus, VisitSelection, VisitTerms,
 };
 use sob_core::sync::TransportError;
 
@@ -70,6 +70,18 @@ impl VisitDesk {
 }
 
 impl Root {
+    fn visit_button(
+        &self,
+        id: impl Into<ElementId>,
+        label: impl Into<SharedString>,
+        kind: Kind,
+        on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Stateful<gpui::Div> {
+        self.button(id, label, kind, on_click)
+            .tab_index(0)
+            .focus(|style| style.border_color(theme::text()))
+    }
+
     pub(super) fn add_visit_part(&mut self, cx: &mut Context<Self>) {
         let Overlay::New(form) = &mut self.overlay else {
             return;
@@ -134,7 +146,7 @@ impl Root {
                             .child(self.staff_name(&part.staff_id))
                             .child(div().text_sm().text_color(theme::muted()).child(services)),
                     )
-                    .child(self.button(
+                    .child(self.visit_button(
                         ("remove-visit-step", index),
                         self.t(Key::VisitRemoveStep),
                         Kind::Ghost,
@@ -537,40 +549,64 @@ impl Root {
                 let ends = item.ends_at.with_timezone(&preview_tz);
                 let date = i18n::date_label(self.locale, starts.date_naive());
                 let amount = self.amount_label(item.price_cents, &preview.currency);
+                let amount = match item.price_status {
+                    VisitPriceStatus::Fixed => amount,
+                    VisitPriceStatus::From => {
+                        i18n::fill(self.t(Key::VisitPriceFrom), &[("price", &amount)])
+                    }
+                    VisitPriceStatus::Pending => self.t(Key::VisitPricePending).to_owned(),
+                };
                 body = body.child(
-                    div().p_2().rounded_md().bg(theme::bg()).child(label).child(
-                        div()
-                            .text_sm()
-                            .text_color(if item.available {
-                                theme::muted()
-                            } else {
-                                theme::conflict_fg()
-                            })
-                            .child(format!(
-                                "{date} · {}–{} · {} · {}",
-                                starts.format("%H:%M"),
-                                ends.format("%H:%M"),
-                                amount,
-                                self.t(if item.available {
-                                    Key::SeriesAvailable
+                    div()
+                        .p_2()
+                        .rounded_md()
+                        .bg(theme::bg())
+                        .child(label)
+                        .when(item.deposit_waiver_required, |step| {
+                            step.child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme::conflict_fg())
+                                    .child(self.t(Key::VisitWaiverNeeded)),
+                            )
+                        })
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(if item.available {
+                                    theme::muted()
                                 } else {
-                                    Key::SeriesUnavailable
+                                    theme::conflict_fg()
                                 })
-                            )),
-                    ),
+                                .child(format!(
+                                    "{date} · {}–{} · {} · {}",
+                                    starts.format("%H:%M"),
+                                    ends.format("%H:%M"),
+                                    amount,
+                                    self.t(if item.available {
+                                        Key::SeriesAvailable
+                                    } else {
+                                        Key::SeriesUnavailable
+                                    })
+                                )),
+                        ),
                 );
             } else {
-                forms = forms.child(self.chip(
-                    ("visit-review-step", index),
-                    label,
-                    index == desk.active,
-                    cx.listener(move |root, _, _, cx| {
-                        if let Some(desk) = root.visit_desk() {
-                            desk.active = index;
-                            cx.notify();
-                        }
-                    }),
-                ));
+                forms = forms.child(
+                    self.chip(
+                        ("visit-review-step", index),
+                        label,
+                        index == desk.active,
+                        cx.listener(move |root, _, _, cx| {
+                            if let Some(desk) = root.visit_desk() {
+                                desk.active = index;
+                                cx.notify();
+                            }
+                        }),
+                    )
+                    .tab_index(0)
+                    .focus(|style| style.border_color(theme::text())),
+                );
             }
         }
         if desk
@@ -580,7 +616,7 @@ impl Root {
         {
             body = body.child(self.t(Key::SeriesDepositPolicy));
         }
-        if desk.preview.is_none() && !desk.saved_changed {
+        if desk.preview.is_none() && !desk.saved_changed && !desk.busy {
             body = body.child(forms);
             if let Some(part) = desk.stages.get(desk.active) {
                 if desk.can_waive {
@@ -604,7 +640,7 @@ impl Root {
             .gap_2()
             .when(desk.submitted && !desk.busy, |row| {
                 row.child(
-                    self.button(
+                    self.visit_button(
                         "visit-review-exit",
                         self.t(if desk.confirm_exit {
                             Key::BookingIntakeExitConfirm
@@ -618,7 +654,7 @@ impl Root {
                 )
             })
             .when(!desk.busy && !desk.submitted, |row| {
-                row.child(self.button(
+                row.child(self.visit_button(
                     "visit-review-back",
                     self.t(if desk.saved_changed {
                         Key::Close
@@ -645,7 +681,7 @@ impl Root {
             .when(
                 !desk.busy && !desk.submitted && desk.preview.is_some(),
                 |row| {
-                    row.child(self.button(
+                    row.child(self.visit_button(
                         "visit-review-edit",
                         self.t(Key::SeriesEditReview),
                         Kind::Ghost,
@@ -660,7 +696,7 @@ impl Root {
                     && desk.preview.is_none()
                     && !desk.saved_changed,
                 |row| {
-                    row.child(self.button(
+                    row.child(self.visit_button(
                         "visit-review-reload",
                         self.t(Key::WaitlistRefreshForms),
                         Kind::Ghost,
@@ -675,7 +711,7 @@ impl Root {
                     && (!desk.stages.is_empty() || desk.submitted),
                 |row| {
                     if desk.packet.is_some() {
-                        row.child(self.button(
+                        row.child(self.visit_button(
                             "visit-review-confirm",
                             self.t(if desk.submitted {
                                 Key::WaitlistRetryAcceptance
@@ -686,7 +722,7 @@ impl Root {
                             cx.listener(|root, _, _, cx| root.confirm_grouped_visit(cx)),
                         ))
                     } else {
-                        row.child(self.button(
+                        row.child(self.visit_button(
                             "visit-review-preview",
                             self.t(if desk.preview.is_some() {
                                 Key::SeriesRefresh

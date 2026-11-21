@@ -78,7 +78,17 @@ pub struct VisitPreviewPart {
     pub starts_at: DateTime<Utc>,
     pub ends_at: DateTime<Utc>,
     pub price_cents: i64,
+    pub price_status: VisitPriceStatus,
+    pub deposit_waiver_required: bool,
     pub available: bool,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VisitPriceStatus {
+    Fixed,
+    From,
+    Pending,
 }
 
 #[derive(Clone, Serialize)]
@@ -198,6 +208,13 @@ impl VisitPacket {
     pub fn confirmable(self, preview: &VisitPreview) -> Result<ReviewedVisit, BookingError> {
         if !self.matches_preview(preview) || preview.parts.iter().any(|part| !part.available) {
             return Err(BookingError::SlotUnavailable);
+        }
+        if preview
+            .parts
+            .iter()
+            .any(|part| part.deposit_waiver_required)
+        {
+            return Err(BookingError::Rejected);
         }
         Ok(ReviewedVisit {
             packet: self,

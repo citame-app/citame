@@ -75,10 +75,15 @@ export async function updateClientControls(
   });
 }
 /** Shared by REST, delegated MCP and offline replay via the appointment domain service. */
-export async function assertClientCanBook(tx: Tx, id: string, requireSurvivingProfile = false) {
+export async function assertClientCanBook(
+  tx: Tx,
+  id: string,
+  requireSurvivingProfile = false,
+  { lock = true } = {},
+) {
   let currentId = id;
   for (let depth = 0; depth < 20; depth++) {
-    const client = await row(tx, currentId, true);
+    const client = await row(tx, currentId, lock);
     if (client.mergedIntoId) {
       if (requireSurvivingProfile) requireClientRoot(client);
       currentId = client.mergedIntoId;
@@ -89,7 +94,7 @@ export async function assertClientCanBook(tx: Tx, id: string, requireSurvivingPr
         "forbidden",
         "This profile cannot book or move appointments. Contact the salon.",
       );
-    return;
+    return client;
   }
   throw new DomainError("invalid_state", "Invalid client identity group");
 }

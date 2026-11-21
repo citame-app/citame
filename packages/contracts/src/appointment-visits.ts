@@ -61,6 +61,8 @@ export const desktopVisitPreviewSchema = z.object({
         startsAt: instantSchema,
         endsAt: instantSchema,
         priceCents: z.number().int().nonnegative(),
+        priceStatus: z.enum(["fixed", "from", "pending"]),
+        depositWaiverRequired: z.boolean(),
         available: z.boolean(),
       }),
     )
