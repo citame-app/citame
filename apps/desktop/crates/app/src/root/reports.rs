@@ -5,7 +5,10 @@ use sob_core::reports::{
 use sob_core::sync::TransportError;
 
 mod clients;
+mod financial;
 mod outcomes;
+
+use sob_core::reports::financial::FinancialReport;
 
 const PAGE_SIZE: usize = 15;
 const RETRY_DELAY: Duration = Duration::from_secs(5);
@@ -13,16 +16,22 @@ const RETRY_DELAY: Duration = Duration::from_secs(5);
 enum ReportData {
     Summary(Box<ReportSummary>),
     Clients(ClientReport),
+    Financial(Box<FinancialReport>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ReportMode {
     Overview,
     Clients,
+    Financial,
     Outcome(Outcome),
 }
 
 impl ReportMode {
+    fn uses_summary(self) -> bool {
+        matches!(self, Self::Overview | Self::Outcome(_))
+    }
+
     fn outcome(self) -> Option<Outcome> {
         match self {
             Self::Outcome(status) => Some(status),
@@ -69,6 +78,7 @@ pub(super) struct Desk {
     mode: ReportMode,
     can_report_clients: bool,
     client_report: Option<ClientReport>,
+    financial_report: Option<FinancialReport>,
     group: Group,
     page: usize,
     request: Option<Arc<()>>,
@@ -111,6 +121,7 @@ impl Root {
             mode: ReportMode::Overview,
             can_report_clients: false,
             client_report: None,
+            financial_report: None,
             group: Group::Day,
             page: 0,
             request: None,
@@ -145,6 +156,7 @@ impl Root {
         if desk.submitted.as_ref() != Some(&query) {
             desk.summary = None;
             desk.client_report = None;
+            desk.financial_report = None;
             desk.page = 0;
             desk.outcomes.reset_page();
         }
@@ -192,12 +204,16 @@ impl Root {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    if mode == ReportMode::Clients {
-                        transport.report_clients(&query).map(ReportData::Clients)
-                    } else {
-                        transport
+                    match mode {
+                        ReportMode::Clients => {
+                            transport.report_clients(&query).map(ReportData::Clients)
+                        }
+                        ReportMode::Financial => transport
+                            .financial_report(&query)
+                            .map(|report| ReportData::Financial(Box::new(report))),
+                        ReportMode::Overview | ReportMode::Outcome(_) => transport
                             .report_summary(&query)
-                            .map(|summary| ReportData::Summary(Box::new(summary)))
+                            .map(|summary| ReportData::Summary(Box::new(summary))),
                     }
                 })
                 .await;
@@ -227,9 +243,11 @@ impl Root {
                         root.refresh_outcome_page(cx);
                     }
                     Ok(ReportData::Clients(report)) => desk.client_report = Some(report),
+                    Ok(ReportData::Financial(report)) => desk.financial_report = Some(*report),
                     Err(TransportError::Forbidden(_) | TransportError::Unauthorized) => {
                         desk.summary = None;
                         desk.client_report = None;
+                        desk.financial_report = None;
                         desk.can_report_clients = false;
                         desk.outcomes.reset_page();
                         desk.error = Some(Key::ReportRestricted);
@@ -291,29 +309,36 @@ impl Root {
         if desk.export_pending || desk.request.is_some() {
             return;
         }
-        let (filename, csv) = if desk.mode == ReportMode::Clients {
-            if desk.error.is_some() {
-                return;
+        let (filename, csv) = match desk.mode {
+            ReportMode::Clients if desk.error.is_none() => {
+                let Some(report) = desk.client_report.as_ref().filter(|r| !r.rows.is_empty())
+                else {
+                    return;
+                };
+                (
+                    format!("clients-{}-{}.csv", report.from, report.to),
+                    report.to_csv(),
+                )
             }
-            let Some(report) = desk
-                .client_report
-                .as_ref()
-                .filter(|report| !report.rows.is_empty())
-            else {
-                return;
-            };
-            (
-                format!("clients-{}-{}.csv", report.from, report.to),
-                report.to_csv(),
-            )
-        } else {
-            let Some(report) = desk.summary.as_ref() else {
-                return;
-            };
-            (
-                format!("report-{}-{}.csv", report.from, report.to),
-                report.to_csv(),
-            )
+            ReportMode::Financial if desk.error.is_none() => {
+                let Some(report) = desk.financial_report.as_ref() else {
+                    return;
+                };
+                (
+                    format!("financial-summary-{}-{}.csv", report.from, report.to),
+                    report.to_csv(),
+                )
+            }
+            ReportMode::Overview => {
+                let Some(report) = desk.summary.as_ref() else {
+                    return;
+                };
+                (
+                    format!("report-{}-{}.csv", report.from, report.to),
+                    report.to_csv(),
+                )
+            }
+            _ => return,
         };
         self.choose_report_export(
             filename,
@@ -466,7 +491,7 @@ impl Root {
                         )
                     })
                     .when(
-                        desk.summary.is_some() || desk.mode == ReportMode::Clients,
+                        desk.summary.is_some() || !desk.mode.uses_summary(),
                         |view| view.child(self.render_report_mode(desk, cx)),
                     )
                     .when(desk.mode == ReportMode::Clients, |view| {
@@ -474,10 +499,13 @@ impl Root {
                             view.child(self.render_client_report(desk, report, cx))
                         })
                     })
+                    .when(desk.mode == ReportMode::Financial, |view| {
+                        view.when_some(desk.financial_report.as_ref(), |view, report| {
+                            view.child(self.render_financial_report(desk, report, cx))
+                        })
+                    })
                     .when_some(
-                        desk.summary
-                            .as_ref()
-                            .filter(|_| desk.mode != ReportMode::Clients),
+                        desk.summary.as_ref().filter(|_| desk.mode.uses_summary()),
                         |view, report| {
                             view.child(self.render_report_period(desk, report, cx))
                                 .when(desk.mode == ReportMode::Overview, |view| {

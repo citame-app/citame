@@ -79,6 +79,7 @@ describe("route mapping", () => {
       "/admin/commerce/cash-sessions/adjust",
       "/admin/commerce/cash-sessions/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/close",
       "/admin/reports/summary?from=2026-11-18&to=2026-11-20",
+      "/admin/accounting/sales?from=2026-11-18&to=2026-11-20",
       "/admin/reports/clients?from=2026-11-18&to=2026-11-20",
       "/admin/reports/outcomes?from=2026-11-18&to=2026-11-20&status=cancelled",
       "/admin/reports/outcomes/export?from=2026-11-18&to=2026-11-20&status=no_show",
@@ -143,6 +144,7 @@ describe("route mapping", () => {
     expect(proxy.matches(new URL("http://web/admin/commerce"))).toBe(false);
     expect(proxy.matches(new URL("http://web/admin/commerce/payments"))).toBe(false);
     expect(proxy.matches(new URL("http://web/admin/reports"))).toBe(false);
+    expect(proxy.matches(new URL("http://web/admin/accounting/sales/private"))).toBe(false);
     expect(proxy.matches(new URL("http://web/admin/reports/summary/private"))).toBe(false);
     expect(proxy.matches(new URL("http://web/admin/reports/clients/private"))).toBe(false);
     expect(proxy.matches(new URL("http://web/admin/reports/outcomes/private"))).toBe(false);

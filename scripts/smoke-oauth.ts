@@ -9,6 +9,7 @@ import {
   reportClientsSchema,
   reportOutcomesPageSchema,
   reportSummarySchema,
+  salesReportSchema,
   syncPullResponseSchema,
 } from "../packages/contracts/src";
 
@@ -449,6 +450,21 @@ assert.equal(
     .status,
   403,
   "Customers cannot read the private client report",
+);
+const financialPath = `/admin/accounting/sales?${dateFilters}`;
+const nativeFinancial = await desktopRequest(financialPath, receptionToken);
+assert.equal(nativeFinancial.status, 200, "The linked owner can open financial reports");
+assert.equal(nativeFinancial.headers.get("cache-control"), "private, no-store");
+const webFinancial = await request(`${origin}/api${financialPath}`, { headers: { cookie } });
+assert.equal(webFinancial.status, 200);
+assert.deepEqual(
+  salesReportSchema.parse(await nativeFinancial.json()),
+  salesReportSchema.parse(await webFinancial.json()),
+);
+assert.equal(
+  (await request(`${origin}/api${financialPath}`, { headers: { cookie: otherBrowserCookie } }))
+    .status,
+  403,
 );
 for (const status of ["cancelled", "no_show"] as const) {
   const filters = new URLSearchParams(dateFilters);

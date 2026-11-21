@@ -50,12 +50,13 @@ impl Root {
         let Overlay::Reports(desk) = &mut self.overlay else {
             return;
         };
-        if desk.mode == mode || (mode == ReportMode::Clients && !desk.can_report_clients) {
+        if desk.mode == mode || (!mode.uses_summary() && !desk.can_report_clients) {
             return;
         }
-        let reload = desk.mode == ReportMode::Clients || mode == ReportMode::Clients;
+        let reload = !desk.mode.uses_summary() || !mode.uses_summary();
         desk.mode = mode;
         desk.client_report = None;
+        desk.financial_report = None;
         desk.outcomes.reset_page();
         desk.export_notice = None;
         if reload {
@@ -194,6 +195,19 @@ impl Root {
                         desk.mode == ReportMode::Clients,
                         cx.listener(|root, _, _, cx| {
                             root.select_report_mode(ReportMode::Clients, cx)
+                        }),
+                    ))
+                },
+            )
+            .when(
+                desk.can_report_clients || desk.mode == ReportMode::Financial,
+                |view| {
+                    view.child(self.chip(
+                        "report-mode-financial",
+                        self.t(Key::FinancialReport),
+                        desk.mode == ReportMode::Financial,
+                        cx.listener(|root, _, _, cx| {
+                            root.select_report_mode(ReportMode::Financial, cx)
                         }),
                     ))
                 },

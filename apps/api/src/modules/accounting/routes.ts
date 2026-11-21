@@ -63,6 +63,7 @@ export function accountingRoutes(deps: AppDeps) {
     )
     .get("/sales", async (c) => {
       requirePermission(c.get("principal"), "financialReports");
+      c.header("Cache-Control", "private, no-store");
       return c.json(
         await salesReport(
           deps.db,

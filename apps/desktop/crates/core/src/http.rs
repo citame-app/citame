@@ -29,7 +29,9 @@ use crate::inventory::{
     StockReturnAttempt, StockWriteError,
 };
 use crate::model::*;
-use crate::reports::{ClientReport, Outcome, OutcomePage, ReportQuery, ReportSummary};
+use crate::reports::{
+    ClientReport, Outcome, OutcomePage, ReportQuery, ReportSummary, financial::FinancialReport,
+};
 use crate::reviews::{
     self, EmailStatus, ManagedReview, ModerationCommand, ReviewEmail, ReviewPage, ReviewRequests,
     ReviewStatus,
@@ -1505,6 +1507,17 @@ impl HttpTransport {
     pub fn report_clients(&self, query: &ReportQuery) -> Result<ClientReport, TransportError> {
         read_response(
             self.get(&self.agent, &query.clients_path(), Some("application/json"))?,
+            false,
+        )
+    }
+
+    pub fn financial_report(&self, query: &ReportQuery) -> Result<FinancialReport, TransportError> {
+        read_response(
+            self.get(
+                &self.agent,
+                &query.financial_path(),
+                Some("application/json"),
+            )?,
             false,
         )
     }

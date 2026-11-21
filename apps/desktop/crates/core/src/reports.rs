@@ -6,6 +6,8 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::Deserialize;
 use url::form_urlencoded;
 
+pub mod financial;
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct ReportQuery {
     pub from: NaiveDate,
@@ -16,36 +18,45 @@ pub struct ReportQuery {
 
 impl ReportQuery {
     pub(crate) fn path(&self) -> String {
-        self.url("summary", &[])
+        self.url("/admin/reports/summary", true, &[])
     }
 
     pub(crate) fn clients_path(&self) -> String {
-        self.url("clients", &[])
+        self.url("/admin/reports/clients", false, &[])
+    }
+
+    pub(crate) fn financial_path(&self) -> String {
+        self.url("/admin/accounting/sales", false, &[])
     }
 
     pub(crate) fn outcome_path(&self, status: Outcome, page: u32) -> String {
         self.url(
-            "outcomes",
+            "/admin/reports/outcomes",
+            true,
             &[("status", status.value()), ("page", &page.to_string())],
         )
     }
 
     pub(crate) fn outcome_export_path(&self, status: Outcome) -> String {
-        self.url("outcomes/export", &[("status", status.value())])
+        self.url(
+            "/admin/reports/outcomes/export",
+            true,
+            &[("status", status.value())],
+        )
     }
 
-    fn url(&self, endpoint: &str, extra: &[(&str, &str)]) -> String {
+    fn url(&self, path: &str, include_currency: bool, extra: &[(&str, &str)]) -> String {
         let mut query = form_urlencoded::Serializer::new(String::new());
         query.append_pair("from", &self.from.to_string());
         query.append_pair("to", &self.to.to_string());
         if let Some(id) = &self.staff_id {
             query.append_pair("staffId", id);
         }
-        if let Some(currency) = self.currency.as_ref().filter(|_| endpoint != "clients") {
+        if let Some(currency) = self.currency.as_ref().filter(|_| include_currency) {
             query.append_pair("currency", currency);
         }
         query.extend_pairs(extra.iter().copied());
-        format!("/admin/reports/{endpoint}?{}", query.finish())
+        format!("{path}?{}", query.finish())
     }
 }
 

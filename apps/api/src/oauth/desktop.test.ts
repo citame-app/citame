@@ -640,6 +640,7 @@ async function assertHostedReceiptPayment(receiptId: string, cookie: string, acc
   expect(await nativeReceipt()).toMatchObject({ status: "paid", paidCents: 1200, balanceCents: 0 });
 }
 const reportPath = "/admin/reports/summary?from=2026-11-18&to=2026-11-18";
+const salesReportPath = "/admin/accounting/sales?from=2026-11-18&to=2026-11-18";
 const clientReportPath = "/admin/reports/clients?from=2026-11-18&to=2026-11-18";
 const outcomeParams = "?from=2026-11-18&to=2026-11-18&status=no_show";
 const outcomePath = `/admin/reports/outcomes${outcomeParams}`;
@@ -1406,6 +1407,18 @@ test("linked devices renew independently and can be revoked from either client",
     rows: [],
     totals: { newClients: 0, returningClients: 0 },
   });
+  const sales = await request(salesReportPath, firstToken);
+  expect(sales.status).toBe(200);
+  expect(sales.headers.get("cache-control")).toBe("private, no-store");
+  expect(await sales.json()).toMatchObject({ netCollectedCents: 0, cashSessions: [] });
+  expect(
+    (
+      await t.app.request(salesReportPath, {
+        method: "POST",
+        headers: { authorization: `Bearer ${firstToken}` },
+      })
+    ).status,
+  ).toBe(403);
   const outcomes = await request(outcomePath, firstToken);
   expect(outcomes.status).toBe(200);
   expect(await outcomes.json()).toMatchObject({ rows: [], page: 1, total: 0 });
@@ -1451,6 +1464,7 @@ test("linked devices renew independently and can be revoked from either client",
   expect((await request("/sync/pull", firstToken)).status).toBe(401);
   expect((await request(reportPath, firstToken)).status).toBe(401);
   expect((await request(clientReportPath, firstToken)).status).toBe(401);
+  expect((await request(salesReportPath, firstToken)).status).toBe(401);
   expect((await request(outcomeExportPath, firstToken)).status).toBe(401);
   expect((await redeemBrowser(revokedTicket)).status).toBe(403);
   expect((await endpoint("token", first.proof("token"))).status).toBe(404);

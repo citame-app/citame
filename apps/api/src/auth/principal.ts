@@ -159,6 +159,7 @@ export function requireAuth(
           "/admin/whatsapp/templates",
           "/admin/commerce/unpaid",
           "/admin/commerce/capabilities",
+          "/admin/accounting/sales",
           "/admin/passes/eligible",
         ].includes(path) &&
           method !== "GET") ||

@@ -31,7 +31,7 @@ const STATUSES: [(Option<&str>, Key); 6] = [
         Key::SalesStatusPartiallyRefunded,
     ),
 ];
-const METHODS: [(Option<&str>, Key); 8] = [
+pub(super) const METHODS: [(Option<&str>, Key); 8] = [
     (None, Key::SalesAllMethods),
     (Some("cash"), Key::CheckoutCash),
     (Some("external_card"), Key::CheckoutExternalCard),
