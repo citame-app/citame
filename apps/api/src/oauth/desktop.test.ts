@@ -200,6 +200,61 @@ test("desktop staff provisioning is owner-only and preserves the existing profil
   });
 });
 
+test("a Desktop owner can explicitly create a new staff calendar for the current database", async () => {
+  const owner = await tokens("owner", "new-native-calendar-owner");
+  const worker = await tokens("staff", "new-native-calendar-worker");
+  const path = "/admin/staff-accounts";
+  const body = {
+    email: "new-native-calendar@example.com",
+    name: "Synthetic staff login",
+    displayName: "Synthetic bookable name",
+    password: "a synthetic passphrase",
+    newCalendar: { generation: t.config.syncReplicaGeneration },
+  };
+  const post = (payload: unknown, access = owner.access) =>
+    t.app.request(path, {
+      method: "POST",
+      headers: { authorization: `Bearer ${access}`, "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  expect((await post(body, worker.access)).status).toBe(403);
+  expect((await post({ ...body, newCalendar: { generation: "old-history" } })).status).toBe(409);
+  expect(
+    (
+      await post({
+        ...body,
+        existingCalendar: {
+          staffId: worker.who.staffId,
+          version: 1,
+          generation: t.config.syncReplicaGeneration,
+        },
+      })
+    ).status,
+  ).toBe(400);
+  const cursor = syncPullResponseSchema.parse(
+    await (await request("/sync/pull", owner.access)).json(),
+  ).headSeq;
+  const response = await post(body);
+  expect(response.status).toBe(201);
+  const created = staffAccountResponseSchema.parse(await response.json());
+  expect(created.reviewedAccess).toMatchObject({
+    generation: t.config.syncReplicaGeneration,
+    accountId: created.userId,
+    accountEmail: body.email,
+    access: { staffId: created.staffId, accountRole: "staff" },
+  });
+  expect((await post(body)).status).toBe(409);
+  expect(
+    await t.db.select().from(staffProfile).where(eq(staffProfile.userId, created.userId)),
+  ).toMatchObject([{ id: created.staffId, displayName: body.displayName, active: true }]);
+  const replica = syncPullResponseSchema.parse(
+    await (await request(`/sync/pull?since=${cursor}`, owner.access)).json(),
+  );
+  expect(replica.changes).toContainEqual(
+    expect.objectContaining({ entity: "staff", id: created.staffId, op: "upsert" }),
+  );
+});
+
 test("reviewed team access uses the same owner policy in Desktop and Cloud", async () => {
   const owner = await tokens("owner", "team-access-review-owner");
   const member = await tokens("staff", "team-access-review-member");

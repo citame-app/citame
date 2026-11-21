@@ -29,8 +29,8 @@ export function adminRoutes(deps: AppDeps, auth: Auth) {
       .use("/users/*", ownerOnly)
       .post("/staff-accounts", async (c) => {
         const body = parseOrThrow(createStaffAccountRequestSchema, await readJson(c));
-        if (c.get("desktopRequest") && !body.existingCalendar)
-          throw new DomainError("validation_error", "Review an existing calendar before linking");
+        if (c.get("desktopRequest") && !body.existingCalendar && !body.newCalendar)
+          throw new DomainError("validation_error", "Explicitly choose a staff calendar operation");
         const response = await provisionStaffAccount(
           { auth, db },
           deps.config,

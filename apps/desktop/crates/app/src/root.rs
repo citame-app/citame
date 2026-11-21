@@ -777,7 +777,7 @@ impl Root {
             if !self.preserve_open_salon_draft(cx)
                 && !self.preserve_open_booking_policy_draft(cx)
                 && !self.preserve_open_assignment_draft()
-                && !self.preserve_open_staff_access()
+                && !self.preserve_open_staff_access(cx)
                 && !self.preserve_open_catalogue()
                 && !self.preserve_open_resource_requirements()
                 && !self.preserve_open_resource_pools(generation.as_deref())

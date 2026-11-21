@@ -194,8 +194,9 @@ export async function provisionStaffAccount(
   actorUserId: string,
   request: Request,
 ): Promise<StaffAccountResponse> {
-  const { existingCalendar } = input;
-  if (existingCalendar && existingCalendar.generation !== config.syncReplicaGeneration)
+  const { existingCalendar, newCalendar } = input;
+  const reviewedGeneration = (existingCalendar ?? newCalendar)?.generation;
+  if (reviewedGeneration !== undefined && reviewedGeneration !== config.syncReplicaGeneration)
     throw new DomainError(
       "sync_generation_changed",
       "The centre was restored; review the calendar",
@@ -228,7 +229,7 @@ export async function provisionStaffAccount(
       email,
       role: "staff" as const,
       invited: created.invited,
-      ...(existingCalendar && {
+      ...(reviewedGeneration !== undefined && {
         reviewedAccess: await getReviewedStaffAccess(
           tx,
           created.staffId,

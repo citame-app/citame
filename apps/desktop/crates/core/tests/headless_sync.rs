@@ -82,18 +82,46 @@ fn native_team_access_uses_reviewed_permissions_through_the_proxy() {
 
     let device = proxy_device();
     let mut web = Device::sign_in();
-    let created = web.rest_post(
-        "/admin/staff-accounts",
-        json!({
-            "name": "Synthetic access review staff",
-            "email": format!("access-{}@example.test", uuid::Uuid::now_v7()),
-            "password": env("SOB_TEST_PASSWORD"),
-        }),
-    );
-    let id = created["staffId"].as_str().unwrap();
     web.sync();
     let before_notice = web.store.staff_directory_revision().unwrap();
+    let generation = web.store.refresh_reviewed_generation().unwrap();
+    let name = "Synthetic access review staff";
+    let display_name = "Synthetic access calendar";
+    let email = format!("access-{}@example.test", uuid::Uuid::now_v7());
+    let password = env("SOB_TEST_PASSWORD");
+    assert_eq!(
+        device.transport.create_staff_account(
+            "history-before-current-database",
+            name,
+            Some(display_name),
+            &email,
+            Some(&password),
+        ),
+        Err(TransportError::ReplicaGenerationChanged),
+    );
+    let created = device
+        .transport
+        .create_staff_account(
+            &generation,
+            name,
+            Some(display_name),
+            &email,
+            Some(&password),
+        )
+        .unwrap();
+    let id = created.access.staff_id.as_str();
+    web.sync();
+    assert!(web.store.staff_directory_revision().unwrap() > before_notice);
+    assert!(
+        web.store
+            .staff_including_inactive()
+            .unwrap()
+            .iter()
+            .any(|staff| staff.id == id && staff.display_name == display_name && staff.active)
+    );
+    let before_notice = web.store.staff_directory_revision().unwrap();
     let reviewed = device.transport.staff_access(id).unwrap();
+    assert_eq!(reviewed, created);
     assert!(reviewed.access.editable());
     let saved = device
         .transport

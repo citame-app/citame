@@ -42,6 +42,12 @@ export const createStaffAccountRequestSchema = z
         generation: syncGenerationSchema,
       })
       .optional(),
+    /** Explicit creation from a Desktop replica that reviewed the current database. */
+    newCalendar: z.strictObject({ generation: syncGenerationSchema }).optional(),
+  })
+  .refine(({ existingCalendar, newCalendar }) => !existingCalendar || !newCalendar, {
+    message: "Choose one staff calendar operation",
+    path: ["newCalendar"],
   })
   .refine(({ existingCalendar, displayName }) => !existingCalendar || displayName === undefined, {
     message: "An existing staff calendar keeps its display name",

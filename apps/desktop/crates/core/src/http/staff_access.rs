@@ -65,6 +65,57 @@ impl HttpTransport {
         email: &str,
         password: Option<&str>,
     ) -> Result<ReviewedStaffAccess, TransportError> {
+        if reviewed.account_id.is_some() {
+            return Err(TransportError::BadRequest("Calendar already linked".into()));
+        }
+        let id = parse_id(&reviewed.access.staff_id)?.to_string();
+        let body = serde_json::json!({
+            "name": name,
+            "email": email,
+            "existingCalendar": {
+                "staffId": id,
+                "version": reviewed.access.version,
+                "generation": reviewed.generation,
+            },
+        });
+        let current = self.provision_staff_account(body, &reviewed.generation, email, password)?;
+        if current.access.staff_id != id
+            || current.access.preset != reviewed.access.preset
+            || current.access.version <= reviewed.access.version
+        {
+            return Err(TransportError::Server(
+                "Unexpected linked staff account access".into(),
+            ));
+        }
+        Ok(current)
+    }
+
+    pub fn create_staff_account(
+        &self,
+        generation: &str,
+        name: &str,
+        display_name: Option<&str>,
+        email: &str,
+        password: Option<&str>,
+    ) -> Result<ReviewedStaffAccess, TransportError> {
+        let mut body = serde_json::json!({
+            "name": name,
+            "email": email,
+            "newCalendar": { "generation": generation },
+        });
+        if let Some(display_name) = display_name {
+            body["displayName"] = serde_json::json!(display_name);
+        }
+        self.provision_staff_account(body, generation, email, password)
+    }
+
+    fn provision_staff_account(
+        &self,
+        mut body: serde_json::Value,
+        generation: &str,
+        email: &str,
+        password: Option<&str>,
+    ) -> Result<ReviewedStaffAccess, TransportError> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct CreatedAccount {
@@ -76,40 +127,25 @@ impl HttpTransport {
             reviewed_access: ReviewedStaffAccess,
         }
 
-        if reviewed.account_id.is_some() {
-            return Err(TransportError::BadRequest("Calendar already linked".into()));
-        }
-        let id = parse_id(&reviewed.access.staff_id)?.to_string();
-        let mut body = serde_json::json!({
-            "name": name,
-            "email": email,
-            "existingCalendar": {
-                "staffId": id,
-                "version": reviewed.access.version,
-                "generation": reviewed.generation,
-            },
-        });
         if let Some(password) = password {
             body["password"] = serde_json::json!(password);
         }
         let created: CreatedAccount = self.post_json("/admin/staff-accounts", &body)?;
-        if created.staff_id != id
-            || created.role != "staff"
+        if created.role != "staff"
             || created.invited != password.is_none()
             || created.user_id.is_empty()
             || created.email != email.to_lowercase()
         {
             return Err(TransportError::Server(
-                "Could not verify the linked account".into(),
+                "Could not verify the staff account".into(),
             ));
         }
+        let id = parse_id(&created.staff_id)?.to_string();
         let current = created.reviewed_access.verify(&id)?;
         if current.account_id.as_deref() != Some(created.user_id.as_str())
             || current.account_email.as_deref() != Some(created.email.as_str())
             || current.access.account_role.as_deref() != Some("staff")
-            || current.access.preset != reviewed.access.preset
-            || current.access.version <= reviewed.access.version
-            || current.generation != reviewed.generation
+            || current.generation != generation
         {
             return Err(TransportError::Server(
                 "Unexpected staff account access".into(),
