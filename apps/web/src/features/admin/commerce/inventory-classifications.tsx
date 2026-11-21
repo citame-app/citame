@@ -58,6 +58,9 @@ export function InventoryClassifications({
       setNotice(true);
     },
   });
+  // Background refreshes retain the last reviewed data. The API checks the draft's
+  // generation and version before writing, even if a newer catalogue is still loading.
+  const canSave = canWrite && online && !stale && !save.isPending;
   function edit(entry: InventoryClassification) {
     if (!review || !canWrite) return;
     save.reset();
@@ -107,15 +110,7 @@ export function InventoryClassifications({
         method="post"
         onSubmit={(event) => {
           event.preventDefault();
-          if (
-            !canWrite ||
-            !online ||
-            stale ||
-            catalogue.isPlaceholderData ||
-            save.isPending ||
-            !draft.name.trim()
-          )
-            return;
+          if (!canSave || !draft.name.trim()) return;
           save.mutate(draft);
         }}
       >
@@ -189,10 +184,7 @@ export function InventoryClassifications({
           </div>
         )}
         <div className="flex flex-wrap gap-2 sm:col-span-2">
-          <Button
-            type="submit"
-            disabled={!online || stale || catalogue.isPlaceholderData || save.isPending}
-          >
+          <Button type="submit" disabled={!canSave}>
             {t("inventory.classification.save")}
           </Button>
           <Button

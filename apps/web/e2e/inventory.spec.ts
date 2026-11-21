@@ -622,6 +622,61 @@ test("reception can inspect product history from the catalog and ledger with rea
   }
 });
 
+test("a live catalogue refresh does not interrupt saving a brand", async ({ page }) => {
+  const owner = await asOwner();
+  const pattern = "**/api/admin/inventory/classifications";
+  const refreshStarted = Promise.withResolvers<void>();
+  const releaseRefresh = Promise.withResolvers<void>();
+  try {
+    const catalogue = await owner.get("/api/admin/inventory/classifications");
+    expect(catalogue.status()).toBe(200);
+    const { generation } = await catalogue.json();
+    await signInAs(
+      page,
+      OWNER_EMAIL,
+      "/admin/commerce?view=inventory&inventoryTab=classifications",
+    );
+    await page.getByRole("button", { name: "New brand", exact: true }).click();
+    const editor = page.getByRole("form", { name: "Edit classification" });
+    const name = `New brand ${crypto.randomUUID()}`;
+    await editor.getByLabel("Name", { exact: true }).fill(name);
+    await page.route(pattern, async (route) => {
+      refreshStarted.resolve();
+      await releaseRefresh.promise;
+      await route.continue();
+    });
+    const concurrent = await owner.put(
+      `/api/admin/inventory/classifications/${crypto.randomUUID()}`,
+      {
+        data: {
+          name: `Other brand ${crypto.randomUUID()}`,
+          kind: "brand",
+          parentId: null,
+          active: true,
+          position: 0,
+          version: 0,
+          generation,
+        },
+      },
+    );
+    expect(concurrent.status(), await concurrent.text()).toBe(200);
+    await refreshStarted.promise;
+    const submitted = page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/admin/inventory/classifications/") &&
+        response.request().method() === "PUT",
+    );
+    const submit = editor.getByRole("button", { name: "Save classification", exact: true });
+    await Promise.all([submit.click({ timeout: 5_000 }), submitted]);
+    expect((await submitted).status()).toBe(200);
+    releaseRefresh.resolve();
+    await expect(page.getByText(name, { exact: true })).toBeVisible();
+  } finally {
+    releaseRefresh.resolve();
+    await owner.dispose();
+  }
+});
+
 test("inventory categories, subcategories and brands can be assigned and filtered", async ({
   page,
 }) => {
