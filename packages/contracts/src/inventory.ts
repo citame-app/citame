@@ -3,7 +3,10 @@ import { clientPhotoUploadSchema } from "./client-photos";
 import { idempotencyKeySchema, moneyCentsSchema } from "./commerce";
 import { idSchema, instantSchema, pageInfoSchema, syncGenerationSchema } from "./common";
 
-import { inventoryClassificationAssignmentSchema } from "./inventory-classification";
+import {
+  inventoryClassificationAssignmentSchema,
+  inventoryClassificationPatchSchema,
+} from "./inventory-classification";
 
 const quantity = z.number().int().min(0).max(999999999);
 const recordedPackageContent = z.strictObject({
@@ -48,7 +51,7 @@ const fields = {
   description: z.string().trim().max(1000).nullable().optional(),
   category: z.string().trim().min(1).max(100).nullable().optional(),
   brand: z.string().trim().min(1).max(100).nullable().optional(),
-  classification: inventoryClassificationAssignmentSchema.optional(),
+  classification: inventoryClassificationPatchSchema.optional(),
   resellable: z.boolean().optional(),
   targetStock: quantity.nullable().optional(),
   priceCents: moneyCentsSchema,

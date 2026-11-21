@@ -15,6 +15,7 @@ import {
   checkout,
   checkoutLine,
   type Database,
+  inventoryClassification,
   pgErrorCode,
   retailProduct,
   retailProductPhoto,
@@ -136,14 +137,30 @@ function productWithPhoto(db: Connection) {
     .from(retailProduct)
     .leftJoin(retailProductPhoto, eq(retailProduct.id, retailProductPhoto.productId));
 }
+function classificationFilter(kind: "category" | "brand", id: string) {
+  const linked = kind === "category" ? retailProduct.categoryId : retailProduct.brandId;
+  const label = kind === "category" ? retailProduct.category : retailProduct.brand;
+  return or(
+    eq(linked, id),
+    and(
+      isNull(linked),
+      sql`exists (
+      select 1 from ${inventoryClassification} as entry
+      where entry.id = ${id} and entry.kind = ${kind} and entry.parent_id is null
+      and lower(entry.name) = lower(btrim(${label}))
+    )`,
+    ),
+  );
+}
+
 export function productFilter(query: ProductFilters) {
   const escaped = query.search.replace(/[\\%_]/g, "\\$&");
   return and(
     query.category ? eq(retailProduct.category, query.category) : undefined,
     query.brand ? eq(retailProduct.brand, query.brand) : undefined,
-    query.categoryId ? eq(retailProduct.categoryId, query.categoryId) : undefined,
+    query.categoryId ? classificationFilter("category", query.categoryId) : undefined,
     query.subcategoryId ? eq(retailProduct.subcategoryId, query.subcategoryId) : undefined,
-    query.brandId ? eq(retailProduct.brandId, query.brandId) : undefined,
+    query.brandId ? classificationFilter("brand", query.brandId) : undefined,
     query.resellable === undefined ? undefined : eq(retailProduct.resellable, query.resellable),
     query.active === "all" ? undefined : eq(retailProduct.active, query.active === "active"),
     query.search

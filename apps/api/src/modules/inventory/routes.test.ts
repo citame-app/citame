@@ -1221,6 +1221,11 @@ test("sync replays only the exact reviewed stock count and preserves its physica
 test("reviewed classifications preserve existing labels, product stock and historical assignments", async () => {
   const legacy = await product({ category: "Imported Hair", brand: "Imported Brand" });
   const root = "/admin/inventory/classifications";
+  const caseVariant = await product({
+    sku: "CASE-ALIAS",
+    category: "imported hair",
+    brand: "imported brand",
+  });
   const initial = inventoryClassificationListSchema.parse(await (await call(staff, root)).json());
   const parent = initial.entries.find((entry: { name: string }) => entry.name === "Imported Hair");
   const maker = initial.entries.find((entry: { name: string }) => entry.name === "Imported Brand");
@@ -1271,6 +1276,12 @@ test("reviewed classifications preserve existing labels, product stock and histo
     status: "applied",
     appliedSeq: expect.any(Number),
   });
+  const group = productListSchema.parse(
+    await (
+      await call(owner, `/admin/inventory/products?categoryId=${parent.id}&brandId=${maker.id}`)
+    ).json(),
+  );
+  expect(group.products.map((row) => row.id).sort()).toEqual([legacy.id, caseVariant.id].sort());
   const assignment = { categoryId: parent.id, subcategoryId: childId, brandId: maker.id };
   const path = `/admin/inventory/products/${legacy.id}`;
   const placed = await call(owner, path, "PATCH", {
@@ -1313,5 +1324,32 @@ test("reviewed classifications preserve existing labels, product stock and histo
   expect(preserved.status).toBe(200);
   expect(productSchema.parse(await preserved.json()).classification).toMatchObject({
     subcategoryId: childId,
+  });
+  expect(
+    (
+      await call(owner, `${root}/${maker.id}`, "PUT", {
+        ...fields,
+        kind: "brand",
+        name: maker.name,
+        active: false,
+        parentId: null,
+        version: maker.version,
+      })
+    ).status,
+  ).toBe(200);
+  const withUnlinkedBrand = await product({ sku: "ARCHIVED-LABEL", brand: maker.name });
+  const linkedCategory = await call(
+    owner,
+    `/admin/inventory/products/${withUnlinkedBrand.id}`,
+    "PATCH",
+    {
+      version: withUnlinkedBrand.version,
+      classification: { categoryId: newParentId, subcategoryId: childId },
+    },
+  );
+  expect(linkedCategory.status).toBe(200);
+  expect(productSchema.parse(await linkedCategory.json())).toMatchObject({
+    brand: maker.name,
+    classification: { categoryId: newParentId, subcategoryId: childId, brandId: null },
   });
 });

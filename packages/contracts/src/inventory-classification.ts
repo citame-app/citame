@@ -4,6 +4,7 @@ import { idSchema, requiredTextSchema, syncGenerationSchema } from "./common";
 const uuid = idSchema.transform((id) => id.toLowerCase());
 const kind = z.enum(["category", "brand"]);
 const position = z.number().int().min(0).max(2147483646);
+const revision = z.number().int().min(0).max(2147483647);
 const fields = {
   kind,
   parentId: uuid.nullable(),
@@ -14,7 +15,7 @@ const fields = {
 export const inventoryClassificationSchema = z.object({
   ...fields,
   id: uuid,
-  version: position.positive(),
+  version: revision.positive(),
   name: z.string(),
 });
 export const inventoryClassificationListSchema = z.object({
@@ -25,13 +26,15 @@ export const inventoryClassificationInputSchema = z.strictObject({
   ...fields,
   name: requiredTextSchema(100),
   generation: syncGenerationSchema,
-  version: position,
+  version: revision.max(2147483646),
 });
 export const inventoryClassificationAssignmentSchema = z.strictObject({
   categoryId: uuid.nullable(),
   subcategoryId: uuid.nullable(),
   brandId: uuid.nullable(),
 });
+export const inventoryClassificationPatchSchema = inventoryClassificationAssignmentSchema.partial();
+export type InventoryClassificationPatch = z.infer<typeof inventoryClassificationPatchSchema>;
 export type InventoryClassificationInput = z.infer<typeof inventoryClassificationInputSchema>;
 export type InventoryClassificationAssignment = z.infer<
   typeof inventoryClassificationAssignmentSchema

@@ -651,18 +651,18 @@ test("inventory categories, subcategories and brands can be assigned and filtere
   await page.getByRole("button", { name: "Product catalog", exact: true }).click();
   await page.getByRole("button", { name: "New product", exact: true }).click();
   await page.getByLabel("Product name", { exact: true }).fill(product);
-  await page.getByLabel("Price (EUR)", { exact: true }).fill("15");
+  await page.getByLabel("Sale price (EUR)", { exact: true }).fill("15");
   await page.getByRole("button", { name: "Assign from catalogue", exact: true }).click();
   const choices = page.getByRole("group", { name: "Categories and brands" });
   await choices.getByLabel("Category", { exact: true }).selectOption({ label: parent });
   await choices.getByLabel("Subcategory", { exact: true }).selectOption({ label: child });
   await choices.getByLabel("Brand", { exact: true }).selectOption({ label: brand });
   await page.getByRole("button", { name: "Save product", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Edit product", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Product details", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Back to inventory", exact: true }).click();
   await page
     .getByLabel("Subcategory", { exact: true })
     .selectOption({ label: `${parent} / ${child}` });
-  await expect(page.getByText(product, { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: product, exact: true })).toBeVisible();
   await expectNoHorizontalScroll(page);
 });

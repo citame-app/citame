@@ -146,12 +146,30 @@ export function InventoryView({
     trigger.current?.focus();
     trigger.current = null;
   }, [showDetail]);
+  const entries = classifications.data?.entries ?? [];
+  const roots = entries.filter((entry) => !entry.parentId);
+  const classificationOptions = (kind: "category" | "brand", labels: string[]) => [
+    ...roots
+      .filter((entry) => entry.kind === kind)
+      .map((entry) => ({ value: `id:${entry.id}`, label: entry.name })),
+    ...labels
+      .filter(
+        (label) =>
+          !roots.some(
+            (entry) =>
+              entry.kind === kind && entry.name.toLowerCase() === label.trim().toLowerCase(),
+          ),
+      )
+      .map((label) => ({ value: `text:${label}`, label })),
+  ];
   const filters = {
     search: term,
     active,
     lowStock,
-    category: category || undefined,
-    brand: brand || undefined,
+    categoryId: category.startsWith("id:") ? category.slice(3) : undefined,
+    brandId: brand.startsWith("id:") ? brand.slice(3) : undefined,
+    category: category.startsWith("text:") ? category.slice(5) : undefined,
+    brand: brand.startsWith("text:") ? brand.slice(5) : undefined,
     subcategoryId: subcategory || undefined,
     resellable: resellable ? resellable === "true" : undefined,
   };
@@ -323,7 +341,7 @@ export function InventoryView({
               value={category}
               options={[
                 { value: "", label: t("pos.allCategories") },
-                ...(facets.data?.categories ?? []).map((value) => ({ value, label: value })),
+                ...classificationOptions("category", facets.data?.categories ?? []),
               ]}
               onChange={(value) => {
                 setCategory(value);
@@ -355,7 +373,7 @@ export function InventoryView({
               value={brand}
               options={[
                 { value: "", label: t("pos.allBrands") },
-                ...(facets.data?.brands ?? []).map((value) => ({ value, label: value })),
+                ...classificationOptions("brand", facets.data?.brands ?? []),
               ]}
               onChange={(value) => {
                 setBrand(value);
@@ -770,7 +788,14 @@ function ProductEditor({
         name: values.name.trim(),
         ...(values.sku.trim() ? { sku: values.sku.trim() } : {}),
         ...(catalogueMode
-          ? { classification: assignment }
+          ? {
+              classification: Object.fromEntries(
+                Object.entries(assignment).filter(
+                  ([field, value]) =>
+                    value !== (product?.classification?.[field as keyof typeof assignment] ?? null),
+                ),
+              ),
+            }
           : { category: values.category.trim() || null, brand: values.brand.trim() || null }),
         description: values.description.trim() || null,
         targetStock,

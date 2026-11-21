@@ -34,6 +34,12 @@ ALTER TABLE retail_product
   ADD COLUMN subcategory_id uuid REFERENCES inventory_classification(id),
   ADD COLUMN brand_id uuid REFERENCES inventory_classification(id);
 --> statement-breakpoint
+CREATE INDEX retail_product_category_id_idx ON retail_product (category_id);
+--> statement-breakpoint
+CREATE INDEX retail_product_subcategory_id_idx ON retail_product (subcategory_id);
+--> statement-breakpoint
+CREATE INDEX retail_product_brand_id_idx ON retail_product (brand_id);
+--> statement-breakpoint
 UPDATE retail_product AS product SET category_id = entry.id
 FROM inventory_classification AS entry
 WHERE entry.kind = 'category' AND lower(entry.name) = lower(btrim(product.category));
@@ -41,12 +47,6 @@ WHERE entry.kind = 'category' AND lower(entry.name) = lower(btrim(product.catego
 UPDATE retail_product AS product SET brand_id = entry.id
 FROM inventory_classification AS entry
 WHERE entry.kind = 'brand' AND lower(entry.name) = lower(btrim(product.brand));
---> statement-breakpoint
-CREATE INDEX retail_product_category_id_idx ON retail_product (category_id);
---> statement-breakpoint
-CREATE INDEX retail_product_subcategory_id_idx ON retail_product (subcategory_id);
---> statement-breakpoint
-CREATE INDEX retail_product_brand_id_idx ON retail_product (brand_id);
 --> statement-breakpoint
 CREATE CONSTRAINT TRIGGER sync_inventory_classification_commerce
   AFTER INSERT OR UPDATE OR DELETE ON inventory_classification

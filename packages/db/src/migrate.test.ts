@@ -261,3 +261,80 @@ for (const prefix of ["local", "upstream-first", "upstream-full"] as const) {
     }
   }, 30_000);
 }
+
+test("catalogue migration backfills imported labels and preserves product stock under maintenance", async () => {
+  const url = new URL(process.env.DATABASE_URL ?? DEFAULT_DATABASE_URL);
+  const name = `sob_test_classifications_${Bun.randomUUIDv7().replaceAll("-", "")}`;
+  const admin = createDb(url.href, NO_DB_TIMEOUTS);
+  const folder = await mkdtemp(join(tmpdir(), "citame-inventory-migration-"));
+  try {
+    const journal = await Bun.file(join(migrationsFolder, "meta", "_journal.json")).json();
+    journal.entries = journal.entries.slice(
+      0,
+      journal.entries.findIndex(
+        ({ tag }: { tag: string }) => tag === "0099_inventory_classification",
+      ),
+    );
+    for (const { tag } of journal.entries)
+      await cp(join(migrationsFolder, `${tag}.sql`), join(folder, `${tag}.sql`));
+    await mkdir(join(folder, "meta"));
+    await Bun.write(join(folder, "meta", "_journal.json"), JSON.stringify(journal));
+    await admin.db.execute(sql`create database ${sql.identifier(name)}`);
+    url.pathname = `/${name}`;
+    const target = createDb(url.href, NO_DB_TIMEOUTS);
+    try {
+      await migrate(target.db, { migrationsFolder: folder });
+      await target.db.execute(sql`
+        insert into retail_product
+           (id, name, sku, category, brand, price_cents, stock_on_hand, stock_reserved, version, idempotency_key, request_hash)
+        values
+           (uuidv7(), 'Imported serum', 'IMPORT-A', '  Salon Care ', 'Laboratory', 1500, 12, 2, 7, 'import-a', 'a'),
+           (uuidv7(), 'Imported cream', 'IMPORT-B', 'salon care', 'laboratory', 900, 5, 0, 3, 'import-b', 'b')
+      `);
+      await expect(runMigrations(target.db, { online: true })).rejects.toThrow(
+        "Migration 0099 requires a maintenance upgrade",
+      );
+      await runMigrations(target.db);
+      const linked = await target.db.execute<{
+        category: string;
+        brand: string;
+        category_id: string;
+        brand_id: string;
+        stock_on_hand: number;
+        stock_reserved: number;
+        version: number;
+      }>(
+        sql`select category, brand, category_id, brand_id, stock_on_hand, stock_reserved, version from retail_product order by sku`,
+      );
+      expect(new Set(linked.map((row) => row.category_id)).size).toBe(1);
+      expect(new Set(linked.map((row) => row.brand_id)).size).toBe(1);
+      expect(linked[0]?.category_id).toBeString();
+      expect(linked[0]?.brand_id).toBeString();
+      expect(linked.map(({ category_id: _, brand_id: __, ...original }) => original)).toEqual([
+        {
+          category: "  Salon Care ",
+          brand: "Laboratory",
+          stock_on_hand: 12,
+          stock_reserved: 2,
+          version: 7,
+        },
+        {
+          category: "salon care",
+          brand: "laboratory",
+          stock_on_hand: 5,
+          stock_reserved: 0,
+          version: 3,
+        },
+      ]);
+    } finally {
+      await target.close();
+    }
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+    try {
+      await admin.db.execute(sql`drop database if exists ${sql.identifier(name)}`);
+    } finally {
+      await admin.close();
+    }
+  }
+}, 25_000);

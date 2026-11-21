@@ -1,4 +1,4 @@
-import type { InventoryClassificationAssignment } from "@sob/contracts";
+import type { InventoryClassificationPatch } from "@sob/contracts";
 import { inventoryClassification, type retailProduct } from "@sob/db";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { DomainError } from "../../errors";
@@ -6,7 +6,7 @@ import type { Tx } from "../../tx";
 
 type Product = typeof retailProduct.$inferSelect;
 type ProductFields = {
-  classification?: InventoryClassificationAssignment;
+  classification?: InventoryClassificationPatch;
   category?: string | null;
   brand?: string | null;
 };
@@ -68,7 +68,18 @@ export async function classificationFields(
   }
   if (category !== undefined || brand !== undefined)
     throw new DomainError("invalid_state", "Use the catalogue assignment or the original labels");
-  const { categoryId, subcategoryId, brandId } = classification;
+  const categoryId =
+    classification.categoryId === undefined
+      ? (current?.categoryId ?? null)
+      : classification.categoryId;
+  const subcategoryId =
+    classification.subcategoryId === undefined
+      ? categoryId === current?.categoryId
+        ? (current?.subcategoryId ?? null)
+        : null
+      : classification.subcategoryId;
+  const brandId =
+    classification.brandId === undefined ? (current?.brandId ?? null) : classification.brandId;
   const requested = [categoryId, subcategoryId, brandId].filter((id) => id !== null);
   const entries = requested.length
     ? await tx
@@ -97,11 +108,17 @@ export async function classificationFields(
   if (root && !root.active && subcategoryId !== current?.subcategoryId && subcategoryId !== null)
     throw new DomainError("invalid_state", "Choose an active parent category for the subcategory");
   return {
-    ...classification,
+    categoryId,
+    subcategoryId,
+    brandId,
     category:
-      categoryId !== null && categoryId === current?.categoryId
-        ? current.category
+      classification.categoryId === undefined ||
+      (categoryId !== null && categoryId === current?.categoryId)
+        ? (current?.category ?? root?.name ?? null)
         : (root?.name ?? null),
-    brand: brandId !== null && brandId === current?.brandId ? current.brand : (maker?.name ?? null),
+    brand:
+      classification.brandId === undefined || (brandId !== null && brandId === current?.brandId)
+        ? (current?.brand ?? maker?.name ?? null)
+        : (maker?.name ?? null),
   };
 }

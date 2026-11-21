@@ -1,8 +1,4 @@
-import type {
-  InventoryClassification,
-  InventoryClassificationAssignment,
-  InventoryClassificationInput,
-} from "@sob/contracts";
+import type { InventoryClassification, InventoryClassificationAssignment } from "@sob/contracts";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useState } from "react";
 import { Button } from "~/components/ui/button";
@@ -39,6 +35,7 @@ export function InventoryClassifications({
   const online = useOnline();
   const title = useId();
   const [draft, setDraft] = useState<Draft>();
+  const [baseline, setBaseline] = useState<InventoryClassification>();
   const [notice, setNotice] = useState(false);
   const review = catalogue.data;
   const entries = review?.entries ?? [];
@@ -65,7 +62,22 @@ export function InventoryClassifications({
     if (!review || !canWrite) return;
     save.reset();
     setNotice(false);
+    setBaseline(entry);
     setDraft({ ...entry, generation: review.generation });
+  }
+  function keepReviewedChanges(draft: Draft, generation: string) {
+    const reviewed = current ?? { ...draft, version: 0 };
+    const next = {
+      ...reviewed,
+      name: draft.name !== baseline?.name ? draft.name : reviewed.name,
+      active: draft.active !== baseline?.active ? draft.active : reviewed.active,
+      parentId: draft.parentId !== baseline?.parentId ? draft.parentId : reviewed.parentId,
+      position: draft.position !== baseline?.position ? draft.position : reviewed.position,
+      generation,
+    };
+    save.reset();
+    setBaseline(reviewed);
+    setDraft(next);
   }
   const newEntry = (kind: Draft["kind"]) =>
     edit({
@@ -157,20 +169,15 @@ export function InventoryClassifications({
               <p>
                 {current.name} ·{" "}
                 {t(current.active ? "inventory.active" : "inventory.classification.archived")} ·{" "}
-                {current.position}
+                {current.position} ·{" "}
+                {entries.find((row) => row.id === current.parentId)?.name ??
+                  t("inventory.classification.noParent")}
               </p>
             )}
             <Button
               type="button"
               variant="secondary"
-              onClick={() => {
-                save.reset();
-                setDraft({
-                  ...draft,
-                  version: current?.version ?? 0,
-                  generation: review.generation,
-                });
-              }}
+              onClick={() => keepReviewedChanges(draft, review.generation)}
             >
               {t("inventory.classification.review")}
             </Button>
