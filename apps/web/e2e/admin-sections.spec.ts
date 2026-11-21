@@ -324,18 +324,30 @@ test.describe("settings", () => {
       const res = await owner.get("/api/availability", {
         params: { serviceIds: HAIRCUT, staffId: STYLIST_A, date },
       });
+      expect(res.status()).toBe(200);
       const body = (await res.json()) as { slots: { startsAt: string }[] };
       return new Set(body.slots.map((s) => new Date(s.startsAt).getUTCMinutes()));
     };
-    await signInAs(page, OWNER_EMAIL, "/admin/settings?section=booking");
-    await page.getByLabel("Time slot interval").selectOption("30");
-    await page.getByRole("button", { name: "Save settings" }).click();
-    await expect(page.getByText("Settings saved").first()).toBeVisible();
-    expect([...(await minutes())].every((m) => m === 0 || m === 30)).toBe(true);
-    await page.getByLabel("Time slot interval").selectOption("15");
-    await page.getByRole("button", { name: "Save settings" }).click();
-    await expect(page.getByText("Settings saved").last()).toBeVisible();
-    expect((await minutes()).size).toBeGreaterThan(2);
+    const saveInterval = async (interval: string) => {
+      await page.getByLabel("Time slot interval").selectOption(interval);
+      const [response] = await Promise.all([
+        page.waitForResponse(
+          (res) => res.url().endsWith("/api/admin/settings") && res.request().method() === "PATCH",
+        ),
+        page.getByRole("button", { name: "Save settings" }).click(),
+      ]);
+      expect(response.status()).toBe(200);
+    };
+    try {
+      await signInAs(page, OWNER_EMAIL, "/admin/settings?section=booking");
+      await saveInterval("30");
+      await expect(page.getByText("Settings saved").first()).toBeVisible();
+      expect(await minutes()).toEqual(new Set([0, 30]));
+      await saveInterval("15");
+      expect((await minutes()).size).toBeGreaterThan(2);
+    } finally {
+      await owner.dispose();
+    }
   });
 
   test("the salon name is editable and an unsaved form asks before leaving", async ({ page }) => {
