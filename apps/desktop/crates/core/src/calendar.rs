@@ -523,34 +523,39 @@ pub fn related_visit_appointments(
     let Some(group_id) = current.visit_group_id.as_deref() else {
         return Ok(Vec::new());
     };
-    let mut group: HashMap<_, _> = store
-        .appointments_in_visit_group(group_id, &current.client_id)?
-        .into_iter()
-        .filter(|a| a.id != current.id)
-        .map(|a| (a.id.clone(), a))
-        .collect();
-    if group.is_empty() {
-        return Ok(Vec::new());
-    }
-    let pending = store
-        .calendar_outbox()?
-        .into_iter()
-        .filter(|entry| group.contains_key(&entry.entity_id))
-        .collect();
-    overlay_calendar_outbox(store, &mut group, &mut HashMap::new(), pending)?;
-    let scope = store.get_meta("calendar_scope")?;
-    let mut related: Vec<_> = group
-        .into_values()
-        .filter(|a| {
-            a.client_id == current.client_id
-                && a.visit_group_id.as_deref() == Some(group_id)
-                && scope
-                    .as_deref()
-                    .is_none_or(|staff| staff == "all" || staff == a.staff_id)
-        })
-        .collect();
-    related.sort_by(|a, b| (a.starts_at, &a.id).cmp(&(b.starts_at, &b.id)));
-    Ok(related)
+    store.read_snapshot(|store| {
+        let scope = store.get_meta("calendar_scope")?;
+        let in_scope = |appointment: &Appointment| {
+            scope
+                .as_deref()
+                .is_none_or(|staff| staff == "all" || staff == appointment.staff_id)
+        };
+        let mut group: HashMap<_, _> = store
+            .appointments_in_visit_group(group_id, &current.client_id)?
+            .into_iter()
+            .filter(|a| a.id != current.id && in_scope(a))
+            .map(|a| (a.id.clone(), a))
+            .collect();
+        if group.is_empty() {
+            return Ok(Vec::new());
+        }
+        let pending = store
+            .calendar_outbox()?
+            .into_iter()
+            .filter(|entry| group.contains_key(&entry.entity_id))
+            .collect();
+        overlay_calendar_outbox(store, &mut group, &mut HashMap::new(), pending)?;
+        let mut related: Vec<_> = group
+            .into_values()
+            .filter(|a| {
+                a.client_id == current.client_id
+                    && a.visit_group_id.as_deref() == Some(group_id)
+                    && in_scope(a)
+            })
+            .collect();
+        related.sort_by(|a, b| (a.starts_at, &a.id).cmp(&(b.starts_at, &b.id)));
+        Ok(related)
+    })
 }
 
 pub(crate) fn effective_appointments_between(
