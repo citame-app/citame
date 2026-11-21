@@ -14,7 +14,7 @@ export interface CalendarParams {
 export const calendarQuery = (params: CalendarParams, endpoints = api) =>
   queryOptions({
     queryKey: ["admin", "calendar", params.from, params.to, (params.staffIds ?? []).join(",")],
-    queryFn: () => endpoints().admin.calendar(params),
+    queryFn: ({ signal }) => endpoints().admin.calendar(params, signal),
     staleTime: 5_000,
     refetchInterval: CALENDAR_POLL_MS,
     refetchOnWindowFocus: true,

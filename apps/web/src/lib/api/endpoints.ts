@@ -270,8 +270,12 @@ export function createEndpoints(client: ApiClient) {
           client.patch("/admin/whatsapp/rules", rules, whatsappSettingsSchema),
         disconnect: () => client.delete("/admin/whatsapp", whatsappSettingsSchema),
       },
-      calendar: (query: Omit<CalendarQuery, "staffIds"> & { staffIds?: string[] }) =>
+      calendar: (
+        query: Omit<CalendarQuery, "staffIds"> & { staffIds?: string[] },
+        signal?: AbortSignal,
+      ) =>
         client.get("/appointments/calendar", calendarResponseSchema, {
+          signal,
           query: {
             from: query.from,
             to: query.to,

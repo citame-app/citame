@@ -37,7 +37,7 @@ test("the whole booking flow can be completed with the keyboard alone", async ({
 
   // Time: the first time slot is reachable and selectable.
   await expect(page).toHaveURL(/\/book\/time/);
-  const firstSlot = page.getByRole("main").getByRole("group").getByRole("radio").first();
+  const firstSlot = page.getByRole("region", { name: "Choose a time" }).getByRole("radio").first();
   await expect(firstSlot).toBeVisible();
   await tabTo(page, firstSlot);
   await page.keyboard.press("Space");
