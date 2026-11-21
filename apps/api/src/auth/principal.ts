@@ -140,6 +140,8 @@ export function requireAuth(
         (path.startsWith("/admin/intake-forms") && !intakeAllowed) ||
         (path === "/admin/intake-forms" && method === "GET" && c.req.query("view") !== "summary") ||
         !DESKTOP_PROXY_ROUTE.test(path) ||
+        (path.startsWith("/admin/marketing/") &&
+          method !== (/\/(?:queue|cancel)$/.test(path) ? "POST" : "GET")) ||
         (method !== "POST" &&
           [
             "/appointments/desktop-booking",

@@ -641,6 +641,7 @@ export const syncLiveViewSchema = z.enum([
   "inbox",
   "review_requests",
   "portfolio",
+  "marketing",
   "intake_forms",
   "intake_records",
   "booking_policy",

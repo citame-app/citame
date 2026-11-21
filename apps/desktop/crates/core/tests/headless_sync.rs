@@ -5455,6 +5455,73 @@ fn native_directory_replays_contacts_and_preserves_newer_edits() {
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_reviews_future_campaign_delivery_and_cancels_through_the_proxy() {
+    use sob_core::http::marketing::{CampaignAction, LIVE_TOPIC, Status};
+
+    let mut browser = Device::sign_in();
+    browser.sync();
+    let previous = browser.store.live_view_revision(LIVE_TOPIC).unwrap();
+    let id = uuid::Uuid::now_v7().to_string();
+    let name = format!("Synthetic Desk Marketing {id}");
+    browser.rest_post("/admin/marketing/campaigns", json!({
+        "id": id, "name": name, "channel": "email", "trigger": "birthday",
+        "subject": "Synthetic test subject", "emailBody": "Synthetic test body",
+        "smsBody": "", "delayMinutes": 0, "birthdayLeadDays": 0,
+        "audience": { "tags": ["synthetic-desk"], "inactiveDays": null, "noFutureAppointments": false },
+    }));
+    browser.sync();
+    assert!(browser.store.live_view_revision(LIVE_TOPIC).unwrap() > previous);
+    let device = proxy_device();
+    let found = device
+        .transport
+        .marketing_campaigns(1, &name, Some(Status::Draft))
+        .unwrap();
+    assert_eq!(found.campaigns.first().unwrap().id, id);
+    let campaign = device.transport.marketing_campaign(&id).unwrap();
+    let preview = device.transport.marketing_preview(&id).unwrap();
+    let capabilities = device.transport.marketing_capabilities().unwrap();
+    assert_eq!(preview.campaign_id, campaign.id);
+    assert!(
+        device
+            .transport
+            .marketing_deliveries(&id, 1)
+            .unwrap()
+            .deliveries
+            .is_empty()
+    );
+    if !capabilities.can_deliver(campaign.channel) {
+        return;
+    }
+    let generation = browser.store.verified_reviewed_generation().unwrap();
+    let scheduled = DateTime::from_timestamp((Utc::now() + Span::days(2)).timestamp(), 0).unwrap();
+    let command =
+        CampaignAction::queue(&campaign, &preview, generation.clone(), Some(scheduled)).unwrap();
+    let updated = device.transport.act_on_campaign(&command).unwrap();
+    assert_eq!(updated.scheduled_for, Some(scheduled));
+    assert_eq!(updated.status, Status::Active);
+    let replay = device.transport.act_on_campaign(&command).unwrap();
+    assert_eq!(replay.version, updated.version);
+    let cancel = CampaignAction::cancel(&updated, generation).unwrap();
+    assert_eq!(
+        device.transport.act_on_campaign(&cancel).unwrap().status,
+        Status::Cancelled
+    );
+    assert_eq!(
+        device.transport.act_on_campaign(&cancel).unwrap().status,
+        Status::Cancelled
+    );
+    assert!(
+        device
+            .transport
+            .marketing_deliveries(&id, 1)
+            .unwrap()
+            .deliveries
+            .is_empty()
+    );
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_reviews_and_books_the_whole_itinerary_through_the_proxy() {
     use sob_core::booking::visit::{
         VisitConfirmation, VisitPartReview, VisitPartSelection, VisitSelection, VisitTerms,

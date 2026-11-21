@@ -83,6 +83,7 @@ const shared: Record<SyncEntity | SyncLiveView, readonly (readonly string[])[]> 
   inbox: [["calendar-inbox"]],
   review_requests: [reviewRequestQueryKey, moderation],
   portfolio: [["portfolio"]],
+  marketing: [["marketing"]],
   intake_forms: [intakeAdminQueryKey],
   intake_records: [intakeHistoryQueryKey],
   booking_policy: [["booking-policy"], ["admin", "booking-policy"]],

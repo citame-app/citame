@@ -36,6 +36,16 @@ export function marketingAdminRoutes(deps: AppDeps) {
   return new Hono<AppEnv>()
     .use("*", async (c, next) => {
       requirePermission(c.get("principal"), "editCatalog");
+      const generation = c.req.header("x-citame-generation");
+      if (
+        c.req.method !== "GET" &&
+        (c.get("desktopRequest") || generation !== undefined) &&
+        generation !== deps.config.syncReplicaGeneration
+      )
+        throw new DomainError(
+          "sync_generation_changed",
+          "Review the campaign on the restored server",
+        );
       c.header("Cache-Control", "private, no-store");
       await next();
     })

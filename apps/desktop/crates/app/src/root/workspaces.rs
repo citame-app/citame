@@ -300,6 +300,8 @@ impl Root {
                                 cx.listener(move |root, _, _, cx| {
                                     if matches!(area, BrowserWorkspace::IntakeForms) {
                                         root.open_intake_forms(cx);
+                                    } else if matches!(area, BrowserWorkspace::Marketing) {
+                                        root.open_marketing(cx);
                                     } else {
                                         root.open_web_workspace(Some(area), cx);
                                     }

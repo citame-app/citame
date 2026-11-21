@@ -210,6 +210,10 @@ test("an email delivery marker refreshes only the owner email settings query", a
   expect([...liveQueryKeys(["email_delivery"])]).toEqual([["admin", "email-delivery"]]);
 });
 
+test("marketing invalidation refreshes the campaign views", () => {
+  expect([...liveQueryKeys(["marketing"])]).toEqual([["marketing"]]);
+});
+
 test("a WhatsApp marker refreshes deliveries and leaves the rule editor query alone", async () => {
   const h = harness(async () => ({ ...response(11), changes: [], refresh: ["whatsapp_desk"] }));
   h.send(10);

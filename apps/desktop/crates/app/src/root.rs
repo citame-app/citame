@@ -55,6 +55,7 @@ mod intake_editor;
 mod intake_live;
 mod intake_record;
 mod inventory;
+mod marketing;
 mod notices;
 mod reports;
 mod resource_pools;
@@ -286,6 +287,7 @@ enum Overlay {
     Cloud(workspaces::CloudDesk),
     SalonConfiguration(Box<salon_configuration::Desk>),
     EmailDelivery(Box<email_delivery::Desk>),
+    Marketing(Box<marketing::Desk>),
     Whatsapp(Box<whatsapp::Desk>),
     BookingPolicy(Box<booking_policy::Desk>),
     IntakeForms(Box<form_admin::Desk>),
@@ -773,6 +775,7 @@ impl Root {
         self.refresh_resource_pools(cx);
         self.refresh_combinations(cx);
         self.refresh_email_delivery(reconnected, cx);
+        self.refresh_marketing(reconnected, cx);
         self.refresh_whatsapp_desk(reconnected, cx);
         if reconnected {
             self.refresh_weekly_conflicts_if_ready(cx);
@@ -2592,6 +2595,7 @@ impl Root {
             Overlay::IntakeForms(_) => self.close_intake_forms(cx),
             Overlay::SalonConfiguration(_) => self.close_salon_configuration(cx),
             Overlay::EmailDelivery(_) => self.dismiss_email_delivery(cx),
+            Overlay::Marketing(_) => self.dismiss_marketing(cx),
             Overlay::Whatsapp(_) => self.close_whatsapp_desk(cx),
             Overlay::BookingPolicy(_) => self.dismiss_booking_policy(cx),
             Overlay::ServiceAssignments(_) => self.close_service_assignment(cx),
@@ -4127,6 +4131,9 @@ impl Render for Root {
                         Overlay::EmailDelivery(desk) => {
                             Some(self.render_email_delivery(desk, window.viewport_size(), cx))
                         }
+                        Overlay::Marketing(desk) => {
+                            Some(self.render_marketing(desk, window.viewport_size(), cx))
+                        }
                         Overlay::BookingPolicy(desk) => {
                             Some(self.render_booking_policy(desk, window.viewport_size(), cx))
                         }
@@ -4251,7 +4258,10 @@ impl Render for Root {
                 if event.keystroke.key == "tab"
                     && (matches!(
                         this.overlay,
-                        Overlay::Directory(_) | Overlay::Details(_) | Overlay::New(_)
+                        Overlay::Directory(_)
+                            | Overlay::Details(_)
+                            | Overlay::New(_)
+                            | Overlay::Marketing(_)
                     ) || this.checkout_review_mut().is_some())
                 {
                     if event.keystroke.modifiers.shift {

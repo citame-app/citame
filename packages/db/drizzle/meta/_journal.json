@@ -757,6 +757,13 @@
       "when": 1795285620000,
       "tag": "0107_sync_visit_itineraries",
       "breakpoints": true
+    },
+    {
+      "idx": 108,
+      "version": "7",
+      "when": 1795289100000,
+      "tag": "0108_marketing_live_view",
+      "breakpoints": true
     }
   ]
 }

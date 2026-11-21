@@ -4,6 +4,7 @@ import {
   campaignPreviewSchema,
   campaignSchema,
   marketingConsentSchema,
+  syncPullResponseSchema,
 } from "@sob/contracts";
 import { appointment, clientProfile, marketingDelivery } from "@sob/db";
 import { eq, sql } from "drizzle-orm";
@@ -205,6 +206,43 @@ test("draft replay, optimistic editing, reviewed audience and queue replay are f
     ).status,
   ).toBe(409);
   expect(await t.db.select().from(marketingDelivery)).toHaveLength(1);
+});
+
+test("marketing refresh is scoped and restored desktop generations cannot queue", async () => {
+  await allow();
+  const previous = syncPullResponseSchema.parse(
+    await (await call(owner, "/sync/pull?since=0")).json(),
+  );
+  const campaign = await create({ name: "Synthetic private campaign" });
+  const audience = await preview(campaign);
+  const since = `/sync/pull?since=${previous.headSeq}`;
+  const ownerPull = syncPullResponseSchema.parse(await (await call(owner, since)).json());
+  const staffPull = syncPullResponseSchema.parse(await (await call(staff, since)).json());
+  expect(ownerPull.refresh).toContain("marketing");
+  expect(staffPull.refresh ?? []).not.toContain("marketing");
+  expect(JSON.stringify(ownerPull)).not.toContain(campaign.name);
+  const confirm = (generation: string) =>
+    t.app.request(`/admin/marketing/campaigns/${campaign.id}/queue`, {
+      method: "POST",
+      headers: {
+        origin: "http://localhost:3000",
+        cookie: owner.cookie,
+        "content-type": "application/json",
+        "x-citame-generation": generation,
+      },
+      body: JSON.stringify({
+        version: campaign.version,
+        audienceHash: audience.audienceHash,
+        scheduledFor: "2026-11-18T12:00:00.000Z",
+      }),
+    });
+  const stale = await confirm("old-history");
+  expect(stale.status).toBe(409);
+  expect(await stale.json()).toMatchObject({ error: { code: "sync_generation_changed" } });
+  expect(await t.db.select().from(marketingDelivery)).toHaveLength(0);
+  const safe = await confirm(t.config.syncReplicaGeneration);
+  expect(safe.status, await safe.clone().text()).toBe(200);
+  expect(await safe.json()).toMatchObject({ status: "scheduled" });
 });
 
 test("scheduled delivery uses fake providers once across concurrent workers and includes a separate safe unsubscribe link", async () => {

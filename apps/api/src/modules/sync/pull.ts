@@ -307,6 +307,7 @@ export async function pullChanges(
         topic.success &&
         (topic.data !== "commerce" || permissions.commerce || permissions.manageCash) &&
         (topic.data !== "portfolio" || (query.portfolio === "1" && permissions.editCatalog)) &&
+        (topic.data !== "marketing" || permissions.editCatalog) &&
         (topic.data !== "review_requests" ||
           (query.reviewRequests === "1" && permissions.editCatalog)) &&
         (topic.data !== "intake_forms" ||
