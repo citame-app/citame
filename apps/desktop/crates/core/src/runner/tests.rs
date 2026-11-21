@@ -69,6 +69,7 @@ impl Transport for Scripted {
             calendar_scope: None,
             viewer_role: None,
             viewer_edit_catalogue: None,
+            resource_pools: None,
             head_seq: 5,
         })
     }

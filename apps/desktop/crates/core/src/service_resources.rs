@@ -21,6 +21,8 @@ pub struct ResourcePool {
     pub name: String,
     pub capacity: u8,
     pub active: bool,
+    #[serde(default)]
+    pub version: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

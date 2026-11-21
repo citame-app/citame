@@ -1827,7 +1827,7 @@ impl Transport for HttpTransport {
     }
 
     fn pull(&self, since: i64, limit: u32) -> Result<PullResponse, TransportError> {
-        self.pull_page(since, limit, false)
+        self.pull_page(since, limit, false, None)
             .map(|result| result.page)
     }
 
@@ -1836,7 +1836,18 @@ impl Transport for HttpTransport {
         since: i64,
         limit: u32,
     ) -> Result<(PullResponse, Option<CatalogColors>), TransportError> {
-        self.pull_page(since, limit, true)
+        self.pull_page(since, limit, true, None)
+            .map(|result| (result.page, result.catalog_colors))
+    }
+
+    fn pull_with_catalogue(
+        &self,
+        since: i64,
+        limit: u32,
+        colors: bool,
+        full_resource_pools: bool,
+    ) -> Result<(PullResponse, Option<CatalogColors>), TransportError> {
+        self.pull_page(since, limit, colors, Some(full_resource_pools))
             .map(|result| (result.page, result.catalog_colors))
     }
 }
@@ -1855,16 +1866,22 @@ impl HttpTransport {
         since: i64,
         limit: u32,
         request_colors: bool,
+        resource_pools: Option<bool>,
     ) -> Result<CatalogPull, TransportError> {
         let catalog = if request_colors {
             "&catalogColors=1"
         } else {
             ""
         };
+        let pools = match resource_pools {
+            Some(true) => "&resourcePools=full",
+            Some(false) => "&resourcePools=delta",
+            None => "",
+        };
         let resp = self.get(
             &self.agent,
             &format!(
-                "/sync/pull?since={since}&limit={limit}{catalog}&reviewRequests=1&intakeViews=1&bookingPolicy=1&resourceCatalogue=1"
+                "/sync/pull?since={since}&limit={limit}{catalog}&reviewRequests=1&intakeViews=1&bookingPolicy=1&resourceCatalogue=1{pools}"
             ),
             None,
         )?;

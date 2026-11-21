@@ -18,6 +18,7 @@ pub mod ops;
 pub mod pkce;
 pub mod receipt_print;
 pub mod reports;
+pub mod resource_pools;
 pub mod reviews;
 pub mod runner;
 pub mod service_resources;

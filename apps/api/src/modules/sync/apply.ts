@@ -29,7 +29,7 @@ import {
   updateAppointment,
 } from "../appointments/service";
 import { updateClient } from "../clients/admin";
-import { setServiceResources } from "../resources/catalog";
+import { createResource, setServiceResources, updateResource } from "../resources/catalog";
 import {
   createService,
   setServiceStaff,
@@ -254,6 +254,16 @@ export async function applyMutation(
     case "service.resources": {
       const { id, ...input } = mutation.payload;
       await setServiceResources(db, id, input, principal, now);
+      return;
+    }
+    case "resource.create": {
+      const { id, ...input } = mutation.payload;
+      await createResource(db, { ...input, idempotencyKey: mutation.mutationId }, principal, id);
+      return;
+    }
+    case "resource.update": {
+      const { id, ...input } = mutation.payload;
+      await updateResource(db, id, input, principal, now);
       return;
     }
     case "staff.update": {

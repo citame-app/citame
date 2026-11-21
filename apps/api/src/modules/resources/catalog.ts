@@ -42,7 +42,12 @@ export async function listResources(db: Connection, p: Principal) {
     .orderBy(asc(resourcePool.name), asc(resourcePool.id));
   return { resources: rows.map(view) };
 }
-export async function createResource(db: Database, input: ResourceCreate, p: Principal) {
+export async function createResource(
+  db: Connection,
+  input: ResourceCreate,
+  p: Principal,
+  id?: string,
+) {
   requirePermission(p, "editCatalog");
   const requestHash = createHash("sha256")
     .update(JSON.stringify({ name: input.name, kind: input.kind, capacity: input.capacity }))
@@ -60,7 +65,7 @@ export async function createResource(db: Database, input: ResourceCreate, p: Pri
           ),
         );
       if (prior) {
-        if (prior.requestHash !== requestHash)
+        if (prior.requestHash !== requestHash || (id !== undefined && prior.id !== id))
           throw new DomainError("invalid_state", "This resource request key has already been used");
         return view(prior);
       }
@@ -72,7 +77,7 @@ export async function createResource(db: Database, input: ResourceCreate, p: Pri
         );
       const [row] = await tx
         .insert(resourcePool)
-        .values({ ...input, createdBy: p.userId, requestHash })
+        .values({ ...input, ...(id ? { id } : {}), createdBy: p.userId, requestHash })
         .returning();
       if (!row) throw new Error("Missing resource after creation");
       await recordAudit(tx, {
@@ -89,7 +94,7 @@ export async function createResource(db: Database, input: ResourceCreate, p: Pri
   }
 }
 export async function updateResource(
-  db: Database,
+  db: Connection,
   id: string,
   input: ResourceUpdate,
   p: Principal,

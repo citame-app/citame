@@ -215,6 +215,12 @@ impl Root {
                             Kind::Ghost,
                             cx.listener(|root, _, _, cx| root.open_resource_requirements(cx)),
                         ))
+                        .child(self.button(
+                            "native-resource-pools",
+                            self.t(Key::PoolManagement),
+                            Kind::Ghost,
+                            cx.listener(|root, _, _, cx| root.open_resource_pools(None, cx)),
+                        ))
                     })
                 },
             )

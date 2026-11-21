@@ -126,6 +126,15 @@ const MIRROR_TABLES: &[&str] = &[
 pub struct Store {
     conn: Connection,
     reviewed_generation: String,
+    validated_pool_catalogue: bool,
+}
+
+#[derive(Default)]
+struct PullMetadata<'a> {
+    refresh: &'a [String],
+    generation: Option<&'a str>,
+    catalogue_access: Option<bool>,
+    resource_pools: Option<&'a [crate::resource_pools::ManagedPool]>,
 }
 
 /// What `apply_push_results` did.
@@ -345,6 +354,7 @@ impl Store {
         Ok(Self {
             conn,
             reviewed_generation,
+            validated_pool_catalogue: false,
         })
     }
 
@@ -823,7 +833,7 @@ impl Store {
     /// Applies one pull page and moves the cursor in a single transaction. The cursor never
     /// decreases. Returns the number of changes applied.
     pub fn apply_page(&mut self, changes: &[RawChange], next_cursor: i64) -> Result<usize> {
-        self.apply_sync_page(changes, next_cursor, false, false, &[], None)
+        self.apply_replica_page(changes, next_cursor, false, false, PullMetadata::default())
     }
 
     /// Repairs the catalog projection even if an earlier release consumed its change log.
@@ -855,6 +865,27 @@ impl Store {
         Ok(())
     }
 
+    pub(crate) fn apply_pulled_page(
+        &mut self,
+        page: &PullResponse,
+        alert: bool,
+        generation: &str,
+    ) -> Result<usize> {
+        self.apply_replica_page(
+            &page.changes,
+            page.next_cursor,
+            alert,
+            !page.has_more,
+            PullMetadata {
+                refresh: &page.refresh,
+                generation: Some(generation),
+                catalogue_access: page.viewer_edit_catalogue,
+                resource_pools: page.resource_pools.as_deref(),
+            },
+        )
+    }
+
+    #[cfg(test)]
     pub(crate) fn apply_sync_page(
         &mut self,
         changes: &[RawChange],
@@ -864,10 +895,40 @@ impl Store {
         refresh: &[String],
         generation: Option<&str>,
     ) -> Result<usize> {
+        self.apply_replica_page(
+            changes,
+            next_cursor,
+            alert,
+            complete,
+            PullMetadata {
+                refresh,
+                generation,
+                ..Default::default()
+            },
+        )
+    }
+
+    fn apply_replica_page(
+        &mut self,
+        changes: &[RawChange],
+        next_cursor: i64,
+        alert: bool,
+        complete: bool,
+        metadata: PullMetadata<'_>,
+    ) -> Result<usize> {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::ensure_generation(&tx, generation)?;
+        Self::ensure_generation(&tx, metadata.generation)?;
+        let mut received_pools = false;
+        if let Some(allowed) = metadata.catalogue_access {
+            let generation = Self::generation_at(&tx)?;
+            Self::apply_catalogue_access_at(&tx, &generation, allowed)?;
+            if allowed && let Some(pools) = metadata.resource_pools {
+                Self::cache_resource_pools_at(&tx, pools, &generation)?;
+                received_pools = true;
+            }
+        }
         let cursor = tx
             .query_row(
                 "SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'cursor'",
@@ -940,7 +1001,8 @@ impl Store {
             let review_dependencies_changed = changes
                 .iter()
                 .any(|change| matches!(change.entity.as_str(), "appointment" | "client" | "staff"));
-            for topic in refresh
+            for topic in metadata
+                .refresh
                 .iter()
                 .map(String::as_str)
                 .chain(review_dependencies_changed.then_some(crate::reviews::LIVE_TOPIC))
@@ -974,6 +1036,7 @@ impl Store {
             params![next_cursor.to_string()],
         )?;
         tx.commit()?;
+        self.validated_pool_catalogue |= received_pools;
         Ok(applied)
     }
 
@@ -1033,7 +1096,7 @@ impl Store {
             tx.execute(&format!("DELETE FROM {t}"), [])?;
         }
         tx.execute(
-            "DELETE FROM meta WHERE key IN ('cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','desk_waitlist',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
+            "DELETE FROM meta WHERE key IN ('cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','desk_waitlist','resource_pool_catalogue',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
             [CATALOG_COLORS_CACHED, SALON_CONFIGURATION_CACHE, SALON_CONFIGURATION_ACK, SALON_CONFIGURATION_UNAVAILABLE],
         )?;
         tx.execute("DELETE FROM local_booking_confirmation", [])?;
@@ -1481,6 +1544,8 @@ impl Store {
                                 | SERVICE_CREATION_KIND
                                 | SERVICE_EDIT_KIND
                                 | crate::service_resources::MUTATION_KIND
+                                | crate::resource_pools::CREATE
+                                | crate::resource_pools::UPDATE
                         )
                     {
                         Self::set_meta_at(
@@ -1506,6 +1571,8 @@ impl Store {
                                 | SERVICE_CREATION_KIND
                                 | service_assignments::KIND
                                 | crate::service_resources::MUTATION_KIND
+                                | crate::resource_pools::CREATE
+                                | crate::resource_pools::UPDATE
                         )
                     {
                         Self::forget_catalogue_access_at(&tx)?;
@@ -1605,6 +1672,7 @@ impl Store {
 
 mod service_assignments;
 pub use service_assignments::{AssignmentSnapshot, AssignmentWork, ServiceAssignment};
+mod resource_pools;
 mod resource_requirements;
 mod service_creation;
 mod service_edit;

@@ -33,21 +33,27 @@ impl Store {
     }
 
     pub(super) fn forget_catalogue_access_at(conn: &Connection) -> Result<()> {
+        Self::forget_resource_pools_at(conn)?;
+        conn.execute(
+            "DELETE FROM meta WHERE key LIKE 'reviewed_service_resources:%'",
+            [],
+        )?;
         conn.execute("DELETE FROM meta WHERE key = ?1", [CATALOGUE_ACCESS])?;
         Ok(())
     }
 
-    pub(crate) fn apply_catalogue_access(&mut self, generation: &str, allowed: bool) -> Result<()> {
-        let saved = self.get_meta(CATALOGUE_ACCESS)?;
-        let desired = allowed.then_some(generation);
-        if saved.as_deref() != desired {
-            if allowed {
-                self.remember_catalogue_access(generation)?;
-            } else {
-                self.forget_catalogue_access()?;
-            }
+    pub(super) fn apply_catalogue_access_at(
+        conn: &Connection,
+        generation: &str,
+        allowed: bool,
+    ) -> Result<()> {
+        if !allowed {
+            return Self::forget_catalogue_access_at(conn);
         }
-        Ok(())
+        if Self::meta_at(conn, CATALOGUE_ACCESS)?.as_deref() == Some(generation) {
+            return Ok(());
+        }
+        Self::set_meta_at(conn, CATALOGUE_ACCESS, generation)
     }
 
     pub fn cached_catalogue_access(&self) -> bool {

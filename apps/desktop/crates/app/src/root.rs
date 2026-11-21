@@ -48,6 +48,7 @@ mod intake_record;
 mod inventory;
 mod notices;
 mod reports;
+mod resource_pools;
 mod resource_requirements;
 mod review_moderation;
 mod reviews;
@@ -266,6 +267,7 @@ enum Overlay {
     ServiceAssignments(Box<service_assignments::Desk>),
     ServiceCatalog(Box<service_catalog::Desk>),
     ResourceRequirements(Box<resource_requirements::Desk>),
+    ResourcePools(Box<resource_pools::Desk>),
     Reviews(Box<reviews::Desk>),
     ReviewModeration(Box<review_moderation::Desk>),
     Waitlist(Box<waitlist::Desk>),
@@ -691,6 +693,7 @@ impl Root {
         self.refresh_staff_access(reconnected, cx);
         self.refresh_open_service_catalog(reconnected, cx);
         self.refresh_service_resources(reconnected, cx);
+        self.refresh_resource_pools(cx);
         if reconnected {
             self.refresh_weekly_conflicts_if_ready(cx);
             self.refresh_open_annotations(true, cx);
@@ -718,6 +721,7 @@ impl Root {
                 && !self.preserve_open_staff_access()
                 && !self.preserve_open_catalogue()
                 && !self.preserve_open_resource_requirements()
+                && !self.preserve_open_resource_pools(generation.as_deref())
             {
                 self.overlay = Overlay::None;
             }
@@ -2385,6 +2389,7 @@ impl Root {
             Overlay::ServiceAssignments(_) => self.close_service_assignment(cx),
             Overlay::ServiceCatalog(_) => self.close_service_catalog(cx),
             Overlay::ResourceRequirements(_) => self.close_resource_requirements(cx),
+            Overlay::ResourcePools(_) => self.close_resource_pools(cx),
             Overlay::StaffAccess(_) => self.close_staff_access(cx),
             Overlay::Directory(desk) if desk.intake.is_some() => self.back_record(cx),
             Overlay::ReviewModeration(desk) => {
@@ -3293,6 +3298,9 @@ impl Root {
                 sob_core::store::SERVICE_CREATION_KIND => Key::CatalogNew,
                 sob_core::store::SERVICE_EDIT_KIND => Key::CatalogTitle,
                 sob_core::service_resources::MUTATION_KIND => Key::ResourceRequirements,
+                sob_core::resource_pools::CREATE | sob_core::resource_pools::UPDATE => {
+                    Key::PoolManagement
+                }
                 _ => Key::ConflictOther,
             });
             let when = c
@@ -3452,6 +3460,23 @@ impl Root {
                                     Kind::Primary,
                                     cx.listener(move |root, _, _, cx| {
                                         root.open_resource_conflict(&id, cx)
+                                    }),
+                                ))
+                            },
+                        )
+                        .when(
+                            matches!(
+                                c.kind.as_str(),
+                                sob_core::resource_pools::CREATE | sob_core::resource_pools::UPDATE
+                            ) && self.can_create_catalogue_item(),
+                            |row| {
+                                let id = c.mutation_id.clone();
+                                row.child(self.button(
+                                    ("review-resource-pool", i),
+                                    self.t(Key::CatalogReview),
+                                    Kind::Primary,
+                                    cx.listener(move |root, _, _, cx| {
+                                        root.open_resource_pools(Some(&id), cx)
                                     }),
                                 ))
                             },
@@ -3711,6 +3736,9 @@ impl Render for Root {
                         Overlay::ResourceRequirements(desk) => Some(
                             self.render_resource_requirements(desk, window.viewport_size(), cx),
                         ),
+                        Overlay::ResourcePools(desk) => {
+                            Some(self.render_resource_pools(desk, window.viewport_size(), cx))
+                        }
                         Overlay::Reviews(desk) => {
                             Some(self.render_review_requests(desk, window.viewport_size(), cx))
                         }

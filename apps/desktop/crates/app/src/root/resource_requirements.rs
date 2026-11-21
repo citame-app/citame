@@ -260,6 +260,10 @@ impl Root {
                             .store
                             .remember_service_resources(&snapshot, revision)
                             .is_ok()
+                            && let Ok(Some(snapshot)) = root
+                                .svc
+                                .store
+                                .reviewed_service_resources(&snapshot.service.service_id)
                         {
                             if let Some(recovery) = &mut desk.recovery {
                                 recovery.needs_online_review = false;
@@ -796,7 +800,7 @@ mod tests {
             }], 1000).unwrap();
             let snapshot = ReviewedServiceResources {
                 generation: root.svc.store.verified_reviewed_generation().unwrap(),
-                resources: vec![ResourcePool { id: room.into(), name: "Room".into(), capacity: 2, active: true }],
+                resources: vec![ResourcePool { id: room.into(), name: "Room".into(), capacity: 2, active: true, version: 1 }],
                 service: ServiceResources { service_id: service.into(), version: 2, selection_mode: SelectionMode::All, requirements: vec![] },
             };
             let revision = root.svc.store.resource_catalogue_revision().unwrap();

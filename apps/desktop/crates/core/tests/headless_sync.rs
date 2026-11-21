@@ -140,6 +140,134 @@ fn native_team_access_uses_reviewed_permissions_through_the_proxy() {
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_resource_pool_creation_and_edits_resume_through_the_proxy() {
+    use sob_core::resource_pools::{PendingPool, PoolDraft, ResourceKind};
+    let device = proxy_device();
+    let web = Device::sign_in();
+    let service = web.rest_post(
+        "/admin/services",
+        json!({
+            "name":"Synthetic existing resource catalogue","durationMinutes":30,"priceCents":2500
+        }),
+    );
+    let service_id = service["id"].as_str().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("resource-pools.sqlite");
+    let mut store = Store::open(&path).unwrap();
+    sync::pull_all(&mut store, &*device.transport).unwrap();
+    let revision = store.resource_catalogue_revision().unwrap();
+    let requirements = device.transport.service_resources(service_id).unwrap();
+    store
+        .remember_service_resources(&requirements, revision)
+        .unwrap();
+    let initial = store.managed_resource_pools().unwrap().unwrap();
+    let id = uuid::Uuid::now_v7().to_string();
+    let created = PoolDraft {
+        name: "Synthetic native equipment".into(),
+        kind: ResourceKind::Equipment,
+        capacity: 2,
+        active: true,
+    };
+    assert!(
+        store
+            .queue_resource_pool(&initial.generation, &id, None, created.clone(), None)
+            .unwrap()
+    );
+    drop(store);
+
+    let mut store = Store::open(&path).unwrap();
+    let pending = store.pending_resource_pools().unwrap();
+    assert_eq!(pending[0].edit.proposed, created);
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    assert!(store.pending_resource_pools().unwrap().is_empty());
+    let confirmed = store.managed_resource_pools().unwrap().unwrap();
+    let original = confirmed.pools.iter().find(|pool| pool.id == id).unwrap();
+    assert_eq!(original.version, 1);
+    assert_eq!(original.settings, created);
+    let offline_requirements = store
+        .reviewed_service_resources(service_id)
+        .unwrap()
+        .unwrap();
+    assert!(
+        offline_requirements
+            .resources
+            .iter()
+            .any(|pool| pool.id == id)
+    );
+
+    let mut local = original.settings.clone();
+    local.name = "Synthetic renamed equipment".into();
+    assert!(
+        store
+            .queue_resource_pool(
+                &confirmed.generation,
+                &id,
+                Some(original),
+                local.clone(),
+                None
+            )
+            .unwrap()
+    );
+    let prefix = std::env::var("SOB_TEST_REST_PREFIX").unwrap_or_default();
+    ureq::put(&format!("{}{prefix}/admin/resources/{id}", web.base))
+        .header("Cookie", &web.cookie)
+        .header("Origin", &web.base)
+        .content_type("application/json")
+        .send(
+            json!({"name":created.name,"kind":"equipment","active":true,"capacity":3,"version":1})
+                .to_string(),
+        )
+        .unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .rejected,
+        1
+    );
+    let edit = store.conflicts().unwrap().pop().unwrap();
+    assert_eq!(edit.reason, "conflict");
+    let rejected: PendingPool = serde_json::from_value(edit.payload).unwrap();
+    let latest = store.managed_resource_pools().unwrap().unwrap();
+    let current = latest.pools.iter().find(|pool| pool.id == id).unwrap();
+    assert_eq!(current.settings.capacity, 3);
+    let reviewed = rejected
+        .proposed
+        .rebase(&rejected.reviewed.unwrap(), &current.settings, true);
+    assert!(
+        store
+            .queue_resource_pool(
+                &latest.generation,
+                &id,
+                Some(current),
+                reviewed,
+                Some(&edit.mutation_id)
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let saved = store.managed_resource_pools().unwrap().unwrap();
+    let resource = saved.pools.iter().find(|pool| pool.id == id).unwrap();
+    assert_eq!(resource.version, 3);
+    assert_eq!(resource.settings.name, local.name);
+    assert_eq!(resource.settings.capacity, 3);
+    assert!(store.conflicts().unwrap().is_empty());
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_resource_requirements_reopen_and_rebase_through_the_proxy() {
     use sob_core::service_resources::{
         LIVE_TOPIC, PendingServiceResources, ResourceDraft, SelectionMode,
@@ -177,6 +305,7 @@ fn native_resource_requirements_reopen_and_rebase_through_the_proxy() {
     store
         .remember_service_resources(&baseline, revision)
         .unwrap();
+    let baseline = store.reviewed_service_resources(id).unwrap().unwrap();
     let mut local = ResourceDraft::from(&baseline.service);
     local.quantities.insert(local_room.clone(), 1);
     assert!(
@@ -229,6 +358,7 @@ fn native_resource_requirements_reopen_and_rebase_through_the_proxy() {
     let latest = device.transport.service_resources(id).unwrap();
     assert_eq!(latest.service.selection_mode, SelectionMode::OneOf);
     store.remember_service_resources(&latest, revision).unwrap();
+    let latest = store.reviewed_service_resources(id).unwrap().unwrap();
     let revised =
         saved
             .proposal()

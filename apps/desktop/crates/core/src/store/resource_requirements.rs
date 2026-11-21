@@ -42,9 +42,39 @@ impl Store {
             .get_meta(&format!("{CACHE_PREFIX}{id}"))?
             .map(|raw| serde_json::from_str::<ReviewedServiceResources>(&raw))
             .transpose()?;
-        Ok(cached.filter(|snapshot| {
+        let Some(mut snapshot) = cached.filter(|snapshot| {
             snapshot.generation == generation && snapshot.service.service_id == id
-        }))
+        }) else {
+            return Ok(None);
+        };
+        if let Some(catalogue) = self.managed_resource_pools()? {
+            use crate::service_resources::ResourcePool;
+            let mut pools: std::collections::BTreeMap<_, _> = snapshot
+                .resources
+                .into_iter()
+                .map(|pool| (pool.id.clone(), pool))
+                .collect();
+            for pool in catalogue.pools {
+                let current = pools.get(&pool.id);
+                if current.is_none_or(|current| current.version <= pool.version) {
+                    pools.insert(
+                        pool.id.clone(),
+                        ResourcePool {
+                            id: pool.id,
+                            name: pool.settings.name,
+                            capacity: pool.settings.capacity,
+                            active: pool.settings.active,
+                            version: pool.version,
+                        },
+                    );
+                }
+            }
+            snapshot.resources = pools.into_values().collect();
+            snapshot
+                .resources
+                .sort_by_cached_key(|pool| (pool.name.to_lowercase(), pool.id.clone()));
+        }
+        Ok(Some(snapshot))
     }
 
     pub fn remember_service_resources(

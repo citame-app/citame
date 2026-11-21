@@ -18,6 +18,7 @@ import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { calendarBadges } from "../appointments/context";
 import { loadSnapshots, toAppointment } from "../appointments/service";
+import { listResources } from "../resources/catalog";
 import { catalogMetadata, publicService } from "../services/options";
 import { toReviewedSettings, toSalonResponse } from "../settings/service";
 
@@ -319,9 +320,18 @@ export async function pullChanges(
           ).flatMap(({ id, color }) => (color === null ? [] : [[id, color] as const])),
         )
       : undefined;
+  const resourceChanged = page.some(
+    (row) => row.entity === "live_view" && row.rowId === "resource_catalogue",
+  );
+  const resourcePools =
+    permissions.editCatalog &&
+    (query.resourcePools === "full" || (query.resourcePools === "delta" && resourceChanged))
+      ? (await listResources(db, principal)).resources
+      : undefined;
   return {
     changes,
     ...(catalogColors ? { catalogColors } : {}),
+    ...(resourcePools ? { resourcePools } : {}),
     ...(refresh.size ? { refresh: [...refresh] } : {}),
     nextCursor,
     hasMore,

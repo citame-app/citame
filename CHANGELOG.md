@@ -15,6 +15,7 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 - The Desktop service editor saves service details and performer assignments together, including when the draft was edited offline.
 - Desktop edits variant labels and compatible services for add-ons in the same reviewed save.
 - Desktop configures required rooms and equipment per service, including alternatives and offline edits with conflict review.
+- Desktop creates and edits rooms, equipment and stations with offline drafts and Cloud's future-reservation checks.
 - Desktop can create services, variants and add-ons with professional assignments. New services use the persistent synchronization queue and are bookable once acknowledged by the server.
 - Desktop queues edits to existing service details offline. Cloud checks the version before applying the edit, and rejected drafts can be compared and resubmitted from Sync conflicts.
 

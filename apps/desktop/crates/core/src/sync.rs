@@ -58,6 +58,20 @@ pub trait Transport: Send + Sync {
     ) -> Result<(PullResponse, Option<CatalogColors>), TransportError> {
         Ok((self.pull(since, limit)?, None))
     }
+
+    fn pull_with_catalogue(
+        &self,
+        since: i64,
+        limit: u32,
+        colors: bool,
+        _full_resource_pools: bool,
+    ) -> Result<(PullResponse, Option<CatalogColors>), TransportError> {
+        if colors {
+            self.pull_with_catalog_colors(since, limit)
+        } else {
+            self.pull(since, limit).map(|page| (page, None))
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -214,11 +228,12 @@ pub fn pull_all(store: &mut Store, transport: &dyn Transport) -> Result<PullRepo
     let mut request_colors = store.get_meta(CATALOG_COLORS_CACHED)?.is_none();
     loop {
         let since = store.cursor()?;
-        let response = if request_colors {
-            transport.pull_with_catalog_colors(since, PULL_PAGE)
-        } else {
-            transport.pull(since, PULL_PAGE).map(|page| (page, None))
-        };
+        let response = transport.pull_with_catalogue(
+            since,
+            PULL_PAGE,
+            request_colors,
+            store.needs_resource_pool_snapshot()?,
+        );
         let (page, colors) = match response {
             Ok(p) => p,
             Err(TransportError::CursorAhead) if !report.replica_reset => {
@@ -270,13 +285,10 @@ pub fn pull_all(store: &mut Store, transport: &dyn Transport) -> Result<PullRepo
                 "the server reports more changes but did not advance the cursor".into(),
             ));
         }
-        let applied = store.apply_sync_page(
-            &page.changes,
-            page.next_cursor,
+        let applied = store.apply_pulled_page(
+            &page,
             snapshot_complete && !report.replica_reset,
-            !page.has_more,
-            &page.refresh,
-            Some(&generation),
+            &generation,
         )?;
         if let Some(colors) = colors {
             store.apply_catalog_colors(&colors, Some(&generation))?;
@@ -286,9 +298,6 @@ pub fn pull_all(store: &mut Store, transport: &dyn Transport) -> Result<PullRepo
             && store.get_meta("time_off_scope")?.as_deref() != Some(scope)
         {
             store.set_meta_in("time_off_scope", scope, &generation)?;
-        }
-        if let Some(allowed) = page.viewer_edit_catalogue {
-            store.apply_catalogue_access(&generation, allowed)?;
         }
         report.pages += 1;
         report.changes += applied;

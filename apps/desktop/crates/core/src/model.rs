@@ -404,6 +404,8 @@ pub struct PullResponse {
     pub viewer_role: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub viewer_edit_catalogue: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_pools: Option<Vec<crate::resource_pools::ManagedPool>>,
 }
 
 /// A mutation exactly as sent in `POST /sync/push`.
@@ -503,6 +505,15 @@ impl OutboxEntry {
             && let Some(fields) = payload.as_object_mut()
         {
             fields.remove("_reviewed");
+        } else if matches!(
+            self.kind.as_str(),
+            crate::resource_pools::CREATE | crate::resource_pools::UPDATE
+        ) && let Some(fields) = payload.as_object_mut()
+        {
+            fields.remove("_reviewed");
+            if self.kind == crate::resource_pools::CREATE {
+                fields.remove("active");
+            }
         }
         WireMutation {
             mutation_id: self.mutation_id.clone(),

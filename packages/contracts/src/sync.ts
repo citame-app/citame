@@ -3,7 +3,12 @@ import { appointmentSchema, createAppointmentBaseSchema } from "./appointments";
 import { calendarAppointmentSchema } from "./calendar";
 import { idSchema, instantSchema, LIMITS, localDateSchema, syncGenerationSchema } from "./common";
 import { dateShiftRangesSchema } from "./date-shifts";
-import { serviceResourceInputSchema } from "./resources";
+import {
+  resourceCreateSchema,
+  resourceSchema,
+  resourceUpdateSchema,
+  serviceResourceInputSchema,
+} from "./resources";
 import {
   reviewedSalonSettingsRequestSchema,
   reviewedSalonSettingsSchema,
@@ -242,6 +247,18 @@ const serviceResources = z.object({
   }),
 });
 
+const resourceCreate = z.object({
+  ...envelope,
+  kind: z.literal("resource.create"),
+  payload: resourceCreateSchema.omit({ idempotencyKey: true }).extend({ id: idSchema }),
+});
+
+const resourceUpdate = z.object({
+  ...envelope,
+  kind: z.literal("resource.update"),
+  payload: resourceUpdateSchema.extend({ id: idSchema }),
+});
+
 const staffUpdate = z.object({
   ...envelope,
   kind: z.literal("staff.update"),
@@ -275,6 +292,8 @@ export const syncMutationSchema = z.discriminatedUnion("kind", [
   serviceUpdate,
   serviceStaffReplace,
   serviceResources,
+  resourceCreate,
+  resourceUpdate,
   staffUpdate,
   settingsUpdate,
 ]);
@@ -371,6 +390,7 @@ export const syncPullQuerySchema = z.object({
   intakeViews: z.literal("1").optional(),
   bookingPolicy: z.literal("1").optional(),
   resourceCatalogue: z.literal("1").optional(),
+  resourcePools: z.enum(["full", "delta"]).optional(),
 });
 export type SyncPullQuery = z.infer<typeof syncPullQuerySchema>;
 
@@ -505,6 +525,7 @@ export const syncPullResponseSchema = z.object({
   refresh: z.array(syncLiveViewSchema).optional(),
   /** Configured service colors for upgrading replicas that lacked the color field. */
   catalogColors: z.record(idSchema, z.string().regex(/^#[0-9a-fA-F]{6}$/)).optional(),
+  resourcePools: z.array(resourceSchema).max(50).optional(),
   changes: z.array(syncChangeSchema),
   /** Store this and send it as `since` next time. Never decreases. */
   nextCursor: z.number().int().min(0),
