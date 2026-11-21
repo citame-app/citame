@@ -1106,6 +1106,8 @@ keys! {
     CheckoutDue => ("Remaining balance", "Saldo pendiente"),
     WalkInSale => ("New sale", "Nueva venta"),
     SalesHistory => ("Transactions", "Transacciones"),
+    SalesOffline => ("Connect to load transactions.", "Conéctate para cargar las transacciones."),
+    SalesOfflineCached => ("Offline. Showing the last loaded transactions. Connect to open receipts.", "Sin conexión. Se muestran las últimas transacciones cargadas. Conéctate para abrir los recibos."),
     SalesFilters => ("Filters and grouping", "Filtros y agrupación"),
     SalesFrom => ("From date", "Desde"),
     SalesTo => ("Through date", "Hasta"),

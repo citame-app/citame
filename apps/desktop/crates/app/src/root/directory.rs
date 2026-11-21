@@ -87,17 +87,20 @@ impl Root {
                 intake.subject_visibility(&desk.contacts.clients);
             }
             if let Some(previous) = desk.form.as_ref().and_then(|form| form.previous.as_ref()) {
-                if desk.contacts.find(&previous.id).is_none() {
-                    desk.form = None;
-                    desk.controls = None;
-                    desk.sales_history = None;
-                    desk.history.clear();
-                } else {
+                if let Some(client) = desk.contacts.find(&previous.id) {
+                    if let Some(history) = &mut desk.sales_history {
+                        history.refresh_client(client);
+                    }
                     desk.history = self
                         .svc
                         .store
                         .client_history(&previous.id)
                         .unwrap_or_default();
+                } else {
+                    desk.form = None;
+                    desk.controls = None;
+                    desk.sales_history = None;
+                    desk.history.clear();
                 }
             }
         }
@@ -155,19 +158,13 @@ impl Root {
         let Some(client) = desk.form.as_ref().and_then(|form| form.previous.as_ref()) else {
             return;
         };
-        let Ok(id) = client.id.parse() else {
+        let Some(subject) = transactions::HistoryClient::from_profile(client) else {
             return;
         };
         if !self.svc.store.client_is_synced(&client.id).unwrap_or(false) {
             return;
         }
-        let history = self.new_sales_history(
-            Some(transactions::HistoryClient {
-                id,
-                name: client.name.clone(),
-            }),
-            cx,
-        );
+        let history = self.new_sales_history(Some(subject), cx);
         if let Overlay::Directory(desk) = &mut self.overlay {
             desk.sales_history = Some(history);
         }

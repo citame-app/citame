@@ -20,7 +20,7 @@ pub(super) struct History {
     invalid_timezone_range: bool,
     group: CheckoutHistoryGroup,
     loaded_group: Option<CheckoutHistoryGroup>,
-    pub(super) page: u32,
+    page: u32,
     results: Result<Option<CheckoutPage>, ()>,
     request: Option<Arc<()>>,
     observation: Option<HistoryObservation>,
@@ -30,13 +30,35 @@ pub(super) struct History {
 }
 
 pub(super) struct HistoryClient {
-    pub id: Uuid,
-    pub name: String,
+    id: Uuid,
+    name: String,
+    controls_version: Option<u64>,
+}
+
+impl HistoryClient {
+    pub(super) fn from_profile(profile: &Client) -> Option<Self> {
+        Some(Self {
+            id: profile.id.parse().ok()?,
+            name: profile.name.clone(),
+            controls_version: profile.controls_version,
+        })
+    }
 }
 
 impl History {
     pub(super) fn client_id(&self) -> Option<Uuid> {
         self.client.as_ref().map(|client| client.id)
+    }
+
+    pub(super) fn refresh_client(&mut self, profile: &Client) {
+        if let Some(client) = &mut self.client {
+            client.name.clone_from(&profile.name);
+            // Linking another profile increments the surviving client's controls version.
+            if client.controls_version != profile.controls_version {
+                client.controls_version = profile.controls_version;
+                self.needs_refresh = true;
+            }
+        }
     }
 }
 
@@ -164,7 +186,8 @@ impl Root {
         if let Some(receipt) = &history.receipt {
             if receipt.can_go_back() {
                 history.receipt = None;
-                self.load_sales_history(HistoryLoad::Refresh, cx);
+                let page = history.page;
+                self.load_sales_history(HistoryLoad::Page(page), cx);
                 cx.notify();
             }
         } else if let Overlay::Directory(directory) = &mut self.overlay {
@@ -568,7 +591,13 @@ impl Root {
                     }),
                 ))
             })
-            .when(!online, |view| view.child(self.t(Key::CheckoutOffline)));
+            .when(!online, |view| {
+                view.child(self.label(if matches!(history.results, Ok(Some(_))) {
+                    Key::SalesOfflineCached
+                } else {
+                    Key::SalesOffline
+                }))
+            });
         let body = body.when(history.refresh_failed, |view| {
             view.child(self.label(Key::SalesRefreshFailed))
                 .when(online, |view| {
@@ -689,14 +718,23 @@ impl Root {
                                                     )),
                                             )
                                         })
-                                        .child(self.button(
-                                            SharedString::from(format!("history-{id}")),
-                                            title,
-                                            Kind::Ghost,
-                                            cx.listener(move |root, _, _, cx| {
-                                                root.open_history_receipt(id, cx)
-                                            }),
-                                        ))
+                                        .child(if online {
+                                            self.button(
+                                                SharedString::from(format!("history-{id}")),
+                                                title,
+                                                Kind::Ghost,
+                                                cx.listener(move |root, _, _, cx| {
+                                                    root.open_history_receipt(id, cx)
+                                                }),
+                                            )
+                                            .into_any_element()
+                                        } else {
+                                            div()
+                                                .text_sm()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .child(title)
+                                                .into_any_element()
+                                        })
                                         .child(
                                             div()
                                                 .text_sm()
@@ -761,6 +799,25 @@ impl Root {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+
+    #[gpui::test]
+    async fn the_surviving_profile_revision_requests_a_history_refresh(cx: &mut TestAppContext) {
+        let (_dir, config) = super::super::tests::desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        root.update(cx, |root, cx| {
+            let mut client = root.svc.store.clients().unwrap().remove(0);
+            client.controls_version = Some(1);
+            let mut history = root.new_sales_history(HistoryClient::from_profile(&client), cx);
+            history.refresh_client(&client);
+            assert!(!history.needs_refresh);
+            client.controls_version = Some(2);
+            history.refresh_client(&client);
+            assert!(history.needs_refresh);
+            history.needs_refresh = false;
+            history.refresh_client(&client);
+            assert!(!history.needs_refresh);
+        });
+    }
 
     #[gpui::test]
     async fn a_submitted_range_recovers_when_the_new_timezone_contains_the_date(

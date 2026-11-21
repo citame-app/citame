@@ -3481,20 +3481,22 @@ fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
     let web = browser.rest_get(&format!("/admin/commerce/checkouts/{}", receipt.id));
     assert_eq!(web["paidCents"], 4200);
     assert_eq!(web["staffId"], staff_id.to_string());
-    let history = device
-        .transport
-        .checkout_history(
-            &sob_core::billing::CheckoutHistoryFilters {
-                search: "Synthetic walk-in product".into(),
-                status: Some("paid"),
-                method: Some("external_card"),
-                group_by: Some(sob_core::billing::CheckoutHistoryGroup::Day),
-                client_id: Some(client_id),
-                ..Default::default()
-            },
-            1,
-        )
-        .unwrap();
+    let mut filters = sob_core::billing::CheckoutHistoryFilters {
+        search: "Synthetic walk-in product".into(),
+        status: Some("paid"),
+        method: Some("external_card"),
+        group_by: Some(sob_core::billing::CheckoutHistoryGroup::Day),
+        ..Default::default()
+    };
+    let unscoped = device.transport.checkout_history(&filters, 1).unwrap();
+    assert!(
+        unscoped
+            .checkouts
+            .iter()
+            .any(|sale| sale.id.to_string() == receipt.id)
+    );
+    filters.client_id = Some(client_id);
+    let history = device.transport.checkout_history(&filters, 1).unwrap();
     let totals = history.group_totals.as_ref().unwrap();
     let web_history = browser.rest_get(&format!(
         "/admin/commerce/checkouts?clientId={client_id}&search=Synthetic%20walk-in%20product&status=paid&method=external_card&groupBy=day",

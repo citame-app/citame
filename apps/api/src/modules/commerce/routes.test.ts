@@ -20,7 +20,7 @@ import {
   serviceAddon,
   staffProfile,
 } from "@sob/db";
-import { eq, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import {
   type Actor,
   actor,
@@ -1245,6 +1245,10 @@ test("a client's transaction list and summaries obey the operator's receipt perm
   };
   const colleague = await addReceipt(f.beaId, client.clientId);
   await addReceipt(f.anaId, other.clientId);
+  await t.db
+    .update(checkoutTable)
+    .set({ createdAt: new Date("2026-03-01T08:00:00Z") })
+    .where(inArray(checkoutTable.id, [own.id, colleague.id]));
   const path = `/admin/commerce/checkouts?clientId=${client.clientId}&groupBy=month&pageSize=1`;
   const list = async (who: Actor, page: number) => {
     const response = await call(who, `${path}&page=${page}`);
