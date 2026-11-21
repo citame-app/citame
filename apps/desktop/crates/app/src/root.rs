@@ -61,6 +61,7 @@ mod scrollbar;
 mod service_assignments;
 mod service_catalog;
 mod settlement;
+use settlement::SettlementMode;
 mod slots;
 mod staff_access;
 mod staff_portraits;
@@ -3168,17 +3169,23 @@ impl Root {
                         .when_some(appointment.external_balance, |list, balance| {
                             list.child(div().text_sm().child(self.external_balance_label(balance)))
                         })
+                        .when(appointment.booksy_unpaid_confirmed, |list| {
+                            list.child(div().text_sm().child(self.t(Key::BooksyUnpaidConfirmed)))
+                        })
                         .when(
                             appointment.status != AppointmentStatus::Cancelled
                                 && !appointment.externally_settled
                                 && appointment.external_balance.is_none(),
                             |list| {
-                                list.children(appointment.billing_review_reasons.iter().filter_map(
+                                list.children(appointment.billing_review_reasons().filter_map(
                                     |reason| {
                                         let label = match reason {
                                             BillingReviewReason::PaidInBooksy => Key::ImportedPaid,
                                             BillingReviewReason::InvoicedInBooksy => {
                                                 Key::ImportedInvoiced
+                                            }
+                                            BillingReviewReason::UnknownBooksyPayment => {
+                                                Key::DueUnknownBooksyPayment
                                             }
                                             BillingReviewReason::UnknownAmount => {
                                                 return None;
@@ -3226,34 +3233,31 @@ impl Root {
                     ))
                 },
             )
-            .when(
-                !pending
-                    && current
-                        .as_ref()
-                        .is_some_and(|a| self.can_open_settlement_review(a, false)),
-                |x| {
-                    x.child(self.button(
-                        "open-imported-settlement",
-                        self.t(Key::ReviewImportedSettlement),
-                        Kind::Ghost,
-                        cx.listener(|this, _, _, cx| this.open_settlement_review(false, cx)),
-                    ))
-                },
-            )
-            .when(
-                !pending
-                    && current
-                        .as_ref()
-                        .is_some_and(|a| self.can_open_settlement_review(a, true)),
-                |x| {
-                    x.child(self.button(
-                        "open-imported-partial-payment",
-                        self.t(Key::ReviewPartialPayment),
-                        Kind::Ghost,
-                        cx.listener(|this, _, _, cx| this.open_settlement_review(true, cx)),
-                    ))
-                },
-            )
+            .when(!pending, |view| {
+                view.children(
+                    [
+                        ("open-imported-settlement", SettlementMode::Full),
+                        ("open-imported-partial-payment", SettlementMode::Partial),
+                        ("open-imported-unpaid", SettlementMode::Unpaid),
+                    ]
+                    .into_iter()
+                    .filter(|(_, mode)| {
+                        current
+                            .as_ref()
+                            .is_some_and(|a| self.can_open_settlement_review(a, *mode))
+                    })
+                    .map(|(id, mode)| {
+                        self.button(
+                            id,
+                            self.t(mode.title()),
+                            Kind::Ghost,
+                            cx.listener(move |this, _, _, cx| {
+                                this.open_settlement_review(mode, cx)
+                            }),
+                        )
+                    }),
+                )
+            })
             .when(editable, |x| {
                 x.child(self.label(Key::MoveTo))
                     .child(self.stepper(

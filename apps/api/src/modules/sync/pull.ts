@@ -18,6 +18,7 @@ import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { calendarBadges } from "../appointments/context";
 import { loadSnapshots, toAppointment } from "../appointments/service";
+import { compatibleBillingReasons } from "../commerce/appointment-billing";
 import { listResources } from "../resources/catalog";
 import { listCombinations } from "../services/combinations";
 import { catalogMetadata, publicService } from "../services/options";
@@ -52,6 +53,7 @@ async function loadVisible(
   principal: Principal,
   entity: SyncEntity,
   ids: string[],
+  supportsUnknownPayment: boolean,
 ): Promise<Visible> {
   const out: Visible = new Map();
   const put = (id: string, data: unknown) => out.set(id, { entity, id, op: "upsert", data });
@@ -93,10 +95,18 @@ async function loadVisible(
           )
             ? { serviceBadges: billing.badges }
             : {}),
-          ...(billing?.reasons.length ? { billingReviewReasons: billing.reasons } : {}),
+          ...(billing?.reasons.length
+            ? {
+                billingReviewReasons: compatibleBillingReasons(
+                  billing.reasons,
+                  supportsUnknownPayment,
+                ),
+              }
+            : {}),
           ...(billing?.externallySettled ? { externallySettled: true as const } : {}),
           ...(billing?.externalBalance ? { externalBalance: billing.externalBalance } : {}),
           ...(billing?.importedFromBooksy ? { importedFromBooksy: true as const } : {}),
+          ...(billing?.booksyUnpaidConfirmed ? { booksyUnpaidConfirmed: true as const } : {}),
         });
       }
       break;
@@ -295,7 +305,10 @@ export async function pullChanges(
   }
   const states = new Map<SyncEntity, Visible>();
   for (const [entity, ids] of idsByEntity) {
-    states.set(entity, await loadVisible(db, principal, entity, ids));
+    states.set(
+      entity,
+      await loadVisible(db, principal, entity, ids, query.booksyPaymentReview === "1"),
+    );
   }
 
   const changes: SyncChange[] = [];

@@ -708,6 +708,13 @@
       "when": 1795243700000,
       "tag": "0100_portfolio_live_view",
       "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1795248805000,
+      "tag": "0101_booksy_payment_review",
+      "breakpoints": true
     }
   ]
 }

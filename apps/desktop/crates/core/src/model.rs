@@ -108,6 +108,7 @@ pub enum BillingReviewReason {
     UnknownAmount,
     PaidInBooksy,
     InvoicedInBooksy,
+    UnknownBooksyPayment,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -197,8 +198,26 @@ pub struct Appointment {
     pub external_balance: Option<ExternalBalance>,
     #[serde(default)]
     pub imported_from_booksy: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub booksy_unpaid_confirmed: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+impl Appointment {
+    pub fn billing_review_reasons(&self) -> impl Iterator<Item = BillingReviewReason> + '_ {
+        self.billing_review_reasons.iter().copied().map(|reason| {
+            // An older client may already have synced the compatibility hold before upgrade.
+            if reason == BillingReviewReason::UnknownAmount
+                && self.imported_from_booksy
+                && self.services.iter().all(|line| !line.source_unpriced)
+            {
+                BillingReviewReason::UnknownBooksyPayment
+            } else {
+                reason
+            }
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

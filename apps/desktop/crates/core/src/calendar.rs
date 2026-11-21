@@ -249,6 +249,7 @@ fn overlay(
                         externally_settled: false,
                         external_balance: None,
                         imported_from_booksy: false,
+                        booksy_unpaid_confirmed: false,
                         created_at: stamp,
                         updated_at: stamp,
                     },

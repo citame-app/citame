@@ -19,7 +19,7 @@ import { IMPORTED_STAFF_UNIT_START } from "../availability/staff-reservations";
 import { repackResourceUnits } from "../resources/plan";
 import { IMPORTED_RESOURCE_UNIT_START } from "../resources/reservations";
 import { booksyLocalDayBounds } from "./local-day";
-import { reviewBooksyPaymentEvidence } from "./payment-evidence";
+import { readBooksyPaymentEvidence, reviewBooksyPaymentEvidence } from "./payment-evidence";
 import { planBooksyTransfer, sourceUuid, stableJson, summarizeTransferIssues } from "./plan";
 import { reviewBooksyCombinations, verifyBookedBooksyCombinations } from "./source-combinations";
 import {
@@ -229,6 +229,9 @@ export function planNativeRehearsal(model: BooksySourceReadModel) {
       throw new Error("Source reservation group is empty or duplicated");
     groupIds.add(group.sourceId);
     const visitGroupId = sourceUuid(model.businessId, "visitGroups", group.sourceId);
+    const payment = readBooksyPaymentEvidence(group.raw).state;
+    const sourcePaymentUnverified =
+      payment !== "withoutDeposit" && payment !== "authorizedWithoutCharge";
     const visible =
       group.raw.kind === "booksy-reviewed-visible-booking"
         ? z
@@ -330,6 +333,7 @@ export function planNativeRehearsal(model: BooksySourceReadModel) {
         visitGroupId,
         sourceBookingRef: group.sourceId,
         sourceLineRef: item.sourceCopy.itemRef,
+        sourcePaymentUnverified,
         item,
         services,
         context,
@@ -529,7 +533,20 @@ async function verifyNativeProjection(
   const servicePositions = new Map(
     services.map((row) => [`${row.appointmentId}/${row.position}`, row.id]),
   );
-  const annotations = await tx.select().from(appointmentContext);
+  // This comparison also runs before migrating older portable backups.
+  const annotations = await tx
+    .select({
+      appointmentId: appointmentContext.appointmentId,
+      servicePosition: appointmentContext.servicePosition,
+      source: appointmentContext.source,
+      sourceRef: appointmentContext.sourceRef,
+      internalNote: appointmentContext.internalNote,
+      customerComment: appointmentContext.customerComment,
+      requestedStaffId: appointmentContext.requestedStaffId,
+      paid: appointmentContext.paid,
+      invoiced: appointmentContext.invoiced,
+    })
+    .from(appointmentContext);
   const staffWork = await tx.select().from(staffReservation);
   const physical = await tx.select().from(resourceReservation);
   if (
@@ -1047,6 +1064,7 @@ export async function rehearseNativeBooksy(
             customerComment: row.customerComment,
             paid: row.paid,
             invoiced: row.invoiced,
+            sourcePaymentUnverified: visit.sourcePaymentUnverified,
             source: "booksy",
             sourceRef: row.sourceRef,
           })),

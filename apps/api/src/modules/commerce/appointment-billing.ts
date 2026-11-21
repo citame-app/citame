@@ -1,9 +1,11 @@
 import {
+  type BillingReviewReason,
   type ExternalBalance,
   externalBalanceSchema,
   type ImportedPriceReview,
   type ImportedPriceReviewPreview,
   type ImportedSettlement,
+  type ImportedUnpaidReview,
   moneyCentsSchema,
   recordedImportedSettlementSchema,
 } from "@sob/contracts";
@@ -26,10 +28,79 @@ import { lockScheduling } from "../../tx";
 const nativePriceAudit = "commerce.imported_price_reviewed";
 const importedSettlementAudit = "commerce.imported_settlement_recorded";
 const importedPartialAudit = "commerce.imported_partial_payment_recorded";
+const importedUnpaidAudit = "commerce.imported_unpaid_confirmed";
 const sourceBilling = and(
   eq(appointmentContext.source, "booksy"),
   or(eq(appointmentContext.paid, true), eq(appointmentContext.invoiced, true)),
 );
+
+/** Older clients accept only the original hold reasons and must still disable collection. */
+export function compatibleBillingReasons(
+  reasons: BillingReviewReason[],
+  supportsUnknownPayment: boolean,
+): BillingReviewReason[] {
+  return supportsUnknownPayment || !reasons.includes("unknown_booksy_payment")
+    ? reasons
+    : [
+        ...new Set(
+          reasons.map((reason) =>
+            reason === "unknown_booksy_payment" ? "unknown_amount" : reason,
+          ),
+        ),
+      ];
+}
+
+async function unknownBooksyPayments(db: Pick<Database, "select">, ids: string[]) {
+  const rows = await db
+    .select({
+      id: appointmentContext.appointmentId,
+      lineId: appointmentContext.id,
+      version: appointmentContext.billingVersion,
+    })
+    .from(appointmentContext)
+    .where(
+      and(
+        inArray(appointmentContext.appointmentId, ids),
+        eq(appointmentContext.source, "booksy"),
+        or(isNull(appointmentContext.paid), eq(appointmentContext.sourcePaymentUnverified, true)),
+      ),
+    )
+    .orderBy(asc(appointmentContext.id));
+  const snapshots = new Map<string, string[]>();
+  for (const row of rows) {
+    const lines = snapshots.get(row.id) ?? [];
+    lines.push(`${row.lineId}:${row.version}`);
+    snapshots.set(row.id, lines);
+  }
+  return snapshots;
+}
+
+async function importedUnpaidReviews(db: Pick<Database, "select">, ids: string[]) {
+  return db
+    .select({ id: auditLog.entityId, metadata: auditLog.metadata })
+    .from(auditLog)
+    .where(
+      and(
+        eq(auditLog.entity, "appointment"),
+        inArray(auditLog.entityId, ids),
+        eq(auditLog.action, importedUnpaidAudit),
+      ),
+    );
+}
+
+export async function booksyPaymentReviews(db: Pick<Database, "select">, ids: string[]) {
+  const unknown = await unknownBooksyPayments(db, ids);
+  const states = new Map<string, "pending" | "confirmed_unpaid">();
+  for (const id of unknown.keys()) states.set(id, "pending");
+  if (unknown.size) {
+    const reviews = await importedUnpaidReviews(db, [...unknown.keys()]);
+    for (const { id, metadata } of reviews) {
+      if (id && metadata.snapshot === JSON.stringify(unknown.get(id)))
+        states.set(id, "confirmed_unpaid");
+    }
+  }
+  return states;
+}
 
 export async function externallySettledAppointments(db: Pick<Database, "select">, ids: string[]) {
   if (!ids.length) return new Set<string>();
@@ -86,10 +157,12 @@ export async function appointmentBillingHolds(
     );
   const settled = await externallySettledAppointments(db, appointmentIds);
   const partial = await importedPartialPayments(db, appointmentIds);
+  const reviews = await booksyPaymentReviews(db, appointmentIds);
   return new Set([
     ...rows.filter(({ id }) => !partial.has(id)).map(({ id }) => id),
     ...unpriced.map(({ id }) => id),
     ...settled,
+    ...[...reviews].flatMap(([id, state]) => (state === "pending" && !partial.has(id) ? [id] : [])),
   ]);
 }
 
@@ -145,6 +218,22 @@ export async function getImportedSettlement(db: Database, id: string, principal:
   return { appointmentVersion: booking.version, settlement: await importedSettlement(db, id) };
 }
 
+async function assertNoNativeCollection(db: Pick<Database, "select">, id: string) {
+  const [receipt] = await db
+    .select({ id: checkout.id })
+    .from(checkout)
+    .where(and(eq(checkout.appointmentId, id), ne(checkout.status, "void")))
+    .limit(1);
+  if (receipt)
+    throw new DomainError("invalid_state", "Reconcile the existing Citame checkout first");
+  const [nativeDeposit] = await db
+    .select({ id: bookingProtection.appointmentId })
+    .from(bookingProtection)
+    .where(eq(bookingProtection.appointmentId, id));
+  if (nativeDeposit)
+    throw new DomainError("invalid_state", "Reconcile the existing Citame deposit first");
+}
+
 /** Acknowledges a full settlement in the source system without generating a new sale. */
 export async function confirmImportedSettlement(
   db: Database,
@@ -182,18 +271,13 @@ export async function confirmImportedSettlement(
       .from(appointmentContext)
       .where(and(eq(appointmentContext.appointmentId, id), sourceBilling))
       .limit(1);
-    if (!source)
+    const unknown = !source && (await unknownBooksyPayments(tx, [id])).has(id);
+    if (!source && !unknown)
       throw new DomainError(
         "invalid_state",
-        "This appointment has no Booksy payment or invoice flag",
+        "This appointment has no Booksy payment or invoice to reconcile",
       );
-    const [native] = await tx
-      .select({ id: checkout.id })
-      .from(checkout)
-      .where(and(eq(checkout.appointmentId, id), ne(checkout.status, "void")))
-      .limit(1);
-    if (native)
-      throw new DomainError("invalid_state", "Reconcile the existing Citame checkout first");
+    await assertNoNativeCollection(tx, id);
     const lines = await tx
       .select()
       .from(appointmentService)
@@ -205,7 +289,10 @@ export async function confirmImportedSettlement(
       (sum, line) => sum + (line.reviewedPriceCents ?? line.priceCents),
       0,
     );
-    if ((known && input.amountCents !== frozenTotal) || (!known && input.amountCents === 0))
+    if (
+      (known && input.amountCents !== frozenTotal) ||
+      ((!known || unknown) && input.amountCents === 0)
+    )
       throw new DomainError("validation_error", "Review the full amount already settled in Booksy");
     const { amountCents, reference } = input;
     await recordAudit(tx, {
@@ -226,6 +313,60 @@ export async function confirmImportedSettlement(
   });
 }
 
+/** Records evidence that an undocumented source payment is absent without generating a sale. */
+export async function confirmImportedUnpaid(
+  db: Database,
+  id: string,
+  input: ImportedUnpaidReview,
+  principal: Principal,
+  now: Date,
+) {
+  requireRole(principal, "owner");
+  return db.transaction(async (tx) => {
+    await lockScheduling(tx);
+    const [booking] = await tx
+      .select()
+      .from(appointment)
+      .where(eq(appointment.id, id))
+      .for("update");
+    if (!booking || booking.deletedAt) throw new DomainError("not_found", "Appointment not found");
+    const lines = (await unknownBooksyPayments(tx, [id])).get(id);
+    const [source] = await tx
+      .select({ id: appointmentContext.id })
+      .from(appointmentContext)
+      .where(and(eq(appointmentContext.appointmentId, id), sourceBilling))
+      .limit(1);
+    if (!lines || source || booking.status === "cancelled")
+      throw new DomainError("invalid_state", "No unknown Booksy payment can be confirmed unpaid");
+    const snapshot = JSON.stringify(lines);
+    const previous = (await importedUnpaidReviews(tx, [id])).find(
+      ({ metadata }) => metadata.snapshot === snapshot,
+    );
+    if (previous?.metadata.reference === input.reference)
+      return { appointmentVersion: booking.version };
+    if (previous || booking.version !== input.appointmentVersion)
+      throw new DomainError("version_conflict", "Reload the appointment before reviewing payment");
+    if (
+      (await externallySettledAppointments(tx, [id])).size ||
+      (await importedPartialPayments(tx, [id])).size
+    )
+      throw new DomainError("invalid_state", "A Booksy payment is already reconciled");
+    await assertNoNativeCollection(tx, id);
+    await recordAudit(tx, {
+      actorUserId: principal.userId,
+      action: importedUnpaidAudit,
+      entity: "appointment",
+      entityId: id,
+      metadata: { snapshot, reference: input.reference },
+    });
+    await tx
+      .update(appointment)
+      .set({ version: booking.version + 1, updatedAt: now })
+      .where(eq(appointment.id, id));
+    return { appointmentVersion: booking.version + 1 };
+  });
+}
+
 async function originalPartialPaymentTotal(
   db: Pick<Database, "select">,
   booking: typeof appointment.$inferSelect,
@@ -239,19 +380,7 @@ async function originalPartialPaymentTotal(
     .where(and(eq(appointmentContext.appointmentId, id), eq(appointmentContext.source, "booksy")))
     .limit(1);
   if (!source) throw new DomainError("invalid_state", "This appointment has no Booksy origin");
-  const [receipt] = await db
-    .select({ id: checkout.id })
-    .from(checkout)
-    .where(and(eq(checkout.appointmentId, id), ne(checkout.status, "void")))
-    .limit(1);
-  if (receipt)
-    throw new DomainError("invalid_state", "Reconcile the existing Citame checkout first");
-  const [nativeDeposit] = await db
-    .select({ id: bookingProtection.appointmentId })
-    .from(bookingProtection)
-    .where(eq(bookingProtection.appointmentId, id));
-  if (nativeDeposit)
-    throw new DomainError("invalid_state", "Reconcile the existing Citame deposit first");
+  await assertNoNativeCollection(db, id);
   const lines = await db
     .select()
     .from(appointmentService)

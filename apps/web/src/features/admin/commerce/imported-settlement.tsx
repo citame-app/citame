@@ -1,7 +1,9 @@
 import {
   type ImportedSettlement,
+  type ImportedUnpaidReview,
   importedPartialPaymentSchema,
   importedSettlementSchema,
+  importedUnpaidReviewSchema,
   moneyCentsSchema,
 } from "@sob/contracts";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -16,14 +18,22 @@ import { formatMoney } from "~/lib/format";
 import { invalidateCommerce } from "./invalidate";
 import { inputCents } from "./money";
 
+type ReviewMode = { kind: "settlement" | "unpaid" } | { kind: "partial"; originalTotal: number };
+
+const labels = {
+  settlement: { title: "settle", submit: "confirmSettlement", reference: "settlementReference" },
+  partial: { title: "partial", submit: "confirmPartial", reference: "settlementReference" },
+  unpaid: { title: "unpaid", submit: "confirmUnpaid", reference: "unpaidReference" },
+} as const;
+
 export function ImportedSettlementForm({
   id,
   version,
-  originalTotal,
+  mode = { kind: "settlement" },
 }: {
   id: string;
   version: number;
-  originalTotal?: number;
+  mode?: ReviewMode;
 }) {
   const { t, locale } = useI18n();
   const heading = useId();
@@ -33,20 +43,22 @@ export function ImportedSettlementForm({
   const [reference, setReference] = useState("");
   const [attempted, setAttempted] = useState(false);
   const cents = inputCents(amount);
-  const partial = originalTotal !== undefined;
+  const confirmUnpaid = mode.kind === "unpaid";
+  const partial = mode.kind === "partial";
+  const label = labels[mode.kind];
   const validAmount =
-    moneyCentsSchema.safeParse(cents).success &&
-    (!partial || (cents !== null && cents > 0 && cents < originalTotal));
+    confirmUnpaid ||
+    (moneyCentsSchema.safeParse(cents).success &&
+      (!partial || (cents !== null && cents > 0 && cents < mode.originalTotal)));
   const validReference = reference.trim().length >= 3;
   const review = useMutation({
-    mutationFn: async (input: ImportedSettlement) => {
-      if (partial) await api().commerce.confirmImportedPartialPayment(id, input);
+    mutationFn: async (input: ImportedSettlement | ImportedUnpaidReview) => {
+      if (!("amountCents" in input)) await api().commerce.confirmImportedUnpaid(id, input);
+      else if (partial) await api().commerce.confirmImportedPartialPayment(id, input);
       else await api().commerce.confirmImportedSettlement(id, input);
     },
     onSuccess: async () => {
-      toast.success(
-        t(partial ? "pos.billingReview.partialSaved" : "pos.billingReview.settlementSaved"),
-      );
+      toast.success(t(`pos.billingReview.${mode.kind}Saved`));
       await invalidateCommerce(queries);
     },
   });
@@ -54,7 +66,7 @@ export function ImportedSettlementForm({
   return (
     <details className="border-t border-line pt-3">
       <summary id={heading} className="cursor-pointer text-sm font-medium">
-        {t(partial ? "pos.billingReview.partial" : "pos.billingReview.settle")}
+        {t(`pos.billingReview.${label.title}`)}
       </summary>
       <form
         aria-labelledby={heading}
@@ -64,13 +76,13 @@ export function ImportedSettlementForm({
         onSubmit={(event) => {
           event.preventDefault();
           if (pending) return;
-          const parsed = (
-            partial ? importedPartialPaymentSchema : importedSettlementSchema
-          ).safeParse({
-            appointmentVersion: version,
-            amountCents: inputCents(amount),
-            reference,
-          });
+          const parsed = confirmUnpaid
+            ? importedUnpaidReviewSchema.safeParse({ appointmentVersion: version, reference })
+            : (partial ? importedPartialPaymentSchema : importedSettlementSchema).safeParse({
+                appointmentVersion: version,
+                amountCents: inputCents(amount),
+                reference,
+              });
           if (parsed.success && validAmount) {
             review.mutate(parsed.data);
           } else {
@@ -83,28 +95,30 @@ export function ImportedSettlementForm({
         <p className="text-sm text-muted">
           {partial
             ? t("pos.billingReview.partialHelp", {
-                amount: formatMoney(originalTotal, "EUR", locale),
+                amount: formatMoney(mode.originalTotal, "EUR", locale),
               })
-            : t("pos.billingReview.settlementHelp")}
+            : t(`pos.billingReview.${mode.kind}Help`)}
         </p>
-        <TextField
-          name="amount"
-          label={t("pos.billingReview.settlementAmount")}
-          value={amount}
-          inputMode="decimal"
-          required
-          disabled={pending}
-          error={
-            attempted && !validAmount
-              ? t(partial ? "pos.billingReview.partialInvalid" : "pos.billingReview.invalidPrice")
-              : undefined
-          }
-          onChange={(event) => setAmount(event.target.value)}
-        />
+        {!confirmUnpaid && (
+          <TextField
+            name="amount"
+            label={t("pos.billingReview.settlementAmount")}
+            value={amount}
+            inputMode="decimal"
+            required
+            disabled={pending}
+            error={
+              attempted && !validAmount
+                ? t(partial ? "pos.billingReview.partialInvalid" : "pos.billingReview.invalidPrice")
+                : undefined
+            }
+            onChange={(event) => setAmount(event.target.value)}
+          />
+        )}
         <TextField
           name="reference"
           label={t("pos.billingReview.reference")}
-          hint={t("pos.billingReview.settlementReference")}
+          hint={t(`pos.billingReview.${label.reference}`)}
           value={reference}
           required
           minLength={3}
@@ -117,7 +131,7 @@ export function ImportedSettlementForm({
         />
         {review.isError && <ErrorState error={review.error} />}
         <Button type="submit" variant="secondary" loading={review.isPending} disabled={pending}>
-          {t(partial ? "pos.billingReview.confirmPartial" : "pos.billingReview.confirmSettlement")}
+          {t(`pos.billingReview.${label.submit}`)}
         </Button>
       </form>
     </details>

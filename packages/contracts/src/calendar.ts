@@ -18,6 +18,7 @@ export const calendarQuerySchema = z
   .object({
     from: instantSchema,
     to: instantSchema,
+    booksyPaymentReview: z.literal("1").optional(),
     staffIds: z
       .string()
       .transform((value) => value.split(",").filter((part) => part.length > 0))
@@ -50,6 +51,7 @@ const billingReviewReasonSchema = z.enum([
   "unknown_amount",
   "paid_in_booksy",
   "invoiced_in_booksy",
+  "unknown_booksy_payment",
 ]);
 export type BillingReviewReason = z.infer<typeof billingReviewReasonSchema>;
 export const billingReviewReasonsSchema = z.array(billingReviewReasonSchema).min(1).max(3);
@@ -66,6 +68,7 @@ export const calendarAppointmentSchema = appointmentSchema.extend({
   billingReviewReasons: billingReviewReasonsSchema.optional(),
   externallySettled: z.literal(true).optional(),
   importedFromBooksy: z.literal(true).optional(),
+  booksyUnpaidConfirmed: z.literal(true).optional(),
   externalBalance: externalBalanceSchema.optional(),
   unpricedServices: z
     .array(z.object({ id: idSchema, name: z.string() }))

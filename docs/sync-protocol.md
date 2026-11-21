@@ -31,6 +31,12 @@ When a pull reports a different generation, the desktop atomically moves queued 
 
 When a pull brings a row that has a pending local mutation, keep showing the local version until the mutation is acknowledged, then take the server version.
 
+Clients that understand the `unknown_booksy_payment` appointment billing hold request
+`booksyPaymentReview=1` on pull. Clients using the original reason set receive an
+`unknown_amount` hold, so collection stays disabled across upgrades. A payment review
+changes the appointment version and republishes the row. Evidence references stay in the
+server audit trail.
+
 The response includes the current `clientDirectory` permission and `calendarScope` even when the cursor is already at the log head. `calendarScope` is `all`, `none`, or a staff ID. When either scope changes, the native client clears its previous mirror and cached views before pulling a new snapshot from zero. It keeps its outbox and conflict records. Older servers can omit these fields.
 
 `viewerRole` carries the current staff or owner role. A desktop profile with a different saved role returns to sign-in so it can open the replica for the new role. It keeps the previous profile’s pending edits. A server response denying sync also returns the app to sign-in. A network outage keeps the offline profile open.

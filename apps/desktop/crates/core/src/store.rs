@@ -112,6 +112,15 @@ const MIGRATIONS: &[&str] = &[
     "#,
     // 5: submitted combination payloads stay immutable across retries and restarts.
     "ALTER TABLE outbox ADD COLUMN submitted INTEGER NOT NULL DEFAULT 0;",
+    // 6: refresh legacy billing holds from the current projection without clearing the mirror.
+    r#"
+    UPDATE meta SET value = '0' WHERE key = 'cursor'
+      AND EXISTS (
+        SELECT 1 FROM appointment, json_each(appointment.json, '$.billingReviewReasons') AS reason
+        WHERE json_extract(appointment.json, '$.importedFromBooksy') = 1
+          AND reason.value = 'unknown_amount'
+      );
+    "#,
 ];
 
 const MIRROR_TABLES: &[&str] = &[

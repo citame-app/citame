@@ -194,6 +194,11 @@ export const importedSettlementSchema = z.strictObject({
   reference: z.string().trim().min(3).max(300),
 });
 export type ImportedSettlement = z.infer<typeof importedSettlementSchema>;
+export const importedUnpaidReviewSchema = importedSettlementSchema.omit({ amountCents: true });
+export type ImportedUnpaidReview = z.infer<typeof importedUnpaidReviewSchema>;
+export const importedUnpaidReviewResponseSchema = importedUnpaidReviewSchema.pick({
+  appointmentVersion: true,
+});
 export const recordedImportedSettlementSchema = importedSettlementSchema
   .omit({ appointmentVersion: true })
   .extend({ recordedAt: z.iso.datetime() });

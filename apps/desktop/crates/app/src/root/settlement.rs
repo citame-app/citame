@@ -3,15 +3,38 @@ use sob_core::billing::{ImportedPartialPaymentPreview, ImportedSettlement, parse
 use sob_core::sync::TransportError;
 use std::sync::Arc;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum SettlementMode {
+    Full,
+    Partial,
+    Unpaid,
+}
+
+impl SettlementMode {
+    pub(super) fn title(self) -> Key {
+        match self {
+            Self::Full => Key::ReviewImportedSettlement,
+            Self::Partial => Key::ReviewPartialPayment,
+            Self::Unpaid => Key::ReviewImportedUnpaid,
+        }
+    }
+}
+
 pub(super) enum SettlementReview {
-    Loading { token: Arc<()>, partial: bool },
+    Loading {
+        token: Arc<()>,
+        mode: SettlementMode,
+    },
     Form(SettlementForm),
-    Failed { partial: bool },
+    Failed {
+        mode: SettlementMode,
+    },
     Saved(RecordedPayment),
 }
 
 pub(super) struct SettlementForm {
     version: i64,
+    mode: SettlementMode,
     original_total: Option<u32>,
     amount: Entity<TextField>,
     reference: Entity<TextField>,
@@ -27,14 +50,17 @@ enum Preview {
 pub(super) enum RecordedPayment {
     Full(u32),
     Partial(ExternalBalance),
+    Unpaid,
 }
 
 impl SettlementReview {
-    fn partial(&self) -> bool {
+    fn mode(&self) -> SettlementMode {
         match self {
-            Self::Loading { partial, .. } | Self::Failed { partial } => *partial,
-            Self::Form(form) => form.original_total.is_some(),
-            Self::Saved(record) => matches!(record, RecordedPayment::Partial(_)),
+            Self::Loading { mode, .. } | Self::Failed { mode } => *mode,
+            Self::Form(form) => form.mode,
+            Self::Saved(RecordedPayment::Full(_)) => SettlementMode::Full,
+            Self::Saved(RecordedPayment::Partial(_)) => SettlementMode::Partial,
+            Self::Saved(RecordedPayment::Unpaid) => SettlementMode::Unpaid,
         }
     }
 }
@@ -45,7 +71,11 @@ impl SettlementForm {
         if !(3..=300).contains(&reference.encode_utf16().count()) {
             return None;
         }
-        let amount_cents = parse_reviewed_amount(self.amount.read(cx).text())?;
+        let amount_cents = if self.mode == SettlementMode::Unpaid {
+            0
+        } else {
+            parse_reviewed_amount(self.amount.read(cx).text())?
+        };
         if self
             .original_total
             .is_some_and(|total| amount_cents == 0 || amount_cents >= total)
@@ -64,7 +94,7 @@ impl Root {
     pub(super) fn can_open_settlement_review(
         &self,
         appointment: &Appointment,
-        partial: bool,
+        mode: SettlementMode,
     ) -> bool {
         self.owner_can_reconcile_billing()
             && !appointment.externally_settled
@@ -75,24 +105,33 @@ impl Root {
                 .services
                 .iter()
                 .all(|line| line.currency == "EUR")
-            && if partial {
-                appointment.imported_from_booksy
-                    && appointment
-                        .services
-                        .iter()
-                        .all(|line| !line.source_unpriced)
-                    && appointment.services.iter().any(|line| line.price_cents > 0)
-            } else {
-                appointment.billing_review_reasons.iter().any(|reason| {
-                    matches!(
-                        reason,
-                        BillingReviewReason::PaidInBooksy | BillingReviewReason::InvoicedInBooksy
-                    )
-                })
+            && match mode {
+                SettlementMode::Partial => {
+                    appointment.imported_from_booksy
+                        && appointment
+                            .services
+                            .iter()
+                            .all(|line| !line.source_unpriced)
+                        && appointment.services.iter().any(|line| line.price_cents > 0)
+                }
+                SettlementMode::Unpaid => appointment
+                    .billing_review_reasons()
+                    .any(|reason| reason == BillingReviewReason::UnknownBooksyPayment),
+                SettlementMode::Full => {
+                    appointment.booksy_unpaid_confirmed
+                        || appointment.billing_review_reasons().any(|reason| {
+                            matches!(
+                                reason,
+                                BillingReviewReason::PaidInBooksy
+                                    | BillingReviewReason::InvoicedInBooksy
+                                    | BillingReviewReason::UnknownBooksyPayment
+                            )
+                        })
+                }
             }
     }
 
-    pub(super) fn open_settlement_review(&mut self, partial: bool, cx: &mut Context<Self>) {
+    pub(super) fn open_settlement_review(&mut self, mode: SettlementMode, cx: &mut Context<Self>) {
         let Overlay::Details(details) = &self.overlay else {
             return;
         };
@@ -101,7 +140,7 @@ impl Root {
             return;
         };
         if details.settlement_review.is_some()
-            || !self.can_open_settlement_review(&appointment, partial)
+            || !self.can_open_settlement_review(&appointment, mode)
             || !self
                 .svc
                 .store
@@ -118,14 +157,14 @@ impl Root {
         if let Overlay::Details(details) = &mut self.overlay {
             details.settlement_review = Some(SettlementReview::Loading {
                 token: token.clone(),
-                partial,
+                mode,
             });
         }
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx.background_executor()
                 .spawn(async move {
-                    if partial {
+                    if mode == SettlementMode::Partial {
                         transport.imported_partial_payment_preview(&id).map(|response| match response {
                             ImportedPartialPaymentPreview::Ready(terms) =>
                                 Preview::Ready(terms.appointment_version, Some(terms.original_total_cents)),
@@ -150,13 +189,14 @@ impl Root {
                     }
                     Ok(Preview::Ready(version, original_total)) => SettlementReview::Form(SettlementForm {
                             version,
+                            mode,
                             original_total,
                             amount: cx.new(|cx| TextField::new("EUR", false, cx)),
                             reference: cx.new(|cx| TextField::new("", false, cx)),
                             pending: None,
                             error: None,
                         }),
-                    Err(_) => SettlementReview::Failed { partial },
+                    Err(_) => SettlementReview::Failed { mode },
                 });
                 cx.notify();
             });
@@ -180,16 +220,17 @@ impl Root {
             return;
         };
         let Some(payload) = form.request(cx) else {
-            form.error = Some(if form.original_total.is_some() {
-                Key::PartialPaymentInvalid
-            } else {
-                Key::SettlementInvalid
+            form.error = Some(match form.mode {
+                SettlementMode::Full => Key::SettlementInvalid,
+                SettlementMode::Partial => Key::PartialPaymentInvalid,
+                SettlementMode::Unpaid => Key::ImportedUnpaidInvalid,
             });
             cx.notify();
             return;
         };
         let id = details.id.clone();
         let original_total = form.original_total;
+        let mode = form.mode;
         let token = Arc::new(());
         let session = self.svc.session.clone();
         form.pending = Some(token.clone());
@@ -199,7 +240,15 @@ impl Root {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    if let Some(total) = original_total {
+                    if mode == SettlementMode::Unpaid {
+                        transport
+                            .confirm_imported_unpaid(
+                                &id,
+                                payload.appointment_version,
+                                &payload.reference,
+                            )
+                            .map(|()| RecordedPayment::Unpaid)
+                    } else if let Some(total) = original_total {
                         transport
                             .confirm_imported_partial_payment(&id, &payload, total)
                             .map(RecordedPayment::Partial)
@@ -252,16 +301,12 @@ impl Root {
         review: &SettlementReview,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        let partial = review.partial();
+        let mode = review.mode();
         let body = div().flex().flex_col().gap_3().child(
             div()
                 .text_lg()
                 .font_weight(FontWeight::BOLD)
-                .child(self.t(if partial {
-                    Key::ReviewPartialPayment
-                } else {
-                    Key::ReviewImportedSettlement
-                })),
+                .child(self.t(mode.title())),
         );
         let body =
             match review {
@@ -275,6 +320,9 @@ impl Root {
                 SettlementReview::Saved(RecordedPayment::Partial(balance)) => body
                     .child(self.t(Key::PartialPaymentSaved))
                     .child(self.external_balance_label(*balance)),
+                SettlementReview::Saved(RecordedPayment::Unpaid) => {
+                    body.child(self.t(Key::ImportedUnpaidSaved))
+                }
                 SettlementReview::Form(form) if form.pending.is_some() => {
                     body.child(self.t(Key::SettlementSaving))
                 }
@@ -287,15 +335,20 @@ impl Root {
                                     &self.amount_label(i64::from(total), "EUR"),
                                 ))
                             }
+                            None if mode == SettlementMode::Unpaid => {
+                                SharedString::from(self.t(Key::ImportedUnpaidHelp))
+                            }
                             None => SharedString::from(self.t(Key::SettlementHelp)),
                         },
                     ))
-                    .child(
-                        div()
-                            .text_sm()
-                            .child(self.t(Key::SettlementAmount))
-                            .child(form.amount.clone()),
-                    )
+                    .when(mode != SettlementMode::Unpaid, |body| {
+                        body.child(
+                            div()
+                                .text_sm()
+                                .child(self.t(Key::SettlementAmount))
+                                .child(form.amount.clone()),
+                        )
+                    })
                     .child(
                         div()
                             .text_sm()
@@ -313,10 +366,10 @@ impl Root {
                     .when(self.owner_can_reconcile_billing(), |view| {
                         view.child(self.button(
                             "confirm-imported-settlement",
-                            self.t(if partial {
-                                Key::ConfirmPartialPayment
-                            } else {
-                                Key::ConfirmSettlement
+                            self.t(match mode {
+                                SettlementMode::Full => Key::ConfirmSettlement,
+                                SettlementMode::Partial => Key::ConfirmPartialPayment,
+                                SettlementMode::Unpaid => Key::ConfirmImportedUnpaid,
                             }),
                             Kind::Primary,
                             cx.listener(|this, _, _, cx| this.save_settlement_review(cx)),

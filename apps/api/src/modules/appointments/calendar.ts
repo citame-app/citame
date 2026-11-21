@@ -195,6 +195,7 @@ export async function getCalendar(
         ...(context?.reasons.length ? { billingReviewReasons: context.reasons } : {}),
         ...(context?.externallySettled ? { externallySettled: true as const } : {}),
         ...(context?.importedFromBooksy ? { importedFromBooksy: true as const } : {}),
+        ...(context?.booksyUnpaidConfirmed ? { booksyUnpaidConfirmed: true as const } : {}),
         ...(context?.externalBalance ? { externalBalance: context.externalBalance } : {}),
         ...(scope.includeBilling && unresolved.length && own.every((s) => s.currency === "EUR")
           ? { unpricedServices: unresolved.map(({ id, name }) => ({ id, name })) }

@@ -38,7 +38,7 @@ describe("admin endpoints", () => {
       staffIds: [ID, STAFF],
     });
     expect(calls[0]?.url).toBe(
-      `/api/appointments/calendar?from=2026-03-09T03%3A00%3A00.000Z&to=2026-03-10T03%3A00%3A00.000Z&staffIds=${ID}%2C${STAFF}`,
+      `/api/appointments/calendar?from=2026-03-09T03%3A00%3A00.000Z&to=2026-03-10T03%3A00%3A00.000Z&staffIds=${ID}%2C${STAFF}&booksyPaymentReview=1`,
     );
   });
 

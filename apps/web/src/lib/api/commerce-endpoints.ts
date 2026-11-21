@@ -10,8 +10,10 @@ import {
   checkoutSchema,
   type ImportedPriceReview,
   type ImportedSettlement,
+  type ImportedUnpaidReview,
   importedPartialPaymentResponseSchema,
   importedSettlementResponseSchema,
+  importedUnpaidReviewResponseSchema,
   paymentCapabilitiesSchema,
   type StartPaymentInput,
   startedPaymentSchema,
@@ -24,7 +26,9 @@ const base = (mode: CommerceMode) => (mode === "admin" ? "/admin/commerce" : "/m
 export function commerceEndpoints(client: ApiClient) {
   return {
     unpaid: (query: { from: string; to: string }) =>
-      client.get("/admin/commerce/unpaid", unpaidAppointmentsSchema, { query }),
+      client.get("/admin/commerce/unpaid", unpaidAppointmentsSchema, {
+        query: { ...query, booksyPaymentReview: "1" },
+      }),
     reviewImportedPrice: (id: string, input: ImportedPriceReview) =>
       client.put(
         `/admin/commerce/appointments/${id}/imported-price`,
@@ -42,6 +46,12 @@ export function commerceEndpoints(client: ApiClient) {
         `/admin/commerce/appointments/${id}/imported-partial-payment`,
         input,
         importedPartialPaymentResponseSchema,
+      ),
+    confirmImportedUnpaid: (id: string, input: ImportedUnpaidReview) =>
+      client.put(
+        `/admin/commerce/appointments/${id}/imported-unpaid`,
+        input,
+        importedUnpaidReviewResponseSchema,
       ),
     capabilities: (mode: CommerceMode) =>
       client.get(

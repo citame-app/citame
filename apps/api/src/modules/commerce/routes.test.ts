@@ -202,6 +202,136 @@ test("a Booksy charge indicator prevents a duplicate appointment checkout", asyn
   expect(JSON.stringify(body)).not.toContain("Private billing note");
 });
 
+test("an undocumented Booksy payment is held until the owner records evidence of no prior charge", async () => {
+  await t.db.insert(appointmentContext).values({
+    appointmentId,
+    servicePosition: 0,
+    source: "booksy",
+    sourceRef: "source-line-undocumented",
+    paid: null,
+  });
+  const range = "from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z";
+  const currentRange = `${range}&booksyPaymentReview=1`;
+  const calendarPath = "/appointments/calendar";
+  const unpaidPath = "/admin/commerce/unpaid";
+  const reviewPath = `/admin/commerce/appointments/${appointmentId}/imported-unpaid`;
+  const input = { appointmentVersion: 1, reference: "Private external ledger review" };
+  const checkoutPath = "/admin/commerce/checkouts";
+  const attemptedSale = { appointmentId, idempotencyKey: crypto.randomUUID() };
+
+  expect(await (await call(owner, `${calendarPath}?${currentRange}`)).json()).toMatchObject({
+    appointments: [{ billingReviewReasons: ["unknown_booksy_payment"] }],
+  });
+  expect(await (await call(owner, `${unpaidPath}?${currentRange}`)).json()).toMatchObject({
+    appointments: [],
+    billingReview: [{ id: appointmentId, reasons: ["unknown_booksy_payment"] }],
+  });
+  expect(await (await call(owner, `${unpaidPath}?${range}`)).json()).toMatchObject({
+    appointments: [],
+    billingReview: [{ id: appointmentId, reasons: ["unknown_amount"] }],
+  });
+  const pull = async (query: string) =>
+    syncPullResponseSchema.parse(await (await call(owner, `/sync/pull?${query}`)).json());
+  const synced = (await pull("since=0&booksyPaymentReview=1")).changes.find(
+    (c) => c.id === appointmentId,
+  );
+  if (!synced) throw new Error("Missing imported appointment in the replica");
+  expect(synced.data).toMatchObject({ billingReviewReasons: ["unknown_booksy_payment"] });
+  expect((await pull("since=0")).changes.find((c) => c.id === appointmentId)?.data).toMatchObject({
+    billingReviewReasons: ["unknown_amount"],
+  });
+  expect((await call(owner, checkoutPath, "POST", attemptedSale)).status).toBe(409);
+  expect((await call(staff, reviewPath, "PUT", input)).status).toBe(403);
+  expect((await call(owner, reviewPath, "PUT", { ...input, appointmentVersion: 2 })).status).toBe(
+    409,
+  );
+  const responses = await Promise.all([
+    call(owner, reviewPath, "PUT", input),
+    call(owner, reviewPath, "PUT", input),
+  ]);
+  for (const response of responses) {
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(await response.json()).toEqual({ appointmentVersion: 2 });
+  }
+  expect(
+    (await call(owner, reviewPath, "PUT", { ...input, reference: "Different records" })).status,
+  ).toBe(409);
+  const updated = await pull(`since=${synced.seq}&booksyPaymentReview=1`);
+  const updatedBooking = updated.changes.find((c) => c.id === appointmentId);
+  expect(updatedBooking?.data).toMatchObject({
+    version: 2,
+    importedFromBooksy: true,
+    booksyUnpaidConfirmed: true,
+  });
+  expect(updatedBooking?.data).not.toHaveProperty("billingReviewReasons");
+  expect(JSON.stringify(updated)).not.toContain(input.reference);
+  expect(await (await call(owner, `${unpaidPath}?${currentRange}`)).json()).toMatchObject({
+    appointments: [{ id: appointmentId }],
+  });
+  expect(await t.db.select().from(appointmentContext)).toMatchObject([{ paid: null }]);
+  expect(await t.db.select().from(checkoutTable)).toHaveLength(0);
+  expect(await t.db.select().from(checkoutPayment)).toHaveLength(0);
+
+  await t.db
+    .update(appointmentContext)
+    .set({ internalNote: "Changed note", version: 2 })
+    .where(eq(appointmentContext.appointmentId, appointmentId));
+  const updatedCalendar = calendarResponseSchema.parse(
+    await (await call(owner, `${calendarPath}?${currentRange}`)).json(),
+  );
+  expect(updatedCalendar.appointments[0]).toMatchObject({ importedFromBooksy: true });
+  expect(updatedCalendar.appointments[0]).not.toHaveProperty("billingReviewReasons");
+  await t.db
+    .update(appointmentContext)
+    .set({ paid: true, version: 3 })
+    .where(eq(appointmentContext.appointmentId, appointmentId));
+  expect((await call(owner, checkoutPath, "POST", attemptedSale)).status).toBe(409);
+  expect((await call(owner, reviewPath, "PUT", { ...input, appointmentVersion: 2 })).status).toBe(
+    409,
+  );
+  await t.db
+    .update(appointmentContext)
+    .set({ paid: null, version: 4 })
+    .where(eq(appointmentContext.appointmentId, appointmentId));
+  expect((await call(owner, checkoutPath, "POST", attemptedSale)).status).toBe(409);
+});
+
+test("the owner can record a verified full payment when the Booksy marker is missing", async () => {
+  await t.db.insert(appointmentContext).values({
+    appointmentId,
+    servicePosition: 0,
+    source: "booksy",
+    sourceRef: "source-line-full-evidence",
+    paid: false,
+    sourcePaymentUnverified: true,
+  });
+  const path = `/admin/commerce/appointments/${appointmentId}/imported-settlement`;
+  const unpaid = `/admin/commerce/appointments/${appointmentId}/imported-unpaid`;
+  const before = await call(owner, "/admin/commerce/checkouts", "POST", {
+    appointmentId,
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(before.status).toBe(409);
+  expect(
+    (
+      await call(owner, unpaid, "PUT", {
+        appointmentVersion: 1,
+        reference: "Prior inspection of the source records",
+      })
+    ).status,
+  ).toBe(200);
+  const input = { appointmentVersion: 2, amountCents: 10000, reference: "Full external receipt" };
+  expect((await call(owner, path, "PUT", { ...input, amountCents: 0 })).status).toBe(400);
+  const recorded = await call(owner, path, "PUT", input);
+  expect(recorded.status, await recorded.clone().text()).toBe(200);
+  expect(await recorded.json()).toMatchObject({
+    appointmentVersion: 3,
+    settlement: { amountCents: 10000 },
+  });
+  expect(await t.db.select().from(checkoutTable)).toHaveLength(0);
+});
+
 test("the owner can reconcile a full Booksy settlement without a receipt or a second charge", async () => {
   const path = `/admin/commerce/appointments/${appointmentId}/imported-settlement`;
   const input = {

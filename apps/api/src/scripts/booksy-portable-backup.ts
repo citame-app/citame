@@ -12,6 +12,7 @@ import {
   verifyMigrationLedger,
 } from "@sob/db";
 import { RedisClient } from "bun";
+import { sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   OperationalAppProofError,
@@ -528,6 +529,14 @@ async function restoreInIsolatedPostgres(
       // The archive fingerprint belongs to the original schema. Exercise the
       // current application on a migrated copy and use its own baseline.
       const originalHead = await headSeq(connection.db);
+      const [original] = await connection.db.execute<{ paymentReviewSchema: boolean }>(sql`
+        select exists (
+          select 1 from information_schema.columns
+          where table_schema = 'public' and table_name = 'appointment_context'
+            and column_name = 'source_payment_unverified'
+        ) as "paymentReviewSchema"
+      `);
+      const expectPaymentReannouncement = !original?.paymentReviewSchema;
       await runMigrations(connection.db, { allowReviewDatabase: true });
       const migrations = await verifyMigrationLedger(connection.db);
       await inspectNativeBooksy(connection.db, expected.snapshotHash, date);
@@ -562,7 +571,9 @@ async function restoreInIsolatedPostgres(
             fingerprint(sourceNative.filter(stableTables))
           )
             throw new Error("Pausing public booking changed unrelated application tables");
-          const replica = await rehearseRecoveredReplica(native.db, originalHead);
+          const replica = await rehearseRecoveredReplica(native.db, originalHead, {
+            expectPaymentReannouncement,
+          });
           const appFixtureTables = new Set([
             "user",
             "account",
@@ -654,7 +665,9 @@ async function restoreInIsolatedPostgres(
           await native.close();
         }
       }
-      const replica = await rehearseRecoveredReplica(connection.db, originalHead);
+      const replica = await rehearseRecoveredReplica(connection.db, originalHead, {
+        expectPaymentReannouncement,
+      });
       const proof = await rehearseRestoredSchedule(connection.db, date);
       if (fingerprint(await readTables()) !== migratedTableContentSha256)
         throw new Error("Scheduling rehearsal changed the migrated table contents");

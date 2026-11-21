@@ -124,6 +124,8 @@ export const appointmentContext = pgTable(
     paid: boolean(),
     source: text().notNull().default("citame"),
     sourceRef: text(),
+    sourcePaymentUnverified: boolean().notNull().default(false),
+    billingVersion: integer().notNull().default(1),
     version: integer().notNull().default(1),
     updatedAt: updatedAt(),
   },

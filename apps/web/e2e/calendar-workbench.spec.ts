@@ -500,3 +500,50 @@ test("an imported price review leaves collection locked until its partial paymen
     lines: [{ kind: "external_balance", unitAmountCents: 2650 }],
   });
 });
+
+test("the owner confirms a missing Booksy payment before collecting", async ({ page }, info) => {
+  const mobile = info.project.name === "mobile";
+  const id = fixture.importedUnknownPaymentAppointments[mobile ? 0 : 1];
+  await page.emulateMedia({ colorScheme: mobile ? "dark" : "light" });
+  await signInThroughUi(
+    page,
+    fixture.ownerEmail,
+    `/admin/calendar?date=${fixture.importedBillingDate}&appointment=${id}`,
+  );
+  if (mobile) await switchLocale(page, "Español");
+  const text = mobile
+    ? {
+        unknown: "Estado del pago en Booksy desconocido",
+        form: "Verificar que no hubo un pago previo",
+        reference: "Referencia del justificante",
+        confirm: "Confirmar que no hubo un pago previo",
+        reviewed: "Sin pago previo en Booksy confirmado",
+        settle: "Conciliar pago de Booksy",
+        collect: "Crear cobro",
+      }
+    : {
+        unknown: "Booksy payment status unknown",
+        form: "Verify no payment was taken",
+        reference: "Evidence reference",
+        confirm: "Confirm no prior payment",
+        reviewed: "No prior payment in Booksy confirmed",
+        settle: "Reconcile Booksy payment",
+        collect: "Create checkout",
+      };
+  const details = page.getByRole("dialog", { name: "Cliente de demostración", exact: true });
+  const collect = details.getByRole("button", { name: text.collect, exact: true });
+  await expect(details.getByText(text.unknown, { exact: true })).toBeVisible();
+  await expect(collect).toHaveCount(0);
+  await details.getByText(text.form, { exact: true }).click();
+  const form = details.getByRole("form", { name: text.form, exact: true });
+  const reference = form.getByLabel(text.reference, { exact: true });
+  await form.getByRole("button", { name: text.confirm, exact: true }).click();
+  await expect(reference).toBeFocused();
+  await expectNoHorizontalScroll(page);
+  await expectNoSeriousA11yViolations(page);
+  await reference.fill("Synthetic unpaid confirmation");
+  await reference.press("Enter");
+  await expect(collect).toBeVisible();
+  await expect(details.getByText(text.reviewed, { exact: true })).toBeVisible();
+  await expect(details.getByText(text.settle, { exact: true })).toBeVisible();
+});

@@ -278,6 +278,33 @@ impl HttpTransport {
         read_response(self.get(&self.agent, &path, None)?, false)
     }
 
+    pub fn confirm_imported_unpaid(
+        &self,
+        id: &str,
+        appointment_version: i64,
+        reference: &str,
+    ) -> Result<(), TransportError> {
+        let path = format!(
+            "/admin/commerce/appointments/{}/imported-unpaid",
+            parse_id(id)?
+        );
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Response {
+            appointment_version: i64,
+        }
+        let response: Response = self.put_json(
+            &path,
+            &serde_json::json!({ "appointmentVersion": appointment_version, "reference": reference }),
+        )?;
+        if response.appointment_version < appointment_version {
+            return Err(TransportError::Server(
+                "Invalid unpaid review acknowledgement".into(),
+            ));
+        }
+        Ok(())
+    }
+
     pub fn confirm_imported_partial_payment(
         &self,
         id: &str,
@@ -1053,6 +1080,7 @@ impl HttpTransport {
         let query = url::form_urlencoded::Serializer::new(String::new())
             .append_pair("from", &from.to_rfc3339())
             .append_pair("to", &to.to_rfc3339())
+            .append_pair("booksyPaymentReview", "1")
             .finish();
         let response = self.get(
             &self.agent,
@@ -1983,7 +2011,7 @@ impl HttpTransport {
         let resp = self.get(
             &self.agent,
             &format!(
-                "/sync/pull?since={since}&limit={limit}{catalog}&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&resourceCatalogue=1&inventoryAccess=1{catalogue_snapshots}"
+                "/sync/pull?since={since}&limit={limit}{catalog}&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&resourceCatalogue=1&inventoryAccess=1&booksyPaymentReview=1{catalogue_snapshots}"
             ),
             None,
         )?;

@@ -10,6 +10,8 @@ import {
   importedPartialPaymentSchema,
   importedPriceReviewSchema,
   importedSettlementSchema,
+  importedUnpaidReviewResponseSchema,
+  importedUnpaidReviewSchema,
   permissionsFor,
   reconcileRefundSchema,
   refundRequestSchema,
@@ -27,8 +29,10 @@ import { recurringSettings } from "../../payments/recurring-settings";
 import { InvalidBankNotificationError, RedsysGateway } from "../../payments/redsys";
 import { checkoutRewardRoutes } from "../rewards/routes";
 import {
+  compatibleBillingReasons,
   confirmImportedPartialPayment,
   confirmImportedSettlement,
+  confirmImportedUnpaid,
   getImportedSettlement,
   previewImportedAppointmentPrice,
   previewImportedPartialPayment,
@@ -82,17 +86,15 @@ export function commerceAdminRoutes(deps: AppDeps) {
   return new Hono<AppEnv>()
     .use("*", operator)
     .route("/checkouts", checkoutRewardRoutes(deps))
-    .get("/unpaid", async (c) =>
-      c.json(
-        await unpaidAppointments(
-          deps.db,
-          parseOrThrow(calendarQuerySchema, c.req.query()),
-          c.get("principal"),
-        ),
-        200,
-        { "Cache-Control": "private, no-store" },
-      ),
-    )
+    .get("/unpaid", async (c) => {
+      const query = parseOrThrow(calendarQuerySchema, c.req.query());
+      const result = await unpaidAppointments(deps.db, query, c.get("principal"));
+      if (query.booksyPaymentReview !== "1") {
+        for (const entry of result.billingReview ?? [])
+          entry.reasons = compatibleBillingReasons(entry.reasons, false);
+      }
+      return c.json(result, 200, { "Cache-Control": "private, no-store" });
+    })
     .get("/appointments/:id/imported-price", async (c) =>
       c.json(
         await previewImportedAppointmentPrice(
@@ -130,6 +132,21 @@ export function commerceAdminRoutes(deps: AppDeps) {
           parseOrThrow(importedSettlementSchema, await readJson(c)),
           c.get("principal"),
           deps.now?.() ?? new Date(),
+        ),
+        200,
+        { "Cache-Control": "private, no-store" },
+      ),
+    )
+    .put("/appointments/:id/imported-unpaid", async (c) =>
+      c.json(
+        importedUnpaidReviewResponseSchema.parse(
+          await confirmImportedUnpaid(
+            deps.db,
+            checkoutId(c.req.param("id")),
+            parseOrThrow(importedUnpaidReviewSchema, await readJson(c)),
+            c.get("principal"),
+            deps.now?.() ?? new Date(),
+          ),
         ),
         200,
         { "Cache-Control": "private, no-store" },

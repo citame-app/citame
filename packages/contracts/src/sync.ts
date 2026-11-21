@@ -508,6 +508,7 @@ export const syncPullQuerySchema = z.object({
   combinationCatalogue: z.literal("1").optional(),
   combinations: z.enum(["full", "delta"]).optional(),
   inventoryAccess: z.literal("1").optional(),
+  booksyPaymentReview: z.literal("1").optional(),
 });
 export type SyncPullQuery = z.infer<typeof syncPullQuerySchema>;
 
@@ -595,6 +596,7 @@ const upsertChangeSchema = z.discriminatedUnion("entity", [
         externallySettled: true,
         externalBalance: true,
         importedFromBooksy: true,
+        booksyUnpaidConfirmed: true,
         serviceBadges: true,
       }).shape,
     }),

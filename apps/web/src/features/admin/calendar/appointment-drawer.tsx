@@ -403,15 +403,38 @@ function DrawerBody({
             {!readOnly &&
               billingRole === "owner" &&
               (appointment.billingReviewReasons.includes("paid_in_booksy") ||
-                appointment.billingReviewReasons.includes("invoiced_in_booksy")) && (
+                appointment.billingReviewReasons.includes("invoiced_in_booksy") ||
+                appointment.billingReviewReasons.includes("unknown_booksy_payment")) && (
                 <ImportedSettlementForm
                   key={appointment.version}
                   id={appointment.id}
                   version={appointment.version}
                 />
               )}
+            {!readOnly &&
+              billingRole === "owner" &&
+              appointment.billingReviewReasons.includes("unknown_booksy_payment") && (
+                <ImportedSettlementForm
+                  key={`unpaid-${appointment.version}`}
+                  id={appointment.id}
+                  version={appointment.version}
+                  mode={{ kind: "unpaid" }}
+                />
+              )}
           </section>
         )}
+      {!readOnly && appointment.booksyUnpaidConfirmed && appointment.status !== "cancelled" && (
+        <section className="space-y-2 rounded-xl border border-line bg-sunken p-4">
+          <p className="text-sm text-muted">{t("pos.billingReview.unpaidConfirmed")}</p>
+          {billingRole === "owner" && (
+            <ImportedSettlementForm
+              key={`correct-payment-${appointment.version}`}
+              id={appointment.id}
+              version={appointment.version}
+            />
+          )}
+        </section>
+      )}
       {!readOnly &&
         billingRole === "owner" &&
         appointment.importedFromBooksy &&
@@ -426,7 +449,7 @@ function DrawerBody({
             key={`partial-${appointment.version}`}
             id={appointment.id}
             version={appointment.version}
-            originalTotal={totalCents}
+            mode={{ kind: "partial", originalTotal: totalCents }}
           />
         )}
       {!readOnly &&

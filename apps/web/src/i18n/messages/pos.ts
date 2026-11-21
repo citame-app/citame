@@ -124,6 +124,14 @@ export const posEn = {
   "pos.billingReview.unknownAmount": "Original amount unavailable",
   "pos.billingReview.paidInBooksy": "Marked as paid in Booksy",
   "pos.billingReview.invoicedInBooksy": "Marked as invoiced in Booksy",
+  "pos.billingReview.unknownPayment": "Booksy payment status unknown",
+  "pos.billingReview.unpaid": "Verify no payment was taken",
+  "pos.billingReview.unpaidHelp":
+    "Check the booking and payment records. Confirm that there is no prior payment to deduct before collecting in Citame.",
+  "pos.billingReview.unpaidReference": "Enter the reference of the records you checked.",
+  "pos.billingReview.confirmUnpaid": "Confirm no prior payment",
+  "pos.billingReview.unpaidSaved": "Payment review saved.",
+  "pos.billingReview.unpaidConfirmed": "No prior payment in Booksy confirmed",
   "pos.billingReview.open": "View appointment",
   "pos.billingReview.verifyPrices": "Confirm imported amounts",
   "pos.billingReview.priceBasis": "Enter each service price before checkout discounts.",
@@ -295,6 +303,15 @@ export const posEs: Record<keyof typeof posEn, string> = {
   "pos.billingReview.unknownAmount": "Importe original desconocido",
   "pos.billingReview.paidInBooksy": "Marcada como pagada en Booksy",
   "pos.billingReview.invoicedInBooksy": "Marcada como facturada en Booksy",
+  "pos.billingReview.unknownPayment": "Estado del pago en Booksy desconocido",
+  "pos.billingReview.unpaid": "Verificar que no hubo un pago previo",
+  "pos.billingReview.unpaidHelp":
+    "Revisa la reserva y el registro de pagos. Confirma que no hay un pago previo que descontar antes de cobrar en Citame.",
+  "pos.billingReview.unpaidReference":
+    "Introduce la referencia de los registros que has comprobado.",
+  "pos.billingReview.confirmUnpaid": "Confirmar que no hubo un pago previo",
+  "pos.billingReview.unpaidSaved": "Revisión del pago guardada.",
+  "pos.billingReview.unpaidConfirmed": "Sin pago previo en Booksy confirmado",
   "pos.billingReview.open": "Ver cita",
   "pos.billingReview.verifyPrices": "Confirmar importes importados",
   "pos.billingReview.priceBasis":

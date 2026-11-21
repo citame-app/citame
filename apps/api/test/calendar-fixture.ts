@@ -108,10 +108,17 @@ export async function seedCalendarFixture(db: Database) {
         minute += duration + (index % 2 ? 15 : 5);
       }
     }
-  for (const [index, id] of fixture.importedBillingAppointments.entries()) {
-    const professional = staff[index];
+  const imported = [
+    ...fixture.importedBillingAppointments,
+    ...fixture.importedUnknownPaymentAppointments,
+  ];
+  for (const [index, id] of imported.entries()) {
+    const unknownPayment = index >= fixture.importedBillingAppointments.length;
+    const professional = staff[index % fixture.importedBillingAppointments.length];
     if (!professional) throw new Error("Missing professional for imported billing");
-    const start = new Date(`${fixture.importedBillingDate}T12:00:00+01:00`);
+    const start = new Date(
+      `${fixture.importedBillingDate}T${unknownPayment ? "14" : "12"}:00:00+01:00`,
+    );
     await db.insert(appointment).values({
       id,
       staffId: professional.id,
@@ -126,15 +133,15 @@ export async function seedCalendarFixture(db: Database) {
       name: haircut.name,
       durationMinutes: haircut.durationMinutes,
       bufferMinutes: 0,
-      priceCents: 0,
+      priceCents: unknownPayment ? haircut.priceCents : 0,
       currency: "EUR",
-      sourceUnpriced: true,
+      sourceUnpriced: !unknownPayment,
     });
     await db.insert(appointmentContext).values({
       appointmentId: id,
       servicePosition: 0,
-      invoiced: true,
-      paid: true,
+      invoiced: unknownPayment ? null : true,
+      paid: unknownPayment ? null : true,
       source: "booksy",
       sourceRef: `synthetic-billing:${id}`,
     });

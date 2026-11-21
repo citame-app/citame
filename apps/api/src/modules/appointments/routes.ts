@@ -29,6 +29,7 @@ import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
 import { bookingOutcome } from "../../observability/booking";
 import { findAvailability } from "../availability/service";
+import { compatibleBillingReasons } from "../commerce/appointment-billing";
 import { quoteBookingPromotion } from "../rewards/booking";
 import { listServices } from "../services/service";
 import { getCalendar } from "./calendar";
@@ -234,6 +235,15 @@ export function appointmentsRoutes({
         const query = parseOrThrow(calendarQuerySchema, c.req.query());
         const scope = authorizeCalendarQuery(c.get("principal"), query);
         const calendar = await getCalendar(db, query, scope);
+        if (query.booksyPaymentReview !== "1") {
+          for (const entry of calendar.appointments) {
+            if (entry.billingReviewReasons)
+              entry.billingReviewReasons = compatibleBillingReasons(
+                entry.billingReviewReasons,
+                false,
+              );
+          }
+        }
         return c.json(
           booksyNativePreview ? { ...calendar, importSnapshot: booksyNativePreview } : calendar,
         );

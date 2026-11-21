@@ -28,7 +28,7 @@ async function readReplicaChanges(db: Database, since: number) {
   const visits = new Map<string, AppointmentChange["data"]>();
   const serviceColors = new Map<string, string>();
   for (;;) {
-    const page = await pullChanges(db, reviewer, { since, limit: 200 });
+    const page = await pullChanges(db, reviewer, { since, limit: 200, booksyPaymentReview: "1" });
     const validated = syncPullResponseSchema.parse(page);
     for (const [index, change] of validated.changes.entries()) {
       if (change.entity === "service") {
@@ -62,7 +62,11 @@ async function readReplicaChanges(db: Database, since: number) {
 }
 
 /** Verify the actual sync feed without keeping another copy of client data on disk. */
-export async function rehearseRecoveredReplica(db: Database, originalHead: number) {
+export async function rehearseRecoveredReplica(
+  db: Database,
+  originalHead: number,
+  { expectPaymentReannouncement }: { expectPaymentReannouncement: boolean },
+) {
   const [expected, contexts, catalogue, replica, replay] = await Promise.all([
     db
       .select({
@@ -83,6 +87,7 @@ export async function rehearseRecoveredReplica(db: Database, originalHead: numbe
         requestedStaffId: appointmentContext.requestedStaffId,
         invoiced: appointmentContext.invoiced,
         paid: appointmentContext.paid,
+        sourcePaymentUnverified: appointmentContext.sourcePaymentUnverified,
         internalNote: sql<boolean>`coalesce(length(btrim(${appointmentContext.internalNote})) > 0, false)`,
         customerComment: sql<boolean>`coalesce(length(btrim(${appointmentContext.customerComment})) > 0, false)`,
       })
@@ -120,6 +125,8 @@ export async function rehearseRecoveredReplica(db: Database, originalHead: numbe
       throw new Error("Recovered sync appointment differs");
   }
   let serviceIndicatorsVerified = 0;
+  const undocumentedPayments = new Set<string>();
+  const positivePaymentEvidence = new Set<string>();
   for (const context of contexts) {
     const visit = replica.visits.get(context.appointmentId);
     if (!visit?.importedFromBooksy) throw new Error("Imported origin is missing from sync");
@@ -127,6 +134,9 @@ export async function rehearseRecoveredReplica(db: Database, originalHead: numbe
     const requested = Boolean(context.requestedStaffId);
     const invoiced = Boolean(context.invoiced);
     const paid = Boolean(context.paid);
+    if (context.paid === null || context.sourcePaymentUnverified)
+      undocumentedPayments.add(context.appointmentId);
+    if (paid || invoiced) positivePaymentEvidence.add(context.appointmentId);
     const customerComment =
       context.customerComment ||
       Boolean(expectedById.get(context.appointmentId)?.customerComment?.trim());
@@ -142,6 +152,17 @@ export async function rehearseRecoveredReplica(db: Database, originalHead: numbe
     )
       throw new Error("Recovered sync service indicator differs from the archived appointment");
     serviceIndicatorsVerified++;
+  }
+  for (const [id, row] of replica.visits) {
+    const expectedReview = undocumentedPayments.has(id) && !positivePaymentEvidence.has(id);
+    const reason = "unknown_booksy_payment";
+    const replayed = replay.visits.get(id);
+    if (
+      Boolean(row.billingReviewReasons?.includes(reason)) !== expectedReview ||
+      (expectedReview && expectPaymentReannouncement && !replayed) ||
+      (replayed && Boolean(replayed.billingReviewReasons?.includes(reason)) !== expectedReview)
+    )
+      throw new Error("Recovered sync payment review differs from the archived appointment");
   }
   return {
     calendarLines: replica.visits.size,

@@ -368,6 +368,7 @@ impl Root {
                         BillingReviewReason::UnknownAmount => Key::DueUnknownAmount,
                         BillingReviewReason::PaidInBooksy => Key::DuePaidInBooksy,
                         BillingReviewReason::InvoicedInBooksy => Key::DueInvoicedInBooksy,
+                        BillingReviewReason::UnknownBooksyPayment => Key::DueUnknownBooksyPayment,
                     }))
             }))
             .when(unavailable, |body| {

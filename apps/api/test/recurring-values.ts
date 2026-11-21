@@ -13,4 +13,8 @@ export const RECURRING_FIXTURE = {
     "0198f5a0-7b1c-7000-8000-00000000ba01",
     "0198f5a0-7b1c-7000-8000-00000000ba02",
   ],
+  importedUnknownPaymentAppointments: [
+    "0198f5a0-7b1c-7000-8000-00000000ba03",
+    "0198f5a0-7b1c-7000-8000-00000000ba04",
+  ],
 } as const;

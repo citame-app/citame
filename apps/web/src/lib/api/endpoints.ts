@@ -272,7 +272,12 @@ export function createEndpoints(client: ApiClient) {
       },
       calendar: (query: Omit<CalendarQuery, "staffIds"> & { staffIds?: string[] }) =>
         client.get("/appointments/calendar", calendarResponseSchema, {
-          query: { from: query.from, to: query.to, staffIds: query.staffIds?.join(",") },
+          query: {
+            from: query.from,
+            to: query.to,
+            staffIds: query.staffIds?.join(","),
+            booksyPaymentReview: "1",
+          },
         }),
       clients: {
         groups: () => client.get("/admin/clients/groups", clientGroupsSchema),

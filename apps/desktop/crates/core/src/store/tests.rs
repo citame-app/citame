@@ -243,6 +243,48 @@ fn migrations_run_once_and_survive_reopen() {
 }
 
 #[test]
+fn an_upgrade_refreshes_legacy_billing_holds_without_discarding_the_mirror_or_outbox() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    for sql in &MIGRATIONS[..5] {
+        conn.execute_batch(sql).unwrap();
+    }
+    conn.pragma_update(None, "user_version", 5).unwrap();
+    let tx = conn.transaction().unwrap();
+    let mut imported = appt_change(5, A1, 1);
+    let data = imported.data.as_mut().unwrap();
+    data["importedFromBooksy"] = json!(true);
+    data["services"][0]["sourceUnpriced"] = json!(true);
+    data["billingReviewReasons"] = json!(["unknown_amount"]);
+    apply_change(&tx, &imported).unwrap();
+    tx.execute("INSERT INTO meta (key,value) VALUES ('cursor','5')", [])
+        .unwrap();
+    tx.execute(
+        "INSERT INTO outbox (mutation_id, created_at, kind, entity_id, payload)
+        VALUES ('queued','2026-11-21T09:00:00Z','appointment.move',?1,'{}')",
+        [A1],
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    let mut store = Store::init(conn).unwrap();
+    assert_eq!(store.cursor().unwrap(), 0);
+    assert!(store.appointment(A1).unwrap().is_some());
+    assert_eq!(store.outbox(1).unwrap()[0].mutation_id, "queued");
+    imported.data.as_mut().unwrap()["billingReviewReasons"] =
+        json!(["unknown_amount", "unknown_booksy_payment"]);
+    store.apply_page(&[imported], 5).unwrap();
+    assert!(
+        store
+            .appointment(A1)
+            .unwrap()
+            .unwrap()
+            .billing_review_reasons()
+            .any(|reason| reason == crate::model::BillingReviewReason::UnknownBooksyPayment)
+    );
+    assert_eq!(store.cursor().unwrap(), 5);
+    assert_eq!(store.outbox(1).unwrap()[0].mutation_id, "queued");
+}
+
+#[test]
 fn booking_notices_skip_snapshot_import_and_local_echo_and_follow_visibility() {
     let mut store = Store::open_in_memory().unwrap();
     store

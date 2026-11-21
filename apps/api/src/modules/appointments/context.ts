@@ -22,6 +22,7 @@ import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { lockScheduling, type Tx } from "../../tx";
 import {
+  booksyPaymentReviews,
   externallySettledAppointments,
   importedPartialPayments,
 } from "../commerce/appointment-billing";
@@ -55,8 +56,15 @@ export async function getAppointmentContext(db: Connection, id: string, principa
     customerComment: visit.customerComment,
     rows: rows
       .sort((a, b) => a.servicePosition - b.servicePosition)
-      .map(({ id: _id, appointmentId: _appointmentId, updatedAt: _updatedAt, ...row }) =>
-        commerce ? row : { ...row, invoiced: null, paid: null },
+      .map(
+        ({
+          id: _id,
+          appointmentId: _appointmentId,
+          updatedAt: _updatedAt,
+          billingVersion: _billingVersion,
+          sourcePaymentUnverified: _sourcePaymentUnverified,
+          ...row
+        }) => (commerce ? row : { ...row, invoiced: null, paid: null }),
       ),
   };
 }
@@ -149,12 +157,13 @@ export async function calendarBadges(
       reasons: BillingReviewReason[];
       externallySettled: boolean;
       importedFromBooksy: boolean;
+      booksyUnpaidConfirmed: boolean;
       externalBalance?: ExternalBalance;
     }
   >();
   if (!visits.length) return result;
   const ids = visits.map((v) => v.id);
-  const [contexts, receipts, externallySettled, partial] = await Promise.all([
+  const [contexts, receipts, externallySettled, partial, unknownPayments] = await Promise.all([
     db
       .select({
         appointmentId: appointmentContext.appointmentId,
@@ -181,6 +190,7 @@ export async function calendarBadges(
       : [],
     includeBilling ? externallySettledAppointments(db, ids) : null,
     includeBilling ? importedPartialPayments(db, ids) : null,
+    includeBilling ? booksyPaymentReviews(db, ids) : null,
   ]);
   const indexed = new Map(contexts.map((c) => [`${c.appointmentId}:${c.servicePosition}`, c]));
   const paidInBooksy = new Set<string>();
@@ -207,10 +217,19 @@ export async function calendarBadges(
       reasons.push("unknown_amount");
     if (!externalBalance && paidInBooksy.has(visit.id)) reasons.push("paid_in_booksy");
     if (!externalBalance && invoicedInBooksy.has(visit.id)) reasons.push("invoiced_in_booksy");
+    const paymentReview =
+      !externalBalance &&
+      !externallySettled?.has(visit.id) &&
+      !paidInBooksy.has(visit.id) &&
+      !invoicedInBooksy.has(visit.id)
+        ? unknownPayments?.get(visit.id)
+        : undefined;
+    if (paymentReview === "pending") reasons.push("unknown_booksy_payment");
     result.set(visit.id, {
       reasons,
       externallySettled: externallySettled?.has(visit.id) ?? false,
       importedFromBooksy: imported.has(visit.id),
+      booksyUnpaidConfirmed: paymentReview === "confirmed_unpaid",
       externalBalance,
       badges: services.map((s) => {
         const c = indexed.get(`${visit.id}:${s.position}`);
