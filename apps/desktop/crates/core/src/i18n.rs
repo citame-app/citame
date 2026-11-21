@@ -602,6 +602,7 @@ keys! {
     InventoryLedger => ("Stock movements", "Movimientos de stock"),
     InventoryBackToLedger => ("Back to movements", "Volver a movimientos"),
     InventoryLedgerSearch => ("Find by product, SKU or reason", "Buscar por producto, SKU o motivo"),
+    InventoryLedgerEveryWarehouse => ("All warehouses", "Todos los almacenes"),
     InventoryLedgerAll => ("All movements", "Todos los movimientos"),
     InventoryLedgerLatest => ("Show latest movements", "Ver los últimos movimientos"),
     InventoryLedgerNewer => ("New stock movements are available.", "Hay nuevos movimientos de stock."),

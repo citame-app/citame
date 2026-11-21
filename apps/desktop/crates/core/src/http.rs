@@ -1226,9 +1226,10 @@ impl HttpTransport {
         if result.pagination.page != page
             || result.pagination.page_size == 0
             || (query.anchor.is_some() && result.anchor != query.anchor)
-            || query
-                .kind
-                .is_some_and(|kind| result.movements.iter().any(|row| row.movement.kind != kind))
+            || result
+                .movements
+                .iter()
+                .any(|row| !query.includes(&row.movement))
         {
             return Err(TransportError::Server(
                 "Unexpected stock ledger page".into(),

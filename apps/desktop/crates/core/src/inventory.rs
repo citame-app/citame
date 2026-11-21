@@ -195,21 +195,52 @@ pub struct InventoryFacets {
     pub brands: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LedgerKind {
+    Movement(StockKind),
+    Transfer,
+}
+
+impl LedgerKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Movement(kind) => kind.as_str(),
+            Self::Transfer => "transfer",
+        }
+    }
+
+    fn includes(self, movement: &StockMovement) -> bool {
+        match self {
+            Self::Transfer => movement.transfer_id.is_some(),
+            Self::Movement(kind) => movement.transfer_id.is_none() && movement.kind == kind,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LedgerQuery {
     search: String,
-    pub kind: Option<StockKind>,
+    pub kind: Option<LedgerKind>,
+    pub warehouse: Option<crate::warehouses::WarehouseLocation>,
     pub anchor: Option<String>,
 }
 
 impl LedgerQuery {
-    pub fn new(search: &str, kind: Option<StockKind>) -> Option<Self> {
+    pub fn new(search: &str, kind: Option<LedgerKind>) -> Option<Self> {
         let search = trim_form_value(search);
         (search.encode_utf16().count() <= 100 && !search.contains('\0')).then(|| Self {
             search: search.to_owned(),
             kind,
+            warehouse: None,
             anchor: None,
         })
+    }
+
+    pub(crate) fn includes(&self, movement: &StockMovement) -> bool {
+        self.kind.is_none_or(|kind| kind.includes(movement))
+            && self
+                .warehouse
+                .is_none_or(|warehouse| movement.warehouse_id == warehouse.0)
     }
 
     fn filters(&self) -> String {
@@ -217,6 +248,9 @@ impl LedgerQuery {
         query.append_pair("search", &self.search);
         if let Some(kind) = self.kind {
             query.append_pair("kind", kind.as_str());
+        }
+        if let Some(warehouse) = self.warehouse {
+            query.append_pair("warehouseId", &String::from(warehouse));
         }
         if let Some(anchor) = &self.anchor {
             query.append_pair("anchor", anchor);
@@ -560,7 +594,11 @@ mod tests {
 
     #[test]
     fn ledger_list_and_export_use_the_same_filters_without_limiting_the_csv_page() {
-        let filter = LedgerQuery::new("  A&B / 2  ", Some(StockKind::Receive)).unwrap();
+        let mut filter = LedgerQuery::new(
+            "  A&B / 2  ",
+            Some(LedgerKind::Movement(StockKind::Receive)),
+        )
+        .unwrap();
         assert_eq!(
             filter.list_path(3),
             "/admin/inventory/movements?search=A%26B+%2F+2&kind=receive&page=3"
@@ -568,6 +606,18 @@ mod tests {
         assert_eq!(
             filter.export_path(),
             "/admin/inventory/movements/export?search=A%26B+%2F+2&kind=receive"
+        );
+        filter.kind = Some(LedgerKind::Transfer);
+        filter.warehouse = Some(crate::warehouses::WarehouseLocation(None));
+        filter.anchor = Some("revision:12".into());
+        let expected = "search=A%26B+%2F+2&kind=transfer&warehouseId=main&anchor=revision%3A12";
+        assert_eq!(
+            filter.list_path(2),
+            format!("/admin/inventory/movements?{expected}&page=2")
+        );
+        assert_eq!(
+            filter.export_path(),
+            format!("/admin/inventory/movements/export?{expected}")
         );
         assert!(LedgerQuery::new(&"🧴".repeat(51), None).is_none());
     }

@@ -274,6 +274,20 @@ impl Root {
                             }),
                     ),
                 )
+                .when(
+                    panel.locations.is_some() && self.status.connectivity == Connectivity::Online,
+                    |body| {
+                        let location = WarehouseLocation(panel.query.location);
+                        body.child(self.button(
+                            "warehouse-ledger",
+                            self.t(Key::InventoryLedger),
+                            Kind::Ghost,
+                            cx.listener(move |root, _, _, cx| {
+                                root.open_inventory_ledger_scoped(Some(location), cx)
+                            }),
+                        ))
+                    },
+                )
                 .when(can_write && panel.locations.is_some(), |body| {
                     body.child(
                         div()

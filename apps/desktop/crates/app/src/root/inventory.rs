@@ -327,7 +327,11 @@ impl Root {
                     self.request_inventory(action, cx);
                 }
             } else {
+                let refresh_locations = desk.ledger.is_some() && desk.product.is_none();
                 self.reload_inventory(cx);
+                if refresh_locations {
+                    self.load_ledger_warehouse_names(cx);
+                }
             }
         }
     }

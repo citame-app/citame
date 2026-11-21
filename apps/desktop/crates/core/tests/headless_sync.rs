@@ -29,8 +29,8 @@ use sob_core::http::{
 };
 use sob_core::intake::Answer;
 use sob_core::inventory::{
-    ContentWriteError, LIVE_TOPIC as INVENTORY_TOPIC, LedgerQuery, PackageContent, PendingStock,
-    ProductQuery, StockKind, StockWriteError,
+    ContentWriteError, LIVE_TOPIC as INVENTORY_TOPIC, LedgerKind, LedgerQuery, PackageContent,
+    PendingStock, ProductQuery, StockKind, StockWriteError,
 };
 use sob_core::model::*;
 use sob_core::ops::{self, NewAppointment, Resolution};
@@ -2635,7 +2635,8 @@ fn native_inventory_round_trips_pack_and_stock_through_the_proxy() {
     assert!(!local.clear_pending_stock(&recovered).unwrap());
     assert_eq!(local.pending_stock(id).unwrap(), Some(count));
     let ledger_path = "/admin/inventory/movements";
-    let query = LedgerQuery::new(" Desktop ", Some(StockKind::Receive)).unwrap();
+    let query =
+        LedgerQuery::new(" Desktop ", Some(LedgerKind::Movement(StockKind::Receive))).unwrap();
     let ledger = device.transport.inventory_ledger(&query, 1).unwrap();
     let web_ledger = browser.rest_get(&format!("{ledger_path}?search=Desktop&kind=receive"));
     assert_eq!(ledger.pagination.total, 1);
@@ -5445,6 +5446,23 @@ fn native_warehouse_transfers_survive_restart_and_reject_stale_stock() {
     assert!(store.live_view_revision("commerce").unwrap() > before);
     let remote = web.rest_get(&format!("/admin/inventory/transfers/{}", transfer.id));
     assert_eq!(remote["lines"][0]["quantity"], 4);
+    let mut query = LedgerQuery::new("Offline transfer", Some(LedgerKind::Transfer)).unwrap();
+    query.warehouse = Some(sob_core::warehouses::WarehouseLocation(Some(warehouse)));
+    let history = desktop.transport.inventory_ledger(&query, 1).unwrap();
+    assert_eq!(history.movements.len(), 1);
+    assert_eq!(history.movements[0].movement.transfer_id, Some(transfer.id));
+    assert_eq!(history.movements[0].movement.warehouse_id, Some(warehouse));
+    assert_eq!(history.movements[0].movement.quantity_delta, 4);
+    query.anchor = history.anchor;
+    let mut csv = Vec::new();
+    desktop
+        .transport
+        .write_inventory_ledger_csv(&query, &mut csv)
+        .unwrap();
+    let csv = String::from_utf8(csv).unwrap();
+    assert_eq!(csv.matches("Offline transfer").count(), 1);
+    assert!(csv.contains("Native test stockroom"));
+
     let main = desktop
         .transport
         .inventory_warehouse_stock(None, "NATIVE-WAREHOUSE", 1)
