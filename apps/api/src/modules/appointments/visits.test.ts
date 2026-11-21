@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
-import { appointment } from "@sob/db";
+import { appointment, appointmentVisit } from "@sob/db";
 import {
   type Actor,
   actor,
@@ -82,6 +82,31 @@ test("a conflict in the second treatment rolls back the entire visit", async () 
   const result = await json(t.app, "/appointments/visits", "POST", packet(), client.cookie);
   expect(result.status).toBe(409);
   expect(await t.db.select().from(appointment)).toHaveLength(1);
+});
+
+test("pausing online booking blocks new public visits and preserves staff booking and replay", async () => {
+  const book = (actor: Actor, body: unknown) =>
+    json(t.app, "/appointments/visits", "POST", body, actor.cookie);
+  const original = { ...packet(), notes: "Customer note for both treatments" };
+  const created = await book(client, original);
+  expect(created.status).toBe(201);
+  expect(
+    (await json(t.app, "/admin/settings", "PATCH", { onlineBookingEnabled: false }, owner.cookie))
+      .status,
+  ).toBe(200);
+  expect((await book(client, original)).status).toBe(201);
+  const next = { ...packet(), startsAt: "2026-03-16T12:00:00.000Z" };
+  const blocked = await book(client, next);
+  expect(blocked.status, await blocked.clone().text()).toBe(409);
+  expect(await blocked.json()).toMatchObject({ error: { code: "online_booking_paused" } });
+  expect(await t.db.select().from(appointmentVisit)).toHaveLength(1);
+  expect(await t.db.select().from(appointment)).toHaveLength(2);
+  expect((await t.db.select().from(appointment)).map((row) => row.customerComment)).toEqual([
+    original.notes,
+    original.notes,
+  ]);
+  const staff = await book(owner, { ...next, clientId: f.clientId });
+  expect(staff.status, await staff.clone().text()).toBe(201);
 });
 
 test("availability resolves the hand-off and concurrent duplicate confirmations create one visit", async () => {

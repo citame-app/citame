@@ -118,7 +118,7 @@ export async function createVisit(
       const created = await createAppointment(
         tx,
         request,
-        { userId: p.userId },
+        { userId: p.userId, role: p.role },
         { now, sequentialContinuation: position > 0 },
       );
       await tx
