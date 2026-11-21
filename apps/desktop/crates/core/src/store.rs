@@ -44,6 +44,7 @@ pub enum SalonConfigurationWork {
     },
 }
 const STAFF_DIRECTORY_TOPIC: &str = "staff_directory";
+const SERVICE_CATALOG_TOPIC: &str = "service_catalog";
 
 const MIGRATIONS: &[&str] = &[
     // 1: initial schema
@@ -792,6 +793,10 @@ impl Store {
         self.live_view_revision(STAFF_DIRECTORY_TOPIC)
     }
 
+    pub fn catalog_revision(&self) -> Result<i64> {
+        self.live_view_revision(SERVICE_CATALOG_TOPIC)
+    }
+
     pub fn live_view_revision(&self, topic: &str) -> Result<i64> {
         Ok(self
             .get_meta(&format!("live_view:{topic}"))?
@@ -929,6 +934,9 @@ impl Store {
             let staff_changed = changes
                 .iter()
                 .any(|change| change.seq > cursor && change.entity == "staff");
+            let catalogue_changed = changes.iter().any(|change| {
+                change.seq > cursor && matches!(change.entity.as_str(), "service" | "service_staff")
+            });
             let review_dependencies_changed = changes
                 .iter()
                 .any(|change| matches!(change.entity.as_str(), "appointment" | "client" | "staff"));
@@ -937,6 +945,7 @@ impl Store {
                 .map(String::as_str)
                 .chain(review_dependencies_changed.then_some(crate::reviews::LIVE_TOPIC))
                 .chain(staff_changed.then_some(STAFF_DIRECTORY_TOPIC))
+                .chain(catalogue_changed.then_some(SERVICE_CATALOG_TOPIC))
             {
                 if matches!(
                     topic,
@@ -944,6 +953,7 @@ impl Store {
                         | "waitlist"
                         | "inbox"
                         | STAFF_DIRECTORY_TOPIC
+                        | SERVICE_CATALOG_TOPIC
                         | crate::reviews::LIVE_TOPIC
                         | crate::intake::FORM_LIVE_TOPIC
                         | crate::intake::RECORD_LIVE_TOPIC

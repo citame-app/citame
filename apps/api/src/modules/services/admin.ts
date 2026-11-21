@@ -1,6 +1,7 @@
 import type {
   AdminService,
   CreateServiceRequest,
+  ReviewedService,
   ServiceCatalog,
   ServiceCatalogUpdate,
   ServiceConfiguration,
@@ -33,7 +34,7 @@ function toAdminService(
   row: ServiceRow,
   staffIds: string[],
   catalog?: ServiceCatalog,
-): AdminService {
+): ReviewedService {
   return {
     id: row.id,
     name: row.name,
@@ -93,7 +94,7 @@ export async function getAdminService(db: Executor, id: string): Promise<AdminSe
 }
 
 /** Every non-deleted service, inactive ones included. */
-export async function listAdminServices(db: CatalogConnection): Promise<AdminService[]> {
+export async function listAdminServices(db: CatalogConnection): Promise<ReviewedService[]> {
   const rows = await db
     .select()
     .from(service)
@@ -243,10 +244,13 @@ export async function updateService(
   id: string,
   input: UpdateServiceRequest,
   actor: AdminActor,
-): Promise<AdminService> {
+  expectedVersion?: number,
+): Promise<ReviewedService> {
   return db.transaction(async (tx) => {
     await lockScheduling(tx);
     const current = await requireService(tx, id);
+    if (expectedVersion !== undefined && current.catalogVersion !== expectedVersion)
+      throw new DomainError("version_conflict", "Review the current service before saving");
     if (input.priceType === "variable" || input.priceType === "free")
       input = { ...input, priceCents: 0 };
     const priceType = input.priceType ?? current.priceType;

@@ -78,6 +78,12 @@ const response = (seq: number, head = seq): SyncPullResponse => ({
   hasMore: seq < head,
 });
 
+test("service and team changes refresh the catalogue used by an open appointment form", () => {
+  for (const entity of ["service", "service_staff"] as const) {
+    expect([...liveQueryKeys([entity])]).toContainEqual(["appointment-catalog"]);
+  }
+});
+
 test("initial connection does not replay history; pages and repeated nudges advance once", async () => {
   const pull = mock(async (since: number) => response(since + 1, 12));
   const h = harness(pull);

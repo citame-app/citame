@@ -3,6 +3,7 @@ import {
   combinationUpdateSchema,
   createServiceRequestSchema,
   idSchema,
+  reviewedServiceUpdateSchema,
   serviceCatalogUpdateSchema,
   serviceConfigurationSchema,
   serviceProcessingInputSchema,
@@ -15,6 +16,7 @@ import { createMiddleware } from "hono/factory";
 import type { AppDeps } from "../../app";
 import { authorizeServiceAdmin } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
+import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
 import { getServiceResources, setServiceResources } from "../resources/catalog";
 import {
@@ -37,7 +39,7 @@ const ownerOnly = createMiddleware<AppEnv>(async (c, next) => {
 });
 
 /** Owner-only catalog administration, mounted at `/admin/services` behind `requireAuth`. */
-export function serviceAdminRoutes({ db, now = () => new Date() }: AppDeps) {
+export function serviceAdminRoutes({ db, config, now = () => new Date() }: AppDeps) {
   return new Hono<AppEnv>()
     .put("/:id/processing", ownerOnly, async (c) =>
       c.json(
@@ -75,6 +77,19 @@ export function serviceAdminRoutes({ db, now = () => new Date() }: AppDeps) {
       ),
     )
     .get("/", ownerOnly, async (c) => c.json({ services: await listAdminServices(db) }))
+    .get("/reviewed", ownerOnly, async (c) =>
+      c.json({ generation: config.syncReplicaGeneration, services: await listAdminServices(db) }),
+    )
+    .put("/:id/reviewed", ownerOnly, async (c) => {
+      const id = parseOrThrow(idSchema, c.req.param("id"));
+      const input = parseOrThrow(reviewedServiceUpdateSchema, await readJson(c));
+      if (input.generation !== config.syncReplicaGeneration)
+        throw new DomainError(
+          "sync_generation_changed",
+          "The centre was restored; review the service",
+        );
+      return c.json(await updateService(db, id, input.service, c.get("principal"), input.version));
+    })
     .post("/", ownerOnly, async (c) => {
       const body = parseOrThrow(createServiceRequestSchema, await readJson(c));
       return c.json(await createService(db, body, c.get("principal")), 201);

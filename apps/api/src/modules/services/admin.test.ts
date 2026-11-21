@@ -4,6 +4,7 @@ import {
   errorResponseSchema,
   listAdminServicesResponseSchema,
   listServicesResponseSchema,
+  reviewedServiceListSchema,
 } from "@sob/contracts";
 import { auditLog, serviceStaff } from "@sob/db";
 import { and, asc, eq } from "drizzle-orm";
@@ -46,6 +47,30 @@ const audit = (action: string) =>
   t.db.select().from(auditLog).where(eq(auditLog.action, action)).orderBy(asc(auditLog.createdAt));
 
 const newService = { name: "Blow dry", durationMinutes: 30, bufferMinutes: 5, priceCents: 8000 };
+
+test("reviewed service edits reject stale versions and restored histories", async () => {
+  const response = await call(owner, "GET", "/admin/services/reviewed");
+  expect(response.status).toBe(200);
+  const { generation, services } = reviewedServiceListSchema.parse(await response.json());
+  const existing = services.find(({ id }) => id === f.haircutId);
+  if (!existing?.version) throw new Error("Missing reviewed catalogue fixture");
+  const route = `/admin/services/${existing.id}/reviewed`;
+  const change = { generation, version: existing.version, service: { priceCents: 3200 } };
+  expect((await call(ana, "PUT", route, change)).status).toBe(403);
+  expect(await errorCode(await call(owner, "PUT", route, { ...change, generation: "old" }))).toBe(
+    "sync_generation_changed",
+  );
+  const saved = await call(owner, "PUT", route, change);
+  expect(saved.status).toBe(200);
+  expect(adminServiceSchema.parse(await saved.json())).toMatchObject({
+    priceCents: 3200,
+    version: existing.version + 1,
+    staffIds: existing.staffIds,
+  });
+  expect(
+    await errorCode(await call(owner, "PUT", route, { ...change, service: { priceCents: 100 } })),
+  ).toBe("version_conflict");
+});
 
 describe("catalog organisation and online visibility", () => {
   test("a visit cannot add amounts expressed in different currencies", async () => {

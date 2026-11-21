@@ -52,8 +52,14 @@ pub struct HttpTransport {
     token_store: Option<Arc<dyn TokenStore>>,
 }
 
+mod service_catalog;
+mod service_catalog_form;
 mod staff_access;
 mod staff_portraits;
+pub use service_catalog::{
+    CatalogPrice, CatalogService, CatalogWriteError, ReviewedCatalog, ServiceDetails,
+};
+pub use service_catalog_form::{CatalogForm, ServiceField};
 pub use staff_access::{AccessPreset, ReviewedStaffAccess, StaffAccess};
 pub use staff_portraits::{PortraitDirectory, PortraitStaff, PortraitUpdate};
 mod weekly_hours;

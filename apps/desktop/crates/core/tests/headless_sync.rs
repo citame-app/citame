@@ -140,6 +140,69 @@ fn native_team_access_uses_reviewed_permissions_through_the_proxy() {
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_catalogue_edits_reach_web_and_respect_newer_values_through_the_proxy() {
+    let device = proxy_device();
+    let mut web = Device::sign_in();
+    web.sync();
+    let catalogue = catalog(&web);
+    let created = web.rest_post(
+        "/admin/services",
+        json!({
+            "name": "Synthetic native catalogue review", "durationMinutes": 30,
+            "priceCents": 2500, "currency": "EUR", "staffIds": [catalogue.staff]
+        }),
+    );
+    let id = created["id"].as_str().unwrap();
+    web.sync();
+    let revision = web.store.catalog_revision().unwrap();
+    let review = device.transport.reviewed_catalog().unwrap();
+    let original = review.services.iter().find(|row| row.id == id).unwrap();
+    let mut changes = original.details.clone();
+    changes.price_cents = 3200;
+    changes.color = Some("#336699".into());
+    let saved = device
+        .transport
+        .save_reviewed_service(&review.generation, original, &changes)
+        .unwrap();
+    assert_eq!(saved.details, changes);
+    let current = web.rest_get("/admin/services");
+    let row = current["services"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id)
+        .unwrap();
+    assert_eq!(row["priceCents"], 3200);
+    assert_eq!(row["staffIds"], created["staffIds"]);
+    web.sync();
+    assert!(web.store.catalog_revision().unwrap() > revision);
+    assert_eq!(
+        web.store
+            .services()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.id == id)
+            .unwrap()
+            .price_cents,
+        3200
+    );
+    changes.price_cents = 100;
+    assert!(
+        device
+            .transport
+            .save_reviewed_service(&review.generation, original, &changes)
+            .is_err()
+    );
+    assert!(
+        device
+            .transport
+            .save_reviewed_service("previous-centre", &saved, &changes)
+            .is_err()
+    );
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_policy_changes_reach_cloud_and_reject_old_reviews_through_the_proxy() {
     use sob_core::booking_policy::{LIVE_TOPIC, PolicyWriteError};
 

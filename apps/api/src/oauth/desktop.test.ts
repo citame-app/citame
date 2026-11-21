@@ -16,6 +16,7 @@ import {
   listServicesResponseSchema,
   reviewedBookingPolicySchema,
   reviewedSalonSettingsSchema,
+  reviewedServiceListSchema,
   reviewedStaffAccessSchema,
   reviewPrivateSchema,
   staffAccountResponseSchema,
@@ -82,6 +83,43 @@ async function tokens(role: "owner" | "client" | "staff", emailName: string = ro
 
 const request = (path: string, access: unknown) =>
   t.app.request(path, { headers: { authorization: `Bearer ${String(access)}` } });
+
+test("the desktop proxy permits only reviewed catalogue operations and enforces live permissions", async () => {
+  const owner = await tokens("owner", "catalog-standards-owner");
+  const manager = await tokens("staff", "catalog-standards-manager");
+  const path = "/admin/services/reviewed";
+  expect((await request(path, manager.access)).status).toBe(403);
+  if (!manager.who.staffId) throw new Error("Missing staff fixture");
+  await t.db
+    .update(staffProfile)
+    .set({ accessPreset: "manager" })
+    .where(eq(staffProfile.id, manager.who.staffId));
+  const response = await request(path, manager.access);
+  expect(response.status).toBe(200);
+  const { generation, services } = reviewedServiceListSchema.parse(await response.json());
+  const row = services.find((candidate) => candidate.active);
+  if (!row?.version) throw new Error("Missing reviewed service fixture");
+  const edit = {
+    generation,
+    version: row.version,
+    service: { description: "Reviewed desktop update" },
+  };
+  const write = (url: string, method: string, access: string) =>
+    t.app.request(url, {
+      method,
+      headers: { authorization: `Bearer ${access}`, "content-type": "application/json" },
+      body: JSON.stringify(edit),
+    });
+  expect((await write(path, "POST", owner.access)).status).toBe(403);
+  expect((await write(`/admin/services/${row.id}`, "PATCH", owner.access)).status).toBe(403);
+  const reviewed = `/admin/services/${row.id}/reviewed`;
+  expect((await write(reviewed, "PUT", manager.access)).status).toBe(200);
+  await t.db
+    .update(staffProfile)
+    .set({ accessPreset: "professional" })
+    .where(eq(staffProfile.id, manager.who.staffId));
+  expect((await write(reviewed, "PUT", manager.access)).status).toBe(403);
+});
 
 test("desktop staff provisioning is owner-only and preserves the existing profile", async () => {
   const owner = await tokens("owner", "provision-staff-owner");

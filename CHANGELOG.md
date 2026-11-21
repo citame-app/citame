@@ -11,6 +11,7 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 - Desktop receipts support final service prices, walk-in checkout, transaction history with date, tender and status filters, sale attribution, customer discounts, gift card redemption, eligible prepaid service redemptions and returns, and refunds for cash, external-card, and gift card payments. Voiding an unpaid receipt releases its reserved stock. Desktop records physical product returns from fulfilled receipts. Desktop preserves unconfirmed requests across restarts, and Cloud preserves them across reloads in the same tab.
 - Desktop prints the reviewed receipt in a temporary browser preview, including when the open receipt is offline.
 - The Desktop management menu opens permitted Cloud areas in the browser with the linked account.
+- Desktop edits existing service prices, timing, presentation and booking availability with the same catalogue permissions as Cloud. A stale draft must be reviewed before publishing.
 
 - Weekly team shifts in the web admin with dated overrides, absence intervals and links to individual schedules. [Scheduling guide](docs/date-shifts.md).
 - Native weekly team shifts read the offline replica, mark pending blocks and open the selected professional's calendar. Dates and names remain visible while scrolling, and a date field jumps directly to a week.

@@ -194,6 +194,22 @@ impl Root {
                         .child(self.t(key)),
                 )
             })
+            .when(
+                self.can_configure_salon()
+                    || desk.areas.as_ref().is_some_and(|areas| {
+                        areas
+                            .iter()
+                            .any(|area| matches!(area, BrowserWorkspace::Services))
+                    }),
+                |view| {
+                    view.child(self.button(
+                        "native-service-catalog",
+                        self.t(Key::CatalogTitle),
+                        Kind::Ghost,
+                        cx.listener(|root, _, _, cx| root.open_service_catalog(cx)),
+                    ))
+                },
+            )
             .when(self.can_configure_salon(), |view| {
                 view.child(self.button(
                     "salon-configuration",

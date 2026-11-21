@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { idSchema, LIMITS } from "./common";
+import { idSchema, LIMITS, syncGenerationSchema } from "./common";
 import {
   serviceCatalogCreateSchema,
   serviceCatalogSchema,
@@ -141,6 +141,24 @@ export const updateServiceRequestSchema = z
     path: ["name"],
   });
 export type UpdateServiceRequest = z.infer<typeof updateServiceRequestSchema>;
+
+export const reviewedServiceSchema = adminServiceSchema.safeExtend({
+  version: z.number().int().positive(),
+  sortOrder: z.number().int().nonnegative(),
+  onlineBooking: z.boolean(),
+});
+export type ReviewedService = z.infer<typeof reviewedServiceSchema>;
+
+export const reviewedServiceListSchema = z.object({
+  generation: syncGenerationSchema,
+  services: z.array(reviewedServiceSchema),
+});
+
+export const reviewedServiceUpdateSchema = z.strictObject({
+  generation: syncGenerationSchema,
+  version: z.number().int().positive(),
+  service: updateServiceRequestSchema,
+});
 
 /** Replaces the whole set of staff who perform a service. */
 export const setServiceStaffRequestSchema = z.object({

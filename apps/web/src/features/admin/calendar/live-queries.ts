@@ -38,13 +38,21 @@ const shared: Record<SyncEntity | SyncLiveView, readonly (readonly string[])[]> 
   service: [
     ...calendar,
     ["admin", "services"],
+    ["appointment-catalog"],
     ["services"],
     ["staff"],
     ["admin", "staff"],
     ["admin", "report"],
     ["combinations"],
   ],
-  service_staff: [...calendar, ["admin", "staff"], ["admin", "services"], ["services"], ["staff"]],
+  service_staff: [
+    ...calendar,
+    ["admin", "staff"],
+    ["admin", "services"],
+    ["appointment-catalog"],
+    ["services"],
+    ["staff"],
+  ],
   staff: [
     ...calendar,
     teamShiftWeekKey,
