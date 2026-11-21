@@ -136,17 +136,21 @@ impl Message {
 }
 
 fn text(field: &Entity<TextField>, cx: &App) -> String {
-    field.read(cx).text().trim().to_owned()
+    trim_text(field.read(cx).text()).to_owned()
+}
+
+fn trim_text(text: &str) -> &str {
+    // Match the draft contract's ECMAScript String.trim.
+    text.trim_matches(|c: char| c == '\u{feff}' || (c != '\u{0085}' && c.is_whitespace()))
 }
 
 fn message_text(lines: &[Entity<TextField>], cx: &App) -> String {
-    lines
+    let text = lines
         .iter()
         .map(|line| line.read(cx).text())
         .collect::<Vec<_>>()
-        .join("\n")
-        .trim()
-        .to_owned()
+        .join("\n");
+    trim_text(&text).to_owned()
 }
 
 fn optional_days(value: &str) -> Option<Option<u32>> {

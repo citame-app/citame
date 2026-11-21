@@ -79,7 +79,7 @@ export function marketingAdminRoutes(deps: AppDeps) {
           id(c.req.param("id")),
           parseOrThrow(campaignUpdateSchema, await readJson(c)),
           c.get("principal"),
-          c.get("desktopRequest") === true,
+          c.req.header("x-citame-generation") !== undefined,
         ),
       ),
     )

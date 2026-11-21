@@ -208,6 +208,32 @@ test("draft replay, optimistic editing, reviewed audience and queue replay are f
   expect(await t.db.select().from(marketingDelivery)).toHaveLength(1);
 });
 
+test("an older desktop cookie session can confirm a lost draft save", async () => {
+  const { id, ...fields } = draft();
+  expect((await call(owner, "/admin/marketing/campaigns", "POST", { ...fields, id })).status).toBe(
+    201,
+  );
+  const path = `/admin/marketing/campaigns/${id}`;
+  const save = (generation: string) =>
+    t.app.request(path, {
+      method: "PATCH",
+      headers: {
+        origin: "http://localhost:3000",
+        cookie: owner.cookie,
+        "content-type": "application/json",
+        "x-citame-generation": generation,
+      },
+      body: JSON.stringify({ ...fields, name: "Edited by legacy desktop", version: 1 }),
+    });
+  const first = await save(t.config.syncReplicaGeneration);
+  expect(first.status, await first.clone().text()).toBe(200);
+  expect(await first.json()).toMatchObject({ version: 2 });
+  expect(await (await save(t.config.syncReplicaGeneration)).json()).toMatchObject({
+    version: 2,
+  });
+  expect((await save("old-history")).status).toBe(409);
+});
+
 test("marketing refresh is scoped and restored desktop generations cannot queue", async () => {
   await allow();
   const previous = syncPullResponseSchema.parse(
