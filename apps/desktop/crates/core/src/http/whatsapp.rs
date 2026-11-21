@@ -184,11 +184,7 @@ pub struct ReviewedAutomations {
 }
 
 impl ReviewedAutomations {
-    pub fn new(
-        connection: &Connection,
-        revision: String,
-        templates: Vec<ApprovedTemplate>,
-    ) -> Option<Self> {
+    pub fn new(connection: &Connection, templates: Vec<ApprovedTemplate>) -> Option<Self> {
         let revision = connection.revision.clone()?;
         let baseline = connection.editable_rules();
         let entries = EVENTS.map(|kind| {
