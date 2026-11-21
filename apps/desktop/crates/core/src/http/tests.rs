@@ -663,6 +663,52 @@ fn report_csv_distinguishes_unknown_amounts_from_free_services() {
 }
 
 #[test]
+fn client_sales_transport_preserves_filters_and_rejects_unscoped_totals() {
+    let alias = "0198f5a0-7b1c-7000-8000-000000000202";
+    let client = "0198f5a0-7b1c-7000-8000-000000000203";
+    let professional = "0198f5a0-7b1c-7000-8000-000000000204";
+    let global = serde_json::json!({
+        "from": "2026-11-18", "to": "2026-11-20", "timezone": "Europe/Madrid",
+        "collectedCents": 12000, "refundedCents": 1000, "netCollectedCents": 11000,
+        "soldCents": 12000, "includedTaxCents": 0, "tipsCents": 0, "productCostCents": 0,
+        "unknownCostLines": 0, "methods": [], "cashSessions": []
+    });
+    let mut scoped = global.clone();
+    scoped["client"] = serde_json::json!({ "id": client, "name": "Remaining profile" });
+    scoped["settledByFamily"] =
+        serde_json::json!([{ "family": "custom", "amountCents": 12000, "taxCents": 0 }]);
+    let (base, seen) = serve(vec![
+        http("200 OK", &[], &global.to_string()),
+        http("200 OK", &[], &scoped.to_string()),
+    ]);
+    let query = ReportQuery {
+        from: "2026-11-18".parse().unwrap(),
+        to: "2026-11-20".parse().unwrap(),
+        staff_id: Some(professional.into()),
+        currency: Some("EUR".into()),
+    };
+    let transport = signed_in(&base);
+    assert!(matches!(
+        transport.client_financial_report(&query, alias),
+        Err(TransportError::BadRequest(_))
+    ));
+    let report = transport.client_financial_report(&query, alias).unwrap();
+    assert_eq!(
+        report.csv_filename(),
+        format!("client-sales-{client}-2026-11-18-2026-11-20.csv")
+    );
+    let csv = report.to_csv();
+    assert!(csv.contains(&format!("\"client_id\",\"{client}\"")));
+    assert!(csv.contains("\"custom\",\"12000\",\"0\",\"EUR\""));
+    let expected = format!(
+        "GET /admin/accounting/sales?from=2026-11-18&to=2026-11-20&staffId={professional}&clientId={alias} HTTP/"
+    );
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    assert!(seen.iter().all(|request| request.starts_with(&expected)));
+}
+
+#[test]
 fn client_reports_use_the_professional_and_dates_without_currency() {
     let (base, seen) = serve(vec![http(
         "200 OK",
