@@ -18,6 +18,9 @@ const valkey = new RedisClient(config.valkeyUrl);
 try {
   await assertOperationalDatabase(db);
   const auth = createAuth({ db, valkey, config });
+  // The no-op path does not hash a password, so wait for Better Auth's async
+  // initialization explicitly before either path can close the database.
+  await auth.$context;
   const result = await bootstrapOwner({ auth, db }, owner);
   console.log(
     result.created
