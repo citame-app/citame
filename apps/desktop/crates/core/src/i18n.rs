@@ -762,6 +762,7 @@ keys! {
     EmailDeliveryTestUnconfirmed => ("The test could not be confirmed. Check your inbox before sending another.", "No se pudo confirmar la prueba. Revisa tu bandeja antes de enviar otra."),
     SalonConfiguration => ("Business and booking settings", "Negocio y reservas"),
     SalonName => ("Business name", "Nombre del negocio"),
+    BusinessProfileInvalid => ("Check the value and format for this field.", "Revisa el valor y el formato de este campo."),
     BusinessProfileTitle => ("Public business profile", "Ficha pública del centro"),
     BusinessProfileHelp => ("Only enter details you want clients to see. Save with publication off to keep a private draft or take the profile offline.", "Introduce solo los datos que quieras mostrar. Guarda con la publicación desactivada para conservar un borrador privado o retirar la ficha."),
     BusinessCategory => ("Business category", "Categoría del negocio"),

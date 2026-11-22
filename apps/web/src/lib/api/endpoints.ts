@@ -53,14 +53,15 @@ import {
   oauthConnectionsSchema,
   optOutPreviewSchema,
   ownerSalonSettingsSchema,
+  publicBusinessProfileSchema,
   type ReportOutcomesQuery,
+  type ReviewedBusinessProfileRequest,
   type ReviewedStaffAccessInput,
   type ReviewedStaffRoleInput,
   type ReviewedUnlinkedRoleInput,
   reportClientsSchema,
   reportOutcomesPageSchema,
   reportSummarySchema,
-  reviewedSalonSettingsSchema,
   reviewedStaffAccessSchema,
   type ServiceConfiguration,
   type SetServiceStaffRequest,
@@ -167,6 +168,7 @@ export function createEndpoints(client: ApiClient) {
     waitlist: waitlistEndpoints(client),
     calendarInbox: calendarInboxEndpoints(client),
     salon: () => client.get("/salon", salonResponseSchema),
+    businessProfile: () => client.get("/salon/profile", publicBusinessProfileSchema),
     services: (fresh = false) =>
       client.get("/services", listServicesResponseSchema, {
         cache: fresh ? "no-store" : undefined,
@@ -398,12 +400,8 @@ export function createEndpoints(client: ApiClient) {
       settings: {
         get: () => client.get("/admin/settings", ownerSalonSettingsSchema),
         reviewed: () => client.get("/admin/settings/desktop", desktopSalonSettingsSchema),
-        saveReviewed: (expectedRevision: string, changes: UpdateSalonSettingsRequest) =>
-          client.put(
-            "/admin/settings/desktop",
-            { expectedRevision, changes },
-            reviewedSalonSettingsSchema,
-          ),
+        saveProfile: (request: ReviewedBusinessProfileRequest) =>
+          client.put("/admin/settings/profile", request, desktopSalonSettingsSchema),
         update: (request: UpdateSalonSettingsRequest) =>
           client.patch("/admin/settings", request, ownerSalonSettingsSchema),
       },

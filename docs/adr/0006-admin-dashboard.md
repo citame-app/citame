@@ -88,9 +88,9 @@ Cloud and Desktop use the same report snapshot for the selected salon-local date
 
 ### Public business profile
 
-The owner can prepare a private profile in Web or Desktop with a description, category, address, public contact details, HTTPS links, amenities, home visits and house rules. The booking homepage displays the saved profile only while publication is enabled. The salon endpoint revalidates public reads, and the sync feed exposes unpublished details only to the owner.
+The owner can prepare a private profile in Web or Desktop with a description, category, address, public contact details, HTTPS links, amenities, home visits and house rules. The booking homepage fetches the current published profile on entry, including client-side navigation. The separate profile endpoint disables HTTP caching, and the sync feed exposes unpublished details only to the owner.
 
-Both editors use the salon settings revision. The native editor queues changed fields while offline. A stale revision requires review against the current settings before saving again. Review merges only the fields edited in the draft, including explicit clears, so unrelated remote updates are retained.
+Both editors use the salon settings revision and replica generation. The native editor queues changed fields while offline. A stale revision or generation requires review against the current settings before saving again. Review merges only the fields edited in the draft, including explicit clears, so unrelated remote updates are retained.
 
 ## Consequences
 

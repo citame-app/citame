@@ -53,6 +53,24 @@ export const businessProfileSchema = businessProfileContentSchema.extend({
   published: z.boolean(),
 });
 export type BusinessProfile = z.infer<typeof businessProfileSchema>;
+export const publicBusinessProfileSchema = z.object({
+  profile: businessProfileContentSchema.nullable(),
+});
+export type PublicBusinessProfile = NonNullable<
+  z.infer<typeof publicBusinessProfileSchema>["profile"]
+>;
+export const businessProfileChangesSchema = businessProfileSchema
+  .partial()
+  .refine(
+    (value) => Object.values(value).some((field) => field !== undefined),
+    "Provide a profile change",
+  );
+export const reviewedBusinessProfileRequestSchema = z.strictObject({
+  generation: syncGenerationSchema,
+  expectedRevision: instantSchema,
+  changes: businessProfileChangesSchema,
+});
+export type ReviewedBusinessProfileRequest = z.infer<typeof reviewedBusinessProfileRequestSchema>;
 export const EMPTY_BUSINESS_PROFILE: BusinessProfile = {
   published: false,
   description: null,
@@ -77,7 +95,6 @@ export const salonResponseSchema = z.object({
   minNoticeMinutes: z.number().int().min(0),
   maxDaysAhead: z.number().int().positive(),
   onlineBookingEnabled: z.boolean().optional(),
-  profile: businessProfileContentSchema.optional(),
 });
 export type SalonResponse = z.infer<typeof salonResponseSchema>;
 
@@ -87,7 +104,6 @@ export const ownerSalonSettingsSchema = salonResponseSchema.extend({
   reminderFirstLeadMinutes: reminderLeadSchema,
   /** Minutes before the start for the second reminder (default 120 = 2 h); null turns it off. */
   reminderSecondLeadMinutes: reminderLeadSchema,
-  businessProfile: businessProfileSchema.optional(),
 });
 export type OwnerSalonSettings = z.infer<typeof ownerSalonSettingsSchema>;
 
@@ -123,42 +139,42 @@ const ianaTimeZoneSchema = z
     return z.NEVER;
   });
 
-/** Owner-only edit of the single salon settings row. Every field is optional. */
-export const updateSalonSettingsRequestSchema = z
-  .object({
-    name: z.string().trim().min(1).max(120),
-    timezone: ianaTimeZoneSchema,
-    /** Offered start times are multiples of this many minutes. */
-    slotGranularityMinutes: z
-      .number()
-      .int()
-      .refine((n) => SLOT_GRANULARITIES.includes(n), "Unsupported granularity"),
-    minNoticeMinutes: z
-      .number()
-      .int()
-      .min(0)
-      .max(60 * 24 * 30),
-    maxDaysAhead: z.number().int().min(1).max(365),
-    onlineBookingEnabled: z.boolean(),
-    reminderFirstLeadMinutes: reminderLeadSchema,
-    reminderSecondLeadMinutes: reminderLeadSchema,
-    businessProfile: businessProfileSchema
-      .partial()
-      .refine(
-        (value) => Object.values(value).some((field) => field !== undefined),
-        "Provide a profile change",
-      ),
-  })
+const salonSettingsChanges = z.object({
+  name: z.string().trim().min(1).max(120),
+  timezone: ianaTimeZoneSchema,
+  /** Offered start times are multiples of this many minutes. */
+  slotGranularityMinutes: z
+    .number()
+    .int()
+    .refine((n) => SLOT_GRANULARITIES.includes(n), "Unsupported granularity"),
+  minNoticeMinutes: z
+    .number()
+    .int()
+    .min(0)
+    .max(60 * 24 * 30),
+  maxDaysAhead: z.number().int().min(1).max(365),
+  onlineBookingEnabled: z.boolean(),
+  reminderFirstLeadMinutes: reminderLeadSchema,
+  reminderSecondLeadMinutes: reminderLeadSchema,
+});
+const hasChange = (value: object) => Object.values(value).some((field) => field !== undefined);
+const missingChange = { message: "Provide at least one change", path: ["name"] };
+
+/** Legacy edits can change operational settings. Private profile writes require review. */
+export const updateSalonSettingsRequestSchema = salonSettingsChanges
   .partial()
-  .refine((value) => Object.values(value).some((v) => v !== undefined), {
-    message: "Provide at least one change",
-    path: ["name"],
-  });
+  .refine(hasChange, missingChange);
 export type UpdateSalonSettingsRequest = z.infer<typeof updateSalonSettingsRequestSchema>;
+
+const reviewedSalonChangesSchema = salonSettingsChanges
+  .extend({ businessProfile: businessProfileChangesSchema })
+  .partial()
+  .refine(hasChange, missingChange);
+export type ReviewedSalonChanges = z.infer<typeof reviewedSalonChangesSchema>;
 
 export const reviewedSalonSettingsSchema = ownerSalonSettingsSchema
   .required({ onlineBookingEnabled: true })
-  .extend({ revision: instantSchema });
+  .extend({ revision: instantSchema, businessProfile: businessProfileSchema.optional() });
 export type ReviewedSalonSettings = z.infer<typeof reviewedSalonSettingsSchema>;
 
 export const desktopSalonSettingsSchema = reviewedSalonSettingsSchema.extend({
@@ -168,5 +184,5 @@ export const desktopSalonSettingsSchema = reviewedSalonSettingsSchema.extend({
 /** Native edits are conditional on the settings revision reviewed by the owner. */
 export const reviewedSalonSettingsRequestSchema = z.strictObject({
   expectedRevision: instantSchema,
-  changes: updateSalonSettingsRequestSchema,
+  changes: reviewedSalonChangesSchema,
 });

@@ -1362,6 +1362,12 @@ describe("other last-writer-wins entities and tombstones", () => {
       ).status,
     ).toBe(200);
     const reopened = await read();
+    const legacy = {
+      mutationId: mid(),
+      kind: "settings.update",
+      payload: { businessProfile: { published: true } },
+    };
+    expect((await push(t, owner, [legacy])).body.results[0]).toMatchObject({ status: "rejected" });
     expect((await push(t, owner, [queued])).body.results[0]).toMatchObject({
       status: "applied",
       replayed: true,

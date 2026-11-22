@@ -10,6 +10,7 @@ import { useState } from "react";
 import { Button } from "~/components/ui/button";
 import { TextField } from "~/components/ui/field";
 import { ErrorState, Skeleton, useOnline } from "~/components/ui/states";
+import { useToast } from "~/components/ui/toast";
 import { useI18n } from "~/i18n/react";
 import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
@@ -47,6 +48,7 @@ export function BusinessProfileForm() {
 function ProfileEditor({ latest }: { latest: Snapshot }) {
   const { t } = useI18n();
   const online = useOnline();
+  const toast = useToast();
   const queries = useQueryClient();
   const router = useRouter();
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -57,10 +59,15 @@ function ProfileEditor({ latest }: { latest: Snapshot }) {
     draft && (base.revision !== latest.revision || base.generation !== latest.generation);
   const save = useMutation({
     mutationFn: (changes: Partial<BusinessProfile>) =>
-      api().admin.settings.saveReviewed(base.revision, { businessProfile: changes }),
+      api().admin.settings.saveProfile({
+        generation: base.generation,
+        expectedRevision: base.revision,
+        changes,
+      }),
     onSuccess: (next) => {
-      queries.setQueryData(queryKey, { ...next, generation: base.generation });
+      queries.setQueryData(queryKey, next);
       setDraft(null);
+      toast.success(t("settings.saved"));
       void queries.invalidateQueries({ queryKey: ["admin", "settings"] });
       void queries.invalidateQueries({ queryKey: ["salon"] });
       void router.invalidate();
@@ -176,7 +183,6 @@ function ProfileEditor({ latest }: { latest: Snapshot }) {
           {t(describeProblem(reload.error ?? save.error).messageKey)}
         </p>
       )}
-      {save.isSuccess && !draft && <p role="status">{t("settings.saved")}</p>}
       <div className="flex flex-wrap gap-2">
         <Button
           type="submit"

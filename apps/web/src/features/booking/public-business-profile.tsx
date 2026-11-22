@@ -1,11 +1,7 @@
-import type { SalonResponse } from "@sob/contracts";
+import type { PublicBusinessProfile as Profile } from "@sob/contracts";
 import { useI18n } from "~/i18n/react";
 
-export function PublicBusinessProfile({
-  profile,
-}: {
-  profile: NonNullable<SalonResponse["profile"]>;
-}) {
+export function PublicBusinessProfile({ profile }: { profile: Profile }) {
   const { t } = useI18n();
   const {
     address,
@@ -43,7 +39,7 @@ export function PublicBusinessProfile({
               {phone && (
                 <p>
                   <a
-                    className="text-accent-text underline"
+                    className="inline-flex min-h-11 items-center text-accent-text underline"
                     href={`tel:${phone.replace(/[^\d+]/g, "")}`}
                   >
                     {phone}
@@ -53,8 +49,8 @@ export function PublicBusinessProfile({
               {email && (
                 <p>
                   <a
-                    className="text-accent-text underline"
-                    href={`mailto:${encodeURIComponent(email)}`}
+                    className="inline-flex min-h-11 items-center text-accent-text underline"
+                    href={`mailto:${encodeURIComponent(email).replace("%40", "@")}`}
                   >
                     {email}
                   </a>

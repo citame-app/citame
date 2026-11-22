@@ -9,17 +9,26 @@ import { PublicBusinessProfile } from "~/features/booking/public-business-profil
 import { priceLabel } from "~/features/booking/service-price";
 import { createTranslator } from "~/i18n";
 import { useI18n } from "~/i18n/react";
+import { api } from "~/lib/api/instance";
 import { formatDuration } from "~/lib/format";
 import { salonQuery, servicesQuery, staffQuery } from "~/lib/queries";
 import { pageMeta } from "~/lib/seo";
 
 export const Route = createFileRoute("/")({
-  loader: async ({ context }) => {
-    await Promise.all([
-      context.queryClient.ensureQueryData(servicesQuery),
-      context.queryClient.ensureQueryData(staffQuery),
-      context.queryClient.ensureQueryData(salonQuery),
-    ]);
+  preloadStaleTime: 0,
+  loader: {
+    staleReloadMode: "blocking",
+    handler: async ({ context }) => {
+      const [, , , published] = await Promise.all([
+        context.queryClient.ensureQueryData(servicesQuery),
+        context.queryClient.ensureQueryData(staffQuery),
+        context.queryClient.ensureQueryData(salonQuery),
+        api()
+          .businessProfile()
+          .catch(() => ({ profile: null })),
+      ]);
+      return published;
+    },
   },
   head: ({ match }) => {
     const { locale, salon } = match.context;
@@ -51,6 +60,7 @@ function HomeSkeleton() {
 }
 
 function Home() {
+  const { profile } = Route.useLoaderData();
   const { t, locale } = useI18n();
   const { data: salon } = useSuspenseQuery(salonQuery);
   const { data: services } = useSuspenseQuery(servicesQuery);
@@ -183,7 +193,7 @@ function Home() {
         </div>
       </section>
 
-      {salon.profile && <PublicBusinessProfile profile={salon.profile} />}
+      {profile && <PublicBusinessProfile profile={profile} />}
       <section aria-labelledby="how-title" className="salon-close editorial-section">
         <div className="wrap editorial-wrap">
           <header className="editorial-section-heading">

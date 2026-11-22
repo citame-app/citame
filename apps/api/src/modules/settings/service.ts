@@ -3,6 +3,7 @@ import {
   businessProfileSchema,
   EMPTY_BUSINESS_PROFILE,
   type OwnerSalonSettings,
+  type ReviewedSalonChanges,
   type ReviewedSalonSettings,
   type SalonResponse,
   type UpdateSalonSettingsRequest,
@@ -27,7 +28,6 @@ const businessProfile = (settings: Row) =>
   businessProfileSchema.parse({ ...EMPTY_BUSINESS_PROFILE, ...settings.businessProfile });
 
 export function toSalonResponse(settings: Row): SalonResponse {
-  const { published, ...profile } = businessProfile(settings);
   return {
     name: settings.name,
     timezone: settings.timezone,
@@ -35,8 +35,12 @@ export function toSalonResponse(settings: Row): SalonResponse {
     minNoticeMinutes: settings.minNoticeMinutes,
     maxDaysAhead: settings.maxDaysAhead,
     onlineBookingEnabled: settings.onlineBookingEnabled,
-    ...(published ? { profile } : {}),
   };
+}
+
+export function toPublicBusinessProfile(settings: Row) {
+  const { published, ...profile } = businessProfile(settings);
+  return { profile: published ? profile : null };
 }
 
 export function assertOnlineBookingEnabled(settings: Row, role?: string) {
@@ -49,7 +53,6 @@ export function toOwnerSettings(settings: Row): OwnerSalonSettings {
     ...toSalonResponse(settings),
     reminderFirstLeadMinutes: settings.reminderFirstLeadMinutes,
     reminderSecondLeadMinutes: settings.reminderSecondLeadMinutes,
-    businessProfile: businessProfile(settings),
   };
 }
 
@@ -58,6 +61,7 @@ export function toReviewedSettings(settings: Row): ReviewedSalonSettings {
     ...toOwnerSettings(settings),
     onlineBookingEnabled: settings.onlineBookingEnabled,
     revision: settings.updatedAt.toISOString(),
+    businessProfile: businessProfile(settings),
   };
 }
 
@@ -83,7 +87,7 @@ export async function updateSalonSettings(
 
 export async function updateReviewedSettings(
   db: Database,
-  input: UpdateSalonSettingsRequest,
+  input: ReviewedSalonChanges,
   actor: { userId: string },
   expectedRevision: string,
 ): Promise<ReviewedSalonSettings> {
@@ -92,7 +96,7 @@ export async function updateReviewedSettings(
 
 async function writeSettings(
   db: Database,
-  input: UpdateSalonSettingsRequest,
+  input: ReviewedSalonChanges,
   actor: { userId: string },
   expectedRevision?: string,
 ) {

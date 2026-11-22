@@ -107,7 +107,7 @@ impl Editor {
         }
         .validated()?;
         if let Some(profile) = &self.profile {
-            draft.business_profile = Some(profile.draft(cx)?);
+            draft.business_profile = Some(profile.draft(cx).ok()?);
         }
         Some(draft)
     }

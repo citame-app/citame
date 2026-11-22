@@ -11,32 +11,50 @@ test("the owner can draft, publish, revise and withdraw the public business prof
   await signInThroughUi(page, fixture.ownerEmail, "/admin/settings?section=profile");
   await expect(page).toHaveURL(/\/admin\/settings\?section=profile$/);
   const settingsPath = "/api/admin/settings";
-  const response = await page.request.get(`${settingsPath}/desktop`);
-  expect(response.status(), await response.text()).toBe(200);
-  const original = desktopSalonSettingsSchema.parse(await response.json()).businessProfile;
+  async function reviewedSettings() {
+    const response = await page.request.get(`${settingsPath}/desktop`);
+    expect(response.status(), await response.text()).toBe(200);
+    return desktopSalonSettingsSchema.parse(await response.json());
+  }
+  const original = (await reviewedSettings()).businessProfile;
   if (!original) throw new Error("Missing business profile fixture");
   const visitor = await browser.newPage({ viewport: page.viewportSize() });
   const headers = { Origin: fixture.baseURL };
+  const profilePath = `${settingsPath}/profile`;
+  async function writeProfile(changes: Partial<typeof original>) {
+    const { generation, revision } = await reviewedSettings();
+    return page.request.put(profilePath, {
+      headers,
+      data: { generation, expectedRevision: revision, changes },
+    });
+  }
   const form = page.getByRole("form", { name: "Public business profile" });
   const description = form.getByLabel("Short description");
   const publish = form.getByRole("checkbox", { name: "Publish on the booking site" });
   const save = form.getByRole("button", { name: "Save settings" });
   const label = `Studio overview ${crypto.randomUUID()}`;
   const publicPage = () => visitor.goto(fixture.baseURL);
+  async function saveAndWait() {
+    const saved = page.waitForResponse(
+      (result) => result.url().endsWith(profilePath) && result.request().method() === "PUT",
+    );
+    await save.click();
+    const result = await saved;
+    expect(result.status(), await result.text()).toBe(200);
+    await expect(page.getByText("Settings saved", { exact: true }).first()).toBeVisible();
+  }
   try {
     await description.fill(label);
     await form.getByLabel("Public address").fill("9 Synthetic Street");
     await form.getByLabel("Website (HTTPS)").fill("https://example.test/studio");
     await form.getByRole("checkbox", { name: "Wi-Fi", exact: true }).check();
     await expectNoHorizontalScroll(page);
-    await save.click();
-    await expect(form.getByRole("status", { name: "" })).toHaveText("Settings saved");
+    await saveAndWait();
     await publicPage();
     await expect(visitor.getByText(label)).toHaveCount(0);
 
     await publish.check();
-    await save.click();
-    await expect(form.getByRole("status", { name: "" })).toHaveText("Settings saved");
+    await saveAndWait();
     await publicPage();
     const profile = visitor.getByRole("region", { name: "About the centre" });
     await expect(profile.getByText(label)).toBeVisible();
@@ -48,25 +66,21 @@ test("the owner can draft, publish, revise and withdraw the public business prof
     await expectNoHorizontalScroll(visitor);
 
     await description.fill(`${label} updated`);
-    const remote = await page.request.patch(settingsPath, {
-      headers,
-      data: { businessProfile: { phone: "+34 555 010 123" } },
-    });
+    const remote = await writeProfile({ phone: "+34 555 010 123" });
     expect(remote.status(), await remote.text()).toBe(200);
     if (await save.isEnabled()) await save.click();
     await form.getByRole("button", { name: "Load latest and review draft" }).click();
     await expect(description).toHaveValue(`${label} updated`);
     await expect(form.getByLabel("Public phone")).toHaveValue("+34 555 010 123");
+    await visitor.locator('main a[href="/book"]').first().click();
+    await expect(visitor).toHaveURL(/\/book$/);
     await publish.uncheck();
-    await save.click();
-    await expect(form.getByRole("status", { name: "" })).toHaveText("Settings saved");
-    await publicPage();
+    await saveAndWait();
+    await visitor.goBack();
+    await expect(visitor).toHaveURL(fixture.baseURL + "/");
     await expect(profile).toHaveCount(0);
   } finally {
-    const restored = await page.request.patch(settingsPath, {
-      headers,
-      data: { businessProfile: original },
-    });
+    const restored = await writeProfile(original);
     expect(restored.status()).toBe(200);
     await visitor.close();
   }
