@@ -2,6 +2,7 @@ import {
   type Campaign,
   type CampaignDraft,
   type CampaignQueue,
+  type CampaignTestEmail,
   campaignDraftSchema,
   campaignStatusSchema,
 } from "@sob/contracts";
@@ -69,7 +70,7 @@ function template(t: Translator, trigger: CampaignDraft["trigger"]): CampaignDra
     birthdayLeadDays: 0,
   };
 }
-export function CampaignsView() {
+export function CampaignsView({ viewerId, isOwner }: { viewerId: string; isOwner: boolean }) {
   const { t } = useI18n();
   const [search, setSearch] = useState("");
   const term = useDebounced(search, 250);
@@ -215,6 +216,8 @@ export function CampaignsView() {
       {review && (
         <CampaignReview
           campaign={review}
+          viewerId={viewerId}
+          isOwner={isOwner}
           onClose={() => setReview(null)}
           onQueued={(c) => {
             setReview(null);
@@ -567,10 +570,14 @@ export function campaignScheduledInstant(value: string, timeZone: string): strin
 }
 function CampaignReview({
   campaign,
+  viewerId,
+  isOwner,
   onClose,
   onQueued,
 }: {
   campaign: Campaign;
+  viewerId: string;
+  isOwner: boolean;
   onClose: () => void;
   onQueued: (c: Campaign) => void;
 }) {
@@ -586,9 +593,28 @@ function CampaignReview({
     refetchOnWindowFocus: false,
   });
   const capabilities = useQuery({
-    queryKey: ["marketing", "capabilities"],
+    queryKey: ["marketing", "capabilities", viewerId],
     queryFn: () => api().marketing.capabilities(),
   });
+  const testEmail = useMutation({
+    mutationFn: (request: CampaignTestEmail) => api().marketing.testEmail(campaign.id, request),
+  });
+  const testStatus = testEmail.data?.status;
+  const retryTest = testEmail.isError || testStatus === "pending";
+  const testConflict =
+    testEmail.error instanceof ApiError && testEmail.error.code === "version_conflict";
+  const requestTestEmail = () => {
+    const requestId = retryTest
+      ? (testEmail.data?.requestId ?? testEmail.variables?.requestId)
+      : undefined;
+    testEmail.mutate({
+      version: campaign.version,
+      requestId: requestId ?? crypto.randomUUID(),
+      mode: retryTest ? "check" : testStatus === "unconfirmed" ? "replace_unconfirmed" : "send",
+    });
+  };
+  const reviewMatches =
+    audience.data?.campaignId === campaign.id && audience.data.version === campaign.version;
   let scheduledFor: string | null = null,
     invalidDate = false;
   try {
@@ -623,7 +649,7 @@ function CampaignReview({
         ? capabilities.data.sms
         : capabilities.data.email || capabilities.data.sms);
   const close = () => {
-    if (queue.isPending) return;
+    if (queue.isPending || testEmail.isPending) return;
     if (uncertain) setDiscard(true);
     else onClose();
   };
@@ -637,7 +663,11 @@ function CampaignReview({
         description={t("marketing.reviewHelp")}
         footer={
           <div className="flex flex-wrap justify-end gap-3">
-            <Button variant="secondary" onClick={close} disabled={queue.isPending}>
+            <Button
+              variant="secondary"
+              onClick={close}
+              disabled={queue.isPending || testEmail.isPending}
+            >
               {t("admin.cancel")}
             </Button>
             <Button
@@ -645,6 +675,7 @@ function CampaignReview({
               disabled={
                 !online ||
                 queue.isPending ||
+                testEmail.isPending ||
                 (!uncertain &&
                   (!configured ||
                     !audience.data ||
@@ -698,6 +729,52 @@ function CampaignReview({
           {campaign.trigger !== "manual" && (
             <p className="text-sm text-muted">{t("marketing.automaticHelp")}</p>
           )}
+          {isOwner &&
+            capabilities.data?.canTestEmail &&
+            campaign.channel !== "sms" &&
+            reviewMatches &&
+            !audience.isError && (
+              <div className="space-y-2">
+                <Button
+                  variant="secondary"
+                  loading={testEmail.isPending}
+                  disabled={
+                    !online ||
+                    audience.isFetching ||
+                    testEmail.isPending ||
+                    queue.isPending ||
+                    testConflict
+                  }
+                  onClick={requestTestEmail}
+                >
+                  {t(
+                    retryTest && !testConflict
+                      ? "marketing.testEmailCheck"
+                      : testStatus === "unconfirmed"
+                        ? "marketing.testEmailAgain"
+                        : "marketing.testEmail",
+                  )}
+                </Button>
+                <p role="status" className="text-sm text-success-fg">
+                  {testStatus === "accepted" && t("marketing.testEmailSent")}
+                  {testStatus === "pending" && t("marketing.testEmailPending")}
+                  {testStatus === "not_requested" && t("marketing.testEmailNotRequested")}
+                </p>
+                {(testEmail.isError ||
+                  testStatus === "unconfirmed" ||
+                  testStatus === "rejected") && (
+                  <p role="alert" className="text-sm text-danger-fg">
+                    {t(
+                      testConflict
+                        ? "marketing.testEmailChanged"
+                        : testStatus === "rejected"
+                          ? "marketing.testEmailRejected"
+                          : "marketing.testEmailFailed",
+                    )}
+                  </p>
+                )}
+              </div>
+            )}
           {capabilities.isError ? (
             <ErrorState error={capabilities.error} />
           ) : (

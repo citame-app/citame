@@ -2,12 +2,14 @@ import {
   type CampaignCreate,
   type CampaignQuery,
   type CampaignQueue,
+  type CampaignTestEmail,
   type CampaignUpdate,
   campaignCapabilitySchema,
   campaignDeliveriesSchema,
   campaignListSchema,
   campaignPreviewSchema,
   campaignSchema,
+  campaignTestEmailReceiptSchema,
   type MarketingConsentInput,
   marketingConsentSchema,
 } from "@sob/contracts";
@@ -24,6 +26,8 @@ export function marketingEndpoints(client: ApiClient) {
     update: (id: string, input: CampaignUpdate) =>
       client.patch(`${base}/${id}`, input, campaignSchema),
     preview: (id: string) => client.get(`${base}/${id}/preview`, campaignPreviewSchema),
+    testEmail: (id: string, input: CampaignTestEmail) =>
+      client.post(`${base}/${id}/test-email`, input, campaignTestEmailReceiptSchema),
     queue: (id: string, input: CampaignQueue) =>
       client.post(`${base}/${id}/queue`, input, campaignSchema),
     cancel: (id: string, version: number) =>

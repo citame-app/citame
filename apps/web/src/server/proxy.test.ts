@@ -64,6 +64,7 @@ describe("route mapping", () => {
       "/admin/marketing/campaigns/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/deliveries",
       "/admin/marketing/campaigns/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/queue",
       "/admin/marketing/campaigns/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/cancel",
+      "/admin/marketing/campaigns/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/test-email",
       "/appointments/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/context",
       "/admin/staff/portrait-directory",
       "/admin/staff/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/portrait?v=bbbbbbbb-1111-4111-8111-bbbbbbbbbbbb",

@@ -84,7 +84,11 @@ function MarketingPage() {
       )}
       {visited.has("campaigns") && (
         <div hidden={section !== "campaigns"}>
-          <CampaignsView />
+          <CampaignsView
+            key={session.user.id}
+            viewerId={session.user.id}
+            isOwner={session.user.role === "owner"}
+          />
         </div>
       )}
       {visited.has("social") && (

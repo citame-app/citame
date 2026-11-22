@@ -1,6 +1,6 @@
 use super::*;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use url::form_urlencoded;
 
 const PATH: &str = "/admin/marketing/campaigns";
@@ -234,6 +234,8 @@ pub struct Capabilities {
     pub email: bool,
     pub sms: bool,
     pub worker: bool,
+    #[serde(default, rename = "canTestEmail")]
+    pub can_test_email: bool,
 }
 
 impl Capabilities {
@@ -245,6 +247,31 @@ impl Capabilities {
                 Channel::Optimized => self.email || self.sms,
             }
     }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TestEmailStatus {
+    Accepted,
+    Pending,
+    Unconfirmed,
+    Rejected,
+    NotRequested,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TestEmailMode {
+    Send,
+    Check,
+    ReplaceUnconfirmed,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TestEmailReceipt {
+    pub status: TestEmailStatus,
+    pub request_id: uuid::Uuid,
 }
 
 #[derive(Clone, Deserialize)]
@@ -425,6 +452,22 @@ impl HttpTransport {
         self.send_campaign_write(req, &action.generation, body)
     }
 
+    pub fn send_campaign_test_email(
+        &self,
+        campaign_id: &str,
+        generation: &str,
+        version: u32,
+        request_id: uuid::Uuid,
+        mode: TestEmailMode,
+    ) -> Result<TestEmailReceipt, MutationError> {
+        let id = parse_id(campaign_id)?;
+        let req = self
+            .agent
+            .post(&format!("{}{PATH}/{id}/test-email", self.base_url));
+        let body = serde_json::json!({ "version": version, "requestId": request_id, "mode": mode });
+        self.send_campaign_write(req, generation, body.to_string())
+    }
+
     pub fn save_campaign_draft(&self, write: &DraftWrite) -> Result<Campaign, MutationError> {
         let body =
             serde_json::to_string(write).map_err(|e| TransportError::BadRequest(e.to_string()))?;
@@ -441,12 +484,12 @@ impl HttpTransport {
         self.send_campaign_write(req, &write.generation, body)
     }
 
-    fn send_campaign_write(
+    fn send_campaign_write<T: DeserializeOwned>(
         &self,
         mut req: ureq::RequestBuilder<ureq::typestate::WithBody>,
         generation: &str,
         body: String,
-    ) -> Result<Campaign, MutationError> {
+    ) -> Result<T, MutationError> {
         for (key, value) in self.headers()? {
             req = req.header(key, value);
         }

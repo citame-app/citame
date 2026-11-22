@@ -71,6 +71,74 @@ fn signed_in(base: &str) -> HttpTransport {
 }
 
 #[test]
+fn campaign_test_email_replays_the_same_review_and_checks_the_server_generation() {
+    let id = "0198f5a0-7b1c-7000-8000-000000000210";
+    let request_id = uuid::Uuid::now_v7();
+    let (base, writes) = serve(vec![
+        http(
+            "200 OK",
+            &[],
+            &serde_json::json!({ "status": "accepted", "requestId": request_id }).to_string(),
+        ),
+        http(
+            "409 Conflict",
+            &[],
+            r#"{"error":{"code":"sync_generation_changed","message":"Restored database"}}"#,
+        ),
+    ]);
+    let desk = signed_in(&base);
+    assert_eq!(
+        desk.send_campaign_test_email(
+            id,
+            "reviewed",
+            3,
+            request_id,
+            marketing::TestEmailMode::Send
+        )
+        .unwrap(),
+        marketing::TestEmailReceipt {
+            status: marketing::TestEmailStatus::Accepted,
+            request_id,
+        },
+    );
+    assert!(matches!(
+        desk.send_campaign_test_email(
+            id,
+            "reviewed",
+            3,
+            request_id,
+            marketing::TestEmailMode::Check
+        ),
+        Err(marketing::MutationError::Transport(
+            TransportError::ReplicaGenerationChanged
+        ))
+    ));
+    let writes = writes.lock().unwrap();
+    assert_eq!(writes.len(), 2);
+    let request = &writes[0];
+    assert!(request.starts_with(&format!(
+        "POST /admin/marketing/campaigns/{id}/test-email HTTP/1.1"
+    )));
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("x-citame-generation: reviewed")
+    );
+    let body: serde_json::Value =
+        serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(
+        body,
+        serde_json::json!({ "version": 3, "requestId": request_id, "mode": "send" })
+    );
+    let check: serde_json::Value =
+        serde_json::from_str(writes[1].split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(
+        check,
+        serde_json::json!({ "version": 3, "requestId": request_id, "mode": "check" })
+    );
+}
+
+#[test]
 fn unlinked_role_change_uses_the_exact_account_review() {
     let email = "account@example.test";
     let staff = "0198f5a0-7b1c-7000-8000-000000000203";

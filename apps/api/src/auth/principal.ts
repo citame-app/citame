@@ -136,7 +136,9 @@ export function requireAuth(
               /^\/admin\/accounting\/appointment-profitability\/[\da-f-]+\/costs$/.test(path));
       const campaignMutation =
         (method === "POST" &&
-          /^\/admin\/marketing\/campaigns(?:\/[\da-f-]+\/(?:queue|cancel))?$/.test(path)) ||
+          /^\/admin\/marketing\/campaigns(?:\/[\da-f-]+\/(?:queue|cancel|test-email))?$/.test(
+            path,
+          )) ||
         (method === "PATCH" && /^\/admin\/marketing\/campaigns\/[\da-f-]+$/.test(path));
       const rewardsAllowed =
         path === "/admin/rewards/stamps/program" || path === "/admin/rewards/policy/reviewed"
@@ -163,7 +165,7 @@ export function requireAuth(
         (/^\/admin\/commerce\/checkouts\/[\da-f-]+\/reward(?:\/|$)/.test(path) &&
           method !== "POST") ||
         (path.startsWith("/admin/marketing/") &&
-          (method === "GET" ? /\/(?:queue|cancel)$/.test(path) : !campaignMutation)) ||
+          (method === "GET" ? /\/(?:queue|cancel|test-email)$/.test(path) : !campaignMutation)) ||
         (method !== "POST" &&
           [
             "/appointments/desktop-booking",

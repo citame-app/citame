@@ -31,7 +31,7 @@ export const SMTP_TIMEOUTS = { connectionMs: 10_000, greetingMs: 10_000, socketM
  * "row marked sent" can still deliver twice (at-least-once, see ADR 0010).
  */
 export function createSmtpProvider(
-  options: { from: string; timeouts?: typeof SMTP_TIMEOUTS } & (
+  options: { from: string; timeouts?: typeof SMTP_TIMEOUTS; maxRequeues?: number } & (
     | { url: string }
     | { connection: SMTPTransport.Options }
   ),
@@ -41,6 +41,7 @@ export function createSmtpProvider(
     ...("url" in options ? { url: options.url } : options.connection),
     pool: true,
     maxConnections: 2,
+    maxRequeues: options.maxRequeues,
     connectionTimeout: timeouts.connectionMs,
     greetingTimeout: timeouts.greetingMs,
     socketTimeout: timeouts.socketMs,

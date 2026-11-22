@@ -10,45 +10,10 @@ import { reviewEmailTarget, reviewRequestLink } from "../reputation/reviews";
 import { getSalonSettings } from "../settings/service";
 import { campaignAudience, marketingCapabilities } from "./audience";
 import { consentFor } from "./consent";
+import { renderCampaignMessage } from "./message";
 import { signMarketingOptOut } from "./tokens";
 
 type DeliveryRow = typeof marketingDelivery.$inferSelect;
-const escapeHtml = (text: string) =>
-  text.replace(
-    /[&<>"']/g,
-    (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!,
-  );
-export function renderCampaignMessage(input: {
-  subject: string;
-  emailBody: string;
-  smsBody: string;
-  name: string;
-  firstName?: string;
-  salonName: string;
-  bookingUrl: string;
-  unsubscribeUrl: string;
-  reviewUrl?: string;
-}) {
-  const replace = (text: string) =>
-    text.replace(/\{\{(first_name|salon_name|booking_url)\}\}/g, (_, key: string) =>
-      key === "first_name"
-        ? input.firstName || input.name
-        : key === "salon_name"
-          ? input.salonName
-          : input.bookingUrl,
-    );
-  const body = replace(input.emailBody);
-  const reviewText = input.reviewUrl ? `\n\n${input.reviewUrl}` : "";
-  const reviewLink = input.reviewUrl
-    ? `<p><a href="${escapeHtml(input.reviewUrl)}">${escapeHtml(input.reviewUrl)}</a></p>`
-    : "";
-  return {
-    subject: replace(input.subject).replace(/[\r\n]/g, " "),
-    text: `${body}${reviewText}\n\nUnsubscribe / Darse de baja: ${input.unsubscribeUrl}`,
-    html: `<!doctype html><html><body><p>${escapeHtml(body).replace(/\n/g, "<br>")}</p>${reviewLink}<p><a href="${escapeHtml(input.unsubscribeUrl)}">Unsubscribe / Darse de baja</a></p></body></html>`,
-    sms: `${replace(input.smsBody)}\n${input.unsubscribeUrl}`,
-  };
-}
 
 export function createMarketingWorker(options: {
   db: Database;

@@ -3,18 +3,22 @@ import {
   campaignCreateSchema,
   campaignQuerySchema,
   campaignQueueSchema,
+  campaignTestEmailReceiptSchema,
+  campaignTestEmailSchema,
   campaignUpdateSchema,
   idSchema,
   marketingConsentInputSchema,
   optOutRequestSchema,
 } from "@sob/contracts";
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import type { AppDeps } from "../../app";
 import { requirePermission } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { clientRoot } from "../../client-identity";
 import { DomainError } from "../../errors";
-import { parseOrThrow, readJson } from "../../http";
+import { errorBody, parseOrThrow, readJson } from "../../http";
+import type { RateLimiter } from "../../rate-limit";
 import { marketingCapabilities } from "./audience";
 import { consentFor, setMarketingConsent, unsubscribeMarketing } from "./consent";
 import {
@@ -27,13 +31,14 @@ import {
   queueCampaign,
   updateCampaign,
 } from "./service";
+import { requestCampaignTestEmail, verifiedCampaignEmailRecipient } from "./test-email";
 import { verifyMarketingOptOut } from "./tokens";
 
 const id = (value: string) => parseOrThrow(idSchema, value);
 
-export function marketingAdminRoutes(deps: AppDeps) {
+export function marketingAdminRoutes(deps: AppDeps, limiter?: RateLimiter) {
   const now = deps.now ?? (() => new Date());
-  return new Hono<AppEnv>()
+  const routes = new Hono<AppEnv>()
     .use("*", async (c, next) => {
       requirePermission(c.get("principal"), "editCatalog");
       const generation = c.req.header("x-citame-generation");
@@ -49,7 +54,20 @@ export function marketingAdminRoutes(deps: AppDeps) {
       c.header("Cache-Control", "private, no-store");
       await next();
     })
-    .get("/capabilities", (c) => c.json(marketingCapabilities(deps.config.notifications)))
+    .get("/capabilities", async (c) => {
+      const capabilities = marketingCapabilities(deps.config.notifications);
+      const principal = c.get("principal");
+      const canTestEmail =
+        Boolean(limiter) &&
+        capabilities.email &&
+        !deps.disableEmailDeliveryTest &&
+        principal.role === "owner" &&
+        Boolean(await verifiedCampaignEmailRecipient(deps.db, principal.userId));
+      return c.json({
+        ...capabilities,
+        canTestEmail,
+      });
+    })
     .get("/campaigns", async (c) =>
       c.json(
         await listCampaigns(
@@ -126,6 +144,30 @@ export function marketingAdminRoutes(deps: AppDeps) {
         ),
       ),
     );
+  if (limiter)
+    routes.post(
+      "/campaigns/:id/test-email",
+      bodyLimit({
+        maxSize: 4096,
+        onError: (c) =>
+          c.json(errorBody("validation_error", "Test email request is too large"), 413),
+      }),
+      async (c) => {
+        const result = await requestCampaignTestEmail(
+          deps,
+          limiter,
+          c.get("principal"),
+          id(c.req.param("id")),
+          parseOrThrow(campaignTestEmailSchema, await readJson(c)),
+        );
+        if ("retryAfterSeconds" in result) {
+          c.header("Retry-After", String(result.retryAfterSeconds));
+          return c.json(errorBody("rate_limited", "Too many email tests; try again later"), 429);
+        }
+        return c.json(campaignTestEmailReceiptSchema.parse(result));
+      },
+    );
+  return routes;
 }
 export function clientMarketingRoutes(deps: AppDeps) {
   return new Hono<AppEnv>()

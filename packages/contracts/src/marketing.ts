@@ -71,6 +71,7 @@ export const campaignCapabilitySchema = z.object({
   email: z.boolean(),
   sms: z.boolean(),
   worker: z.boolean(),
+  canTestEmail: z.boolean().optional(),
 });
 export const campaignPreviewSchema = z.object({
   campaignId: idSchema,
@@ -92,6 +93,17 @@ export const campaignQueueSchema = z
   })
   .strict();
 export const campaignCancelSchema = z.object({ version: z.number().int().positive() }).strict();
+export const campaignTestEmailSchema = z.strictObject({
+  version: z.number().int().positive(),
+  requestId: idSchema,
+  mode: z.enum(["send", "check", "replace_unconfirmed"]).default("send"),
+});
+export const campaignTestEmailReceiptSchema = z.object({
+  status: z.enum(["accepted", "pending", "unconfirmed", "rejected", "not_requested"]),
+  requestId: idSchema,
+});
+export type CampaignTestEmail = z.infer<typeof campaignTestEmailSchema>;
+export type CampaignTestEmailReceipt = z.infer<typeof campaignTestEmailReceiptSchema>;
 export const marketingConsentSchema = z.object({
   clientId: idSchema,
   email: z.object({

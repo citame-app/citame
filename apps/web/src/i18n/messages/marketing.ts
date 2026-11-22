@@ -48,6 +48,17 @@ export const marketingEn = {
   "marketing.reviewHelp":
     "Review this saved version before confirming delivery. Recipient permissions are checked again before each send.",
   "marketing.review": "Review recipients",
+  "marketing.testEmail": "Send test to my email",
+  "marketing.testEmailCheck": "Check test delivery",
+  "marketing.testEmailAgain": "Send another test",
+  "marketing.testEmailSent": "Test email accepted. Check your inbox.",
+  "marketing.testEmailPending": "Delivery is awaiting confirmation.",
+  "marketing.testEmailNotRequested": "The test did not start. You can send it now.",
+  "marketing.testEmailChanged": "The draft changed. Reopen it to test the current version.",
+  "marketing.testEmailRejected":
+    "The email server rejected the test. Check its settings before trying again.",
+  "marketing.testEmailFailed":
+    "We couldn't confirm the test email. Check your inbox before retrying.",
   "marketing.saveDraft": "Save draft",
   "marketing.leadDays": "Days before the birthday",
   "marketing.delay": "Delay after the visit (minutes)",
@@ -149,6 +160,18 @@ export const marketingEs: Record<keyof typeof marketingEn, string> = {
   "marketing.reviewHelp":
     "Revisa esta versión guardada antes de confirmar el envío. Los permisos se comprueban de nuevo antes de cada envío.",
   "marketing.review": "Revisar destinatarios",
+  "marketing.testEmail": "Enviar prueba a mi correo",
+  "marketing.testEmailCheck": "Comprobar envío de prueba",
+  "marketing.testEmailAgain": "Enviar otra prueba",
+  "marketing.testEmailSent": "Envío de prueba aceptado. Revisa tu bandeja de entrada.",
+  "marketing.testEmailPending": "El envío está pendiente de confirmación.",
+  "marketing.testEmailNotRequested": "El envío de prueba no se inició. Puedes enviarlo ahora.",
+  "marketing.testEmailChanged":
+    "El borrador cambió. Vuelve a abrirlo para probar la versión actual.",
+  "marketing.testEmailRejected":
+    "El servidor de correo rechazó la prueba. Revisa su configuración antes de reintentar.",
+  "marketing.testEmailFailed":
+    "No se pudo confirmar el envío de prueba. Revisa tu bandeja de entrada antes de reintentar.",
   "marketing.saveDraft": "Guardar borrador",
   "marketing.leadDays": "Días antes del cumpleaños",
   "marketing.delay": "Espera tras la visita (minutos)",
