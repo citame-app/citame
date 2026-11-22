@@ -105,11 +105,14 @@ const forecastRow = z.object({
   date: localDateSchema,
   appointmentLines: z.number().int().positive(),
 });
+const forecastCurrency = z.string().regex(/^[A-Z]{3}$/);
 export const revenueForecastSchema = z.object({
   asOf: instantSchema,
+  totals: z.array(z.object({ currency: forecastCurrency, amountCents: aggregateMoney })),
+  pendingPriceLines: z.number().int().nonnegative(),
   rows: z.array(
     z.union([
-      forecastRow.extend({ currency: z.string().regex(/^[A-Z]{3}$/), amountCents: aggregateMoney }),
+      forecastRow.extend({ currency: forecastCurrency, amountCents: aggregateMoney }),
       forecastRow.extend({ currency: z.null(), amountCents: z.null() }),
     ]),
   ),

@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt::Write};
+use std::fmt::Write;
 
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use serde::Deserialize;
@@ -77,7 +77,16 @@ pub struct SettledSaleItem {
 #[serde(rename_all = "camelCase")]
 pub struct RevenueForecast {
     pub as_of: DateTime<Utc>,
+    pub totals: Vec<ForecastAmount>,
+    pub pending_price_lines: u64,
     pub rows: Vec<ForecastDay>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForecastAmount {
+    pub currency: String,
+    pub amount_cents: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -87,21 +96,6 @@ pub struct ForecastDay {
     pub currency: Option<String>,
     pub appointment_lines: u64,
     pub amount_cents: Option<i64>,
-}
-
-impl RevenueForecast {
-    pub fn totals(&self) -> (BTreeMap<&str, i64>, u64) {
-        let mut amounts = BTreeMap::new();
-        let mut pending = 0;
-        for row in &self.rows {
-            if let (Some(currency), Some(cents)) = (row.currency.as_deref(), row.amount_cents) {
-                *amounts.entry(currency).or_default() += cents;
-            } else {
-                pending += row.appointment_lines;
-            }
-        }
-        (amounts, pending)
-    }
 }
 
 #[derive(Debug, Deserialize)]

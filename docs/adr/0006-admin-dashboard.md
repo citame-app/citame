@@ -104,7 +104,9 @@ The item breakdown uses the financial report's read-only snapshot and responsive
 
 The financial report gives the scheduled service value of future booked appointment lines from the report calculation time through the selected salon-local dates. It uses the current assigned professional and, for client reports, the active client identity and its linked historical profiles. The range can be set directly or via the next-thirty-days shortcut.
 
-The calculation uses frozen booked prices and accepts final service line totals from a matching active checkout, including line discounts. It excludes additional products and tips. Missing services, mixed currencies, unresolved imported prices and quotes requiring final prices go in a separate count without a monetary value. Totals keep currencies separate. Payments, refunds and partial Booksy balances do not alter the forecast, which measures scheduled work including amounts already paid. The financial CSV gives the calculation instant, projected value, currency and appointment line count by day and retains pending rows with empty monetary fields.
+The calculation uses frozen booked prices and accepts final service line totals from a matching active checkout, including line discounts. It excludes additional products and tips. Missing services, invalid or mixed currencies, unresolved imported prices and quotes requiring final prices go in a separate count without a monetary value. Known currency codes are normalized before summing. The API gives both clients the same totals. Payments, refunds and partial Booksy balances do not alter the forecast, which measures scheduled work including amounts already paid. The financial CSV gives the calculation instant, projected value, currency and appointment line count by day and retains pending rows with empty monetary fields.
+
+Report date and professional filters are retained in the URL in Web Reports. Like settled item detail, forecast paging limits the displayed rows of the financial snapshot. It keeps local view state and exports all rows from that snapshot.
 
 ### Team occupancy
 

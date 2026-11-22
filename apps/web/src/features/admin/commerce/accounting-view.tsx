@@ -9,7 +9,7 @@ import { EmptyState, ErrorState, Skeleton, useOnline } from "~/components/ui/sta
 import { useI18n } from "~/i18n/react";
 import { adminStaffQuery } from "~/lib/admin-queries";
 import { api } from "~/lib/api/instance";
-import { addDaysLocal, formatMoney } from "~/lib/format";
+import { addDaysLocal, formatMoney, localDateOf } from "~/lib/format";
 import { presetRange } from "../reports/logic";
 import { downloadCsv } from "./csv";
 import {
@@ -22,9 +22,13 @@ import { centsInput, inputCents } from "./money";
 export function AccountingView({
   role,
   section = "all",
+  salesFilters,
+  onApplySalesFilters,
 }: {
   role: UserRole;
   section?: "all" | "reports" | "commissions";
+  salesFilters?: SalesReportFilters;
+  onApplySalesFilters?: (filters: SalesReportFilters) => void;
 }) {
   const { t } = useI18n();
   const [selected, setSelected] = useState("");
@@ -43,7 +47,9 @@ export function AccountingView({
       <h2 className="text-heading">
         {t(role === "owner" ? "accounting.title" : "accounting.own")}
       </h2>
-      {role === "owner" && section !== "commissions" && <SalesReport />}
+      {role === "owner" && section !== "commissions" && (
+        <SalesReport filters={salesFilters} onApply={onApplySalesFilters} />
+      )}
       {role === "owner" &&
         section !== "reports" &&
         (staff.isPending ? (
@@ -487,10 +493,11 @@ export function SalesReport({
           type="button"
           variant="secondary"
           onClick={() => {
-            const end = addDaysLocal(today, 29);
-            setFrom(today);
+            const start = localDateOf(new Date().toISOString(), timeZone);
+            const end = addDaysLocal(start, 29);
+            setFrom(start);
             setTo(end);
-            applyRange(today, end);
+            applyRange(start, end);
           }}
         >
           {t("accounting.forecast.next30")}

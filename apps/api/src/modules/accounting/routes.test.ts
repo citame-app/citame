@@ -3,6 +3,7 @@ import {
   checkoutSchema,
   commissionPayoutSchema,
   reviewedCommissionPolicySchema,
+  salesReportSchema,
   syncPullResponseSchema,
 } from "@sob/contracts";
 import { appointment, appointmentService, clientProfile } from "@sob/db";
@@ -304,6 +305,10 @@ test("settled families exclude tips and put historical receipts without matching
 });
 
 test("forecast separates future booked service value by currency and keeps unpriced lines visible", async () => {
+  const staffId = staff.staffId;
+  const otherStaffId = other.staffId;
+  const clientId = client.clientId;
+  if (!staffId || !otherStaffId || !clientId) throw new Error("Missing forecast actors");
   const timezone = "America/Argentina/Buenos_Aires";
   const today = Temporal.Now.plainDateISO(timezone);
   const date = today.add({ days: 5 });
@@ -319,6 +324,7 @@ test("forecast separates future booked service value by currency and keeps unpri
       priceType?: "from";
     }>,
     status: "booked" | "cancelled" = "booked",
+    bookedClientId = clientId,
   ) => {
     const [created] = await t.db
       .insert(appointment)
@@ -326,7 +332,7 @@ test("forecast separates future booked service value by currency and keeps unpri
         startsAt,
         endsAt: new Date(startsAt.getTime() + 30 * 60_000),
         staffId,
-        clientId: client.clientId!,
+        clientId: bookedClientId,
         status,
       })
       .returning();
@@ -343,46 +349,84 @@ test("forecast separates future booked service value by currency and keeps unpri
     );
     return created.id;
   };
-  const priced = await fixture(toInstant(date, 10), staff.staffId!, [
+  const priced = await fixture(toInstant(date, 10), staffId, [
     { currency: "EUR", priceCents: 10000 },
   ]);
   await sale({ appointmentId: priced });
-  await fixture(toInstant(date, 11), staff.staffId!, [
+  await fixture(toInstant(date, 11), staffId, [
     { currency: "EUR", priceCents: 8000 },
     { currency: "EUR", priceCents: 0, sourceUnpriced: true },
   ]);
   // This line begins on the next UTC date and belongs to the selected salon date.
-  await fixture(toInstant(date, 23), other.staffId!, [{ currency: "ARS", priceCents: 6000 }]);
-  const provisional = await fixture(toInstant(date, 14), staff.staffId!, [
+  await fixture(toInstant(date, 23), otherStaffId, [{ currency: "ars", priceCents: 6000 }]);
+  const [unrelated, alias] = await t.db
+    .insert(clientProfile)
+    .values([{ name: "Other forecast client" }, { name: "Historical forecast client" }])
+    .returning();
+  if (!unrelated || !alias) throw new Error("Missing forecast scope fixtures");
+  await fixture(
+    toInstant(date, 17),
+    staffId,
+    [{ currency: "EUR", priceCents: 2200 }],
+    "booked",
+    unrelated.id,
+  );
+  await fixture(
+    toInstant(date, 18),
+    staffId,
+    [{ currency: "EUR", priceCents: 3300 }],
+    "booked",
+    alias.id,
+  );
+  const pair = { sourceId: alias.id, targetId: clientId };
+  const preview = await call(owner, "/admin/clients/merge/preview", "POST", pair);
+  expect(preview.status).toBe(200);
+  const { reviewHash } = (await preview.json()) as { reviewHash: string };
+  expect(
+    (
+      await call(owner, "/admin/clients/merge", "POST", {
+        ...pair,
+        confirmedSamePerson: true,
+        reviewHash,
+        idempotencyKey: key(),
+      })
+    ).status,
+  ).toBe(201);
+  const provisional = await fixture(toInstant(date, 14), staffId, [
     { currency: "EUR", priceCents: 3000, priceType: "from" },
   ]);
   const provisionalSale = await sale({ appointmentId: provisional, discountCents: 0, tipCents: 0 });
   await fixture(
     toInstant(date, 13),
-    other.staffId!,
+    otherStaffId,
     [{ currency: "EUR", priceCents: 3000 }],
     "cancelled",
   );
   const yesterday = today.subtract({ days: 1 });
-  await fixture(toInstant(yesterday, 11), staff.staffId!, [{ currency: "EUR", priceCents: 4000 }]);
+  await fixture(toInstant(yesterday, 11), staffId, [{ currency: "EUR", priceCents: 4000 }]);
 
   const path = `/admin/accounting/sales?from=${yesterday}&to=${date}`;
   const report = await call(owner, path);
   expect(report.status).toBe(200);
-  expect(await report.json()).toMatchObject({
+  expect(salesReportSchema.parse(await report.json())).toMatchObject({
     revenueForecast: {
+      totals: [
+        { currency: "ARS", amountCents: 6000 },
+        { currency: "EUR", amountCents: 14500 },
+      ],
+      pendingPriceLines: 2,
       rows: [
         { date: String(date), currency: "ARS", appointmentLines: 1, amountCents: 6000 },
-        { date: String(date), currency: "EUR", appointmentLines: 1, amountCents: 9000 },
+        { date: String(date), currency: "EUR", appointmentLines: 3, amountCents: 14500 },
         { date: String(date), currency: null, appointmentLines: 2, amountCents: null },
       ],
     },
   });
-  const scoped = await call(owner, `${path}&staffId=${staff.staffId}&clientId=${client.clientId}`);
+  const scoped = await call(owner, `${path}&staffId=${staffId}&clientId=${alias.id}`);
   expect(await scoped.json()).toMatchObject({
     revenueForecast: {
       rows: [
-        { currency: "EUR", appointmentLines: 1, amountCents: 9000 },
+        { currency: "EUR", appointmentLines: 2, amountCents: 12300 },
         { currency: null, appointmentLines: 2, amountCents: null },
       ],
     },
@@ -404,7 +448,7 @@ test("forecast separates future booked service value by currency and keeps unpri
     revenueForecast: {
       rows: [
         { currency: "ARS", appointmentLines: 1, amountCents: 6000 },
-        { currency: "EUR", appointmentLines: 2, amountCents: 14000 },
+        { currency: "EUR", appointmentLines: 4, amountCents: 19500 },
         { currency: null, appointmentLines: 1, amountCents: null },
       ],
     },

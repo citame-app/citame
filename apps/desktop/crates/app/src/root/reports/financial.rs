@@ -260,7 +260,6 @@ impl Root {
     ) -> gpui::Div {
         let pages = forecast.rows.len().div_ceil(PAGE_SIZE).max(1);
         let page = desk.forecast_page.min(pages - 1);
-        let (amounts, pending) = forecast.totals();
         div()
             .debug_selector(|| "revenue-forecast".to_owned())
             .flex()
@@ -295,7 +294,7 @@ impl Root {
                         .flex()
                         .flex_wrap()
                         .gap_2()
-                        .children(amounts.into_iter().map(|(currency, cents)| {
+                        .children(forecast.totals.iter().map(|total| {
                             div()
                                 .rounded_md()
                                 .border_1()
@@ -303,12 +302,12 @@ impl Root {
                                 .p_2()
                                 .child(i18n::fill(
                                     self.t(Key::FinancialForecastTotal),
-                                    &[("currency", currency)],
+                                    &[("currency", &total.currency)],
                                 ))
                                 .child(
-                                    div()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child(self.amount_label(cents, currency)),
+                                    div().font_weight(FontWeight::SEMIBOLD).child(
+                                        self.amount_label(total.amount_cents, &total.currency),
+                                    ),
                                 )
                         }))
                         .child(
@@ -321,7 +320,7 @@ impl Root {
                                 .child(
                                     div()
                                         .font_weight(FontWeight::SEMIBOLD)
-                                        .child(pending.to_string()),
+                                        .child(forecast.pending_price_lines.to_string()),
                                 ),
                         ),
                 )
@@ -512,6 +511,8 @@ mod tests {
                 "settledByItem": item_rows,
                 "revenueForecast": {
                     "asOf": "2026-11-22T13:00:00.000Z",
+                    "totals": [{ "currency": "EUR", "amountCents": 5000 }],
+                    "pendingPriceLines": 1,
                     "rows": [
                         { "date": "2026-11-23", "currency": "EUR", "appointmentLines": 2, "amountCents": 5000 },
                         { "date": "2026-11-23", "currency": null, "appointmentLines": 1, "amountCents": null }

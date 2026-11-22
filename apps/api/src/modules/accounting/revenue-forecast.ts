@@ -14,7 +14,8 @@ export async function reportRevenueForecast(
 ): Promise<RevenueForecast> {
   const asOf = new Date().toISOString();
   const { fromAt, toAt, timezone, staffId, clientId } = range;
-  if (toAt.getTime() <= Date.parse(asOf)) return { asOf, rows: [] };
+  if (toAt.getTime() <= Date.parse(asOf))
+    return { asOf, totals: [], pendingPriceLines: 0, rows: [] };
   const staff = staffId ? sql`and a.staff_id = ${staffId}` : sql``;
   const client = clientId
     ? sql`and a.client_id in (select client_identity_ids(${clientId}::uuid))`
@@ -33,7 +34,8 @@ export async function reportRevenueForecast(
         and a.starts_at < ${toAt}::timestamptz
         ${staff} ${client}
     ), booked_services as (
-      select aps.appointment_id, min(aps.currency) as currency, count(distinct aps.currency) as currencies,
+      select aps.appointment_id, min(upper(aps.currency)) as currency,
+        count(distinct upper(aps.currency)) = 1 and bool_and(upper(aps.currency) ~ '^[A-Z]{3}$') as has_currency,
         bool_or(aps.source_unpriced and aps.reviewed_price_cents is null) as unpriced_import,
         bool_or(aps.price_type in (${provisionalPriceTypes}) and aps.reviewed_price_cents is null) as provisional,
         sum(coalesce(aps.reviewed_price_cents, aps.price_cents)) as booked_amount,
@@ -52,7 +54,7 @@ export async function reportRevenueForecast(
       group by c.appointment_id, c.currency
     ), values_by_appointment as (
       select a.day, b.currency,
-        case when b.currencies <> 1 or b.unpriced_import then null
+        case when not b.has_currency or b.unpriced_import then null
           when r.is_final and r.currency = b.currency and r.service_identities = b.service_identities then r.amount
           when not b.provisional then b.booked_amount
         end as amount
@@ -66,12 +68,23 @@ export async function reportRevenueForecast(
     group by day, case when amount is not null then currency end
     order by day, currency nulls last
   `);
+  const totals = new Map<string, number>();
+  let pendingPriceLines = 0;
+  const result = rows.map(({ day, currency, lines, amount }) => {
+    if (currency !== null && amount !== null) {
+      const amountCents = Number(amount);
+      totals.set(currency, (totals.get(currency) ?? 0) + amountCents);
+      return { date: day, currency, appointmentLines: lines, amountCents };
+    }
+    pendingPriceLines += lines;
+    return { date: day, currency: null, appointmentLines: lines, amountCents: null };
+  });
   return {
     asOf,
-    rows: rows.map(({ day, currency, lines, amount }) =>
-      currency !== null && amount !== null
-        ? { date: day, currency, appointmentLines: lines, amountCents: Number(amount) }
-        : { date: day, currency: null, appointmentLines: lines, amountCents: null },
-    ),
+    pendingPriceLines,
+    rows: result,
+    totals: [...totals]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([currency, amountCents]) => ({ currency, amountCents })),
   };
 }

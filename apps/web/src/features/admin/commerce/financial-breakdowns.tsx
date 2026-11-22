@@ -129,12 +129,6 @@ export function ScheduledRevenue({
   const [requestedPage, setPage] = useState(0);
   const pageCount = Math.ceil(forecast.rows.length / PAGE_SIZE);
   const page = Math.max(0, Math.min(requestedPage, pageCount - 1));
-  const amounts = new Map<string, number>();
-  let pending = 0;
-  for (const row of forecast.rows) {
-    if (row.currency === null) pending += row.appointmentLines;
-    else amounts.set(row.currency, (amounts.get(row.currency) ?? 0) + row.amountCents);
-  }
   const checkedAt = `${formatDateWithYear(localDateOf(forecast.asOf, timezone), locale)} · ${formatTime(forecast.asOf, timezone, locale)}`;
   return (
     <>
@@ -153,19 +147,19 @@ export function ScheduledRevenue({
             </p>
             {forecast.rows.length > 0 && (
               <dl className="flex flex-wrap gap-x-6 gap-y-2 rounded-xl border border-line bg-surface p-3 text-sm">
-                {[...amounts]
-                  .sort(([a], [b]) => a.localeCompare(b))
-                  .map(([currency, cents]) => (
-                    <div key={currency}>
-                      <dt className="text-muted">{t("accounting.forecast.total", { currency })}</dt>
-                      <dd className="font-semibold tabular-nums">
-                        {formatMoney(cents, currency, locale)}
-                      </dd>
-                    </div>
-                  ))}
+                {forecast.totals.map(({ currency, amountCents }) => (
+                  <div key={currency}>
+                    <dt className="text-muted">{t("accounting.forecast.total", { currency })}</dt>
+                    <dd className="font-semibold tabular-nums">
+                      {formatMoney(amountCents, currency, locale)}
+                    </dd>
+                  </div>
+                ))}
                 <div>
                   <dt className="text-muted">{t("accounting.forecast.pendingLines")}</dt>
-                  <dd className="font-semibold tabular-nums">{pending.toLocaleString(locale)}</dd>
+                  <dd className="font-semibold tabular-nums">
+                    {forecast.pendingPriceLines.toLocaleString(locale)}
+                  </dd>
                 </div>
               </dl>
             )}

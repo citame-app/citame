@@ -25,8 +25,20 @@ function ReportsPage() {
   const [visited, setVisited] = useState(() => new Set<string>(["overview"]));
   const permissions = permissionsFor(session?.user.role ?? "client", session?.accessPreset);
   if (!session) return null;
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date());
+  const applyFinancialFilters = ({
+    from,
+    to,
+    staffId,
+  }: {
+    from: string;
+    to: string;
+    staffId?: string;
+  }) =>
+    void navigate({
+      search: (current) => ({ ...current, preset: "custom", from, to, staff: staffId }),
+    });
   if (search.client) {
-    const today = new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date());
     const range = resolveRange(search, today);
     return (
       <div className="view-reports">
@@ -43,11 +55,7 @@ function ReportsPage() {
             key={JSON.stringify([search.client, range.from, range.to, search.staff])}
             clientId={search.client}
             filters={{ ...range, staffId: search.staff }}
-            onApply={({ from, to, staffId }) =>
-              void navigate({
-                search: (current) => ({ ...current, preset: "custom", from, to, staff: staffId }),
-              })
-            }
+            onApply={applyFinancialFilters}
           />
         ) : (
           <p role="status">{t("accounting.clientReportRestricted")}</p>
@@ -56,6 +64,8 @@ function ReportsPage() {
     );
   }
   const all = permissions.allCalendars;
+  const financialRange =
+    search.preset === "custom" ? resolveRange(search, today) : { from: today, to: today };
   return (
     <div className="view-reports">
       <PageHeading title={t("reports.title")} lead={t(all ? "reports.lead" : "reports.leadOwn")} />
@@ -100,7 +110,13 @@ function ReportsPage() {
       </div>
       {visited.has("financial") && permissions.financialReports && (
         <div hidden={section !== "financial"}>
-          <AccountingView role="owner" section="reports" />
+          <AccountingView
+            key={JSON.stringify([financialRange.from, financialRange.to, search.staff])}
+            role="owner"
+            section="reports"
+            salesFilters={{ ...financialRange, staffId: search.staff }}
+            onApplySalesFilters={applyFinancialFilters}
+          />
         </div>
       )}
       {visited.has("commissions") && permissions.commerce && (

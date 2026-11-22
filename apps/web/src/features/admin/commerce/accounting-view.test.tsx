@@ -33,6 +33,8 @@ beforeEach(() => {
         unknownCostLines: 0,
         revenueForecast: {
           asOf: "2026-11-22T13:00:00.000Z",
+          totals: [{ currency: "EUR", amountCents: 5000 }],
+          pendingPriceLines: 1,
           rows: [
             { date: "2026-11-23", currency: "EUR", appointmentLines: 2, amountCents: 5000 },
             { date: "2026-11-23", currency: null, appointmentLines: 1, amountCents: null },

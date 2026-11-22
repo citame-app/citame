@@ -337,17 +337,26 @@ for (const scheme of ["light", "dark"] as const)
         await expectNoHorizontalScroll(page);
         await expectNoSeriousA11yViolations(page, `booking promotion collections ${scheme}`);
         await collections.screenshot({ path: info.outputPath("promotion-collections-es.png") });
+        const baselineResponse = await owner.get(
+          `/api/admin/accounting/sales?from=${day}&to=${day}&staffId=${staff.id}`,
+        );
+        expect(baselineResponse.ok()).toBe(true);
+        const baseline = (await baselineResponse.json()).revenueForecast.rows.find(
+          (row: { currency: string | null }) => row.currency === "EUR",
+        );
+        const clientId = crypto.randomUUID();
         const forecastClient = await owner.post("/api/admin/clients", {
-          data: { name: `Forecast fixture ${code}` },
+          data: { id: clientId, name: `Forecast fixture ${code}` },
         });
         expect(forecastClient.status(), await forecastClient.text()).toBe(201);
         const bookedForForecast = await owner.post("/api/appointments", {
           data: {
             staffId: staff.id,
-            clientId: (await forecastClient.json()).id,
+            clientId,
             serviceIds: [serviceId],
             startsAt: freedStart,
             override: true,
+            protectionWaiverReason: "Synthetic forecast test booking",
           },
         });
         expect(bookedForForecast.status(), await bookedForForecast.text()).toBe(201);
@@ -365,6 +374,16 @@ for (const scheme of ["light", "dark"] as const)
         await forecast.screenshot({ path: info.outputPath("revenue-forecast-es.png") });
         await expectNoHorizontalScroll(page);
         await expectNoSeriousA11yViolations(page, `booking revenue forecast ${scheme}`);
+        const forecastRange = new URL(page.url()).searchParams;
+        expect(forecastRange.get("staff")).toBe(staff.id);
+        expect(
+          Date.parse(forecastRange.get("to") ?? "") - Date.parse(forecastRange.get("from") ?? ""),
+        ).toBe(29 * 86_400_000);
+        const forecastDownload = page.waitForEvent("download", { timeout: 10000 });
+        await financial.getByRole("button", { name: "Exportar resumen económico (CSV)" }).click();
+        expect(await readFile(await (await forecastDownload).path(), "utf8")).toContain(
+          `"${day}","EUR","${(baseline?.appointmentLines ?? 0) + 1}","${(baseline?.amountCents ?? 0) + 10000}"`,
+        );
         await switchLocale(page, "English");
         const english = page.getByRole(mobile ? "list" : "table", {
           name: "Collections by booking promotion",
