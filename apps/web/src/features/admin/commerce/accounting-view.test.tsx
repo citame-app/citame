@@ -37,6 +37,24 @@ beforeEach(() => {
           { family: "service", amountCents: 1700, taxCents: 172 },
           { family: "unallocated", amountCents: 100, taxCents: 0 },
         ],
+        settledByItem: [
+          {
+            family: "service",
+            itemId: id,
+            name: "=Treatment",
+            quantity: 2,
+            amountCents: 1700,
+            taxCents: 172,
+          },
+          {
+            family: "unallocated",
+            itemId: null,
+            name: null,
+            quantity: null,
+            amountCents: 100,
+            taxCents: 0,
+          },
+        ],
         promotionCollections: [
           {
             name: "=Current offer",
@@ -126,7 +144,13 @@ test("financial reports apply the professional filter and export the visible fam
     fireEvent.change(screen.getByLabelText("Professional"), { target: { value: id } });
     fireEvent.click(screen.getByRole("button", { name: "Apply filters" }));
     await waitFor(() => expect(salesQueries.at(-1)?.get("staffId")).toBe(id));
-    expect(await screen.findByRole("rowheader", { name: "Unallocated" })).toBeInTheDocument();
+    const families = await screen.findByRole("table", { name: "Settled amounts by sale family" });
+    expect(within(families).getByRole("rowheader", { name: "Unallocated" })).toBeInTheDocument();
+    const items = await screen.findByRole("table", { name: "Settled sales by item and plan" });
+    const treatment = within(items).getByRole("row", { name: /=Treatment/ });
+    expect(within(treatment).getByRole("cell", { name: "2" })).toBeInTheDocument();
+    const unallocated = within(items).getByRole("row", { name: /Unallocated/ });
+    expect(within(unallocated).getByRole("cell", { name: "—" })).toBeInTheDocument();
     const promotions = await screen.findByRole("table", {
       name: "Collections by booking promotion",
     });
@@ -141,6 +165,9 @@ test("financial reports apply the professional filter and export the visible fam
     );
     expect(await download?.text()).toContain(
       `"promotion_name","promotion_code","collected_cents","refunded_cents","net_cents","currency"\r\n"'=Current offer","OFFER","0","125","-125","EUR"`,
+    );
+    expect(await download?.text()).toContain(
+      `"sale_family","item_id","item_name","quantity","settled_amount_cents","included_tax_cents","currency"\r\n"service","${id}","'=Treatment","2","1700","172","EUR"\r\n"unallocated","","","","100","0","EUR"`,
     );
   } finally {
     click.mockRestore();

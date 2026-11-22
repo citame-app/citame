@@ -357,6 +357,17 @@ test("gift redemption is stored value rather than a second collection of cash", 
       { family: "custom", amountCents: 600, taxCents: 0 },
       { family: "gift_card", amountCents: 1000, taxCents: 0 },
     ],
+    settledByItem: [
+      { family: "custom", amountCents: 600, quantity: 1, taxCents: 0 },
+      {
+        family: "gift_card",
+        itemId: null,
+        name: null,
+        quantity: 1,
+        amountCents: 1000,
+        taxCents: 0,
+      },
+    ],
   });
 });
 test("late excess bank capture restores covered gift value and refunding excess does not reduce it", async () => {

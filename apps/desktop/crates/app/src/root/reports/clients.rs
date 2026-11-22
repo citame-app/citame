@@ -152,7 +152,7 @@ impl Root {
                 )
             })
             .when(pages > 1, |view| {
-                view.child(self.render_report_pager(page, pages, cx))
+                view.child(self.render_report_pager(ReportPage::Main, page, pages, cx))
             })
             .children(self.render_client_breakdown(ClientReportBreakdown::Groups, desk, report, cx))
             .children(self.render_client_breakdown(

@@ -1,10 +1,12 @@
-import type { PromotionCollection, SalesFamilyTotal } from "@sob/contracts";
-import { useId } from "react";
+import type { PromotionCollection, SalesFamilyTotal, SettledSaleItem } from "@sob/contracts";
+import { useId, useState } from "react";
+import { Button } from "~/components/ui/button";
 import { useI18n } from "~/i18n/react";
 import { formatMoney } from "~/lib/format";
 
 type Heading = "h3" | "h4";
-type MoneyRow = { key: string; label: string; amounts: number[] };
+type BreakdownRow = { key: string; label: string; values: string[] };
+const PAGE_SIZE = 24;
 
 export function SalesFamilies({
   rows,
@@ -13,7 +15,7 @@ export function SalesFamilies({
   rows: SalesFamilyTotal[];
   headingLevel: Heading;
 }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   return (
     <FinancialBreakdown
       headingLevel={headingLevel}
@@ -21,11 +23,11 @@ export function SalesFamilies({
       basis={t("accounting.families.basis")}
       empty={t("accounting.families.empty")}
       labelColumn={t("accounting.families.family")}
-      moneyColumns={[t("accounting.families.amount"), t("accounting.tax")]}
+      columns={[t("accounting.families.amount"), t("accounting.tax")]}
       rows={rows.map((row) => ({
         key: row.family,
         label: t(`accounting.families.${row.family}`),
-        amounts: [row.amountCents, row.taxCents],
+        values: [row.amountCents, row.taxCents].map((cents) => formatMoney(cents, "EUR", locale)),
       }))}
     />
   );
@@ -38,7 +40,7 @@ export function PromotionCollections({
   rows: PromotionCollection[];
   headingLevel: Heading;
 }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   return (
     <FinancialBreakdown
       headingLevel={headingLevel}
@@ -47,13 +49,81 @@ export function PromotionCollections({
       empty={t("accounting.promotions.empty")}
       labelColumn={t("accounting.promotions.offer")}
       stackWhenNarrow
-      moneyColumns={[t("accounting.collected"), t("accounting.refunded"), t("accounting.net")]}
+      columns={[t("accounting.collected"), t("accounting.refunded"), t("accounting.net")]}
       rows={rows.map((row) => ({
         key: JSON.stringify([row.name, row.code]),
         label: `${row.name} (${row.code})`,
-        amounts: [row.collectedCents, row.refundedCents, row.netCents],
+        values: [row.collectedCents, row.refundedCents, row.netCents].map((cents) =>
+          formatMoney(cents, "EUR", locale),
+        ),
       }))}
     />
+  );
+}
+
+export function SalesItems({
+  rows,
+  headingLevel,
+}: {
+  rows: SettledSaleItem[];
+  headingLevel: Heading;
+}) {
+  const { locale, t } = useI18n();
+  const [requestedPage, setPage] = useState(0);
+  const pageCount = Math.ceil(rows.length / PAGE_SIZE);
+  const page = Math.max(0, Math.min(requestedPage, pageCount - 1));
+  const number = new Intl.NumberFormat(locale);
+  return (
+    <>
+      <FinancialBreakdown
+        headingLevel={headingLevel}
+        title={t("accounting.items.title")}
+        basis={t("accounting.items.basis")}
+        empty={t("accounting.families.empty")}
+        labelColumn={t("accounting.items.item")}
+        columns={[
+          t("accounting.items.quantity"),
+          t("accounting.families.amount"),
+          t("accounting.tax"),
+        ]}
+        stackWhenNarrow
+        rows={rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map((row) => {
+          const family = t(`accounting.families.${row.family}`);
+          return {
+            key: JSON.stringify([row.family, row.itemId, row.name]),
+            label: row.name ? `${row.name} · ${family}` : family,
+            values: [
+              row.quantity === null ? "—" : number.format(row.quantity),
+              formatMoney(row.amountCents, "EUR", locale),
+              formatMoney(row.taxCents, "EUR", locale),
+            ],
+          };
+        })}
+      />
+      {pageCount > 1 && (
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={page === 0}
+            onClick={() => setPage(page - 1)}
+          >
+            {t("accounting.items.previous")}
+          </Button>
+          <span aria-live="polite" className="text-sm tabular-nums text-muted">
+            {page + 1} / {pageCount}
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={page + 1 >= pageCount}
+            onClick={() => setPage(page + 1)}
+          >
+            {t("accounting.items.next")}
+          </Button>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -63,7 +133,7 @@ function FinancialBreakdown({
   basis,
   empty,
   labelColumn,
-  moneyColumns,
+  columns,
   rows,
   stackWhenNarrow = false,
 }: {
@@ -72,11 +142,10 @@ function FinancialBreakdown({
   basis: string;
   empty: string;
   labelColumn: string;
-  moneyColumns: string[];
-  rows: MoneyRow[];
+  columns: string[];
+  rows: BreakdownRow[];
   stackWhenNarrow?: boolean;
 }) {
-  const { locale } = useI18n();
   const headingId = useId();
   const basisId = useId();
   return (
@@ -108,7 +177,7 @@ function FinancialBreakdown({
                   >
                     {labelColumn}
                   </th>
-                  {moneyColumns.map((label) => (
+                  {columns.map((label) => (
                     <th key={label} scope="col" className="px-3 py-3 text-end font-medium">
                       {label}
                     </th>
@@ -124,12 +193,12 @@ function FinancialBreakdown({
                     >
                       {row.label}
                     </th>
-                    {row.amounts.map((amount, index) => (
+                    {row.values.map((value, index) => (
                       <td
-                        key={moneyColumns[index]}
+                        key={columns[index]}
                         className="whitespace-nowrap border-t border-line px-3 py-2.5 text-end tabular-nums"
                       >
-                        {formatMoney(amount, "EUR", locale)}
+                        {value}
                       </td>
                     ))}
                   </tr>
@@ -147,12 +216,10 @@ function FinancialBreakdown({
                 <li key={row.key} className="space-y-2 p-3">
                   <p className="text-sm font-semibold [overflow-wrap:anywhere]">{row.label}</p>
                   <dl className="flex flex-wrap gap-x-4 gap-y-2">
-                    {row.amounts.map((amount, index) => (
-                      <div key={moneyColumns[index]} className="space-y-0.5">
-                        <dt className="text-xs text-muted">{moneyColumns[index]}</dt>
-                        <dd className="text-sm tabular-nums">
-                          {formatMoney(amount, "EUR", locale)}
-                        </dd>
+                    {row.values.map((value, index) => (
+                      <div key={columns[index]} className="space-y-0.5">
+                        <dt className="text-xs text-muted">{columns[index]}</dt>
+                        <dd className="text-sm tabular-nums">{value}</dd>
                       </div>
                     ))}
                   </dl>

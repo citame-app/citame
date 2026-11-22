@@ -684,6 +684,17 @@ test("financial reports separate new cash, receipt face values and the prepaid a
       { family: "service", amountCents: 334, taxCents: 0 },
       { family: "package_purchase", amountCents: 1000, taxCents: 0 },
     ],
+    settledByItem: [
+      { family: "service", itemId: f.haircutId, quantity: 1, amountCents: 334, taxCents: 0 },
+      {
+        family: "package_purchase",
+        itemId: bought.pass.planId,
+        name: "Three visits",
+        quantity: 1,
+        amountCents: 1000,
+        taxCents: 0,
+      },
+    ],
   });
   expect((await refund(used.payment.id, 2000)).status).toBe(201);
   const after = await call(owner, `/admin/accounting/sales?from=${date}&to=${date}`);

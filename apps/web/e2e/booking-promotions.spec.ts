@@ -281,6 +281,27 @@ for (const scheme of ["light", "dark"] as const)
         const paymentDate = new Intl.DateTimeFormat("sv-SE", {
           timeZone: "America/Argentina/Buenos_Aires",
         }).format(new Date(recordedPayment.updatedAt ?? recordedPayment.createdAt));
+        const itemName = `Office_${code}_${"W".repeat(56)}`;
+        const itemReceipt = await owner.post("/api/admin/commerce/checkouts", {
+          data: {
+            staffId: staff.id,
+            lines: [{ kind: "custom", description: itemName, quantity: 2, unitAmountCents: 1234 }],
+            idempotencyKey: crypto.randomUUID(),
+          },
+        });
+        expect(itemReceipt.status()).toBe(201);
+        const itemSale = await itemReceipt.json();
+        expect(
+          (
+            await owner.post(`/api/admin/commerce/checkouts/${itemSale.id}/payments`, {
+              data: {
+                method: "external_card",
+                amountCents: 2468,
+                idempotencyKey: crypto.randomUUID(),
+              },
+            })
+          ).status(),
+        ).toBe(201);
         await page.getByRole("button", { name: "Informes económicos", exact: true }).click();
         const financial = page.getByRole("region", { name: "Ventas y cobros", exact: true });
         await financial.getByLabel("Desde", { exact: true }).fill(paymentDate);
@@ -297,11 +318,20 @@ for (const scheme of ["light", "dark"] as const)
         const amounts = collectedRow.getByRole(mobile ? "definition" : "cell");
         await expect(amounts).toHaveCount(3);
         await expect(amounts.first()).toContainText("18,75");
+        const items = financial.getByRole(mobile ? "list" : "table", {
+          name: "Ventas liquidadas por artículo y plan",
+        });
+        const itemRow = items.getByRole(mobile ? "listitem" : "row").filter({ hasText: itemName });
+        const itemAmounts = itemRow.getByRole(mobile ? "definition" : "cell");
+        await expect(itemAmounts).toHaveCount(3);
+        await expect(itemAmounts.nth(0)).toHaveText("2");
+        await expect(itemAmounts.nth(1)).toContainText("24,68");
+        await items.screenshot({ path: info.outputPath("settled-sales-items-es.png") });
         const financialDownload = page.waitForEvent("download", { timeout: 10000 });
         await financial.getByRole("button", { name: "Exportar resumen económico (CSV)" }).click();
-        expect(await readFile(await (await financialDownload).path(), "utf8")).toContain(
-          `"${terms.name}","${code}","1875","0","1875","EUR"`,
-        );
+        const financialCsv = await readFile(await (await financialDownload).path(), "utf8");
+        expect(financialCsv).toContain(`"${terms.name}","${code}","1875","0","1875","EUR"`);
+        expect(financialCsv).toContain(`"custom","","${itemName}","2","2468","0","EUR"`);
         await expectNoHorizontalScroll(page);
         await expectNoSeriousA11yViolations(page, `booking promotion collections ${scheme}`);
         await collections.screenshot({ path: info.outputPath("promotion-collections-es.png") });
@@ -310,6 +340,11 @@ for (const scheme of ["light", "dark"] as const)
           name: "Collections by booking promotion",
         });
         await expect(english.getByText(offerLabel, { exact: true })).toBeVisible();
+        const englishItems = page.getByRole(mobile ? "list" : "table", {
+          name: "Settled sales by item and plan",
+        });
+        await expect(englishItems.getByText(itemName, { exact: false })).toBeVisible();
+        await englishItems.screenshot({ path: info.outputPath("settled-sales-items-en.png") });
         await expectNoHorizontalScroll(page);
         await expectNoSeriousA11yViolations(page, `booking promotion collections EN ${scheme}`);
         await english.screenshot({ path: info.outputPath("promotion-collections-en.png") });
