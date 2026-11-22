@@ -100,6 +100,14 @@ Both views page through the rows and include the full detail in the financial CS
 
 The item breakdown uses the financial report's read-only snapshot and responsive breakdown renderer. Paging limits the rendered rows in each client while totals, families and the complete export use the same settlement snapshot.
 
+### Revenue forecast from bookings
+
+The financial report gives the scheduled service value of future booked appointment lines from the report calculation time through the selected salon-local dates. It uses the current assigned professional and, for client reports, the active client identity and its linked historical profiles. The range can be set directly or via the next-thirty-days shortcut.
+
+The calculation uses frozen booked prices and accepts final service line totals from a matching active checkout, including line discounts. It excludes additional products and tips. Missing services, invalid or mixed currencies, unresolved imported prices and quotes requiring final prices go in a separate count without a monetary value. Known currency codes are normalized before summing. The API gives both clients the same totals. Payments, refunds and partial Booksy balances do not alter the forecast, which measures scheduled work including amounts already paid. The financial CSV gives the calculation instant, projected value, currency and appointment line count by day and retains pending rows with empty monetary fields.
+
+The selected section, report dates and professional filters are retained in the URL in Web Reports. Like settled item detail, forecast paging limits the displayed rows of the financial snapshot. It keeps local view state and exports all rows from that snapshot.
+
 ### Team occupancy
 
 Cloud and Desktop use the same report snapshot for the selected salon-local dates and team member. Effective shifts use the current weekly schedule and dated overrides. The report counts overlapping blocks once and clips them to the shift. Reserved staff work includes active bookings and completed visits inside the remaining shift. Simultaneous reservations count once, and processing gaps are taken from each appointment's frozen work plan. Completed and missed time sums each visit's calendar duration within the report dates, including concurrent visits. Occupancy uses all currencies and is blank when no shift time remains. Schedule changes refresh open reports. A period with no appointments remains exportable when it has scheduled capacity. A period with neither appointments nor occupancy minutes has no CSV action. The report and its CSV measure planned time from the calendar. Attendance records would be required to report hours actually worked.

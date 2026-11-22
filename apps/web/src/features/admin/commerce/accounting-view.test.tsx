@@ -31,6 +31,15 @@ beforeEach(() => {
         tipsCents: 0,
         productCostCents: 100,
         unknownCostLines: 0,
+        revenueForecast: {
+          asOf: "2026-11-22T13:00:00.000Z",
+          totals: [{ currency: "EUR", amountCents: 5000 }],
+          pendingPriceLines: 1,
+          rows: [
+            { date: "2026-11-23", currency: "EUR", appointmentLines: 2, amountCents: 5000 },
+            { date: "2026-11-23", currency: null, appointmentLines: 1, amountCents: null },
+          ],
+        },
         methods: [],
         cashSessions: [],
         settledByFamily: [
@@ -179,11 +188,24 @@ test("financial reports apply the professional filter and export the visible fam
       `"sale_family","item_id","item_name","quantity","settled_amount_cents","included_tax_cents","currency"\r\n"service","${id}","'=Treatment","2","1700","172","EUR"\r\n"unallocated","","","","100","0","EUR"`,
     );
     expect(await download?.text()).toContain('"custom","","Manual item 23","1","100","0","EUR"');
+    const forecast = await screen.findByRole("table", { name: "Revenue forecast from bookings" });
+    expect(within(forecast).getByRole("cell", { name: "Price pending" })).toBeInTheDocument();
+    expect(await download?.text()).toContain(
+      '"forecast_date","currency","appointment_lines","scheduled_service_value_cents"\r\n"2026-11-23","EUR","2","5000"\r\n"2026-11-23","","1",""',
+    );
     fireEvent.click(screen.getByRole("button", { name: "Next items" }));
     expect(within(items).getByRole("rowheader", { name: /Manual item 23/ })).toBeInTheDocument();
     expect(within(items).queryByRole("row", { name: /=Treatment/ })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Previous items" }));
     expect(within(items).getByRole("rowheader", { name: /=Treatment/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Next 30 days" }));
+    await waitFor(() => {
+      const query = salesQueries.at(-1);
+      expect(query?.get("staffId")).toBe(id);
+      const to = Date.parse(query?.get("to") ?? "");
+      const from = Date.parse(query?.get("from") ?? "");
+      expect((to - from) / 86_400_000).toBe(29);
+    });
   } finally {
     click.mockRestore();
     create.mockRestore();

@@ -1,8 +1,13 @@
-import type { PromotionCollection, SalesFamilyTotal, SettledSaleItem } from "@sob/contracts";
-import { useId, useState } from "react";
+import type {
+  PromotionCollection,
+  RevenueForecast,
+  SalesFamilyTotal,
+  SettledSaleItem,
+} from "@sob/contracts";
+import { type ReactNode, useId, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { useI18n } from "~/i18n/react";
-import { formatMoney } from "~/lib/format";
+import { formatDateWithYear, formatMoney, formatTime, localDateOf } from "~/lib/format";
 
 type Heading = "h3" | "h4";
 type BreakdownRow = { key: string; label: string; values: string[] };
@@ -100,30 +105,122 @@ export function SalesItems({
           };
         })}
       />
-      {pageCount > 1 && (
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            disabled={page === 0}
-            onClick={() => setPage(page - 1)}
-          >
-            {t("accounting.items.previous")}
-          </Button>
-          <span aria-live="polite" className="text-sm tabular-nums text-muted">
-            {page + 1} / {pageCount}
-          </span>
-          <Button
-            type="button"
-            variant="ghost"
-            disabled={page + 1 >= pageCount}
-            onClick={() => setPage(page + 1)}
-          >
-            {t("accounting.items.next")}
-          </Button>
-        </div>
-      )}
+      <BreakdownPager
+        page={page}
+        pageCount={pageCount}
+        setPage={setPage}
+        previous={t("accounting.items.previous")}
+        next={t("accounting.items.next")}
+      />
     </>
+  );
+}
+
+export function ScheduledRevenue({
+  forecast,
+  headingLevel,
+  timezone,
+}: {
+  forecast: RevenueForecast;
+  headingLevel: Heading;
+  timezone: string;
+}) {
+  const { locale, t } = useI18n();
+  const [requestedPage, setPage] = useState(0);
+  const pageCount = Math.ceil(forecast.rows.length / PAGE_SIZE);
+  const page = Math.max(0, Math.min(requestedPage, pageCount - 1));
+  const checkedAt = `${formatDateWithYear(localDateOf(forecast.asOf, timezone), locale)} · ${formatTime(forecast.asOf, timezone, locale)}`;
+  return (
+    <>
+      <FinancialBreakdown
+        headingLevel={headingLevel}
+        title={t("accounting.forecast.title")}
+        basis={t("accounting.forecast.basis")}
+        empty={t("accounting.forecast.empty")}
+        labelColumn={t("accounting.forecast.date")}
+        columns={[t("accounting.forecast.lines"), t("accounting.forecast.value")]}
+        stackWhenNarrow
+        summary={
+          <div className="space-y-2">
+            <p className="text-sm text-muted">
+              {t("accounting.forecast.checkedAt", { at: checkedAt })}
+            </p>
+            {forecast.rows.length > 0 && (
+              <dl className="flex flex-wrap gap-x-6 gap-y-2 rounded-xl border border-line bg-surface p-3 text-sm">
+                {forecast.totals.map(({ currency, amountCents }) => (
+                  <div key={currency}>
+                    <dt className="text-muted">{t("accounting.forecast.total", { currency })}</dt>
+                    <dd className="font-semibold tabular-nums">
+                      {formatMoney(amountCents, currency, locale)}
+                    </dd>
+                  </div>
+                ))}
+                <div>
+                  <dt className="text-muted">{t("accounting.forecast.pendingLines")}</dt>
+                  <dd className="font-semibold tabular-nums">
+                    {forecast.pendingPriceLines.toLocaleString(locale)}
+                  </dd>
+                </div>
+              </dl>
+            )}
+          </div>
+        }
+        rows={forecast.rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map((row) => {
+          const date = formatDateWithYear(row.date, locale);
+          return {
+            key: JSON.stringify([row.date, row.currency]),
+            label: row.currency ? `${date} · ${row.currency}` : date,
+            values: [
+              row.appointmentLines.toLocaleString(locale),
+              row.currency === null
+                ? t("accounting.forecast.pending")
+                : formatMoney(row.amountCents, row.currency, locale),
+            ],
+          };
+        })}
+      />
+      <BreakdownPager
+        page={page}
+        pageCount={pageCount}
+        setPage={setPage}
+        previous={t("table.previous")}
+        next={t("table.next")}
+      />
+    </>
+  );
+}
+
+function BreakdownPager({
+  page,
+  pageCount,
+  setPage,
+  previous,
+  next,
+}: {
+  page: number;
+  pageCount: number;
+  setPage: (page: number) => void;
+  previous: string;
+  next: string;
+}) {
+  if (pageCount < 2) return null;
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      <Button type="button" variant="ghost" disabled={page === 0} onClick={() => setPage(page - 1)}>
+        {previous}
+      </Button>
+      <span aria-live="polite" className="text-sm tabular-nums text-muted">
+        {page + 1} / {pageCount}
+      </span>
+      <Button
+        type="button"
+        variant="ghost"
+        disabled={page + 1 >= pageCount}
+        onClick={() => setPage(page + 1)}
+      >
+        {next}
+      </Button>
+    </div>
   );
 }
 
@@ -135,6 +232,7 @@ function FinancialBreakdown({
   labelColumn,
   columns,
   rows,
+  summary,
   stackWhenNarrow = false,
 }: {
   headingLevel: Heading;
@@ -144,6 +242,7 @@ function FinancialBreakdown({
   labelColumn: string;
   columns: string[];
   rows: BreakdownRow[];
+  summary?: ReactNode;
   stackWhenNarrow?: boolean;
 }) {
   const headingId = useId();
@@ -156,6 +255,7 @@ function FinancialBreakdown({
       <p id={basisId} className="max-w-prose text-sm text-muted">
         {basis}
       </p>
+      {summary}
       {rows.length ? (
         <>
           <section

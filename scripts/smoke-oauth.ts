@@ -560,10 +560,14 @@ assert.equal(nativeFinancial.status, 200, "The linked owner can open financial r
 assert.equal(nativeFinancial.headers.get("cache-control"), "private, no-store");
 const webFinancial = await request(`${origin}/api${financialPath}`, { headers: { cookie } });
 assert.equal(webFinancial.status, 200);
-assert.deepEqual(
-  salesReportSchema.parse(await nativeFinancial.json()),
-  salesReportSchema.parse(await webFinancial.json()),
-);
+const nativeSales = salesReportSchema.parse(await nativeFinancial.json());
+const webSales = salesReportSchema.parse(await webFinancial.json());
+const stableSales = (report: typeof nativeSales) => ({
+  ...report,
+  // The forecast is calculated for each request, so compare the result without its timestamp.
+  revenueForecast: report.revenueForecast && { ...report.revenueForecast, asOf: undefined },
+});
+assert.deepEqual(stableSales(nativeSales), stableSales(webSales));
 assert.equal(
   (await request(`${origin}/api${financialPath}`, { headers: { cookie: otherBrowserCookie } }))
     .status,

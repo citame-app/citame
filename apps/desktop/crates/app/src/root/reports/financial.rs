@@ -1,5 +1,5 @@
 use super::*;
-use sob_core::reports::financial::{CURRENCY, SettledSaleItem};
+use sob_core::reports::financial::{CURRENCY, RevenueForecast, SettledSaleItem};
 
 impl Root {
     pub(super) fn render_financial_report(
@@ -99,6 +99,14 @@ impl Root {
                 self.t(Key::FinancialUnknownCost),
                 &[("n", &lines)],
             )))
+            .when_some(report.revenue_forecast.as_ref(), |view, forecast| {
+                view.child(self.render_revenue_forecast(
+                    desk,
+                    forecast,
+                    date_time(forecast.as_of),
+                    cx,
+                ))
+            })
             .when_some(report.settled_by_family.as_ref(), |view, rows| {
                 view.child(
                     div()
@@ -240,6 +248,112 @@ impl Root {
             )
             .when(pages > 1, |view| {
                 view.child(self.render_report_pager(ReportPage::Main, page, pages, cx))
+            })
+    }
+
+    fn render_revenue_forecast(
+        &self,
+        desk: &Desk,
+        forecast: &RevenueForecast,
+        checked_at: String,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let pages = forecast.rows.len().div_ceil(PAGE_SIZE).max(1);
+        let page = desk.forecast_page.min(pages - 1);
+        div()
+            .debug_selector(|| "revenue-forecast".to_owned())
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(self.t(Key::FinancialForecast)),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme::muted())
+                    .child(self.t(Key::FinancialForecastBasis)),
+            )
+            .child(div().text_sm().text_color(theme::muted()).child(i18n::fill(
+                self.t(Key::FinancialForecastChecked),
+                &[("at", &checked_at)],
+            )))
+            .when(forecast.rows.is_empty(), |view| {
+                view.child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::muted())
+                        .child(self.t(Key::FinancialForecastEmpty)),
+                )
+            })
+            .when(!forecast.rows.is_empty(), |view| {
+                view.child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .children(forecast.totals.iter().map(|total| {
+                            div()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(theme::line())
+                                .p_2()
+                                .child(i18n::fill(
+                                    self.t(Key::FinancialForecastTotal),
+                                    &[("currency", &total.currency)],
+                                ))
+                                .child(
+                                    div().font_weight(FontWeight::SEMIBOLD).child(
+                                        self.amount_label(total.amount_cents, &total.currency),
+                                    ),
+                                )
+                        }))
+                        .child(
+                            div()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(theme::line())
+                                .p_2()
+                                .child(self.t(Key::FinancialForecastPendingLines))
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(forecast.pending_price_lines.to_string()),
+                                ),
+                        ),
+                )
+            })
+            .children(
+                forecast
+                    .rows
+                    .iter()
+                    .skip(page * PAGE_SIZE)
+                    .take(PAGE_SIZE)
+                    .map(|row| {
+                        let date = i18n::date_label(self.locale, row.date);
+                        let (label, value) = match (row.currency.as_deref(), row.amount_cents) {
+                            (Some(currency), Some(cents)) => (
+                                format!("{date} · {currency}"),
+                                self.amount_label(cents, currency),
+                            ),
+                            _ => (date, self.t(Key::FinancialForecastPending).to_owned()),
+                        };
+                        self.financial_row(
+                            &label,
+                            [
+                                (
+                                    Key::FinancialForecastLines,
+                                    row.appointment_lines.to_string(),
+                                ),
+                                (Key::FinancialForecastValue, value),
+                            ],
+                        )
+                    }),
+            )
+            .when(pages > 1, |view| {
+                view.child(self.render_report_pager(ReportPage::Forecast, page, pages, cx))
             })
     }
 
@@ -395,6 +509,15 @@ mod tests {
                     { "family": "unallocated", "amountCents": 100, "taxCents": 17 }
                 ],
                 "settledByItem": item_rows,
+                "revenueForecast": {
+                    "asOf": "2026-11-22T13:00:00.000Z",
+                    "totals": [{ "currency": "EUR", "amountCents": 5000 }],
+                    "pendingPriceLines": 1,
+                    "rows": [
+                        { "date": "2026-11-23", "currency": "EUR", "appointmentLines": 2, "amountCents": 5000 },
+                        { "date": "2026-11-23", "currency": null, "appointmentLines": 1, "amountCents": null }
+                    ]
+                },
                 "promotionCollections": [
                     { "name": "=Original offer", "code": "OFFER", "collectedCents": 0, "refundedCents": 125, "netCents": -125 }
                 ],
@@ -407,6 +530,7 @@ mod tests {
         assert!(cx.debug_bounds("financial-report").is_some());
         assert!(cx.debug_bounds("promotion-collections").is_some());
         assert!(cx.debug_bounds("settled-sales-items").is_some());
+        assert!(cx.debug_bounds("revenue-forecast").is_some());
         let output = dir.path().join("financial.csv");
         root.update(cx, |root, cx| root.save_report(cx));
         cx.simulate_new_path_selection(|_| Some(output.clone()));
@@ -426,6 +550,10 @@ mod tests {
             csv.contains("\"product\",\"\",\"'=Classic shampoo\",\"2\",\"900\",\"156\",\"EUR\"")
         );
         assert!(csv.contains("\"unallocated\",\"\",\"\",\"\",\"100\",\"17\",\"EUR\""));
+        assert!(csv.contains("\"forecast_as_of\",\"2026-11-22T13:00:00.000Z\""));
+        assert!(
+            csv.contains("\"2026-11-23\",\"EUR\",\"2\",\"5000\"\r\n\"2026-11-23\",\"\",\"1\",\"\"")
+        );
         assert!(csv.contains(&format!(
             "\"custom\",\"\",\"Manual item {}\",\"1\",\"100\",\"0\",\"EUR\"",
             PAGE_SIZE - 1
