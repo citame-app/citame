@@ -4,10 +4,17 @@ import { idSchema, instantSchema, pageInfoSchema, syncGenerationSchema } from ".
 import { giftCardCodeSchema } from "./gift-card-code";
 
 export { giftCardCodeSchema } from "./gift-card-code";
+
+const eligibleGiftServiceSchema = z.object({ id: idSchema, name: z.string() });
+export const giftEligibleCatalogSchema = z.object({
+  services: z.array(eligibleGiftServiceSchema),
+});
+export const maximumGiftServices = 50;
 export const giftCardPurchaseSchema = z
   .object({
     amountCents: moneyCentsSchema.positive(),
     purchasePriceCents: moneyCentsSchema.positive().optional(),
+    eligibleServiceIds: z.array(idSchema).max(maximumGiftServices).optional(),
     label: z.string().trim().max(120).default(""),
     buyerClientId: idSchema.optional(),
     expiresAt: instantSchema.nullable().optional(),
@@ -27,6 +34,10 @@ export const giftCardSchema = z.object({
   checkoutId: idSchema,
   amountCents: moneyCentsSchema,
   purchasePriceCents: moneyCentsSchema.positive().optional(),
+  eligibleServices: z
+    .array(z.object({ id: idSchema, name: z.string() }))
+    .max(50)
+    .optional(),
   balanceCents: moneyCentsSchema,
   reservedCents: moneyCentsSchema,
   availableCents: moneyCentsSchema,
@@ -63,6 +74,7 @@ export const giftCardPurchaseResponseSchema = z.object({
 });
 export const giftCardCodeInputSchema = z.object({ code: giftCardCodeSchema }).strict();
 export const giftCardBalanceSchema = giftCardSchema.pick({
+  eligibleServices: true,
   balanceCents: true,
   reservedCents: true,
   availableCents: true,

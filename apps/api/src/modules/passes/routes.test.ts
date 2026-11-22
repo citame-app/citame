@@ -4,6 +4,8 @@ import {
   benefitRefundQuoteResponseSchema,
   DESKTOP_CLIENT_ID,
   DESKTOP_SIGN_IN_SCOPE,
+  giftCardPurchaseResponseSchema,
+  giftCardRevealSchema,
   passContractSchema,
   passPurchaseResponseSchema,
   salesReportSchema,
@@ -97,6 +99,7 @@ async function sale(
   clientId = must(client.clientId),
   serviceId = f.haircutId,
   date = new Date(Date.now() + 86400000),
+  extraLines: unknown[] = [],
 ) {
   const [booking] = await t.db
     .insert(appointment)
@@ -119,6 +122,7 @@ async function sale(
   });
   const response = await call(owner, "/admin/commerce/checkouts", "POST", {
     appointmentId: must(booking).id,
+    lines: extraLines,
     idempotencyKey: key(),
   });
   expect(response.status, await response.clone().text()).toBe(201);
@@ -270,6 +274,41 @@ test("concurrent visits cannot consume the same entitlement and tender replay is
     remainingAllocationCents: 0,
   });
 });
+test("a package and a restricted gift cannot both fund the same service", async () => {
+  const bought = await paid();
+  const giftResponse = await call(owner, "/admin/gift-cards", "POST", {
+    amountCents: 2000,
+    eligibleServiceIds: [f.haircutId],
+    idempotencyKey: key(),
+  });
+  expect(giftResponse.status).toBe(201);
+  const gift = giftCardPurchaseResponseSchema.parse(await giftResponse.json());
+  expect((await pay(gift.checkout.id, 2000)).status).toBe(201);
+  const reveal = await call(owner, `/admin/gift-cards/${gift.card.id}/code`, "POST", {});
+  const { code } = giftCardRevealSchema.parse(await reveal.json());
+  const mixed = (days: number) =>
+    sale(must(client.clientId), f.haircutId, new Date(Date.now() + days * 86400000), [
+      { kind: "custom", description: "Retail accessory", quantity: 1, unitAmountCents: 2000 },
+    ]);
+  const first = await mixed(1);
+  const second = await mixed(2);
+  const redeemPackage = (receipt: typeof first) =>
+    pay(receipt.id, 2000, {
+      method: "package",
+      passPeriodId: bought.period.id,
+      checkoutLineId: must(receipt.lines[0]).id,
+    });
+
+  expect((await pay(first.id, 1000, { method: "gift_card", giftCardCode: code })).status).toBe(201);
+  expect((await redeemPackage(first)).status).toBe(409);
+  expect((await get(bought.pass.id)).periods[0]).toMatchObject({ availableUses: 3, usedUses: 0 });
+  expect((await redeemPackage(second)).status).toBe(201);
+  expect((await pay(second.id, 1000, { method: "gift_card", giftCardCode: code })).status).toBe(
+    409,
+  );
+  expect((await get(bought.pass.id)).periods[0]).toMatchObject({ availableUses: 2, usedUses: 1 });
+});
+
 test("eligibility checks buyer, service date, currency, pending state and full line amount", async () => {
   const bought = await paid({ validityDays: 2 });
   const s = await sale();

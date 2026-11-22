@@ -41,6 +41,7 @@ import {
   protectionView,
   syncProtectionPayment,
 } from "../booking-protection/value";
+import { assertGiftServiceCoverage } from "../gift-cards/eligibility";
 import {
   activateCheckoutGifts,
   pendingGiftForCheckout,
@@ -862,8 +863,10 @@ export async function startPayment(
       }
       if (!payment)
         throw new DomainError("invalid_state", "Could not allocate a unique payment order");
-      if (input.method === "package" || input.method === "membership")
+      if (input.method === "package" || input.method === "membership") {
         await redeemPass(tx, input, payment.id, id, principal);
+        await assertGiftServiceCoverage(tx, id);
+      }
       if (input.method === "gift_card")
         await redeemGift(
           tx,

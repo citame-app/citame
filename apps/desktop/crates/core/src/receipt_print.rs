@@ -361,6 +361,21 @@ fn gift_document(gift: &GiftReveal, salon: &str, tz: Tz, locale: Locale, nonce: 
         ),
         None => label(Key::GiftNoExpiry).to_owned(),
     };
+    let eligibility = if balance.eligible_services.is_empty() {
+        String::new()
+    } else {
+        let names = balance
+            .eligible_services
+            .iter()
+            .map(|service| service.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "<p>{} · {}</p>",
+            label(Key::GiftEligibleServices),
+            escaped(&names)
+        )
+    };
     let price = |cents| escaped(&amount_label(locale, i64::from(cents), &balance.currency));
     let status = label(if balance.status == GiftStatus::Expired {
         Key::GiftExpired
@@ -380,7 +395,7 @@ button{{font:inherit;padding:.65rem 1rem;background:#823054;color:white;border:0
 <main><button type="button" id="print">{print}</button>
 <h1>{salon}</h1><h2>{title}</h2><p>{name}</p><p>{status}</p>
 <p>{value_label} · {value}</p><p>{available_label} · {available}</p>
-<code>{code}</code><p>{expiry}</p><p>{keep_private}</p></main>
+{eligibility}<code>{code}</code><p>{expiry}</p><p>{keep_private}</p></main>
 <script nonce="{nonce}">document.getElementById("print").addEventListener("click", () => window.print());</script></html>"#,
         print = label(Key::GiftPrint),
         title = label(Key::SalesGiftCard),

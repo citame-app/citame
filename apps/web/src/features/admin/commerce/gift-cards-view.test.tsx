@@ -33,6 +33,8 @@ beforeEach(() => {
     const body = init?.body ? JSON.parse(String(init.body)) : {};
     if (url.pathname.endsWith("/gift-cards")) searched.push(url.searchParams.get("search") ?? "");
     if (init?.method === "POST") posts.push({ path: url.pathname + url.search, body });
+    if (url.pathname.endsWith("/eligible-services"))
+      return Response.json({ services: [{ id, name: "Facial" }] });
     if (url.pathname.endsWith("/check")) return Response.json({ ...card });
     if (url.pathname.endsWith("/capabilities"))
       return Response.json({
@@ -121,4 +123,16 @@ test("an uncertain purchase keeps the reviewed amounts and reuses its receipt ke
   fireEvent.click(retry);
   await waitFor(() => expect(posts).toHaveLength(2));
   expect(posts[1]).toEqual(posts[0]);
+});
+
+test("the reviewed purchase includes only the chosen treatments", async () => {
+  renderApp(<GiftCardsView mode="admin" role="owner" />);
+  await screen.findByText("Birthday");
+  fireEvent.click(screen.getByRole("button", { name: "New gift card" }));
+  fireEvent.change(screen.getByLabelText("Gift value (EUR)"), { target: { value: "30" } });
+  fireEvent.click(screen.getByRole("button", { name: "Choose treatments" }));
+  fireEvent.click(await screen.findByRole("checkbox", { name: "Facial" }));
+  fireEvent.click(screen.getByRole("button", { name: "Create gift purchase" }));
+  await waitFor(() => expect(posts).toHaveLength(1));
+  expect(posts[0]?.body).toMatchObject({ eligibleServiceIds: [id] });
 });

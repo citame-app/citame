@@ -7,6 +7,7 @@ import {
   giftCardPurchaseResponseSchema,
   giftCardRevealSchema,
   giftCardSchema,
+  giftEligibleCatalogSchema,
 } from "@sob/contracts";
 import type { ApiClient } from "./client";
 import type { CommerceMode } from "./commerce-endpoints";
@@ -14,6 +15,8 @@ import type { CommerceMode } from "./commerce-endpoints";
 const base = (mode: CommerceMode) => `${mode === "admin" ? "/admin" : "/me"}/gift-cards`;
 export function giftCardEndpoints(client: ApiClient) {
   return {
+    eligibleServices: (signal?: AbortSignal) =>
+      client.get("/admin/gift-cards/eligible-services", giftEligibleCatalogSchema, { signal }),
     list: (mode: CommerceMode, page = 1, search = "", status?: GiftCard["status"]) =>
       client.get(base(mode), giftCardListSchema, { query: { page, search, status } }),
     get: (id: string, mode: CommerceMode) => client.get(`${base(mode)}/${id}`, giftCardSchema),

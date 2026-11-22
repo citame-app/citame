@@ -1,5 +1,15 @@
 import { sql } from "drizzle-orm";
-import { check, index, integer, pgEnum, pgTable, text, unique, uuid } from "drizzle-orm/pg-core";
+import {
+  check,
+  index,
+  integer,
+  jsonb,
+  pgEnum,
+  pgTable,
+  text,
+  unique,
+  uuid,
+} from "drizzle-orm/pg-core";
 import { user } from "./auth";
 import { clientProfile } from "./client";
 import { createdAt, primaryId, timestamptz, updatedAt } from "./helpers";
@@ -11,6 +21,10 @@ export const giftCard = pgTable(
     label: text().notNull().default(""),
     buyerClientId: uuid().references(() => clientProfile.id),
     amountCents: integer().notNull(),
+    eligibleServices: jsonb()
+      .$type<{ id: string; name: string }[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
     balanceCents: integer().notNull().default(0),
     reservedCents: integer().notNull().default(0),
     purchaseRefundedCents: integer().notNull().default(0),
@@ -27,6 +41,10 @@ export const giftCard = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [
+    check(
+      "gift_card_eligible_services_valid",
+      sql`jsonb_typeof(${t.eligibleServices}) = 'array' and jsonb_array_length(${t.eligibleServices}) <= 50`,
+    ),
     unique("gift_card_actor_key_unique").on(t.createdBy, t.idempotencyKey),
     index("gift_card_buyer_created_idx").on(t.buyerClientId, t.createdAt),
     check(

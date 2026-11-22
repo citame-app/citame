@@ -64,6 +64,7 @@ function toGiftCard(
     checkoutId,
     amountCents: row.amountCents,
     purchasePriceCents: priceCents,
+    ...(row.eligibleServices.length ? { eligibleServices: row.eligibleServices } : {}),
     balanceCents: row.balanceCents,
     reservedCents: row.reservedCents,
     availableCents: row.balanceCents - row.reservedCents,
@@ -182,6 +183,7 @@ export async function checkGift(db: Database, code: string, principal: Principal
     .where(eq(giftCard.codeHash, giftCodeHash(code)));
   if (!row) throw new DomainError("not_found", "Gift card not found");
   return {
+    ...(row.eligibleServices.length ? { eligibleServices: row.eligibleServices } : {}),
     balanceCents: row.balanceCents,
     reservedCents: row.reservedCents,
     availableCents: row.balanceCents - row.reservedCents,

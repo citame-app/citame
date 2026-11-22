@@ -71,8 +71,8 @@ async function reveal(id: string, who = owner) {
 }
 const card = async (id: string) =>
   (await (await call(owner, `/admin/gift-cards/${id}`)).json()) as Card;
-async function active(amount = 1000) {
-  const purchase = await buy(amount);
+async function active(amount = 1000, options: Record<string, unknown> = {}) {
+  const purchase = await buy(amount, options);
   const response = await pay(purchase.checkout.id, "external_card", amount);
   expect(response.status).toBe(201);
   return {
@@ -313,6 +313,78 @@ test("rounding away the remaining gift balance does not close a partially refund
 
   expect((await refund(payment.id, 1)).status).toBe(201);
   expect(await card(gift.card.id)).toMatchObject({ status: "void", balanceCents: 0 });
+});
+
+test("restricted gift terms survive catalogue changes and are immutable on replay", async () => {
+  const idempotencyKey = key();
+  const first = await buy(2000, {
+    idempotencyKey,
+    eligibleServiceIds: [fixtures.haircutId, fixtures.colorId, fixtures.haircutId],
+  });
+  expect(first.card).toMatchObject({
+    eligibleServices: expect.arrayContaining([
+      expect.objectContaining({ id: fixtures.haircutId }),
+      expect.objectContaining({ id: fixtures.colorId }),
+    ]),
+  });
+  await t.db.execute(sql`update service set active = false where id = ${fixtures.haircutId}`);
+  const replay = await buy(2000, {
+    idempotencyKey,
+    eligibleServiceIds: [fixtures.colorId, fixtures.haircutId],
+  });
+  expect(replay).toEqual(first);
+  const altered = await call(owner, "/admin/gift-cards", "POST", {
+    amountCents: 2000,
+    idempotencyKey,
+    eligibleServiceIds: [fixtures.colorId],
+  });
+  expect(altered.status).toBe(409);
+  const inactive = await call(owner, "/admin/gift-cards", "POST", {
+    amountCents: 2000,
+    idempotencyKey: key(),
+    eligibleServiceIds: [fixtures.haircutId],
+  });
+  expect(inactive.status).toBe(400);
+  const selfIssued = await call(client, "/me/gift-cards", "POST", {
+    amountCents: 2000,
+    idempotencyKey: key(),
+    eligibleServiceIds: [fixtures.colorId],
+  });
+  expect(selfIssued.status).toBe(403);
+});
+
+test("mixed receipts fit overlapping restricted gifts without using other lines or tips", async () => {
+  await t.db.execute(
+    sql`update service set price_cents = 1000, currency = 'EUR'
+        where id in (${fixtures.haircutId}, ${fixtures.colorId})`,
+  );
+  const broad = await active(2000, { eligibleServiceIds: [fixtures.colorId, fixtures.haircutId] });
+  const narrow = await active(2000, { eligibleServiceIds: [fixtures.haircutId] });
+  const response = await call(owner, "/admin/commerce/checkouts", "POST", {
+    lines: [
+      { kind: "service", serviceId: fixtures.haircutId, quantity: 1 },
+      { kind: "service", serviceId: fixtures.colorId, quantity: 1 },
+      { kind: "custom", description: "Accessories", quantity: 1, unitAmountCents: 1000 },
+    ],
+    discountCents: 300,
+    tipCents: 100,
+    idempotencyKey: key(),
+  });
+  expect(response.status).toBe(201);
+  const receipt = (await response.json()) as { id: string };
+  const checked = await call(client, "/me/gift-cards/check", "POST", { code: narrow.code });
+  expect(await checked.json()).toMatchObject({
+    eligibleServices: [expect.objectContaining({ id: fixtures.haircutId })],
+  });
+  expect((await pay(receipt.id, "gift_card", 900, broad.code)).status).toBe(201);
+  expect((await pay(receipt.id, "gift_card", 901, narrow.code)).status).toBe(409);
+  expect(await card(narrow.card.id)).toMatchObject({ balanceCents: 2000 });
+  const paymentKey = key();
+  expect((await pay(receipt.id, "gift_card", 900, narrow.code, paymentKey)).status).toBe(201);
+  expect((await pay(receipt.id, "gift_card", 900, narrow.code, paymentKey)).status).toBe(201);
+  expect((await pay(receipt.id, "gift_card", 1, broad.code)).status).toBe(409);
+  expect(await card(narrow.card.id)).toMatchObject({ balanceCents: 1100 });
+  expect((await pay(receipt.id, "external_card", 1000)).status).toBe(201);
 });
 
 test("a pending bank refund reserves proportional value and a failed refund releases it", async () => {

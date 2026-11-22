@@ -15,6 +15,7 @@ import type { AppEnv } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
 import { checkoutBankTenders, gatewayFor } from "../commerce/hosted-tenders";
+import { listServices } from "../services/service";
 import { purchaseGift } from "./purchase";
 import {
   authorizeGiftAccess,
@@ -70,6 +71,11 @@ export function giftCardRoutes(deps: AppDeps) {
         ),
       ),
     )
+    .get("/eligible-services", async (c) => {
+      requirePermission(c.get("principal"), "commerce");
+      const services = await listServices(deps.db, true);
+      return c.json({ services: services.map(({ id, name }) => ({ id, name })) });
+    })
     .get("/replica", async (c) => {
       const query = parseOrThrow(giftReplicaQuerySchema, c.req.query());
       return c.json({

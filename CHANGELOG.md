@@ -8,6 +8,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Added
 
+- Web and Desktop can issue gift cards for selected treatments and show the terms on vouchers and when checking balances. Checkout verifies the eligible amount even for mixed payments.
+
 - Web and Desktop can issue gift cards at a sale price distinct from their initial balance. The receipt records the reviewed price and purchase refunds revoke the proportional gift value.
 
 - Desktop prepares Redsys card and Bizum payments for the reviewed amount. The linked browser opens the exact receipt and can continue the same pending bank order after reloading. Citame updates the receipt when the bank confirms payment.
