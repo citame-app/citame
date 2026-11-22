@@ -465,11 +465,12 @@ pub fn search_directory<'a>(
 ) -> Vec<&'a Client> {
     let query = query.trim().to_lowercase();
     let digits: String = query.chars().filter(char::is_ascii_digit).collect();
-    let matches_active_digits = digits.len() >= 3
-        || (!digits.is_empty()
-            && query
-                .chars()
-                .all(|ch| ch.is_ascii_digit() || "+-(). ".contains(ch)));
+    let phone_query = !digits.is_empty()
+        && query
+            .strip_prefix('+')
+            .unwrap_or(&query)
+            .chars()
+            .all(|ch| ch.is_ascii_digit() || ch.is_whitespace() || "-().".contains(ch));
     let matches_contact = |client: &Client, match_by_digits| {
         client.name.to_lowercase().contains(&query)
             || client
@@ -495,12 +496,12 @@ pub fn search_directory<'a>(
                 return false;
             }
             query.is_empty()
-                || matches_contact(client, matches_active_digits)
+                || matches_contact(client, phone_query)
                 || groups.iter().any(|name| name.contains(&query))
                 || directory.aliases.get(&client.id).is_some_and(|aliases| {
                     aliases
                         .iter()
-                        .any(|alias| matches_contact(alias, digits.len() >= 3))
+                        .any(|alias| matches_contact(alias, phone_query && digits.len() >= 3))
                 })
         })
         .collect()

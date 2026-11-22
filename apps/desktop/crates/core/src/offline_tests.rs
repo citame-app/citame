@@ -96,6 +96,7 @@ fn directory_search_finds_the_active_contact_through_merged_aliases() {
         assert_eq!(search_directory(&directory, query, Some("vip")), [&active]);
     }
     assert!(search_directory(&directory, "61", Some("vip")).is_empty());
+    assert!(search_directory(&directory, "Other client 346", None).is_empty());
     assert!(search_directory(&directory, "oldest name", Some("archived-group")).is_empty());
     assert!(search_directory(&directory, "archived-group", None).is_empty());
     assert_eq!(directory_groups(&directory.clients).unwrap()["vip"], 1);
