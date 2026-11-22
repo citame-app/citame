@@ -1015,6 +1015,7 @@ keys! {
     StaffPortraitUpload => ("Choose a photo", "Elegir foto"),
     StaffPortraitSave => ("Save as internal photo", "Guardar como foto interna"),
     StaffPortraitDraft => ("Photo selected for {staff}", "Foto elegida para {staff}"),
+    StaffPortraitDraftGeneric => ("Selected photo", "Foto elegida"),
     StaffPortraitDraftOffline => ("The selected photo is still in this panel. Reconnect to save it.", "La foto elegida sigue en este panel. Conéctate para guardarla."),
     StaffPortraitReviewCloud => ("Load current photo", "Cargar foto actual"),
     StaffPortraitUseReviewed => ("Use this version for the replacement", "Usar esta versión para la sustitución"),
