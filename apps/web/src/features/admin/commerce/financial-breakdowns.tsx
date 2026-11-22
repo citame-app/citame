@@ -46,6 +46,7 @@ export function PromotionCollections({
       basis={t("accounting.promotions.basis")}
       empty={t("accounting.promotions.empty")}
       labelColumn={t("accounting.promotions.offer")}
+      stackWhenNarrow
       moneyColumns={[t("accounting.collected"), t("accounting.refunded"), t("accounting.net")]}
       rows={rows.map((row) => ({
         key: JSON.stringify([row.name, row.code]),
@@ -64,6 +65,7 @@ function FinancialBreakdown({
   labelColumn,
   moneyColumns,
   rows,
+  stackWhenNarrow = false,
 }: {
   headingLevel: Heading;
   title: string;
@@ -72,12 +74,13 @@ function FinancialBreakdown({
   labelColumn: string;
   moneyColumns: string[];
   rows: MoneyRow[];
+  stackWhenNarrow?: boolean;
 }) {
   const { locale } = useI18n();
   const headingId = useId();
   const basisId = useId();
   return (
-    <div className="min-w-0 space-y-2">
+    <div className="@container min-w-0 space-y-2">
       <Heading id={headingId} className="font-semibold">
         {title}
       </Heading>
@@ -85,54 +88,79 @@ function FinancialBreakdown({
         {basis}
       </p>
       {rows.length ? (
-        <section
-          aria-labelledby={headingId}
-          // biome-ignore lint/a11y/noNoninteractiveTabindex: Keyboard users must be able to scroll the table.
-          tabIndex={0}
-          className="max-h-96 overflow-auto rounded-xl border border-line bg-surface focus-visible:outline-2 focus-visible:outline-ring"
-        >
-          <table
+        <>
+          <section
             aria-labelledby={headingId}
-            aria-describedby={basisId}
-            className="w-full border-separate border-spacing-0 text-sm"
+            // biome-ignore lint/a11y/noNoninteractiveTabindex: Keyboard users must be able to scroll the table.
+            tabIndex={0}
+            className={`max-h-96 overflow-auto rounded-xl border border-line bg-surface focus-visible:outline-2 focus-visible:outline-ring ${stackWhenNarrow ? "hidden @lg:block" : ""}`}
           >
-            <thead className="sticky top-0 z-20 bg-surface text-muted">
-              <tr>
-                <th
-                  scope="col"
-                  className="sticky start-0 bg-surface px-3 py-3 text-start font-medium"
-                >
-                  {labelColumn}
-                </th>
-                {moneyColumns.map((label) => (
-                  <th key={label} scope="col" className="px-3 py-3 text-end font-medium">
-                    {label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.key}>
+            <table
+              aria-labelledby={headingId}
+              aria-describedby={basisId}
+              className="w-full border-separate border-spacing-0 text-sm"
+            >
+              <thead className="sticky top-0 z-20 bg-surface text-muted">
+                <tr>
                   <th
-                    scope="row"
-                    className="sticky start-0 z-10 max-w-48 border-t border-line bg-surface px-3 py-2.5 text-start font-medium [overflow-wrap:anywhere]"
+                    scope="col"
+                    className="sticky start-0 bg-surface px-3 py-3 text-start font-medium"
                   >
-                    {row.label}
+                    {labelColumn}
                   </th>
-                  {row.amounts.map((amount, index) => (
-                    <td
-                      key={moneyColumns[index]}
-                      className="whitespace-nowrap border-t border-line px-3 py-2.5 text-end tabular-nums"
-                    >
-                      {formatMoney(amount, "EUR", locale)}
-                    </td>
+                  {moneyColumns.map((label) => (
+                    <th key={label} scope="col" className="px-3 py-3 text-end font-medium">
+                      {label}
+                    </th>
                   ))}
                 </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.key}>
+                    <th
+                      scope="row"
+                      className="sticky start-0 z-10 max-w-48 border-t border-line bg-surface px-3 py-2.5 text-start font-medium [overflow-wrap:anywhere]"
+                    >
+                      {row.label}
+                    </th>
+                    {row.amounts.map((amount, index) => (
+                      <td
+                        key={moneyColumns[index]}
+                        className="whitespace-nowrap border-t border-line px-3 py-2.5 text-end tabular-nums"
+                      >
+                        {formatMoney(amount, "EUR", locale)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+          {stackWhenNarrow && (
+            <ul
+              aria-labelledby={headingId}
+              aria-describedby={basisId}
+              className="divide-y divide-line rounded-xl border border-line bg-surface @lg:hidden"
+            >
+              {rows.map((row) => (
+                <li key={row.key} className="space-y-2 p-3">
+                  <p className="text-sm font-semibold [overflow-wrap:anywhere]">{row.label}</p>
+                  <dl className="flex flex-wrap gap-x-4 gap-y-2">
+                    {row.amounts.map((amount, index) => (
+                      <div key={moneyColumns[index]} className="space-y-0.5">
+                        <dt className="text-xs text-muted">{moneyColumns[index]}</dt>
+                        <dd className="text-sm tabular-nums">
+                          {formatMoney(amount, "EUR", locale)}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                </li>
               ))}
-            </tbody>
-          </table>
-        </section>
+            </ul>
+          )}
+        </>
       ) : (
         <p className="text-sm text-muted">{empty}</p>
       )}
