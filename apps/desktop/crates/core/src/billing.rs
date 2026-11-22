@@ -30,6 +30,7 @@ pub struct UnpaidReceiptBalance {
     pub id: Uuid,
     pub confirmed_cents: u32,
     pub balance_cents: Option<u32>,
+    pub price_pending: bool,
     pub payment_in_progress: bool,
 }
 

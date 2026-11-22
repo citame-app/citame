@@ -78,7 +78,8 @@ export const calendarAppointmentSchema = appointmentSchema.extend({
 export const unpaidReceiptBalanceSchema = z.object({
   id: idSchema,
   confirmedCents: moneyCentsSchema,
-  balanceCents: moneyCentsSchema.nullable(),
+  balanceCents: moneyCentsSchema.positive().nullable(),
+  pricePending: z.boolean(),
   paymentInProgress: z.boolean(),
 });
 export const unpaidAppointmentsSchema = z.object({

@@ -11,8 +11,21 @@ pub(super) struct Desk {
     observation: Option<Observation>,
     error: Option<Key>,
     invalid_date: bool,
-    unavailable_id: Option<String>,
+    unavailable: Option<(String, Key)>,
     pub(super) needs_refresh: bool,
+}
+
+impl Desk {
+    pub(super) fn receipt_restricted_for(&self, id: &str) -> bool {
+        let Ok(id) = id.parse::<Uuid>() else {
+            return false;
+        };
+        self.rows.as_ref().is_some_and(|rows| {
+            rows.appointments
+                .iter()
+                .any(|appointment| appointment.row.id == id && appointment.receipt_restricted)
+        })
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -38,7 +51,7 @@ impl Root {
             observation: None,
             error: None,
             invalid_date: false,
-            unavailable_id: None,
+            unavailable: None,
             needs_refresh: true,
         }));
         self.load_unpaid(cx);
@@ -89,7 +102,7 @@ impl Root {
         };
         if desk.date != date {
             desk.rows = None;
-            desk.unavailable_id = None;
+            desk.unavailable = None;
         }
         desk.date = date;
         desk.invalid_date = false;
@@ -161,15 +174,11 @@ impl Root {
             return;
         };
         let Ok(Some(appointment)) = calendar::effective_appointment(&self.svc.store, id) else {
-            desk.unavailable_id = Some(id.to_owned());
+            desk.unavailable = Some((id.to_owned(), Key::ShiftAppointmentUnavailable));
             self.svc.wake(Wake::Manual);
             cx.notify();
             return;
         };
-        let Overlay::Unpaid(mut desk) = std::mem::replace(&mut self.overlay, Overlay::None) else {
-            unreachable!()
-        };
-        desk.unavailable_id = None;
         let receipt = id.parse::<Uuid>().ok().and_then(|id| {
             desk.rows
                 .as_ref()?
@@ -178,6 +187,25 @@ impl Root {
                 .find(|appointment| appointment.row.id == id)?
                 .receipt_balance
         });
+        if receipt.is_some()
+            && (!self.can_open_appointment_checkout(&appointment)
+                || !self
+                    .svc
+                    .store
+                    .outbox(usize::MAX)
+                    .is_ok_and(|edits| edits.iter().all(|edit| edit.entity_id != id)))
+        {
+            if let Overlay::Unpaid(desk) = &mut self.overlay {
+                desk.unavailable = Some((id.to_owned(), Key::DueReceiptWaiting));
+            }
+            self.svc.wake(Wake::Manual);
+            cx.notify();
+            return;
+        }
+        let Overlay::Unpaid(mut desk) = std::mem::replace(&mut self.overlay, Overlay::None) else {
+            unreachable!()
+        };
+        desk.unavailable = None;
         self.show_appointment_details(appointment, Some(AppointmentReturn::Unpaid(desk)), cx);
         if let Some(receipt) = receipt {
             self.load_appointment_checkout(Some(receipt.id), cx);
@@ -276,10 +304,12 @@ impl Root {
                             if receipt.confirmed_cents > 0 {
                                 labels.push(amount(Key::DueConfirmed, receipt.confirmed_cents));
                             }
-                            labels.push(receipt.balance_cents.map_or_else(
-                                || self.t(Key::DuePricePending).to_owned(),
-                                |balance| amount(Key::DueReceiptBalance, balance),
-                            ));
+                            if let Some(balance) = receipt.balance_cents {
+                                labels.push(amount(Key::DueReceiptBalance, balance));
+                            }
+                            if receipt.price_pending {
+                                labels.push(self.t(Key::DuePricePending).to_owned());
+                            }
                             if receipt.payment_in_progress {
                                 labels.push(self.t(Key::DuePaymentPending).to_owned());
                             }
@@ -354,7 +384,10 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let id = row.id.to_string();
-        let unavailable = desk.unavailable_id.as_deref() == Some(id.as_str());
+        let unavailable = desk
+            .unavailable
+            .as_ref()
+            .and_then(|(target, label)| (target == &id).then_some(*label));
         div()
             .id(SharedString::from(id.clone()))
             .flex()
@@ -410,12 +443,8 @@ impl Root {
                         BillingReviewReason::UnknownBooksyPayment => Key::DueUnknownBooksyPayment,
                     }))
             }))
-            .when(unavailable, |body| {
-                body.child(
-                    div()
-                        .text_sm()
-                        .child(self.t(Key::ShiftAppointmentUnavailable)),
-                )
+            .when_some(unavailable, |body, label| {
+                body.child(div().text_sm().child(self.t(label)))
             })
     }
 }

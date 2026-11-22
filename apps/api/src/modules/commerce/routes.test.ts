@@ -13,6 +13,7 @@ import {
   appointmentService,
   auditLog,
   checkoutPayment,
+  checkoutRefund,
   checkout as checkoutTable,
   clientProfile,
   salonSettings,
@@ -1350,6 +1351,7 @@ test("the unpaid desk shows confirmed mixed tenders and keeps unresolved bank pa
     id: sale.id,
     confirmedCents: 5000,
     balanceCents: 5000,
+    pricePending: false,
     paymentInProgress: false,
   });
 
@@ -1359,7 +1361,8 @@ test("the unpaid desk shows confirmed mixed tenders and keeps unresolved bank pa
   expect((await list()).appointments[0]?.receiptBalance).toEqual({
     id: sale.id,
     confirmedCents: 5000,
-    balanceCents: 5000,
+    balanceCents: null,
+    pricePending: false,
     paymentInProgress: true,
   });
   await t.db
@@ -1368,7 +1371,8 @@ test("the unpaid desk shows confirmed mixed tenders and keeps unresolved bank pa
     .where(eq(checkoutPayment.id, payment.id));
   expect((await list()).appointments[0]?.receiptBalance).toMatchObject({
     confirmedCents: 5000,
-    balanceCents: 5000,
+    balanceCents: null,
+    pricePending: false,
     paymentInProgress: true,
   });
   // Simulate the other bank path from the same pending attempt.
@@ -1390,6 +1394,14 @@ test("the unpaid desk follows original receipt permissions when an appointment c
   expect(restricted.appointments[0]).toMatchObject({ id: appointmentId, receiptRestricted: true });
   expect(restricted.appointments[0]?.receiptBalance).toBeUndefined();
   expect((await call(colleague, `/admin/commerce/checkouts/${sale.id}`)).status).toBe(404);
+  const resumeRestricted = await call(colleague, "/admin/commerce/checkouts", "POST", {
+    appointmentId,
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(resumeRestricted.status).toBe(404);
+  expect(await t.db.select({ id: checkoutTable.id }).from(checkoutTable)).toEqual([
+    { id: sale.id },
+  ]);
   const ownerList = unpaidAppointmentsSchema.parse(await (await call(owner, path)).json());
   expect(ownerList.appointments[0]?.receiptBalance).toMatchObject({
     id: sale.id,
@@ -1411,8 +1423,46 @@ test("a provisional zero from a variable-price receipt stays in the unpaid desk"
     id: sale.id,
     confirmedCents: 0,
     balanceCents: null,
+    pricePending: true,
     paymentInProgress: false,
   });
+});
+
+test("a refunded excess bank capture does not leave a collectible row or verification warning", async () => {
+  const sale = await checkout();
+  const attempted = await pay(sale.id, "redsys_card", 10000);
+  expect(attempted.status).toBe(201);
+  const { payment } = (await attempted.json()) as { payment: { id: string; order: string } };
+  await notify(payment.order, { Ds_Response: "0190" });
+  expect((await pay(sale.id, "external_card", 5000)).status).toBe(201);
+  await notify(payment.order);
+
+  const path = "/admin/commerce/unpaid?from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z";
+  const read = async () => unpaidAppointmentsSchema.parse(await (await call(owner, path)).json());
+  expect((await read()).appointments[0]?.receiptBalance).toMatchObject({
+    id: sale.id,
+    confirmedCents: 5000,
+    balanceCents: null,
+    pricePending: false,
+    paymentInProgress: true,
+  });
+  const refund = await call(owner, `/admin/commerce/payments/${payment.id}/refunds`, "POST", {
+    amountCents: 10000,
+    reason: "Refund the late capture in the synthetic ledger",
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(refund.status, await refund.clone().text()).toBe(201);
+  const { id } = (await refund.json()) as { id: string };
+  await t.db
+    .update(checkoutRefund)
+    .set({ status: "reconciliation" })
+    .where(eq(checkoutRefund.id, id));
+  const reconciled = await call(owner, `/admin/commerce/refunds/${id}/reconcile`, "POST", {
+    outcome: "succeeded",
+    reference: "Synthetic bank refund proof",
+  });
+  expect(reconciled.status, await reconciled.clone().text()).toBe(200);
+  expect((await read()).appointments).toEqual([]);
 });
 
 test("unpaid appointments stay settled beyond the latest hundred sales and respect staff scope", async () => {

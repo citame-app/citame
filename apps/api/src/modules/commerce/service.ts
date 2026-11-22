@@ -100,6 +100,16 @@ export function ownsSale(
     : sale.staffId === principal.staffId;
 }
 
+function assertSaleAccess(principal: Principal, sale: typeof checkout.$inferSelect) {
+  const restricted =
+    principal.role === "staff" && !permissionsFor(principal.role, principal.accessPreset).allSales;
+  if (
+    (principal.role === "client" && (!sale.clientId || !ownsClient(principal, sale.clientId))) ||
+    (restricted && !ownsSale(principal, sale))
+  )
+    throw new DomainError("not_found", "Checkout not found");
+}
+
 export function saleRow(
   db: Tx,
   id: string,
@@ -116,15 +126,8 @@ export async function saleRow(db: Connection, id: string, principal: Principal, 
   if (principal.role !== "client") requireOperator(principal);
   const query = db.select().from(checkout).where(eq(checkout.id, id));
   const [row] = await (lock ? query.for("update") : query);
-  const restricted =
-    principal.role === "staff" && !permissionsFor(principal.role, principal.accessPreset).allSales;
-
-  if (
-    !row ||
-    (principal.role === "client" && (!row.clientId || !ownsClient(principal, row.clientId))) ||
-    (restricted && !ownsSale(principal, row))
-  )
-    throw new DomainError("not_found", "Checkout not found");
+  if (!row) throw new DomainError("not_found", "Checkout not found");
+  assertSaleAccess(principal, row);
   // Receipt first, scheduling next, then client/value/inventory and appointment rows.
   if (lock && row.appointmentId) await lockScheduling(db as Tx);
   return row;
@@ -475,6 +478,7 @@ export async function createCheckoutInTransaction(
       ),
     );
   if (existing) {
+    assertSaleAccess(principal, existing);
     checkReplay(existing, requestHash);
     return snapshot(tx, existing);
   }
@@ -549,6 +553,7 @@ export async function createCheckoutInTransaction(
         and(eq(checkout.appointmentId, input.appointmentId), sql`${checkout.status} <> 'void'`),
       );
     if (previous) {
+      assertSaleAccess(principal, previous);
       if (input.lines.length || input.discountCents || input.tipCents || input.clientId)
         checkReplay(previous, requestHash);
       return snapshot(tx, previous);

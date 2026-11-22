@@ -836,7 +836,7 @@ function DueAppointments({
                           )}
                         </dl>
                       )}
-                      {item.receiptBalance.balanceCents === null && (
+                      {item.receiptBalance.pricePending && (
                         <p className="text-sm">{t("pos.duePricePending")}</p>
                       )}
                       {item.receiptBalance.paymentInProgress && (

@@ -121,7 +121,11 @@ fn tender_label(method: ReceiptTender) -> Key {
 
 impl Root {
     pub(super) fn can_open_appointment_checkout(&self, appointment: &Appointment) -> bool {
-        self.status.connectivity == Connectivity::Online
+        let restricted_in_unpaid = matches!(&self.overlay, Overlay::Details(details)
+            if matches!(details.return_to.as_ref(), Some(AppointmentReturn::Unpaid(desk))
+                if desk.receipt_restricted_for(&appointment.id)));
+        !restricted_in_unpaid
+            && self.status.connectivity == Connectivity::Online
             && self
                 .svc
                 .current_session()

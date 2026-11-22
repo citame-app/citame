@@ -1,9 +1,10 @@
 import { type CalendarQuery, permissionsFor, type UnpaidAppointments } from "@sob/contracts";
-import { checkout, checkoutLine, checkoutPayment, type Database } from "@sob/db";
+import { checkout, checkoutLine, checkoutPayment, checkoutRefund, type Database } from "@sob/db";
 import { and, getTableName, inArray, sql } from "drizzle-orm";
 import { authorizeCalendarQuery } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import { getCalendar } from "../appointments/calendar";
+import { completedRefundStatus, recordedPaymentStatuses } from "./money";
 import { ownsSale, requireOperator } from "./service";
 
 /** The cashier sees the intersection of calendar and sales access. No recent-receipt
@@ -27,6 +28,7 @@ export async function unpaidAppointments(
       // Drizzle can omit column qualifiers in a single-table projection.
       // Keep the outer ID qualified inside the correlated payment and line lookups.
       const receiptId = sql`${sql.identifier(getTableName(checkout))}.${sql.identifier(checkout.id.name)}`;
+      const paymentId = sql`${sql.identifier(getTableName(checkoutPayment))}.${sql.identifier(checkoutPayment.id.name)}`;
       const receipts = ids.length
         ? await tx
             .select({
@@ -35,6 +37,11 @@ export async function unpaidAppointments(
               staffId: checkout.staffId,
               createdBy: checkout.createdBy,
               totalCents: checkout.totalCents,
+              status: checkout.status,
+              recordedCents: sql<number>`coalesce((
+                select sum(${checkoutPayment.amountCents}) from ${checkoutPayment}
+                where ${checkoutPayment.checkoutId} = ${receiptId} and ${inArray(checkoutPayment.status, recordedPaymentStatuses)}
+              ), 0)`.mapWith(Number),
               confirmedCents: sql<number>`coalesce((
                 select sum(${checkoutPayment.amountCents}) from ${checkoutPayment}
                 where ${checkoutPayment.checkoutId} = ${receiptId} and ${checkoutPayment.status} = 'succeeded'
@@ -42,7 +49,16 @@ export async function unpaidAppointments(
               paymentInProgress: sql<boolean>`exists (
                 select 1 from ${checkoutPayment}
                 where ${checkoutPayment.checkoutId} = ${receiptId}
-                and ${checkoutPayment.status} in ('pending', 'reconciliation')
+                and (
+                  ${checkoutPayment.status} = 'pending'
+                  or (
+                    ${checkoutPayment.status} = 'reconciliation' and coalesce((
+                      select sum(${checkoutRefund.amountCents}) from ${checkoutRefund}
+                      where ${checkoutRefund.paymentId} = ${paymentId}
+                        and ${checkoutRefund.status} = ${completedRefundStatus}
+                    ), 0) < ${checkoutPayment.amountCents}
+                  )
+                )
               )`,
               pricePending: sql<boolean>`exists (
                 select 1 from ${checkoutLine}
@@ -72,7 +88,15 @@ export async function unpaidAppointments(
           if (row.billingReviewReasons) return [];
           const receipt = byAppointment.get(row.id);
           if (!receipt) return [row];
+          const balance = receipt.totalCents - receipt.recordedCents;
           if (!receipt.pricePending && receipt.confirmedCents >= receipt.totalCents) return [];
+          // Refunded or closed receipts do not open a new collectible balance.
+          if (
+            !receipt.pricePending &&
+            !receipt.paymentInProgress &&
+            (receipt.status !== "open" || balance <= 0)
+          )
+            return [];
           if (!allSales && !ownsSale(principal, receipt))
             return [{ ...row, receiptRestricted: true as const }];
           return [
@@ -81,9 +105,8 @@ export async function unpaidAppointments(
               receiptBalance: {
                 id: receipt.id,
                 confirmedCents: receipt.confirmedCents,
-                balanceCents: receipt.pricePending
-                  ? null
-                  : receipt.totalCents - receipt.confirmedCents,
+                balanceCents: receipt.pricePending || receipt.paymentInProgress ? null : balance,
+                pricePending: receipt.pricePending,
                 paymentInProgress: receipt.paymentInProgress,
               },
             },

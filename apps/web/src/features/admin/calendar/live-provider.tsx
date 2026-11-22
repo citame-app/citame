@@ -80,7 +80,8 @@ export function CalendarLiveProvider({
             queryKey[0] === "peak-price-policy" ||
             queryKey[0] === "booking-peak-price" ||
             queryKey[0] === "salon" ||
-            (queryKey[0] === "commerce" && queryKey[1] === "transactions") ||
+            (queryKey[0] === "commerce" &&
+              (queryKey[1] === "transactions" || queryKey[1] === "unpaid")) ||
             (queryKey[0] === "admin" &&
               (queryKey[1] === "calendar" ||
                 queryKey[1] === "report" ||

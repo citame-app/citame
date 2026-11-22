@@ -1581,6 +1581,7 @@ keys! {
     DueReceiptBalance => ("Remaining on receipt: {amount}", "Saldo del recibo: {amount}"),
     DuePricePending => ("Final price pending", "Precio final pendiente"),
     DuePaymentPending => ("Payment to verify", "Pago por verificar"),
+    DueReceiptWaiting => ("Sync and review this appointment before opening its receipt.", "Sincroniza y revisa esta cita antes de abrir su recibo."),
     DueReceiptRestricted => ("Receipt access restricted", "Acceso al recibo restringido"),
     DueOpenReceipt => ("Open receipt", "Abrir recibo"),
     DueBalance => ("Due in Citame: {amount}", "Pendiente en Citame: {amount}"),
