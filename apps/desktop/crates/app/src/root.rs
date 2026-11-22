@@ -838,6 +838,7 @@ impl Root {
         }
         self.calendar_scope = scope;
         self.replica_generation = generation;
+        self.refresh_open_waitlist_scope();
         self.refresh_notices();
         let store = &self.svc.store;
         let previous_time_off_scope = std::mem::take(&mut self.time_off_scope);
