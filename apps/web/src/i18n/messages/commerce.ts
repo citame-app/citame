@@ -28,7 +28,8 @@ export const commerceEn = {
   "commerce.continue": "Continue to payment",
   "commerce.bankSubmit": "Pay securely with Redsys",
   "commerce.resumeBank": "Open pending bank payment",
-  "commerce.originalBankUnavailable": "The selected bank order cannot be opened. Check the receipt history.",
+  "commerce.originalBankUnavailable":
+    "The selected bank order cannot be opened. Check the receipt history.",
   "commerce.resumeBankError":
     "This payment could not be opened. Check its status before trying again.",
   "commerce.bankHelp": "You will enter your payment details on the bank’s secure page.",
@@ -128,7 +129,8 @@ export const commerceEsAR: Record<keyof typeof commerceEn, string> = {
   "commerce.continue": "Continuar al pago",
   "commerce.bankSubmit": "Pagar de forma segura con Redsys",
   "commerce.resumeBank": "Abrir pago bancario pendiente",
-  "commerce.originalBankUnavailable": "No se puede abrir la orden bancaria seleccionada. Revisa el historial del recibo.",
+  "commerce.originalBankUnavailable":
+    "No se puede abrir la orden bancaria seleccionada. Revisa el historial del recibo.",
   "commerce.resumeBankError":
     "No se pudo abrir este pago. Comprueba su estado antes de reintentar.",
   "commerce.bankHelp": "Introducirás los datos de pago en la página segura del banco.",

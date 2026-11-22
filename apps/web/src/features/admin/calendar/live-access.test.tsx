@@ -202,6 +202,26 @@ test("a client merge replaces the in-flight first business overview load", async
   }
 });
 
+function ReceiptNavigation({
+  readReceipt,
+}: {
+  readReceipt: (signal: AbortSignal) => Promise<string>;
+}) {
+  const [opened, setOpened] = useState(false);
+  const receipt = useQuery({
+    queryKey: ["commerce", "admin", "checkout", staffId],
+    queryFn: ({ signal }) => readReceipt(signal),
+    enabled: opened,
+  });
+  return opened ? (
+    receipt.data && <p>{receipt.data}</p>
+  ) : (
+    <button type="button" onClick={() => setOpened(true)}>
+      Open receipt
+    </button>
+  );
+}
+
 test("a live bank reservation replaces an in-flight first checkout load", async () => {
   globalThis.EventSource = Stream as unknown as typeof EventSource;
   const stale = Promise.withResolvers<string>();
@@ -221,25 +241,9 @@ test("a live bank reservation replaces an in-flight first checkout load", async 
     }),
   ) as unknown as typeof fetch;
 
-  function ReceiptNavigation() {
-    const [opened, setOpened] = useState(false);
-    const receipt = useQuery({
-      queryKey: ["commerce", "admin", "checkout", staffId],
-      queryFn: ({ signal }) => readReceipt(signal),
-      enabled: opened,
-    });
-    return opened ? (
-      receipt.data && <p>{receipt.data}</p>
-    ) : (
-      <button type="button" onClick={() => setOpened(true)}>
-        Open receipt
-      </button>
-    );
-  }
-
   const view = renderApp(
     <CalendarLiveProvider>
-      <ReceiptNavigation />
+      <ReceiptNavigation readReceipt={readReceipt} />
     </CalendarLiveProvider>,
   );
   const refresh = spyOn(view.queryClient, "invalidateQueries");

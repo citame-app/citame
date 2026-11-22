@@ -63,7 +63,10 @@ function SalesPage() {
         }
         onViewChange={(view) => void navigate({ search: { view }, replace: false })}
         onCheckoutChange={(id) =>
-          void navigate({ search: { ...search, checkout: id ?? undefined, bankPayment: undefined }, replace: !id })
+          void navigate({
+            search: { ...search, checkout: id ?? undefined, bankPayment: undefined },
+            replace: !id,
+          })
         }
       />
     </div>

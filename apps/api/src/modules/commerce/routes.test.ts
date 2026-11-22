@@ -772,7 +772,9 @@ test("a stale generation in a Desktop cookie session cannot start a bank order",
   });
   expect(response.status).toBe(409);
   expect(await response.json()).toMatchObject({ error: { code: "sync_generation_changed" } });
-  const current = checkoutSchema.parse(await (await call(owner, `/admin/commerce/checkouts/${sale.id}`)).json());
+  const current = checkoutSchema.parse(
+    await (await call(owner, `/admin/commerce/checkouts/${sale.id}`)).json(),
+  );
   expect(current.payments).toHaveLength(0);
 });
 

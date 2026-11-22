@@ -19,7 +19,7 @@ import type { AppConfig } from "../config";
 import { DomainError } from "../errors";
 import { parseOrThrow, readJson } from "../http";
 import { BearerError, type TokenVerifier } from "../mcp/verify";
-import { saleRow, receiptHasHostedOrder } from "../modules/commerce/service";
+import { receiptHasHostedOrder, saleRow } from "../modules/commerce/service";
 import { desktopResource } from "./desktop";
 import { desktopWorkspacePath } from "./desktop-workspaces";
 
