@@ -33,6 +33,26 @@ impl ReportQuery {
         }
     }
 
+    pub(crate) fn profitability_path(&self, client_id: Option<&str>, page: Option<u32>) -> String {
+        let page_string = page.map(|page| page.to_string());
+        let mut fields = Vec::new();
+        if let Some(id) = client_id {
+            fields.push(("clientId", id));
+        }
+        if let Some(page) = page_string.as_deref() {
+            fields.push(("page", page));
+        }
+        self.url(
+            if page.is_some() {
+                "/admin/accounting/appointment-profitability"
+            } else {
+                "/admin/accounting/appointment-profitability/export"
+            },
+            false,
+            &fields,
+        )
+    }
+
     pub(crate) fn outcome_path(&self, status: Outcome, page: u32) -> String {
         self.url(
             "/admin/reports/outcomes",

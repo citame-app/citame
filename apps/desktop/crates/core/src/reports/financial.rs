@@ -43,6 +43,8 @@ pub struct FinancialReport {
     pub settled_by_family: Option<Vec<SalesFamilyTotal>>,
     pub settled_by_item: Option<Vec<SettledSaleItem>>,
     pub revenue_forecast: Option<RevenueForecast>,
+    #[serde(default)]
+    pub appointment_profitability: bool,
     pub promotion_collections: Option<Vec<PromotionCollection>>,
     pub methods: Vec<FinancialMethod>,
     pub cash_sessions: Vec<FinancialSession>,
@@ -96,6 +98,63 @@ pub struct ForecastDay {
     pub currency: Option<String>,
     pub appointment_lines: u64,
     pub amount_cents: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppointmentProfitability {
+    pub generation: String,
+    pub timezone: String,
+    pub rows: Vec<AppointmentMargin>,
+    pub pagination: MarginPagination,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarginPagination {
+    pub page: u32,
+    pub page_size: u32,
+    pub total: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppointmentMargin {
+    pub appointment_id: uuid::Uuid,
+    pub starts_at: DateTime<Utc>,
+    pub staff_name: Option<String>,
+    pub net_sales_cents: Option<i64>,
+    pub product_cost_cents: i64,
+    pub unknown_product_lines: u32,
+    pub commission_cents: i64,
+    pub direct_costs: Option<AppointmentDirectCosts>,
+    pub margin_cents: Option<i64>,
+    pub review_reason: Option<MarginReview>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppointmentDirectCosts {
+    pub labour_cents: Option<u32>,
+    pub materials_cents: Option<u32>,
+    pub version: u32,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewAppointmentCosts {
+    pub generation: String,
+    pub labour_cents: Option<u32>,
+    pub materials_cents: Option<u32>,
+    pub version: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MarginReview {
+    MissingCosts,
+    RefundReview,
+    UnallocatedReceipt,
 }
 
 #[derive(Debug, Deserialize)]

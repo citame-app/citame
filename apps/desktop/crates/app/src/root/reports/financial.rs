@@ -99,6 +99,16 @@ impl Root {
                 self.t(Key::FinancialUnknownCost),
                 &[("n", &lines)],
             )))
+            .when(report.appointment_profitability, |view| {
+                view.child(self.button(
+                    "open-appointment-profitability",
+                    self.t(Key::FinancialProfitability),
+                    Kind::Ghost,
+                    cx.listener(|root, _, _, cx| {
+                        root.select_report_mode(ReportMode::Profitability, cx)
+                    }),
+                ))
+            })
             .when_some(report.revenue_forecast.as_ref(), |view, forecast| {
                 view.child(self.render_revenue_forecast(
                     desk,
@@ -424,7 +434,7 @@ impl Root {
             })
     }
 
-    fn financial_row<const N: usize>(
+    pub(super) fn financial_row<const N: usize>(
         &self,
         heading: &str,
         values: [(Key, String); N],

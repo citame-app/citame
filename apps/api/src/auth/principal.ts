@@ -131,7 +131,9 @@ export function requireAuth(
         ? method === "GET" || method === "PUT"
         : path.endsWith("/payouts/reviewed")
           ? method === "POST"
-          : method === "GET";
+          : method === "GET" ||
+            (method === "PUT" &&
+              /^\/admin\/accounting\/appointment-profitability\/[\da-f-]+\/costs$/.test(path));
       const campaignMutation =
         (method === "POST" &&
           /^\/admin\/marketing\/campaigns(?:\/[\da-f-]+\/(?:queue|cancel))?$/.test(path)) ||

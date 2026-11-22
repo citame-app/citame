@@ -11,6 +11,7 @@ import { adminStaffQuery } from "~/lib/admin-queries";
 import { api } from "~/lib/api/instance";
 import { addDaysLocal, formatMoney, localDateOf } from "~/lib/format";
 import { presetRange } from "../reports/logic";
+import { AppointmentProfitability } from "./appointment-profitability";
 import { downloadCsv } from "./csv";
 import {
   PromotionCollections,
@@ -696,6 +697,13 @@ export function SalesReport({
               forecast={report.data.revenueForecast}
               headingLevel={clientId ? "h3" : "h4"}
               timezone={report.data.timezone}
+            />
+          )}
+          {report.data.appointmentProfitability && (
+            <AppointmentProfitability
+              key={JSON.stringify(["profitability", range])}
+              range={range}
+              headingLevel={clientId ? "h3" : "h4"}
             />
           )}
           {report.data.settledByFamily && (

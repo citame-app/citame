@@ -349,6 +349,11 @@ for (const scheme of ["light", "dark"] as const)
           data: { id: clientId, name: `Forecast fixture ${code}` },
         });
         expect(forecastClient.status(), await forecastClient.text()).toBe(201);
+        const currentPolicy = await (await owner.get("/api/admin/settings/booking-policy")).json();
+        const disabledPolicy = await owner.put("/api/admin/settings/booking-policy", {
+          data: { ...currentPolicy, enabled: false },
+        });
+        expect(disabledPolicy.status(), await disabledPolicy.text()).toBe(200);
         const bookedForForecast = await owner.post("/api/appointments", {
           data: {
             staffId: staff.id,
@@ -356,7 +361,6 @@ for (const scheme of ["light", "dark"] as const)
             serviceIds: [serviceId],
             startsAt: freedStart,
             override: true,
-            protectionWaiverReason: "Synthetic forecast test booking",
           },
         });
         expect(bookedForForecast.status(), await bookedForForecast.text()).toBe(201);
@@ -423,6 +427,53 @@ for (const scheme of ["light", "dark"] as const)
         await page.getByRole("radio", { name: "Last 7 days", exact: true }).check();
         await expect(clientsTab).toHaveAttribute("aria-pressed", "true");
         expect(new URL(page.url()).searchParams.get("section")).toBe("clients");
+        if (!forecastVisit) throw new Error("Missing appointment for margin report");
+        const appointmentCheckout = await owner.post("/api/admin/commerce/checkouts", {
+          data: { appointmentId: forecastVisit.id, idempotencyKey: crypto.randomUUID() },
+        });
+        expect(appointmentCheckout.status(), await appointmentCheckout.text()).toBe(201);
+        const appointmentReceipt = await appointmentCheckout.json();
+        expect(appointmentReceipt.totalCents).toBe(10000);
+        expect(
+          (
+            await owner.post(`/api/admin/commerce/checkouts/${appointmentReceipt.id}/payments`, {
+              data: {
+                method: "external_card",
+                amountCents: 10000,
+                idempotencyKey: crypto.randomUUID(),
+              },
+            })
+          ).status(),
+        ).toBe(201);
+        await page.goto(
+          `/admin/reports?client=${clientId}&preset=custom&from=${paymentDate}&to=${paymentDate}`,
+        );
+        await page.getByRole("button", { name: "Direct margin by appointment" }).click();
+        const margins = page.getByRole(mobile ? "list" : "table", {
+          name: "Direct margin by appointment",
+        });
+        await expect(margins.getByText("Costs pending", { exact: true })).toBeVisible();
+        await margins.getByRole("button", { name: "Review costs" }).click();
+        await page.getByRole("textbox", { name: "Labour (EUR)", exact: true }).fill("20");
+        await page.getByRole("textbox", { name: "Materials (EUR)", exact: true }).fill("25");
+        await page.getByRole("button", { name: "Save reviewed costs" }).click();
+        await expect(margins.getByText("€55", { exact: true })).toBeVisible();
+        await expectNoHorizontalScroll(page);
+        await expectNoSeriousA11yViolations(page, `appointment margins EN ${scheme}`);
+        await margins.screenshot({ path: info.outputPath("appointment-profitability-en.png") });
+        const profitDownload = page.waitForEvent("download", { timeout: 10000 });
+        await page.getByRole("link", { name: "Export all appointment margins (CSV)" }).click();
+        expect(await readFile(await (await profitDownload).path(), "utf8")).toContain(
+          '"10000","0","0","0","2000","2500","5500","","EUR"',
+        );
+        await switchLocale(page, "Español");
+        const marginsEs = page.getByRole(mobile ? "list" : "table", {
+          name: "Margen directo por cita",
+        });
+        await expect(marginsEs.getByText(/EUR\s*55/)).toBeVisible();
+        await expectNoHorizontalScroll(page);
+        await expectNoSeriousA11yViolations(page, `appointment margins ES ${scheme}`);
+        await marginsEs.screenshot({ path: info.outputPath("appointment-profitability-es.png") });
       } finally {
         if (forecastVisit)
           await owner.patch(`/api/appointments/${forecastVisit.id}`, {

@@ -1,4 +1,6 @@
 import {
+  appointmentDirectCostInputSchema,
+  appointmentProfitabilityQuerySchema,
   type CommissionScope,
   commissionPayoutInputSchema,
   commissionPolicyInputSchema,
@@ -15,6 +17,11 @@ import { requirePermission } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
+import {
+  exportAppointmentProfitability,
+  reportAppointmentProfitability,
+  saveAppointmentDirectCost,
+} from "./appointment-profitability";
 import {
   commissionStatement,
   findRecordedPayout,
@@ -39,6 +46,36 @@ export function accountingRoutes(deps: AppDeps) {
       requirePermission(c.get("principal"), "commerce");
       if (c.req.method !== "GET") requirePermission(c.get("principal"), "manageCommissions");
       await next();
+    })
+    .get("/appointment-profitability", async (c) => {
+      c.header("Cache-Control", "private, no-store");
+      const report = await reportAppointmentProfitability(
+        deps.db,
+        parseOrThrow(appointmentProfitabilityQuerySchema, c.req.query()),
+        c.get("principal"),
+      );
+      return c.json({ ...report, generation });
+    })
+    .get("/appointment-profitability/export", (c) =>
+      exportAppointmentProfitability(
+        deps.db,
+        parseOrThrow(appointmentProfitabilityQuerySchema, c.req.query()),
+        c.get("principal"),
+        c.req.method === "HEAD",
+      ),
+    )
+    .put("/appointment-profitability/:id/costs", async (c) => {
+      c.header("Cache-Control", "private, no-store");
+      const input = parseOrThrow(appointmentDirectCostInputSchema, await readJson(c));
+      checkGeneration(input.generation);
+      return c.json(
+        await saveAppointmentDirectCost(
+          deps.db,
+          parseOrThrow(idSchema, c.req.param("id")),
+          input,
+          c.get("principal"),
+        ),
+      );
     })
     .get("/statement-scope", (c) => {
       const principal = c.get("principal");

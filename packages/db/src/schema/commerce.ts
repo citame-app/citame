@@ -77,6 +77,9 @@ export const checkout = pgTable(
       .on(t.appointmentId)
       .where(sql`${t.status} <> 'void'`),
     index("checkout_client_idx").on(t.clientId),
+    index("checkout_appointment_settlement_idx")
+      .on(t.fulfilledAt, t.id)
+      .where(sql`${t.appointmentId} is not null and ${t.fulfilledAt} is not null`),
     index("checkout_created_idx").on(t.createdAt),
     check(
       "checkout_money_valid",
@@ -137,7 +140,9 @@ export const cashSession = pgTable(
     expectedCents: integer(),
   },
   (t) => [
-    uniqueIndex("cash_session_one_open").on(sql`(true)`).where(sql`${t.closedAt} is null`),
+    uniqueIndex("cash_session_one_open")
+      .on(sql`(true)`)
+      .where(sql`${t.closedAt} is null`),
     check(
       "cash_session_nonnegative",
       sql`${t.openingCents} >= 0 and (${t.countedCents} is null or ${t.countedCents} >= 0)`,

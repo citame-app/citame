@@ -827,6 +827,13 @@
       "when": 1795316100000,
       "tag": "0117_inventory_brand_logo",
       "breakpoints": true
+    },
+    {
+      "idx": 118,
+      "version": "7",
+      "when": 1795316700000,
+      "tag": "0118_appointment_direct_costs",
+      "breakpoints": true
     }
   ]
 }

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import {
+  appointmentProfitabilitySchema,
   checkoutSchema,
   commissionPayoutSchema,
   reviewedCommissionPolicySchema,
@@ -301,6 +302,80 @@ test("settled families exclude tips and put historical receipts without matching
         taxCents: 0,
       },
     ],
+  });
+});
+
+test("appointment profitability uses reviewed direct costs and keeps refunded receipts pending review", async () => {
+  await policy();
+  const receipt = await sale();
+  const payment = await settle(receipt.id, receipt.totalCents);
+  const date = Temporal.Now.plainDateISO("America/Argentina/Buenos_Aires").toString();
+  const reportPath = `/admin/accounting/appointment-profitability?from=${date}&to=${date}`;
+  const costsPath = `/admin/accounting/appointment-profitability/${appointmentId}/costs`;
+  expect((await call(staff, reportPath)).status).toBe(403);
+  const starting = await call(owner, reportPath);
+  expect(starting.status).toBe(200);
+  expect(starting.headers.get("cache-control")).toBe("private, no-store");
+  const startingReport = appointmentProfitabilitySchema.parse(await starting.json());
+  expect(startingReport).toMatchObject({
+    rows: [
+      {
+        appointmentId,
+        netSalesCents: 9000,
+        commissionCents: 2250,
+        marginCents: null,
+        reviewReason: "missing_costs",
+        directCosts: null,
+      },
+    ],
+    pagination: { page: 1, pageSize: 25, total: 1 },
+  });
+  const changes = {
+    version: null,
+    labourCents: 1500,
+    materialsCents: 800,
+    generation: startingReport.generation,
+  };
+  expect((await call(staff, costsPath, "PUT", changes)).status).toBe(403);
+  expect(
+    (await call(owner, costsPath, "PUT", { ...changes, generation: "restored-database" })).status,
+  ).toBe(409);
+  const saved = await call(owner, costsPath, "PUT", changes);
+  expect(saved.status).toBe(200);
+  expect(await saved.json()).toMatchObject({ version: 1, labourCents: 1500, materialsCents: 800 });
+  expect(await (await call(owner, costsPath, "PUT", changes)).json()).toMatchObject({ version: 1 });
+  expect((await call(owner, costsPath, "PUT", { ...changes, materialsCents: 0 })).status).toBe(409);
+  const detailed = await call(
+    owner,
+    `${reportPath}&staffId=${staff.staffId}&clientId=${client.clientId}`,
+  );
+  expect(await detailed.json()).toMatchObject({
+    rows: [
+      {
+        appointmentId,
+        marginCents: 4450,
+        reviewReason: null,
+        directCosts: { labourCents: 1500, materialsCents: 800, version: 1 },
+      },
+    ],
+  });
+  const otherDesk = await call(owner, `${reportPath}&staffId=${other.staffId}`);
+  expect(await otherDesk.json()).toMatchObject({ rows: [], pagination: { total: 0 } });
+  const exported = await call(owner, reportPath.replace("?", "/export?"));
+  expect(exported.status).toBe(200);
+  expect(exported.headers.get("content-type")).toContain("text/csv");
+  expect(await exported.text()).toContain('"2250","1500","800","4450","","EUR"');
+  expect(
+    (
+      await call(owner, `/admin/commerce/payments/${payment.id}/refunds`, "POST", {
+        amountCents: 1000,
+        reason: "Synthetic profitability review",
+        idempotencyKey: key(),
+      })
+    ).status,
+  ).toBe(201);
+  expect(await (await call(owner, reportPath)).json()).toMatchObject({
+    rows: [{ appointmentId, marginCents: null, reviewReason: "refund_review" }],
   });
 });
 
