@@ -424,10 +424,10 @@ export async function createCheckoutInTransaction(
   tx: Tx,
   input: CreateCheckoutInput,
   principal: Principal,
-  options: { giftPurchase?: boolean } = {},
+  options: { giftPurchase?: { priceCents: number } } = {},
 ) {
   const giftPurchase =
-    options.giftPurchase === true &&
+    options.giftPurchase !== undefined &&
     input.lines.length === 1 &&
     input.lines[0]?.kind === "gift_card" &&
     input.lines[0].quantity === 1 &&
@@ -621,7 +621,7 @@ export async function createCheckoutInTransaction(
         giftCardId: card.id,
         description: card.label || "Gift card",
         quantity: 1,
-        unitAmountCents: card.amountCents,
+        unitAmountCents: options.giftPurchase?.priceCents ?? card.amountCents,
         taxBasisPoints: 0,
       });
       continue;

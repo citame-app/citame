@@ -1,5 +1,6 @@
 import {
   type GiftCard,
+  type GiftCardPurchaseInput,
   giftCardCodeSchema,
   giftCardStatusSchema,
   permissionsFor,
@@ -7,13 +8,14 @@ import {
   type UserRole,
 } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { TextField } from "~/components/ui/field";
 import { SelectField } from "~/components/ui/select-field";
 import { EmptyState, ErrorState, Skeleton, useOnline } from "~/components/ui/states";
 import { useI18n } from "~/i18n/react";
 import { clientsQuery } from "~/lib/admin-queries";
+import { ApiError } from "~/lib/api/client";
 import type { CommerceMode } from "~/lib/api/commerce-endpoints";
 import { api } from "~/lib/api/instance";
 import { formatMoney, localDateOf } from "~/lib/format";
@@ -38,6 +40,7 @@ export function GiftCardsView({
   const [searchInput, setSearchInput] = useState("");
   const search = /^SOB(?:[ -]|[A-F0-9]+$)/i.test(searchInput.trim()) ? "" : searchInput;
   const [creating, setCreating] = useState(false);
+  const [purchaseLocked, setPurchaseLocked] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const cards = useQuery({
     queryKey: ["gift-cards", mode, "list", page, search, status],
@@ -71,7 +74,7 @@ export function GiftCardsView({
           <p className="text-muted">{t("gift.lead")}</p>
         </div>
         <Button
-          disabled={unavailable || (mode === "client" && !capabilities.isSuccess)}
+          disabled={purchaseLocked || unavailable || (mode === "client" && !capabilities.isSuccess)}
           onClick={() => setCreating(!creating)}
         >
           {t(mode === "admin" ? "gift.new" : "gift.buy")}
@@ -81,6 +84,7 @@ export function GiftCardsView({
       {creating && (
         <GiftPurchaseForm
           mode={mode}
+          onLockChange={setPurchaseLocked}
           onCreated={(id) => {
             setCreating(false);
             setSelected(id);
@@ -133,7 +137,11 @@ export function GiftCardsView({
               <p className="text-sm text-muted">
                 {t("gift.reserved", { amount: formatMoney(card.reservedCents, "EUR", locale) })}
               </p>
-              <Button variant="secondary" onClick={() => setSelected(card.id)}>
+              <Button
+                variant="secondary"
+                disabled={purchaseLocked}
+                onClick={() => setSelected(card.id)}
+              >
                 {t("gift.details")}
               </Button>
             </li>
@@ -168,77 +176,120 @@ function Pages({
 }
 function GiftPurchaseForm({
   mode,
+  onLockChange,
   onCreated,
 }: {
   mode: CommerceMode;
+  onLockChange: (locked: boolean) => void;
   onCreated: (id: string) => void;
 }) {
   const { t, timeZone } = useI18n();
   const online = useOnline();
   const queries = useQueryClient();
   const [amount, setAmount] = useState("");
+  const [price, setPrice] = useState("");
+  const [validating, setValidating] = useState(false);
+  const amountCents = inputCents(amount);
+  const salePriceCents = mode === "admin" && price.trim() ? inputCents(price) : undefined;
+  const amountInvalid = (amountCents ?? 0) <= 0;
+  const priceInvalid = salePriceCents !== undefined && (salePriceCents ?? 0) <= 0;
   const [label, setLabel] = useState("");
   const [expiry, setExpiry] = useState("");
   const [buyer, setBuyer] = useState("");
   const [search, setSearch] = useState("");
-  const [key, setKey] = useState(() => crypto.randomUUID());
+  const [uncertain, setUncertain] = useState(false);
+  const packet = useRef<GiftCardPurchaseInput | null>(null);
   const clients = useQuery({
     ...clientsQuery({ search, pageSize: 20, sort: "name", order: "asc" }),
     enabled: mode === "admin" && search.trim().length > 0,
   });
   const save = useMutation({
-    mutationFn: () => {
-      const amountCents = inputCents(amount);
-      if (amountCents === null || amountCents <= 0) throw new Error("Invalid gift value");
-      return api().giftCards.purchase(
-        {
-          amountCents,
-          label: label.trim() || t("gift.title"),
-          idempotencyKey: key,
-          ...(mode === "admin"
-            ? {
-                ...(buyer ? { buyerClientId: buyer } : {}),
-                expiresAt: expiry ? localDayBounds(expiry, timeZone).to : null,
-              }
-            : {}),
-        },
-        mode,
-      );
-    },
+    mutationFn: (request: GiftCardPurchaseInput) => api().giftCards.purchase(request, mode),
     onSuccess: (purchase) => {
+      onLockChange(false);
       void invalidateCommerce(queries);
       onCreated(purchase.card.id);
     },
+    onError: (error) => {
+      // A response may have been lost after the server committed the purchase.
+      const outcomeUnknown = uncertain || !(error instanceof ApiError) || error.status >= 500;
+      setUncertain(outcomeUnknown);
+      if (!outcomeUnknown) {
+        packet.current = null;
+        onLockChange(false);
+      }
+    },
   });
-  const reset = () => {
-    setKey(crypto.randomUUID());
-    save.reset();
-  };
+  const locked = save.isPending || uncertain;
   return (
     <form
       className="grid gap-4 rounded-xl border border-line bg-surface p-4 sm:grid-cols-2"
       onSubmit={(event) => {
         event.preventDefault();
-        save.mutate();
+        setValidating(true);
+        if (save.isPending || !online) return;
+        if (!uncertain && (amountInvalid || priceInvalid)) {
+          const first = event.currentTarget.elements.namedItem(
+            amountInvalid ? "gift-value" : "gift-price",
+          );
+          if (first instanceof HTMLInputElement) first.focus();
+          return;
+        }
+        if (amountCents === null) return;
+        packet.current ??= {
+          amountCents,
+          label: label.trim() || t("gift.title"),
+          idempotencyKey: crypto.randomUUID(),
+          ...(mode === "admin"
+            ? {
+                ...(salePriceCents !== undefined && salePriceCents !== null
+                  ? { purchasePriceCents: salePriceCents }
+                  : {}),
+                ...(buyer ? { buyerClientId: buyer } : {}),
+                expiresAt: expiry ? localDayBounds(expiry, timeZone).to : null,
+              }
+            : {}),
+        };
+        onLockChange(true);
+        save.mutate(packet.current);
       }}
     >
       <h3 className="font-semibold sm:col-span-2">{t("gift.new")}</h3>
       <TextField
         label={t("gift.amount")}
+        name="gift-value"
         value={amount}
         inputMode="decimal"
+        disabled={locked}
+        error={validating && amountInvalid ? t("gift.positiveAmount") : undefined}
         onChange={(event) => {
           setAmount(event.target.value);
-          reset();
+          save.reset();
         }}
       />
+      {mode === "admin" && (
+        <TextField
+          label={t("gift.salePrice")}
+          hint={t("gift.salePriceHelp")}
+          name="gift-price"
+          value={price}
+          inputMode="decimal"
+          disabled={locked}
+          error={validating && priceInvalid ? t("gift.positiveAmount") : undefined}
+          onChange={(event) => {
+            setPrice(event.target.value);
+            save.reset();
+          }}
+        />
+      )}
       <TextField
         label={t("gift.label")}
         value={label}
         maxLength={120}
+        disabled={locked}
         onChange={(event) => {
           setLabel(event.target.value);
-          reset();
+          save.reset();
         }}
       />
       {mode === "admin" && (
@@ -247,18 +298,20 @@ function GiftPurchaseForm({
             label={t("gift.validThrough")}
             type="date"
             value={expiry}
+            disabled={locked}
             onChange={(event) => {
               setExpiry(event.target.value);
-              reset();
+              save.reset();
             }}
           />
           <TextField
             label={t("gift.searchBuyer")}
             value={search}
+            disabled={locked}
             onChange={(event) => {
               setSearch(event.target.value);
               setBuyer("");
-              reset();
+              save.reset();
             }}
           />
           {clients.isError ? (
@@ -267,6 +320,7 @@ function GiftPurchaseForm({
             <SelectField
               label={t("gift.buyer")}
               value={buyer}
+              disabled={locked}
               options={[
                 { value: "", label: t("gift.walkIn") },
                 ...(clients.data?.clients ?? []).map((client) => ({
@@ -276,7 +330,7 @@ function GiftPurchaseForm({
               ]}
               onChange={(value) => {
                 setBuyer(value);
-                reset();
+                save.reset();
               }}
             />
           )}
@@ -284,11 +338,11 @@ function GiftPurchaseForm({
       )}
       {save.isError && (
         <p role="alert" className="text-danger-fg">
-          {t("gift.error")}
+          {t(uncertain ? "gift.purchaseUncertain" : "gift.error")}
         </p>
       )}
       <Button type="submit" disabled={!online || save.isPending}>
-        {t("gift.create")}
+        {t(uncertain ? "gift.retryPurchase" : "gift.create")}
       </Button>
     </form>
   );
@@ -328,6 +382,10 @@ function GiftDetail({
       <p role="status">{t(`gift.status.${current.status}`)}</p>
       <div className="rounded-xl border border-line bg-surface p-4">
         <p>{t("gift.value", { amount: money(current.amountCents) })}</p>
+        {current.purchasePriceCents !== undefined &&
+          current.purchasePriceCents !== current.amountCents && (
+            <p>{t("gift.paidPrice", { amount: money(current.purchasePriceCents) })}</p>
+          )}
         <p className="font-semibold">
           {t("gift.available", { amount: money(current.availableCents) })}
         </p>

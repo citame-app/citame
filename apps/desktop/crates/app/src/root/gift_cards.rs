@@ -43,6 +43,7 @@ pub(super) struct Desk {
     checker: Entity<TextField>,
     checked: Option<GiftBalance>,
     value: Entity<TextField>,
+    purchase_price: Entity<TextField>,
     label: Entity<TextField>,
     buyer_search: Entity<TextField>,
     buyer: Option<(Uuid, String)>,
@@ -221,6 +222,7 @@ impl Root {
             checker: cx.new(|cx| TextField::new("SOB-…", true, cx)),
             checked: None,
             value: cx.new(|cx| TextField::new("EUR", false, cx)),
+            purchase_price: cx.new(|cx| TextField::new("EUR", false, cx)),
             label: cx.new(|cx| TextField::new("", false, cx)),
             buyer_search: cx.new(|cx| TextField::new("", false, cx)),
             buyer: None,
@@ -689,7 +691,13 @@ impl Root {
         desk.checked = None;
         desk.checker.update(cx, |field, cx| field.clear(cx));
         if view == View::Issue && desk.purchase.is_none() {
-            for field in [&desk.value, &desk.label, &desk.buyer_search, &desk.expiry] {
+            for field in [
+                &desk.value,
+                &desk.purchase_price,
+                &desk.label,
+                &desk.buyer_search,
+                &desk.expiry,
+            ] {
                 field.update(cx, |field, cx| field.clear(cx));
             }
             desk.buyer = None;
@@ -728,6 +736,7 @@ impl Root {
         let purchase = generation.and_then(|generation| {
             GiftPurchase::review(
                 desk.value.read(cx).text(),
+                desk.purchase_price.read(cx).text(),
                 desk.label.read(cx).text(),
                 desk.buyer.as_ref().map(|(id, _)| *id),
                 expiry_date(tz, desk.expiry.read(cx).text())?,
@@ -1170,7 +1179,18 @@ impl Root {
             .gap_3()
             .child(self.label(Key::GiftIssue));
         if let Some(pending) = &desk.purchase {
-            body = body.child(self.amount_label(i64::from(pending.amount_cents), "EUR"));
+            body = body.child(format!(
+                "{} · {}",
+                self.t(Key::GiftValue),
+                self.amount_label(i64::from(pending.amount_cents), "EUR")
+            ));
+            body = body.when_some(pending.purchase_price_cents, |body, price| {
+                body.child(format!(
+                    "{} · {}",
+                    self.t(Key::GiftPurchasePrice),
+                    self.amount_label(i64::from(price), "EUR")
+                ))
+            });
             if !pending.label.is_empty() {
                 body = body.child(pending.label.clone());
             }
@@ -1214,6 +1234,9 @@ impl Root {
         };
         body.child(self.label(Key::GiftValue))
             .child(desk.value.clone())
+            .child(self.label(Key::GiftPurchasePriceInput))
+            .child(desk.purchase_price.clone())
+            .child(div().text_sm().child(self.t(Key::GiftPurchasePriceHelp)))
             .child(self.label(Key::GiftLabel))
             .child(desk.label.clone())
             .child(self.label(Key::GiftExpiryInput))
@@ -1301,6 +1324,17 @@ impl Root {
                 self.t(Key::GiftValue),
                 money(i64::from(card.amount_cents))
             ))
+            .when_some(
+                card.purchase_price_cents
+                    .filter(|price| *price != card.amount_cents),
+                |body, price| {
+                    body.child(format!(
+                        "{} · {}",
+                        self.t(Key::GiftPurchasePrice),
+                        money(i64::from(price))
+                    ))
+                },
+            )
             .child(self.render_gift_balance(&card.balance));
         if let Some(edit) = desk.edit {
             return body
@@ -1618,7 +1652,7 @@ mod tests {
         let (_directory, window) = crate::root::tests::open(cx);
         window.update(cx, |root, _, cx| {
             let actor = root.svc.current_session().expect("local test session").user_id;
-            let purchase = GiftPurchase::review("25,00", "Regalo", None, None, "reviewed".into(), Utc::now()).unwrap();
+            let purchase = GiftPurchase::review("25,00", "20,00", "Regalo", None, None, "reviewed".into(), Utc::now()).unwrap();
             assert!(root.svc.store.reserve_gift_purchase(&actor, &purchase).unwrap());
             root.status.connectivity = Connectivity::Offline;
             root.open_gift_cards(cx);

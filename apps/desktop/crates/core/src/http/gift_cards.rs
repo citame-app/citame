@@ -44,6 +44,7 @@ pub struct GiftCard {
     pub label: String,
     pub checkout_id: Uuid,
     pub amount_cents: u32,
+    pub purchase_price_cents: Option<u32>,
     #[serde(flatten)]
     pub balance: GiftBalance,
     pub code_revision: String,
@@ -105,6 +106,8 @@ pub struct GiftReplicaStamp {
 #[serde(rename_all = "camelCase")]
 pub struct GiftPurchase {
     pub amount_cents: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub purchase_price_cents: Option<u32>,
     pub label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buyer_client_id: Option<Uuid>,
@@ -115,8 +118,13 @@ pub struct GiftPurchase {
 }
 
 impl GiftPurchase {
+    pub fn price_cents(&self) -> u32 {
+        self.purchase_price_cents.unwrap_or(self.amount_cents)
+    }
+
     pub fn review(
         amount: &str,
+        price: &str,
         label: &str,
         buyer_client_id: Option<Uuid>,
         expires_at: Option<DateTime<Utc>>,
@@ -125,12 +133,19 @@ impl GiftPurchase {
     ) -> Option<Self> {
         let amount_cents =
             crate::billing::parse_reviewed_amount(amount).filter(|value| *value != 0)?;
+        let purchase_price_cents = if price.trim().is_empty() {
+            None
+        } else {
+            Some(crate::billing::parse_reviewed_amount(price).filter(|value| *value != 0)?)
+                .filter(|value| *value != amount_cents)
+        };
         let label = label.trim();
         if label.encode_utf16().count() > 120 || expires_at.is_some_and(|date| date <= now) {
             return None;
         }
         Some(Self {
             amount_cents,
+            purchase_price_cents,
             label: label.to_owned(),
             buyer_client_id,
             expires_at,
@@ -338,7 +353,12 @@ impl HttpTransport {
         )?;
         if parse_id(&purchase.checkout.id).ok() != Some(purchase.card.checkout_id)
             || purchase.card.amount_cents != input.amount_cents
-            || purchase.checkout.total_cents != input.amount_cents
+            || purchase.checkout.total_cents != input.price_cents()
+            || purchase
+                .card
+                .purchase_price_cents
+                .unwrap_or(purchase.card.amount_cents)
+                != input.price_cents()
             || purchase.card.balance.currency != "EUR"
         {
             return Err(TransportError::Server(

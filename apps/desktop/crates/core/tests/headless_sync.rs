@@ -4474,6 +4474,7 @@ fn native_gift_card_redeems_and_refunds_once_through_the_proxy() {
     let device = proxy_device();
     let purchase = GiftPurchase {
         amount_cents: 2000,
+        purchase_price_cents: Some(1700),
         label: format!("Synthetic native gift {}", uuid::Uuid::now_v7()),
         buyer_client_id: None,
         expires_at: None,
@@ -4494,11 +4495,14 @@ fn native_gift_card_redeems_and_refunds_once_through_the_proxy() {
     assert_eq!(repeated.checkout.id, gift.checkout.id);
     let cloud = browser.rest_get(&format!("/admin/gift-cards/{gift_id}"));
     assert_eq!(cloud["checkoutId"], gift.checkout.id);
+    assert_eq!(cloud["purchasePriceCents"], 1700);
+    assert_eq!(gift.checkout.total_cents, 1700);
+    assert_eq!(gift.card.amount_cents, 2000);
     let paid_gift = device
         .transport
         .record_checkout_payment(
             &gift.checkout,
-            &PaymentAttempt::new(ReceiptTender::ExternalCard, 2000),
+            &PaymentAttempt::new(ReceiptTender::ExternalCard, 1700),
         )
         .unwrap();
     assert_eq!(paid_gift.status, "paid");

@@ -7,6 +7,7 @@ export { giftCardCodeSchema } from "./gift-card-code";
 export const giftCardPurchaseSchema = z
   .object({
     amountCents: moneyCentsSchema.positive(),
+    purchasePriceCents: moneyCentsSchema.positive().optional(),
     label: z.string().trim().max(120).default(""),
     buyerClientId: idSchema.optional(),
     expiresAt: instantSchema.nullable().optional(),
@@ -25,6 +26,7 @@ export const giftCardSchema = z.object({
   buyerClientId: idSchema.nullable(),
   checkoutId: idSchema,
   amountCents: moneyCentsSchema,
+  purchasePriceCents: moneyCentsSchema.positive().optional(),
   balanceCents: moneyCentsSchema,
   reservedCents: moneyCentsSchema,
   availableCents: moneyCentsSchema,
