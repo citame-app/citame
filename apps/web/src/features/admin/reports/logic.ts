@@ -189,8 +189,12 @@ export function reportToCsv(summary: ReportSummary): string {
       "",
       row(["group", "label", "appointments", "booked", "completed", "cancelled", "no_show"]),
     );
-    for (const kind of reportBreakdownKinds) {
-      for (const entry of breakdown[kind]) {
+    const sections = reportBreakdownKinds.map((kind) => [kind, breakdown[kind]] as const);
+    for (const [kind, entries] of [
+      ...sections,
+      ["promotion", summary.promotionBreakdown ?? []] as const,
+    ]) {
+      for (const entry of entries) {
         lines.push(
           row([
             kind,

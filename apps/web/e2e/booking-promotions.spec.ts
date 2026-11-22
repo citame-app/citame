@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { expect, request as playwrightRequest, test } from "@playwright/test";
 import { RECURRING_FIXTURE as fixture } from "../../api/test/recurring-values";
 import { expectNoHorizontalScroll } from "./admin-helpers";
@@ -39,6 +40,7 @@ for (const scheme of ["light", "dark"] as const)
         | {
             id: string;
             version: number;
+            startsAt: string;
             protection: { checkoutId: string; depositCents: number; policyVersion: number };
           }
         | undefined;
@@ -205,6 +207,51 @@ for (const scheme of ["light", "dark"] as const)
           path: `/tmp/sob-booking-promotion-${scheme}-${info.project.name}.png`,
           fullPage: true,
         });
+
+        const cancelled = await owner.patch(`/api/appointments/${visit.id}`, {
+          data: { version: visit.version, status: "cancelled" },
+        });
+        expect(cancelled.status(), await cancelled.text()).toBe(200);
+        const day = new Intl.DateTimeFormat("sv-SE", {
+          timeZone: "America/Argentina/Buenos_Aires",
+        }).format(new Date(visit.startsAt));
+        visit = undefined;
+        await page.context().clearCookies();
+        const reportPath = `/admin/reports?preset=custom&from=${day}&to=${day}&staff=${staff.id}`;
+        await signInThroughUi(page, fixture.ownerEmail, reportPath);
+        const breakdown = page.getByRole("region", { name: "Appointment breakdown" });
+        await breakdown.getByRole("combobox", { name: "Group by" }).selectOption("promotion");
+        const offerLabel = `${terms.name} (${code})`;
+        await expect(
+          breakdown.getByText(offerLabel, { exact: true }).filter({ visible: true }),
+        ).toBeVisible();
+        const reportRow =
+          info.project.name === "mobile"
+            ? breakdown
+                .getByRole("listitem")
+                .filter({ hasText: offerLabel })
+                .getByRole("definition")
+            : breakdown
+                .getByRole("row")
+                .filter({ hasText: offerLabel })
+                .getByRole("cell")
+                .filter({ hasNotText: offerLabel });
+        await expect(reportRow).toHaveText(["1", "0", "0", "1", "0"]);
+        const download = page.waitForEvent("download", { timeout: 10000 });
+        await page.getByRole("button", { name: "Export CSV" }).click();
+        const csvPath = await (await download).path();
+        expect(await readFile(csvPath, "utf8")).toContain(`promotion,${offerLabel},1,0,0,1,0\r\n`);
+        await expectNoHorizontalScroll(page);
+        await breakdown.screenshot({ path: info.outputPath("booking-promotion-report-en.png") });
+        await page
+          .context()
+          .addCookies([{ name: "sob_locale", value: "es-AR", url: fixture.baseURL }]);
+        await page.reload();
+        const localized = page.getByRole("region", { name: "Desglose de citas" });
+        await localized.getByRole("combobox", { name: "Agrupar por" }).selectOption("promotion");
+        await expectNoHorizontalScroll(page);
+        await expectNoSeriousA11yViolations(page, `booking promotion report ${scheme}`);
+        await localized.screenshot({ path: info.outputPath("booking-promotion-report-es.png") });
       } finally {
         if (visit)
           await owner.patch(`/api/appointments/${visit.id}`, {

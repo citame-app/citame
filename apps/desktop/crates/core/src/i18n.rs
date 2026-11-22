@@ -986,6 +986,7 @@ keys! {
     ReportService => ("Service", "Servicio"),
     ReportCategory => ("Category", "Categoría"),
     ReportAddon => ("Add-on", "Extra"),
+    ReportBookingPromotion => ("Booking promotion", "Promoción"),
     ReportStaff => ("Team member", "Profesional"),
     ReportAllStaff => ("Entire team", "Todo el equipo"),
     ReportAppointments => ("Appointments", "Citas"),

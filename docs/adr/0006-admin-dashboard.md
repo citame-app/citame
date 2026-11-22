@@ -74,6 +74,12 @@ All copy goes through the existing catalogs, split per area under `src/i18n/mess
 
 Strict TDD in three layers, test first for every unit: pure logic (`bun test`: nav, zoned time, calendar layout, drag geometry, keyboard moves, hours model, price parsing, report ranges and CSV), components (`bun test` with happy-dom and Testing Library against a stubbed `fetch`), and Playwright against the real production stack at a phone and a desktop viewport (role matrix, walk-in booking, outcomes, drag and keyboard moves, conflict recovery, client search/sort/paging, service CRUD, hours with conflict warnings, time off, deactivation flow, report numbers and CSV against a seeded fixture, settings reflected in availability, i18n, dark mode, no horizontal scroll, axe on every route in both themes).
 
+### Booking promotion outcomes
+
+The overview and its CSV in Web and Desktop count visits by the promotion name and code agreed at booking. Appointments use the existing salon-local date, professional and currency scope. Visits with the same recorded name and code share a row. The report retains cancelled visits and their historical labels after a code changes or the reward is released.
+
+Attribution requires the original receipt and the server's confirmation in the appointment creation audit, written together at booking. A coupon added later during checkout does not appear in this breakdown. The counts describe appointment outcomes. Financial reports continue to use settled sales and returns.
+
 ### Client net collections
 
 Cloud and Desktop use the same client report and export the ten highest positive net collections in EUR. The calculation uses recorded external payments and completed refunds in the selected salon-local dates and the checkout's staff scope. It groups historical checkouts under the current client identity after merges. Anonymous sales, deleted client profiles and redemptions of stored value are outside the ranking. The report requires financial and client directory permissions.

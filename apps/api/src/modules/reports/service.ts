@@ -1,12 +1,14 @@
 import type {
   AppointmentStatus,
   ReportBreakdownKind,
+  ReportBreakdownRow,
   ReportQuery,
   ReportSummary,
 } from "@sob/contracts";
 import { type Database, staffProfile } from "@sob/db";
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import type { Tx } from "../../tx";
+import { BOOKING_PROMOTION_KEY_PREFIX } from "../rewards/booking";
 import { getSalonSettings } from "../settings/service";
 import { requireStaff } from "../staff/admin";
 import { buildReportSummary, type DayStaffStatusRow, type ServiceRow } from "./aggregate";
@@ -30,7 +32,7 @@ type ServiceBucketRow = {
 };
 
 type BreakdownBucketRow = {
-  kind: ReportBreakdownKind;
+  kind: ReportBreakdownKind | "promotion";
   key: string;
   label: string | null;
   appointments: number;
@@ -165,6 +167,30 @@ async function reportSummarySnapshot(db: Tx, query: ReportQuery): Promise<Report
              coalesce(parent.category, s.category))
         ) bucket(kind, key, label)
         where bucket.kind is not null
+        -- The audit row and original receipt were written in the same booking transaction.
+        -- Request keys alone are insufficient because checkout callers can choose them.
+        union all
+        select distinct a.id, a.status, 'promotion',
+               jsonb_build_array(r.name, r.code)::text,
+               concat(r.name, ' (', r.code, ')')
+        from scoped a
+        join checkout c on c.appointment_id = a.id
+          and c.idempotency_key = ${BOOKING_PROMOTION_KEY_PREFIX} || a.id::text
+          and c.currency = ${currency}
+        join checkout_reward r on r.checkout_id = c.id
+          and r.kind = 'promotion' and r.code is not null and r.idempotency_key = c.idempotency_key
+        where exists (
+          select 1 from audit_log log
+          where log.entity = 'appointment' and log.entity_id = a.id::text
+            and log.action = 'appointment.create' and log.created_at = c.created_at
+            -- Audit metadata can be stored as an object or a JSON-encoded string.
+            and (case
+              when jsonb_typeof(log.metadata) = 'string'
+                and pg_input_is_valid(log.metadata #>> '{}', 'jsonb')
+              then (log.metadata #>> '{}')::jsonb
+              else log.metadata
+            end) @> '{"promotionConfirmed":true}'::jsonb
+        )
       )
       select kind, key, label, count(*)::int as appointments,
              (count(*) filter (where status = 'booked'))::int as booked,
@@ -198,10 +224,11 @@ async function reportSummarySnapshot(db: Tx, query: ReportQuery): Promise<Report
     category: [],
     addon: [],
   };
-  const breakdownRows = breakdownBuckets as BreakdownBucketRow[];
-  for (const row of breakdownRows) {
+  const promotionBreakdown: ReportBreakdownRow[] = [];
+  for (const row of breakdownBuckets as BreakdownBucketRow[]) {
     const { kind, key, label, appointments, booked, completed, cancelled, no_show } = row;
-    appointmentBreakdown[kind].push({
+    const bucket = kind === "promotion" ? promotionBreakdown : appointmentBreakdown[kind];
+    bucket.push({
       key,
       label,
       appointments,
@@ -237,5 +264,6 @@ async function reportSummarySnapshot(db: Tx, query: ReportQuery): Promise<Report
     currency,
     currencies,
     appointmentBreakdown,
+    promotionBreakdown,
   };
 }
