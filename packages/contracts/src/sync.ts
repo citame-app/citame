@@ -10,7 +10,10 @@ import {
   stockMovementSyncPayloadSchema,
   updateProductSchema,
 } from "./inventory";
-import { inventoryClassificationInputSchema } from "./inventory-classification";
+import {
+  inventoryClassificationInputSchema,
+  inventoryClassificationOrderSchema,
+} from "./inventory-classification";
 import { purchaseOrderSyncPayloadSchema } from "./inventory-orders";
 import { stockReceiptInputSchema, supplierInputSchema } from "./inventory-receipts";
 import { stockTransferSyncPayloadSchema, warehouseInputSchema } from "./inventory-warehouses";
@@ -361,6 +364,12 @@ const classificationSave = z.object({
   }),
 });
 
+const classificationReorder = z.object({
+  ...envelope,
+  kind: z.literal("inventory.classification_reorder"),
+  payload: inventoryClassificationOrderSchema,
+});
+
 const staffUpdate = z.object({
   ...envelope,
   kind: z.literal("staff.update"),
@@ -409,6 +418,7 @@ export const syncMutationSchema = z.discriminatedUnion("kind", [
   warehouseTransfer,
   warehouseAdjustment,
   classificationSave,
+  classificationReorder,
   staffUpdate,
   settingsUpdate,
 ]);

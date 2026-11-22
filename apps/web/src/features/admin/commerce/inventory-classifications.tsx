@@ -1,6 +1,10 @@
-import type { InventoryClassification, InventoryClassificationAssignment } from "@sob/contracts";
+import type {
+  InventoryClassification,
+  InventoryClassificationAssignment,
+  InventoryClassificationReorder,
+} from "@sob/contracts";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useId, useState } from "react";
+import { type ReactNode, useEffect, useId, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { TextField } from "~/components/ui/field";
 import { SelectField } from "~/components/ui/select-field";
@@ -10,6 +14,7 @@ import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { useInventoryLiveRevision } from "../calendar/live-provider";
 import { UnsavedGuard } from "../unsaved-guard";
+import { ClassificationOrderList } from "./classification-order-list";
 
 export function useInventoryClassifications(enabled = true) {
   const revision = useInventoryLiveRevision();
@@ -69,6 +74,14 @@ export function InventoryClassifications({
       setNotice(true);
     },
   });
+  const order = useMutation({
+    mutationFn: (input: InventoryClassificationReorder) =>
+      api().inventory.reorderClassifications(input),
+    onSettled: async () => {
+      await query.invalidateQueries({ queryKey: ["inventory"] });
+    },
+  });
+  const canReorder = canWrite && online && !catalogue.isPlaceholderData && !order.isPending;
   // Background refreshes retain the last reviewed data. The API checks the draft's
   // generation and version before writing, even if a newer catalogue is still loading.
   const conflict = isClassificationConflict(save.error);
@@ -114,6 +127,7 @@ export function InventoryClassifications({
   if (catalogue.isPending) return <Skeleton className="h-40" />;
   if (catalogue.isError)
     return <ErrorState error={catalogue.error} onRetry={() => void catalogue.refetch()} />;
+  if (!review) return <Skeleton className="h-40" />;
   if (editing && draft) {
     return (
       <form
@@ -240,6 +254,15 @@ export function InventoryClassifications({
         )}
       </div>
       {notice && <p role="status">{t("inventory.classification.saved")}</p>}
+      <p role="status" className="sr-only">
+        {order.isSuccess ? t("inventory.classification.orderSaved") : ""}
+      </p>
+      {order.isError &&
+        (isClassificationConflict(order.error) ? (
+          <p role="alert">{t("inventory.classification.orderChanged")}</p>
+        ) : (
+          <ErrorState error={order.error} />
+        ))}
       {!entries.length && <p className="text-muted">{t("inventory.classification.empty")}</p>}
       {(["category", "brand"] as const).map((kind) => {
         const roots = entries.filter((row) => row.kind === kind && !row.parentId);
@@ -249,24 +272,43 @@ export function InventoryClassifications({
             <h4 className="font-semibold">
               {t(kind === "category" ? "pos.category" : "pos.brand")}
             </h4>
-            <ul className="divide-y divide-line">
-              {roots.map((root) => (
-                <li key={root.id}>
-                  <ClassificationRow entry={root} canWrite={canWrite} onEdit={edit} />
-                  {entries.some((row) => row.parentId === root.id) && (
-                    <ul className="ms-5 border-s border-line ps-4">
-                      {entries
-                        .filter((row) => row.parentId === root.id)
-                        .map((child) => (
-                          <li key={child.id}>
-                            <ClassificationRow entry={child} canWrite={canWrite} onEdit={edit} />
-                          </li>
-                        ))}
-                    </ul>
-                  )}
-                </li>
-              ))}
-            </ul>
+            <ClassificationOrderList
+              className="divide-y divide-line"
+              rows={roots}
+              generation={review.generation}
+              ready={canReorder}
+              onMove={order.mutate}
+              render={(root, movement) => {
+                const children = entries.filter((row) => row.parentId === root.id);
+                return (
+                  <>
+                    <ClassificationRow
+                      entry={root}
+                      movement={canWrite && movement}
+                      canWrite={canWrite}
+                      onEdit={edit}
+                    />
+                    {children.length > 0 && (
+                      <ClassificationOrderList
+                        className="ms-3 border-s border-line ps-3 sm:ms-5 sm:ps-4"
+                        rows={children}
+                        generation={review.generation}
+                        ready={canReorder}
+                        onMove={order.mutate}
+                        render={(child, movement) => (
+                          <ClassificationRow
+                            entry={child}
+                            movement={canWrite && movement}
+                            canWrite={canWrite}
+                            onEdit={edit}
+                          />
+                        )}
+                      />
+                    )}
+                  </>
+                );
+              }}
+            />
           </div>
         );
       })}
@@ -277,31 +319,36 @@ export function InventoryClassifications({
 function ClassificationRow({
   entry,
   canWrite,
+  movement,
   onEdit,
 }: {
   entry: InventoryClassification;
+  movement: ReactNode;
   canWrite: boolean;
   onEdit: (entry: InventoryClassification) => void;
 }) {
   const { t } = useI18n();
   return (
-    <div className="flex min-h-11 items-center justify-between gap-2 py-2">
-      <span>
+    <div className="flex min-h-11 flex-wrap items-center justify-between gap-2 py-2">
+      <span className="min-w-0 break-words">
         {entry.name}
         {!entry.active && (
           <span className="ms-2 text-sm text-muted">{t("inventory.classification.archived")}</span>
         )}
       </span>
-      {canWrite && (
-        <Button
-          variant="secondary"
-          type="button"
-          aria-label={`${t("inventory.classification.edit")} · ${entry.name}`}
-          onClick={() => onEdit(entry)}
-        >
-          {t("inventory.classification.edit")}
-        </Button>
-      )}
+      <div className="flex min-w-0 flex-wrap items-center gap-1">
+        {movement}
+        {canWrite && (
+          <Button
+            variant="secondary"
+            type="button"
+            aria-label={`${t("inventory.classification.edit")} · ${entry.name}`}
+            onClick={() => onEdit(entry)}
+          >
+            {t("inventory.classification.edit")}
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

@@ -17,6 +17,12 @@ export const inventoryEn = {
   "inventory.classification.save": "Save classification",
   "inventory.classification.cancel": "Cancel",
   "inventory.classification.saved": "Classification saved.",
+  "inventory.classification.moveUp": "Move {name} up",
+  "inventory.classification.moveDown": "Move {name} down",
+  "inventory.classification.drag": "Drag to reorder {name}",
+  "inventory.classification.orderSaved": "Order saved.",
+  "inventory.classification.orderChanged":
+    "The group changed. Review the current order and try again.",
   "inventory.classification.changed":
     "The catalogue changed. Review the current record before saving again.",
   "inventory.classification.review": "Use current version and keep my changes",
@@ -274,6 +280,12 @@ export const inventoryEsAR: Record<keyof typeof inventoryEn, string> = {
   "inventory.classification.save": "Guardar clasificación",
   "inventory.classification.cancel": "Cancelar",
   "inventory.classification.saved": "Clasificación guardada.",
+  "inventory.classification.moveUp": "Subir {name}",
+  "inventory.classification.moveDown": "Bajar {name}",
+  "inventory.classification.drag": "Arrastrar para reordenar {name}",
+  "inventory.classification.orderSaved": "Orden guardado.",
+  "inventory.classification.orderChanged":
+    "El grupo ha cambiado. Revisa el orden actual y vuelve a intentarlo.",
   "inventory.classification.changed":
     "El catálogo cambió. Revisa la ficha actual antes de volver a guardar.",
   "inventory.classification.review": "Usar la versión actual y conservar mis cambios",

@@ -28,6 +28,15 @@ export const inventoryClassificationInputSchema = z.strictObject({
   generation: syncGenerationSchema,
   version: revision.max(2147483646),
 });
+export const inventoryClassificationOrderSchema = z.strictObject({
+  kind,
+  parentId: uuid.nullable(),
+  entries: z.array(z.strictObject({ id: uuid, version: revision.positive() })).min(2),
+});
+export const inventoryClassificationReorderSchema = inventoryClassificationOrderSchema.extend({
+  generation: syncGenerationSchema,
+});
+export type InventoryClassificationReorder = z.infer<typeof inventoryClassificationReorderSchema>;
 export const inventoryClassificationAssignmentSchema = z.strictObject({
   categoryId: idSchema.nullable(),
   subcategoryId: idSchema.nullable(),

@@ -1817,6 +1817,7 @@ impl Store {
                                 | crate::warehouses::TRANSFER
                                 | crate::warehouses::ADJUST
                                 | crate::inventory_classifications::SAVE
+                                | crate::inventory_classifications::REORDER
                         )
                     {
                         Self::set_meta_at(
@@ -1848,6 +1849,7 @@ impl Store {
                                 | crate::warehouses::TRANSFER
                                 | crate::warehouses::ADJUST
                                 | crate::inventory_classifications::SAVE
+                                | crate::inventory_classifications::REORDER
                         )
                     {
                         Self::apply_inventory_access_at(&tx, false)?;

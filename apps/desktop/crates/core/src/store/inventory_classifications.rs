@@ -1,6 +1,7 @@
 use super::*;
 use crate::inventory_classifications::{
-    Classification, ClassificationCatalogue, ClassificationKind, ClassificationProposal, SAVE,
+    Classification, ClassificationCatalogue, ClassificationKind, ClassificationOrder,
+    ClassificationProposal, REORDER, SAVE,
 };
 
 const CLASSIFICATIONS: &str = "inventory_classifications";
@@ -44,6 +45,60 @@ impl Store {
         rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
     }
 
+    pub fn pending_inventory_orders(&self) -> Result<Vec<ClassificationOrder>> {
+        if !self.can_read_cached_orders() {
+            return Ok(Vec::new());
+        }
+        let mut query = self
+            .conn
+            .prepare("SELECT payload FROM outbox WHERE kind = ?1 ORDER BY seq")?;
+        let rows = query.query_map([REORDER], |row| row.get::<_, String>(0))?;
+        rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+    }
+
+    pub fn queue_inventory_order(
+        &mut self,
+        generation: &str,
+        source: uuid::Uuid,
+        order: &ClassificationOrder,
+        replaces: Option<&str>,
+    ) -> Result<()> {
+        self.write_transaction(|store| {
+            if !store.can_queue_product_edits()
+                || store.verified_reviewed_generation()? != generation
+            {
+                return Err(CoreError::CalendarGenerationChanged);
+            }
+            if store
+                .pending_inventory_orders()?
+                .iter()
+                .any(|pending| pending.kind == order.kind && pending.parent_id == order.parent_id)
+                || !store.pending_inventory_classifications()?.is_empty()
+            {
+                return Err(CoreError::CatalogueEditPending);
+            }
+            let mut catalogue = store
+                .inventory_classifications()?
+                .filter(|list| list.generation == generation)
+                .ok_or(CoreError::CalendarGenerationChanged)?;
+            if order.entries.len() < 2
+                || !order.entries.iter().any(|row| row.id == source)
+                || !catalogue.apply_reviewed_order(order)
+            {
+                return Err(CoreError::CatalogueVersionChanged);
+            }
+            if let Some(id) = replaces {
+                store
+                    .conflict(id)?
+                    .filter(|row| row.kind == REORDER && row.entity_id == source.to_string())
+                    .ok_or_else(|| CoreError::NotFound("inventory classification order".into()))?;
+                store.resolve_conflict(id, "resubmitted")?;
+            }
+            store.enqueue(REORDER, &source.to_string(), serde_json::to_value(order)?)?;
+            Ok(())
+        })
+    }
+
     pub fn inventory_classification_choices(&self) -> Result<Option<ClassificationCatalogue>> {
         let Some(mut catalogue) = self.inventory_classifications()? else {
             return Ok(None);
@@ -79,6 +134,12 @@ impl Store {
                 .entries
                 .iter()
                 .find(|entry| entry.id == proposal.id);
+            if store.pending_inventory_orders()?.iter().any(|order| {
+                order.matches_group(&proposal)
+                    || current.is_some_and(|current| order.matches_group(current))
+            }) {
+                return Err(CoreError::CatalogueEditPending);
+            }
             if current.map_or(0, |entry| entry.version) != proposal.version
                 || current.is_some_and(|entry| entry.kind != proposal.kind)
             {

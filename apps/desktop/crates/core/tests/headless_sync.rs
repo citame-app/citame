@@ -7403,4 +7403,58 @@ fn native_classifications_replay_after_restart_and_keep_legacy_product_stock() {
         product.classification.unwrap().subcategory_id,
         Some(subcategory.id)
     );
+    store.remember_inventory_classifications(&list).unwrap();
+    let other = Classification {
+        id: Uuid::now_v7(),
+        position: 3,
+        name: "Another native child".into(),
+        ..subcategory.clone()
+    };
+    store
+        .queue_inventory_classification(&generation, other.clone(), None)
+        .unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*desktop.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let list = desktop.transport.inventory_classifications().unwrap();
+    store.remember_inventory_classifications(&list).unwrap();
+    let order = list
+        .reviewed_order(other.id)
+        .unwrap()
+        .move_to(other.id, subcategory.id, false)
+        .unwrap();
+    store
+        .queue_inventory_order(&generation, other.id, &order, None)
+        .unwrap();
+    drop(store);
+
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(store.pending_inventory_orders().unwrap(), [order]);
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*desktop.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    assert!(store.pending_inventory_orders().unwrap().is_empty());
+    let remote = web.rest_get("/admin/inventory/classifications");
+    let visible = remote["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["parentId"] == parent.id.to_string())
+        .map(|row| row["id"].as_str().unwrap().parse::<Uuid>().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(visible, [other.id, subcategory.id]);
+    let product = desktop.transport.inventory_product(product_id).unwrap();
+    assert_eq!(product.stock_on_hand, 5);
+    assert_eq!(
+        product.classification.unwrap().subcategory_id,
+        Some(subcategory.id)
+    );
 }
