@@ -1,4 +1,5 @@
 use super::*;
+use sob_core::error::CoreError;
 use sob_core::http::{PortraitDirectory, PortraitStaff, PortraitUpdate};
 use sob_core::staff_portrait_image::prepare_photo;
 use sob_core::store::{StaffPortraitDraft, Store};
@@ -63,7 +64,11 @@ impl Draft {
             staff_id: saved.staff_id.to_string(),
             version: None,
             jpeg: saved.jpeg,
-            review: DraftReview::Reload,
+            review: if saved.confirmed {
+                DraftReview::Saved
+            } else {
+                DraftReview::Reload
+            },
             stored: true,
         }
     }
@@ -91,6 +96,7 @@ pub(super) struct Desk {
     notice: Option<Key>,
     confirming_removal: bool,
     confirming_discard: bool,
+    unreadable_draft: bool,
     draft: Option<Draft>,
     preview_scope: Option<Entity<Arc<gpui::RenderImage>>>,
     observed_revision: i64,
@@ -135,6 +141,8 @@ impl Desk {
     pub(super) fn dismiss(&mut self) -> bool {
         if self.confirming_removal {
             self.confirming_removal = false;
+        } else if self.unreadable_draft && self.confirming_discard {
+            self.confirming_discard = false;
         } else if self.draft.as_ref().is_none_or(|draft| draft.stored) {
             return !self.busy;
         } else if !self.busy {
@@ -147,13 +155,12 @@ impl Desk {
         &mut self,
         action: DraftAction,
         saved: bool,
+        cleanup_pending: bool,
         photos: Option<&Photos>,
-        store: &Store,
     ) -> Option<Key> {
         if action == DraftAction::Save && saved {
             if let Some(draft) = &mut self.draft
-                && draft.stored
-                && store.clear_staff_portrait_draft(draft.id).is_err()
+                && cleanup_pending
             {
                 draft.review = DraftReview::Saved;
                 return Some(Key::StaffPortraitDraftSavedCleanupFailed);
@@ -193,9 +200,19 @@ enum DraftAction {
 
 impl Root {
     pub(super) fn open_staff_portraits(&mut self, cx: &mut Context<Self>) {
-        let (draft, notice) = match self.svc.store.staff_portrait_draft() {
-            Ok(saved) => (saved.map(Draft::recovered), None),
-            Err(_) => (None, Some(Key::StaffPortraitDraftReadFailed)),
+        let (draft, notice, unreadable_draft) = match self.svc.store.staff_portrait_draft() {
+            Ok(saved) => {
+                let notice = saved
+                    .as_ref()
+                    .filter(|saved| saved.confirmed)
+                    .map(|_| Key::StaffPortraitDraftSavedCleanupFailed);
+                (saved.map(Draft::recovered), notice, false)
+            }
+            Err(error) => (
+                None,
+                Some(Key::StaffPortraitDraftReadFailed),
+                matches!(error, CoreError::Invalid(_) | CoreError::Json(_)),
+            ),
         };
         let action = if draft.is_some() {
             Action::ReviewDraft
@@ -210,6 +227,7 @@ impl Root {
             notice,
             confirming_removal: false,
             confirming_discard: false,
+            unreadable_draft,
             draft,
             preview_scope: None,
             observed_revision: 0,
@@ -261,6 +279,7 @@ impl Root {
         if !desk.busy
             && !desk.confirming_removal
             && !desk.confirming_discard
+            && !desk.unreadable_draft
             && !desk.waiting_to_retry()
             && (desk.refresh_pending || revision_changed || desk.retry_at.is_some())
         {
@@ -308,23 +327,6 @@ impl Root {
             Action::Change(update) => (DraftAction::None, Some(update)),
             Action::ReviewDraft => (DraftAction::Review, None),
             Action::SaveDraft => {
-                if let Some(draft) = &desk.draft
-                    && draft.stored
-                {
-                    match self.svc.store.has_staff_portrait_draft(draft.id) {
-                        Ok(true) => {}
-                        Ok(false) => {
-                            desk.notice = Some(Key::StaffPortraitDraftReplaced);
-                            cx.notify();
-                            return;
-                        }
-                        Err(_) => {
-                            desk.notice = Some(Key::StaffPortraitDraftReadFailed);
-                            cx.notify();
-                            return;
-                        }
-                    }
-                }
                 let Some(update) = desk
                     .draft
                     .as_ref()
@@ -341,6 +343,25 @@ impl Root {
             desk.refresh_pending = true;
             return;
         }
+        let claim = match desk
+            .draft
+            .as_ref()
+            .filter(|draft| draft_action == DraftAction::Save && draft.stored)
+        {
+            Some(draft) => match self.svc.store.claim_staff_portrait_draft(draft.id) {
+                Ok(Some(claim)) => Some(claim),
+                outcome => {
+                    desk.notice = Some(match outcome {
+                        Ok(None) => Key::StaffPortraitDraftReplaced,
+                        Err(CoreError::StaffPortraitDraftBusy) => Key::StaffPortraitDraftBusy,
+                        _ => Key::StaffPortraitDraftReadFailed,
+                    });
+                    cx.notify();
+                    return;
+                }
+            },
+            None => None,
+        };
         let instance = desk.instance.clone();
         let session = self.svc.session.clone();
         let selected = if draft_action == DraftAction::None {
@@ -357,13 +378,18 @@ impl Root {
         desk.confirming_removal = false;
         cx.notify();
         cx.spawn(async move |root, cx| {
-            let (photos, saved, notice, retry_after) =
+            let (photos, saved, cleanup_pending, notice, retry_after) =
                 cx.background_executor()
                     .spawn(async move {
                         let change = update
                             .zip(selected.as_deref())
                             .map(|(update, id)| transport.set_staff_portrait(id, update));
                         let saved = change.as_ref().is_some_and(Result::is_ok);
+                        let cleanup_pending = if let (true, Some(claim)) = (saved, claim) {
+                            claim.confirm().is_err()
+                        } else {
+                            false
+                        };
                         let notice = change.as_ref().map(|result| {
                             if result.is_ok() {
                                 Key::StaffPortraitSaved
@@ -374,6 +400,7 @@ impl Root {
                         if let Some(Err(TransportError::RateLimited(delay))) = change {
                             return (
                                 None,
+                                false,
                                 false,
                                 notice,
                                 Some(delay.unwrap_or(Duration::from_secs(5))),
@@ -396,7 +423,13 @@ impl Root {
                                     }
                                     _ => None,
                                 };
-                                return (None, saved, notice.or(Some(failed)), retry_after);
+                                return (
+                                    None,
+                                    saved,
+                                    cleanup_pending,
+                                    notice.or(Some(failed)),
+                                    retry_after,
+                                );
                             }
                         };
                         let member = selected
@@ -429,6 +462,7 @@ impl Root {
                                 unavailable,
                             }),
                             saved,
+                            cleanup_pending,
                             notice,
                             None,
                         )
@@ -455,8 +489,8 @@ impl Root {
                 let local_notice = desk.update_draft_after_request(
                     draft_action,
                     saved,
+                    cleanup_pending,
                     photos.as_ref(),
-                    &root.svc.store,
                 );
                 if stale || photos.is_some() || retry_after.is_none() {
                     desk.preview_scope = photos
@@ -526,10 +560,23 @@ impl Root {
             .when(desk.busy, |view| {
                 view.child(div().text_sm().child(self.t(Key::StaffPortraitLoading)))
             })
+            .when(desk.unreadable_draft, |view| {
+                view.child(self.button(
+                    "staff-photo-recover-discard",
+                    self.t(if desk.confirming_discard {
+                        Key::StaffPortraitDiscardUnreadableConfirm
+                    } else {
+                        Key::StaffPortraitDiscardUnreadable
+                    }),
+                    Kind::Danger,
+                    cx.listener(|root, _, _, cx| root.discard_unreadable_staff_photo_draft(cx)),
+                ))
+            })
             .when(
                 !desk.busy
                     && !desk.waiting_to_retry()
                     && desk.draft.is_none()
+                    && !desk.unreadable_draft
                     && !desk.confirming_removal
                     && self.status.connectivity != Connectivity::Offline,
                 |view| {
@@ -631,7 +678,10 @@ impl Root {
                         view.child(div().text_sm().child(self.t(Key::StaffPortraitReadOnly)))
                     })
                     .when(
-                        photos.directory.can_edit && !desk.busy && desk.draft.is_none(),
+                        photos.directory.can_edit
+                            && !desk.busy
+                            && desk.draft.is_none()
+                            && !desk.unreadable_draft,
                         |view| {
                             view.child(self.render_staff_photo_actions(
                                 member,
@@ -666,7 +716,7 @@ impl Root {
         let Overlay::StaffPortraits(desk) = &mut self.overlay else {
             return;
         };
-        if desk.busy || desk.draft.is_some() {
+        if desk.busy || desk.draft.is_some() || desk.unreadable_draft {
             return;
         }
         let Some(member) = desk
@@ -756,9 +806,12 @@ impl Root {
         }
         if let Some(draft) = &desk.draft
             && draft.stored
-            && self.svc.store.clear_staff_portrait_draft(draft.id).is_err()
+            && let Err(error) = self.svc.store.clear_staff_portrait_draft(draft.id)
         {
-            desk.notice = Some(Key::StaffPortraitDraftCleanupFailed);
+            desk.notice = Some(match error {
+                CoreError::StaffPortraitDraftBusy => Key::StaffPortraitDraftBusy,
+                _ => Key::StaffPortraitDraftCleanupFailed,
+            });
             cx.notify();
             return;
         }
@@ -770,6 +823,30 @@ impl Root {
             desk.refresh_pending = true;
         }
         cx.notify();
+    }
+
+    fn discard_unreadable_staff_photo_draft(&mut self, cx: &mut Context<Self>) {
+        let Overlay::StaffPortraits(desk) = &mut self.overlay else {
+            return;
+        };
+        if !desk.unreadable_draft {
+            return;
+        }
+        if !desk.confirming_discard {
+            desk.confirming_discard = true;
+            cx.notify();
+            return;
+        }
+        match self.svc.store.clear_unreadable_staff_portrait_draft() {
+            Ok(_) => self.open_staff_portraits(cx),
+            Err(error) => {
+                desk.notice = Some(match error {
+                    CoreError::StaffPortraitDraftBusy => Key::StaffPortraitDraftBusy,
+                    _ => Key::StaffPortraitDraftCleanupFailed,
+                });
+                cx.notify();
+            }
+        }
     }
 
     fn render_staff_photo_draft(
@@ -800,6 +877,11 @@ impl Root {
             .flex_col()
             .gap_2()
             .child(label)
+            .when(
+                draft.review == DraftReview::Saved
+                    && desk.notice != Some(Key::StaffPortraitDraftSavedCleanupFailed),
+                |view| view.child(self.t(Key::StaffPortraitDraftSavedCleanupFailed)),
+            )
             .when(desk.confirming_discard, |view| {
                 view.child(self.t(Key::StaffPortraitDiscardConfirm))
             })
@@ -1081,52 +1163,32 @@ mod tests {
             desk.draft = Some(Draft::new(latest.current().unwrap(), image.clone()));
             latest.directory.staff[0].portrait_version = Some("cloud-version".into());
             assert!(
-                desk.update_draft_after_request(
-                    DraftAction::Save,
-                    false,
-                    Some(&latest),
-                    &root.svc.store
-                )
-                .is_none()
+                desk.update_draft_after_request(DraftAction::Save, false, false, Some(&latest))
+                    .is_none()
             );
             assert_eq!(desk.draft.as_ref().unwrap().review, DraftReview::Reload);
 
             latest.unavailable = false;
             latest.directory.can_edit = false;
             assert!(
-                desk.update_draft_after_request(
-                    DraftAction::Review,
-                    false,
-                    Some(&latest),
-                    &root.svc.store
-                )
-                .is_none()
+                desk.update_draft_after_request(DraftAction::Review, false, false, Some(&latest))
+                    .is_none()
             );
             assert_eq!(desk.draft.as_ref().unwrap().review, DraftReview::Reload);
             latest.directory.can_edit = true;
             latest.directory.staff[0].id = "other".into();
             latest.selected = Some("other".into());
             assert!(
-                desk.update_draft_after_request(
-                    DraftAction::Review,
-                    false,
-                    Some(&latest),
-                    &root.svc.store
-                )
-                .is_none()
+                desk.update_draft_after_request(DraftAction::Review, false, false, Some(&latest))
+                    .is_none()
             );
             assert_eq!(desk.draft.as_ref().unwrap().review, DraftReview::Reload);
 
             latest.directory.staff[0].id = "member".into();
             latest.selected = Some("member".into());
             assert!(
-                desk.update_draft_after_request(
-                    DraftAction::Review,
-                    false,
-                    Some(&latest),
-                    &root.svc.store
-                )
-                .is_none()
+                desk.update_draft_after_request(DraftAction::Review, false, false, Some(&latest))
+                    .is_none()
             );
             assert_eq!(desk.draft.as_ref().unwrap().review, DraftReview::Confirm);
             assert!(desk.draft.as_ref().unwrap().update(&latest).is_none());
@@ -1141,7 +1203,7 @@ mod tests {
                     if version.as_deref() == Some("cloud-version") && jpeg == image
             ));
             assert!(
-                desk.update_draft_after_request(DraftAction::Save, true, None, &root.svc.store)
+                desk.update_draft_after_request(DraftAction::Save, true, false, None)
                     .is_none()
             );
             assert!(desk.draft.is_none());
@@ -1266,6 +1328,7 @@ mod tests {
                 notice: None,
                 confirming_removal: false,
                 confirming_discard: false,
+                unreadable_draft: false,
                 draft: None,
                 preview_scope: None,
                 observed_revision: 0,
