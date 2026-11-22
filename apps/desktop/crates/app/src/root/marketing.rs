@@ -816,6 +816,22 @@ impl Root {
                             },
                             cx,
                         ))
+                        .when(
+                            self.directory_enabled()
+                                && desk
+                                    .list
+                                    .as_ref()
+                                    .is_some_and(|page| page.booking_invitations),
+                            |row| {
+                                row.child(self.marketing_button(
+                                    "create-booking-invitation",
+                                    Key::MarketingInvite,
+                                    Kind::Ghost,
+                                    |root, cx| root.open_campaign_editor(EditorMode::Invite, cx),
+                                    cx,
+                                ))
+                            },
+                        )
                         .child(self.marketing_button(
                             "marketing-booking-links",
                             Key::BookingLinkTitle,

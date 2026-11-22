@@ -6,7 +6,13 @@ import {
   marketingConsentSchema,
   syncPullResponseSchema,
 } from "@sob/contracts";
-import { appointment, clientProfile, marketingCampaign, marketingDelivery } from "@sob/db";
+import {
+  appointment,
+  clientProfile,
+  marketingCampaign,
+  marketingConsent,
+  marketingDelivery,
+} from "@sob/db";
 import { eq, sql } from "drizzle-orm";
 import {
   type Actor,
@@ -115,6 +121,89 @@ beforeEach(async () => {
     .update(clientProfile)
     .set({ phone: "+15005550006" })
     .where(eq(clientProfile.id, client.clientId!));
+});
+
+test("booking invitations queue only the selected contacts with consent", async () => {
+  const other = await actor(t, "client", "unselected@example.com");
+  const excluded = await actor(t, "client", "selected-without-consent@example.com");
+  const contacts = Array.from({ length: 11 }, (_, index) => ({
+    name: `Selected fixture ${index}`,
+    email: `selected-${index}@example.com`,
+  }));
+  const additional = await t.db
+    .insert(clientProfile)
+    .values(contacts)
+    .returning({ id: clientProfile.id });
+  await t.db.insert(marketingConsent).values(
+    additional.map(({ id }) => ({
+      clientId: id,
+      channel: "email" as const,
+      enabled: true,
+      source: "Explicit test consent",
+    })),
+  );
+  await allow();
+  expect(
+    (
+      await call(owner, `/admin/clients/${other.clientId}/marketing-consent`, "PATCH", {
+        channel: "email",
+        enabled: true,
+        version: 0,
+        source: "Explicit salon consent fixture",
+      })
+    ).status,
+  ).toBe(200);
+  const selectedIds = [client.clientId, excluded.clientId, ...additional.map(({ id }) => id)];
+  const campaign = await create({
+    audience: { selectedClientIds: selectedIds.map((id) => id?.toUpperCase()) },
+  });
+  const legacyList = await call(owner, "/admin/marketing/campaigns");
+  expect(await legacyList.json()).toMatchObject({ campaigns: [] });
+  const list = await call(owner, "/admin/marketing/campaigns?bookingInvitations=1");
+  expect(await list.json()).toMatchObject({
+    bookingInvitations: true,
+    campaigns: [
+      {
+        id: campaign.id,
+        audience: { selectedClientIds: selectedIds },
+        selectedContacts: expect.arrayContaining([
+          { id: client.clientId, name: expect.any(String) },
+        ]),
+      },
+    ],
+  });
+  const path = `/admin/marketing/campaigns/${campaign.id}`;
+  const reviewed = await preview(campaign);
+  expect(reviewed.eligible).toBe(12);
+  expect(reviewed.excluded).toBe(1);
+  expect(reviewed.sample).toHaveLength(12);
+  expect(reviewed.sample.some(({ clientId }) => clientId === client.clientId)).toBe(true);
+  const broken = await create({
+    emailBody: "This draft is missing the link",
+    audience: { selectedClientIds: [client.clientId] },
+  });
+  expect((await call(owner, `/admin/marketing/campaigns/${broken.id}/preview`)).status).toBe(400);
+  const { id: _, ...legacyDraft } = draft();
+  expect(
+    (await call(owner, path, "PATCH", { ...legacyDraft, version: campaign.version })).status,
+  ).toBe(409);
+  expect(
+    (
+      await call(owner, "/admin/marketing/campaigns", "POST", {
+        ...draft({ trigger: "first_visit" }),
+        audience: { selectedClientIds: [client.clientId] },
+      })
+    ).status,
+  ).toBe(400);
+  const result = await queue(campaign);
+  expect(result.campaign.counts.pending).toBe(12);
+  const deliveryWorker = worker();
+  await deliveryWorker.runOnce();
+  await deliveryWorker.runOnce();
+  expect(email.calls.map(({ to }) => to).sort()).toEqual(
+    ["marketing-client@example.com", ...contacts.map(({ email }) => email)].sort(),
+  );
+  expect(email.calls[0]?.html).toContain(`<a href="${t.config.notifications.publicUrl}/book">`);
 });
 
 test("campaigns require marketing access; commercial consent defaults to off independently of booking reminders", async () => {

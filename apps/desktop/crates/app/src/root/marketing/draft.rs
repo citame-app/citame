@@ -2,6 +2,9 @@ use super::*;
 use sob_core::http::marketing::{Audience, Draft, DraftRevision, DraftWrite};
 use std::{cell::Cell, rc::Rc};
 
+mod invitation;
+use invitation::InvitationEditor;
+
 const MAX_EDITABLE_LINES: usize = 256;
 
 const CHANNELS: [Channel; 3] = [Channel::Email, Channel::Sms, Channel::Optimized];
@@ -15,6 +18,7 @@ const TRIGGERS: [Trigger; 4] = [
 #[derive(Clone, Copy)]
 pub(super) enum EditorMode {
     Create(Trigger),
+    Invite,
     Edit,
     Duplicate,
 }
@@ -36,6 +40,7 @@ pub(super) struct Editor {
     delay: Entity<TextField>,
     birthday: Entity<TextField>,
     no_future: bool,
+    invitation: Option<InvitationEditor>,
     pending: Option<DraftWrite>,
     stale: bool,
 }
@@ -184,6 +189,7 @@ impl Editor {
         source: Option<&Campaign>,
         generation: String,
         from_template: bool,
+        invitation: Option<InvitationEditor>,
         cx: &mut Context<Root>,
     ) -> Self {
         Self {
@@ -210,6 +216,7 @@ impl Editor {
             delay: input(&draft.delay_minutes.to_string(), cx),
             birthday: input(&draft.birthday_lead_days.to_string(), cx),
             no_future: draft.audience.no_future_appointments,
+            invitation,
             pending: None,
             stale: false,
             preview: false,
@@ -235,6 +242,10 @@ impl Editor {
     }
 
     fn packet(&self, cx: &App) -> Option<DraftWrite> {
+        let selected_client_ids = match &self.invitation {
+            Some(invitation) => Some(invitation.packet()?),
+            None => None,
+        };
         let name = text(&self.name, cx);
         let subject = text(&self.subject, cx);
         let email_body = message_text(&self.email.lines, cx);
@@ -288,6 +299,7 @@ impl Editor {
                     tags,
                     no_future_appointments: self.no_future,
                     inactive_days: optional_days(&text(&self.inactive_days, cx))?,
+                    selected_client_ids,
                 },
             },
         })
@@ -318,6 +330,16 @@ impl Root {
         let generation = self.svc.store.verified_reviewed_generation().ok();
         let draft_template = match mode {
             EditorMode::Create(trigger) => Some(self.campaign_template(trigger)),
+            EditorMode::Invite => {
+                let mut draft = Draft::from_template(
+                    Trigger::Manual,
+                    self.t(Key::MarketingInvite),
+                    self.t(Key::MarketingInvitationSubject),
+                    self.t(Key::MarketingInvitationBody),
+                );
+                draft.audience.selected_client_ids = Some(Vec::new());
+                Some(draft)
+            }
             _ => None,
         };
         let copy = self.t(Key::MarketingCopy);
@@ -349,7 +371,28 @@ impl Root {
                 (Draft::duplicate(campaign, copy), None)
             }
         };
-        desk.editor = Some(Editor::new(draft, source, generation, from_template, cx));
+        let selected = draft.audience.selected_client_ids.clone().map(|ids| {
+            (
+                ids,
+                campaign
+                    .map(|value| value.selected_contacts.clone())
+                    .unwrap_or_default(),
+            )
+        });
+        let source = source.cloned();
+        let invitation =
+            selected.map(|(ids, contacts)| InvitationEditor::new(self, ids, contacts, cx));
+        let Some(desk) = self.marketing_desk() else {
+            return;
+        };
+        desk.editor = Some(Editor::new(
+            draft,
+            source.as_ref(),
+            generation,
+            from_template,
+            invitation,
+            cx,
+        ));
         desk.choose_template = false;
         desk.error = None;
         desk.review = None;
@@ -449,8 +492,29 @@ impl Root {
             cx.notify();
             return;
         }
+        if editor.invitation.is_some()
+            && editor.pending.is_none()
+            && ((editor.channel != Channel::Sms
+                && !message_text(&editor.email.lines, cx).contains("{{booking_url}}"))
+                || (editor.channel != Channel::Email
+                    && !message_text(&editor.sms.lines, cx).contains("{{booking_url}}")))
+        {
+            desk.error = Some(Key::MarketingInvitationLinkRequired);
+            cx.notify();
+            return;
+        }
         let Some(write) = editor.pending.clone().or_else(|| editor.packet(cx)) else {
-            desk.error = Some(Key::MarketingDraftInvalid);
+            desk.error = Some(
+                if editor
+                    .invitation
+                    .as_ref()
+                    .is_some_and(|invitation| invitation.packet().is_none())
+                {
+                    Key::MarketingInvitationRequired
+                } else {
+                    Key::MarketingDraftInvalid
+                },
+            );
             cx.notify();
             return;
         };
@@ -611,20 +675,23 @@ impl Root {
                 > Message::Email.limit();
         let sms = editor.channel != Channel::Email
             || message_text(&editor.sms.lines, cx).encode_utf16().count() > Message::Sms.limit();
-        body.when(ready && editor.from_template && !editor.stale, |body| {
-            body.child(self.marketing_button(
-                "change-campaign-template",
-                Key::MarketingChangeTemplate,
-                Kind::Ghost,
-                |root, cx| {
-                    if let Some(desk) = root.marketing_desk() {
-                        desk.choose_template = true;
-                        cx.notify();
-                    }
-                },
-                cx,
-            ))
-        })
+        body.when(
+            ready && editor.from_template && !editor.stale && editor.invitation.is_none(),
+            |body| {
+                body.child(self.marketing_button(
+                    "change-campaign-template",
+                    Key::MarketingChangeTemplate,
+                    Kind::Ghost,
+                    |root, cx| {
+                        if let Some(desk) = root.marketing_desk() {
+                            desk.choose_template = true;
+                            cx.notify();
+                        }
+                    },
+                    cx,
+                ))
+            },
+        )
         .child(self.label(Key::MarketingCampaignName))
         .child(editor.name.clone())
         .child(self.label(Key::MarketingChannel))
@@ -651,37 +718,38 @@ impl Root {
                     .focus(|style| style.border_color(theme::text()))
                 })),
         )
-        .child(self.label(Key::MarketingTrigger))
-        .child(
-            div()
-                .flex()
-                .flex_wrap()
-                .gap_2()
-                .children(TRIGGERS.into_iter().enumerate().map(|(index, trigger)| {
-                    self.chip(
-                        ("campaign-trigger", index),
-                        self.t(trigger_key(trigger)),
-                        editor.trigger == trigger,
-                        cx.listener(move |root, _, _, cx| {
-                            if let Some(editor) =
-                                root.marketing_desk().and_then(|desk| desk.editor.as_mut())
-                            {
-                                editor.trigger = trigger;
-                                if trigger == Trigger::Inactive
-                                    && editor.inactive_days.read(cx).text().trim().is_empty()
+        .when(editor.invitation.is_none(), |body| {
+            body.child(self.label(Key::MarketingTrigger)).child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .children(TRIGGERS.into_iter().enumerate().map(|(index, trigger)| {
+                        self.chip(
+                            ("campaign-trigger", index),
+                            self.t(trigger_key(trigger)),
+                            editor.trigger == trigger,
+                            cx.listener(move |root, _, _, cx| {
+                                if let Some(editor) =
+                                    root.marketing_desk().and_then(|desk| desk.editor.as_mut())
                                 {
-                                    editor
-                                        .inactive_days
-                                        .update(cx, |field, cx| field.set_text("60", cx));
+                                    editor.trigger = trigger;
+                                    if trigger == Trigger::Inactive
+                                        && editor.inactive_days.read(cx).text().trim().is_empty()
+                                    {
+                                        editor
+                                            .inactive_days
+                                            .update(cx, |field, cx| field.set_text("60", cx));
+                                    }
+                                    cx.notify();
                                 }
-                                cx.notify();
-                            }
-                        }),
-                    )
-                    .tab_index(0)
-                    .focus(|style| style.border_color(theme::text()))
-                })),
-        )
+                            }),
+                        )
+                        .tab_index(0)
+                        .focus(|style| style.border_color(theme::text()))
+                    })),
+            )
+        })
         .when(editor.trigger == Trigger::FirstVisit, |body| {
             body.child(self.label(Key::MarketingDelayField))
                 .child(editor.delay.clone())
@@ -711,27 +779,32 @@ impl Root {
             Root::open_campaign_preview,
             cx,
         ))
-        .child(self.label(Key::MarketingTags))
-        .child(editor.tags.clone())
-        .child(self.label(Key::MarketingInactiveDaysField))
-        .child(editor.inactive_days.clone())
-        .child(
-            self.chip(
-                "campaign-no-future",
-                self.t(Key::MarketingNoFuture),
-                editor.no_future,
-                cx.listener(|root, _, _, cx| {
-                    if let Some(editor) =
-                        root.marketing_desk().and_then(|desk| desk.editor.as_mut())
-                    {
-                        editor.no_future = !editor.no_future;
-                        cx.notify();
-                    }
-                }),
-            )
-            .tab_index(0)
-            .focus(|style| style.border_color(theme::text())),
-        )
+        .when_some(editor.invitation.as_ref(), |body, invitation| {
+            body.child(self.render_invitation_contacts(invitation, cx))
+        })
+        .when(editor.invitation.is_none(), |body| {
+            body.child(self.label(Key::MarketingTags))
+                .child(editor.tags.clone())
+                .child(self.label(Key::MarketingInactiveDaysField))
+                .child(editor.inactive_days.clone())
+                .child(
+                    self.chip(
+                        "campaign-no-future",
+                        self.t(Key::MarketingNoFuture),
+                        editor.no_future,
+                        cx.listener(|root, _, _, cx| {
+                            if let Some(editor) =
+                                root.marketing_desk().and_then(|desk| desk.editor.as_mut())
+                            {
+                                editor.no_future = !editor.no_future;
+                                cx.notify();
+                            }
+                        }),
+                    )
+                    .tab_index(0)
+                    .focus(|style| style.border_color(theme::text())),
+                )
+        })
         .when(ready && !editor.stale, |body| body.child(save))
     }
 }
@@ -819,6 +892,15 @@ mod tests {
             assert_eq!(selected.id, new_id);
             assert!(history.deliveries.is_empty());
             assert!(root.svc.store.outbox(5).unwrap().is_empty());
+            root.open_campaign_editor(EditorMode::Invite, cx);
+            let editor = root.marketing_desk().unwrap().editor.as_mut().unwrap();
+            assert!(editor.packet(cx).is_none());
+            let contact = uuid::Uuid::now_v7().to_string();
+            editor.invitation.as_mut().unwrap().toggle(&contact);
+            let draft = editor.packet(cx).unwrap().draft;
+            assert_eq!(draft.trigger, Trigger::Manual);
+            assert_eq!(draft.audience.selected_client_ids, Some(vec![contact]));
+            assert!(draft.email_body.contains("{{booking_url}}"));
         });
     }
 

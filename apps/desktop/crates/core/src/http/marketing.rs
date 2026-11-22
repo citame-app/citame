@@ -88,7 +88,18 @@ pub struct Campaign {
     pub scheduled_for: Option<DateTime<Utc>>,
     pub audience: Audience,
     pub counts: Counts,
+    #[serde(default)]
+    pub selected_contacts: Vec<InvitationContact>,
 }
+
+#[derive(Clone, Deserialize)]
+pub struct InvitationContact {
+    pub id: String,
+    pub name: String,
+}
+
+// Matches BOOKING_INVITATION_MAX_CONTACTS in the shared campaign contract.
+pub const MAX_INVITATION_CONTACTS: usize = 100;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -96,6 +107,8 @@ pub struct Audience {
     pub tags: Vec<String>,
     pub no_future_appointments: bool,
     pub inactive_days: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_client_ids: Option<Vec<String>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -132,6 +145,7 @@ impl Draft {
                 tags: Vec::new(),
                 inactive_days: inactive.then_some(60),
                 no_future_appointments: inactive,
+                selected_client_ids: None,
             },
         }
     }
@@ -207,9 +221,12 @@ pub struct Counts {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CampaignPage {
     pub campaigns: Vec<Campaign>,
     pub pagination: Pagination,
+    #[serde(default)]
+    pub booking_invitations: bool,
 }
 
 #[derive(Clone, Deserialize)]
@@ -387,6 +404,7 @@ impl HttpTransport {
         let mut params = form_urlencoded::Serializer::new(String::new());
         params
             .append_pair("page", &page.to_string())
+            .append_pair("bookingInvitations", "1")
             .append_pair("search", search);
         if let Some(status) = status {
             params.append_pair("status", status.wire());

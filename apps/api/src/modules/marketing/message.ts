@@ -25,6 +25,11 @@ export function renderCampaignMessage(input: {
           : input.bookingUrl,
     );
   const body = replace(input.emailBody);
+  const bookingHref = escapeHtml(input.bookingUrl);
+  const htmlBody = input.emailBody
+    .split("{{booking_url}}")
+    .map((part) => escapeHtml(replace(part)).replace(/\n/g, "<br>"))
+    .join(`<a href="${bookingHref}">${bookingHref}</a>`);
   const reviewText = input.reviewUrl ? `\n\n${input.reviewUrl}` : "";
   const reviewLink = input.reviewUrl
     ? `<p><a href="${escapeHtml(input.reviewUrl)}">${escapeHtml(input.reviewUrl)}</a></p>`
@@ -36,7 +41,7 @@ export function renderCampaignMessage(input: {
   return {
     subject: replace(input.subject).replace(/[\r\n]/g, " "),
     text: `${body}${reviewText}\n\nUnsubscribe / Darse de baja: ${unsubscribeText}`,
-    html: `<!doctype html><html><body><p>${escapeHtml(body).replace(/\n/g, "<br>")}</p>${reviewLink}<p>${unsubscribe}</p></body></html>`,
+    html: `<!doctype html><html><body><p>${htmlBody}</p>${reviewLink}<p>${unsubscribe}</p></body></html>`,
     sms: `${replace(input.smsBody)}\n${unsubscribeText}`,
   };
 }

@@ -3,6 +3,52 @@ import { expectNoHorizontalScroll } from "./admin-helpers";
 import { expectNoSeriousA11yViolations, signInThroughUi } from "./helpers";
 import { waitForMail } from "./mail";
 
+test("booking invitations review selected contacts without granting marketing permission", async ({
+  page,
+}) => {
+  const email = process.env.E2E_OWNER_EMAIL;
+  const password = process.env.E2E_OWNER_PASSWORD;
+  if (!email || !password) {
+    test.skip(true, "The isolated owner is required");
+    return;
+  }
+  await signInThroughUi(page, email, "/admin/marketing", password);
+  await expect(page).toHaveURL(/\/admin\/marketing$/);
+  const contact = `Invitation contact ${crypto.randomUUID()}`;
+  const created = await page.request.post("/api/admin/clients", {
+    headers: { Origin: new URL(page.url()).origin },
+    data: { id: crypto.randomUUID(), name: contact },
+  });
+  expect(created.status(), await created.text()).toBe(201);
+  const { id: clientId } = await created.json();
+  await page.getByRole("button", { name: "Campaigns and automations", exact: true }).click();
+  await page.getByRole("button", { name: "Invite to book", exact: true }).click();
+  const editor = page.getByRole("dialog", { name: "Invite to book", exact: true });
+  const search = editor.getByRole("searchbox", { name: "Search clients" });
+  await search.fill(contact);
+  await search.press("Enter");
+  await editor.getByRole("checkbox", { name: contact, exact: true }).check();
+  await expect(editor.getByRole("status")).toHaveText("1 selected");
+  await expectNoHorizontalScroll(page);
+  const [draft] = await Promise.all([
+    page.waitForResponse(
+      (response) => response.url().endsWith("/campaigns") && response.request().method() === "POST",
+    ),
+    editor.getByRole("button", { name: "Review recipients", exact: true }).click(),
+  ]);
+  expect(draft.ok()).toBe(true);
+  expect(await draft.json()).toMatchObject({
+    audience: { selectedClientIds: [clientId] },
+    counts: { pending: 0, sent: 0 },
+  });
+  const review = page.getByRole("dialog", { name: "Review recipients", exact: true });
+  await expect(review.getByText("0 eligible recipients now")).toBeVisible();
+  await expect(review.getByText(/1 clients excluded/)).toBeVisible();
+  await expect(review.getByRole("button", { name: "Confirm delivery" })).toBeDisabled();
+  await expectNoHorizontalScroll(page);
+  await expectNoSeriousA11yViolations(page, "Booking invitation recipient review");
+});
+
 test("a draft email test reaches the owner's inbox without activating the campaign", async ({
   page,
 }) => {

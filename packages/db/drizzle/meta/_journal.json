@@ -862,6 +862,13 @@
       "when": 1795319100000,
       "tag": "0122_scheduled_peak_prices",
       "breakpoints": true
+    },
+    {
+      "idx": 123,
+      "version": "7",
+      "when": 1795319700000,
+      "tag": "0123_booking_invitations",
+      "breakpoints": true
     }
   ]
 }
