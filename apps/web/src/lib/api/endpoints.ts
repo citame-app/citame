@@ -398,8 +398,8 @@ export function createEndpoints(client: ApiClient) {
         deleteTimeOff: (id: string, entryId: string) =>
           client.delete(`/admin/staff/${id}/time-off/${entryId}`, timeOffResponseSchema),
       },
-      reports: (query: ReportSummaryQuery) =>
-        client.get("/admin/reports/summary", reportSummarySchema, { query }),
+      reports: (query: ReportSummaryQuery, signal?: AbortSignal) =>
+        client.get("/admin/reports/summary", reportSummarySchema, { query, signal }),
       clientReport: (query: { from: string; to: string; staffId?: string }) =>
         client.get("/admin/reports/clients", reportClientsSchema, { query }),
       reportOutcomes: (query: ReportOutcomesQuery) =>

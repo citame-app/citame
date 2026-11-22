@@ -87,6 +87,6 @@ export const timeOffQuery = (staffId: string) =>
 export const reportQuery = (params: ReportSummaryQuery, viewerId?: string) =>
   queryOptions({
     queryKey: ["admin", "report", params, viewerId],
-    queryFn: () => api().admin.reports(params),
+    queryFn: ({ signal }) => api().admin.reports(params, signal),
     staleTime: 15_000,
   });

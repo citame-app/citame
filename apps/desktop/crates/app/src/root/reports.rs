@@ -116,7 +116,11 @@ pub(super) struct Desk {
 fn occupancy_label(rate: Option<f64>) -> String {
     rate.map_or_else(
         || "—".to_string(),
-        |rate| format!("{}%", (rate * 100.).round()),
+        |rate| {
+            // The API returns four decimal places. Round the integer basis points at the display boundary.
+            let basis_points = (rate * 10_000.).round() as u32;
+            format!("{}%", (basis_points + 50) / 100)
+        },
     )
 }
 
@@ -1207,6 +1211,22 @@ fn report_date_field(date: &str, cx: &mut Context<TextField>) -> TextField {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+
+    #[test]
+    fn occupancy_rounds_the_server_rate_to_the_nearest_percent() {
+        for (rate, expected) in [
+            (None, "—"),
+            (Some(0.), "0%"),
+            (Some(0.1449), "14%"),
+            (Some(0.145), "15%"),
+            (Some(0.285), "29%"),
+            (Some(0.565), "57%"),
+            (Some(0.575), "58%"),
+            (Some(1.), "100%"),
+        ] {
+            assert_eq!(occupancy_label(rate), expected);
+        }
+    }
 
     #[gpui::test]
     async fn an_empty_report_exposes_capacity_and_csv_only_if_there_are_scheduled_minutes(
