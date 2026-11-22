@@ -50,13 +50,18 @@ impl Root {
         let Overlay::Reports(desk) = &mut self.overlay else {
             return;
         };
-        if desk.mode == mode || (!mode.uses_summary() && !desk.can_view_financial_reports) {
+        if desk.mode == mode
+            || (!mode.uses_summary() && !desk.can_view_financial_reports)
+            || (mode == ReportMode::Profitability && !desk.can_view_profitability)
+        {
             return;
         }
         let reload = !desk.mode.uses_summary() || !mode.uses_summary();
         desk.mode = mode;
         desk.client_report = None;
         desk.financial_report = None;
+        desk.profitability_report = None;
+        desk.profitability_draft = None;
         desk.outcomes.reset_page();
         desk.export_notice = None;
         if desk.error == Some(Key::ReportRange) {

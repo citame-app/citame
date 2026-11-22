@@ -38,7 +38,10 @@ use crate::reports::commissions::{
     CommissionStatement, RecordedCommissionPayout, SavedCommissionPayout,
 };
 use crate::reports::{
-    ClientReport, Outcome, OutcomePage, ReportQuery, ReportSummary, financial::FinancialReport,
+    ClientReport, Outcome, OutcomePage, ReportQuery, ReportSummary,
+    financial::{
+        AppointmentDirectCosts, AppointmentProfitability, FinancialReport, ReviewAppointmentCosts,
+    },
 };
 use crate::reviews::{
     self, EmailStatus, ManagedReview, ModerationCommand, ReviewEmail, ReviewPage, ReviewRequests,
@@ -1605,6 +1608,43 @@ impl HttpTransport {
             )?,
             false,
         )
+    }
+
+    pub fn appointment_profitability(
+        &self,
+        query: &ReportQuery,
+        client_id: Option<&str>,
+        page: u32,
+        reviewed: Option<uuid::Uuid>,
+    ) -> Result<AppointmentProfitability, TransportError> {
+        let mut path = query.profitability_path(client_id, Some(page));
+        if let Some(id) = reviewed {
+            path.push_str(&format!("&reviewAppointmentId={id}"));
+        }
+        read_response(
+            self.get(&self.agent, &path, Some("application/json"))?,
+            false,
+        )
+    }
+
+    pub fn save_appointment_costs(
+        &self,
+        appointment_id: uuid::Uuid,
+        review: &ReviewAppointmentCosts,
+    ) -> Result<AppointmentDirectCosts, TransportError> {
+        self.put_json(
+            &format!("/admin/accounting/appointment-profitability/{appointment_id}/costs"),
+            review,
+        )
+    }
+
+    pub fn write_appointment_profitability_csv(
+        &self,
+        query: &ReportQuery,
+        client_id: Option<&str>,
+        output: &mut impl std::io::Write,
+    ) -> Result<(), TransportError> {
+        self.write_csv(&query.profitability_path(client_id, None), output)
     }
 
     pub fn commission_statement(

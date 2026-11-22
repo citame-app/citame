@@ -7,8 +7,9 @@ use sob_core::sync::TransportError;
 mod clients;
 mod financial;
 mod outcomes;
+mod profitability;
 
-use sob_core::reports::financial::FinancialReport;
+use sob_core::reports::financial::{AppointmentProfitability, FinancialReport};
 
 const PAGE_SIZE: usize = 15;
 const RETRY_DELAY: Duration = Duration::from_secs(5);
@@ -24,6 +25,7 @@ enum ReportData {
     Summary(Box<ReportSummary>),
     Clients(ClientReport),
     Financial(Box<FinancialReport>),
+    Profitability(AppointmentProfitability),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -31,6 +33,7 @@ enum ReportMode {
     Overview,
     Clients,
     Financial,
+    Profitability,
     Outcome(Outcome),
 }
 
@@ -94,6 +97,9 @@ pub(super) struct Desk {
     client_sales: Option<ClientSalesScope>,
     client_report: Option<ClientReport>,
     financial_report: Option<FinancialReport>,
+    can_view_profitability: bool,
+    profitability_report: Option<AppointmentProfitability>,
+    profitability_draft: Option<profitability::CostDraft>,
     group: Group,
     page: usize,
     item_page: usize,
@@ -164,6 +170,9 @@ impl Root {
             client_sales,
             client_report: None,
             financial_report: None,
+            can_view_profitability: false,
+            profitability_report: None,
+            profitability_draft: None,
             group: Group::Day,
             page: 0,
             item_page: 0,
@@ -202,6 +211,8 @@ impl Root {
             desk.request = None;
             desk.client_report = None;
             desk.financial_report = None;
+            desk.profitability_report = None;
+            desk.profitability_draft = None;
             desk.outcomes.reset_page();
             desk.error = Some(Key::ReportRange);
             cx.notify();
@@ -217,6 +228,8 @@ impl Root {
             desk.summary = None;
             desk.client_report = None;
             desk.financial_report = None;
+            desk.profitability_report = None;
+            desk.profitability_draft = None;
             desk.page = 0;
             desk.item_page = 0;
             desk.forecast_page = 0;
@@ -257,6 +270,11 @@ impl Root {
         let request = Arc::new(());
         let session = self.svc.session.clone();
         let mode = desk.mode;
+        let page = (desk.page as u32).saturating_add(1);
+        let reviewed = desk
+            .profitability_draft
+            .as_ref()
+            .map(|draft| draft.appointment_id);
         let client_id = desk
             .client_sales
             .as_ref()
@@ -279,6 +297,9 @@ impl Root {
                             None => transport.financial_report(&query),
                         }
                         .map(|report| ReportData::Financial(Box::new(report))),
+                        ReportMode::Profitability => transport
+                            .appointment_profitability(&query, client_id.as_deref(), page, reviewed)
+                            .map(ReportData::Profitability),
                         ReportMode::Overview | ReportMode::Outcome(_) => transport
                             .report_summary(&query)
                             .map(|summary| ReportData::Summary(Box::new(summary))),
@@ -311,11 +332,20 @@ impl Root {
                         root.refresh_outcome_page(cx);
                     }
                     Ok(ReportData::Clients(report)) => desk.client_report = Some(report),
-                    Ok(ReportData::Financial(report)) => desk.financial_report = Some(*report),
+                    Ok(ReportData::Financial(report)) => {
+                        desk.can_view_profitability = report.appointment_profitability;
+                        desk.financial_report = Some(*report);
+                    }
+                    Ok(ReportData::Profitability(report)) => {
+                        desk.profitability_report = Some(report)
+                    }
                     Err(TransportError::Forbidden(_) | TransportError::Unauthorized) => {
                         desk.summary = None;
                         desk.client_report = None;
                         desk.financial_report = None;
+                        desk.profitability_report = None;
+                        desk.profitability_draft = None;
+                        desk.can_view_profitability = false;
                         desk.can_view_financial_reports = false;
                         desk.outcomes.reset_page();
                         desk.error = Some(Key::ReportRestricted);
@@ -391,6 +421,10 @@ impl Root {
             return;
         };
         if desk.export_pending || desk.request.is_some() || desk.error == Some(Key::ReportRange) {
+            return;
+        }
+        if desk.mode == ReportMode::Profitability {
+            self.export_appointment_profitability(cx);
             return;
         }
         let (filename, csv) = match desk.mode {
@@ -641,6 +675,11 @@ impl Root {
                     .when(desk.mode == ReportMode::Financial, |view| {
                         view.when_some(desk.financial_report.as_ref(), |view, report| {
                             view.child(self.render_financial_report(desk, report, cx))
+                        })
+                    })
+                    .when(desk.mode == ReportMode::Profitability, |view| {
+                        view.when_some(desk.profitability_report.as_ref(), |view, report| {
+                            view.child(self.render_appointment_profitability(desk, report, cx))
                         })
                     })
                     .when_some(

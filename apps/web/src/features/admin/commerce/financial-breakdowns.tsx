@@ -9,8 +9,8 @@ import { Button } from "~/components/ui/button";
 import { useI18n } from "~/i18n/react";
 import { formatDateWithYear, formatMoney, formatTime, localDateOf } from "~/lib/format";
 
-type Heading = "h3" | "h4";
-type BreakdownRow = { key: string; label: string; values: string[] };
+export type Heading = "h3" | "h4";
+type BreakdownRow = { key: string; label: string; values: string[]; action?: ReactNode };
 const PAGE_SIZE = 24;
 
 export function SalesFamilies({
@@ -190,23 +190,30 @@ export function ScheduledRevenue({
   );
 }
 
-function BreakdownPager({
+export function BreakdownPager({
   page,
   pageCount,
   setPage,
   previous,
   next,
+  disabled = false,
 }: {
   page: number;
   pageCount: number;
   setPage: (page: number) => void;
   previous: string;
   next: string;
+  disabled?: boolean;
 }) {
   if (pageCount < 2) return null;
   return (
     <div className="flex flex-wrap items-center justify-end gap-2">
-      <Button type="button" variant="ghost" disabled={page === 0} onClick={() => setPage(page - 1)}>
+      <Button
+        type="button"
+        variant="ghost"
+        disabled={disabled || page === 0}
+        onClick={() => setPage(page - 1)}
+      >
         {previous}
       </Button>
       <span aria-live="polite" className="text-sm tabular-nums text-muted">
@@ -215,7 +222,7 @@ function BreakdownPager({
       <Button
         type="button"
         variant="ghost"
-        disabled={page + 1 >= pageCount}
+        disabled={disabled || page + 1 >= pageCount}
         onClick={() => setPage(page + 1)}
       >
         {next}
@@ -224,7 +231,7 @@ function BreakdownPager({
   );
 }
 
-function FinancialBreakdown({
+export function FinancialBreakdown({
   headingLevel: Heading,
   title,
   basis,
@@ -233,6 +240,7 @@ function FinancialBreakdown({
   columns,
   rows,
   summary,
+  actionColumn,
   stackWhenNarrow = false,
 }: {
   headingLevel: Heading;
@@ -243,6 +251,7 @@ function FinancialBreakdown({
   columns: string[];
   rows: BreakdownRow[];
   summary?: ReactNode;
+  actionColumn?: string;
   stackWhenNarrow?: boolean;
 }) {
   const headingId = useId();
@@ -282,6 +291,11 @@ function FinancialBreakdown({
                       {label}
                     </th>
                   ))}
+                  {actionColumn && (
+                    <th scope="col" className="px-3 py-3 text-end font-medium">
+                      {actionColumn}
+                    </th>
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -301,6 +315,9 @@ function FinancialBreakdown({
                         {value}
                       </td>
                     ))}
+                    {actionColumn && (
+                      <td className="border-t border-line px-3 py-2 text-end">{row.action}</td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -323,6 +340,7 @@ function FinancialBreakdown({
                       </div>
                     ))}
                   </dl>
+                  {row.action}
                 </li>
               ))}
             </ul>

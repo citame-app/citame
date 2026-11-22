@@ -407,6 +407,9 @@ export async function salesReport(db: Database, query: SalesReportQuery, princip
         membershipAccessFeesCents: Number(fees?.amount ?? 0),
         bookingFeesCents: Number(bookingFees?.amount ?? 0),
         ...sales,
+        ...(permissionsFor(principal.role, principal.accessPreset).readCosts
+          ? { appointmentProfitability: true as const }
+          : {}),
         promotionCollections: await reportPromotionCollections(tx, fromAt, toAt, scope),
         revenueForecast: await reportRevenueForecast(tx, {
           fromAt,

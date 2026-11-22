@@ -130,6 +130,51 @@ export const salesReportQuerySchema = reportQuerySchema.safeExtend({
   clientId: idSchema.optional(),
 });
 export type SalesReportQuery = z.infer<typeof salesReportQuerySchema>;
+const appointmentCostAmounts = z.object({
+  labourCents: moneyCentsSchema.nullable(),
+  materialsCents: moneyCentsSchema.nullable(),
+});
+export const appointmentDirectCostSchema = appointmentCostAmounts.extend({
+  version: z.number().int().positive(),
+});
+export const appointmentDirectCostInputSchema = appointmentCostAmounts
+  .extend({
+    version: z.number().int().positive().nullable(),
+    generation: syncGenerationSchema,
+  })
+  .strict();
+export type AppointmentDirectCostInput = z.infer<typeof appointmentDirectCostInputSchema>;
+export const appointmentProfitabilityQuerySchema = salesReportQuerySchema.safeExtend({
+  reviewAppointmentId: idSchema.optional(),
+  page: z.coerce.number().int().min(1).max(100000).default(1),
+});
+export type AppointmentProfitabilityQuery = z.infer<typeof appointmentProfitabilityQuerySchema>;
+export const appointmentProfitabilityRowSchema = z.object({
+  appointmentId: idSchema,
+  checkoutId: idSchema,
+  staffId: idSchema.nullable(),
+  staffName: z.string().nullable(),
+  startsAt: instantSchema,
+  settledAt: instantSchema,
+  netSalesCents: aggregateMoney.nullable(),
+  productCostCents: aggregateMoney,
+  unknownProductLines: z.number().int().nonnegative(),
+  commissionCents: aggregateMoney,
+  directCosts: appointmentDirectCostSchema.nullable(),
+  marginCents: signedMoney.nullable(),
+  reviewReason: z.enum(["missing_costs", "refund_review", "unallocated_receipt"]).nullable(),
+});
+export type AppointmentProfitabilityRow = z.infer<typeof appointmentProfitabilityRowSchema>;
+export const appointmentProfitabilitySchema = z.object({
+  generation: syncGenerationSchema,
+  from: localDateSchema,
+  to: localDateSchema,
+  timezone: z.string(),
+  rows: z.array(appointmentProfitabilityRowSchema),
+  reviewed: appointmentProfitabilityRowSchema.nullable().optional(),
+  pagination: pageInfoSchema,
+});
+export type AppointmentProfitability = z.infer<typeof appointmentProfitabilitySchema>;
 export const salesReportSchema = z.object({
   from: z.string(),
   to: z.string(),
@@ -155,6 +200,7 @@ export const salesReportSchema = z.object({
   settledByFamily: z.array(salesFamilyTotalSchema).optional(),
   settledByItem: z.array(settledSaleItemSchema).optional(),
   revenueForecast: revenueForecastSchema.optional(),
+  appointmentProfitability: z.literal(true).optional(),
   promotionCollections: z.array(promotionCollectionSchema).optional(),
   methods: z.array(
     z.object({ method: z.string(), collectedCents: aggregateMoney, refundedCents: aggregateMoney }),

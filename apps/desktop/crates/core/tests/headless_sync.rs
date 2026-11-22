@@ -4802,6 +4802,79 @@ fn native_appointment_receipt_applies_the_profile_discount_and_records_split_ten
 }
 
 #[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_reviews_appointment_costs_and_exports_margin_through_the_proxy() {
+    use sob_core::reports::financial::ReviewAppointmentCosts;
+
+    let mut web = Device::sign_in();
+    let booking = eur_booking(&mut web, 10000, None);
+    let device = proxy_device();
+    let receipt = device
+        .transport
+        .open_appointment_checkout(&booking.id, None)
+        .unwrap();
+    device
+        .transport
+        .record_checkout_payment(
+            &receipt,
+            &PaymentAttempt::new(ReceiptTender::ExternalCard, 10000),
+        )
+        .unwrap();
+    let today = Utc::now().date_naive();
+    let query = ReportQuery {
+        from: today - Span::days(1),
+        to: today + Span::days(1),
+        staff_id: None,
+        currency: None,
+    };
+    let read = || {
+        device
+            .transport
+            .appointment_profitability(&query, Some(&booking.client_id), 1, None)
+            .unwrap()
+    };
+    let unreviewed = read();
+    assert_eq!(unreviewed.pagination.total, 1);
+    assert_eq!(unreviewed.rows[0].net_sales_cents, Some(10000));
+    assert!(unreviewed.rows[0].margin_cents.is_none());
+    let id = booking.id.parse().unwrap();
+    let review = ReviewAppointmentCosts {
+        generation: unreviewed.generation,
+        version: None,
+        labour_cents: Some(0),
+        materials_cents: Some(2500),
+    };
+    let first = device
+        .transport
+        .save_appointment_costs(id, &review)
+        .unwrap();
+    assert_eq!(first.version, 1);
+    assert_eq!(
+        device
+            .transport
+            .save_appointment_costs(id, &review)
+            .unwrap()
+            .version,
+        1
+    );
+    let reviewed = read();
+    let row = &reviewed.rows[0];
+    assert_eq!(row.margin_cents, Some(7500 - row.commission_cents));
+    assert_eq!(row.direct_costs.as_ref().unwrap().labour_cents, Some(0));
+    let mut csv = Vec::new();
+    device
+        .transport
+        .write_appointment_profitability_csv(&query, Some(&booking.client_id), &mut csv)
+        .unwrap();
+    let csv = String::from_utf8(csv).unwrap();
+    assert!(csv.contains(&format!(
+        "\"{}\",\"0\",\"2500\",\"{}\",\"\",\"EUR\"",
+        row.commission_cents,
+        7500 - row.commission_cents
+    )));
+}
+
+#[test]
 #[ignore = "needs the real API, Postgres and Valkey (see README)"]
 fn imported_settlement_replays_safely_and_reopens_offline() {
     let mut desk = Device::sign_in();

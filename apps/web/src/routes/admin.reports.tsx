@@ -27,6 +27,13 @@ function ReportsPage() {
   const permissions = permissionsFor(session?.user.role ?? "client", session?.accessPreset);
   if (!session) return null;
   const today = new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date());
+  const marginPaging = {
+    page: search.marginPage ?? 1,
+    setPage: (page: number) =>
+      void navigate({
+        search: (current) => ({ ...current, marginPage: page > 1 ? page : undefined }),
+      }),
+  };
   const applyFinancialFilters = ({
     from,
     to,
@@ -37,7 +44,14 @@ function ReportsPage() {
     staffId?: string;
   }) =>
     void navigate({
-      search: (current) => ({ ...current, preset: "custom", from, to, staff: staffId }),
+      search: (current) => ({
+        ...current,
+        preset: "custom",
+        from,
+        to,
+        staff: staffId,
+        marginPage: undefined,
+      }),
     });
   if (search.client) {
     const range = resolveRange(search, today);
@@ -57,6 +71,7 @@ function ReportsPage() {
             clientId={search.client}
             filters={{ ...range, staffId: search.staff }}
             onApply={applyFinancialFilters}
+            marginPaging={marginPaging}
           />
         ) : (
           <p role="status">{t("accounting.clientReportRestricted")}</p>
@@ -121,6 +136,7 @@ function ReportsPage() {
             section="reports"
             salesFilters={{ ...financialRange, staffId: search.staff }}
             onApplySalesFilters={applyFinancialFilters}
+            marginPaging={marginPaging}
           />
         </div>
       )}

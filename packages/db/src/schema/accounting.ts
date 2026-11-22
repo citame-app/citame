@@ -1,9 +1,30 @@
 import { sql } from "drizzle-orm";
 import { check, index, integer, pgTable, text, unique, uuid } from "drizzle-orm/pg-core";
+import { appointment } from "./appointment";
 import { user } from "./auth";
 import { checkout, checkoutLine } from "./commerce";
 import { createdAt, primaryId, updatedAt } from "./helpers";
 import { staffProfile } from "./staff";
+export const appointmentDirectCost = pgTable(
+  "appointment_direct_cost",
+  {
+    appointmentId: uuid()
+      .primaryKey()
+      .references(() => appointment.id),
+    labourCents: integer(),
+    materialsCents: integer(),
+    version: integer().notNull().default(1),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    check(
+      "appointment_direct_cost_valid",
+      sql`(${t.labourCents} is null or ${t.labourCents} between 0 and 999999999)
+        and (${t.materialsCents} is null or ${t.materialsCents} between 0 and 999999999)
+        and ${t.version} > 0`,
+    ),
+  ],
+);
 export const commissionPolicy = pgTable(
   "commission_policy",
   {
@@ -43,6 +64,7 @@ export const commissionAccrual = pgTable(
   },
   (t) => [
     index("commission_accrual_staff_created_idx").on(t.staffId, t.createdAt),
+    index("commission_accrual_checkout_idx").on(t.checkoutId),
     check(
       "commission_accrual_money_valid",
       sql`${t.basisCents} between 0 and 999999999 and ${t.rateBasisPoints} between 0 and 10000 and ${t.earnedCents} between 0 and ${t.basisCents}`,

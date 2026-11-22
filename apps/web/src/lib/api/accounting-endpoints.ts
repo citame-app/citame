@@ -1,4 +1,8 @@
 import {
+  type AppointmentDirectCostInput,
+  type AppointmentProfitabilityQuery,
+  appointmentDirectCostSchema,
+  appointmentProfitabilitySchema,
   type CommissionPayoutInput,
   type CommissionPolicyInput,
   commissionPayoutSchema,
@@ -20,6 +24,16 @@ export function accountingEndpoints(client: ApiClient) {
       }),
     payout: (id: string, body: CommissionPayoutInput) =>
       client.post(`/admin/accounting/staff/${id}/payouts`, body, commissionPayoutSchema),
+    appointmentProfitability: (query: AppointmentProfitabilityQuery) =>
+      client.get("/admin/accounting/appointment-profitability", appointmentProfitabilitySchema, {
+        query,
+      }),
+    saveAppointmentCosts: (id: string, body: AppointmentDirectCostInput) =>
+      client.put(
+        `/admin/accounting/appointment-profitability/${id}/costs`,
+        body,
+        appointmentDirectCostSchema,
+      ),
     sales: async (query: SalesReportQuery) => {
       const report = await client.get("/admin/accounting/sales", salesReportSchema, { query });
       if (query.clientId && !report.client) throw new Error("Missing client scope in sales report");
