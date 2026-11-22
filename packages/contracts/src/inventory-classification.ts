@@ -14,6 +14,7 @@ const fields = {
 };
 
 export const inventoryBrandLogoSchema = z.object({ version: uuid, present: z.boolean() });
+export const inventoryBrandLogoResultSchema = inventoryBrandLogoSchema.nullable();
 export const inventoryBrandLogoInputSchema = z.strictObject({
   version: uuid.nullable(),
   imageBase64: clientPhotoUploadSchema.shape.imageBase64.nullable(),

@@ -667,18 +667,31 @@ test("brand logo upload and concurrent removal require the latest reviewed image
       (response) =>
         response.url().endsWith(`${path}/logo`) && response.request().method() === "PUT",
     );
+    const imagePattern = `**${path}/logo/*`;
+    await page.route(imagePattern, (route) => route.abort("failed"));
     await save.click();
     expect((await added).status()).toBe(200);
     const { version } = await (await added).json();
     const current = sheet.locator("img");
+    const retry = sheet.getByRole("button", { name: "Try again", exact: true });
+    await expect(retry).toBeVisible();
+    await expect(choose).toBeDisabled();
+    await page.unroute(imagePattern);
+    await retry.click();
     await expect(current).toHaveAttribute("src", `${path}/logo/${version}`);
     await expect(choose).toBeEnabled();
     await choose.setInputFiles(file);
 
+    const listPattern = "**/api/admin/inventory/classifications";
+    await page.route(listPattern, (route) => route.abort("failed"));
     const removed = await owner.put(`${path}/logo`, {
       data: { imageBase64: null, version, generation },
     });
     expect(removed.status(), await removed.text()).toBe(200);
+    await expect(retry).toBeVisible();
+    expect(await choose.evaluate((input: HTMLInputElement) => input.files?.length)).toBe(1);
+    await page.unroute(listPattern);
+    await retry.click();
     await expect(current).toHaveCount(0);
     await expect(save).toBeDisabled();
     await sheet.getByRole("button", { name: "Keep my selected file" }).click();

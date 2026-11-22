@@ -3,7 +3,7 @@ import type {
   InventoryClassificationAssignment,
   InventoryClassificationReorder,
 } from "@sob/contracts";
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useId, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { TextField } from "~/components/ui/field";
@@ -13,17 +13,14 @@ import { useToast } from "~/components/ui/toast";
 import { useI18n } from "~/i18n/react";
 import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
-import { useInventoryLiveRevision } from "../calendar/live-provider";
 import { UnsavedGuard } from "../unsaved-guard";
 import { BrandLogo, BrandLogoEditor } from "./brand-logo";
 import { ClassificationOrderList } from "./classification-order-list";
 
 export function useInventoryClassifications(enabled = true) {
-  const revision = useInventoryLiveRevision();
   return useQuery({
-    queryKey: ["inventory", "classifications", revision],
-    queryFn: () => api().inventory.classifications(),
-    placeholderData: keepPreviousData,
+    queryKey: ["inventory", "classifications"],
+    queryFn: ({ signal }) => api().inventory.classifications(signal),
     enabled,
   });
 }
@@ -98,11 +95,12 @@ export function InventoryClassifications({
       await query.invalidateQueries({ queryKey: ["inventory"] });
     },
   });
-  const canReorder = canWrite && online && !catalogue.isPlaceholderData && !order.isPending;
+  const canReorder = canWrite && online && !catalogue.isError && !order.isPending;
   // Background refreshes retain the last reviewed data. The API checks the draft's
   // generation and version before writing, even if a newer catalogue is still loading.
   const conflict = isClassificationConflict(save.error);
-  const canSave = canWrite && online && !stale && !conflict && !save.isPending;
+  const canSave =
+    canWrite && online && !catalogue.isError && !stale && !conflict && !save.isPending;
   function edit(entry: InventoryClassification) {
     if (!review || !canWrite) return;
     save.reset();
@@ -142,7 +140,13 @@ export function InventoryClassifications({
       (row.active || row.id === draft?.parentId),
   );
   if (catalogue.isPending) return <Skeleton className="h-40" />;
-  if (catalogue.isError)
+  const accessLost =
+    catalogue.error instanceof ApiError && [401, 403].includes(catalogue.error.status);
+  const refreshError =
+    catalogue.isError && !accessLost ? (
+      <ErrorState error={catalogue.error} onRetry={() => void catalogue.refetch()} />
+    ) : undefined;
+  if (accessLost || (catalogue.isError && !review))
     return <ErrorState error={catalogue.error} onRetry={() => void catalogue.refetch()} />;
   if (!review) return <Skeleton className="h-40" />;
   if (editing && draft) {
@@ -158,6 +162,7 @@ export function InventoryClassifications({
         }}
       >
         <UnsavedGuard dirty={!save.isPending} />
+        {refreshError}
         <h3 id={title} className="font-semibold sm:col-span-2">
           {t("inventory.classification.edit")}
         </h3>
@@ -270,12 +275,14 @@ export function InventoryClassifications({
           </div>
         )}
       </div>
+      {!logoBrand && refreshError}
       {canWrite && logoBrand && (
         <BrandLogoEditor
           key={logoBrand.id}
           brand={logoBrand}
           generation={review.generation}
-          ready={!catalogue.isPlaceholderData}
+          ready={!catalogue.isError}
+          refreshError={refreshError}
           onClose={() => setLogoBrandId(undefined)}
         />
       )}

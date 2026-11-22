@@ -1,9 +1,6 @@
+use super::image::{Preview, pick_inventory_image, tracked_image};
 use super::*;
 use sob_core::product_editor::ProductPhotoProposal;
-use sob_core::staff_portrait_image::prepare_photo;
-
-type Image = Arc<gpui::RenderImage>;
-type Preview = Entity<Image>;
 
 #[derive(Clone, PartialEq, Eq)]
 struct Review {
@@ -93,14 +90,6 @@ impl Panel {
         self.baseline = self.current();
         true
     }
-}
-
-pub(super) fn tracked_image(image: Image, cx: &mut Context<Root>) -> Preview {
-    cx.new(|cx| {
-        cx.on_release(|image: &mut Image, app| app.drop_image(image.clone(), None))
-            .detach();
-        image
-    })
 }
 
 impl Root {
@@ -467,35 +456,10 @@ impl Root {
         panel.choosing = true;
         let instance = panel.instance.clone();
         let session = self.svc.session.clone();
-        let renderer = cx.svg_renderer();
-        let picker = cx.prompt_for_paths(gpui::PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: Some(self.t(Key::InventoryPhotoChoose).into()),
-        });
+        let picker = pick_inventory_image(cx, self.t(Key::InventoryPhotoChoose).into());
         cx.notify();
         cx.spawn(async move |handle, cx| {
-            let result = match picker.await {
-                Ok(Ok(Some(paths))) => match paths.into_iter().next() {
-                    Some(path) => {
-                        cx.background_executor()
-                            .spawn(async move {
-                                let bytes =
-                                    prepare_photo(&path).ok_or(Key::StaffPortraitInvalid)?;
-                                let preview =
-                                    gpui::Image::from_bytes(gpui::ImageFormat::Jpeg, bytes.clone())
-                                        .to_image_data(renderer)
-                                        .map_err(|_| Key::StaffPortraitInvalid)?;
-                                Ok(Some((bytes, preview)))
-                            })
-                            .await
-                    }
-                    None => Ok(None),
-                },
-                Ok(Ok(None)) => Ok(None),
-                _ => Err(Key::StaffPortraitInvalid),
-            };
+            let result = picker.await;
             let _ = handle.update(cx, |root, cx| {
                 if !Arc::ptr_eq(&root.svc.session, &session) {
                     return;

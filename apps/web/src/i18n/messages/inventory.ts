@@ -169,6 +169,7 @@ export const inventoryEn = {
   "inventory.brandLogo.saved": "Brand logo updated",
   "inventory.brandLogo.discardTitle": "Discard file",
   "inventory.brandLogo.discard": "The selected file will be cleared.",
+  "inventory.brandLogo.loadError": "The current logo could not be loaded.",
   "inventory.photo.title": "Product photo",
   "inventory.photo.file": "Choose a product photo",
   "inventory.photo.help": "JPEG, PNG or WebP. The photo is visible to the inventory team.",
@@ -440,6 +441,7 @@ export const inventoryEsAR: Record<keyof typeof inventoryEn, string> = {
   "inventory.brandLogo.saved": "Logotipo de marca actualizado",
   "inventory.brandLogo.discardTitle": "Descartar archivo",
   "inventory.brandLogo.discard": "Se quitará el archivo seleccionado.",
+  "inventory.brandLogo.loadError": "No se pudo cargar el logotipo actual.",
   "inventory.photo.title": "Foto del producto",
   "inventory.photo.file": "Elegir foto del producto",
   "inventory.photo.help":

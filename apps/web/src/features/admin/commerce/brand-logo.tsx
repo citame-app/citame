@@ -1,6 +1,6 @@
 import type { InventoryClassification } from "@sob/contracts";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { ConfirmDialog } from "~/components/ui/dialog";
 import { TextField } from "~/components/ui/field";
@@ -17,13 +17,21 @@ export function BrandLogo({
   brand,
   compact,
   onLoaded,
+  onFailed,
 }: {
   brand: InventoryClassification;
   compact?: boolean;
   onLoaded?: (version: string) => void;
+  onFailed?: (version: string) => void;
 }) {
   const logo = brand.logo?.present ? brand.logo : undefined;
   const [failed, setFailed] = useState<string>();
+  useEffect(() => {
+    if (!compact || !failed) return;
+    const reconnect = () => setFailed(undefined);
+    window.addEventListener("online", reconnect, { once: true });
+    return () => window.removeEventListener("online", reconnect);
+  }, [compact, failed]);
   const size = compact ? 32 : 96;
   return (
     <span
@@ -40,7 +48,10 @@ export function BrandLogo({
           loading={compact ? "lazy" : "eager"}
           decoding="async"
           onLoad={() => onLoaded?.(logo.version)}
-          onError={() => setFailed(logo.version)}
+          onError={() => {
+            setFailed(logo.version);
+            onFailed?.(logo.version);
+          }}
         />
       ) : (
         <span aria-hidden="true">{brand.name.trim().slice(0, 1).toLocaleUpperCase()}</span>
@@ -56,11 +67,13 @@ export function BrandLogoEditor({
   brand,
   generation,
   ready,
+  refreshError,
   onClose,
 }: {
   brand: InventoryClassification;
   generation: string;
   ready: boolean;
+  refreshError: ReactNode;
   onClose: () => void;
 }) {
   const { t } = useI18n();
@@ -70,6 +83,8 @@ export function BrandLogoEditor({
   const form = useRef<HTMLFormElement>(null);
   const [draft, setDraft] = useState<Draft>();
   const [loaded, setLoaded] = useState<string>();
+  const [failed, setFailed] = useState<string>();
+  const [attempt, setAttempt] = useState(0);
   const [conflict, setConflict] = useState(false);
   const [discard, setDiscard] = useState(false);
   const version = brand.logo?.version ?? null;
@@ -124,7 +139,26 @@ export function BrandLogoEditor({
         destructive
       />
       <div className="space-y-4">
-        <BrandLogo brand={brand} onLoaded={setLoaded} />
+        {refreshError}
+        <BrandLogo key={attempt} brand={brand} onLoaded={setLoaded} onFailed={setFailed} />
+        {brand.logo?.present && failed === version && loaded !== version && (
+          <div className="space-y-2">
+            <p role="status" className="text-sm text-muted">
+              {t("inventory.brandLogo.loadError")}
+            </p>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={!online}
+              onClick={() => {
+                setFailed(undefined);
+                setAttempt((previous) => previous + 1);
+              }}
+            >
+              {t("common.retry")}
+            </Button>
+          </div>
+        )}
         <form
           ref={form}
           method="post"

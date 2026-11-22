@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import {
   checkoutSchema,
-  inventoryBrandLogoSchema,
+  inventoryBrandLogoResultSchema,
   inventoryClassificationListSchema,
   inventoryNumberingSnapshotSchema,
   productListSchema,
@@ -761,7 +761,8 @@ test("brand logos are private, survive sync replay and reject revisions from bef
   expect(attempts.map((result) => result.status).sort()).toEqual([200, 409]);
   const saved = attempts.find((row) => row.ok);
   if (!saved) throw new Error("Brand logo creation failed");
-  const logo = inventoryBrandLogoSchema.parse(await saved.json());
+  const logo = inventoryBrandLogoResultSchema.parse(await saved.json());
+  if (!logo) throw new Error("Brand logo save returned no logo");
   expect(logo.present).toBe(true);
   expect((await catalogue()).entries.find((row) => row.id === brandId)).toMatchObject({
     logo,
@@ -787,9 +788,11 @@ test("brand logos are private, survive sync replay and reject revisions from bef
     status: "rejected",
     reason: "forbidden",
   });
-  expect((await push(t, owner, [remove])).body.results[0]).toMatchObject({ status: "applied" });
-  expect((await push(t, owner, [remove])).body.results[0]).toMatchObject({
-    status: "applied",
+  const applied = (await push(t, owner, [remove])).body.results[0];
+  if (applied?.status !== "applied") throw new Error("Brand logo sync did not apply");
+  expect(applied).toMatchObject({ status: "applied", appliedSeq: expect.any(Number) });
+  expect((await push(t, owner, [remove])).body.results[0]).toEqual({
+    ...applied,
     replayed: true,
   });
   expect((await pull(t, owner, { since: before.headSeq })).refresh).toContain("commerce");

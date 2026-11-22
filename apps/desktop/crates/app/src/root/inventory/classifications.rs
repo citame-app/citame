@@ -231,6 +231,11 @@ impl Root {
                     panel.notice = Some(Key::InventoryClassificationsUnavailable);
                 }
                 if saved {
+                    if let Some(panel) = root.classifications_panel()
+                        && panel.notice == Some(Key::InventoryClassificationsUnavailable)
+                    {
+                        panel.notice = None;
+                    }
                     root.refresh_brand_logo(cx);
                 }
                 cx.notify();
@@ -639,7 +644,7 @@ impl Root {
                 ));
         }
         if let Some(logo) = &panel.logo {
-            return body.child(self.render_brand_logo(logo, &list, current, cx));
+            return body.child(self.render_brand_logo(logo, &list, current, loading, cx));
         }
         if let Some(draft) = &panel.draft {
             let latest = list.entries.iter().find(|entry| entry.id == draft.entry.id);

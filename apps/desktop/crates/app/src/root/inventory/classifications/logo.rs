@@ -1,9 +1,6 @@
 use super::*;
-use crate::root::inventory::product_photo::tracked_image;
+use crate::root::inventory::image::{Preview, pick_inventory_image, tracked_image};
 use sob_core::inventory_classifications::{BrandLogo, BrandLogoProposal};
-use sob_core::staff_portrait_image::prepare_photo;
-
-type Preview = Entity<Arc<gpui::RenderImage>>;
 
 #[derive(Clone, PartialEq, Eq)]
 struct Review {
@@ -223,33 +220,10 @@ impl Root {
         };
         editor.choosing = true;
         let instance = editor.instance.clone();
-        let renderer = cx.svg_renderer();
-        let picker = cx.prompt_for_paths(gpui::PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: Some(self.t(Key::InventoryPhotoChoose).into()),
-        });
+        let picker = pick_inventory_image(cx, self.t(Key::InventoryPhotoChoose).into());
         cx.notify();
         cx.spawn(async move |handle, cx| {
-            let result = match picker.await {
-                Ok(Ok(paths)) => match paths.and_then(|paths| paths.into_iter().next()) {
-                    Some(path) => {
-                        cx.background_executor()
-                            .spawn(async move {
-                                let jpeg = prepare_photo(&path).ok_or(Key::StaffPortraitInvalid)?;
-                                let image =
-                                    gpui::Image::from_bytes(gpui::ImageFormat::Jpeg, jpeg.clone())
-                                        .to_image_data(renderer)
-                                        .map_err(|_| Key::StaffPortraitInvalid)?;
-                                Ok(Some((jpeg, image)))
-                            })
-                            .await
-                    }
-                    None => Ok(None),
-                },
-                _ => Err(Key::StaffPortraitInvalid),
-            };
+            let result = picker.await;
             let _ = handle.update(cx, |root, cx| {
                 if !Arc::ptr_eq(&root.svc.session, &session) {
                     return;
@@ -326,6 +300,7 @@ impl Root {
         editor: &Editor,
         catalogue: &ClassificationCatalogue,
         current: bool,
+        loading: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let mut body = div()
@@ -378,14 +353,20 @@ impl Root {
                 },
             )
             .when(
-                online && editor.requested.is_none() && !editor.shows_current(&review),
+                online
+                    && !loading
+                    && (!current || (editor.requested.is_none() && !editor.shows_current(&review))),
                 |body| {
                     body.child(self.button(
                         "retry-brand-logo",
                         self.t(Key::InventoryRefresh),
                         Kind::Ghost,
-                        cx.listener(|root, _, _, cx| {
-                            root.refresh_brand_logo(cx);
+                        cx.listener(move |root, _, _, cx| {
+                            if current {
+                                root.refresh_brand_logo(cx);
+                            } else {
+                                root.load_classifications(cx);
+                            }
                             cx.notify();
                         }),
                     ))
