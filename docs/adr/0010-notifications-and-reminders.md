@@ -56,7 +56,7 @@ Rows are created per channel for which the client has an address (email, phone).
 Scheduling is **exactly-once** (unique key). Sending is **at-least-once with an idempotency key**, which becomes exactly-once only when the provider honours the key:
 
 - A crash after the provider accepted the message but before the row is marked `sent` makes the lease expire and the next worker send the same row again. The key is the reminder id. The in-memory fake provider (and any HTTP provider that supports idempotency keys) records one delivery; tests cover this case and the many-workers case.
-- **SMTP has no idempotency key.** The adapter sets a deterministic `Message-ID` (`<reminder-id@domain>`), which helps a human or a filter spot a duplicate but is not guaranteed to be deduplicated. In that crash window a client can get the same email twice.
+- **SMTP has no idempotency key.** The adapter sets a deterministic `Message-ID` (`<reminder-id@domain>`), which helps a human or a filter spot a duplicate but is not guaranteed to be deduplicated. The SMTP transport reports a disconnect after one attempt. Citame applies retry and outcome policy in the workflow that called it. In that crash window a client can get the same email twice.
 - **Twilio's documented Messages API has no idempotency key either**, so SMS has the same window.
 - The opposite failure (marking `sent` before sending) would lose messages, which is worse for reminders and confirmations. We chose a rare duplicate over a silent loss.
 - A reminder is checked right before sending, so a cancellation committed in the few milliseconds between the check and the provider call can still be followed by the reminder and then the cancellation notice.
