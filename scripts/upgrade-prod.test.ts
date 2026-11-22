@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 async function exerciseUpgrade(
-  probe: "ready" | "after-restart" | "unavailable",
+  probe: "ready" | "after-restart" | "unavailable" | "other-ready",
   {
     existing = "recovered",
     stopFails = false,
@@ -28,6 +28,7 @@ case "$*" in
     printf '{"services":{"api":{"environment":{"DATABASE_URL":"postgres://sob:next-password@postgres:5432/recovered","VALKEY_URL":"redis://valkey:6379","VALKEY_KEY_PREFIX":"recovery:","SYNC_REPLICA_GENERATION":"recovered"}},"worker":{"environment":{"DATABASE_URL":"postgres://sob:next-password@postgres:5432/recovered","VALKEY_URL":"redis://valkey:6379","VALKEY_KEY_PREFIX":"recovery:","SYNC_REPLICA_GENERATION":"recovered"}},"migrate":{"environment":{"DATABASE_URL":"postgres://sob:next-password@postgres:5432/recovered"}},"web":{"environment":{"API_INTERNAL_URL":"%s"}}}}\\n' "$DESIRED_UPSTREAM" ;;
   *'ps --all --quiet api worker'*) printf 'synthetic-api\\nsynthetic-worker\\n' ;;
   *'ps --quiet --status running api'*) echo synthetic-api ;;
+  'exec synthetic-api bun -e'*) echo 'c3bec088-76c4-48b3-91d0-b188ebe739ec' ;;
   *'ps --quiet --status running worker'*) echo synthetic-worker ;;
   "inspect --format {{json .Config.Env}} smoke-web")
     printf '["API_INTERNAL_URL=%s"]\\n' "$RUNNING_UPSTREAM" ;;
@@ -122,6 +123,19 @@ test("a running Web container with an unreachable API fails the upgrade without 
   });
   expect(code).toBe(1);
   expect(commands).toContain("exec -T web bun -e");
+  expect(commands).not.toContain("--force-recreate --wait caddy");
+  expect(commands).not.toContain("start --wait");
+  expect(stderr).toContain("The web gateway could not reach the upgraded API");
+});
+
+test("a healthy response from another API instance fails the rollout", async () => {
+  const { code, commands, stderr } = await exerciseUpgrade("other-ready", {
+    migrationSucceeds: true,
+    caddy: true,
+  });
+  expect(code).toBe(1);
+  expect(commands).toContain("exec synthetic-api bun -e");
+  expect(commands).toContain("c3bec088-76c4-48b3-91d0-b188ebe739ec");
   expect(commands).not.toContain("--force-recreate --wait caddy");
   expect(commands).not.toContain("start --wait");
   expect(stderr).toContain("The web gateway could not reach the upgraded API");

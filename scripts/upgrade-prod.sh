@@ -23,22 +23,45 @@ python3 scripts/check-compose-storage.py upgrade "${compose[@]}"
 wait_for_web_api() {
   "${compose[@]}" exec -T web bun -e '
     const deadline = Date.now() + Number(Bun.argv[1]);
+    const instances = new Set((Bun.argv[2] ?? "").split(/\s+/).filter(Boolean));
     const url = `http://127.0.0.1:${process.env.PORT ?? 4173}/api/ready`;
     while (Date.now() < deadline) {
       try {
         const response = await fetch(url, {
+          headers: instances.size ? { "x-citame-readiness-probe": "instance" } : undefined,
           redirect: "error",
           signal: AbortSignal.timeout(Math.min(2000, Math.max(1, deadline - Date.now()))),
         });
         const report = await response.json();
-        if (response.ok && report.status === "ready") process.exit(0);
+        if (response.ok && report.status === "ready" &&
+            (!instances.size || instances.has(response.headers.get("x-citame-api-instance"))))
+          process.exit(0);
       } catch {
         // The gateway or its upstream can still be reconnecting.
       }
       await Bun.sleep(250);
     }
     process.exit(1);
-  ' "$1"
+  ' "$1" "${2:-}"
+}
+
+api_readiness_instances() {
+  local containers container instance
+  containers=$("${compose[@]}" ps --quiet --status running api) || return 1
+  [[ -n "$containers" ]] || return 1
+  while IFS= read -r container; do
+    instance=$(docker exec "$container" bun -e '
+      const response = await fetch(`http://127.0.0.1:${process.env.PORT ?? 3000}/ready`, {
+        headers: { "x-citame-readiness-probe": "instance" },
+        redirect: "error",
+        signal: AbortSignal.timeout(3000),
+      });
+      if (!response.ok) process.exit(1);
+      console.log(response.headers.get("x-citame-api-instance") ?? "");
+    ') || return 1
+    [[ "$instance" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 1
+    printf '%s\n' "$instance"
+  done <<< "$containers"
 }
 
 if [[ "$build" == true ]]; then
@@ -107,7 +130,7 @@ if ! python3 scripts/check-compose-storage.py upgrade-ready "${compose[@]}"; the
   printf '%s\n' "Migration succeeded, but the upgraded service configuration could not be verified." >&2
   exit 1
 fi
-if ! wait_for_web_api 15000; then
+if ! instances=$(api_readiness_instances) || ! wait_for_web_api 15000 "$instances"; then
   printf '%s\n' "The web gateway could not reach the upgraded API. Migration succeeded. Check the API and web configuration." >&2
   exit 1
 fi
