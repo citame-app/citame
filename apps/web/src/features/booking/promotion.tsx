@@ -1,6 +1,7 @@
 import {
   type BookingPromotionQuoteRequest,
   bookingPromotionQuoteRequestSchema,
+  type Service,
 } from "@sob/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
@@ -41,7 +42,7 @@ export function useBookingPromotion(
     pending: preview.isPending,
     error: preview.error,
     payload: quote ? { code: code.trim().toUpperCase(), reviewHash: quote.reviewHash } : undefined,
-    serviceIds: selection?.serviceIds ?? [],
+    canReview: selection !== null,
     review: (offerCode = code) => {
       if (!selection) return;
       const request = bookingPromotionQuoteRequestSchema.safeParse({
@@ -61,23 +62,27 @@ export function useBookingPromotion(
 }
 export function BookingPromotionReview({
   state,
-  offerServiceIds = state.serviceIds,
+  services,
   disabled = false,
 }: {
   state: ReturnType<typeof useBookingPromotion>;
-  offerServiceIds?: string[];
+  services: Pick<Service, "id" | "priceCents" | "currency">[];
   disabled?: boolean;
 }) {
   const { t, locale } = useI18n();
   const online = useOnline();
+  const offerServiceIds = services.every(({ currency }) => currency === "EUR")
+    ? services.filter(({ priceCents }) => priceCents > 0).map(({ id }) => id)
+    : [];
+  const canShowOffers = state.canReview && online && offerServiceIds.length > 0;
   const flash = useQuery({
     queryKey: ["public-flash-offers"],
     queryFn: ({ signal }) => api().rewards.flashOffers(signal),
     refetchInterval: 30000,
-    enabled: state.serviceIds.length > 0 && offerServiceIds.length > 0,
+    enabled: canShowOffers,
   });
   const offers =
-    flash.isSuccess && online && offerServiceIds.length > 0
+    flash.isSuccess && canShowOffers
       ? flash.data.offers.filter(
           (offer) =>
             offer.allServices || offer.services.some(({ id }) => offerServiceIds.includes(id)),

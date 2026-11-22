@@ -132,7 +132,7 @@ function PartReview({
           <summary className="cursor-pointer py-3 text-sm font-medium">
             {t("bookingPromotion.title")}
           </summary>
-          <BookingPromotionReview state={promotion} disabled={disabled} />
+          <BookingPromotionReview state={promotion} services={services} disabled={disabled} />
         </details>
       )}
       <BookingPolicyConsent
@@ -344,7 +344,9 @@ export function VisitReview({ booking }: { booking: BookingContext }) {
                 key={`${subject}:${part[0]?.id}`}
                 className="min-w-0 space-y-4 rounded-lg border border-line p-4"
               >
-                <h2 className="text-heading">{part.map((s) => s.name).join(" + ")}</h2>
+                <h2 className="text-heading wrap-anywhere">
+                  {part.map((s) => s.name).join(" + ")}
+                </h2>
                 <p className="text-sm text-muted">
                   {formatTime(visitPart.startsAt, salon.timezone, locale)} ·{" "}
                   {booking.staff.find((s) => s.id === selected.parts[i]?.staffId)?.displayName}

@@ -46,7 +46,10 @@ function Harness({
       <button type="button" onClick={() => setChangedStart("2026-11-17T10:00:00Z")}>
         Change booking time
       </button>
-      <BookingPromotionReview state={state} />
+      <BookingPromotionReview
+        state={state}
+        services={[{ id, priceCents: 10000, currency: "EUR" }]}
+      />
       <output aria-label="Booking can confirm">{String(state.ready)}</output>
       <output aria-label="Reviewed booking hash">{state.payload?.reviewHash ?? "none"}</output>
     </>

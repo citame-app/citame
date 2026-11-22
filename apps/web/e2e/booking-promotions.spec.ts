@@ -578,6 +578,7 @@ test("publishes a dated service offer on the profile and takes it to a reviewed 
     await expect(page).toHaveURL(/\/book\?services=/);
 
     await signInThroughUi(page, fixture.clientEmail, `/book?services=${serviceId}`);
+    await expectNoHorizontalScroll(page);
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     await pickProfessional(page, "Stylist A");
     await pickFirstTime(page);

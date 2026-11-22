@@ -329,7 +329,7 @@ function SingleReviewStep() {
               .filter((s) => s.clientInstructions)
               .map((s) => (
                 <div key={s.id}>
-                  <h3 className="text-sm font-semibold">{s.name}</h3>
+                  <h3 className="text-sm font-semibold wrap-anywhere">{s.name}</h3>
                   <p className="whitespace-pre-wrap text-sm text-muted">{s.clientInstructions}</p>
                 </div>
               ))}
@@ -366,11 +366,7 @@ function SingleReviewStep() {
         {isClient && !finalPricePending && (
           <BookingPromotionReview
             state={promotion}
-            offerServiceIds={
-              selectedServices.every(({ currency }) => currency === "EUR")
-                ? selectedServices.filter(({ priceCents }) => priceCents > 0).map(({ id }) => id)
-                : []
-            }
+            services={selectedServices}
             disabled={confirm.isPending || uncertain}
           />
         )}
