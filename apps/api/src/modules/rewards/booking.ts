@@ -11,6 +11,7 @@ import { getBookableServices } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { assertStaffExists } from "../staff/service";
 import { rewardHash } from "./accounts";
+import { BOOKING_PROMOTION_KEY_PREFIX } from "./booking-attribution";
 import { applyCheckoutReward, type RewardPricingLine, rewardPricing } from "./discounts";
 
 async function quoteInTransaction(
@@ -117,8 +118,6 @@ export async function quoteBookingPromotion(
     accessMode: "read only",
   });
 }
-export const BOOKING_PROMOTION_KEY_PREFIX = "booking-promotion-";
-
 /** Called within creation, after client/calendar locks; every write rolls back with the visit. */
 export async function applyBookingPromotion(
   tx: Tx,

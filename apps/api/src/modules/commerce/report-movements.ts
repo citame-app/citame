@@ -18,12 +18,12 @@ export function checkoutReportScope(staffId?: string, clientId?: string) {
 /** The recorded payment and refund events in a half-open reporting period. */
 export function recordedCheckoutMovements(fromAt: Date | string, toAt: Date | string, scope: SQL) {
   return sql`
-    select c.client_id, p.method, p.amount_cents::bigint as amount, false as refund
+    select c.id as checkout_id, c.client_id, p.method, p.amount_cents::bigint as amount, false as refund
     from checkout_payment p join checkout c on c.id = p.checkout_id
     where p.status in (${paymentStatuses})
       and p.updated_at >= ${fromAt}::timestamptz and p.updated_at < ${toAt}::timestamptz ${scope}
     union all
-    select c.client_id, p.method, r.amount_cents::bigint, true
+    select c.id as checkout_id, c.client_id, p.method, r.amount_cents::bigint, true
     from checkout_refund r join checkout_payment p on p.id = r.payment_id
     join checkout c on c.id = p.checkout_id
     where r.status = ${completedRefundStatus}

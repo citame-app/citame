@@ -41,6 +41,7 @@ pub struct FinancialReport {
     pub booking_fees_cents: i64,
     pub unknown_cost_lines: u64,
     pub settled_by_family: Option<Vec<SalesFamilyTotal>>,
+    pub promotion_collections: Option<Vec<PromotionCollection>>,
     pub methods: Vec<FinancialMethod>,
     pub cash_sessions: Vec<FinancialSession>,
 }
@@ -57,6 +58,16 @@ pub struct SalesFamilyTotal {
     pub family: SalesFamily,
     pub amount_cents: i64,
     pub tax_cents: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromotionCollection {
+    pub name: String,
+    pub code: String,
+    pub collected_cents: i64,
+    pub refunded_cents: i64,
+    pub net_cents: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -235,6 +246,20 @@ impl FinancialReport {
                     csv,
                     "\r\n\"{family}\",\"{}\",\"{}\",\"{CURRENCY}\"",
                     row.amount_cents, row.tax_cents
+                );
+            }
+        }
+        if let Some(rows) = &self.promotion_collections {
+            csv.push_str("\r\n\r\n\"promotion_name\",\"promotion_code\",\"collected_cents\",\"refunded_cents\",\"net_cents\",\"currency\"");
+            for row in rows {
+                let _ = write!(
+                    csv,
+                    "\r\n{},{},\"{}\",\"{}\",\"{}\",\"{CURRENCY}\"",
+                    csv_text(&row.name),
+                    csv_text(&row.code),
+                    row.collected_cents,
+                    row.refunded_cents,
+                    row.net_cents
                 );
             }
         }

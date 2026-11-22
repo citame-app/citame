@@ -129,6 +129,38 @@ impl Root {
                     )
                 }))
             })
+            .when_some(report.promotion_collections.as_ref(), |view, rows| {
+                view.child(
+                    div()
+                        .debug_selector(|| "promotion-collections".to_string())
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(self.t(Key::FinancialPromotionCollections)),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::muted())
+                        .child(self.t(Key::FinancialPromotionBasis)),
+                )
+                .when(rows.is_empty(), |view| {
+                    view.child(
+                        div()
+                            .text_sm()
+                            .text_color(theme::muted())
+                            .child(self.t(Key::FinancialPromotionEmpty)),
+                    )
+                })
+                .children(rows.iter().map(|row| {
+                    self.financial_row(
+                        &format!("{} ({})", row.name, row.code),
+                        [
+                            (Key::FinancialCollected, amount(row.collected_cents)),
+                            (Key::FinancialRefunded, amount(row.refunded_cents)),
+                            (Key::FinancialNet, amount(row.net_cents)),
+                        ],
+                    )
+                }))
+            })
             .when(!report.methods.is_empty(), |view| {
                 view.child(
                     div()
@@ -284,6 +316,9 @@ mod tests {
                     { "family": "product", "amountCents": 900, "taxCents": 156 },
                     { "family": "unallocated", "amountCents": 100, "taxCents": 17 }
                 ],
+                "promotionCollections": [
+                    { "name": "=Original offer", "code": "OFFER", "collectedCents": 0, "refundedCents": 125, "netCents": -125 }
+                ],
                 "methods": [{ "method": "cash", "collectedCents": 1000, "refundedCents": 1300 }],
                 "cashSessions": [],
             })).unwrap());
@@ -291,6 +326,7 @@ mod tests {
         });
         cx.run_until_parked();
         assert!(cx.debug_bounds("financial-report").is_some());
+        assert!(cx.debug_bounds("promotion-collections").is_some());
         let output = dir.path().join("financial.csv");
         root.update(cx, |root, cx| root.save_report(cx));
         cx.simulate_new_path_selection(|_| Some(output.clone()));
@@ -304,6 +340,8 @@ mod tests {
         ));
         assert!(csv.contains("\"product\",\"900\",\"156\",\"EUR\""));
         assert!(csv.contains("\"unallocated\",\"100\",\"17\",\"EUR\""));
+        assert!(csv.contains("\"promotion_name\",\"promotion_code\",\"collected_cents\",\"refunded_cents\",\"net_cents\",\"currency\""));
+        assert!(csv.contains("\"'=Original offer\",\"OFFER\",\"0\",\"125\",\"-125\",\"EUR\""));
 
         let revoked = dir.path().join("revoked.csv");
         root.update(cx, |root, cx| {

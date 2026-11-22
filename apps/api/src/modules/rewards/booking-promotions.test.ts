@@ -1,6 +1,14 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import { checkoutSchema } from "@sob/contracts";
-import { appointment, checkout, checkoutReward, passPeriod, service } from "@sob/db";
+import {
+  appointment,
+  checkout,
+  checkoutPayment,
+  checkoutRefund,
+  checkoutReward,
+  passPeriod,
+  service,
+} from "@sob/db";
 import { eq } from "drizzle-orm";
 import {
   type Actor,
@@ -175,6 +183,89 @@ test("a promotion applied at checkout cannot appear as an offer accepted at book
   expect(applied.status, await applied.clone().text()).toBe(200);
   const report = await call(owner, "/admin/reports/summary?from=2026-03-09&to=2026-03-09");
   expect(await report.json()).toMatchObject({ promotionBreakdown: [] });
+  const payment = await collect(saleId, 9000);
+  await t.db
+    .update(checkoutPayment)
+    .set({ updatedAt: new Date("2026-03-09T13:00:00Z") })
+    .where(eq(checkoutPayment.id, payment));
+  const financial = await call(owner, "/admin/accounting/sales?from=2026-03-09&to=2026-03-09");
+  expect(await financial.json()).toMatchObject({ collectedCents: 9000, promotionCollections: [] });
+});
+
+async function collect(checkoutId: string, amountCents: number) {
+  const result = await call(owner, `/admin/commerce/checkouts/${checkoutId}/payments`, "POST", {
+    amountCents,
+    method: "external_card",
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(result.status, await result.clone().text()).toBe(201);
+  return ((await result.json()) as { payment: { id: string } }).payment.id;
+}
+
+test("financial reports attribute payments and later refunds to the frozen booking promotion", async () => {
+  const promotion = await offer();
+  const input = request((await quote()).reviewHash);
+  expect((await call(client, "/appointments", "POST", input)).status).toBe(201);
+  const [sale] = await t.db.select().from(checkout).where(eq(checkout.appointmentId, input.id));
+  if (!sale) throw new Error("Missing booking receipt");
+  await collect(sale.id, 2000);
+  const second = await collect(sale.id, 7000);
+  const refund = await call(owner, `/admin/commerce/payments/${second}/refunds`, "POST", {
+    amountCents: 1000,
+    reason: "Synthetic refund",
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(refund.status, await refund.clone().text()).toBe(201);
+  await t.db
+    .update(checkoutPayment)
+    .set({ updatedAt: new Date("2026-03-09T13:00:00Z") })
+    .where(eq(checkoutPayment.checkoutId, sale.id));
+  await t.db
+    .update(checkoutRefund)
+    .set({ updatedAt: new Date("2026-03-10T13:00:00Z") })
+    .where(eq(checkoutRefund.paymentId, second));
+  // Synthetic ledger entries verify the reporting filters independently of payment capture.
+  const paymentFixture = {
+    checkoutId: sale.id,
+    amountCents: 500,
+    currency: "EUR",
+    updatedAt: new Date("2026-03-09T13:00:00Z"),
+    requestHash: "fixture",
+  };
+  await t.db.insert(checkoutPayment).values([
+    { ...paymentFixture, method: "package", status: "succeeded", idempotencyKey: "prepaid" },
+    { ...paymentFixture, method: "external_card", status: "pending", idempotencyKey: "pending" },
+  ]);
+  expect(
+    (
+      await call(owner, `/admin/rewards/promotions/${promotion.id}`, "PUT", {
+        ...terms,
+        name: "Renamed offer",
+        code: "NEW10",
+        version: promotion.version,
+      })
+    ).status,
+  ).toBe(200);
+
+  const route = (to = "2026-03-10", from = "2026-03-09") =>
+    `/admin/accounting/sales?from=${from}&to=${to}`;
+  const result = await call(owner, route());
+  expect(result.status).toBe(200);
+  expect(result.headers.get("cache-control")).toBe("private, no-store");
+  const row = { name: terms.name, code: terms.code };
+  expect(await result.json()).toMatchObject({
+    promotionCollections: [{ ...row, collectedCents: 9000, refundedCents: 1000, netCents: 8000 }],
+  });
+  expect(await (await call(owner, route("2026-03-10", "2026-03-10"))).json()).toMatchObject({
+    promotionCollections: [{ ...row, collectedCents: 0, refundedCents: 1000, netCents: -1000 }],
+  });
+  expect(await (await call(owner, `${route()}&staffId=${f.beaId}`)).json()).toMatchObject({
+    promotionCollections: [],
+  });
+  expect(await (await call(owner, `${route()}&clientId=${other.clientId}`)).json()).toMatchObject({
+    promotionCollections: [],
+  });
+  expect((await call(client, route())).status).toBe(403);
 });
 test("changing offer terms invalidates the booking review without leaving a visit or consuming quota", async () => {
   const p = await offer();

@@ -40,6 +40,11 @@ export const accountingEn = {
     "You do not have permission to view this client’s sales report.",
   "accounting.allStaff": "Entire team",
   "accounting.cashTeam": "Cash register history is available for the entire team.",
+  "accounting.promotions.title": "Collections by booking promotion",
+  "accounting.promotions.offer": "Booking promotion",
+  "accounting.promotions.basis":
+    "Payments and refunds follow their confirmation dates. The name and code come from the original booking. Gift card and prepaid visit redemptions are excluded.",
+  "accounting.promotions.empty": "No payments or refunds for booking promotions in this period.",
   "accounting.families.title": "Settled amounts by sale family",
   "accounting.families.basis":
     "Amounts exclude tips and later refunds. Prepaid visits use their allocated value. Issuance of prepaid products appears in its own rows. Historical receipts without a reliable allocation appear under Unallocated.",
@@ -116,6 +121,12 @@ export const accountingEsAR: Record<keyof typeof accountingEn, string> = {
     "No tienes permiso para consultar las ventas de este cliente.",
   "accounting.allStaff": "Todo el equipo",
   "accounting.cashTeam": "El historial de caja está disponible para todo el equipo.",
+  "accounting.promotions.title": "Cobros por promoción de reserva",
+  "accounting.promotions.offer": "Promoción de reserva",
+  "accounting.promotions.basis":
+    "Los cobros y devoluciones se cuentan en su fecha de confirmación. Se conserva el nombre y el código de la reserva. Los canjes de tarjetas regalo y visitas prepagadas quedan fuera.",
+  "accounting.promotions.empty":
+    "No hay cobros ni devoluciones de promociones de reserva en este período.",
   "accounting.families.title": "Importes liquidados por familia de venta",
   "accounting.families.basis":
     "Los importes excluyen propinas y devoluciones posteriores. Las visitas prepagadas usan su valor asignado. Las emisiones de productos prepagados figuran en sus propias filas. Los recibos históricos sin reparto fiable figuran como Sin asignar.",

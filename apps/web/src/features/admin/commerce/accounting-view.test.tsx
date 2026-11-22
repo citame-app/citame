@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderApp } from "../../../../test/render";
 import { AccountingView, CommissionPanel, SalesReport } from "./accounting-view";
 
@@ -36,6 +36,15 @@ beforeEach(() => {
         settledByFamily: [
           { family: "service", amountCents: 1700, taxCents: 172 },
           { family: "unallocated", amountCents: 100, taxCents: 0 },
+        ],
+        promotionCollections: [
+          {
+            name: "=Current offer",
+            code: "OFFER",
+            collectedCents: 0,
+            refundedCents: 125,
+            netCents: -125,
+          },
         ],
       });
     }
@@ -118,10 +127,20 @@ test("financial reports apply the professional filter and export the visible fam
     fireEvent.click(screen.getByRole("button", { name: "Apply filters" }));
     await waitFor(() => expect(salesQueries.at(-1)?.get("staffId")).toBe(id));
     expect(await screen.findByRole("rowheader", { name: "Unallocated" })).toBeInTheDocument();
+    const promotions = await screen.findByRole("table", {
+      name: "Collections by booking promotion",
+    });
+    expect(
+      within(promotions).getByRole("rowheader", { name: "=Current offer (OFFER)" }),
+    ).toBeInTheDocument();
+    expect(within(promotions).getByRole("cell", { name: "-€1.25" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Export financial summary (CSV)" }));
     expect(click).toHaveBeenCalledTimes(1);
     expect(await download?.text()).toContain(
       '"sale_family","settled_amount_cents","included_tax_cents","currency"\r\n"service","1700","172","EUR"\r\n"unallocated","100","0","EUR"',
+    );
+    expect(await download?.text()).toContain(
+      `"promotion_name","promotion_code","collected_cents","refunded_cents","net_cents","currency"\r\n"'=Current offer","OFFER","0","125","-125","EUR"`,
     );
   } finally {
     click.mockRestore();
