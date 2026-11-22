@@ -1579,6 +1579,7 @@ keys! {
     DueOpenAppointment => ("Open appointment", "Abrir cita"),
     DueConfirmed => ("Confirmed payments: {amount}", "Cobros confirmados: {amount}"),
     DueReceiptBalance => ("Remaining on receipt: {amount}", "Saldo del recibo: {amount}"),
+    DueAfterVisit => ("The service balance is due after the appointment is completed.", "El saldo del servicio se cobra al completar la cita."),
     DuePricePending => ("Final price pending", "Precio final pendiente"),
     DuePaymentPending => ("Payment to verify", "Pago por verificar"),
     DueReceiptWaiting => ("Sync and review this appointment before opening its receipt.", "Sincroniza y revisa esta cita antes de abrir su recibo."),

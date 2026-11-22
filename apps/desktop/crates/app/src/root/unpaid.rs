@@ -310,6 +310,9 @@ impl Root {
                             if receipt.price_pending {
                                 labels.push(self.t(Key::DuePricePending).to_owned());
                             }
+                            if receipt.service_balance_deferred {
+                                labels.push(self.t(Key::DueAfterVisit).to_owned());
+                            }
                             if receipt.payment_in_progress {
                                 labels.push(self.t(Key::DuePaymentPending).to_owned());
                             }

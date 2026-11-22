@@ -839,6 +839,9 @@ function DueAppointments({
                       {item.receiptBalance.pricePending && (
                         <p className="text-sm">{t("pos.duePricePending")}</p>
                       )}
+                      {item.receiptBalance.serviceBalanceDeferred && (
+                        <p className="text-sm">{t("pos.dueAfterVisit")}</p>
+                      )}
                       {item.receiptBalance.paymentInProgress && (
                         <p className="text-sm">{t("pos.duePaymentPending")}</p>
                       )}

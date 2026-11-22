@@ -99,6 +99,11 @@ export async function unpaidAppointments(
             return [];
           if (!allSales && !ownsSale(principal, receipt))
             return [{ ...row, receiptRestricted: true as const }];
+          const protection = row.protection;
+          const serviceBalanceDeferred =
+            protection?.checkoutId === receipt.id &&
+            (protection.state === "pending" || protection.state === "confirmed") &&
+            row.status !== "completed";
           return [
             {
               ...row,
@@ -108,6 +113,7 @@ export async function unpaidAppointments(
                 balanceCents: receipt.pricePending || receipt.paymentInProgress ? null : balance,
                 pricePending: receipt.pricePending,
                 paymentInProgress: receipt.paymentInProgress,
+                ...(serviceBalanceDeferred ? { serviceBalanceDeferred: true as const } : {}),
               },
             },
           ];

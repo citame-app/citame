@@ -150,6 +150,24 @@ test("deposit funding confirms the hold but cannot charge the remaining service 
     fulfilledAt: null,
     protection: { state: "confirmed" },
   });
+  const due = await call(
+    owner,
+    "/admin/commerce/unpaid?from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z",
+  );
+  expect(due.status).toBe(200);
+  expect(await due.json()).toMatchObject({
+    appointments: [
+      {
+        id: a.id,
+        receiptBalance: {
+          id,
+          confirmedCents: 2500,
+          balanceCents: 7500,
+          serviceBalanceDeferred: true,
+        },
+      },
+    ],
+  });
 });
 test("early cancellation releases the slot and shows the whole signal due back without erasing its payments", async () => {
   const p = await enable();

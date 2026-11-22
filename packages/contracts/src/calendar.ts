@@ -81,6 +81,7 @@ export const unpaidReceiptBalanceSchema = z.object({
   balanceCents: moneyCentsSchema.positive().nullable(),
   pricePending: z.boolean(),
   paymentInProgress: z.boolean(),
+  serviceBalanceDeferred: z.literal(true).optional(),
 });
 export const unpaidAppointmentsSchema = z.object({
   appointments: z.array(

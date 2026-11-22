@@ -32,6 +32,8 @@ pub struct UnpaidReceiptBalance {
     pub balance_cents: Option<u32>,
     pub price_pending: bool,
     pub payment_in_progress: bool,
+    #[serde(default)]
+    pub service_balance_deferred: bool,
 }
 
 #[derive(Debug, Deserialize)]
