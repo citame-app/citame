@@ -416,6 +416,13 @@ for (const scheme of ["light", "dark"] as const)
             .first(),
         ).toBeVisible();
         await englishForecast.screenshot({ path: info.outputPath("revenue-forecast-en.png") });
+        const clientsTab = page
+          .getByRole("navigation", { name: "Reports" })
+          .getByRole("button", { name: "Clients", exact: true });
+        await clientsTab.click();
+        await page.getByRole("radio", { name: "Last 7 days", exact: true }).check();
+        await expect(clientsTab).toHaveAttribute("aria-pressed", "true");
+        expect(new URL(page.url()).searchParams.get("section")).toBe("clients");
       } finally {
         if (forecastVisit)
           await owner.patch(`/api/appointments/${forecastVisit.id}`, {

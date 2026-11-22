@@ -103,7 +103,12 @@ function ReportsPage() {
       >
         <ReportsView
           search={search}
-          onSearchChange={(next) => void navigate({ search: next, replace: true })}
+          onSearchChange={(next) =>
+            void navigate({
+              search: (current) => ({ ...next, section: current.section }),
+              replace: true,
+            })
+          }
           role={all ? "owner" : session.user.role}
           showClients={section === "clients" && permissions.financialReports}
         />
