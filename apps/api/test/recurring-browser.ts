@@ -46,6 +46,8 @@ const config = loadConfig({
   PAYMENT_TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
   RATE_LIMIT_AUTH_MAX: "100000",
   RATE_LIMIT_GLOBAL_MAX: "1000000",
+  // Browser projects share a test account and loopback address across sequential scenarios.
+  SYNC_STREAM_RATE_LIMIT_MAX: "1000",
 });
 await seedSampleData(database.db);
 if (process.env.E2E_CALENDAR_FIXTURE === "true") {
