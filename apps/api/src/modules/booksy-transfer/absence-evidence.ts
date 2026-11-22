@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sourceCalendarDate } from "./calendar-intervals";
 import { isUnfilteredBooksyCalendarRequest } from "./calendar-request-scope";
 import { fingerprint } from "./plan";
 import type { BooksySourceReadModel } from "./source-read-model";
@@ -8,7 +9,14 @@ const calendar = z.object({
   end_date: z.iso.date(),
   resources_count: z.number().int().nonnegative(),
   resources: z.array(z.object({ id: z.number().int() })),
-  bookings: z.record(z.string(), z.object({ id: z.number().int() })),
+  bookings: z.record(
+    z.string(),
+    z.object({
+      id: z.number().int(),
+      booked_from: z.string().optional(),
+      booked_till: z.string().optional(),
+    }),
+  ),
 });
 const detail = z.object({
   appointment: z.object({ appointment_uid: z.number().int(), status: z.string().optional() }),
@@ -20,6 +28,7 @@ const retainedResponse = z.object({
 
 type Evidence = { at: string; sha256: string };
 type CoverageWindow = readonly [string, string];
+type FullCalendar = (capture: z.infer<typeof calendar>, date: string, evidence: Evidence) => void;
 
 function* datesIn([from, to]: CoverageWindow) {
   for (
@@ -50,6 +59,7 @@ export function collectBookingAbsences(
   current: BooksySourceReadModel,
   refs: string[],
   coverageWindow?: CoverageWindow,
+  onFullCalendar?: FullCalendar,
 ) {
   const wanted = new Set(refs);
   const lines: Line[] = previous.appointments.flatMap((row) => {
@@ -58,10 +68,7 @@ export function collectBookingAbsences(
       {
         itemRef: row.sourceCopy.itemRef,
         groupRef: row.sourceCopy.groupRef,
-        date: Temporal.Instant.from(row.startsAt)
-          .toZonedDateTimeISO(previous.base.timezone)
-          .toPlainDate()
-          .toString(),
+        date: sourceCalendarDate(row.startsAt, previous.base.timezone),
       },
     ];
   });
@@ -126,7 +133,10 @@ export function collectBookingAbsences(
           observed.start_date > from ? observed.start_date : from,
           observed.end_date < to ? observed.end_date : to,
         ])) {
-          if (isNewer(evidence, calendarDays.get(date))) calendarDays.set(date, evidence);
+          const prior = calendarDays.get(date);
+          if (isNewer(evidence, prior)) calendarDays.set(date, evidence);
+          if (onFullCalendar && (!prior || Temporal.Instant.compare(evidence.at, prior.at) >= 0))
+            onFullCalendar(observed, date, evidence);
         }
       }
       const present = new Set(Object.values(observed.bookings).map((row) => String(row.id)));
