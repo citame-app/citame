@@ -364,7 +364,15 @@ function SingleReviewStep() {
           <p className="text-sm text-muted">{t("services.price.promotionLater")}</p>
         )}
         {isClient && !finalPricePending && (
-          <BookingPromotionReview state={promotion} disabled={confirm.isPending || uncertain} />
+          <BookingPromotionReview
+            state={promotion}
+            offerServiceIds={
+              selectedServices.every(({ currency }) => currency === "EUR")
+                ? selectedServices.filter(({ priceCents }) => priceCents > 0).map(({ id }) => id)
+                : []
+            }
+            disabled={confirm.isPending || uncertain}
+          />
         )}
         {policy.isError && (
           <ErrorState error={policy.error} onRetry={() => void policy.refetch()} />

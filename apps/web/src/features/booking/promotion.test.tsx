@@ -130,7 +130,7 @@ test("selecting a public offer requests the booking quote immediately", async ()
     return Response.json(quote);
   }) as unknown as typeof fetch;
   renderApp(<Harness />);
-  fireEvent.click(await screen.findByRole("button", { name: "Review Flash fixture" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Review offer Flash fixture" }));
   expect(await screen.findByText("Save €10 · Booking total €90")).toBeVisible();
   expect(screen.getByLabelText("Promotion code (optional)")).toHaveValue("FLASH10");
   expect(packets).toEqual([{ ...selection, code: "FLASH10" }]);

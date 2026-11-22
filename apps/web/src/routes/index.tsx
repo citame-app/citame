@@ -1,4 +1,4 @@
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 import { PageContainer } from "~/components/pages";
@@ -84,6 +84,13 @@ function Home() {
   const { data: salon } = useSuspenseQuery(salonQuery);
   const { data: services } = useSuspenseQuery(servicesQuery);
   const { data: staff } = useSuspenseQuery(staffQuery);
+  const flash = useQuery({
+    queryKey: ["public-flash-offers"],
+    queryFn: ({ signal }) => api().rewards.flashOffers(signal),
+    initialData: { offers: flashOffers },
+    refetchOnMount: "always",
+    refetchInterval: 30000,
+  });
   const steps = ["home.how.one", "home.how.two", "home.how.three"] as const;
   const momentRef = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -233,7 +240,14 @@ function Home() {
         </div>
       </section>
 
-      <FlashStorefront offers={flashOffers} />
+      <FlashStorefront
+        offers={flash.isSuccess ? flash.data.offers : []}
+        bookableServiceIds={
+          new Set(
+            services.filter((service) => service.catalog?.kind !== "addon").map(({ id }) => id),
+          )
+        }
+      />
       <GiftStorefront offers={giftOffers} />
       {profile && (
         <PublicBusinessProfile

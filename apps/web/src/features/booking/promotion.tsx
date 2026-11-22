@@ -61,9 +61,11 @@ export function useBookingPromotion(
 }
 export function BookingPromotionReview({
   state,
+  offerServiceIds = state.serviceIds,
   disabled = false,
 }: {
   state: ReturnType<typeof useBookingPromotion>;
+  offerServiceIds?: string[];
   disabled?: boolean;
 }) {
   const { t, locale } = useI18n();
@@ -72,13 +74,13 @@ export function BookingPromotionReview({
     queryKey: ["public-flash-offers"],
     queryFn: ({ signal }) => api().rewards.flashOffers(signal),
     refetchInterval: 30000,
-    enabled: state.serviceIds.length > 0,
+    enabled: state.serviceIds.length > 0 && offerServiceIds.length > 0,
   });
   const offers =
-    flash.isSuccess && online
+    flash.isSuccess && online && offerServiceIds.length > 0
       ? flash.data.offers.filter(
           (offer) =>
-            offer.allServices || offer.services.some(({ id }) => state.serviceIds.includes(id)),
+            offer.allServices || offer.services.some(({ id }) => offerServiceIds.includes(id)),
         )
       : [];
   return (

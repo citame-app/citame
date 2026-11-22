@@ -7,7 +7,7 @@ export const bookingPromotionsEn = {
   "flashOffers.perClient": "Uses per customer: {count}",
   "flashOffers.allServices": "Eligible online services",
   "flashOffers.bookNamed": "Book with {name}",
-  "flashOffers.reviewNamed": "Review {name}",
+  "flashOffers.reviewNamed": "Review offer {name}",
   "peakPrices.title": "Peak-time pricing",
   "peakPrices.help": "Set a surcharge for busy times. Customers see the price before confirming.",
   "peakPrices.timezone": "Times are in {zone}. If rules overlap, the highest surcharge applies.",
@@ -62,7 +62,7 @@ export const bookingPromotionsEs: Record<keyof typeof bookingPromotionsEn, strin
   "flashOffers.perClient": "Canjes por cliente: {count}",
   "flashOffers.allServices": "Servicios elegibles para reserva online",
   "flashOffers.bookNamed": "Reservar con {name}",
-  "flashOffers.reviewNamed": "Revisar {name}",
+  "flashOffers.reviewNamed": "Revisar oferta {name}",
   "peakPrices.title": "Precios en horas punta",
   "peakPrices.help":
     "Configura un recargo en horas de alta demanda. El cliente ve el precio antes de confirmar.",

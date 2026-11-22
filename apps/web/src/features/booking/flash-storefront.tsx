@@ -40,7 +40,13 @@ export function FlashOfferDetails({ offer }: { offer: PublicFlashOffer }) {
   );
 }
 
-export function FlashStorefront({ offers }: { offers: PublicFlashOffer[] }) {
+export function FlashStorefront({
+  offers,
+  bookableServiceIds,
+}: {
+  offers: PublicFlashOffer[];
+  bookableServiceIds: ReadonlySet<string>;
+}) {
   const { t } = useI18n();
   if (!offers.length) return null;
   return (
@@ -50,26 +56,30 @@ export function FlashStorefront({ offers }: { offers: PublicFlashOffer[] }) {
           <h2 id="flash-offer-title">{t("flashOffers.title")}</h2>
         </header>
         <ul className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
-          {offers.map((offer) => (
-            <li key={offer.id}>
-              <article className="flex h-full min-w-0 flex-col gap-3 rounded-xl border border-line bg-surface p-5">
-                <h3 className="break-words text-lg font-semibold">{offer.name}</h3>
-                <FlashOfferDetails offer={offer} />
-                <p className="text-sm text-muted">
-                  {offer.allServices
-                    ? t("flashOffers.allServices")
-                    : offer.services.map(({ name }) => name).join(", ")}
-                </p>
-                <Link
-                  to="/book"
-                  className={`${buttonClasses({ variant: "secondary" })} mt-auto w-fit`}
-                  aria-label={t("flashOffers.bookNamed", { name: offer.name })}
-                >
-                  {t("home.services.book")}
-                </Link>
-              </article>
-            </li>
-          ))}
+          {offers.map((offer) => {
+            const service = offer.services.length === 1 ? offer.services[0]?.id : undefined;
+            return (
+              <li key={offer.id}>
+                <article className="flex h-full min-w-0 flex-col gap-3 rounded-xl border border-line bg-surface p-5">
+                  <h3 className="break-words text-lg font-semibold">{offer.name}</h3>
+                  <FlashOfferDetails offer={offer} />
+                  <p className="text-sm text-muted [overflow-wrap:anywhere]">
+                    {offer.allServices
+                      ? t("flashOffers.allServices")
+                      : offer.services.map(({ name }) => name).join(", ")}
+                  </p>
+                  <Link
+                    to="/book"
+                    search={service && bookableServiceIds.has(service) ? { services: service } : {}}
+                    className={`${buttonClasses({ variant: "secondary" })} mt-auto w-fit`}
+                    aria-label={t("flashOffers.bookNamed", { name: offer.name })}
+                  >
+                    {t("home.services.book")}
+                  </Link>
+                </article>
+              </li>
+            );
+          })}
         </ul>
       </div>
     </section>

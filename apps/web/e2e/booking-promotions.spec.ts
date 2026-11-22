@@ -520,3 +520,83 @@ for (const scheme of ["light", "dark"] as const)
       }
     });
   });
+
+test("publishes a dated service offer on the profile and takes it to a reviewed quote", async ({
+  page,
+}) => {
+  const owner = await playwrightRequest.newContext({
+    baseURL: fixture.baseURL,
+    extraHTTPHeaders: { origin: fixture.baseURL },
+  });
+  const code = `FLASH_${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+  const name = `Flash offer ${code}`;
+  let serviceId: string | undefined;
+  let promotion: { id: string; version: number } | undefined;
+  try {
+    const signedIn = await owner.post("/api/auth/sign-in/email", {
+      data: { email: fixture.ownerEmail, password: fixture.password },
+    });
+    expect(signedIn.ok()).toBe(true);
+    const staff = (await (await owner.get("/api/staff")).json()).staff.find(
+      (row: { displayName: string }) => row.displayName === "Stylist A",
+    );
+    const service = await owner.post("/api/admin/services", {
+      data: {
+        name: `Flash_${"W".repeat(55)}_${code}`,
+        durationMinutes: 45,
+        bufferMinutes: 0,
+        priceCents: 10000,
+        currency: "EUR",
+        staffIds: [staff.id],
+      },
+    });
+    expect(service.status(), await service.text()).toBe(201);
+    ({ id: serviceId } = (await service.json()) as { id: string });
+    const terms = {
+      code,
+      name,
+      kind: "percent",
+      value: 1500,
+      eligibleKinds: ["service"],
+      serviceIds: [serviceId],
+      startsAt: new Date(Date.now() - 3600000).toISOString(),
+      endsAt: new Date(Date.now() + 86400000).toISOString(),
+      showOnline: true,
+    };
+    const created = await owner.post("/api/admin/rewards/promotions", { data: terms });
+    expect(created.status(), await created.text()).toBe(201);
+    promotion = await created.json();
+    if (!promotion) throw new Error("The fixture promotion was not saved");
+
+    await page.goto("/");
+    const storefront = page.getByRole("region", { name: "Flash offers" });
+    await expect(storefront.getByRole("heading", { name })).toBeVisible();
+    await expectNoHorizontalScroll(page);
+    const book = storefront.getByRole("link", { name: `Book with ${name}` });
+    await book.focus();
+    await book.press("Enter");
+    await expect(page).toHaveURL(/\/book\?services=/);
+
+    await signInThroughUi(page, fixture.clientEmail, `/book?services=${serviceId}`);
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await pickProfessional(page, "Stylist A");
+    await pickFirstTime(page);
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    const review = page.getByRole("button", { name: `Review offer ${name}` });
+    await review.focus();
+    await review.press("Enter");
+    await expect(page.getByText("Save €15 · Booking total €85", { exact: true })).toBeVisible();
+    await expectNoHorizontalScroll(page);
+    await expectNoSeriousA11yViolations(page, "reviewed flash offer");
+
+    const withdrawn = await owner.put(`/api/admin/rewards/promotions/${promotion.id}`, {
+      data: { ...terms, showOnline: false, version: promotion.version },
+    });
+    expect(withdrawn.status()).toBe(200);
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name })).toHaveCount(0);
+  } finally {
+    if (serviceId) await owner.delete(`/api/admin/services/${serviceId}`);
+    await owner.dispose();
+  }
+});

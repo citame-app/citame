@@ -1,8 +1,8 @@
 import {
+  canPublishFlashOffer,
   needsFinalPrice,
   type PromotionInput,
   type PublicFlashOffer,
-  promotionInputSchema,
 } from "@sob/contracts";
 import {
   checkoutReward,
@@ -16,7 +16,6 @@ import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
-import { parseOrThrow } from "../../http";
 import { getServicesByIds, listServices } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { rewardHash } from "./accounts";
@@ -99,9 +98,7 @@ export async function publicFlashOffers(db: Database, now: Date) {
           terms.startsAt <= time &&
           terms.endsAt &&
           terms.endsAt > time &&
-          !terms.timing &&
-          terms.eligibleKinds.length === 1 &&
-          terms.eligibleKinds[0] === "service",
+          canPublishFlashOffer(terms),
       );
       if (!rows.length || !(await getSalonSettings(tx)).onlineBookingEnabled) return { offers: [] };
       const usage = await promotionUsage(
@@ -143,7 +140,6 @@ export async function publicFlashOffers(db: Database, now: Date) {
           allServices: terms.serviceIds.length === 0,
           services: terms.serviceIds.length ? services.map(({ id, name }) => ({ id, name })) : [],
         });
-        if (offers.length === 12) break;
       }
       return { offers };
     },
@@ -176,10 +172,7 @@ export async function savePromotion(
           .where(eq(promotion.id, id))
           .for("update");
         if (!current) throw new DomainError("not_found", "Promotion not found");
-        if (showOnline ?? current.terms.showOnline) {
-          parseOrThrow(promotionInputSchema, { ...input, showOnline: true });
-          terms = { ...terms, showOnline: true };
-        }
+        if (showOnline ?? current.terms.showOnline) terms = { ...terms, showOnline: true };
         if (
           allowIdenticalReplay &&
           version !== null &&
@@ -191,6 +184,11 @@ export async function savePromotion(
           return promotionView(current);
         if (current.version !== version)
           throw new DomainError("version_conflict", "Promotion changed; review the current terms");
+        if (terms.showOnline && !canPublishFlashOffer(terms))
+          throw new DomainError(
+            "validation_error",
+            "Public flash offers require dated appointment services",
+          );
         if (input.serviceIds.length) await getServicesByIds(tx, input.serviceIds);
         [row] = await tx
           .update(promotion)

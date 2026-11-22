@@ -139,6 +139,17 @@ test("public flash offers keep existing codes private and disappear after their 
     },
   ]);
 
+  const stale = await call(owner, `/admin/rewards/promotions/${flash.id}`, "PUT", {
+    ...terms,
+    version: flash.version + 1,
+  });
+  expect(stale.status).toBe(409);
+  expect(await stale.json()).toMatchObject({ error: { code: "version_conflict" } });
+
+  await t.db.update(salonSettings).set({ onlineBookingEnabled: false });
+  expect(await read()).toEqual([]);
+  await t.db.update(salonSettings).set({ onlineBookingEnabled: true });
+
   const legacySave = await call(owner, `/admin/rewards/promotions/${flash.id}`, "PUT", {
     ...terms,
     ...window,

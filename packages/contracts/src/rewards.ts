@@ -121,6 +121,21 @@ export const adminLoyaltyStatementSchema = loyaltyStatementSchema.extend({
   generation: syncGenerationSchema,
   canAdjust: z.boolean(),
 });
+export function canPublishFlashOffer(terms: {
+  eligibleKinds: readonly string[];
+  startsAt: string | null;
+  endsAt: string | null;
+  timing?: object;
+}) {
+  return (
+    terms.eligibleKinds.length === 1 &&
+    terms.eligibleKinds[0] === "service" &&
+    !terms.timing &&
+    terms.startsAt !== null &&
+    terms.endsAt !== null
+  );
+}
+
 export const promotionInputSchema = z
   .object({
     code: z
@@ -158,19 +173,10 @@ export const promotionInputSchema = z
     path: ["eligibleKinds"],
     message: "Timed promotions apply only to appointment services",
   })
-  .refine(
-    (p) =>
-      !p.showOnline ||
-      (p.eligibleKinds.length === 1 &&
-        p.eligibleKinds[0] === "service" &&
-        !p.timing &&
-        p.startsAt !== null &&
-        p.endsAt !== null),
-    {
-      path: ["showOnline"],
-      message: "Public flash offers require appointment services and start and end dates",
-    },
-  )
+  .refine((p) => !p.showOnline || canPublishFlashOffer(p), {
+    path: ["showOnline"],
+    message: "Public flash offers require appointment services and start and end dates",
+  })
   .refine((p) => !p.startsAt || !p.endsAt || Date.parse(p.startsAt) < Date.parse(p.endsAt), {
     path: ["endsAt"],
     message: "Expiry must follow the start",
