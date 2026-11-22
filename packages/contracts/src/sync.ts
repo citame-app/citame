@@ -4,6 +4,7 @@ import { calendarAppointmentSchema } from "./calendar";
 import { clientEmailChangeSchema } from "./clients";
 import { idSchema, instantSchema, LIMITS, localDateSchema, syncGenerationSchema } from "./common";
 import { dateShiftRangesSchema } from "./date-shifts";
+import { giftReplicaScopeSchema } from "./gift-cards";
 import {
   createProductSchema,
   productPhotoInputSchema,
@@ -698,6 +699,10 @@ export const syncPullResponseSchema = z.object({
   /** Time off the current caller can manage: none, every calendar, or their own staff ID. */
   timeOffScope: z.union([z.literal("none"), z.literal("all"), idSchema]).optional(),
   clientDirectory: z.boolean().optional(),
+  giftCardsScope: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
   /** Confirms the requested client groups projection for callers with directory access. */
   clientGroups: z.literal(true).optional(),
   viewerRole: z.enum(["owner", "staff"]).optional(),

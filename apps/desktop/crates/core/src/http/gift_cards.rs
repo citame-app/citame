@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 const PATH: &str = "/admin/gift-cards";
 
-#[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum GiftStatus {
     Pending,
@@ -25,7 +25,7 @@ impl GiftStatus {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GiftBalance {
     pub balance_cents: u32,
@@ -37,7 +37,7 @@ pub struct GiftBalance {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GiftCard {
     pub id: Uuid,
@@ -50,7 +50,7 @@ pub struct GiftCard {
     pub version: u32,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GiftPagination {
     pub page: u32,
@@ -64,13 +64,13 @@ impl GiftPagination {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct GiftPage {
     pub cards: Vec<GiftCard>,
     pub pagination: GiftPagination,
 }
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GiftMovementKind {
     Activation,
@@ -80,7 +80,7 @@ pub enum GiftMovementKind {
     PurchaseRefundReversal,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GiftMovement {
     pub kind: GiftMovementKind,
@@ -88,10 +88,17 @@ pub struct GiftMovement {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct GiftMovements {
     pub movements: Vec<GiftMovement>,
     pub pagination: GiftPagination,
+    pub replica: Option<GiftReplicaStamp>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct GiftReplicaStamp {
+    pub scope: String,
+    pub generation: String,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -145,6 +152,83 @@ pub struct GiftReveal {
     pub card: GiftCard,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReplicaPage {
+    scope: String,
+    generation: String,
+    revision: i64,
+    through: i64,
+    rows: Vec<GiftCard>,
+    has_more: bool,
+}
+
+pub struct GiftCatalogue {
+    pub scope: String,
+    pub generation: String,
+    pub through: i64,
+    pub saved_at: DateTime<Utc>,
+    pub cards: Vec<GiftCard>,
+}
+
+impl GiftCatalogue {
+    pub fn search(
+        &self,
+        page: u32,
+        search: &str,
+        status: Option<GiftStatus>,
+        now: DateTime<Utc>,
+    ) -> GiftPage {
+        const PAGE_SIZE: usize = 20;
+        let label_term = search.to_lowercase();
+        let page = usize::try_from(page.max(1)).unwrap_or(usize::MAX);
+        let start = page.saturating_sub(1).saturating_mul(PAGE_SIZE);
+        let mut total = 0u32;
+        let mut cards = Vec::with_capacity(PAGE_SIZE);
+        for card in &self.cards {
+            let current_status = card.balance.status_at(now);
+            if status.is_some_and(|status| current_status != status)
+                || (!label_term.is_empty()
+                    && !card.balance.code_last4.eq_ignore_ascii_case(search)
+                    && !card.label.to_lowercase().contains(&label_term))
+            {
+                continue;
+            }
+            if usize::try_from(total).is_ok_and(|index| index >= start) && cards.len() < PAGE_SIZE {
+                let mut card = card.clone();
+                card.balance.status = current_status;
+                cards.push(card);
+            }
+            total = total.saturating_add(1);
+        }
+        GiftPage {
+            cards,
+            pagination: GiftPagination {
+                page: u32::try_from(page).unwrap_or(u32::MAX),
+                page_size: PAGE_SIZE as u32,
+                total,
+            },
+        }
+    }
+
+    pub fn card(&self, id: Uuid, now: DateTime<Utc>) -> Option<GiftCard> {
+        let mut card = self.cards.iter().find(|card| card.id == id)?.clone();
+        card.balance.status = card.balance.status_at(now);
+        Some(card)
+    }
+}
+
+impl GiftBalance {
+    fn status_at(&self, now: DateTime<Utc>) -> GiftStatus {
+        if self.status == GiftStatus::Active && self.expires_at.is_some_and(|expiry| expiry <= now)
+        {
+            GiftStatus::Expired
+        } else {
+            self.status
+        }
+    }
+}
+
 impl HttpTransport {
     pub fn can_manage_gift_cards(&self) -> Result<bool, TransportError> {
         #[derive(Deserialize)]
@@ -159,6 +243,59 @@ impl HttpTransport {
         Ok(response
             .permissions
             .is_some_and(|permission| permission.refunds))
+    }
+
+    pub fn gift_catalogue(
+        &self,
+        scope: &str,
+        generation: &str,
+    ) -> Result<GiftCatalogue, TransportError> {
+        let mut cards = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut revision = None;
+        for page in 1..=100_000 {
+            let response: ReplicaPage = self.gift_get(&format!("{PATH}/replica?page={page}"))?;
+            if response.scope != scope || response.generation != generation {
+                return Err(TransportError::ReplicaGenerationChanged);
+            }
+            if response.revision < 0
+                || response.through < response.revision
+                || revision.is_some_and(|seq| response.revision != seq)
+            {
+                return Err(TransportError::Server(
+                    "Gift register changed during download".into(),
+                ));
+            }
+            if response.rows.len() > 128
+                || response.has_more && response.rows.len() != 128
+                || !response.rows.iter().all(|card| {
+                    seen.insert(card.id)
+                        && card.balance.currency == "EUR"
+                        && card.balance.code_last4.len() == 4
+                        && card
+                            .balance
+                            .code_last4
+                            .bytes()
+                            .all(|byte| byte.is_ascii_hexdigit())
+                })
+            {
+                return Err(TransportError::Server("Invalid gift register page".into()));
+            }
+            revision = Some(response.revision);
+            cards.extend(response.rows);
+            if !response.has_more {
+                return Ok(GiftCatalogue {
+                    scope: scope.to_owned(),
+                    generation: generation.to_owned(),
+                    through: response.through,
+                    saved_at: Utc::now(),
+                    cards,
+                });
+            }
+        }
+        Err(TransportError::Server(
+            "Gift register pagination exceeded the API limit".into(),
+        ))
     }
 
     pub fn gift_cards(

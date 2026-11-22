@@ -1,5 +1,9 @@
 import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from "bun:test";
-import { syncPullResponseSchema } from "@sob/contracts";
+import {
+  giftCardMovementListSchema,
+  giftReplicaPageSchema,
+  syncPullResponseSchema,
+} from "@sob/contracts";
 import { sql } from "drizzle-orm";
 import {
   type Actor,
@@ -165,6 +169,58 @@ beforeEach(async () => {
   ]);
   refundOutcome = "success";
   dispatches = 0;
+});
+
+test("the offline register contains only cards in the current account scope", async () => {
+  const manager = await actor(t, "staff", "gift-offline-manager@example.test");
+  await t.db.execute(
+    sql`update staff_profile set access_preset='manager' where user_id=${manager.userId}`,
+  );
+  const professional = await actor(t, "staff", "gift-offline-no-access@example.test");
+  const gift = await active();
+  const replica = "/admin/gift-cards/replica";
+  const pull = await call(owner, "/sync/pull?since=0&limit=1");
+  const ownerScope = syncPullResponseSchema.parse(await pull.json()).giftCardsScope;
+  const response = await call(owner, replica);
+  expect(response.status).toBe(200);
+  expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+  const raw = await response.json();
+  const snapshot = giftReplicaPageSchema.parse(raw);
+  expect(snapshot.scope).toBe(ownerScope ?? "");
+  expect(snapshot.through).toBeGreaterThanOrEqual(snapshot.revision);
+  expect(snapshot.rows).toEqual([
+    expect.objectContaining({
+      id: gift.card.id,
+      balanceCents: 1000,
+      codeLast4: gift.code.slice(-4),
+    }),
+  ]);
+  const [masked] = snapshot.rows;
+  expect(masked).not.toHaveProperty("buyerClientId");
+  expect(masked).not.toHaveProperty("code");
+  expect(JSON.stringify(raw)).not.toContain(gift.code);
+  expect(JSON.stringify(raw)).not.toContain("buyerClientId");
+  const history = await call(owner, `/admin/gift-cards/${gift.card.id}/movements`);
+  expect(giftCardMovementListSchema.parse(await history.json()).replica).toEqual({
+    scope: snapshot.scope,
+    generation: snapshot.generation,
+  });
+  const own = await call(professional, replica);
+  expect(own.status).toBe(200);
+  const restrictedSnapshot = giftReplicaPageSchema.parse(await own.json());
+  expect(restrictedSnapshot.rows).toEqual([]);
+  expect(restrictedSnapshot.scope).not.toBe(snapshot.scope);
+  await t.db.execute(
+    sql`update staff_profile set access_preset='restricted' where user_id=${professional.userId}`,
+  );
+  expect((await call(professional, replica)).status).toBe(403);
+  const deniedPull = await call(professional, "/sync/pull?since=0&limit=1");
+  expect(syncPullResponseSchema.parse(await deniedPull.json()).giftCardsScope).toBeUndefined();
+  expect((await call(client, replica)).status).toBe(403);
+  expect((await call(client, "/me/gift-cards/replica")).status).toBe(403);
+  const shared = await call(manager, replica);
+  expect(shared.status).toBe(200);
+  expect(await shared.json()).toMatchObject({ rows: snapshot.rows });
 });
 
 test("purchase is idempotent, pending value cannot be used or revealed and activation stores no plaintext code", async () => {

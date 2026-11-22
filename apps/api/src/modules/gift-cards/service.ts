@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
-import { type GiftCard, permissionsFor } from "@sob/contracts";
-import { checkoutLine, type Database, giftCard, giftCardMovement } from "@sob/db";
-import { and, asc, count, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { type GiftCard, giftReplicaPageSize, permissionsFor } from "@sob/contracts";
+import { checkoutLine, type Database, giftCard, giftCardMovement, syncChange } from "@sob/db";
+import { and, asc, count, desc, eq, ilike, inArray, max, or, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
 import { ownedClientIds, type Principal } from "../../auth/principal";
@@ -12,6 +12,15 @@ import { giftCode, giftCodeHash } from "./code";
 type Connection = Database | Tx;
 export function authorizeGiftAccess(principal: Principal) {
   if (principal.role !== "client") requirePermission(principal, "commerce");
+}
+/** The cache token describes precisely the visibility relevant to the gift register. */
+export function giftReplicaScope(principal: Principal) {
+  const permissions = permissionsFor(principal.role, principal.accessPreset);
+  if (principal.role === "client" || !permissions.commerce) return undefined;
+  const clientIds = permissions.allSales ? [] : [...ownedClientIds(principal)].sort();
+  return createHash("sha256")
+    .update(JSON.stringify([principal.userId, permissions.allSales, clientIds]))
+    .digest("hex");
 }
 export function giftScope(principal: Principal) {
   authorizeGiftAccess(principal);
@@ -40,11 +49,15 @@ export async function giftView(
     .from(checkoutLine)
     .where(eq(checkoutLine.giftCardId, row.id));
   if (!line) throw new Error("Gift card is missing its purchase receipt");
+  return toGiftCard(row, line.checkoutId);
+}
+
+function toGiftCard(row: typeof giftCard.$inferSelect, checkoutId: string): GiftCard {
   return {
     id: row.id,
     label: row.label,
     buyerClientId: row.buyerClientId,
-    checkoutId: line.checkoutId,
+    checkoutId,
     amountCents: row.amountCents,
     balanceCents: row.balanceCents,
     reservedCents: row.reservedCents,
@@ -101,6 +114,40 @@ export async function listGifts(
     { isolationLevel: "repeatable read", accessMode: "read only" },
   );
 }
+export async function giftReplicaPage(db: Database, principal: Principal, page: number) {
+  const scope = giftReplicaScope(principal);
+  if (!scope) throw new DomainError("forbidden", "Gift register access is required");
+  const pageSize = giftReplicaPageSize;
+  return db.transaction(
+    async (tx) => {
+      const [snapshot] = await tx
+        .select({ revision: max(syncChange.seq) })
+        .from(syncChange)
+        .where(and(eq(syncChange.entity, "live_view"), eq(syncChange.rowId, "commerce")));
+      const [head] = await tx.select({ seq: max(syncChange.seq) }).from(syncChange);
+      const rows = await tx
+        .select({ card: giftCard, checkoutId: checkoutLine.checkoutId })
+        .from(giftCard)
+        .innerJoin(checkoutLine, eq(checkoutLine.giftCardId, giftCard.id))
+        .where(giftScope(principal))
+        .orderBy(desc(giftCard.createdAt), asc(giftCard.id))
+        .limit(pageSize + 1)
+        .offset((page - 1) * pageSize);
+      return {
+        scope,
+        revision: Number(snapshot?.revision ?? 0),
+        through: Number(head?.seq ?? 0),
+        rows: rows.slice(0, pageSize).map(({ card, checkoutId }) => {
+          const { buyerClientId: _, ...saved } = toGiftCard(card, checkoutId);
+          return saved;
+        }),
+        hasMore: rows.length > pageSize,
+      };
+    },
+    { isolationLevel: "repeatable read", accessMode: "read only" },
+  );
+}
+
 export async function revealGift(db: Database, id: string, principal: Principal, secret: string) {
   return db.transaction(
     async (tx) => {

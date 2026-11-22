@@ -330,3 +330,19 @@ data: {"seq":415}
 ## Local schema hints
 
 Keep one table per entity keyed by `id`, a `sync_state(cursor)` row, and an `outbox(mutation_id, created_at, kind, payload, state)` table. Generate `mutation_id` with UUIDv7 at the moment the user acts, never at send time, and keep the `createdAt` of the edit stable across resends.
+
+### Offline gift register
+
+The pull response includes `giftCardsScope` for centre accounts that can access the gift
+register. The opaque token describes the account's visible set. Desktop deletes its saved
+register and movement pages when the token is absent or changes, when the replica resets
+and when the operator signs out.
+
+`GET /admin/gift-cards/replica?page=1` returns up to 128 masked cards, the current scope,
+database generation, commerce revision, sync log head, and `hasMore`. Desktop publishes a
+complete copy only if every page shares its scope, generation and commerce revision. It also
+checks that the final log head covers the most recent local commerce refresh. A movement
+response includes the scope and generation required to save it with the corresponding register.
+Desktop retains up to 64 recently opened pages of movements. Saved balances can be searched
+offline and are marked with their last retrieval time. Codes and financial writes use the online
+gift register.

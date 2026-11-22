@@ -140,6 +140,9 @@ impl Services {
 
     pub fn sign_out(&mut self) -> Option<Session> {
         self.stop_sync();
+        if let Err(error) = self.store.clear_gift_register() {
+            eprintln!("could not clear the offline gift register: {error}");
+        }
         let session = self.session.write().expect("session lock").take();
         if let Err(error) = self.tokens.clear() {
             eprintln!("could not clear the saved session: {error}");

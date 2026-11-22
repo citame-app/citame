@@ -419,10 +419,12 @@ describe("snapshot (since=0)", () => {
   });
 
   test("an empty pull at the head returns the same cursor and no more pages", async () => {
-    const h = await head();
+    const { headSeq: h, giftCardsScope } = await pull(t, owner, { since: 0, limit: 1 });
+    expect(giftCardsScope).toMatch(/^[a-f0-9]{64}$/);
     const page = await pull(t, owner, { since: h });
     expect(page).toEqual({
       generation: "initial",
+      giftCardsScope,
       changes: [],
       nextCursor: h,
       hasMore: false,

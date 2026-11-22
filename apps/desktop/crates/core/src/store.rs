@@ -20,6 +20,7 @@ use crate::reports::commissions::SavedCommissionPayout;
 use crate::sync::{CATALOG_COLORS_CACHED, CatalogColors};
 
 mod calendar_notices;
+pub mod gift_cache;
 mod gift_purchase;
 mod staff_portrait_draft;
 mod waitlist_cache;
@@ -192,6 +193,7 @@ struct PullMetadata<'a> {
     inventory_access: Option<bool>,
     inventory_read_access: Option<bool>,
     portfolio_uploads: bool,
+    gift_cards_scope: Option<&'a str>,
 }
 
 /// What `apply_push_results` did.
@@ -1070,6 +1072,7 @@ impl Store {
                 inventory_access: page.viewer_write_inventory,
                 inventory_read_access: page.viewer_read_inventory.or(page.viewer_write_inventory),
                 portfolio_uploads: page.portfolio_uploads.unwrap_or(false),
+                gift_cards_scope: page.gift_cards_scope.as_deref(),
             },
         )
     }
@@ -1117,6 +1120,7 @@ impl Store {
         }
         if metadata.generation.is_some() {
             Self::apply_portfolio_upload_support_at(&tx, metadata.portfolio_uploads)?;
+            gift_cache::apply_scope_at(&tx, metadata.gift_cards_scope)?;
         }
         let mut received_pools = false;
         let mut received_combinations = false;
@@ -1308,6 +1312,7 @@ impl Store {
         tx.execute("DELETE FROM local_booking_confirmation", [])?;
         tx.execute("DELETE FROM local_calendar_ack", [])?;
         waitlist_cache::invalidate_visibility(tx)?;
+        gift_cache::clear_at(tx)?;
         Self::apply_inventory_access_at(tx, false)?;
         Self::apply_inventory_read_access_at(tx, false)?;
         Ok(())

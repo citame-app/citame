@@ -106,6 +106,11 @@ Choose **Open appointment receipt** from an eligible EUR appointment to open the
 
 When Redsys is configured, choose online card or Bizum and review the amount on the receipt. **Prepare bank payment** creates one pending bank order and opens that exact order in the linked browser session. The browser can reopen a pending order after a reload. Citame updates the shared receipt when the bank confirms the payment.
 
+Open **Cash register → Gift cards** with a connection to save the complete register visible to
+your account. Desktop shows the date of the saved copy and allows local searches and filters when
+offline. It also retains up to 64 recently opened movement pages. Codes are revealed and balances
+are changed using the online register. Signing out or losing access clears the offline copy.
+
 **Cash register** opens the shared till for accounts with cash management permission. Enter the opening float, record cash deposits or withdrawals with a reason, or reconcile the counted cash at closing. Citame displays the expected amount, the difference and the most recent movements. Register operations need a connection. If another operator changes the expected amount before closing, reload the register and review the count again.
 
 **Reports** opens the shared operational report. The period uses the centre's local dates. Accounts with access to all calendars can filter by team member, and the server limits other authorized accounts to their own appointments. The table groups results by day, start hour, service, category, add-on or team member. Save CSV exports the report shown in the panel. An open report updates as sync advances and when the device reconnects. While offline, the application can display the last result fetched in that panel.
