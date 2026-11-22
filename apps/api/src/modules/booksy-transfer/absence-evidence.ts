@@ -8,7 +8,14 @@ const calendar = z.object({
   end_date: z.iso.date(),
   resources_count: z.number().int().nonnegative(),
   resources: z.array(z.object({ id: z.number().int() })),
-  bookings: z.record(z.string(), z.object({ id: z.number().int() })),
+  bookings: z.record(
+    z.string(),
+    z.object({
+      id: z.number().int(),
+      booked_from: z.string().optional(),
+      booked_till: z.string().optional(),
+    }),
+  ),
 });
 const detail = z.object({
   appointment: z.object({ appointment_uid: z.number().int(), status: z.string().optional() }),
@@ -20,6 +27,7 @@ const retainedResponse = z.object({
 
 type Evidence = { at: string; sha256: string };
 type CoverageWindow = readonly [string, string];
+type FullCalendar = (capture: z.infer<typeof calendar>, updatedDates: string[]) => void;
 
 function* datesIn([from, to]: CoverageWindow) {
   for (
@@ -50,6 +58,7 @@ export function collectBookingAbsences(
   current: BooksySourceReadModel,
   refs: string[],
   coverageWindow?: CoverageWindow,
+  onFullCalendar?: FullCalendar,
 ) {
   const wanted = new Set(refs);
   const lines: Line[] = previous.appointments.flatMap((row) => {
@@ -122,12 +131,17 @@ export function collectBookingAbsences(
         [...expectedResources].every((id) => resources.has(id));
       if (fullScope && coverageWindow) {
         const [from, to] = coverageWindow;
+        const updatedDates: string[] = [];
         for (const date of datesIn([
           observed.start_date > from ? observed.start_date : from,
           observed.end_date < to ? observed.end_date : to,
         ])) {
-          if (isNewer(evidence, calendarDays.get(date))) calendarDays.set(date, evidence);
+          if (isNewer(evidence, calendarDays.get(date))) {
+            calendarDays.set(date, evidence);
+            updatedDates.push(date);
+          }
         }
+        if (updatedDates.length) onFullCalendar?.(observed, updatedDates);
       }
       const present = new Set(Object.values(observed.bookings).map((row) => String(row.id)));
       for (const line of lines) {
