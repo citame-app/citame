@@ -99,8 +99,13 @@ if ! "${compose[@]}" run --rm --no-deps --pull never -T migrate "${migration[@]}
   exit 1
 fi
 
+"${compose[@]}" up -d --no-deps --no-build --pull never --wait api worker web
+if ! wait_for_web_api 15000; then
+  printf '%s\n' "The web gateway could not reach the upgraded API. Migration succeeded. Check the API and web configuration." >&2
+  exit 1
+fi
+
 if [[ -n "$edge_running" ]]; then
   # The old bind mount may still point at the replaced file from the previous checkout.
   "${edge[@]}" up -d --no-deps --no-build --pull never --force-recreate --wait caddy
 fi
-"${compose[@]}" up -d --no-deps --no-build --pull never --wait api worker web

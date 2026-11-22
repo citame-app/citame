@@ -3,10 +3,15 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-async function failedMaintenance(
+async function exerciseUpgrade(
   probe: "ready" | "after-restart" | "unavailable",
-  existing = "recovered",
-  stopFails = false,
+  {
+    existing = "recovered",
+    stopFails = false,
+    migrationSucceeds = false,
+    maintenance = true,
+    caddy = false,
+  } = {},
 ) {
   const dir = await mkdtemp(join(tmpdir(), "citame-upgrade-test-"));
   const log = join(dir, "commands");
@@ -40,8 +45,9 @@ case "$*" in
   *'config --images'*) echo smoke-image ;;
   *'ps --services --status running api worker'*) printf 'api\\nworker\\n' ;;
   *'ps --quiet --status running web'*) echo smoke-web ;;
+  *'ps --quiet caddy'*) if [[ "$CADDY_RUNNING" == 1 ]]; then echo smoke-caddy; fi ;;
   *'stop api worker'*) [[ "$STOP_FAILS" != 1 ]] ;;
-  *'run --rm --no-deps --pull never -T migrate'*) exit 1 ;;
+  *'run --rm --no-deps --pull never -T migrate'*) [[ "$MIGRATION_SUCCEEDS" == 1 ]] ;;
   *'exec -T web bun -e'*)
     [[ "$PROBE" == ready || ( "$PROBE" == after-restart && -f "$RESTARTED" ) ]] ;;
   *'restart --no-deps web'*) touch "$RESTARTED" ;;
@@ -49,7 +55,9 @@ esac
 `,
       { mode: 0o700 },
     );
-    const child = Bun.spawn(["bash", "scripts/upgrade-prod.sh", "--prebuilt", "--maintenance"], {
+    const command = ["bash", "scripts/upgrade-prod.sh", "--prebuilt"];
+    if (maintenance) command.push("--maintenance");
+    const child = Bun.spawn(command, {
       env: {
         ...process.env,
         PATH: `${dir}:${process.env.PATH}`,
@@ -57,18 +65,56 @@ esac
         PROBE: probe,
         EXISTING: existing,
         STOP_FAILS: stopFails ? "1" : "0",
+        CADDY_RUNNING: caddy ? "1" : "0",
+        MIGRATION_SUCCEEDS: migrationSucceeds ? "1" : "0",
         RESTARTED: join(dir, "restarted"),
       },
       stdout: "ignore",
       stderr: "pipe",
     });
     const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
-    expect(code).toBe(1);
-    return { commands: await readFile(log, "utf8"), stderr };
+    return { code, commands: await readFile(log, "utf8"), stderr };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 }
+
+async function failedMaintenance(
+  probe: "ready" | "after-restart" | "unavailable",
+  existing = "recovered",
+  stopFails = false,
+) {
+  const result = await exerciseUpgrade(probe, { existing, stopFails });
+  expect(result.code).toBe(1);
+  return result;
+}
+
+test("upgrade verifies the Web-to-API path before replacing the running Caddy", async () => {
+  const { code, commands } = await exerciseUpgrade("ready", {
+    migrationSucceeds: true,
+    caddy: true,
+  });
+  expect(code).toBe(0);
+  const services = commands.indexOf("--no-build --pull never --wait api worker web");
+  const probe = commands.indexOf("exec -T web bun -e");
+  const caddy = commands.indexOf("--force-recreate --wait caddy");
+  expect(services).toBeGreaterThan(-1);
+  expect(probe).toBeGreaterThan(services);
+  expect(caddy).toBeGreaterThan(probe);
+});
+
+test("a running Web container with an unreachable API fails the upgrade without refreshing Caddy", async () => {
+  const { code, commands, stderr } = await exerciseUpgrade("unavailable", {
+    migrationSucceeds: true,
+    maintenance: false,
+    caddy: true,
+  });
+  expect(code).toBe(1);
+  expect(commands).toContain("exec -T web bun -e");
+  expect(commands).not.toContain("--force-recreate --wait caddy");
+  expect(commands).not.toContain("start --wait");
+  expect(stderr).toContain("The web gateway could not reach the upgraded API");
+});
 
 test.each(["database", "cache", "generation"])(
   "upgrade refuses a different %s before stopping writers or migrating",
