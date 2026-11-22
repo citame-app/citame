@@ -1,9 +1,14 @@
-import { type DateShiftRange, OPENING_EXCEPTION_LIMIT, type OpeningSchedule } from "@sob/contracts";
+import {
+  type DateShiftRange,
+  MAX_DATE_SHIFT_RANGES,
+  OPENING_EXCEPTION_LIMIT,
+  type OpeningSchedule,
+} from "@sob/contracts";
 import { useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { TextField } from "~/components/ui/field";
 import { useI18n } from "~/i18n/react";
-import { WEEKDAY_ORDER } from "../staff/hours";
+import { WEEKDAY_ORDER } from "~/lib/format";
 
 const emptyWeek = () => Array.from({ length: 7 }, (): DateShiftRange[] => []);
 
@@ -54,7 +59,11 @@ export function OpeningHoursEditor({
             if (!event.currentTarget.checked) {
               hiddenWeek.current = weekly;
               onChange({ ...schedule, weekly: null });
-            } else onChange({ ...schedule, weekly: hiddenWeek.current ?? emptyWeek() });
+            } else
+              onChange({
+                ...schedule,
+                weekly: hiddenWeek.current ?? emptyWeek(),
+              });
           }}
         />
         {t("settings.opening.showWeekly")}
@@ -127,7 +136,10 @@ export function OpeningHoursEditor({
           disabled={exceptions.length >= OPENING_EXCEPTION_LIMIT}
           onClick={() => {
             dateKeys.append();
-            onChange({ ...schedule, exceptions: [...exceptions, { date: "", ranges: [] }] });
+            onChange({
+              ...schedule,
+              exceptions: [...exceptions, { date: "", ranges: [] }],
+            });
           }}
         >
           {t("settings.opening.addDate")}
@@ -184,7 +196,7 @@ function OpeningRanges({
       <Button
         type="button"
         variant="secondary"
-        disabled={ranges.length >= 8}
+        disabled={ranges.length >= MAX_DATE_SHIFT_RANGES}
         onClick={() => {
           rangeKeys.append();
           onChange([...ranges, { startTime: "", endTime: "" }]);

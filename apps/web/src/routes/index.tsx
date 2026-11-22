@@ -25,9 +25,12 @@ export const Route = createFileRoute("/")({
         context.queryClient.ensureQueryData(salonQuery),
         api()
           .businessProfile()
-          .catch(() => ({ profile: null })),
+          .catch(() => ({ profile: null, openingSchedule: undefined })),
       ]);
-      return { ...published, localDate: localDateOf(new Date().toISOString(), salon.timezone) };
+      return {
+        ...published,
+        localDate: localDateOf(new Date().toISOString(), salon.timezone),
+      };
     },
   },
   head: ({ match }) => {
@@ -60,7 +63,7 @@ function HomeSkeleton() {
 }
 
 function Home() {
-  const { profile, localDate } = Route.useLoaderData();
+  const { profile, openingSchedule, localDate } = Route.useLoaderData();
   const { t, locale } = useI18n();
   const { data: salon } = useSuspenseQuery(salonQuery);
   const { data: services } = useSuspenseQuery(servicesQuery);
@@ -193,7 +196,14 @@ function Home() {
         </div>
       </section>
 
-      {profile && <PublicBusinessProfile profile={profile} localDate={localDate} />}
+      {profile && (
+        <PublicBusinessProfile
+          profile={profile}
+          openingSchedule={openingSchedule}
+          initialDate={localDate}
+          timezone={salon.timezone}
+        />
+      )}
       <section aria-labelledby="how-title" className="salon-close editorial-section">
         <div className="wrap editorial-wrap">
           <header className="editorial-section-heading">

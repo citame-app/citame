@@ -8,7 +8,7 @@ export interface TimeRange {
 /** Weekday (0 = Sunday) to that day's ranges. */
 export type WeekHours = Record<number, TimeRange[]>;
 
-export const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0] as const;
+export { WEEKDAY_ORDER } from "~/lib/format";
 
 export function emptyWeek(): WeekHours {
   return { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] };

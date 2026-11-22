@@ -4,6 +4,7 @@
  */
 
 const dateFormatters = new Map<string, Intl.DateTimeFormat>();
+export const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0] as const;
 
 /** Share formatters, never formatted user data. Bound the process-wide cache for SSR. */
 export function dateFormatter(locale: string, options: Intl.DateTimeFormatOptions) {
@@ -61,6 +62,11 @@ export function formatTime(instant: string, timeZone: string, locale: string): s
   })
     .format(new Date(instant))
     .replaceAll("\u202f", " ");
+}
+
+/** Format a wall-clock time without applying a time zone offset. */
+export function formatWallTime(time: string, locale: string): string {
+  return formatTime(`2000-01-01T${time}:00Z`, "UTC", locale);
 }
 
 /** Calendar date (`YYYY-MM-DD`) of an instant as seen in `timeZone`. */

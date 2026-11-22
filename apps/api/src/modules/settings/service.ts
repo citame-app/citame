@@ -1,7 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 import {
+  applyOpeningScheduleEdits,
   businessProfileSchema,
   EMPTY_BUSINESS_PROFILE,
+  EMPTY_OPENING_SCHEDULE,
   type OwnerSalonSettings,
   type ReviewedSalonChanges,
   type ReviewedSalonSettings,
@@ -39,8 +41,8 @@ export function toSalonResponse(settings: Row): SalonResponse {
 }
 
 export function toPublicBusinessProfile(settings: Row) {
-  const { published, ...profile } = businessProfile(settings);
-  return { profile: published ? profile : null };
+  const { published, openingSchedule, ...profile } = businessProfile(settings);
+  return published ? { profile, openingSchedule } : { profile: null };
 }
 
 export function assertOnlineBookingEnabled(settings: Row, role?: string) {
@@ -57,11 +59,13 @@ export function toOwnerSettings(settings: Row): OwnerSalonSettings {
 }
 
 export function toReviewedSettings(settings: Row): ReviewedSalonSettings {
+  const { openingSchedule, ...profile } = businessProfile(settings);
   return {
     ...toOwnerSettings(settings),
     onlineBookingEnabled: settings.onlineBookingEnabled,
     revision: settings.updatedAt.toISOString(),
-    businessProfile: businessProfile(settings),
+    businessProfile: profile,
+    openingSchedule,
   };
 }
 
@@ -102,6 +106,9 @@ async function writeSettings(
 ) {
   return db.transaction(async (tx) => {
     const current = await getSalonSettings(tx, "update");
+    const stale =
+      expectedRevision !== undefined &&
+      Date.parse(expectedRevision) !== current.updatedAt.getTime();
     const changes: Partial<typeof salonSettings.$inferInsert> = Object.fromEntries(
       EDITABLE.filter((key) => input[key] !== undefined && input[key] !== current[key]).map(
         (key) => [key, input[key]],
@@ -109,13 +116,24 @@ async function writeSettings(
     );
     if (input.businessProfile !== undefined) {
       const original = businessProfile(current);
-      const next = { ...original, ...input.businessProfile };
-      if (!isDeepStrictEqual(next, original)) changes.businessProfile = next;
+      const { openingScheduleEdits, ...profileChanges } = input.businessProfile;
+      const proposed = { ...original, ...profileChanges };
+      if (openingScheduleEdits) {
+        proposed.openingSchedule = applyOpeningScheduleEdits(
+          original.openingSchedule ?? EMPTY_OPENING_SCHEDULE,
+          openingScheduleEdits,
+        );
+      }
+      const next = businessProfileSchema.safeParse(proposed);
+      if (!next.success) {
+        if (stale) throw new DomainError("version_conflict", "The reviewed settings changed");
+        throw new DomainError("validation_error", "The resulting opening hours are invalid");
+      }
+      if (!isDeepStrictEqual(next.data, original)) changes.businessProfile = next.data;
     }
     const fields = Object.keys(changes);
     if (fields.length === 0) return current;
-    if (expectedRevision && Date.parse(expectedRevision) !== current.updatedAt.getTime())
-      throw new DomainError("version_conflict", "The reviewed settings changed");
+    if (stale) throw new DomainError("version_conflict", "The reviewed settings changed");
     const [updated] = await tx
       .update(salonSettings)
       .set({

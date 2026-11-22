@@ -1,6 +1,8 @@
 use super::*;
 use chrono::Weekday;
-use sob_core::http::{DatedShiftEdit, OPENING_EXCEPTION_LIMIT, OpeningException, OpeningSchedule};
+use sob_core::http::{
+    DatedShiftEdit, MAX_DATE_SHIFT_RANGES, OPENING_EXCEPTION_LIMIT, OpeningException,
+};
 use sob_core::model::DateShiftRange;
 
 const DAYS: [Weekday; 7] = [
@@ -85,6 +87,9 @@ impl HoursEditor {
     }
 
     pub(super) fn draft(&self, cx: &App) -> Option<OpeningSchedule> {
+        if self.exceptions.len() > OPENING_EXCEPTION_LIMIT {
+            return None;
+        }
         let parse = |ranges: &[RangeFields]| {
             if ranges.is_empty() {
                 Some(Vec::new())
@@ -148,11 +153,7 @@ impl Root {
         cx: &mut Context<Self>,
         edit: impl FnOnce(&mut HoursEditor, &mut Context<Self>),
     ) {
-        self.edit_business_profile(cx, |profile, cx| {
-            if let Some(hours) = &mut profile.hours {
-                edit(hours, cx);
-            }
-        });
+        self.edit_business_profile(cx, |profile, cx| edit(&mut profile.hours, cx));
     }
 
     pub(super) fn render_opening_hours(
@@ -322,7 +323,7 @@ impl Root {
                             .child(end.clone()),
                     )
                     .child(self.button(
-                        ("opening-remove-range", day.key() * 8 + index),
+                        SharedString::from(format!("opening-remove-range-{}-{index}", day.key())),
                         self.t(Key::OpeningRemoveRange),
                         Kind::Ghost,
                         cx.listener(move |root, _, _, cx| {
@@ -336,7 +337,7 @@ impl Root {
                         }),
                     ))
             }))
-            .when(ranges.len() < 8, |view| {
+            .when(ranges.len() < MAX_DATE_SHIFT_RANGES, |view| {
                 view.child(self.button(
                     ("opening-add-range", day.key()),
                     self.t(Key::OpeningAddRange),
@@ -344,7 +345,7 @@ impl Root {
                     cx.listener(move |root, _, _, cx| {
                         root.edit_opening_hours(cx, |editor, cx| {
                             if let Some(ranges) = editor.ranges(day)
-                                && ranges.len() < 8
+                                && ranges.len() < MAX_DATE_SHIFT_RANGES
                             {
                                 ranges.push(range_fields(None, cx));
                             }
@@ -370,7 +371,7 @@ mod tests {
                 "name": "Studio", "timezone": "Europe/Madrid", "slotGranularityMinutes": 15,
                 "minNoticeMinutes": 30, "maxDaysAhead": 60, "onlineBookingEnabled": true,
                 "reminderFirstLeadMinutes": null, "reminderSecondLeadMinutes": null,
-                "businessProfile": BusinessProfile { opening_schedule: Some(OpeningSchedule::default()), ..BusinessProfile::default() },
+                "businessProfile": BusinessProfile::default(),
                 "revision": "2026-11-21T00:00:00Z", "generation": "initial",
             })).unwrap();
             root.svc.store.cache_salon_configuration(&reviewed).unwrap();
@@ -394,9 +395,10 @@ mod tests {
                 panic!("Opening hours did not queue")
             };
             assert_eq!(serde_json::to_value(write).unwrap()["changes"], serde_json::json!({
-                "businessProfile": {"openingSchedule": {
-                    "weekly": [[], [{"startTime":"09:00","endTime":"12:00"},{"startTime":"14:00","endTime":"18:00"}], [], [], [], [], []],
-                    "exceptions": [{"date":"2026-12-25","ranges":[]}]
+                "businessProfile": {"openingScheduleEdits": {
+                    "weeklyEnabled": true,
+                    "days": {"1": [{"startTime":"09:00","endTime":"12:00"},{"startTime":"14:00","endTime":"18:00"}]},
+                    "exceptions": {"2026-12-25":[]}
                 }}
             }));
         }).unwrap();

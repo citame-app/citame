@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import {
+  availabilityResponseSchema,
   desktopSalonSettingsSchema,
   errorResponseSchema,
   publicBusinessProfileSchema,
@@ -52,7 +53,7 @@ test("split opening hours and dated closures are published without changing book
       "GET",
     );
     expect(result.status).toBe(200);
-    return result.json();
+    return availabilityResponseSchema.parse(await result.json());
   };
   const before = await available();
   expect(before.slots.length).toBeGreaterThan(0);
@@ -63,18 +64,20 @@ test("split opening hours and dated closures are published without changing book
   const afternoon = { startTime: "14:00", endTime: "18:00" };
   const weekly = [[], [afternoon, morning], [], [], [], [], []];
   const exception = { date: MONDAY, ranges: [] };
-  const save = (openingSchedule: unknown, published: boolean) =>
+  const update = (expectedRevision: string, changes: unknown) =>
     json(
       t.app,
       "/admin/settings/profile",
       "PUT",
       {
         generation: latest.generation,
-        expectedRevision: latest.revision,
-        changes: { openingSchedule, published },
+        expectedRevision,
+        changes,
       },
       owner.cookie,
     );
+  const save = (openingSchedule: unknown, published: boolean) =>
+    update(latest.revision, { openingSchedule, published });
   expect((await save({ weekly, exceptions: [exception, exception] }, true)).status).toBe(400);
   expect(
     (
@@ -92,9 +95,28 @@ test("split opening hours and dated closures are published without changing book
   const publicData = publicBusinessProfileSchema.parse(
     await (await json(t.app, "/salon/profile", "GET")).json(),
   );
-  expect(publicData.profile?.openingSchedule).toEqual({
+  expect(publicData.profile).not.toHaveProperty("openingSchedule");
+  expect(publicData.openingSchedule).toEqual({
     weekly: [[], [morning, afternoon], [], [], [], [], []],
     exceptions: [exception],
+  });
+  const first = desktopSalonSettingsSchema.parse(await result.json());
+  expect(first.businessProfile).not.toHaveProperty("openingSchedule");
+  const closeLater = { openingScheduleEdits: { exceptions: { "2026-12-25": [] } } };
+  const changeMonday = { openingScheduleEdits: { days: { "1": [morning] } } };
+  const remote = await update(first.revision, closeLater);
+  expect(remote.status, await remote.clone().text()).toBe(200);
+  expect((await update(first.revision, changeMonday)).status).toBe(409);
+  const rebased = await update(
+    desktopSalonSettingsSchema.parse(await remote.json()).revision,
+    changeMonday,
+  );
+  expect(rebased.status, await rebased.clone().text()).toBe(200);
+  expect(desktopSalonSettingsSchema.parse(await rebased.json()).openingSchedule).toEqual({
+    weekly: [[], [morning], [], [], [], [], []],
+    exceptions: [exception, { date: "2026-12-25", ranges: [] }].sort((a, b) =>
+      a.date.localeCompare(b.date),
+    ),
   });
   expect(await available()).toEqual(before);
 });

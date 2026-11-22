@@ -1,16 +1,36 @@
-import type { DateShiftRange, PublicBusinessProfile as Profile } from "@sob/contracts";
-import { WEEKDAY_ORDER } from "~/features/admin/staff/hours";
+import type {
+  DateShiftRange,
+  OpeningSchedule,
+  PublicBusinessProfile as Profile,
+} from "@sob/contracts";
+import { useEffect, useState } from "react";
 import { useI18n } from "~/i18n/react";
-import { formatDateWithYear } from "~/lib/format";
+import { formatDateWithYear, formatWallTime, localDateOf, WEEKDAY_ORDER } from "~/lib/format";
 
 export function PublicBusinessProfile({
   profile,
-  localDate,
+  openingSchedule,
+  initialDate,
+  timezone,
 }: {
   profile: Profile;
-  localDate: string;
+  openingSchedule?: OpeningSchedule;
+  initialDate: string;
+  timezone: string;
 }) {
   const { t, locale } = useI18n();
+  const [localDate, setLocalDate] = useState(initialDate);
+  useEffect(() => {
+    if (!openingSchedule?.weekly && !openingSchedule?.exceptions.length) return;
+    const refresh = () => setLocalDate(localDateOf(new Date().toISOString(), timezone));
+    refresh();
+    const timer = window.setInterval(refresh, 60_000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [openingSchedule, timezone]);
   const {
     address,
     phone,
@@ -23,7 +43,6 @@ export function PublicBusinessProfile({
     rules,
     amenities,
     mobileService,
-    openingSchedule,
   } = profile;
   const weekly = openingSchedule?.weekly;
   const exceptions = openingSchedule?.exceptions.filter((entry) => entry.date >= localDate) ?? [];
@@ -48,7 +67,12 @@ export function PublicBusinessProfile({
   if (!hasDetails) return null;
   const hours = (ranges: DateShiftRange[]) =>
     ranges.length
-      ? ranges.map(({ startTime, endTime }) => `${startTime}–${endTime}`).join(", ")
+      ? ranges
+          .map(
+            ({ startTime, endTime }) =>
+              `${formatWallTime(startTime, locale)}–${formatWallTime(endTime, locale)}`,
+          )
+          .join(", ")
       : t("settings.opening.closed");
   return (
     <section className="py-12 sm:py-16" aria-labelledby="public-business-heading">

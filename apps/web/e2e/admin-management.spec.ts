@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { desktopSalonSettingsSchema } from "@sob/contracts";
+import { type BusinessProfileChanges, desktopSalonSettingsSchema } from "@sob/contracts";
 import { RECURRING_FIXTURE as fixture } from "../../api/test/recurring-values";
 import { expectNoHorizontalScroll, salonDate } from "./admin-helpers";
 import { expectNoSeriousA11yViolations, signInThroughUi } from "./helpers";
@@ -16,12 +16,16 @@ test("the owner can draft, publish, revise and withdraw the public business prof
     expect(response.status(), await response.text()).toBe(200);
     return desktopSalonSettingsSchema.parse(await response.json());
   }
-  const original = (await reviewedSettings()).businessProfile;
-  if (!original) throw new Error("Missing business profile fixture");
+  const initial = await reviewedSettings();
+  if (!initial.businessProfile) throw new Error("Missing business profile fixture");
+  const original = {
+    ...initial.businessProfile,
+    openingSchedule: initial.openingSchedule,
+  };
   const visitor = await browser.newPage({ viewport: page.viewportSize() });
   const headers = { Origin: fixture.baseURL };
   const profilePath = `${settingsPath}/profile`;
-  async function writeProfile(changes: Partial<typeof original>) {
+  async function writeProfile(changes: BusinessProfileChanges) {
     const { generation, revision } = await reviewedSettings();
     return page.request.put(profilePath, {
       headers,
@@ -30,7 +34,9 @@ test("the owner can draft, publish, revise and withdraw the public business prof
   }
   const form = page.getByRole("form", { name: "Public business profile" });
   const description = form.getByLabel("Short description");
-  const publish = form.getByRole("checkbox", { name: "Publish on the booking site" });
+  const publish = form.getByRole("checkbox", {
+    name: "Publish on the booking site",
+  });
   const save = form.getByRole("button", { name: "Save settings" });
   const label = `Studio overview ${crypto.randomUUID()}`;
   const publicPage = () => visitor.goto(fixture.baseURL);
@@ -73,7 +79,9 @@ test("the owner can draft, publish, revise and withdraw the public business prof
     const profile = visitor.getByRole("region", { name: "About the centre" });
     await expect(profile.getByText(label)).toBeVisible();
     await expect(profile.getByText("9 Synthetic Street")).toBeVisible();
-    await expect(profile.getByText("09:00–12:00, 14:00–18:00", { exact: true })).toBeVisible();
+    await expect(
+      profile.getByText("9:00 AM–12:00 PM, 2:00 PM–6:00 PM", { exact: true }).first(),
+    ).toBeVisible();
     const special = profile.locator(`time[datetime="${closure}"]`);
     await expect(special).toBeVisible();
     await expect(special.locator("../..").getByText("Closed", { exact: true })).toBeVisible();
@@ -84,18 +92,33 @@ test("the owner can draft, publish, revise and withdraw the public business prof
     await expectNoHorizontalScroll(visitor);
 
     await description.fill(`${label} updated`);
-    const remote = await writeProfile({ phone: "+34 555 010 123" });
+    await monday.getByLabel("Opens", { exact: true }).first().fill("09:30");
+    const remoteClosure = salonDate(15);
+    const remote = await writeProfile({
+      phone: "+34 555 010 123",
+      openingScheduleEdits: { exceptions: { [remoteClosure]: [] } },
+    });
     expect(remote.status(), await remote.text()).toBe(200);
     if (await save.isEnabled()) await save.click();
     await form.getByRole("button", { name: "Load latest and review draft" }).click();
     await expect(description).toHaveValue(`${label} updated`);
     await expect(form.getByLabel("Public phone")).toHaveValue("+34 555 010 123");
+    await expect(monday.getByLabel("Opens", { exact: true }).first()).toHaveValue("09:30");
+    await expect(form.getByLabel("Special date", { exact: true }).nth(1)).toHaveValue(
+      remoteClosure,
+    );
     await visitor.locator('main a[href="/book"]').first().click();
     await expect(visitor).toHaveURL(/\/book$/);
     await publish.uncheck();
     await saveAndWait();
+    const reviewed = await reviewedSettings();
+    expect(reviewed.openingSchedule?.weekly?.[1]?.[0]?.startTime).toBe("09:30");
+    expect(reviewed.openingSchedule?.exceptions.map(({ date }) => date)).toEqual([
+      closure,
+      remoteClosure,
+    ]);
     await visitor.goBack();
-    await expect(visitor).toHaveURL(fixture.baseURL + "/");
+    await expect(visitor).toHaveURL(`${fixture.baseURL}/`);
     await expect(profile).toHaveCount(0);
   } finally {
     const restored = await writeProfile(original);

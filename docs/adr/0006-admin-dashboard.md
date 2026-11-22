@@ -92,7 +92,7 @@ The owner can prepare a private profile in Web or Desktop with a description, ca
 
 Both editors use the salon settings revision and replica generation. The native editor queues changed fields while offline. A stale revision or generation requires review against the current settings before saving again. Review merges only the fields edited in the draft, including explicit clears, so unrelated remote updates are retained.
 
-Public opening hours use salon-local times. A weekly schedule is optional, can include separate periods for breaks and labels an empty day as closed. Special dates override that day's published hours, including full closures. Opening hours belong to the profile draft and use the same publication control and revision. They describe access to the centre. Team schedules and the booking engine continue to determine bookable slots.
+Public opening hours use salon-local times. A weekly schedule is optional, can include separate periods for breaks and labels an empty day as closed. Special dates override that day's published hours, including full closures. Opening hours belong to the profile draft and use the same publication control and revision. Review applies changes by weekday and special date, retaining unrelated hours saved from another device. Read responses carry the schedule alongside the profile so earlier clients can still read the profile. Team schedules and the booking engine continue to determine bookable slots.
 
 ## Consequences
 

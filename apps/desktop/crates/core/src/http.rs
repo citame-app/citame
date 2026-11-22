@@ -102,7 +102,7 @@ mod intake_records;
 mod salon_configuration;
 pub use date_shifts::{
     DatedShiftConflict, DatedShiftConflictReason, DatedShiftCopy, DatedShiftDay, DatedShiftEdit,
-    DatedShiftReview, DatedShiftSelection, ReviewedDatedShift,
+    DatedShiftReview, DatedShiftSelection, MAX_DATE_SHIFT_RANGES, ReviewedDatedShift,
 };
 pub use salon_configuration::{
     BusinessAmenity, BusinessProfile, OPENING_EXCEPTION_LIMIT, OpeningException, OpeningSchedule,

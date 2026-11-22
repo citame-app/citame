@@ -1,8 +1,12 @@
 import {
+  applyOpeningScheduleEdits,
   BUSINESS_AMENITIES,
   type BusinessProfile,
+  type BusinessProfileChanges,
   businessProfileSchema,
+  diffOpeningSchedule,
   EMPTY_BUSINESS_PROFILE,
+  EMPTY_OPENING_SCHEDULE,
 } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
@@ -33,16 +37,32 @@ const fields = [
 type Snapshot = Awaited<ReturnType<ReturnType<typeof api>["admin"]["settings"]["reviewed"]>>;
 type Draft = { base: Snapshot; changes: Partial<BusinessProfile> };
 
+function rebaseDraft(draft: Draft, base: Snapshot): Draft | null {
+  const { openingSchedule, ...otherChanges } = draft.changes;
+  const changes: Partial<BusinessProfile> = otherChanges;
+  if (openingSchedule) {
+    const schedule = base.openingSchedule ?? EMPTY_OPENING_SCHEDULE;
+    const edits = diffOpeningSchedule(
+      draft.base.openingSchedule ?? EMPTY_OPENING_SCHEDULE,
+      openingSchedule,
+    );
+    const next = edits && applyOpeningScheduleEdits(schedule, edits);
+    if (next && diffOpeningSchedule(schedule, next)) changes.openingSchedule = next;
+  }
+  return Object.keys(changes).length ? { base, changes } : null;
+}
+
 export function BusinessProfileForm() {
-  const { t } = useI18n();
-  const query = useQuery({ queryKey, queryFn: () => api().admin.settings.reviewed() });
+  const query = useQuery({
+    queryKey,
+    queryFn: () => api().admin.settings.reviewed(),
+  });
   if (!query.data)
     return query.isError ? (
       <ErrorState error={query.error} onRetry={() => void query.refetch()} />
     ) : (
       <Skeleton className="h-56" />
     );
-  if (!query.data.businessProfile) return <p role="status">{t("settings.profile.unavailable")}</p>;
   return <ProfileEditor latest={query.data} />;
 }
 
@@ -55,11 +75,16 @@ function ProfileEditor({ latest }: { latest: Snapshot }) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [errors, setErrors] = useState<Set<string>>(() => new Set());
   const base = draft?.base ?? latest;
-  const form = { ...(base.businessProfile ?? EMPTY_BUSINESS_PROFILE), ...draft?.changes };
+  const form = {
+    ...EMPTY_BUSINESS_PROFILE,
+    ...base.businessProfile,
+    openingSchedule: base.openingSchedule ?? EMPTY_OPENING_SCHEDULE,
+    ...draft?.changes,
+  };
   const stale =
     draft && (base.revision !== latest.revision || base.generation !== latest.generation);
   const save = useMutation({
-    mutationFn: (changes: Partial<BusinessProfile>) =>
+    mutationFn: (changes: BusinessProfileChanges) =>
       api().admin.settings.saveProfile({
         generation: base.generation,
         expectedRevision: base.revision,
@@ -78,7 +103,7 @@ function ProfileEditor({ latest }: { latest: Snapshot }) {
     mutationFn: () => api().admin.settings.reviewed(),
     onSuccess: (next) => {
       queries.setQueryData(queryKey, next);
-      setDraft((current) => (current ? { base: next, changes: current.changes } : null));
+      setDraft((current) => (current ? rebaseDraft(current, next) : null));
       save.reset();
     },
   });
@@ -88,14 +113,18 @@ function ProfileEditor({ latest }: { latest: Snapshot }) {
     setDraft((current) => {
       const snapshot = current?.base ?? latest;
       const changes = { ...current?.changes };
-      if (JSON.stringify(value) === JSON.stringify(snapshot.businessProfile?.[key]))
-        delete changes[key];
+      const original: Partial<BusinessProfile> = {
+        ...snapshot.businessProfile,
+        openingSchedule: snapshot.openingSchedule ?? EMPTY_OPENING_SCHEDULE,
+      };
+      if (JSON.stringify(value) === JSON.stringify(original[key])) delete changes[key];
       else changes[key] = value;
       return Object.keys(changes).length ? { base: snapshot, changes } : null;
     });
     setErrors((current) => new Set([...current].filter((field) => field !== key)));
     if (save.isSuccess) save.reset();
   }
+  if (!base.businessProfile) return <p role="status">{t("settings.profile.unavailable")}</p>;
   return (
     <form
       className="max-w-2xl space-y-5"
@@ -116,7 +145,13 @@ function ProfileEditor({ latest }: { latest: Snapshot }) {
           return;
         }
         setErrors(new Set());
-        save.mutate(parsed.data);
+        const { openingSchedule, ...changes } = parsed.data;
+        const edits =
+          openingSchedule &&
+          diffOpeningSchedule(base.openingSchedule ?? EMPTY_OPENING_SCHEDULE, openingSchedule);
+        if (edits) save.mutate({ ...changes, openingScheduleEdits: edits });
+        else if (Object.keys(changes).length) save.mutate(changes);
+        else setDraft(null);
       }}
     >
       <UnsavedGuard dirty={!!draft} preserveOnSearchChange />
@@ -162,14 +197,12 @@ function ProfileEditor({ latest }: { latest: Snapshot }) {
             </label>
           ))}
         </fieldset>
-        {form.openingSchedule && (
-          <OpeningHoursEditor
-            key={`${base.generation}:${base.revision}`}
-            schedule={form.openingSchedule}
-            invalid={errors.has("openingSchedule")}
-            onChange={(value) => edit("openingSchedule", value)}
-          />
-        )}
+        <OpeningHoursEditor
+          key={`${base.generation}:${base.revision}`}
+          schedule={form.openingSchedule ?? EMPTY_OPENING_SCHEDULE}
+          invalid={errors.has("openingSchedule")}
+          onChange={(value) => edit("openingSchedule", value)}
+        />
         {(["mobileService", "published"] as const).map((key) => (
           <label key={key} className="flex min-h-11 items-center gap-2 text-sm">
             <input

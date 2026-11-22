@@ -51,6 +51,75 @@ export const openingScheduleSchema = z.strictObject({
     .transform((entries) => [...entries].sort((a, b) => a.date.localeCompare(b.date))),
 });
 export type OpeningSchedule = z.infer<typeof openingScheduleSchema>;
+export const EMPTY_OPENING_SCHEDULE: OpeningSchedule = {
+  weekly: null,
+  exceptions: [],
+};
+const weekdayKey = z.enum(["0", "1", "2", "3", "4", "5", "6"]);
+const openingScheduleEditsSchema = z
+  .strictObject({
+    weeklyEnabled: z.boolean().optional(),
+    days: z.partialRecord(weekdayKey, openingRanges).optional(),
+    exceptions: z.record(localDateSchema, openingRanges.nullable()).optional(),
+  })
+  .refine(
+    (edit) =>
+      Object.keys(edit.exceptions ?? {}).length <= 2 * OPENING_EXCEPTION_LIMIT &&
+      (edit.weeklyEnabled !== undefined ||
+        Object.keys(edit.days ?? {}).length > 0 ||
+        Object.keys(edit.exceptions ?? {}).length > 0) &&
+      (edit.weeklyEnabled !== false || Object.keys(edit.days ?? {}).length === 0),
+    "Provide valid opening-hours changes",
+  );
+export type OpeningScheduleEdits = z.infer<typeof openingScheduleEditsSchema>;
+
+export function diffOpeningSchedule(
+  base: OpeningSchedule,
+  next: OpeningSchedule,
+): OpeningScheduleEdits | undefined {
+  const edit: OpeningScheduleEdits = {};
+  if (Boolean(base.weekly) !== Boolean(next.weekly)) edit.weeklyEnabled = Boolean(next.weekly);
+  for (const day of weekdayKey.options) {
+    const ranges = next.weekly?.[Number(day)];
+    if (ranges && JSON.stringify(ranges) !== JSON.stringify(base.weekly?.[Number(day)] ?? [])) {
+      edit.days ??= {};
+      edit.days[day] = ranges;
+    }
+  }
+  const previous = new Map(base.exceptions.map(({ date, ranges }) => [date, ranges]));
+  for (const { date, ranges } of next.exceptions) {
+    if (JSON.stringify(previous.get(date)) !== JSON.stringify(ranges)) {
+      edit.exceptions ??= {};
+      edit.exceptions[date] = ranges;
+    }
+    previous.delete(date);
+  }
+  for (const date of previous.keys()) {
+    edit.exceptions ??= {};
+    edit.exceptions[date] = null;
+  }
+  return Object.keys(edit).length ? edit : undefined;
+}
+
+export function applyOpeningScheduleEdits(
+  base: OpeningSchedule,
+  edit: OpeningScheduleEdits,
+): OpeningSchedule {
+  const exceptions = new Map(base.exceptions.map(({ date, ranges }) => [date, ranges]));
+  for (const [date, ranges] of Object.entries(edit.exceptions ?? {})) {
+    if (ranges === null) exceptions.delete(date);
+    else exceptions.set(date, ranges);
+  }
+  return {
+    weekly:
+      edit.weeklyEnabled !== false && (edit.weeklyEnabled || base.weekly || edit.days)
+        ? weekdayKey.options.map((day) => edit.days?.[day] ?? base.weekly?.[Number(day)] ?? [])
+        : null,
+    exceptions: [...exceptions]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, ranges]) => ({ date, ranges })),
+  };
+}
 export const businessProfileContentSchema = z.strictObject({
   description: shortText(600),
   category: shortText(80),
@@ -62,7 +131,6 @@ export const businessProfileContentSchema = z.strictObject({
   instagram: httpsLink,
   rules: shortText(400),
   mobileService: z.boolean(),
-  openingSchedule: openingScheduleSchema.optional(),
   amenities: z
     .array(z.enum(BUSINESS_AMENITIES))
     .max(BUSINESS_AMENITIES.length)
@@ -70,20 +138,28 @@ export const businessProfileContentSchema = z.strictObject({
 });
 export const businessProfileSchema = businessProfileContentSchema.extend({
   published: z.boolean(),
+  openingSchedule: openingScheduleSchema.optional(),
 });
 export type BusinessProfile = z.infer<typeof businessProfileSchema>;
 export const publicBusinessProfileSchema = z.object({
   profile: businessProfileContentSchema.nullable(),
+  openingSchedule: openingScheduleSchema.optional(),
 });
 export type PublicBusinessProfile = NonNullable<
   z.infer<typeof publicBusinessProfileSchema>["profile"]
 >;
 export const businessProfileChangesSchema = businessProfileSchema
   .partial()
+  .extend({ openingScheduleEdits: openingScheduleEditsSchema.optional() })
   .refine(
     (value) => Object.values(value).some((field) => field !== undefined),
     "Provide a profile change",
+  )
+  .refine(
+    (value) => !(value.openingSchedule && value.openingScheduleEdits),
+    "Provide either opening hours or individual changes",
   );
+export type BusinessProfileChanges = z.infer<typeof businessProfileChangesSchema>;
 export const reviewedBusinessProfileRequestSchema = z.strictObject({
   generation: syncGenerationSchema,
   expectedRevision: instantSchema,
@@ -103,7 +179,7 @@ export const EMPTY_BUSINESS_PROFILE: BusinessProfile = {
   rules: null,
   mobileService: false,
   amenities: [],
-  openingSchedule: { weekly: null, exceptions: [] },
+  openingSchedule: EMPTY_OPENING_SCHEDULE,
 };
 
 /** Public salon information: what the booking flow needs to render dates and limits. */
@@ -194,7 +270,11 @@ export type ReviewedSalonChanges = z.infer<typeof reviewedSalonChangesSchema>;
 
 export const reviewedSalonSettingsSchema = ownerSalonSettingsSchema
   .required({ onlineBookingEnabled: true })
-  .extend({ revision: instantSchema, businessProfile: businessProfileSchema.optional() });
+  .extend({
+    revision: instantSchema,
+    businessProfile: businessProfileSchema.omit({ openingSchedule: true }).optional(),
+    openingSchedule: openingScheduleSchema.optional(),
+  });
 export type ReviewedSalonSettings = z.infer<typeof reviewedSalonSettingsSchema>;
 
 export const desktopSalonSettingsSchema = reviewedSalonSettingsSchema.extend({

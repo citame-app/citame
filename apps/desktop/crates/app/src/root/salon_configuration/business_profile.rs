@@ -1,5 +1,5 @@
 use super::*;
-use sob_core::http::{BusinessAmenity, BusinessProfile};
+use sob_core::http::{BusinessAmenity, BusinessProfile, OpeningSchedule};
 
 mod opening_hours;
 use opening_hours::HoursEditor;
@@ -87,7 +87,8 @@ pub(super) struct BusinessEditor {
     published: bool,
     mobile_service: bool,
     amenities: [bool; AMENITIES.len()],
-    hours: Option<HoursEditor>,
+    hours: HoursEditor,
+    had_opening_schedule: bool,
 }
 
 impl BusinessEditor {
@@ -107,10 +108,14 @@ impl BusinessEditor {
             published: profile.published,
             mobile_service: profile.mobile_service,
             amenities: AMENITIES.map(|(value, _)| profile.amenities.contains(&value)),
-            hours: profile
-                .opening_schedule
-                .as_ref()
-                .map(|schedule| HoursEditor::new(schedule, cx)),
+            hours: HoursEditor::new(
+                profile
+                    .opening_schedule
+                    .as_ref()
+                    .unwrap_or(&OpeningSchedule::default()),
+                cx,
+            ),
+            had_opening_schedule: profile.opening_schedule.is_some(),
         }
     }
 
@@ -125,8 +130,9 @@ impl BusinessEditor {
                 .collect(),
             ..BusinessProfile::default()
         };
-        if let Some(hours) = &self.hours {
-            profile.opening_schedule = Some(hours.draft(cx).ok_or(Key::OpeningInvalid)?);
+        let hours = self.hours.draft(cx).ok_or(Key::OpeningInvalid)?;
+        if self.had_opening_schedule || hours != OpeningSchedule::default() {
+            profile.opening_schedule = Some(hours);
         }
         for (field, input) in FIELDS.iter().zip(&self.inputs) {
             let value = input.read(cx).text().trim();
@@ -269,9 +275,7 @@ impl Root {
                         )
                     })),
             )
-            .when_some(editor.hours.as_ref(), |view, hours| {
-                view.child(self.render_opening_hours(hours, cx))
-            })
+            .child(self.render_opening_hours(&editor.hours, cx))
             .child(
                 div()
                     .flex()
