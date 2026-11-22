@@ -141,7 +141,7 @@ export async function requestCampaignTestEmail(
     bookingUrl: `${notification.publicUrl}/book`,
     unsubscribeUrl: null,
   });
-  const provider = createSmtpProvider({ url: email.smtpUrl, from: email.from, maxRequeues: 0 });
+  const provider = createSmtpProvider({ url: email.smtpUrl, from: email.from });
   let status: Status;
   try {
     await provider.send({

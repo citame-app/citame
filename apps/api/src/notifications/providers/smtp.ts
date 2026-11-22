@@ -25,23 +25,39 @@ function classify(error: unknown, redact: boolean): Error {
  */
 export const SMTP_TIMEOUTS = { connectionMs: 10_000, greetingMs: 10_000, socketMs: 30_000 };
 
+type SmtpConnection = { url: string } | { connection: SMTPTransport.Options };
+
+function smtpConnectionUrl(input?: string) {
+  if (!input) return input;
+  let url: URL;
+  try {
+    url = new URL(input);
+  } catch {
+    throw new Error("Invalid SMTP connection URL");
+  }
+  // Nodemailer applies URL query options after the transport options.
+  url.searchParams.delete("maxRequeues");
+  url.searchParams.delete("url");
+  return url.href;
+}
+
 /**
  * SMTP through nodemailer. SMTP has no idempotency key: the deterministic `Message-ID` lets a
  * receiving server or the operator spot a duplicate, but a crash between "server accepted" and
  * "row marked sent" can still deliver twice (at-least-once, see ADR 0010).
  */
 export function createSmtpProvider(
-  options: { from: string; timeouts?: typeof SMTP_TIMEOUTS; maxRequeues?: number } & (
-    | { url: string }
-    | { connection: SMTPTransport.Options }
-  ),
+  options: { from: string; timeouts?: typeof SMTP_TIMEOUTS } & SmtpConnection,
 ): EmailProvider {
   const timeouts = options.timeouts ?? SMTP_TIMEOUTS;
+  const connection = "url" in options ? { url: options.url } : options.connection;
   const transport = nodemailer.createTransport({
-    ...("url" in options ? { url: options.url } : options.connection),
+    ...connection,
+    url: smtpConnectionUrl(connection.url),
     pool: true,
     maxConnections: 2,
-    maxRequeues: options.maxRequeues,
+    // Let Citame record the failed attempt before performing a retry.
+    maxRequeues: 0,
     connectionTimeout: timeouts.connectionMs,
     greetingTimeout: timeouts.greetingMs,
     socketTimeout: timeouts.socketMs,
