@@ -10,6 +10,7 @@ export const marketingEn = {
   "marketing.invitationRemove": "Remove {name}",
   "marketing.invitationUnavailable": "unavailable client",
   "marketing.invitationRequired": "Select at least one client.",
+  "marketing.invitationLinkRequired": "Include {{booking_url}} in each delivery message.",
   "marketing.status": "Status",
   "marketing.birthdayBody":
     "Happy birthday, {{first_name}}! Best wishes from {{salon_name}}. Treat yourself: {{booking_url}}",
@@ -134,6 +135,8 @@ export const marketingEs: Record<keyof typeof marketingEn, string> = {
   "marketing.invitationRemove": "Quitar a {name}",
   "marketing.invitationUnavailable": "cliente no disponible",
   "marketing.invitationRequired": "Selecciona al menos un cliente.",
+  "marketing.invitationLinkRequired":
+    "Incluye {{booking_url}} en cada mensaje que se vaya a enviar.",
   "marketing.status": "Estado",
   "marketing.birthdayBody":
     "¡Feliz cumpleaños, {{first_name}}! Te deseamos un gran día desde {{salon_name}}. Dedícate un momento: {{booking_url}}",

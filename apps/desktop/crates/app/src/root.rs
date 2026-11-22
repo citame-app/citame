@@ -931,6 +931,7 @@ impl Root {
         self.refresh_service_assignments(&catalogue);
         self.services = catalogue.into_iter().filter(|s| s.active).collect();
         self.reload_directory();
+        self.reload_marketing_invitation_contacts();
         self.refresh_client_controls(cx);
         self.reload_team_shifts();
         self.refresh_weekly_conflicts_if_ready(cx);

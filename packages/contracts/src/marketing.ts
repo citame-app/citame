@@ -21,7 +21,8 @@ export const campaignAudienceSchema = z
       .array(idSchema)
       .min(1)
       .max(BOOKING_INVITATION_MAX_CONTACTS)
-      .refine((ids) => new Set(ids.map((id) => id.toLowerCase())).size === ids.length, {
+      .transform((ids) => ids.map((id) => id.toLowerCase()))
+      .refine((ids) => new Set(ids).size === ids.length, {
         message: "Clients must be selected once",
       })
       .optional(),
@@ -95,7 +96,7 @@ export const campaignPreviewSchema = z.object({
   excluded: z.number().int().nonnegative(),
   sample: z
     .array(z.object({ clientId: idSchema, name: z.string(), channel: z.enum(["email", "sms"]) }))
-    .max(10),
+    .max(BOOKING_INVITATION_MAX_CONTACTS),
 });
 export const campaignQueueSchema = z
   .object({

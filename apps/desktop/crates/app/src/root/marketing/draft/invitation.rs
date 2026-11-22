@@ -62,6 +62,26 @@ impl InvitationEditor {
 }
 
 impl Root {
+    pub(in crate::root) fn reload_marketing_invitation_contacts(&mut self) {
+        if self.invitation_editor().is_none() {
+            return;
+        }
+        let contacts = calendar::directory_clients(&self.svc.store)
+            .unwrap_or_default()
+            .clients;
+        let Some(editor) = self.invitation_editor() else {
+            return;
+        };
+        editor.names = contacts
+            .iter()
+            .map(|c| (c.id.clone(), c.name.clone()))
+            .collect();
+        if editor.contacts.len() != contacts.len() {
+            editor.page = 0;
+        }
+        editor.contacts = contacts;
+    }
+
     fn invitation_editor(&mut self) -> Option<&mut InvitationEditor> {
         let editor = self.marketing_desk()?.editor.as_mut()?;
         if editor.pending.is_some() || editor.stale {
@@ -161,7 +181,10 @@ impl Root {
                 editor.selected.len(),
                 MAX_INVITATION_CONTACTS
             ))
-            .child(self.t(Key::MarketingInvitationHelp))
+            .child(i18n::fill(
+                self.t(Key::MarketingInvitationHelp),
+                &[("count", &MAX_INVITATION_CONTACTS.to_string())],
+            ))
             .child(div().flex().flex_wrap().gap_2().children(selected))
             .child(self.label(Key::DirectorySearch))
             .child(editor.search.clone())

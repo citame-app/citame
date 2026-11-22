@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
+  BOOKING_INVITATION_MAX_CONTACTS,
   type Campaign,
   type CampaignCreate,
   type CampaignQuery,
@@ -99,8 +100,9 @@ export async function campaignViews(db: Connection, rows: CampaignRow[]): Promis
       activatedAt: row.activatedAt?.toISOString() ?? null,
       counts: totals.get(row.id),
       selectedContacts: row.audience.selectedClientIds?.flatMap((id) => {
-        const name = contactNames.get(id.toLowerCase());
-        return name === undefined ? [] : [{ id, name }];
+        const canonicalId = id.toLowerCase();
+        const name = contactNames.get(canonicalId);
+        return name === undefined ? [] : [{ id: canonicalId, name }];
       }),
     });
   });
@@ -227,6 +229,15 @@ function requireContent(row: CampaignRow) {
     throw new DomainError("validation_error", "Email needs a subject and message");
   if ((row.channel === "sms" || row.channel === "optimized") && !row.smsBody.trim())
     throw new DomainError("validation_error", "SMS needs a message");
+  if (
+    row.purpose === "booking_invitation" &&
+    ((row.channel !== "sms" && !row.emailBody.includes("{{booking_url}}")) ||
+      (row.channel !== "email" && !row.smsBody.includes("{{booking_url}}")))
+  )
+    throw new DomainError(
+      "validation_error",
+      "Include the booking link in each invitation message",
+    );
 }
 export async function previewCampaign(
   db: Database,
@@ -255,7 +266,7 @@ export async function previewCampaign(
         sms: audience.recipients.filter((row) => row.channel === "sms").length,
         excluded: audience.excluded,
         sample: audience.recipients
-          .slice(0, 10)
+          .slice(0, row.purpose === "booking_invitation" ? BOOKING_INVITATION_MAX_CONTACTS : 10)
           .map(({ clientId, name, channel }) => ({ clientId, name, channel })),
       };
     },

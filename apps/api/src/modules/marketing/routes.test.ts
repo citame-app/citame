@@ -6,7 +6,13 @@ import {
   marketingConsentSchema,
   syncPullResponseSchema,
 } from "@sob/contracts";
-import { appointment, clientProfile, marketingCampaign, marketingDelivery } from "@sob/db";
+import {
+  appointment,
+  clientProfile,
+  marketingCampaign,
+  marketingConsent,
+  marketingDelivery,
+} from "@sob/db";
 import { eq, sql } from "drizzle-orm";
 import {
   type Actor,
@@ -120,6 +126,23 @@ beforeEach(async () => {
 test("booking invitations queue only the selected contacts with consent", async () => {
   const other = await actor(t, "client", "unselected@example.com");
   const excluded = await actor(t, "client", "selected-without-consent@example.com");
+  const additional = await t.db
+    .insert(clientProfile)
+    .values(
+      Array.from({ length: 11 }, (_, index) => ({
+        name: `Selected fixture ${index}`,
+        email: `selected-${index}@example.com`,
+      })),
+    )
+    .returning({ id: clientProfile.id, email: clientProfile.email });
+  await t.db.insert(marketingConsent).values(
+    additional.map(({ id }) => ({
+      clientId: id,
+      channel: "email" as const,
+      enabled: true,
+      source: "Explicit test consent",
+    })),
+  );
   await allow();
   expect(
     (
@@ -131,8 +154,9 @@ test("booking invitations queue only the selected contacts with consent", async 
       })
     ).status,
   ).toBe(200);
+  const selectedIds = [client.clientId, excluded.clientId, ...additional.map(({ id }) => id)];
   const campaign = await create({
-    audience: { selectedClientIds: [client.clientId, excluded.clientId] },
+    audience: { selectedClientIds: selectedIds.map((id) => id?.toUpperCase()) },
   });
   const legacyList = await call(owner, "/admin/marketing/campaigns");
   expect(await legacyList.json()).toMatchObject({ campaigns: [] });
@@ -142,16 +166,26 @@ test("booking invitations queue only the selected contacts with consent", async 
     campaigns: [
       {
         id: campaign.id,
-        selectedContacts: [{ id: client.clientId }, { id: excluded.clientId }],
+        audience: { selectedClientIds: selectedIds },
+        selectedContacts: expect.arrayContaining([
+          { id: client.clientId, name: expect.any(String) },
+        ]),
       },
     ],
   });
   const path = `/admin/marketing/campaigns/${campaign.id}`;
-  expect(await preview(campaign)).toMatchObject({
-    eligible: 1,
+  const reviewed = await preview(campaign);
+  expect(reviewed).toMatchObject({
+    eligible: 12,
     excluded: 1,
-    sample: [expect.objectContaining({ clientId: client.clientId })],
+    sample: expect.arrayContaining([expect.objectContaining({ clientId: client.clientId })]),
   });
+  expect(reviewed.sample).toHaveLength(reviewed.eligible);
+  const broken = await create({
+    emailBody: "This draft is missing the link",
+    audience: { selectedClientIds: [client.clientId] },
+  });
+  expect((await call(owner, `/admin/marketing/campaigns/${broken.id}/preview`)).status).toBe(400);
   const { id: _, ...legacyDraft } = draft();
   expect(
     (await call(owner, path, "PATCH", { ...legacyDraft, version: campaign.version })).status,
@@ -165,10 +199,14 @@ test("booking invitations queue only the selected contacts with consent", async 
     ).status,
   ).toBe(400);
   const result = await queue(campaign);
-  expect(result.campaign.counts.pending).toBe(1);
-  await worker().runOnce();
-  expect(email.calls).toHaveLength(1);
-  expect(email.calls[0]?.to).toBe("marketing-client@example.com");
+  expect(result.campaign.counts.pending).toBe(12);
+  const deliveryWorker = worker();
+  await deliveryWorker.runOnce();
+  await deliveryWorker.runOnce();
+  expect(email.calls.map(({ to }) => to).sort()).toEqual(
+    ["marketing-client@example.com", ...additional.map(({ email }) => email)].sort(),
+  );
+  expect(email.calls[0]?.html).toContain(`<a href="${t.config.notifications.publicUrl}/book">`);
 });
 
 test("campaigns require marketing access; commercial consent defaults to off independently of booking reminders", async () => {

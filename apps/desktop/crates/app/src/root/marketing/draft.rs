@@ -492,6 +492,17 @@ impl Root {
             cx.notify();
             return;
         }
+        if editor.invitation.is_some()
+            && editor.pending.is_none()
+            && ((editor.channel != Channel::Sms
+                && !message_text(&editor.email.lines, cx).contains("{{booking_url}}"))
+                || (editor.channel != Channel::Email
+                    && !message_text(&editor.sms.lines, cx).contains("{{booking_url}}")))
+        {
+            desk.error = Some(Key::MarketingInvitationLinkRequired);
+            cx.notify();
+            return;
+        }
         let Some(write) = editor.pending.clone().or_else(|| editor.packet(cx)) else {
             desk.error = Some(
                 if editor

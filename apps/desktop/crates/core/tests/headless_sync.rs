@@ -6838,6 +6838,43 @@ fn native_reviews_future_campaign_delivery_and_cancels_through_the_proxy() {
     let preview = device.transport.marketing_preview(&id).unwrap();
     let capabilities = device.transport.marketing_capabilities().unwrap();
     assert_eq!(preview.campaign_id, campaign.id);
+    assert!(found.booking_invitations);
+    let contact = browser.rest_post(
+        "/admin/clients",
+        json!({"id": uuid::Uuid::now_v7(), "name": "Synthetic invited client"}),
+    );
+    let contact_id = contact["id"].as_str().unwrap();
+    let invite_id = uuid::Uuid::now_v7().to_string();
+    let mut invite = Draft::from_template(
+        Trigger::Manual,
+        "Synthetic booking invitation",
+        "Book with us",
+        "Your next visit: {{booking_url}}",
+    );
+    invite.audience.selected_client_ids = Some(vec![contact_id.to_owned()]);
+    let invitation = device
+        .transport
+        .save_campaign_draft(&DraftWrite {
+            generation: generation.clone(),
+            revision: DraftRevision::Create {
+                id: invite_id.clone(),
+            },
+            draft: invite,
+        })
+        .unwrap();
+    assert_eq!(invitation.selected_contacts[0].id, contact_id);
+    assert_eq!(
+        invitation.selected_contacts[0].name,
+        "Synthetic invited client"
+    );
+    let web_invite = browser.rest_get(&format!("/admin/marketing/campaigns/{invite_id}"));
+    assert_eq!(
+        web_invite["audience"]["selectedClientIds"],
+        json!([contact_id])
+    );
+    let invitation_preview = device.transport.marketing_preview(&invite_id).unwrap();
+    assert_eq!(invitation_preview.eligible, 0);
+    assert_eq!(invitation_preview.excluded, 1);
     assert!(
         device
             .transport

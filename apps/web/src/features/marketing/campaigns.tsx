@@ -360,6 +360,14 @@ function CampaignEditor({
     action.current = review;
     setInvalid(!candidate.success);
     if (!candidate.success) return;
+    if (
+      selected &&
+      ((draft.channel !== "sms" && !draft.emailBody.includes("{{booking_url}}")) ||
+        (draft.channel !== "email" && !draft.smsBody.includes("{{booking_url}}")))
+    ) {
+      setInvalid(true);
+      return;
+    }
     if (initial && !dirty) {
       onSaved(initial, review);
       return;
@@ -582,7 +590,11 @@ function CampaignEditor({
           </fieldset>
           {invalid && (
             <p role="alert" className="text-danger-fg">
-              {t("marketing.invalid")}
+              {t(
+                invalid && candidate.success && selected
+                  ? "marketing.invitationLinkRequired"
+                  : "marketing.invalid",
+              )}
             </p>
           )}
           {uncertain && <p role="alert">{t("timing.uncertain")}</p>}
