@@ -126,6 +126,7 @@ function ReportsPage() {
           }
           role={all ? "owner" : session.user.role}
           showClients={section === "clients" && permissions.financialReports}
+          visible={section === "overview" || section === "clients"}
         />
       </div>
       {(section === "financial" || visited.has("financial")) && permissions.financialReports && (

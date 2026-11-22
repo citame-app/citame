@@ -49,8 +49,8 @@ export async function reportStaffOccupancy(
   staffIds: string[],
   query: ReportQuery,
   { timezone, fromAt, toAt }: { timezone: string; fromAt: string; toAt: string },
-): Promise<Map<string, StaffOccupancy>> {
-  if (!staffIds.length) return new Map();
+): Promise<{ byStaff: Map<string, StaffOccupancy>; rate: number | null }> {
+  if (!staffIds.length) return { byStaff: new Map(), rate: null };
   const from = new Date(fromAt);
   const to = new Date(toAt);
   const [hours, dated, blocks, visits, reservations] = await Promise.all([
@@ -135,7 +135,11 @@ export async function reportStaffOccupancy(
   const visitsByStaff = byStaff(visits);
   const merged = (items: { start: Date; end: Date }[]) =>
     union(items.map(({ start, end }) => ({ start: start.getTime(), end: end.getTime() })));
-  return new Map(
+  let totalAvailable = 0;
+  let totalReserved = 0;
+  const rate = (reserved: number, available: number) =>
+    available ? Math.round((reserved / available) * 10_000) / 10_000 : null;
+  const occupancyByStaff = new Map(
     staffIds.map((staffId) => {
       const shifts = intersection(period, union(shiftsByStaff.get(staffId) ?? []));
       const blocked = intersection(shifts, merged(blocksByStaff.get(staffId) ?? []));
@@ -152,6 +156,8 @@ export async function reportStaffOccupancy(
       const blockedTime = duration(blocked);
       const availableTime = scheduledTime - blockedTime;
       const reservedTime = duration(reserved) - duration(intersection(reserved, blocked));
+      totalAvailable += availableTime;
+      totalReserved += reservedTime;
       return [
         staffId,
         {
@@ -160,11 +166,10 @@ export async function reportStaffOccupancy(
           reservedMinutes: minutes(reservedTime),
           completedMinutes: minutes(visitTime.completed),
           noShowMinutes: minutes(visitTime.no_show),
-          occupancyRate: availableTime
-            ? Math.round((reservedTime / availableTime) * 10_000) / 10_000
-            : null,
+          occupancyRate: rate(reservedTime, availableTime),
         },
       ];
     }),
   );
+  return { byStaff: occupancyByStaff, rate: rate(totalReserved, totalAvailable) };
 }

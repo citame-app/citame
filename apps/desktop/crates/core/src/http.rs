@@ -1157,6 +1157,17 @@ impl HttpTransport {
         )
     }
 
+    pub fn report_summary_with_overview(
+        &self,
+        query: &ReportQuery,
+    ) -> Result<ReportSummary, TransportError> {
+        let path = format!("{}&businessOverview=1", query.path());
+        read_response(
+            self.get(&self.agent, &path, Some("application/json"))?,
+            false,
+        )
+    }
+
     pub fn review_requests(
         &self,
         page: u32,

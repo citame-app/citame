@@ -1,4 +1,9 @@
-import { permissionsFor, reportOutcomesQuerySchema, reportQuerySchema } from "@sob/contracts";
+import {
+  permissionsFor,
+  reportOutcomesQuerySchema,
+  reportQuerySchema,
+  reportSummaryQuerySchema,
+} from "@sob/contracts";
 import { Hono } from "hono";
 import type { AppDeps } from "../../app";
 import { authorizeClientAccess, authorizeReportQuery, requirePermission } from "../../auth/policy";
@@ -12,14 +17,24 @@ import { reportSummary } from "./service";
 export function reportRoutes({ db }: AppDeps) {
   return new Hono<AppEnv>()
     .get("/summary", async (c) => {
-      const query = parseOrThrow(reportQuerySchema, c.req.query());
+      const { businessOverview, ...query } = parseOrThrow(reportSummaryQuerySchema, c.req.query());
       const principal = c.get("principal");
       const scoped = authorizeReportQuery(principal, query);
-      const summary = await reportSummary(db, scoped);
+      const access = permissionsFor(principal.role, principal.accessPreset);
+      const summary = await reportSummary(
+        db,
+        scoped,
+        businessOverview === "1" &&
+          access.financialReports &&
+          access.clients &&
+          access.commerce &&
+          access.allSales &&
+          access.readInventory,
+      );
       c.header("Cache-Control", "private, no-store");
       return c.json({
         ...summary,
-        canReportClients: permissionsFor(principal.role, principal.accessPreset).financialReports,
+        canReportClients: access.financialReports,
       });
     })
     .get("/clients", async (c) => {

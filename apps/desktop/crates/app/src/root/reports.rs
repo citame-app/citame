@@ -300,7 +300,10 @@ impl Root {
                         ReportMode::Profitability => transport
                             .appointment_profitability(&query, client_id.as_deref(), page, reviewed)
                             .map(ReportData::Profitability),
-                        ReportMode::Overview | ReportMode::Outcome(_) => transport
+                        ReportMode::Overview => transport
+                            .report_summary_with_overview(&query)
+                            .map(|summary| ReportData::Summary(Box::new(summary))),
+                        ReportMode::Outcome(_) => transport
                             .report_summary(&query)
                             .map(|summary| ReportData::Summary(Box::new(summary))),
                     }
@@ -863,31 +866,65 @@ impl Root {
                 .collect(),
             None => Vec::new(),
         };
+        let mut metrics = vec![
+            (
+                Key::ReportAppointments,
+                report.totals.appointments.to_string(),
+                None,
+            ),
+            (
+                Key::ReportCompleted,
+                report.totals.by_status.completed.to_string(),
+                None,
+            ),
+            (
+                Key::ReportNoShow,
+                report.totals.by_status.no_show.to_string(),
+                None,
+            ),
+            (
+                Key::ReportRevenue,
+                self.report_amount(report.totals.revenue_cents, currency),
+                None,
+            ),
+        ];
+        if let Some(overview) = &report.business_overview {
+            metrics.extend([
+                (
+                    Key::ReportVisitingClients,
+                    overview.visiting_clients.to_string(),
+                    Some(Key::ReportAllServiceCurrencies),
+                ),
+                (
+                    Key::ReportOverviewOccupancy,
+                    overview.occupancy_rate.map_or_else(
+                        || "—".to_owned(),
+                        |value| format!("{}%", (value * 100.0).round()),
+                    ),
+                    Some(Key::ReportAllServiceCurrencies),
+                ),
+                (
+                    Key::ReportOverviewNetCollections,
+                    self.amount_label(overview.net_collected_cents, "EUR"),
+                    Some(Key::ReportRecordedNet),
+                ),
+                (
+                    Key::ReportOverviewLowStock,
+                    overview.low_stock_products.to_string(),
+                    Some(Key::ReportCentreStock),
+                ),
+            ]);
+        }
         div()
             .flex()
             .flex_col()
             .gap_3()
             .child(
-                div().flex().flex_wrap().gap_2().children(
-                    [
-                        (
-                            Key::ReportAppointments,
-                            report.totals.appointments.to_string(),
-                        ),
-                        (
-                            Key::ReportCompleted,
-                            report.totals.by_status.completed.to_string(),
-                        ),
-                        (
-                            Key::ReportNoShow,
-                            report.totals.by_status.no_show.to_string(),
-                        ),
-                        (
-                            Key::ReportRevenue,
-                            self.report_amount(report.totals.revenue_cents, currency),
-                        ),
-                    ]
-                    .map(|(key, value)| {
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .children(metrics.into_iter().map(|(key, value, hint)| {
                         div()
                             .flex_1()
                             .min_w(px(120.))
@@ -907,8 +944,15 @@ impl Root {
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(value),
                             )
-                    }),
-                ),
+                            .when_some(hint, |tile, hint| {
+                                tile.child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(theme::muted())
+                                        .child(self.t(hint)),
+                                )
+                            })
+                    })),
             )
             .when(report.totals.unpriced_services > 0, |view| {
                 view.child(

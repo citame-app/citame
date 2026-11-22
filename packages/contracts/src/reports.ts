@@ -116,8 +116,22 @@ const staffOccupancySchema = z.object({
 });
 export type StaffOccupancy = z.infer<typeof staffOccupancySchema>;
 
+export const reportSummaryQuerySchema = reportQuerySchema.safeExtend({
+  businessOverview: z.literal("1").optional(),
+});
+export const reportBusinessOverviewSchema = z.object({
+  visitingClients: count,
+  occupancyRate: rateSchema,
+  /** Recorded external collections minus recorded refunds, in EUR. */
+  netCollectedCents: z.number().int(),
+  /** Active products across the centre with available stock at or below threshold now. */
+  lowStockProducts: count,
+});
+export type ReportBusinessOverview = z.infer<typeof reportBusinessOverviewSchema>;
+
 export const reportSummarySchema = z.object({
   canReportClients: z.boolean().optional(),
+  businessOverview: reportBusinessOverviewSchema.optional(),
   from: localDateSchema,
   to: localDateSchema,
   timezone: z.string(),

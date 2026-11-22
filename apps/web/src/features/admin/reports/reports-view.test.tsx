@@ -236,8 +236,24 @@ describe("ReportsView", () => {
     open();
     await screen.findByRole("group", { name: "Summary" });
     expect(urls.find((u) => u.startsWith("/api/admin/reports"))).toBe(
-      "/api/admin/reports/summary?from=2026-02-17&to=2026-03-18",
+      "/api/admin/reports/summary?from=2026-02-17&to=2026-03-18&businessOverview=1",
     );
+  });
+
+  test("displays the combined overview and explains the report data scopes", async () => {
+    report.businessOverview = {
+      visitingClients: 12,
+      occupancyRate: 0.7,
+      netCollectedCents: -15000,
+      lowStockProducts: 6,
+    };
+    open();
+    const summary = within(await screen.findByRole("group", { name: "Summary" }));
+    expect(summary.getByText("Clients served").parentElement?.textContent).toContain("12");
+    expect(summary.getByText("Planned occupancy").parentElement?.textContent).toContain("70%");
+    expect(summary.getByText("Net collections").parentElement?.textContent).toContain("-€150");
+    expect(summary.getByText("Products low in stock").parentElement?.textContent).toContain("6");
+    expect(summary.getByText("Current stock across the centre")).toBeTruthy();
   });
 
   test("summary tiles show the exact numbers", async () => {

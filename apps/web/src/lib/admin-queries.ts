@@ -89,6 +89,7 @@ export const reportQuery = (params: {
   to: string;
   staffId?: string;
   currency?: string;
+  businessOverview?: "1";
 }) =>
   queryOptions({
     queryKey: ["admin", "report", params],
