@@ -1,10 +1,10 @@
 import { type CalendarQuery, permissionsFor, type UnpaidAppointments } from "@sob/contracts";
-import { checkout, checkoutPayment, type Database } from "@sob/db";
-import { and, inArray, sql } from "drizzle-orm";
+import { checkout, checkoutLine, checkoutPayment, type Database } from "@sob/db";
+import { and, getTableName, inArray, sql } from "drizzle-orm";
 import { authorizeCalendarQuery } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import { getCalendar } from "../appointments/calendar";
-import { requireOperator } from "./service";
+import { ownsSale, requireOperator } from "./service";
 
 /** The cashier sees the intersection of calendar and sales access. No recent-receipt
  * limit: a fully collected appointment stays out even after thousands of other sales. */
@@ -15,30 +15,44 @@ export async function unpaidAppointments(
 ): Promise<UnpaidAppointments> {
   requireOperator(principal);
   const scope = authorizeCalendarQuery(principal, query);
-  if (!permissionsFor(principal.role, principal.accessPreset).allSales)
-    scope.staffIds = principal.staffId ? [principal.staffId] : [];
+  const { allSales } = permissionsFor(principal.role, principal.accessPreset);
+  if (!allSales) scope.staffIds = principal.staffId ? [principal.staffId] : [];
   return db.transaction(
     async (tx) => {
       const calendar = await getCalendar(tx, query, { ...scope, includeInactiveStaff: true });
       const candidates = calendar.appointments.filter(
         (row) => row.status !== "cancelled" && !row.externallySettled,
       );
-      const settled = candidates.length
+      const ids = candidates.filter((row) => !row.billingReviewReasons).map((row) => row.id);
+      // Drizzle can omit column qualifiers in a single-table projection.
+      // Keep the outer ID qualified inside the correlated payment and line lookups.
+      const receiptId = sql`${sql.identifier(getTableName(checkout))}.${sql.identifier(checkout.id.name)}`;
+      const receipts = ids.length
         ? await tx
-            .select({ appointmentId: checkout.appointmentId })
+            .select({
+              appointmentId: checkout.appointmentId,
+              id: checkout.id,
+              staffId: checkout.staffId,
+              createdBy: checkout.createdBy,
+              totalCents: checkout.totalCents,
+              confirmedCents: sql<number>`coalesce((
+                select sum(${checkoutPayment.amountCents}) from ${checkoutPayment}
+                where ${checkoutPayment.checkoutId} = ${receiptId} and ${checkoutPayment.status} = 'succeeded'
+              ), 0)`.mapWith(Number),
+              paymentInProgress: sql<boolean>`exists (
+                select 1 from ${checkoutPayment}
+                where ${checkoutPayment.checkoutId} = ${receiptId}
+                and ${checkoutPayment.status} in ('pending', 'reconciliation')
+              )`,
+              pricePending: sql<boolean>`exists (
+                select 1 from ${checkoutLine}
+                where ${checkoutLine.checkoutId} = ${receiptId} and ${checkoutLine.pricePending}
+              )`,
+            })
             .from(checkout)
-            .where(
-              and(
-                inArray(
-                  checkout.appointmentId,
-                  candidates.map((row) => row.id),
-                ),
-                sql`${checkout.status} <> 'void'`,
-                sql`coalesce((select sum(${checkoutPayment.amountCents}) from ${checkoutPayment} where ${checkoutPayment.checkoutId}=${checkout.id} and ${checkoutPayment.status}='succeeded'),0) >= ${checkout.totalCents}`,
-              ),
-            )
+            .where(and(inArray(checkout.appointmentId, ids), sql`${checkout.status} <> 'void'`))
         : [];
-      const paid = new Set(settled.map(({ appointmentId }) => appointmentId));
+      const byAppointment = new Map(receipts.map((receipt) => [receipt.appointmentId, receipt]));
       const billingReview = candidates.flatMap((row) =>
         row.billingReviewReasons
           ? [
@@ -54,7 +68,27 @@ export async function unpaidAppointments(
           : [],
       );
       return {
-        appointments: candidates.filter((row) => !row.billingReviewReasons && !paid.has(row.id)),
+        appointments: candidates.flatMap((row) => {
+          if (row.billingReviewReasons) return [];
+          const receipt = byAppointment.get(row.id);
+          if (!receipt) return [row];
+          if (!receipt.pricePending && receipt.confirmedCents >= receipt.totalCents) return [];
+          if (!allSales && !ownsSale(principal, receipt))
+            return [{ ...row, receiptRestricted: true as const }];
+          return [
+            {
+              ...row,
+              receiptBalance: {
+                id: receipt.id,
+                confirmedCents: receipt.confirmedCents,
+                balanceCents: receipt.pricePending
+                  ? null
+                  : receipt.totalCents - receipt.confirmedCents,
+                paymentInProgress: receipt.paymentInProgress,
+              },
+            },
+          ];
+        }),
         ...(billingReview.length ? { billingReview } : {}),
       };
     },

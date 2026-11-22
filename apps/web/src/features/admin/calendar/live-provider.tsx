@@ -100,6 +100,7 @@ export function CalendarLiveProvider({
             void Promise.all([
               queryClient.cancelQueries({ queryKey: ["commerce", "transactions"] }),
               queryClient.cancelQueries({ queryKey: ["commerce", "admin", "checkout"] }),
+              queryClient.cancelQueries({ queryKey: ["commerce", "unpaid"] }),
             ]).then(() => {
               if (!closed) return queryClient.invalidateQueries({ queryKey });
             });

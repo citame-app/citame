@@ -138,6 +138,14 @@ impl Root {
     }
 
     pub(super) fn open_appointment_checkout(&mut self, cx: &mut Context<Self>) {
+        self.load_appointment_checkout(None, cx);
+    }
+
+    pub(super) fn load_appointment_checkout(
+        &mut self,
+        receipt: Option<Uuid>,
+        cx: &mut Context<Self>,
+    ) {
         let Overlay::Details(details) = &mut self.overlay else {
             return;
         };
@@ -174,7 +182,17 @@ impl Root {
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx.background_executor()
-                .spawn(async move { transport.open_appointment_checkout(&id, balance) })
+                .spawn(async move {
+                    if let Some(receipt_id) = receipt {
+                        let receipt = transport.open_saved_checkout(receipt_id)?;
+                        if receipt.appointment_id.as_deref() != Some(id.as_str()) {
+                            return Err(sob_core::sync::TransportError::Server("Unexpected appointment on receipt".into()));
+                        }
+                        Ok(receipt)
+                    } else {
+                        transport.open_appointment_checkout(&id, balance)
+                    }
+                })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if !Arc::ptr_eq(&session, &this.svc.session) || this.svc.current_session().is_none() {

@@ -29,17 +29,19 @@ export function CheckoutPanel({
   mode,
   role,
   bankPaymentId,
+  viewerScope,
 }: {
   id: string;
   mode: CommerceMode;
   role: UserRole;
   bankPaymentId?: string;
+  viewerScope?: string;
 }) {
   const { t, locale, timeZone } = useI18n();
   const queries = useQueryClient();
   const online = useOnline();
   const sale = useQuery({
-    queryKey: ["commerce", mode, "checkout", id],
+    queryKey: ["commerce", mode, "checkout", id, viewerScope],
     queryFn: ({ signal }) => api().commerce.get(id, mode, signal),
     refetchInterval: (query) =>
       query.state.data?.payments.some((p) => p.status === "pending") ||

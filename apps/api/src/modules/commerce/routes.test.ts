@@ -1336,6 +1336,85 @@ test("transaction summaries match visible local months when clocks roll back acr
   expect((await list("&pageSize=1")).groupTotals?.rows).toEqual([october]);
 });
 
+test("the unpaid desk shows confirmed mixed tenders and keeps unresolved bank payments separate", async () => {
+  const path = "/admin/commerce/unpaid?from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z";
+  const list = async () => unpaidAppointmentsSchema.parse(await (await call(owner, path)).json());
+  expect((await list()).appointments[0]?.receiptBalance).toBeUndefined();
+  const sale = await checkout();
+  expect(
+    (await call(owner, "/admin/commerce/cash-sessions", "POST", { openingCents: 0 })).status,
+  ).toBe(201);
+  expect((await pay(sale.id, "cash", 2000)).status).toBe(201);
+  expect((await pay(sale.id, "external_card", 3000)).status).toBe(201);
+  expect((await list()).appointments[0]?.receiptBalance).toEqual({
+    id: sale.id,
+    confirmedCents: 5000,
+    balanceCents: 5000,
+    paymentInProgress: false,
+  });
+
+  const initiated = await pay(sale.id, "redsys_card", 5000);
+  expect(initiated.status).toBe(201);
+  const { payment } = (await initiated.json()) as { payment: { id: string; order: string } };
+  expect((await list()).appointments[0]?.receiptBalance).toEqual({
+    id: sale.id,
+    confirmedCents: 5000,
+    balanceCents: 5000,
+    paymentInProgress: true,
+  });
+  await t.db
+    .update(checkoutPayment)
+    .set({ status: "reconciliation" })
+    .where(eq(checkoutPayment.id, payment.id));
+  expect((await list()).appointments[0]?.receiptBalance).toMatchObject({
+    confirmedCents: 5000,
+    balanceCents: 5000,
+    paymentInProgress: true,
+  });
+  // Simulate the other bank path from the same pending attempt.
+  await t.db
+    .update(checkoutPayment)
+    .set({ status: "pending" })
+    .where(eq(checkoutPayment.id, payment.id));
+  expect((await notify(payment.order, { Ds_Amount: "5000" })).status).toBe(200);
+  expect((await list()).appointments).toEqual([]);
+});
+
+test("the unpaid desk follows original receipt permissions when an appointment changes professional", async () => {
+  const sale = await checkout();
+  expect((await pay(sale.id, "external_card", 3000)).status).toBe(201);
+  await t.db.update(appointment).set({ staffId: f.beaId }).where(eq(appointment.id, appointmentId));
+  const colleague = await actor(t, "staff", "next@commerce.test", { staffProfileId: f.beaId });
+  const path = "/admin/commerce/unpaid?from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z";
+  const restricted = unpaidAppointmentsSchema.parse(await (await call(colleague, path)).json());
+  expect(restricted.appointments[0]).toMatchObject({ id: appointmentId, receiptRestricted: true });
+  expect(restricted.appointments[0]?.receiptBalance).toBeUndefined();
+  expect((await call(colleague, `/admin/commerce/checkouts/${sale.id}`)).status).toBe(404);
+  const ownerList = unpaidAppointmentsSchema.parse(await (await call(owner, path)).json());
+  expect(ownerList.appointments[0]?.receiptBalance).toMatchObject({
+    id: sale.id,
+    confirmedCents: 3000,
+    balanceCents: 7000,
+  });
+});
+
+test("a provisional zero from a variable-price receipt stays in the unpaid desk", async () => {
+  await t.db
+    .update(appointmentService)
+    .set({ priceType: "variable", priceCents: 0 })
+    .where(eq(appointmentService.appointmentId, appointmentId));
+  const sale = await checkout();
+  expect(sale).toMatchObject({ status: "open", totalCents: 0 });
+  const path = "/admin/commerce/unpaid?from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z";
+  const list = unpaidAppointmentsSchema.parse(await (await call(owner, path)).json());
+  expect(list.appointments[0]?.receiptBalance).toEqual({
+    id: sale.id,
+    confirmedCents: 0,
+    balanceCents: null,
+    paymentInProgress: false,
+  });
+});
+
 test("unpaid appointments stay settled beyond the latest hundred sales and respect staff scope", async () => {
   const range = "/admin/commerce/unpaid?from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z";
   const otherAppointment = await t.db

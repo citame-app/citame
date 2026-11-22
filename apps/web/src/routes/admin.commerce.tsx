@@ -52,6 +52,7 @@ function SalesPage() {
       <CommerceView
         role={session.user.role}
         userId={session.user.id}
+        staffId={session.staffId}
         accessPreset={session.accessPreset}
         view={search.view}
         checkoutId={search.checkout}

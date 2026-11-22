@@ -8,10 +8,15 @@ const realFetch = globalThis.fetch;
 const id = "0198f5a0-7b1c-7000-8000-000000000100";
 let calls: { path: string; body: Record<string, unknown> }[];
 let cash: null | Record<string, unknown>;
+const receiptId = "0198f5a0-7b1c-7000-8000-000000000101";
+let dueReceipt:
+  | { id: string; confirmedCents: number; balanceCents: number | null; paymentInProgress: boolean }
+  | undefined;
 let externalBalance: { paidInBooksyCents: number; dueInCitameCents: number } | undefined;
 beforeEach(() => {
   cash = null;
   externalBalance = undefined;
+  dueReceipt = undefined;
   calls = [];
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     const path = new URL(String(input), "http://localhost").pathname;
@@ -36,6 +41,7 @@ beforeEach(() => {
             serviceNames: ["Catalog treatment"],
             clientName: "Test customer",
             externalBalance,
+            receiptBalance: dueReceipt,
           },
         ],
       });
@@ -174,6 +180,21 @@ test.each([false, true])(
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith(id));
   },
 );
+test("the unpaid desk identifies the existing receipt and its confirmed balance without another create", async () => {
+  dueReceipt = { id: receiptId, confirmedCents: 2400, balanceCents: 1600, paymentInProgress: true };
+  const onCreated = mock(() => {});
+  renderApp(<PointOfSale role="owner" sales={[]} onCreated={onCreated} onBenefits={() => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: "To collect" }));
+  expect(await screen.findByText("Confirmed payments")).toBeVisible();
+  expect(screen.getByText("€24")).toBeVisible();
+  expect(screen.getByText("Remaining on receipt")).toBeVisible();
+  expect(screen.getByText("€16")).toBeVisible();
+  expect(screen.getByText("Payment to verify")).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Open receipt" }));
+  expect(onCreated).toHaveBeenCalledWith(receiptId);
+  expect(calls).toHaveLength(0);
+});
+
 test("owner can open and close the register with a counted discrepancy", async () => {
   renderApp(<CommerceView role="owner" />);
   await screen.findByText("Your basket is empty");

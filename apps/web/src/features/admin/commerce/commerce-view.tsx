@@ -34,6 +34,7 @@ export function CommerceView({
   role,
   accessPreset,
   userId,
+  staffId,
   view,
   onViewChange,
   checkoutId,
@@ -45,6 +46,7 @@ export function CommerceView({
 }: {
   role: UserRole;
   userId?: string;
+  staffId?: string | null;
   accessPreset?: StaffAccessPreset | null;
   view?: CommerceViewName;
   onViewChange?: (view: CommerceViewName) => void;
@@ -57,6 +59,7 @@ export function CommerceView({
 }) {
   const { t } = useI18n();
   const permissions = permissionsFor(role, accessPreset);
+  const viewerScope = JSON.stringify([userId, staffId, role, accessPreset]);
   const [localView, setLocalView] = useState<CommerceViewName>("sale");
   const [localSelected, setLocalSelected] = useState<string | null>(null);
   const [benefitsTab, setBenefitsTab] = useState<"gift" | "packages" | "memberships" | "loyalty">(
@@ -112,6 +115,7 @@ export function CommerceView({
         <PointOfSale
           role={role}
           accessPreset={accessPreset}
+          viewerScope={viewerScope}
           sales={sales.data?.checkouts ?? []}
           onCreated={(id) => open(id)}
           onBenefits={(tab) => {
@@ -154,7 +158,8 @@ export function CommerceView({
       >
         {selected && (
           <CheckoutPanel
-            key={selected}
+            key={JSON.stringify([selected, viewerScope])}
+            viewerScope={viewerScope}
             id={selected}
             mode="admin"
             role={role}

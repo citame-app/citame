@@ -91,6 +91,15 @@ function checkReplay(row: { requestHash: string }, requestHash: string) {
       "Idempotency key already belongs to a different request",
     );
 }
+export function ownsSale(
+  principal: Principal,
+  sale: Pick<typeof checkout.$inferSelect, "staffId" | "createdBy">,
+) {
+  return sale.staffId === null
+    ? sale.createdBy === principal.userId
+    : sale.staffId === principal.staffId;
+}
+
 export function saleRow(
   db: Tx,
   id: string,
@@ -109,14 +118,11 @@ export async function saleRow(db: Connection, id: string, principal: Principal, 
   const [row] = await (lock ? query.for("update") : query);
   const restricted =
     principal.role === "staff" && !permissionsFor(principal.role, principal.accessPreset).allSales;
-  const ownSale =
-    row &&
-    ((row.staffId !== null && row.staffId === principal.staffId) ||
-      (row.staffId === null && row.createdBy === principal.userId));
+
   if (
     !row ||
     (principal.role === "client" && (!row.clientId || !ownsClient(principal, row.clientId))) ||
-    (restricted && !ownSale)
+    (restricted && !ownsSale(principal, row))
   )
     throw new DomainError("not_found", "Checkout not found");
   // Receipt first, scheduling next, then client/value/inventory and appointment rows.
