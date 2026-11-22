@@ -21,6 +21,7 @@ pub(super) struct Desk {
     list: Option<CampaignPage>,
     detail: Option<(Campaign, DeliveryPage)>,
     review: Option<(Preview, Capabilities)>,
+    test_email: Option<TestEmailResult>,
     search: Entity<TextField>,
     applied_search: String,
     schedule: Entity<TextField>,
@@ -78,6 +79,7 @@ impl Desk {
             })
         {
             self.review = None;
+            self.test_email = None;
             self.schedule.update(cx, |field, cx| field.set_text("", cx));
         }
         self.detail = Some((campaign, deliveries));
@@ -89,6 +91,12 @@ enum Request {
     List(u32),
     Detail(String, u32),
     Review(String),
+    TestEmail {
+        campaign_id: String,
+        generation: String,
+        version: u32,
+        request_id: uuid::Uuid,
+    },
     Write(CampaignAction),
     SaveDraft(sob_core::http::marketing::DraftWrite),
 }
@@ -97,7 +105,13 @@ enum Loaded {
     List(CampaignPage),
     Detail(Campaign, DeliveryPage),
     Review(Preview, Capabilities),
+    TestEmailAccepted,
     Written(Campaign),
+}
+
+enum TestEmailResult {
+    Accepted,
+    Unconfirmed(uuid::Uuid),
 }
 
 fn status_key(status: Status) -> Key {
@@ -162,6 +176,7 @@ impl Root {
             list: None,
             detail: None,
             review: None,
+            test_email: None,
             action: None,
             editor: None,
             links: None,
@@ -290,6 +305,10 @@ impl Root {
         let status = desk.status;
         let saving = matches!(request, Request::SaveDraft(_));
         let writing = saving || matches!(request, Request::Write(_));
+        let test_request = match &request {
+            Request::TestEmail { request_id, .. } => Some(*request_id),
+            _ => None,
+        };
         if matches!(request, Request::Review(_)) {
             desk.review = None;
         }
@@ -313,6 +332,20 @@ impl Root {
                             transport.marketing_preview(&id)?,
                             transport.marketing_capabilities()?,
                         ),
+                        Request::TestEmail {
+                            campaign_id,
+                            generation,
+                            version,
+                            request_id,
+                        } => {
+                            transport.send_campaign_test_email(
+                                &campaign_id,
+                                &generation,
+                                version,
+                                request_id,
+                            )?;
+                            Loaded::TestEmailAccepted
+                        }
                         Request::Write(action) => {
                             Loaded::Written(transport.act_on_campaign(&action)?)
                         }
@@ -351,6 +384,7 @@ impl Root {
                         desk.list = Some(list);
                         desk.detail = None;
                         desk.review = None;
+                        desk.test_email = None;
                         None
                     }
                     Ok(Loaded::Detail(campaign, deliveries)) => {
@@ -369,11 +403,32 @@ impl Root {
                         }
                         None
                     }
+                    Ok(Loaded::TestEmailAccepted) => {
+                        desk.test_email = Some(TestEmailResult::Accepted);
+                        None
+                    }
+                    Err(error) if let Some(request_id) = test_request => {
+                        if matches!(
+                            error,
+                            MutationError::Changed
+                                | MutationError::Transport(
+                                    TransportError::ReplicaGenerationChanged
+                                )
+                        ) {
+                            desk.review = None;
+                            desk.test_email = None;
+                            desk.error = Some(Key::MarketingChanged);
+                        } else {
+                            desk.test_email = Some(TestEmailResult::Unconfirmed(request_id));
+                        }
+                        None
+                    }
                     Ok(Loaded::Written(campaign)) => {
                         desk.editor = None;
                         desk.action = None;
                         desk.uncertain = false;
                         desk.review = None;
+                        desk.test_email = None;
                         let id = campaign.id.clone();
                         desk.install_write_result(campaign, generation, cx);
                         Some(id)
@@ -456,6 +511,36 @@ impl Root {
             });
         })
         .detach();
+    }
+
+    fn send_marketing_test_email(&mut self, cx: &mut Context<Self>) {
+        let Some(desk) = self
+            .marketing_desk()
+            .filter(|desk| !desk.busy && desk.action.is_none())
+        else {
+            return;
+        };
+        let (Some((campaign, _)), Some((_, capability)), Some(generation)) =
+            (&desk.detail, &desk.review, &desk.generation)
+        else {
+            return;
+        };
+        if !capability.can_test_email
+            || campaign.status != Status::Draft
+            || campaign.channel == Channel::Sms
+        {
+            return;
+        }
+        let request = Request::TestEmail {
+            campaign_id: campaign.id.clone(),
+            generation: generation.clone(),
+            version: campaign.version,
+            request_id: match desk.test_email {
+                Some(TestEmailResult::Unconfirmed(request_id)) => request_id,
+                _ => uuid::Uuid::now_v7(),
+            },
+        };
+        self.request_marketing(request, cx);
     }
 
     fn prepare_marketing_action(&mut self, cancel: bool, cx: &mut Context<Self>) {
@@ -913,6 +998,27 @@ impl Root {
                 .when(!capabilities.can_deliver(campaign.channel), |panel| {
                     panel.child(self.t(Key::MarketingDeliveryDisabled))
                 });
+            if capabilities.can_test_email
+                && campaign.status == Status::Draft
+                && campaign.channel != Channel::Sms
+            {
+                body = body
+                    .when(ready && desk.action.is_none(), |panel| {
+                        panel.child(self.marketing_button(
+                            "send-marketing-test-email",
+                            Key::MarketingTestEmail,
+                            Kind::Ghost,
+                            Root::send_marketing_test_email,
+                            cx,
+                        ))
+                    })
+                    .when_some(desk.test_email.as_ref(), |panel, result| {
+                        panel.child(self.t(match result {
+                            TestEmailResult::Accepted => Key::MarketingTestEmailSent,
+                            TestEmailResult::Unconfirmed(_) => Key::MarketingTestEmailFailed,
+                        }))
+                    });
+            }
             if ready
                 && desk.action.is_none()
                 && capabilities.can_deliver(campaign.channel)
@@ -1145,7 +1251,7 @@ mod tests {
                 "email":1,"sms":0,"excluded":0,"sample":[]
             })).unwrap();
             desk.detail = Some((campaign, deliveries));
-            desk.review = Some((preview, Capabilities { email:true, sms:false, worker:true }));
+            desk.review = Some((preview, Capabilities { email:true, sms:false, worker:true, can_test_email: false }));
             root.prepare_marketing_action(false, cx);
             let desk = root.marketing_desk().unwrap();
             assert!(desk.action.is_none());

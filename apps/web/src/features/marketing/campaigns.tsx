@@ -69,7 +69,7 @@ function template(t: Translator, trigger: CampaignDraft["trigger"]): CampaignDra
     birthdayLeadDays: 0,
   };
 }
-export function CampaignsView() {
+export function CampaignsView({ viewerId, isOwner }: { viewerId: string; isOwner: boolean }) {
   const { t } = useI18n();
   const [search, setSearch] = useState("");
   const term = useDebounced(search, 250);
@@ -215,6 +215,8 @@ export function CampaignsView() {
       {review && (
         <CampaignReview
           campaign={review}
+          viewerId={viewerId}
+          isOwner={isOwner}
           onClose={() => setReview(null)}
           onQueued={(c) => {
             setReview(null);
@@ -567,10 +569,14 @@ export function campaignScheduledInstant(value: string, timeZone: string): strin
 }
 function CampaignReview({
   campaign,
+  viewerId,
+  isOwner,
   onClose,
   onQueued,
 }: {
   campaign: Campaign;
+  viewerId: string;
+  isOwner: boolean;
   onClose: () => void;
   onQueued: (c: Campaign) => void;
 }) {
@@ -586,8 +592,15 @@ function CampaignReview({
     refetchOnWindowFocus: false,
   });
   const capabilities = useQuery({
-    queryKey: ["marketing", "capabilities"],
+    queryKey: ["marketing", "capabilities", viewerId],
     queryFn: () => api().marketing.capabilities(),
+  });
+  const testEmail = useMutation({
+    mutationFn: (requestId: string) =>
+      api().marketing.testEmail(campaign.id, {
+        version: campaign.version,
+        requestId,
+      }),
   });
   let scheduledFor: string | null = null,
     invalidDate = false;
@@ -623,7 +636,7 @@ function CampaignReview({
         ? capabilities.data.sms
         : capabilities.data.email || capabilities.data.sms);
   const close = () => {
-    if (queue.isPending) return;
+    if (queue.isPending || testEmail.isPending) return;
     if (uncertain) setDiscard(true);
     else onClose();
   };
@@ -637,7 +650,11 @@ function CampaignReview({
         description={t("marketing.reviewHelp")}
         footer={
           <div className="flex flex-wrap justify-end gap-3">
-            <Button variant="secondary" onClick={close} disabled={queue.isPending}>
+            <Button
+              variant="secondary"
+              onClick={close}
+              disabled={queue.isPending || testEmail.isPending}
+            >
               {t("admin.cancel")}
             </Button>
             <Button
@@ -645,6 +662,7 @@ function CampaignReview({
               disabled={
                 !online ||
                 queue.isPending ||
+                testEmail.isPending ||
                 (!uncertain &&
                   (!configured ||
                     !audience.data ||
@@ -697,6 +715,30 @@ function CampaignReview({
           )}
           {campaign.trigger !== "manual" && (
             <p className="text-sm text-muted">{t("marketing.automaticHelp")}</p>
+          )}
+          {isOwner && capabilities.data?.canTestEmail && campaign.channel !== "sms" && (
+            <div className="space-y-2">
+              <Button
+                variant="secondary"
+                loading={testEmail.isPending}
+                disabled={!online || testEmail.isPending || queue.isPending}
+                onClick={() =>
+                  testEmail.mutate(
+                    (testEmail.isError && testEmail.variables) || crypto.randomUUID(),
+                  )
+                }
+              >
+                {t("marketing.testEmail")}
+              </Button>
+              <p role="status" className="text-sm text-success-fg">
+                {testEmail.isSuccess && t("marketing.testEmailSent")}
+              </p>
+              {testEmail.isError && (
+                <p role="alert" className="text-sm text-danger-fg">
+                  {t("marketing.testEmailFailed")}
+                </p>
+              )}
+            </div>
           )}
           {capabilities.isError ? (
             <ErrorState error={capabilities.error} />

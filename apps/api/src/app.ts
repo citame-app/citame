@@ -383,7 +383,7 @@ export function createApp(input: AppDeps): App {
   app.use("/admin/*", authenticated);
   app.route("/admin", adminRoutes(deps, auth));
   app.route("/admin/commerce", commerceAdminRoutes(deps));
-  app.route("/admin/marketing", marketingAdminRoutes(deps));
+  app.route("/admin/marketing", marketingAdminRoutes(deps, limiter));
   app.route("/admin/clients", clientMarketingRoutes(deps));
   app.route("/admin/inventory", inventoryRoutes(deps));
   app.route("/admin/accounting", accountingRoutes(deps));

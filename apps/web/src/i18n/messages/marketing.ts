@@ -48,6 +48,10 @@ export const marketingEn = {
   "marketing.reviewHelp":
     "Review this saved version before confirming delivery. Recipient permissions are checked again before each send.",
   "marketing.review": "Review recipients",
+  "marketing.testEmail": "Send test to my email",
+  "marketing.testEmailSent": "Test email accepted. Check your inbox.",
+  "marketing.testEmailFailed":
+    "We couldn't confirm the test email. Check your inbox before retrying.",
   "marketing.saveDraft": "Save draft",
   "marketing.leadDays": "Days before the birthday",
   "marketing.delay": "Delay after the visit (minutes)",
@@ -149,6 +153,10 @@ export const marketingEs: Record<keyof typeof marketingEn, string> = {
   "marketing.reviewHelp":
     "Revisa esta versión guardada antes de confirmar el envío. Los permisos se comprueban de nuevo antes de cada envío.",
   "marketing.review": "Revisar destinatarios",
+  "marketing.testEmail": "Enviar prueba a mi correo",
+  "marketing.testEmailSent": "Envío de prueba aceptado. Revisa tu bandeja de entrada.",
+  "marketing.testEmailFailed":
+    "No se pudo confirmar el envío de prueba. Revisa tu bandeja de entrada antes de reintentar.",
   "marketing.saveDraft": "Guardar borrador",
   "marketing.leadDays": "Días antes del cumpleaños",
   "marketing.delay": "Espera tras la visita (minutos)",
