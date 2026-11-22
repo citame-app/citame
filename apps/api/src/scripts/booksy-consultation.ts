@@ -1,22 +1,29 @@
 import { randomBytes } from "node:crypto";
-import { readFile, realpath } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
+  account,
   booksyDesktopTestDatabase,
   connectToNamedDatabase,
   runMigrations,
   salonSettings,
   user,
+  verifyMigrationLedger,
 } from "@sob/db";
 import { RedisClient } from "bun";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import { z } from "zod";
 import { createApp } from "../app";
 import { createAccount } from "../auth/accounts";
 import { createAuth } from "../auth/auth";
 import { loadConfig } from "../config";
 import { restoreLegacyBooksyPaymentEvidence } from "../modules/booksy-transfer/operational-rehearsal";
 import { loadBooksySourceModel } from "../modules/booksy-transfer/source-store";
-import { privateCliError, privateWrite } from "../modules/booksy-transfer/vault";
+import {
+  privateCliError,
+  privateWrite,
+  readPrivateArchiveFile,
+} from "../modules/booksy-transfer/vault";
 
 const slots = {
   archive: { apiPort: 4301, webPort: 4276, name: "consultation", cacheScope: "" },
@@ -31,16 +38,34 @@ const slots = {
   },
 } as const;
 
+const localOwnerSchema = z.object({
+  email: z.email(),
+  password: z.string().min(1),
+  secret: z.string().min(32),
+});
+
+export async function readBooksyLocalOwner(
+  file: string,
+): Promise<z.infer<typeof localOwnerSchema>> {
+  const { bytes } = await readPrivateArchiveFile(file);
+  try {
+    return localOwnerSchema.parse(JSON.parse(bytes.toString("utf8")));
+  } catch (cause) {
+    throw new Error("Invalid local owner credentials", { cause });
+  }
+}
+
 /** Local import reviews and the isolated desktop test copy. No public listener or operational workers. */
 if (import.meta.main) {
   let closeDatabase: (() => Promise<void>) | undefined;
   let closeCache: (() => void) | undefined;
   let closeApp: (() => Promise<void>) | undefined;
   try {
-    const [directory, snapshotHash, mode = "archive", ...extra] = process.argv.slice(2);
-    if (extra.length || !Object.hasOwn(slots, mode))
-      throw new Error("Unexpected consultation arguments");
+    const [directory, snapshotHash, mode = "archive", startup, ...extra] = process.argv.slice(2);
     const desktopTest = mode === "--desktop-test";
+    const prepared = desktopTest && (startup === "--prepared" || startup === "--check-prepared");
+    if (extra.length || !Object.hasOwn(slots, mode) || (startup !== undefined && !prepared))
+      throw new Error("Unexpected consultation arguments");
     const native = mode !== "archive" && !desktopTest;
     const slot = slots[mode as keyof typeof slots];
     const { apiPort, webPort } = slot;
@@ -68,16 +93,20 @@ if (import.meta.main) {
     const db = await connectToNamedDatabase(connection);
     closeDatabase = db.close;
     const snapshot = await loadBooksySourceModel(db.db, snapshotHash);
-    if (desktopTest) {
+    if (prepared) {
+      await verifyMigrationLedger(db.db);
+    } else if (desktopTest) {
       await runMigrations(db.db, { allowReviewDatabase: true });
       await restoreLegacyBooksyPaymentEvidence(db.db, snapshotHash);
     }
     const credentialFile = resolve(root, "local-owner.json");
     let credentials: { email: string; password: string; secret: string };
     try {
-      credentials = JSON.parse(await readFile(credentialFile, "utf8"));
+      credentials = await readBooksyLocalOwner(credentialFile);
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+      if (prepared)
+        throw new Error("The prepared desktop copy is missing its local owner file", { cause: e });
       credentials = {
         email: desktopTest ? "pruebas@citame.localhost.invalid" : "owner@citame.localhost.invalid",
         password: randomBytes(24).toString("base64url"),
@@ -104,7 +133,33 @@ if (import.meta.main) {
     config.auth.cookiePrefix = `citame-booksy-${slot.name}`;
     await valkey.send("PING", []);
     const existing = await db.db.select().from(user).where(eq(user.email, credentials.email));
-    if (!existing.length) {
+    if (prepared) {
+      if (existing[0]?.role !== "owner")
+        throw new Error("The prepared desktop copy is missing the configured owner");
+      const owner = existing[0];
+      const [credential, duplicate] = await db.db
+        .select({ hash: account.password })
+        .from(account)
+        .where(and(eq(account.userId, owner.id), eq(account.providerId, "credential")))
+        .limit(2);
+      if (!credential?.hash || duplicate)
+        throw new Error("The prepared desktop copy is missing a usable owner credential");
+      const auth = createAuth({ db: db.db, valkey, config });
+      try {
+        const { password } = await auth.$context;
+        const valid = await password
+          .verify({
+            hash: credential.hash,
+            password: credentials.password,
+          })
+          .catch(() => false);
+        if (!valid) throw new Error("The local owner credentials do not match the prepared copy");
+      } finally {
+        await auth.mailer.stop();
+      }
+      const [settings] = await db.db.select({ id: salonSettings.id }).from(salonSettings);
+      if (!settings) throw new Error("The prepared desktop copy is missing salon settings");
+    } else if (!existing.length) {
       const auth = createAuth({ db: db.db, valkey, config });
       try {
         await createAccount(
@@ -119,20 +174,30 @@ if (import.meta.main) {
         await auth.mailer.stop();
       }
     }
-    await db.db
-      .insert(salonSettings)
-      .values({
-        name: `${snapshot.businessName} · Copia de Booksy`,
-        timezone: "Europe/Madrid",
-        slotGranularityMinutes: 5,
-        minNoticeMinutes: 60,
-        maxDaysAhead: 365,
-        reminderFirstLeadMinutes: null,
-        reminderSecondLeadMinutes: null,
-      })
-      .onConflictDoNothing();
-    if (desktopTest && !existing.length)
-      await db.db.update(salonSettings).set({ name: `${snapshot.businessName} · Pruebas locales` });
+    if (!prepared) {
+      await db.db
+        .insert(salonSettings)
+        .values({
+          name: `${snapshot.businessName} · Copia de Booksy`,
+          timezone: "Europe/Madrid",
+          slotGranularityMinutes: 5,
+          minNoticeMinutes: 60,
+          maxDaysAhead: 365,
+          reminderFirstLeadMinutes: null,
+          reminderSecondLeadMinutes: null,
+        })
+        .onConflictDoNothing();
+      if (desktopTest && !existing.length)
+        await db.db
+          .update(salonSettings)
+          .set({ name: `${snapshot.businessName} · Pruebas locales` });
+    }
+    if (startup === "--check-prepared") {
+      valkey.close();
+      await db.close();
+      console.log(JSON.stringify({ status: "prepared", database: "ok", valkey: "ok" }));
+      process.exit(0);
+    }
     const app = createApp({
       db: db.db,
       valkey,
