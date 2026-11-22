@@ -7,7 +7,7 @@ import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { createCheckoutInTransaction, getCheckoutInTransaction } from "../commerce/service";
 import { giftCode, giftCodeHash } from "./code";
-import { authorizeGiftAccess, giftView } from "./service";
+import { authorizeGiftAccess, giftEligibleCatalog, giftView } from "./service";
 export async function purchaseGift(
   db: Database,
   input: GiftCardPurchaseInput,
@@ -23,7 +23,9 @@ export async function purchaseGift(
       (input.eligibleServiceIds?.length ?? 0) > 0)
   )
     throw new DomainError("forbidden", "Clients cannot customize gift purchase terms");
-  const eligibleServiceIds = [...new Set(input.eligibleServiceIds)].sort();
+  const eligibleServiceIds = [
+    ...new Set(input.eligibleServiceIds?.map((id) => id.toLowerCase())),
+  ].sort();
   const purchasePriceCents = input.purchasePriceCents ?? input.amountCents;
   const buyerClientId =
     principal.role === "client" ? principal.clientId : (input.buyerClientId ?? null);
@@ -81,8 +83,14 @@ export async function purchaseGift(
           .orderBy(asc(service.id))
           .for("share")
       : [];
-    if (eligibleServices.length !== eligibleServiceIds.length)
-      throw new DomainError("validation_error", "Choose active services for the gift card");
+    if (eligibleServiceIds.length) {
+      const catalog = new Set((await giftEligibleCatalog(tx)).services.map(({ id }) => id));
+      if (
+        eligibleServices.length !== eligibleServiceIds.length ||
+        eligibleServiceIds.some((id) => !catalog.has(id))
+      )
+        throw new DomainError("validation_error", "Choose active services for the gift card");
+    }
     const id = randomUUID();
     const nonce = randomBytes(16).toString("hex");
     const code = giftCode(secret, id, nonce);

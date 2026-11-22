@@ -4691,6 +4691,14 @@ fn native_gift_card_preserves_restrictions_through_the_proxy() {
     let service_id: uuid::Uuid = treatment["id"].as_str().unwrap().parse().unwrap();
     let generation = browser.store.verified_reviewed_generation().unwrap();
     let device = proxy_device();
+    assert!(
+        device
+            .transport
+            .gift_eligible_services()
+            .unwrap()
+            .iter()
+            .any(|service| service.id == service_id)
+    );
     let draft = GiftPurchase::review(
         "30",
         "",

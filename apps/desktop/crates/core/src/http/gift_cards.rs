@@ -350,6 +350,16 @@ impl HttpTransport {
         self.gift_get(&format!("{PATH}?{}", query.finish()))
     }
 
+    pub fn gift_eligible_services(&self) -> Result<Vec<GiftService>, TransportError> {
+        #[derive(Deserialize)]
+        struct Catalog {
+            services: Vec<GiftService>,
+        }
+        Ok(self
+            .gift_get::<Catalog>(&format!("{PATH}/eligible-services"))?
+            .services)
+    }
+
     pub fn gift_card(&self, id: Uuid) -> Result<GiftCard, TransportError> {
         self.gift_get(&format!("{PATH}/{id}"))
     }

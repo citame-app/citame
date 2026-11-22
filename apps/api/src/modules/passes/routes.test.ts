@@ -275,6 +275,7 @@ test("concurrent visits cannot consume the same entitlement and tender replay is
   });
 });
 test("a package and a restricted gift cannot both fund the same service", async () => {
+  await t.db.execute(sql`update service set currency = 'EUR' where id = ${f.haircutId}`);
   const bought = await paid();
   const giftResponse = await call(owner, "/admin/gift-cards", "POST", {
     amountCents: 2000,

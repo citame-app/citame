@@ -5,7 +5,7 @@ use sob_core::http::{
     HttpTransport,
     gift_cards::{
         GiftBalance, GiftCard, GiftMovementKind, GiftMovements, GiftPage, GiftPurchase,
-        GiftPurchaseResult, GiftReveal, GiftStatus, MAX_GIFT_SERVICES,
+        GiftPurchaseResult, GiftReveal, GiftService, GiftStatus, MAX_GIFT_SERVICES,
     },
 };
 use sob_core::{receipt_print::ReceiptPreview, sync::TransportError};
@@ -46,7 +46,8 @@ pub(super) struct Desk {
     purchase_price: Entity<TextField>,
     choose_services: bool,
     service_search: Entity<TextField>,
-    eligible_service_ids: Vec<Uuid>,
+    selected_services: Vec<GiftService>,
+    eligible_service_options: Option<Vec<GiftService>>,
     label: Entity<TextField>,
     buyer_search: Entity<TextField>,
     buyer: Option<(Uuid, String)>,
@@ -84,6 +85,7 @@ enum Request {
     },
     Detail(Uuid, u32),
     Issue(GiftPurchase),
+    EligibleServices,
     Check(String),
     Reveal(Uuid),
     Print {
@@ -108,6 +110,7 @@ enum Loaded {
     Detail(GiftCard, GiftMovements),
     Issued(Box<GiftPurchaseResult>),
     Balance(GiftBalance),
+    EligibleServices(Vec<GiftService>),
     Revealed(GiftReveal),
     Print(ReceiptPreview),
     Receipt(Box<AppointmentCheckout>),
@@ -129,6 +132,7 @@ impl Request {
                 Loaded::Detail(http.gift_card(id)?, http.gift_card_movements(id, page)?)
             }
             Self::Issue(purchase) => Loaded::Issued(Box::new(http.purchase_gift_card(&purchase)?)),
+            Self::EligibleServices => Loaded::EligibleServices(http.gift_eligible_services()?),
             Self::Check(code) => Loaded::Balance(http.check_gift_card(&code)?),
             Self::Reveal(id) => Loaded::Revealed(http.reveal_gift_card(id)?),
             Self::Print {
@@ -229,7 +233,8 @@ impl Root {
             purchase_price: cx.new(|cx| TextField::new("EUR", false, cx)),
             choose_services: false,
             service_search: cx.new(|cx| TextField::new("", false, cx)),
-            eligible_service_ids: Vec::new(),
+            selected_services: Vec::new(),
+            eligible_service_options: None,
             label: cx.new(|cx| TextField::new("", false, cx)),
             buyer_search: cx.new(|cx| TextField::new("", false, cx)),
             buyer: None,
@@ -606,6 +611,9 @@ impl Root {
                             cx,
                         ));
                     }
+                    Ok(Loaded::EligibleServices(services)) => {
+                        desk.eligible_service_options = Some(services);
+                    }
                     Ok(Loaded::Balance(balance)) if fresh => {
                         desk.observed = observation;
                         desk.checked = Some(balance);
@@ -713,7 +721,8 @@ impl Root {
             }
             desk.buyer = None;
             desk.choose_services = false;
-            desk.eligible_service_ids.clear();
+            desk.selected_services.clear();
+            desk.eligible_service_options = None;
         }
         cx.notify();
     }
@@ -756,7 +765,13 @@ impl Root {
                 generation,
                 Utc::now(),
             )?
-            .restrict_to(&desk.eligible_service_ids)
+            .restrict_to(
+                &desk
+                    .selected_services
+                    .iter()
+                    .map(|service| service.id)
+                    .collect::<Vec<_>>(),
+            )
         });
         let Some(purchase) = purchase else {
             desk.error = Some(Key::GiftIssueInvalid);
@@ -1323,7 +1338,7 @@ impl Root {
         ready: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        let selected_count = desk.eligible_service_ids.len();
+        let selected_count = desk.selected_services.len();
         let mut body = div()
             .flex()
             .flex_col()
@@ -1348,6 +1363,10 @@ impl Root {
             |root, cx| {
                 if let Some(desk) = root.gift_cards_desk() {
                     desk.choose_services = !desk.choose_services;
+                    if desk.choose_services {
+                        desk.eligible_service_options = None;
+                        root.request_gift(Request::EligibleServices, cx);
+                    }
                     cx.notify();
                 }
             },
@@ -1358,32 +1377,36 @@ impl Root {
         }
 
         let search = desk.service_search.read(cx).text().trim().to_lowercase();
-        let selected = desk.eligible_service_ids.iter().map(|id| {
-            let id_text = id.to_string();
-            let name = self
-                .services
-                .iter()
-                .find(|service| service.id == id_text)
-                .map_or(id_text, |service| service.name.clone());
-            (*id, name, true)
-        });
-        let available = self
-            .services
+        let selected = desk
+            .selected_services
             .iter()
-            .filter_map(|service| {
-                let id = Uuid::parse_str(&service.id).ok()?;
-                (!desk.eligible_service_ids.contains(&id)
-                    && service.name.to_lowercase().contains(&search))
-                .then(|| (id, service.name.clone(), false))
+            .cloned()
+            .map(|service| (service, true));
+        let available = desk
+            .eligible_service_options
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter(|service| {
+                !desk
+                    .selected_services
+                    .iter()
+                    .any(|selected| selected.id == service.id)
+                    && service.name.to_lowercase().contains(&search)
             })
-            .take(12);
+            .take(12)
+            .cloned()
+            .map(|service| (service, false));
         let choices = selected.chain(available).collect::<Vec<_>>();
         body.child(self.label(Key::GiftSearchServices))
             .child(desk.service_search.clone())
-            .when(choices.is_empty(), |body| {
-                body.child(self.t(Key::GiftNoServices))
-            })
-            .children(choices.into_iter().map(|(id, name, selected)| {
+            .when(
+                desk.eligible_service_options.is_some() && choices.is_empty(),
+                |body| body.child(self.t(Key::GiftNoServices)),
+            )
+            .children(choices.into_iter().map(|(service, selected)| {
+                let id = service.id;
+                let name = &service.name;
                 self.button(
                     SharedString::from(format!("gift-service-{id}")),
                     format!("{} {name}", if selected { "☑" } else { "☐" }),
@@ -1391,12 +1414,14 @@ impl Root {
                     cx.listener(move |root, _, _, cx| {
                         if let Some(desk) = root.gift_cards_desk() {
                             if selected {
-                                desk.eligible_service_ids
-                                    .retain(|selected_id| *selected_id != id);
-                            } else if desk.eligible_service_ids.len() < MAX_GIFT_SERVICES
-                                && !desk.eligible_service_ids.contains(&id)
+                                desk.selected_services.retain(|selected| selected.id != id);
+                            } else if desk.selected_services.len() < MAX_GIFT_SERVICES
+                                && !desk
+                                    .selected_services
+                                    .iter()
+                                    .any(|selected| selected.id == id)
                             {
-                                desk.eligible_service_ids.push(id);
+                                desk.selected_services.push(service.clone());
                             }
                             cx.notify();
                         }

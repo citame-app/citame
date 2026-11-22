@@ -9,6 +9,8 @@ const eligibleGiftServiceSchema = z.object({ id: idSchema, name: z.string() });
 export const giftEligibleCatalogSchema = z.object({
   services: z.array(eligibleGiftServiceSchema),
 });
+export type GiftEligibleService = z.infer<typeof eligibleGiftServiceSchema>;
+export type GiftEligibleCatalog = z.infer<typeof giftEligibleCatalogSchema>;
 export const maximumGiftServices = 50;
 export const giftCardPurchaseSchema = z
   .object({
@@ -34,10 +36,7 @@ export const giftCardSchema = z.object({
   checkoutId: idSchema,
   amountCents: moneyCentsSchema,
   purchasePriceCents: moneyCentsSchema.positive().optional(),
-  eligibleServices: z
-    .array(z.object({ id: idSchema, name: z.string() }))
-    .max(50)
-    .optional(),
+  eligibleServices: z.array(eligibleGiftServiceSchema).max(maximumGiftServices).optional(),
   balanceCents: moneyCentsSchema,
   reservedCents: moneyCentsSchema,
   availableCents: moneyCentsSchema,

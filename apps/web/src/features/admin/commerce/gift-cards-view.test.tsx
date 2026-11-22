@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderApp } from "../../../../test/render";
 import { GiftBalanceChecker } from "./gift-balance-checker";
 import { GiftCardsView } from "./gift-cards-view";
@@ -135,4 +135,21 @@ test("the reviewed purchase includes only the chosen treatments", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Create gift purchase" }));
   await waitFor(() => expect(posts).toHaveLength(1));
   expect(posts[0]?.body).toMatchObject({ eligibleServiceIds: [id] });
+});
+
+test("a treatment stays removable when the catalog archives it during review", async () => {
+  const { queryClient } = renderApp(<GiftCardsView mode="admin" role="owner" />);
+  await screen.findByText("Birthday");
+  fireEvent.click(screen.getByRole("button", { name: "New gift card" }));
+  fireEvent.change(screen.getByLabelText("Gift value (EUR)"), { target: { value: "30" } });
+  fireEvent.click(screen.getByRole("button", { name: "Choose treatments" }));
+  fireEvent.click(await screen.findByRole("checkbox", { name: "Facial" }));
+  act(() => queryClient.setQueryData(["gift-cards", "eligible-services"], { services: [] }));
+  const archived = await screen.findByRole("checkbox", { name: /Facial Archived treatment/ });
+  expect(archived).toBeChecked();
+  fireEvent.click(archived);
+  expect(screen.queryByRole("checkbox", { name: /Facial/ })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Create gift purchase" }));
+  await waitFor(() => expect(posts).toHaveLength(1));
+  expect(posts[0]?.body).not.toHaveProperty("eligibleServiceIds");
 });

@@ -1,6 +1,7 @@
 import {
   type GiftCard,
   type GiftCardPurchaseInput,
+  type GiftEligibleService,
   giftCardCodeSchema,
   giftCardStatusSchema,
   maximumGiftServices,
@@ -191,7 +192,7 @@ function GiftPurchaseForm({
   const [price, setPrice] = useState("");
   const [validating, setValidating] = useState(false);
   const formTitle = useId();
-  const [serviceIds, setServiceIds] = useState<string[]>([]);
+  const [selectedServices, setSelectedServices] = useState<GiftEligibleService[]>([]);
   const amountCents = inputCents(amount);
   const salePriceCents = mode === "admin" && price.trim() ? inputCents(price) : undefined;
   const amountInvalid = (amountCents ?? 0) <= 0;
@@ -250,7 +251,9 @@ function GiftPurchaseForm({
                   ? { purchasePriceCents: salePriceCents }
                   : {}),
                 ...(buyer ? { buyerClientId: buyer } : {}),
-                ...(serviceIds.length ? { eligibleServiceIds: serviceIds } : {}),
+                ...(selectedServices.length
+                  ? { eligibleServiceIds: selectedServices.map(({ id }) => id) }
+                  : {}),
                 expiresAt: expiry ? localDayBounds(expiry, timeZone).to : null,
               }
             : {}),
@@ -303,9 +306,9 @@ function GiftPurchaseForm({
         <>
           <GiftServicePicker
             disabled={locked}
-            selected={serviceIds}
-            onChange={(ids) => {
-              setServiceIds(ids);
+            selected={selectedServices}
+            onChange={(services) => {
+              setSelectedServices(services);
               save.reset();
             }}
           />
@@ -367,9 +370,9 @@ function GiftServicePicker({
   disabled,
   onChange,
 }: {
-  selected: string[];
+  selected: GiftEligibleService[];
   disabled: boolean;
-  onChange: (ids: string[]) => void;
+  onChange: (services: GiftEligibleService[]) => void;
 }) {
   const { t, locale } = useI18n();
   const [open, setOpen] = useState(false);
@@ -381,11 +384,14 @@ function GiftServicePicker({
     enabled: open,
     staleTime: 30_000,
   });
-  const matches = (catalog.data?.services ?? []).filter(
-    (service) =>
-      selected.includes(service.id) ||
-      service.name.toLocaleLowerCase(locale).includes(search.trim().toLocaleLowerCase(locale)),
+  const selectedIds = new Set(selected.map(({ id }) => id));
+  const available = catalog.data?.services ?? [];
+  const availableIds = new Set(available.map(({ id }) => id));
+  const searchText = search.trim().toLocaleLowerCase(locale);
+  const matches = available.filter(
+    ({ id, name }) => !selectedIds.has(id) && name.toLocaleLowerCase(locale).includes(searchText),
   );
+  const choices = [...selected, ...matches];
   return (
     <fieldset disabled={disabled} aria-describedby={limitHelp} className="min-w-0 sm:col-span-2">
       <legend className="font-medium">{t("gift.eligibleServices")}</legend>
@@ -410,16 +416,17 @@ function GiftServicePicker({
               value={search}
               onChange={(event) => setSearch(event.target.value)}
             />
-            {catalog.isPending ? (
-              <Skeleton className="h-28" />
-            ) : catalog.isError ? (
+            {catalog.isPending && <Skeleton className="h-28" />}
+            {catalog.isError && (
               <ErrorState error={catalog.error} onRetry={() => void catalog.refetch()} />
-            ) : matches.length === 0 ? (
+            )}
+            {catalog.isSuccess && choices.length === 0 && (
               <p className="text-sm text-muted">{t("gift.noServices")}</p>
-            ) : (
+            )}
+            {choices.length > 0 && (
               <ul className="max-h-56 overflow-y-auto rounded-lg border border-line">
-                {matches.map((service) => {
-                  const checked = selected.includes(service.id);
+                {choices.map((service) => {
+                  const checked = selectedIds.has(service.id);
                   return (
                     <li key={service.id}>
                       <label className="flex min-h-11 cursor-pointer items-center gap-3 px-3">
@@ -431,12 +438,15 @@ function GiftServicePicker({
                           onChange={() =>
                             onChange(
                               checked
-                                ? selected.filter((id) => id !== service.id)
-                                : [...selected, service.id],
+                                ? selected.filter(({ id }) => id !== service.id)
+                                : [...selected, service],
                             )
                           }
                         />
                         {service.name}
+                        {catalog.isSuccess && !availableIds.has(service.id) && (
+                          <span className="text-sm text-muted">{t("gift.inactiveService")}</span>
+                        )}
                       </label>
                     </li>
                   );

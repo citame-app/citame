@@ -316,10 +316,12 @@ test("rounding away the remaining gift balance does not close a partially refund
 });
 
 test("restricted gift terms survive catalogue changes and are immutable on replay", async () => {
+  await t.db.execute(sql`update service set currency = 'EUR'
+    where id in (${fixtures.haircutId}, ${fixtures.colorId})`);
   const idempotencyKey = key();
   const first = await buy(2000, {
     idempotencyKey,
-    eligibleServiceIds: [fixtures.haircutId, fixtures.colorId, fixtures.haircutId],
+    eligibleServiceIds: [fixtures.haircutId, fixtures.colorId, fixtures.haircutId.toUpperCase()],
   });
   expect(first.card).toMatchObject({
     eligibleServices: expect.arrayContaining([
@@ -330,7 +332,7 @@ test("restricted gift terms survive catalogue changes and are immutable on repla
   await t.db.execute(sql`update service set active = false where id = ${fixtures.haircutId}`);
   const replay = await buy(2000, {
     idempotencyKey,
-    eligibleServiceIds: [fixtures.colorId, fixtures.haircutId],
+    eligibleServiceIds: [fixtures.colorId.toUpperCase(), fixtures.haircutId],
   });
   expect(replay).toEqual(first);
   const altered = await call(owner, "/admin/gift-cards", "POST", {
@@ -351,6 +353,26 @@ test("restricted gift terms survive catalogue changes and are immutable on repla
     eligibleServiceIds: [fixtures.colorId],
   });
   expect(selfIssued.status).toBe(403);
+});
+
+test("operators cannot issue gifts for unavailable variants or services in another currency", async () => {
+  const variantId = key();
+  await t.db.execute(sql`update service set active = false where id = ${fixtures.haircutId}`);
+  await t.db.execute(sql`insert into service
+      (id, name, duration_minutes, price_cents, currency, catalog_kind, parent_service_id, option_label)
+      values (${variantId}, 'Unavailable variant', 30, 1000, 'EUR', 'variant', ${fixtures.haircutId}, 'Variant')`);
+  const catalog = await call(owner, "/admin/gift-cards/eligible-services");
+  expect(catalog.status).toBe(200);
+  expect(await catalog.json()).toEqual({ services: [] });
+  expect((await call(client, "/me/gift-cards/eligible-services")).status).toBe(403);
+  for (const serviceId of [variantId, fixtures.colorId]) {
+    const purchase = await call(owner, "/admin/gift-cards", "POST", {
+      amountCents: 1000,
+      eligibleServiceIds: [serviceId],
+      idempotencyKey: key(),
+    });
+    expect(purchase.status).toBe(400);
+  }
 });
 
 test("mixed receipts fit overlapping restricted gifts without using other lines or tips", async () => {
