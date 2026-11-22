@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { collectBookingAbsences } from "./absence-evidence";
+import { type CalendarSeen, latestByReference, sourceCalendarDate } from "./calendar-intervals";
+import { stableJson } from "./plan";
 import { type BooksySourceReadModel, sourceInstant } from "./source-read-model";
 
 export const calendarAuditInput = z.object({
@@ -19,65 +21,97 @@ export function auditCalendarCoverage(
   const daysRequested = Temporal.PlainDate.from(from).until(to).days + 1;
   const fromInSnapshot = from > model.fromDate ? from : model.fromDate;
   const toInSnapshot = to < model.throughDate ? to : model.throughDate;
-  type Interval = { startsAt: string; endsAt: string };
-  const snapshotBookings = new Map<string, Map<string, Interval>>();
+  type Interval = { date: string; startsAt: string; endsAt: string };
+  type RawBooking = { id: number; booked_from?: string; booked_till?: string };
+  const snapshot = new Map<string, Interval>();
   for (const { sourceCopy, startsAt, endsAt } of model.appointments) {
     if (!sourceCopy) continue;
-    const date = Temporal.Instant.from(startsAt)
-      .toZonedDateTimeISO(timezone)
-      .toPlainDate()
-      .toString();
-    if (date < fromInSnapshot || date > toInSnapshot) continue;
-    const rows = snapshotBookings.get(date) ?? new Map<string, Interval>();
-    rows.set(sourceCopy.itemRef, { startsAt, endsAt });
-    snapshotBookings.set(date, rows);
+    const ref = sourceCopy.itemRef;
+    if (snapshot.has(ref)) throw new Error("Snapshot has duplicate booking references");
+    snapshot.set(ref, { date: sourceCalendarDate(startsAt, timezone), startsAt, endsAt });
   }
-  const observedBookings = new Map<string, Map<string, Interval>>();
-  // Use the same resource-scope and original-response checks as the booking report reconciliation.
+
+  const latest = new Map<string, { at: string; captures: Record<string, RawBooking>[] }>();
+  // Defer parsing until the newest full-scope captures are known for every day.
   const evidence = collectBookingAbsences(
     model,
     model,
     [],
     [from, to],
-    (calendar, updatedDates) => {
-      const dates = new Set(
-        updatedDates.filter((date) => date >= fromInSnapshot && date <= toInSnapshot),
-      );
-      if (!dates.size) return;
-      for (const date of dates) observedBookings.set(date, new Map());
-      for (const { id, booked_from, booked_till } of Object.values(calendar.bookings)) {
-        if (!booked_from || !booked_till) throw new Error("Observed booking hours are missing");
-        const rows = observedBookings.get(booked_from.slice(0, 10));
-        if (!rows || !dates.has(booked_from.slice(0, 10))) continue;
-        const ref = String(id);
-        if (rows.has(ref))
-          throw new Error("Calendar has more than one row for one booking reference");
-        rows.set(ref, { startsAt: sourceInstant(booked_from), endsAt: sourceInstant(booked_till) });
-      }
+    (calendar, date, { at }) => {
+      if (date < fromInSnapshot || date > toInSnapshot) return;
+      const current = latest.get(date);
+      if (current?.at === at) current.captures.push(calendar.bookings);
+      else latest.set(date, { at, captures: [calendar.bookings] });
     },
   );
-  function reconcile(date: string) {
-    const observed = observedBookings.get(date);
-    if (!observed) return undefined;
-    const snapshot = snapshotBookings.get(date) ?? new Map<string, Interval>();
-    const absent = [...snapshot.keys()].filter((ref) => !observed.has(ref)).sort();
-    const unexpected = [...observed.keys()].filter((ref) => !snapshot.has(ref)).sort();
-    const changedHours = [...observed]
-      .flatMap(([ref, hours]) => {
-        const saved = snapshot.get(ref);
-        return saved &&
-          (Temporal.Instant.compare(saved.startsAt, hours.startsAt) ||
-            Temporal.Instant.compare(saved.endsAt, hours.endsAt))
-          ? [ref]
-          : [];
-      })
-      .sort();
-    return { absent, unexpected, changedHours };
+  const localTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?$/;
+  function readBookings(date: string, bookings: Record<string, RawBooking>) {
+    const rows = new Map<string, Interval>();
+    for (const { id, booked_from, booked_till } of Object.values(bookings)) {
+      if (
+        !booked_from ||
+        !localTime.test(booked_from) ||
+        !calendarAuditInput.shape.from.safeParse(booked_from.slice(0, 10)).success
+      )
+        throw new Error("Calendar has an invalid local booking start");
+      if (booked_from.slice(0, 10) !== date) continue;
+      if (!booked_till || !localTime.test(booked_till))
+        throw new Error("Calendar has an invalid local booking end");
+
+      const ref = String(id);
+      const startsAt = sourceInstant(booked_from);
+      const endsAt = sourceInstant(booked_till);
+      if (rows.has(ref) || Temporal.Instant.compare(startsAt, endsAt) >= 0)
+        throw new Error("Calendar has a duplicate booking reference or a nonpositive interval");
+      rows.set(ref, { date, startsAt, endsAt });
+    }
+    return rows;
+  }
+
+  function reconcile() {
+    const comparisons = new Map<
+      string,
+      { absent: string[]; unexpected: string[]; changedHours: string[] }
+    >();
+    const observations: CalendarSeen<Interval>[] = [];
+    for (const [date, { at, captures }] of latest) {
+      comparisons.set(date, { absent: [], unexpected: [], changedHours: [] });
+      const [first, ...rest] = captures;
+      if (!first) continue;
+      const rows = readBookings(date, first);
+      const signature = stableJson(Object.fromEntries(rows));
+      for (const other of rest)
+        if (signature !== stableJson(Object.fromEntries(readBookings(date, other))))
+          throw new Error("Simultaneous full calendars have different bookings for the same day");
+      for (const [ref, row] of rows)
+        observations.push({ ref, row, at, start: row.startsAt, end: row.endsAt });
+    }
+    const observed = latestByReference(observations);
+    for (const [ref, { date }] of snapshot)
+      if (!observed.has(ref)) comparisons.get(date)?.absent.push(ref);
+    for (const [ref, { row }] of observed) {
+      const saved = snapshot.get(ref);
+      const comparison = comparisons.get(row.date);
+      if (!saved) comparison?.unexpected.push(ref);
+      else if (
+        Temporal.Instant.compare(saved.startsAt, row.startsAt) ||
+        Temporal.Instant.compare(saved.endsAt, row.endsAt)
+      )
+        comparison?.changedHours.push(ref);
+    }
+    for (const { absent, unexpected, changedHours } of comparisons.values()) {
+      absent.sort();
+      unexpected.sort();
+      changedHours.sort();
+    }
+    return comparisons;
   }
   const cutoff = Temporal.Instant.from(atOrAfter);
   return {
     inspect: evidence.inspect,
     result() {
+      const comparisons = reconcile();
       const snapshotDays = evidence.coverage([fromInSnapshot, toInSnapshot]);
       const outsideObservedDays = evidence
         .observedCoverage()
@@ -86,7 +120,7 @@ export function auditCalendarCoverage(
         .map((day) => ({
           ...day,
           inSnapshot: day.date >= fromInSnapshot && day.date <= toInSnapshot,
-          reconciliation: reconcile(day.date),
+          reconciliation: comparisons.get(day.date),
           state: !day.lastFullObservation
             ? ("missing" as const)
             : Temporal.Instant.compare(day.lastFullObservation.at, cutoff) >= 0
@@ -97,9 +131,21 @@ export function auditCalendarCoverage(
       const currentDays = days.filter((day) => day.inSnapshot && day.state === "current").length;
       const staleDays = days.filter((day) => day.inSnapshot && day.state === "stale").length;
       const missingDays = snapshotDays.length - currentDays - staleDays;
-      const reviewed = days.flatMap(({ reconciliation }) =>
-        reconciliation ? [reconciliation] : [],
-      );
+      const countReconciliation = (state?: "current" | "stale") => {
+        const reviewed = days.flatMap((day) =>
+          day.reconciliation && (!state || day.state === state) ? [day.reconciliation] : [],
+        );
+        return {
+          daysCompared: reviewed.length,
+          daysWithDifferences: reviewed.filter(
+            ({ absent, unexpected, changedHours }) =>
+              absent.length || unexpected.length || changedHours.length,
+          ).length,
+          absent: reviewed.reduce((total, day) => total + day.absent.length, 0),
+          unexpected: reviewed.reduce((total, day) => total + day.unexpected.length, 0),
+          changedHours: reviewed.reduce((total, day) => total + day.changedHours.length, 0),
+        };
+      };
       return {
         from,
         to,
@@ -118,14 +164,9 @@ export function auditCalendarCoverage(
         lastObservedAppointmentAt: model.lastObservedAppointmentAt,
         lastAppointmentProven: model.lastAppointmentProven,
         bookingReconciliation: {
-          daysCompared: reviewed.length,
-          daysWithDifferences: reviewed.filter(
-            ({ absent, unexpected, changedHours }) =>
-              absent.length || unexpected.length || changedHours.length,
-          ).length,
-          absent: reviewed.reduce((total, day) => total + day.absent.length, 0),
-          unexpected: reviewed.reduce((total, day) => total + day.unexpected.length, 0),
-          changedHours: reviewed.reduce((total, day) => total + day.changedHours.length, 0),
+          ...countReconciliation(),
+          current: countReconciliation("current"),
+          stale: countReconciliation("stale"),
         },
         canCutOver: false as const,
         days,

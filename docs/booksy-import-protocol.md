@@ -211,7 +211,14 @@ La preparación contrasta el tratamiento y la preferencia de profesional entre e
 
 El 21/11 se repitió la proyección desde los 1.053 originales con la comprobación del alcance de cada petición. El resultado coincidió íntegramente con la proyección anterior, incluidas las 785 líneas con ficha. La auditoría de las 368 fechas del 21/11/2026 al 23/11/2027 encontró observaciones completas anteriores al corte del ensayo para todas ellas y cero observaciones posteriores al corte. Se mantiene la candidata con sus dos líneas verificadas visualmente y sigue pendiente acreditar la última cita real.
 
-`booksy-audit-calendar-window.ts` compara también las líneas de cada jornada de inicio en Europe/Madrid con la última observación sin filtros y con el conjunto completo de recursos. El comprobante privado identifica referencias ausentes, inesperadas y con cambios de hora. La salida de terminal muestra recuentos. El resultado mantiene las ausencias pendientes de contraste y conserva `canCutOver: false`. Una diferencia puede corresponder a una línea recuperada por otra evidencia, como un informe contrastado con el calendario visible.
+`booksy-audit-calendar-window.ts` compara también las líneas de cada jornada de inicio en Europe/Madrid con la última observación sin filtros y con el conjunto completo de recursos. Un movimiento a otro día se cuenta una vez como cambio de hora. La auditoría falla si las últimas observaciones completas de una jornada se contradicen. El comprobante privado identifica referencias ausentes, inesperadas y con cambios de hora. La terminal muestra recuentos separados según el corte de frescura. El resultado mantiene las ausencias pendientes de contraste y conserva `canCutOver: false`. Una diferencia puede corresponder a una línea recuperada por otra evidencia, como un informe contrastado con el calendario visible.
+
+```sh
+bun --no-env-file apps/api/src/scripts/booksy-audit-calendar-window.ts \
+  /ruta/privada/source-snapshot-HASH.json FECHA_INICIAL FECHA_FINAL INSTANTE_DE_CORTE
+```
+
+El rango de jornadas es inclusivo y el instante de corte incluye zona u offset ISO 8601. El comando abre únicamente el snapshot y sus originales locales.
 
 Las fichas también deben incluir la lista de extras. La reconstrucción y la restauración usan el mismo cálculo de precio y duración por cantidad. Cada extra conserva su posición, nombre, importe y duración de origen. Si el catálogo actual carece de esa referencia, el extra se conserva en la cita con su nombre e importes históricos. La comprobación se detiene si cambia la lista o algún dato congelado. Los 30 extras reservados coinciden en el archivo y en la candidata. Todos tenían cantidad uno en esta captura. El ensayo sintético cubre también cantidad múltiple y referencias retiradas del catálogo.
 

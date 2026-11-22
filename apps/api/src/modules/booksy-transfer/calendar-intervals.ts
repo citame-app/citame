@@ -8,7 +8,10 @@ export type CalendarSeen<T> = {
   row: T;
 };
 
-function latestByReference<T>(observations: CalendarSeen<T>[]) {
+export const sourceCalendarDate = (instant: string, timezone: string) =>
+  Temporal.Instant.from(instant).toZonedDateTimeISO(timezone).toPlainDate().toString();
+
+export function latestByReference<T>(observations: CalendarSeen<T>[]) {
   const latest = new Map<string, CalendarSeen<T>>();
   const newestFirst = [...observations].sort((a, b) => Temporal.Instant.compare(b.at, a.at));
   for (const observation of newestFirst) {

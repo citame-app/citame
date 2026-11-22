@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sourceCalendarDate } from "./calendar-intervals";
 import { isUnfilteredBooksyCalendarRequest } from "./calendar-request-scope";
 import { fingerprint } from "./plan";
 import type { BooksySourceReadModel } from "./source-read-model";
@@ -27,7 +28,7 @@ const retainedResponse = z.object({
 
 type Evidence = { at: string; sha256: string };
 type CoverageWindow = readonly [string, string];
-type FullCalendar = (capture: z.infer<typeof calendar>, updatedDates: string[]) => void;
+type FullCalendar = (capture: z.infer<typeof calendar>, date: string, evidence: Evidence) => void;
 
 function* datesIn([from, to]: CoverageWindow) {
   for (
@@ -67,10 +68,7 @@ export function collectBookingAbsences(
       {
         itemRef: row.sourceCopy.itemRef,
         groupRef: row.sourceCopy.groupRef,
-        date: Temporal.Instant.from(row.startsAt)
-          .toZonedDateTimeISO(previous.base.timezone)
-          .toPlainDate()
-          .toString(),
+        date: sourceCalendarDate(row.startsAt, previous.base.timezone),
       },
     ];
   });
@@ -131,17 +129,15 @@ export function collectBookingAbsences(
         [...expectedResources].every((id) => resources.has(id));
       if (fullScope && coverageWindow) {
         const [from, to] = coverageWindow;
-        const updatedDates: string[] = [];
         for (const date of datesIn([
           observed.start_date > from ? observed.start_date : from,
           observed.end_date < to ? observed.end_date : to,
         ])) {
-          if (isNewer(evidence, calendarDays.get(date))) {
-            calendarDays.set(date, evidence);
-            updatedDates.push(date);
-          }
+          const prior = calendarDays.get(date);
+          if (isNewer(evidence, prior)) calendarDays.set(date, evidence);
+          if (onFullCalendar && (!prior || Temporal.Instant.compare(evidence.at, prior.at) >= 0))
+            onFullCalendar(observed, date, evidence);
         }
-        if (updatedDates.length) onFullCalendar?.(observed, updatedDates);
       }
       const present = new Set(Object.values(observed.bookings).map((row) => String(row.id)));
       for (const line of lines) {

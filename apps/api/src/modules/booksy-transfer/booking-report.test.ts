@@ -175,20 +175,26 @@ test("calendar evidence reconciles the newest full capture by Madrid date and ex
       appointments: [
         { ...booking("1", "2026-11-23T23:10:00Z"), endsAt: "2026-11-23T23:20:00Z" },
         { ...booking("2", "2026-11-24T08:00:00Z"), endsAt: "2026-11-24T08:20:00Z" },
+        { ...booking("5", "2026-11-24T10:00:00Z"), endsAt: "2026-11-24T10:20:00Z" },
         { ...booking("3", "2026-11-24T09:00:00Z"), endsAt: "2026-11-24T09:20:00Z" },
       ],
     },
-    { from: day, to: day, atOrAfter: "2026-11-18T10:00:00Z" },
+    { from: day, to: "2026-11-25", atOrAfter: "2026-11-18T13:00:00Z" },
   );
-  const observe = (hour: number, bookings: Record<string, unknown>, onlyConfirmed = false) => {
+  const observe = (
+    hour: number,
+    bookings: Record<string, unknown>,
+    onlyConfirmed = false,
+    date = day,
+  ) => {
     const payload = {
-      start_date: day,
-      end_date: day,
+      start_date: date,
+      end_date: date,
       resources_count: 1,
       resources: [{ id: 10 }],
       bookings,
     };
-    const query = `start_date=${day}&end_date=${day}&include_unconfirmed=${!onlyConfirmed}`;
+    const query = `start_date=${date}&end_date=${date}&include_unconfirmed=${!onlyConfirmed}`;
     audit.inspect(
       {
         kind: "booksy-api-response",
@@ -197,30 +203,50 @@ test("calendar evidence reconciles the newest full capture by Madrid date and ex
         capturedAt: `2026-11-18T${hour}:00:00Z`,
         data: { body: JSON.stringify(payload), data: payload },
       },
-      String(hour),
+      fingerprint({ hour, query, payload }),
     );
   };
+  observe(11, { superseded: { id: 2 } });
   observe(12, {
     one: { id: 1, booked_from: `${day}T00:10`, booked_till: `${day}T00:20` },
     two: { id: 2, booked_from: `${day}T09:05`, booked_till: `${day}T09:20` },
     four: { id: 4, booked_from: `${day}T10:30`, booked_till: `${day}T10:50` },
+    five: { id: 5, booked_from: `${day}T11:00`, booked_till: `${day}T11:20` },
   });
-  observe(11, {});
+  observe(
+    13,
+    { five: { id: 5, booked_from: "2026-11-25T11:00", booked_till: "2026-11-25T11:20" } },
+    false,
+    "2026-11-25",
+  );
   observe(13, {}, true);
   expect(audit.result()).toMatchObject({
     currentDays: 1,
     bookingReconciliation: {
-      daysCompared: 1,
-      daysWithDifferences: 1,
+      daysCompared: 2,
+      daysWithDifferences: 2,
       absent: 1,
       unexpected: 1,
-      changedHours: 1,
+      changedHours: 2,
+      current: { daysCompared: 1, changedHours: 1, absent: 0, unexpected: 0 },
+      stale: { daysCompared: 1, changedHours: 1, absent: 1, unexpected: 1 },
     },
     days: [
       { date: day, reconciliation: { absent: ["3"], unexpected: ["4"], changedHours: ["2"] } },
+      { date: "2026-11-25", reconciliation: { absent: [], unexpected: [], changedHours: ["5"] } },
     ],
     canCutOver: false,
   });
+  observe(12, {});
+  expect(() => audit.result()).toThrow("Simultaneous full calendars");
+  observe(14, {
+    offset: { id: 1, booked_from: `${day}T08:00+02:00`, booked_till: `${day}T08:10` },
+  });
+  expect(() => audit.result()).toThrow("invalid local booking start");
+  observe(15, {
+    reversed: { id: 1, booked_from: `${day}T08:30`, booked_till: `${day}T08:10` },
+  });
+  expect(() => audit.result()).toThrow("nonpositive interval");
 });
 
 function booking(itemRef: string, startsAt: string): BooksySourceReadModel["appointments"][number] {
