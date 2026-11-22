@@ -126,15 +126,14 @@ beforeEach(async () => {
 test("booking invitations queue only the selected contacts with consent", async () => {
   const other = await actor(t, "client", "unselected@example.com");
   const excluded = await actor(t, "client", "selected-without-consent@example.com");
+  const contacts = Array.from({ length: 11 }, (_, index) => ({
+    name: `Selected fixture ${index}`,
+    email: `selected-${index}@example.com`,
+  }));
   const additional = await t.db
     .insert(clientProfile)
-    .values(
-      Array.from({ length: 11 }, (_, index) => ({
-        name: `Selected fixture ${index}`,
-        email: `selected-${index}@example.com`,
-      })),
-    )
-    .returning({ id: clientProfile.id, email: clientProfile.email });
+    .values(contacts)
+    .returning({ id: clientProfile.id });
   await t.db.insert(marketingConsent).values(
     additional.map(({ id }) => ({
       clientId: id,
@@ -204,7 +203,7 @@ test("booking invitations queue only the selected contacts with consent", async 
   await deliveryWorker.runOnce();
   await deliveryWorker.runOnce();
   expect(email.calls.map(({ to }) => to).sort()).toEqual(
-    ["marketing-client@example.com", ...additional.map(({ email }) => email)].sort(),
+    ["marketing-client@example.com", ...contacts.map(({ email }) => email)].sort(),
   );
   expect(email.calls[0]?.html).toContain(`<a href="${t.config.notifications.publicUrl}/book">`);
 });
