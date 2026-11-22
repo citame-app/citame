@@ -84,7 +84,7 @@ The client profile opens a scoped financial report in Cloud and Desktop. The exi
 
 ### Team occupancy
 
-Cloud and Desktop use the same report snapshot for the selected salon-local dates and team member. Effective shifts use the current weekly schedule and dated overrides. The report counts overlapping blocks once and clips them to the shift. Reserved staff work includes active bookings and completed visits inside the remaining shift. Simultaneous reservations count once, and processing gaps are taken from each appointment's frozen work plan. Completed and missed visit spans use their calendar duration. Occupancy uses all currencies and is blank when no shift time remains. The report and its CSV measure planned time from the calendar. Attendance records would be required to report hours actually worked.
+Cloud and Desktop use the same report snapshot for the selected salon-local dates and team member. Effective shifts use the current weekly schedule and dated overrides. The report counts overlapping blocks once and clips them to the shift. Reserved staff work includes active bookings and completed visits inside the remaining shift. Simultaneous reservations count once, and processing gaps are taken from each appointment's frozen work plan. Completed and missed time sums each visit's calendar duration within the report dates, including concurrent visits. Occupancy uses all currencies and is blank when no shift time remains. Schedule changes refresh open reports. The report and its CSV measure planned time from the calendar. Attendance records would be required to report hours actually worked.
 
 ## Consequences
 

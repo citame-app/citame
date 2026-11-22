@@ -94,6 +94,34 @@ describe("reportToCsv", () => {
     expect(csv.endsWith("\r\n")).toBe(true);
   });
 
+  test("exports zero and uncomputable occupancy distinctly and accepts an older response", () => {
+    expect(csv).not.toContain("scheduled_minutes");
+    const [member] = summary.perStaff;
+    if (!member) throw new Error("Missing staff fixture");
+    const values = {
+      scheduledMinutes: 540,
+      blockedMinutes: 0,
+      reservedMinutes: 0,
+      completedMinutes: 0,
+      noShowMinutes: 0,
+      occupancyRate: 0,
+    };
+    const exported = reportToCsv({
+      ...summary,
+      perStaff: [
+        { ...member, occupancy: values },
+        {
+          ...member,
+          displayName: "Bea",
+          occupancy: { ...values, blockedMinutes: 540, occupancyRate: null },
+        },
+        { ...member, displayName: "Older response" },
+      ],
+    });
+    expect(exported).toContain("Ana,540,0,0,0,0,0.0000\r\nBea,540,540,0,0,0,\r\n");
+    expect(exported).not.toContain("Older response,540");
+  });
+
   test("exports counts for pending prices separately from numeric amounts", () => {
     const withPending = reportToCsv({
       ...summary,

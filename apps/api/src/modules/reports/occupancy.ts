@@ -2,9 +2,8 @@ import type { ReportQuery, StaffOccupancy } from "@sob/contracts";
 import { appointment, staffReservation, timeOff, workingHours } from "@sob/db";
 import { and, eq, gt, inArray, isNull, lt } from "drizzle-orm";
 import type { Tx } from "../../tx";
-import { resolveWorkingRange } from "../availability/compute";
-import { hoursForDate } from "../availability/dated-hours";
-import { asDatedHours, loadShiftRows } from "../staff/date-hours";
+import { workingWindows } from "../availability/windows";
+import { asDatedHours, byStaff, loadShiftRows } from "../staff/date-hours";
 
 interface Interval {
   start: number;
@@ -108,46 +107,47 @@ export async function reportStaffOccupancy(
       ),
   ]);
   const period = [{ start: from.getTime(), end: to.getTime() }];
-  const days: Temporal.PlainDate[] = [];
-  for (
-    let day = Temporal.PlainDate.from(query.from);
-    day.toString() <= query.to;
-    day = day.add({ days: 1 })
-  ) {
-    days.push(day);
-  }
-  const ranges = (items: { staffId: string; start: Date; end: Date }[], staffId: string) =>
-    intersection(
-      period,
-      union(
-        items
-          .filter((item) => item.staffId === staffId)
-          .map((item) => ({ start: item.start.getTime(), end: item.end.getTime() })),
-      ),
-    );
-  const completed = visits.filter((visit) => visit.status === "completed");
-  const noShows = visits.filter((visit) => visit.status === "no_show");
+  const weekly = byStaff(hours);
+  const datedByStaff = byStaff(dated);
+  const schedule = workingWindows({
+    from,
+    to,
+    timeZone: timezone,
+    staff: staffIds.map((staffId) => ({
+      staffId,
+      workingHours: (weekly.get(staffId) ?? []).map((row) => ({
+        weekday: row.weekday,
+        start: row.startTime,
+        end: row.endTime,
+      })),
+      datedWorkingHours: asDatedHours(datedByStaff.get(staffId) ?? []),
+    })),
+  });
+  const shiftsByStaff = byStaff(
+    schedule.map(({ staffId, startsAt, endsAt }) => ({
+      staffId,
+      start: startsAt.getTime(),
+      end: endsAt.getTime(),
+    })),
+  );
+  const blocksByStaff = byStaff(blocks);
+  const reservationsByStaff = byStaff(reservations);
+  const visitsByStaff = byStaff(visits);
+  const merged = (items: { start: Date; end: Date }[]) =>
+    union(items.map(({ start, end }) => ({ start: start.getTime(), end: end.getTime() })));
   return new Map(
     staffIds.map((staffId) => {
-      const weekly = hours
-        .filter((row) => row.staffId === staffId)
-        .map((row) => ({ weekday: row.weekday, start: row.startTime, end: row.endTime }));
-      const overrides = asDatedHours(dated, staffId);
-      const shifts = intersection(
-        period,
-        union(
-          days.flatMap((day) =>
-            hoursForDate(day, weekly, overrides)
-              .filter((range) => range.weekday === day.dayOfWeek % 7)
-              .map((range) => {
-                const { startMs, endMs } = resolveWorkingRange(day, timezone, range);
-                return { start: startMs, end: endMs };
-              }),
-          ),
-        ),
-      );
-      const blocked = intersection(shifts, ranges(blocks, staffId));
-      const reserved = intersection(shifts, ranges(reservations, staffId));
+      const shifts = intersection(period, union(shiftsByStaff.get(staffId) ?? []));
+      const blocked = intersection(shifts, merged(blocksByStaff.get(staffId) ?? []));
+      const reserved = intersection(shifts, merged(reservationsByStaff.get(staffId) ?? []));
+      const visitTime = { completed: 0, no_show: 0 };
+      for (const visit of visitsByStaff.get(staffId) ?? []) {
+        if (visit.status === "completed" || visit.status === "no_show") {
+          visitTime[visit.status] +=
+            Math.min(to.getTime(), visit.end.getTime()) -
+            Math.max(from.getTime(), visit.start.getTime());
+        }
+      }
       const scheduledTime = duration(shifts);
       const blockedTime = duration(blocked);
       const availableTime = scheduledTime - blockedTime;
@@ -158,8 +158,8 @@ export async function reportStaffOccupancy(
           scheduledMinutes: minutes(scheduledTime),
           blockedMinutes: minutes(blockedTime),
           reservedMinutes: minutes(reservedTime),
-          completedMinutes: minutes(duration(ranges(completed, staffId))),
-          noShowMinutes: minutes(duration(ranges(noShows, staffId))),
+          completedMinutes: minutes(visitTime.completed),
+          noShowMinutes: minutes(visitTime.no_show),
           occupancyRate: availableTime
             ? Math.round((reservedTime / availableTime) * 10_000) / 10_000
             : null,

@@ -3,7 +3,6 @@ import type { ReportSummary } from "@sob/contracts";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderApp } from "../../../../test/render";
 import { clientGroupReportCsv, clientReportCsv } from "./client-report";
-import { reportToCsv } from "./logic";
 import { ReportsView } from "./reports-view";
 
 const ANA = "0198f5a0-7b1c-7000-8000-000000000201";
@@ -93,7 +92,7 @@ const open = (
   renderApp(<ReportsView search={search} onSearchChange={onSearchChange} role={role} now={NOW} />);
 
 describe("ReportsView", () => {
-  test("shows the team's planned and reserved minutes and exports the same occupancy", async () => {
+  test("shows the team's planned and reserved minutes in a sortable table", async () => {
     const [member] = report.perStaff;
     if (!member) throw new Error("Missing staff fixture");
     member.occupancy = {
@@ -112,7 +111,9 @@ describe("ReportsView", () => {
         .getAllByRole("cell")
         .map((cell) => cell.textContent),
     ).toEqual(["Ana", "240", "30", "45", "150", "60", "21%"]);
-    expect(reportToCsv(report)).toContain("Ana,240,30,45,150,60,0.2143\r\n");
+    const reserved = within(table).getByRole("columnheader", { name: "Reserved in shift" });
+    fireEvent.click(within(reserved).getByRole("button"));
+    expect(reserved).toHaveAttribute("aria-sort", "ascending");
   });
 
   test("shows scheduled capacity and allows export even without appointments", async () => {

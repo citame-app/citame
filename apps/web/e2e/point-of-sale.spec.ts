@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
+import { reportSummarySchema } from "@sob/contracts";
 import { RECURRING_FIXTURE as fixture } from "../../api/test/recurring-values";
 import { expectNoHorizontalScroll, salonDate } from "./admin-helpers";
 import { expectNoSeriousA11yViolations, signInThroughUi } from "./helpers";
@@ -92,7 +93,9 @@ test("the team occupancy report shows scheduled capacity and exports it", async 
   const route = `/admin/reports?preset=custom&from=${from}&to=${to}`;
   await signInThroughUi(page, fixture.ownerEmail, route);
   const report = page.getByRole("region", { name: "Team occupancy" });
-  await expect(report.getByText("Reserved in shift").filter({ visible: true }).first()).toBeVisible();
+  await expect(
+    report.getByText("Reserved in shift").filter({ visible: true }).first(),
+  ).toBeVisible();
   await expectNoHorizontalScroll(page);
   const exporting = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export CSV", exact: true }).click();
@@ -101,6 +104,48 @@ test("the team occupancy report shows scheduled capacity and exports it", async 
     "staff,scheduled_minutes,blocked_minutes,reserved_minutes,completed_visit_minutes,no_show_minutes,occupancy_rate",
   );
   expect(csv).toMatch(/,\d{3,},0,0,0,0,0\.0000\r\n/);
+
+  const summaryPath = "/api/admin/reports/summary";
+  const initial = reportSummarySchema.parse(
+    await (await page.request.get(`${summaryPath}?from=${from}&to=${to}`)).json(),
+  );
+  const member = initial.perStaff.find((row) => (row.occupancy?.scheduledMinutes ?? 0) > 0);
+  if (!member?.occupancy) throw new Error("No scheduled member in the fixture");
+  const { scheduledMinutes } = member.occupancy;
+  const refreshed = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === summaryPath,
+  );
+  const blocks = `/api/admin/staff/${member.staffId}/time-off`;
+  const headers = { Origin: fixture.baseURL };
+  const block = await page.request.post(blocks, {
+    headers,
+    data: {
+      startsAt: `${salonDate(6)}T00:00:00.000Z`,
+      endsAt: `${salonDate(16)}T00:00:00.000Z`,
+    },
+  });
+  expect(block.status(), await block.text()).toBe(201);
+  const {
+    timeOff: { id },
+  } = await block.json();
+  try {
+    const updated = reportSummarySchema.parse(await (await refreshed).json());
+    expect(updated.perStaff.find((row) => row.staffId === member.staffId)?.occupancy).toMatchObject(
+      {
+        scheduledMinutes,
+        blockedMinutes: scheduledMinutes,
+        occupancyRate: null,
+      },
+    );
+    await expect(
+      report
+        .getByText(new Intl.NumberFormat("en").format(scheduledMinutes), { exact: true })
+        .filter({ visible: true })
+        .nth(1),
+    ).toBeVisible();
+  } finally {
+    expect((await page.request.delete(`${blocks}/${id}`, { headers })).status()).toBe(200);
+  }
 });
 
 test("client collections report shows and exports net payments", async ({ page }) => {

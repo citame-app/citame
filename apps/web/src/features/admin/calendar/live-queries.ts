@@ -10,6 +10,14 @@ import {
 } from "~/lib/api/reward-endpoints";
 
 const calendar = [["admin", "calendar"], ["availability"]] as const;
+const report = ["admin", "report"] as const;
+const staffSchedule = [
+  ...calendar,
+  ["admin", "working-hours"],
+  ["date-shifts"],
+  teamShiftWeekKey,
+  report,
+] as const;
 const moderation = ["reviews", "admin"] as const;
 const commerce = [
   ["commerce"],
@@ -73,9 +81,9 @@ const shared: Record<SyncEntity | SyncLiveView, readonly (readonly string[])[]> 
     ["staff"],
     ["combinations"],
   ],
-  working_hours: [...calendar, ["admin", "working-hours"], ["date-shifts"], teamShiftWeekKey],
-  date_shift: [...calendar, ["admin", "working-hours"], ["date-shifts"], teamShiftWeekKey],
-  time_off: [...calendar, ["admin", "time-off"], teamShiftWeekKey],
+  working_hours: staffSchedule,
+  date_shift: staffSchedule,
+  time_off: [...calendar, ["admin", "time-off"], teamShiftWeekKey, report],
   salon_settings: [
     ...calendar,
     ["admin", "settings"],

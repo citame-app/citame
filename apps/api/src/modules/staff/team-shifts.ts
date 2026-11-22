@@ -2,17 +2,7 @@ import { shiftDate, type TeamShiftWeek } from "@sob/contracts";
 import { type Database, staffProfile, timeOff, workingHours } from "@sob/db";
 import { and, asc, eq, gt, inArray, isNull, lt } from "drizzle-orm";
 import { getSalonSettings } from "../settings/service";
-import { loadShiftRows, shiftDay, toWorkingRange } from "./date-hours";
-
-function byStaff<T extends { staffId: string }>(rows: T[]) {
-  const result = new Map<string, T[]>();
-  for (const row of rows) {
-    const group = result.get(row.staffId);
-    if (group) group.push(row);
-    else result.set(row.staffId, [row]);
-  }
-  return result;
-}
+import { byStaff, loadShiftRows, shiftDay, toWorkingRange } from "./date-hours";
 
 /** Read the roster and its schedule from one snapshot, with queries bounded by the week. */
 export function getTeamShiftWeek(db: Database, week: string): Promise<TeamShiftWeek> {

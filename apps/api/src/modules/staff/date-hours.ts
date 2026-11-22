@@ -5,6 +5,16 @@ import type { DatedWorkingHours } from "../availability/dated-hours";
 
 type Reader = Pick<Database, "select">;
 
+export function byStaff<T extends { staffId: string }>(rows: T[]) {
+  const result = new Map<string, T[]>();
+  for (const row of rows) {
+    const group = result.get(row.staffId);
+    if (group) group.push(row);
+    else result.set(row.staffId, [row]);
+  }
+  return result;
+}
+
 export function toWorkingRange(row: typeof workingHours.$inferSelect): WorkingRange {
   return {
     weekday: row.weekday,

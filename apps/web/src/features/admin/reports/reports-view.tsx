@@ -29,7 +29,7 @@ import {
   clientGroupReportCsv,
   clientReportCsv,
 } from "./client-report";
-import { formatRate, REPORT_PRESETS, reportToCsv } from "./logic";
+import { formatRate, REPORT_PRESETS, reportToCsv, sortBy } from "./logic";
 import { type ReportsSearch, rangeError, resolveRange } from "./range";
 import { StaffOccupancy } from "./staff-occupancy";
 
@@ -517,7 +517,7 @@ export function ReportsView({
               </section>
             </>
           )}
-          <StaffOccupancy staff={staffRows} />
+          <StaffOccupancy staff={report.perStaff} />
         </>
       )}
     </div>
@@ -609,18 +609,5 @@ function AppointmentBreakdown({
         }
       />
     </section>
-  );
-}
-
-function sortBy<T>(
-  rows: T[],
-  sorting: SortingState,
-  getters: Record<string, (row: T) => string | number>,
-): T[] {
-  const [sort] = sorting;
-  const get = sort ? getters[sort.id] : undefined;
-  if (!sort || !get) return rows;
-  return [...rows].sort(
-    (a, b) => (get(a) < get(b) ? -1 : get(a) > get(b) ? 1 : 0) * (sort.desc ? -1 : 1),
   );
 }

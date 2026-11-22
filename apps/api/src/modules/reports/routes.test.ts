@@ -83,6 +83,7 @@ test("occupancy uses dated shifts, clipped blocks and actual reserved work witho
     clientId: f.clientId,
     startsAt: new Date("2026-03-09T12:45Z"),
     endsAt: new Date("2026-03-09T14:15Z"),
+    status: "completed",
     workWindows: [
       { offsetMinutes: 0, endOffsetMinutes: 15 },
       { offsetMinutes: 75, endOffsetMinutes: 90 },
@@ -94,7 +95,7 @@ test("occupancy uses dated shifts, clipped blocks and actual reserved work witho
     scheduledMinutes: 240,
     blockedMinutes: 30,
     reservedMinutes: 45,
-    completedMinutes: 150,
+    completedMinutes: 240,
     noShowMinutes: 60,
     occupancyRate: 0.2143,
   });

@@ -1,4 +1,5 @@
 import { type ReportSummary, reportBreakdownKinds } from "@sob/contracts";
+import type { SortingState } from "@tanstack/react-table";
 import { addDaysLocal } from "~/lib/format";
 
 export type ReportPreset = "today" | "last7" | "last30" | "thisMonth" | "lastMonth";
@@ -41,6 +42,21 @@ export function presetRange(preset: ReportPreset, today: string): { from: string
 export function formatRate(rate: number | null, locale: string): string {
   if (rate === null) return "-";
   return new Intl.NumberFormat(locale, { style: "percent", maximumFractionDigits: 0 }).format(rate);
+}
+
+export function sortBy<T>(
+  rows: T[],
+  sorting: SortingState,
+  getters: Record<string, (row: T) => string | number>,
+): T[] {
+  const [sort] = sorting;
+  const get = sort ? getters[sort.id] : undefined;
+  if (!sort || !get) return rows;
+  return [...rows].sort((a, b) => {
+    const left = get(a);
+    const right = get(b);
+    return (left < right ? -1 : left > right ? 1 : 0) * (sort.desc ? -1 : 1);
+  });
 }
 
 /** One CSV cell. Leading `= + - @` would run as a formula in spreadsheets, so it is neutralized. */

@@ -908,9 +908,10 @@ impl Root {
         let rows: Vec<_> = staff
             .filter_map(|entry| {
                 let occupancy = entry.occupancy.as_ref()?;
-                let rate = occupancy
-                    .occupancy_rate
-                    .map_or_else(|| "—".to_string(), |rate| format!("{:.0}%", rate * 100.));
+                let rate = occupancy.occupancy_rate.map_or_else(
+                    || "—".to_string(),
+                    |rate| format!("{}%", (rate * 100.).round()),
+                );
                 Some(report_table_row(
                     entry.display_name.clone(),
                     occupancy.minutes().map(|value| value.to_string()),
