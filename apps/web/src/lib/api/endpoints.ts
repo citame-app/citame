@@ -67,6 +67,7 @@ import {
   type ReviewedUnlinkedRoleInput,
   reportClientsSchema,
   reportOutcomesPageSchema,
+  type ReportSummaryQuery,
   reportSummarySchema,
   reviewedStaffAccessSchema,
   type ServiceConfiguration,
@@ -397,13 +398,8 @@ export function createEndpoints(client: ApiClient) {
         deleteTimeOff: (id: string, entryId: string) =>
           client.delete(`/admin/staff/${id}/time-off/${entryId}`, timeOffResponseSchema),
       },
-      reports: (query: {
-        from: string;
-        to: string;
-        staffId?: string;
-        currency?: string;
-        businessOverview?: "1";
-      }) => client.get("/admin/reports/summary", reportSummarySchema, { query }),
+      reports: (query: ReportSummaryQuery) =>
+        client.get("/admin/reports/summary", reportSummarySchema, { query }),
       clientReport: (query: { from: string; to: string; staffId?: string }) =>
         client.get("/admin/reports/clients", reportClientsSchema, { query }),
       reportOutcomes: (query: ReportOutcomesQuery) =>

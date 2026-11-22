@@ -2,14 +2,15 @@ import type { ReportBusinessOverview } from "@sob/contracts";
 import { retailProduct } from "@sob/db";
 import { type SQL, sql } from "drizzle-orm";
 import type { Tx } from "../../tx";
-import { storedValuePaymentMethods } from "../commerce/money";
-import { checkoutReportScope, recordedCheckoutMovements } from "../commerce/report-movements";
+import {
+  checkoutReportScope,
+  externallyCollectedMovement,
+  netMovement,
+  recordedCheckoutMovements,
+} from "../commerce/report-movements";
 import { lowStockPredicate } from "../inventory/service";
 
-const internalMethods = sql.join(
-  storedValuePaymentMethods.map((method) => sql`${method}`),
-  sql`, `,
-);
+import { completedClientVisitScope, visitedClientIdentity } from "./client-visits";
 
 /** Client and cash activity follow the report's dates and professional. Stock is a current centre-wide count. */
 export async function reportBusinessOverview(
@@ -27,15 +28,13 @@ export async function reportBusinessOverview(
     lowStockProducts: number;
   }>(sql`
     select (
-      select count(distinct client_root_id(a.client_id))::int
+      select count(distinct ${visitedClientIdentity})::int
       from appointment a
-      where a.deleted_at is null and a.status = 'completed'
-        and a.starts_at >= ${fromAt}::timestamptz and a.starts_at < ${toAt}::timestamptz
-        ${onlyStaff}
+      where ${completedClientVisitScope({ fromAt, toAt, onlyStaff })}
     ) as "visitingClients", (
-      select coalesce(sum(case when refund then -amount else amount end), 0)::text
+      select coalesce(${netMovement}, 0)::text
       from (${recordedCheckoutMovements(fromAt, toAt, checkoutReportScope(staffId))}) movements
-      where method not in (${internalMethods})
+      where ${externallyCollectedMovement}
     ) as "netCollected", (
       select count(*)::int from ${retailProduct}
       where ${retailProduct.active} and ${lowStockPredicate}

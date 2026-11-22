@@ -6,8 +6,13 @@ import {
 import type { Database } from "@sob/db";
 import { sql } from "drizzle-orm";
 import { groupName } from "../clients/groups";
-import { storedValuePaymentMethods } from "../commerce/money";
-import { checkoutReportScope, recordedCheckoutMovements } from "../commerce/report-movements";
+import {
+  checkoutReportScope,
+  externallyCollectedMovement,
+  netMovement,
+  recordedCheckoutMovements,
+} from "../commerce/report-movements";
+import { completedClientVisitScope, visitedClientIdentity } from "./client-visits";
 import { reportDateScope } from "./service";
 
 /** Completed visits and net recorded collections for the selected salon-local period. */
@@ -22,13 +27,11 @@ export function reportClients(db: Database, query: ReportQuery): Promise<ReportC
       };
       const result = await tx.execute<ClientBreakdown>(sql`
         with first_in_scope as (
-          select client_root_id(a.client_id) as profile_id, min(a.starts_at) as starts_at,
+          select ${visitedClientIdentity} as profile_id, min(a.starts_at) as starts_at,
             count(distinct (a.visit_group_id, case when a.visit_group_id is null then a.id end))
               as visits
           from appointment a
-          where a.deleted_at is null and a.status = 'completed'
-            and a.starts_at >= ${fromAt}::timestamptz and a.starts_at < ${toAt}::timestamptz
-            ${onlyStaff}
+          where ${completedClientVisitScope({ fromAt, toAt, onlyStaff })}
           group by 1
         ), classified as (
           select (scoped.starts_at at time zone ${timezone})::date as day,
@@ -64,19 +67,15 @@ export function reportClients(db: Database, query: ReportQuery): Promise<ReportC
           ) from first_in_scope) as frequency
       `);
       const { rows, groups, frequency } = result[0] as ClientBreakdown;
-      const storedValueMethods = sql.join(
-        storedValuePaymentMethods.map((method) => sql`${method}`),
-        sql`, `,
-      );
       const collections = await tx.execute<{
         clientId: string;
         name: string;
         netCents: string;
       }>(sql`
         with by_record as (
-          select client_id, sum(case when refund then -amount else amount end) as cents
+          select client_id, ${netMovement} as cents
           from (${recordedCheckoutMovements(fromAt, toAt, checkoutReportScope(query.staffId))}) movements
-          where client_id is not null and method not in (${storedValueMethods})
+          where client_id is not null and ${externallyCollectedMovement}
           group by client_id
         ), ranked as (
           select client_root_id(client_id) as profile_id, sum(cents)::bigint as net_cents

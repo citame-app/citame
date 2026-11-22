@@ -90,7 +90,15 @@ const open = (
   onSearchChange: (s: typeof search) => void = () => {},
   role: "owner" | "staff" = "owner",
 ) =>
-  renderApp(<ReportsView search={search} onSearchChange={onSearchChange} role={role} now={NOW} />);
+  renderApp(
+    <ReportsView
+      search={search}
+      onSearchChange={onSearchChange}
+      role={role}
+      now={NOW}
+      showBusinessOverview={role === "owner"}
+    />,
+  );
 
 describe("ReportsView", () => {
   test("shows the team's planned and reserved minutes in a sortable table", async () => {
@@ -254,6 +262,21 @@ describe("ReportsView", () => {
     expect(summary.getByText("Net collections").parentElement?.textContent).toContain("-€150");
     expect(summary.getByText("Products low in stock").parentElement?.textContent).toContain("6");
     expect(summary.getByText("Current stock across the centre")).toBeTruthy();
+  });
+
+  test("operational reports never display financial overview data without access", async () => {
+    report.businessOverview = {
+      visitingClients: 12,
+      occupancyRate: 0.7,
+      netCollectedCents: 12345,
+      lowStockProducts: 6,
+    };
+    open(undefined, undefined, "staff");
+    await screen.findByRole("group", { name: "Summary" });
+    expect(screen.queryByText("Net collections")).toBeNull();
+    expect(urls.find((url) => url.startsWith("/api/admin/reports/summary"))).not.toContain(
+      "businessOverview",
+    );
   });
 
   test("summary tiles show the exact numbers", async () => {

@@ -81,6 +81,8 @@ export function ReportsView({
   now: fixedNow,
   showClients = false,
   visible = true,
+  showBusinessOverview = false,
+  viewerId,
 }: {
   search: ReportsSearch;
   onSearchChange: (search: ReportsSearch) => void;
@@ -88,6 +90,8 @@ export function ReportsView({
   now?: Date;
   showClients?: boolean;
   visible?: boolean;
+  showBusinessOverview?: boolean;
+  viewerId?: string;
 }) {
   const { t, locale, timeZone } = useI18n();
   const toast = useToast();
@@ -99,11 +103,14 @@ export function ReportsView({
   const staff = useQuery({ ...adminStaffQuery, enabled: role === "owner" });
   const scoped = { ...range, ...(search.staff ? { staffId: search.staff } : {}) };
   const query = useQuery({
-    ...reportQuery({
-      ...scoped,
-      currency: search.currency,
-      businessOverview: role === "owner" && !showClients ? "1" : undefined,
-    }),
+    ...reportQuery(
+      {
+        ...scoped,
+        currency: search.currency,
+        businessOverview: showBusinessOverview && !showClients ? "1" : undefined,
+      },
+      viewerId,
+    ),
     enabled: visible && problem === null && !showClients,
   });
   const clients = useQuery({
@@ -255,7 +262,7 @@ export function ReportsView({
           value: formatRate(totals.noShowRate, locale),
           hint: totals.noShowRate === null ? t("reports.tile.noShowRate.none") : undefined,
         },
-        ...(report?.businessOverview
+        ...(showBusinessOverview && report?.businessOverview
           ? [
               {
                 label: t("reports.overview.visitingClients"),

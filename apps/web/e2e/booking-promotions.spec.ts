@@ -485,6 +485,23 @@ for (const scheme of ["light", "dark"] as const)
         await expectNoHorizontalScroll(page);
         await expectNoSeriousA11yViolations(page, `appointment margins ES ${scheme}`);
         await marginsEs.screenshot({ path: info.outputPath("appointment-profitability-es.png") });
+
+        await page.goto(`/admin/reports?preset=custom&from=${paymentDate}&to=${paymentDate}`);
+        const overviewEs = page.getByRole("group", { name: "Resumen", exact: true });
+        await expect(overviewEs.getByText("Clientes atendidos", { exact: true })).toBeVisible();
+        await expect(
+          overviewEs.getByText("Productos con stock bajo", { exact: true }),
+        ).toBeVisible();
+        await expectNoHorizontalScroll(page);
+        await expectNoSeriousA11yViolations(page, `business overview ES ${scheme}`);
+        await overviewEs.screenshot({ path: info.outputPath("business-overview-es.png") });
+        await switchLocale(page, "English");
+        const overviewEn = page.getByRole("group", { name: "Summary", exact: true });
+        await expect(overviewEn.getByText("Net collections", { exact: true })).toBeVisible();
+        await expect(overviewEn.getByText("Planned occupancy", { exact: true })).toBeVisible();
+        await expectNoHorizontalScroll(page);
+        await expectNoSeriousA11yViolations(page, `business overview EN ${scheme}`);
+        await overviewEn.screenshot({ path: info.outputPath("business-overview-en.png") });
       } finally {
         if (forecastVisit)
           await owner.patch(`/api/appointments/${forecastVisit.id}`, {

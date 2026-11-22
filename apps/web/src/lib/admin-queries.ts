@@ -1,4 +1,4 @@
-import type { ClientListQuery } from "@sob/contracts";
+import type { ClientListQuery, ReportSummaryQuery } from "@sob/contracts";
 import { queryOptions } from "@tanstack/react-query";
 import { api } from "./api/instance";
 
@@ -84,15 +84,9 @@ export const timeOffQuery = (staffId: string) =>
     queryFn: async () => (await api().admin.staff.timeOff(staffId)).timeOff,
   });
 
-export const reportQuery = (params: {
-  from: string;
-  to: string;
-  staffId?: string;
-  currency?: string;
-  businessOverview?: "1";
-}) =>
+export const reportQuery = (params: ReportSummaryQuery, viewerId?: string) =>
   queryOptions({
-    queryKey: ["admin", "report", params],
+    queryKey: ["admin", "report", params, viewerId],
     queryFn: () => api().admin.reports(params),
     staleTime: 15_000,
   });

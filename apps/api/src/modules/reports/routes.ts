@@ -1,4 +1,5 @@
 import {
+  canViewBusinessOverview,
   permissionsFor,
   reportOutcomesQuerySchema,
   reportQuerySchema,
@@ -24,12 +25,7 @@ export function reportRoutes({ db }: AppDeps) {
       const summary = await reportSummary(
         db,
         scoped,
-        businessOverview === "1" &&
-          access.financialReports &&
-          access.clients &&
-          access.commerce &&
-          access.allSales &&
-          access.readInventory,
+        businessOverview === "1" && canViewBusinessOverview(access),
       );
       c.header("Cache-Control", "private, no-store");
       return c.json({

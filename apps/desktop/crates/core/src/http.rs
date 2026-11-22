@@ -1151,17 +1151,25 @@ impl HttpTransport {
     }
 
     pub fn report_summary(&self, query: &ReportQuery) -> Result<ReportSummary, TransportError> {
-        read_response(
-            self.get(&self.agent, &query.path(), Some("application/json"))?,
-            false,
-        )
+        self.read_report_summary(query, false)
     }
 
     pub fn report_summary_with_overview(
         &self,
         query: &ReportQuery,
     ) -> Result<ReportSummary, TransportError> {
-        let path = format!("{}&businessOverview=1", query.path());
+        self.read_report_summary(query, true)
+    }
+
+    fn read_report_summary(
+        &self,
+        query: &ReportQuery,
+        include_overview: bool,
+    ) -> Result<ReportSummary, TransportError> {
+        let mut path = query.path();
+        if include_overview {
+            path.push_str("&businessOverview=1");
+        }
         read_response(
             self.get(&self.agent, &path, Some("application/json"))?,
             false,

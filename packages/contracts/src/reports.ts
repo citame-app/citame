@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { idSchema, localDateSchema } from "./common";
+import type { StaffPermissions } from "./permissions";
 
 /** Longest reportable window, in calendar days (both ends inclusive). */
 export const REPORT_MAX_DAYS = 366;
@@ -119,6 +120,18 @@ export type StaffOccupancy = z.infer<typeof staffOccupancySchema>;
 export const reportSummaryQuerySchema = reportQuerySchema.safeExtend({
   businessOverview: z.literal("1").optional(),
 });
+export type ReportSummaryQuery = z.infer<typeof reportSummaryQuerySchema>;
+
+export function canViewBusinessOverview(access: StaffPermissions) {
+  return (
+    access.financialReports &&
+    access.clients &&
+    access.commerce &&
+    access.allSales &&
+    access.readInventory
+  );
+}
+
 export const reportBusinessOverviewSchema = z.object({
   visitingClients: count,
   occupancyRate: rateSchema,

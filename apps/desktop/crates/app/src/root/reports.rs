@@ -113,6 +113,13 @@ pub(super) struct Desk {
     outcomes: outcomes::Desk,
 }
 
+fn occupancy_label(rate: Option<f64>) -> String {
+    rate.map_or_else(
+        || "—".to_string(),
+        |rate| format!("{}%", (rate * 100.).round()),
+    )
+}
+
 pub(super) fn parse_report_date(value: &str) -> Option<NaiveDate> {
     let input = value.trim();
     let date = NaiveDate::parse_from_str(input, "%Y-%m-%d").ok()?;
@@ -897,10 +904,7 @@ impl Root {
                 ),
                 (
                     Key::ReportOverviewOccupancy,
-                    overview.occupancy_rate.map_or_else(
-                        || "—".to_owned(),
-                        |value| format!("{}%", (value * 100.0).round()),
-                    ),
+                    occupancy_label(overview.occupancy_rate),
                     Some(Key::ReportAllServiceCurrencies),
                 ),
                 (
@@ -1041,10 +1045,7 @@ impl Root {
         let rows: Vec<_> = staff
             .filter_map(|entry| {
                 let occupancy = entry.occupancy.as_ref()?;
-                let rate = occupancy.occupancy_rate.map_or_else(
-                    || "—".to_string(),
-                    |rate| format!("{}%", (rate * 100.).round()),
-                );
+                let rate = occupancy_label(occupancy.occupancy_rate);
                 Some(report_table_row(
                     entry.display_name.clone(),
                     occupancy.minutes().map(|value| value.to_string()),
