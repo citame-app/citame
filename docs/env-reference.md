@@ -160,3 +160,5 @@ Online payments are disabled by default. See [payments.md](payments.md) for work
 | `REDSYS_TERMINAL`             | unset   | Bank-provided terminal, 1–3 digits.                                                      |
 | `REDSYS_SECRET_KEY` / `_FILE` | unset   | Private bank-provided signing key. `_FILE` needs a corresponding container secret mount. |
 | `REDSYS_BIZUM_ENABLED`        | `false` | Enable only when the bank has activated Bizum on this terminal.                          |
+| `REDSYS_RECURRING_ENABLED`    | `false` | Explicitly start automatic membership billing on the API when Redsys is configured.     |
+| `PAYMENT_TOKEN_ENCRYPTION_KEY` / `_FILE` | unset | Base64 encoding of 32 random bytes, required for recurring billing. With production Compose, mount the file in the API service when using `_FILE`. |

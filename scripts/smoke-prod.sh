@@ -28,6 +28,7 @@ export WEB_TRUST_PROXY=true
 # The smoke environment has no mail server: opt out of verification explicitly (production
 # refuses to start with verification required and no provider, see ADR 0011).
 export AUTH_REQUIRE_EMAIL_VERIFICATION=false NOTIFY_EMAIL_PROVIDER=none NOTIFY_SMS_PROVIDER=none PAYMENT_PROVIDER=none REDSYS_RECURRING_ENABLED=false
+export PAYMENT_TOKEN_ENCRYPTION_KEY="" PAYMENT_TOKEN_ENCRYPTION_KEY_FILE=""
 export SMTP_URL="" SMTP_URL_FILE="" NOTIFY_EMAIL_FROM="Citame Smoke <smoke-sender@example.com>" NOTIFY_DEFAULT_LOCALE=en
 export META_WHATSAPP_APP_ID="" META_WHATSAPP_CONFIG_ID="" META_WHATSAPP_APP_SECRET="" META_WHATSAPP_VERIFY_TOKEN=""
 export META_WHATSAPP_APP_SECRET_FILE="" META_WHATSAPP_VERIFY_TOKEN_FILE=""
