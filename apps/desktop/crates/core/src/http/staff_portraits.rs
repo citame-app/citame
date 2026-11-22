@@ -49,7 +49,18 @@ pub enum PortraitUpdate {
 
 impl HttpTransport {
     pub fn portrait_directory(&self) -> Result<PortraitDirectory, TransportError> {
-        read_response(self.get(&self.agent, STAFF, None)?, false)
+        let response = self.get(
+            &self.agent,
+            "/admin/staff/portrait-directory",
+            Some("application/json"),
+        )?;
+        if response.status().as_u16() == 404 {
+            return read_response(
+                self.get(&self.agent, STAFF, Some("application/json"))?,
+                false,
+            );
+        }
+        read_response(response, false)
     }
 
     pub fn staff_portrait(&self, id: &str, version: &str) -> Result<Vec<u8>, TransportError> {

@@ -1,7 +1,10 @@
 use super::*;
+use sob_core::error::CoreError;
 use sob_core::http::{PortraitDirectory, PortraitStaff, PortraitUpdate};
 use sob_core::staff_portrait_image::prepare_photo;
+use sob_core::store::{StaffPortraitDraft, Store};
 use sob_core::sync::TransportError;
+use uuid::Uuid;
 
 struct Photos {
     directory: PortraitDirectory,
@@ -31,22 +34,42 @@ enum DraftReview {
     Ready,
     Reload,
     Confirm,
+    Saved,
 }
 
 struct Draft {
+    id: Uuid,
     staff_id: String,
     version: Option<String>,
     jpeg: Vec<u8>,
     review: DraftReview,
+    stored: bool,
 }
 
 impl Draft {
     fn new(member: &PortraitStaff, jpeg: Vec<u8>) -> Self {
         Self {
+            id: Uuid::now_v7(),
             staff_id: member.id.clone(),
             version: member.upload_version().map(str::to_owned),
             jpeg,
             review: DraftReview::Ready,
+            stored: false,
+        }
+    }
+
+    fn recovered(saved: StaffPortraitDraft) -> Self {
+        Self {
+            id: saved.id,
+            staff_id: saved.staff_id.to_string(),
+            version: None,
+            jpeg: saved.jpeg,
+            review: if saved.confirmed {
+                DraftReview::Saved
+            } else {
+                DraftReview::Reload
+            },
+            stored: true,
         }
     }
 
@@ -73,6 +96,7 @@ pub(super) struct Desk {
     notice: Option<Key>,
     confirming_removal: bool,
     confirming_discard: bool,
+    unreadable_draft: bool,
     draft: Option<Draft>,
     preview_scope: Option<Entity<Arc<gpui::RenderImage>>>,
     observed_revision: i64,
@@ -85,7 +109,12 @@ impl Desk {
         self.retry_at.is_some_and(|retry| Instant::now() < retry)
     }
 
-    fn finish_picker(&mut self, mut draft: Draft, selection: Result<Option<Vec<u8>>, Key>) {
+    fn finish_picker(
+        &mut self,
+        mut draft: Draft,
+        selection: Result<Option<Vec<u8>>, Key>,
+        store: &Store,
+    ) {
         self.busy = false;
         self.picking = false;
         match selection {
@@ -94,6 +123,14 @@ impl Desk {
                     draft.review = DraftReview::Reload;
                 }
                 draft.jpeg = jpeg;
+                draft.stored = Uuid::parse_str(&draft.staff_id).is_ok_and(|staff_id| {
+                    store
+                        .reserve_staff_portrait_draft(draft.id, staff_id, &draft.jpeg)
+                        .unwrap_or(false)
+                });
+                if !draft.stored {
+                    self.notice = Some(Key::StaffPortraitDraftStorageFailed);
+                }
                 self.draft = Some(draft);
             }
             Ok(None) => {}
@@ -104,7 +141,9 @@ impl Desk {
     pub(super) fn dismiss(&mut self) -> bool {
         if self.confirming_removal {
             self.confirming_removal = false;
-        } else if self.draft.is_none() {
+        } else if self.unreadable_draft && self.confirming_discard {
+            self.confirming_discard = false;
+        } else if self.draft.as_ref().is_none_or(|draft| draft.stored) {
             return !self.busy;
         } else if !self.busy {
             self.confirming_discard = !self.confirming_discard;
@@ -116,15 +155,23 @@ impl Desk {
         &mut self,
         action: DraftAction,
         saved: bool,
+        cleanup_pending: bool,
         photos: Option<&Photos>,
-    ) {
+    ) -> Option<Key> {
         if action == DraftAction::Save && saved {
+            if let Some(draft) = &mut self.draft
+                && cleanup_pending
+            {
+                draft.review = DraftReview::Saved;
+                return Some(Key::StaffPortraitDraftSavedCleanupFailed);
+            }
             self.draft = None;
         } else if action != DraftAction::None
             && let Some(draft) = &mut self.draft
+            && draft.review != DraftReview::Saved
         {
             if action == DraftAction::Review && photos.is_some_and(|photos| draft.ready(photos)) {
-                return;
+                return None;
             }
             draft.review =
                 if photos.is_some_and(|photos| photos.reviewable(&draft.staff_id).is_some()) {
@@ -133,6 +180,7 @@ impl Desk {
                     DraftReview::Reload
                 };
         }
+        None
     }
 }
 
@@ -152,22 +200,42 @@ enum DraftAction {
 
 impl Root {
     pub(super) fn open_staff_portraits(&mut self, cx: &mut Context<Self>) {
+        let (draft, notice, unreadable_draft) = match self.svc.store.staff_portrait_draft() {
+            Ok(saved) => {
+                let notice = saved
+                    .as_ref()
+                    .filter(|saved| saved.confirmed)
+                    .map(|_| Key::StaffPortraitDraftSavedCleanupFailed);
+                (saved.map(Draft::recovered), notice, false)
+            }
+            Err(error) => (
+                None,
+                Some(Key::StaffPortraitDraftReadFailed),
+                matches!(error, CoreError::Invalid(_) | CoreError::Json(_)),
+            ),
+        };
+        let action = if draft.is_some() {
+            Action::ReviewDraft
+        } else {
+            Action::Load
+        };
         self.overlay = Overlay::StaffPortraits(Box::new(Desk {
             instance: Arc::new(()),
             photos: None,
             busy: false,
             picking: false,
-            notice: None,
+            notice,
             confirming_removal: false,
             confirming_discard: false,
-            draft: None,
+            unreadable_draft,
+            draft,
             preview_scope: None,
             observed_revision: 0,
             refresh_pending: false,
             retry_at: None,
         }));
-        if self.status.connectivity != Connectivity::Offline {
-            self.staff_portrait_request(None, Action::Load, cx);
+        if notice.is_none() && self.status.connectivity != Connectivity::Offline {
+            self.staff_portrait_request(None, action, cx);
         } else {
             cx.notify();
         }
@@ -190,7 +258,9 @@ impl Root {
         desk.confirming_discard = false;
         desk.retry_at = None;
         desk.refresh_pending = true;
-        if let Some(draft) = &mut desk.draft {
+        if let Some(draft) = &mut desk.draft
+            && draft.review != DraftReview::Saved
+        {
             draft.review = DraftReview::Reload;
         }
         true
@@ -209,6 +279,7 @@ impl Root {
         if !desk.busy
             && !desk.confirming_removal
             && !desk.confirming_discard
+            && !desk.unreadable_draft
             && !desk.waiting_to_retry()
             && (desk.refresh_pending || revision_changed || desk.retry_at.is_some())
         {
@@ -272,6 +343,25 @@ impl Root {
             desk.refresh_pending = true;
             return;
         }
+        let claim = match desk
+            .draft
+            .as_ref()
+            .filter(|draft| draft_action == DraftAction::Save && draft.stored)
+        {
+            Some(draft) => match self.svc.store.claim_staff_portrait_draft(draft.id) {
+                Ok(Some(claim)) => Some(claim),
+                outcome => {
+                    desk.notice = Some(match outcome {
+                        Ok(None) => Key::StaffPortraitDraftReplaced,
+                        Err(CoreError::StaffPortraitDraftBusy) => Key::StaffPortraitDraftBusy,
+                        _ => Key::StaffPortraitDraftReadFailed,
+                    });
+                    cx.notify();
+                    return;
+                }
+            },
+            None => None,
+        };
         let instance = desk.instance.clone();
         let session = self.svc.session.clone();
         let selected = if draft_action == DraftAction::None {
@@ -288,13 +378,18 @@ impl Root {
         desk.confirming_removal = false;
         cx.notify();
         cx.spawn(async move |root, cx| {
-            let (photos, saved, notice, retry_after) =
+            let (photos, saved, cleanup_pending, notice, retry_after) =
                 cx.background_executor()
                     .spawn(async move {
                         let change = update
                             .zip(selected.as_deref())
                             .map(|(update, id)| transport.set_staff_portrait(id, update));
                         let saved = change.as_ref().is_some_and(Result::is_ok);
+                        let cleanup_pending = if let (true, Some(claim)) = (saved, claim) {
+                            claim.confirm().is_err()
+                        } else {
+                            false
+                        };
                         let notice = change.as_ref().map(|result| {
                             if result.is_ok() {
                                 Key::StaffPortraitSaved
@@ -305,6 +400,7 @@ impl Root {
                         if let Some(Err(TransportError::RateLimited(delay))) = change {
                             return (
                                 None,
+                                false,
                                 false,
                                 notice,
                                 Some(delay.unwrap_or(Duration::from_secs(5))),
@@ -327,7 +423,13 @@ impl Root {
                                     }
                                     _ => None,
                                 };
-                                return (None, saved, notice.or(Some(failed)), retry_after);
+                                return (
+                                    None,
+                                    saved,
+                                    cleanup_pending,
+                                    notice.or(Some(failed)),
+                                    retry_after,
+                                );
                             }
                         };
                         let member = selected
@@ -360,6 +462,7 @@ impl Root {
                                 unavailable,
                             }),
                             saved,
+                            cleanup_pending,
                             notice,
                             None,
                         )
@@ -383,7 +486,12 @@ impl Root {
                     .is_ok_and(|current| current != revision);
                 let photos = photos.filter(|_| !stale);
                 desk.refresh_pending |= stale;
-                desk.update_draft_after_request(draft_action, saved, photos.as_ref());
+                let local_notice = desk.update_draft_after_request(
+                    draft_action,
+                    saved,
+                    cleanup_pending,
+                    photos.as_ref(),
+                );
                 if stale || photos.is_some() || retry_after.is_none() {
                     desk.preview_scope = photos
                         .as_ref()
@@ -399,7 +507,7 @@ impl Root {
                         });
                     desk.photos = photos;
                 }
-                desk.notice = notice;
+                desk.notice = local_notice.or(notice);
                 desk.retry_at = retry_after.and_then(|delay| Instant::now().checked_add(delay));
                 cx.notify();
             });
@@ -452,10 +560,23 @@ impl Root {
             .when(desk.busy, |view| {
                 view.child(div().text_sm().child(self.t(Key::StaffPortraitLoading)))
             })
+            .when(desk.unreadable_draft, |view| {
+                view.child(self.button(
+                    "staff-photo-recover-discard",
+                    self.t(if desk.confirming_discard {
+                        Key::StaffPortraitDiscardUnreadableConfirm
+                    } else {
+                        Key::StaffPortraitDiscardUnreadable
+                    }),
+                    Kind::Danger,
+                    cx.listener(|root, _, _, cx| root.discard_unreadable_staff_photo_draft(cx)),
+                ))
+            })
             .when(
                 !desk.busy
                     && !desk.waiting_to_retry()
                     && desk.draft.is_none()
+                    && !desk.unreadable_draft
                     && !desk.confirming_removal
                     && self.status.connectivity != Connectivity::Offline,
                 |view| {
@@ -557,7 +678,10 @@ impl Root {
                         view.child(div().text_sm().child(self.t(Key::StaffPortraitReadOnly)))
                     })
                     .when(
-                        photos.directory.can_edit && !desk.busy && desk.draft.is_none(),
+                        photos.directory.can_edit
+                            && !desk.busy
+                            && desk.draft.is_none()
+                            && !desk.unreadable_draft,
                         |view| {
                             view.child(self.render_staff_photo_actions(
                                 member,
@@ -592,7 +716,7 @@ impl Root {
         let Overlay::StaffPortraits(desk) = &mut self.overlay else {
             return;
         };
-        if desk.busy || desk.draft.is_some() {
+        if desk.busy || desk.draft.is_some() || desk.unreadable_draft {
             return;
         }
         let Some(member) = desk
@@ -644,7 +768,7 @@ impl Root {
                 {
                     return;
                 }
-                desk.finish_picker(draft, selected);
+                desk.finish_picker(draft, selected, &root.svc.store);
                 cx.notify();
             });
         })
@@ -680,6 +804,17 @@ impl Root {
         if desk.busy {
             return;
         }
+        if let Some(draft) = &desk.draft
+            && draft.stored
+            && let Err(error) = self.svc.store.clear_staff_portrait_draft(draft.id)
+        {
+            desk.notice = Some(match error {
+                CoreError::StaffPortraitDraftBusy => Key::StaffPortraitDraftBusy,
+                _ => Key::StaffPortraitDraftCleanupFailed,
+            });
+            cx.notify();
+            return;
+        }
         if desk.confirming_discard {
             self.overlay = Overlay::None;
         } else {
@@ -688,6 +823,30 @@ impl Root {
             desk.refresh_pending = true;
         }
         cx.notify();
+    }
+
+    fn discard_unreadable_staff_photo_draft(&mut self, cx: &mut Context<Self>) {
+        let Overlay::StaffPortraits(desk) = &mut self.overlay else {
+            return;
+        };
+        if !desk.unreadable_draft {
+            return;
+        }
+        if !desk.confirming_discard {
+            desk.confirming_discard = true;
+            cx.notify();
+            return;
+        }
+        match self.svc.store.clear_unreadable_staff_portrait_draft() {
+            Ok(_) => self.open_staff_portraits(cx),
+            Err(error) => {
+                desk.notice = Some(match error {
+                    CoreError::StaffPortraitDraftBusy => Key::StaffPortraitDraftBusy,
+                    _ => Key::StaffPortraitDraftCleanupFailed,
+                });
+                cx.notify();
+            }
+        }
     }
 
     fn render_staff_photo_draft(
@@ -718,6 +877,11 @@ impl Root {
             .flex_col()
             .gap_2()
             .child(label)
+            .when(
+                draft.review == DraftReview::Saved
+                    && desk.notice != Some(Key::StaffPortraitDraftSavedCleanupFailed),
+                |view| view.child(self.t(Key::StaffPortraitDraftSavedCleanupFailed)),
+            )
             .when(desk.confirming_discard, |view| {
                 view.child(self.t(Key::StaffPortraitDiscardConfirm))
             })
@@ -888,6 +1052,68 @@ mod tests {
     use gpui::TestAppContext;
 
     #[gpui::test]
+    async fn reopening_the_profile_recovers_a_photo_without_reusing_its_old_review(
+        cx: &mut TestAppContext,
+    ) {
+        let (dir, config) = super::super::tests::desk();
+        let file = dir.path().join("portrait.png");
+        // A synthetic one-pixel PNG for the real preparation path.
+        std::fs::write(
+            &file,
+            [
+                137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0,
+                1, 8, 2, 0, 0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 120, 156, 99, 48,
+                241, 10, 4, 0, 1, 133, 0, 208, 122, 167, 104, 97, 0, 0, 0, 0, 73, 69, 78, 68, 174,
+                66, 96, 130,
+            ],
+        )
+        .unwrap();
+        let bytes = prepare_photo(&file).unwrap();
+        let staff = Uuid::now_v7().to_string();
+        let first = cx.add_window(|window, cx| Root::new(config.clone(), window, cx));
+        let draft_id = first
+            .update(cx, |root, _, cx| {
+                root.svc.stop_sync();
+                root.status.connectivity = Connectivity::Offline;
+                root.open_staff_portraits(cx);
+                let Overlay::StaffPortraits(desk) = &mut root.overlay else {
+                    panic!("missing portrait desk");
+                };
+                let mut photos = photos_without_preview();
+                photos.directory.staff[0].id = staff.clone();
+                photos.selected = Some(staff.clone());
+                let draft = Draft::new(photos.current().unwrap(), vec![]);
+                let id = draft.id;
+                desk.photos = Some(photos);
+                desk.finish_picker(draft, Ok(Some(bytes.clone())), &root.svc.store);
+                assert!(desk.draft.as_ref().unwrap().stored);
+                root.dismiss_overlay(cx);
+                assert!(matches!(root.overlay, Overlay::None));
+                id
+            })
+            .unwrap();
+        let second = cx.add_window(|window, cx| Root::new(config, window, cx));
+        second
+            .update(cx, |root, _, cx| {
+                root.svc.stop_sync();
+                root.status.connectivity = Connectivity::Offline;
+                root.open_staff_portraits(cx);
+                let Overlay::StaffPortraits(desk) = &mut root.overlay else {
+                    panic!("missing recovered portrait desk");
+                };
+                let draft = desk.draft.as_ref().unwrap();
+                assert_eq!(draft.id, draft_id);
+                assert_eq!(draft.staff_id, staff);
+                assert_eq!(draft.jpeg, bytes);
+                assert_eq!(draft.review, DraftReview::Reload);
+                assert!(draft.version.is_none() && desk.photos.is_none());
+                root.discard_staff_photo_draft(cx);
+                assert!(root.svc.store.staff_portrait_draft().unwrap().is_none());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
     async fn saving_without_a_transport_keeps_the_selected_file(cx: &mut TestAppContext) {
         let (_dir, config) = super::super::tests::desk();
         let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
@@ -936,22 +1162,34 @@ mod tests {
             let image = vec![255, 216, 255, 1];
             desk.draft = Some(Draft::new(latest.current().unwrap(), image.clone()));
             latest.directory.staff[0].portrait_version = Some("cloud-version".into());
-            desk.update_draft_after_request(DraftAction::Save, false, Some(&latest));
+            assert!(
+                desk.update_draft_after_request(DraftAction::Save, false, false, Some(&latest))
+                    .is_none()
+            );
             assert_eq!(desk.draft.as_ref().unwrap().review, DraftReview::Reload);
 
             latest.unavailable = false;
             latest.directory.can_edit = false;
-            desk.update_draft_after_request(DraftAction::Review, false, Some(&latest));
+            assert!(
+                desk.update_draft_after_request(DraftAction::Review, false, false, Some(&latest))
+                    .is_none()
+            );
             assert_eq!(desk.draft.as_ref().unwrap().review, DraftReview::Reload);
             latest.directory.can_edit = true;
             latest.directory.staff[0].id = "other".into();
             latest.selected = Some("other".into());
-            desk.update_draft_after_request(DraftAction::Review, false, Some(&latest));
+            assert!(
+                desk.update_draft_after_request(DraftAction::Review, false, false, Some(&latest))
+                    .is_none()
+            );
             assert_eq!(desk.draft.as_ref().unwrap().review, DraftReview::Reload);
 
             latest.directory.staff[0].id = "member".into();
             latest.selected = Some("member".into());
-            desk.update_draft_after_request(DraftAction::Review, false, Some(&latest));
+            assert!(
+                desk.update_draft_after_request(DraftAction::Review, false, false, Some(&latest))
+                    .is_none()
+            );
             assert_eq!(desk.draft.as_ref().unwrap().review, DraftReview::Confirm);
             assert!(desk.draft.as_ref().unwrap().update(&latest).is_none());
             desk.photos = Some(latest);
@@ -964,7 +1202,10 @@ mod tests {
                 Some(PortraitUpdate::Upload { version, jpeg })
                     if version.as_deref() == Some("cloud-version") && jpeg == image
             ));
-            desk.update_draft_after_request(DraftAction::Save, true, None);
+            assert!(
+                desk.update_draft_after_request(DraftAction::Save, true, false, None)
+                    .is_none()
+            );
             assert!(desk.draft.is_none());
         });
     }
@@ -1057,7 +1298,7 @@ mod tests {
             assert!(Arc::ptr_eq(&instance, &desk.instance));
             assert!(desk.photos.is_none());
             assert!(desk.busy);
-            desk.finish_picker(draft, Ok(Some(vec![255, 216, 255, 3])));
+            desk.finish_picker(draft, Ok(Some(vec![255, 216, 255, 3])), &root.svc.store);
             let draft = desk.draft.as_ref().unwrap();
             assert_eq!(draft.staff_id, "member");
             assert_eq!(draft.review, DraftReview::Reload);
@@ -1087,6 +1328,7 @@ mod tests {
                 notice: None,
                 confirming_removal: false,
                 confirming_discard: false,
+                unreadable_draft: false,
                 draft: None,
                 preview_scope: None,
                 observed_revision: 0,

@@ -41,6 +41,8 @@ The response includes the current `clientDirectory` permission and `calendarScop
 
 `viewerRole` carries the current staff or owner role. A desktop profile with a different saved role returns to sign-in so it can open the replica for the new role. It keeps the previous profile’s pending edits. A server response denying sync also returns the app to sign-in. A network outage keeps the offline profile open.
 
+Linked Desktop devices load team photo metadata at `GET /admin/staff/portrait-directory`. Reads and uploads use `/admin/staff/:id/portrait`, and publication uses `/admin/staff/:id/portrait/publication`. The same-origin gateway forwards those paths to the authenticated API. The directory uses the staff permissions of the browser API, and `/admin/staff` remains the browser page on Cloud.
+
 ## Reviewed recurring bookings
 
 Reviewed desktop series use `POST /appointments/desktop-series/preview` and
