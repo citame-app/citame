@@ -498,6 +498,7 @@ fn native_manages_timed_promotions_through_the_proxy() {
             eligible_kinds: vec![Eligible::Service],
             service_ids: vec![catalog.haircut.parse().unwrap()],
             active: true,
+            show_online: None,
             timing: Some(Timing {
                 weekdays: vec![1, 3],
                 start_minute: 16 * 60,

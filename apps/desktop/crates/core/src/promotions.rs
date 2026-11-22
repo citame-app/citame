@@ -44,6 +44,8 @@ pub struct Terms {
     pub eligible_kinds: Vec<Eligible>,
     pub service_ids: Vec<Uuid>,
     pub active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_online: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timing: Option<Timing>,
 }
@@ -108,6 +110,11 @@ impl Terms {
                 .starts_at
                 .zip(self.ends_at)
                 .is_some_and(|(start, end)| start >= end)
+            || (self.show_online == Some(true)
+                && (self.eligible_kinds != [Eligible::Service]
+                    || self.timing.is_some()
+                    || self.starts_at.is_none()
+                    || self.ends_at.is_none()))
             || self.eligible_kinds.is_empty()
             || self.service_ids.len() > 100
         {
@@ -172,6 +179,34 @@ pub fn parse_minute(text: &str, allow_end_of_day: bool) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flash_publication_requires_dated_services_and_preserves_legacy_payloads() {
+        let mut draft: Terms = serde_json::from_value(serde_json::json!({
+            "code": "FLASH10", "name": "Flash fixture", "kind": "percent", "value": 1000,
+            "minimumSpendCents": 0, "eligibleKinds": ["service"], "serviceIds": [], "active": true
+        }))
+        .unwrap();
+        assert!(draft.valid());
+        assert!(
+            serde_json::to_value(&draft)
+                .unwrap()
+                .get("showOnline")
+                .is_none()
+        );
+
+        draft.show_online = Some(true);
+        assert!(!draft.valid());
+        draft.starts_at = Some("2026-11-20T12:00:00Z".parse().unwrap());
+        draft.ends_at = Some("2026-11-22T12:00:00Z".parse().unwrap());
+        assert!(draft.valid());
+        draft.eligible_kinds.push(Eligible::Product);
+        assert!(!draft.valid());
+
+        draft.show_online = Some(false);
+        assert!(draft.valid());
+        assert_eq!(serde_json::to_value(draft).unwrap()["showOnline"], false);
+    }
 
     #[test]
     fn promotion_intervals_keep_existing_instants_and_reject_invalid_wall_times() {

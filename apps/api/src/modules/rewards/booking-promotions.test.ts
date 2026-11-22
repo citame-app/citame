@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
-import { checkoutSchema } from "@sob/contracts";
+import { checkoutSchema, publicFlashOffersSchema } from "@sob/contracts";
 import {
   appointment,
   checkout,
@@ -7,6 +7,8 @@ import {
   checkoutRefund,
   checkoutReward,
   passPeriod,
+  promotion,
+  salonSettings,
   service,
 } from "@sob/db";
 import { eq } from "drizzle-orm";
@@ -91,6 +93,102 @@ function request(reviewHash: string, extra = {}) {
   const { code, ...fields } = selection;
   return { ...fields, id: crypto.randomUUID(), promotion: { code, reviewHash }, ...extra };
 }
+test("public flash offers keep existing codes private and disappear after their last redemption", async () => {
+  const window = {
+    startsAt: new Date(NOW.getTime() - 86400000).toISOString(),
+    endsAt: new Date(NOW.getTime() + 86400000).toISOString(),
+  };
+  await offer({ code: "PRIVATE10", usageLimit: 2, ...window });
+  await offer({
+    code: "ENDED10",
+    showOnline: true,
+    startsAt: new Date(NOW.getTime() - 172800000).toISOString(),
+    endsAt: window.startsAt,
+  });
+  await offer({
+    code: "FUTURE10",
+    showOnline: true,
+    startsAt: window.endsAt,
+    endsAt: new Date(NOW.getTime() + 172800000).toISOString(),
+  });
+  const flash = await offer({
+    showOnline: true,
+    serviceIds: [f.haircutId],
+    usageLimit: 1,
+    ...window,
+  });
+  const [stored] = await t.db.select().from(promotion).where(eq(promotion.id, flash.id));
+  expect(stored?.terms).toMatchObject({ showOnline: true, ...window });
+  const [settings] = await t.db.select().from(salonSettings);
+  expect(settings?.onlineBookingEnabled).toBe(true);
+  const read = async () => {
+    const response = await call(null, "/flash-offers");
+    expect(response.status, await response.clone().text()).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    const body = await response.json();
+    const parsed = publicFlashOffersSchema.parse(body);
+    expect(body).toEqual(parsed);
+    return parsed.offers;
+  };
+  expect(await read()).toMatchObject([
+    {
+      id: flash.id,
+      code: terms.code,
+      allServices: false,
+      services: [{ id: f.haircutId }],
+    },
+  ]);
+
+  const legacySave = await call(owner, `/admin/rewards/promotions/${flash.id}`, "PUT", {
+    ...terms,
+    ...window,
+    serviceIds: [f.haircutId],
+    usageLimit: 1,
+    version: flash.version,
+    name: "Legacy edit",
+  });
+  expect(legacySave.status, await legacySave.clone().text()).toBe(200);
+  expect(await read()).toMatchObject([{ name: "Legacy edit" }]);
+
+  await t.db.update(service).set({ onlineBooking: false }).where(eq(service.id, f.haircutId));
+  expect(await read()).toEqual([]);
+  await t.db.update(service).set({ onlineBooking: true }).where(eq(service.id, f.haircutId));
+
+  const q = await quote();
+  expect((await call(client, "/appointments", "POST", request(q.reviewHash))).status).toBe(201);
+  expect(await read()).toEqual([]);
+});
+
+test("only a dated service offer can be published and publication can be withdrawn", async () => {
+  const window = {
+    startsAt: new Date(NOW.getTime() - 86400000).toISOString(),
+    endsAt: new Date(NOW.getTime() + 86400000).toISOString(),
+  };
+  const createPath = "/admin/rewards/promotions";
+  expect((await call(owner, createPath, "POST", { ...terms, showOnline: true })).status).toBe(400);
+  expect(
+    (
+      await call(owner, createPath, "POST", {
+        ...terms,
+        ...window,
+        eligibleKinds: ["service", "product"],
+        showOnline: true,
+      })
+    ).status,
+  ).toBe(400);
+  const created = await offer({ showOnline: true, ...window });
+  const unpublished = await call(owner, `${createPath}/${created.id}`, "PUT", {
+    ...terms,
+    ...window,
+    showOnline: false,
+    version: created.version,
+  });
+  expect(unpublished.status).toBe(200);
+  expect((await call(null, "/flash-offers")).status).toBe(200);
+  expect(await (await call(null, "/flash-offers")).json()).toEqual({ offers: [] });
+  expect((await quote()).discountCents).toBe(1000);
+});
+
 test("the booking review quotes its own current offer and creates one server-priced discounted receipt atomically", async () => {
   await offer();
   const q = await quote();

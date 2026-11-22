@@ -9,6 +9,7 @@ import {
   loyaltyStatementSchema,
   type PromotionInput,
   promotionSchema,
+  publicFlashOffersSchema,
   type ReviewedLoyaltyPolicy,
   type RewardChoice,
   reviewedLoyaltyPolicySchema,
@@ -63,6 +64,8 @@ export function rewardEndpoints(client: ApiClient) {
       client.post("/admin/rewards/stamps/cards", input, stampCardSchema),
     changeStampCard: (id: string, input: ChangeStampCard) =>
       client.post(`/admin/rewards/stamps/cards/${id}`, input, stampCardSchema),
+    flashOffers: (signal?: AbortSignal) =>
+      client.get("/flash-offers", publicFlashOffersSchema, { cache: "no-store", signal }),
     bookingQuote: (input: BookingPromotionQuoteRequest) =>
       client.post("/appointments/promotion-quote", input, bookingPromotionQuoteSchema),
     policy: (signal?: AbortSignal) =>

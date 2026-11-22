@@ -48,7 +48,11 @@ import {
   reviewSelfRoutes,
 } from "./modules/reputation/routes";
 import { resourceRoutes } from "./modules/resources/routes";
-import { rewardsAdminRoutes, rewardsClientRoutes } from "./modules/rewards/routes";
+import {
+  publicFlashOfferRoutes,
+  rewardsAdminRoutes,
+  rewardsClientRoutes,
+} from "./modules/rewards/routes";
 import { stampAdminRoutes, stampClientRoutes } from "./modules/rewards/stamp-routes";
 import { serviceAdminRoutes } from "./modules/services/admin-routes";
 import { servicesRoutes } from "./modules/services/routes";
@@ -399,6 +403,7 @@ export function createApp(input: AppDeps): App {
   app.route("/admin/portfolio", portfolioAdminRoutes(deps));
   app.route("/benefit-plans", publicPlanRoutes(deps));
   app.route("/gift-offers", publicGiftOfferRoutes(deps));
+  app.route("/flash-offers", publicFlashOfferRoutes(deps));
   app.route("/admin/benefit-plans", planAdminRoutes(deps));
   app.route("/admin/passes", passRoutes(deps));
   app.route("/me/passes", passRoutes(deps));

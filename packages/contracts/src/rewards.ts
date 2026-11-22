@@ -145,6 +145,7 @@ export const promotionInputSchema = z
       .default(["service", "product", "custom"]),
     serviceIds: z.array(idSchema).max(100).default([]),
     active: z.boolean().default(true),
+    showOnline: z.boolean().optional(),
     timing: promotionTimingSchema.optional(),
     version: z.number().int().positive().nullable().default(null),
   })
@@ -157,6 +158,19 @@ export const promotionInputSchema = z
     path: ["eligibleKinds"],
     message: "Timed promotions apply only to appointment services",
   })
+  .refine(
+    (p) =>
+      !p.showOnline ||
+      (p.eligibleKinds.length === 1 &&
+        p.eligibleKinds[0] === "service" &&
+        !p.timing &&
+        p.startsAt !== null &&
+        p.endsAt !== null),
+    {
+      path: ["showOnline"],
+      message: "Public flash offers require appointment services and start and end dates",
+    },
+  )
   .refine((p) => !p.startsAt || !p.endsAt || Date.parse(p.startsAt) < Date.parse(p.endsAt), {
     path: ["endsAt"],
     message: "Expiry must follow the start",
@@ -167,6 +181,21 @@ export const promotionSchema = promotionInputSchema.safeExtend({
   createdAt: instantSchema,
   usedCount: z.number().int().nonnegative().default(0),
 });
+export const publicFlashOfferSchema = z.object({
+  id: idSchema,
+  name: z.string(),
+  code: z.string(),
+  kind: z.enum(["percent", "fixed"]),
+  value: money.positive(),
+  minimumSpendCents: money,
+  maximumDiscountCents: money.positive().nullable(),
+  perClientLimit: z.number().int().positive().nullable(),
+  endsAt: instantSchema,
+  allServices: z.boolean(),
+  services: z.array(z.object({ id: idSchema, name: z.string() })),
+});
+export const publicFlashOffersSchema = z.object({ offers: z.array(publicFlashOfferSchema) });
+export type PublicFlashOffer = z.infer<typeof publicFlashOfferSchema>;
 export type LoyaltyPolicy = z.infer<typeof loyaltyPolicySchema>;
 export type ReviewedLoyaltyPolicy = z.infer<typeof reviewedLoyaltyPolicySchema>;
 export type RewardChoice = z.infer<typeof rewardChoiceSchema>;

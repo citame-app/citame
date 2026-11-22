@@ -12,6 +12,12 @@ Original online promotion receipts use the stable server-generated `booking-prom
 
 An edited, archived, exhausted or newly ineligible offer requires a new review or explicit removal, preserving the selection and confirmed private form answers. The booking is not silently repriced without the offer. Saved timing conditions continue to govern rescheduling, independently of subsequent offer changes. Repeating a successful original request recovers its original visit and receipt even after the source offer is archived.
 
+## Public flash offers
+
+In **Marketing → Promotions**, turn on **Show as a flash offer on the website**. Select services only, set a start and end date, and leave appointment-start restrictions off. Choose specific services or leave the selection empty for eligible online services. Web and Desktop save the same versioned promotion.
+
+The public profile shows current flash offers and their limits. The booking review offers a direct quote for matching services. Customers review the server-calculated price and confirm in the existing booking flow. Expiry, global redemption limits and paused online bookings remove offers from the public listing. Turning off publication returns a code to manual entry and leaves its redemption terms in force.
+
 ## Uncertain requests
 
 While sending, the reviewed packet and its intent UUID freeze. If the response is lost, malformed or uncertain, the same packet is retained in memory and fields remain disabled. Confirm again to recover that same result. A later authentication or other rejection cannot prove that the original request failed; it does not unlock editing. Navigation warns that the visit may already exist. **Check my appointments** provides an explicit recovery path before making another reservation. Nothing about this packet or private form answers is written to browser storage. A late response cannot redirect a different page opened meanwhile.

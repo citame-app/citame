@@ -1,4 +1,13 @@
 export const bookingPromotionsEn = {
+  "flashOffers.title": "Flash offers",
+  "flashOffers.discount": "{amount} off eligible services",
+  "flashOffers.minimum": "Minimum eligible spend {amount}",
+  "flashOffers.maximum": "Up to {amount} off",
+  "flashOffers.ends": "Book with this offer by {date}",
+  "flashOffers.perClient": "Uses per customer: {count}",
+  "flashOffers.allServices": "Eligible online services",
+  "flashOffers.bookNamed": "Book with {name}",
+  "flashOffers.reviewNamed": "Review {name}",
   "peakPrices.title": "Peak-time pricing",
   "peakPrices.help": "Set a surcharge for busy times. Customers see the price before confirming.",
   "peakPrices.timezone": "Times are in {zone}. If rules overlap, the highest surcharge applies.",
@@ -45,6 +54,15 @@ export const bookingPromotionsEn = {
     "The booking response is uncertain. Retry the same booking to recover its result before editing or making another reservation.",
 } as const;
 export const bookingPromotionsEs: Record<keyof typeof bookingPromotionsEn, string> = {
+  "flashOffers.title": "Ofertas flash",
+  "flashOffers.discount": "{amount} de descuento en los servicios incluidos",
+  "flashOffers.minimum": "Importe mínimo en servicios incluidos {amount}",
+  "flashOffers.maximum": "Hasta {amount} de descuento",
+  "flashOffers.ends": "Reserva con esta oferta hasta el {date}",
+  "flashOffers.perClient": "Canjes por cliente: {count}",
+  "flashOffers.allServices": "Servicios elegibles para reserva online",
+  "flashOffers.bookNamed": "Reservar con {name}",
+  "flashOffers.reviewNamed": "Revisar {name}",
   "peakPrices.title": "Precios en horas punta",
   "peakPrices.help":
     "Configura un recargo en horas de alta demanda. El cliente ve el precio antes de confirmar.",
