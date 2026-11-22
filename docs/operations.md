@@ -109,7 +109,7 @@ scripts/restore.sh /backups/sob-2026-11-14.dump postgres://sob:...@host:5432/sob
 
 ### Switch a Compose deployment to the restored database
 
-Use the same production Compose project options in all commands. Keep the previous database available during validation. Hold public traffic at the load balancer or stop the bundled gateway. Pause any API and worker replicas outside this project. Restore the archive into a new database in the production Postgres container, using a name with letters, digits and underscores.
+Use the same production Compose project options in all commands. Keep the previous database available during validation. Hold public traffic at the load balancer or stop the bundled gateway. Pause any API and worker replicas outside this project. Restore the archive into a new database in the production Postgres container, using a name with letters, digits and underscores. For an archive at migration `0115`, restore in an isolated PostgreSQL instance first, apply `0116` and take a fresh backup there. Use the fresh archive for the Compose recovery.
 
 ```bash
 compose_options=() # Add the project's --project-name, --env-file and overlay flags here.
@@ -122,7 +122,7 @@ compose=(docker compose -f compose.prod.yaml "${compose_options[@]}")
     /backups/sob-2026-11-18.dump postgres://sob@localhost:5432/sob_recovered
 ```
 
-After verifying the restore, persist the database name, a fresh cache namespace and a fresh sync generation in the deployment environment. The migrator, API, worker and owner setup share the database choice. The previous Valkey keys remain in their original namespace. Generate unique values for each recovery and keep them stable on normal restarts and upgrades.
+After verifying the restore, persist the database name, a fresh cache namespace and a fresh sync generation in the deployment environment. The migrator, API, worker and owner setup share the database choice. The previous Valkey keys remain in their original namespace. Before reopening inventory on a restored database, compare the highest order and receipt numbers with documents issued since the backup. If an issued document is missing from the restored history, use **Settings → Document numbering** to advance its series above that number before issuing another document. Generate unique values for each recovery and keep them stable on normal restarts and upgrades.
 
 ```dotenv
 SOB_DATABASE_NAME=sob_recovered
@@ -131,8 +131,13 @@ SYNC_REPLICA_GENERATION=recovery-20261118-77af035c
 ```
 
 ```bash
-"${compose[@]}" run --rm --no-deps --pull never -T migrate &&
-  "${compose[@]}" up -d --no-build --no-deps --pull never --wait api
+"${compose[@]}" run --rm --no-deps --pull never -T migrate
+```
+
+Before starting the API on a deployment with separate PostgreSQL roles, reapply the [runtime grants](#4-upgrades-migrations-and-rollback) to the restored database.
+
+```bash
+"${compose[@]}" up -d --no-build --no-deps --pull never --wait api
 ```
 
 Verify the restored appointments and allocations in Postgres while the gateway and worker are stopped. Restore the previous database, cache and generation settings to reverse the validation at this point. Once the recovered database is approved, start the worker and web. Start Caddy only on deployments that use the bundled proxy.
@@ -221,6 +226,8 @@ Migrators targeting the same database wait for a PostgreSQL advisory lock before
 The production API and worker verify the release's ordered migration timestamps and SQL hashes before opening the listener or starting background jobs. If the database is behind, apply the release migrations before restarting the services. A forward-compatible code rollback can use a strictly newer ledger suffix when all entries required by the older release still match. The recovery rehearsal continues to require an exact match.
 
 If the API and worker use separate PostgreSQL roles from the migrator, grant both runtime roles `USAGE` on schema `drizzle` and `SELECT` on `drizzle.__drizzle_migrations` after the initial migration and before starting the services.
+
+With separate database roles, grant the API role `EXECUTE` on `public.inventory_numbering_status(text)` and `public.inventory_numbering_advance(text, integer, integer)` after applying the numbering migrations. Reapply those grants after restoring into an installation with separate roles. Migration `0116_private_inventory_numbering` keeps existing grants during an upgrade and rejects the default `PUBLIC` grant at runtime after a restore that omits ACLs. A backup captured at migration `0115` contains the earlier routines. Restore that intermediate backup in a network-isolated PostgreSQL instance and apply `0116` before moving or reopening the database.
 
 The deployment migrator and sample seed reject reserved Booksy review database names and any database with the `booksy_rehearsal` schema. The check uses the connected database name as well as the URL, so an environment override such as `PGDATABASE` cannot direct these commands to a review database. Renaming or restoring a full candidate dump under an ordinary name leaves the schema guard in place. The portable recovery command can still migrate its disposable PostgreSQL copy for the rehearsal.
 

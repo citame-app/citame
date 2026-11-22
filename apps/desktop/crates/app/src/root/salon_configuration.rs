@@ -5,6 +5,7 @@ use sob_core::http::{
 use sob_core::store::SalonConfigurationWork;
 
 mod business_profile;
+mod numbering;
 mod profile_media;
 use business_profile::BusinessEditor;
 
@@ -29,6 +30,7 @@ pub(super) struct Desk {
     read_failed: bool,
     review_after_restore: bool,
     media: profile_media::MediaDesk,
+    numbering: numbering::NumberingDesk,
 }
 
 impl Desk {
@@ -150,6 +152,7 @@ impl Root {
             read_failed: false,
             review_after_restore: false,
             media: profile_media::MediaDesk::default(),
+            numbering: numbering::NumberingDesk::default(),
         }));
         self.request_salon_configuration(false, cx);
     }
@@ -160,11 +163,13 @@ impl Root {
         };
         let keep = desk.editor.as_ref().is_some_and(|editor| editor.dirty(cx))
             || desk.reviewing_conflict.is_some()
-            || desk.media.dirty();
+            || desk.media.dirty()
+            || desk.numbering.dirty();
         if keep {
             desk.instance = Arc::new(());
             desk.busy = false;
             desk.media.reset_request();
+            desk.numbering.reset_request();
             desk.review_after_restore = true;
             desk.message = Some(Key::SalonRestoreReview);
         }
@@ -213,6 +218,7 @@ impl Root {
             self.request_salon_configuration(false, cx);
         }
         self.refresh_profile_images(observed, reconnected, cx);
+        self.refresh_numbering(reconnected, cx);
     }
 
     fn request_salon_configuration(&mut self, review_conflict: bool, cx: &mut Context<Self>) {
@@ -364,12 +370,14 @@ impl Root {
         let Overlay::SalonConfiguration(desk) = &mut self.overlay else {
             return;
         };
-        if desk.busy || desk.media.busy() {
+        if desk.busy || desk.media.busy() || desk.numbering.busy {
             return;
         }
         if desk.confirm_close {
             desk.confirm_close = false;
-        } else if desk.media.dirty() || desk.editor.as_ref().is_some_and(|editor| editor.dirty(cx))
+        } else if desk.media.dirty()
+            || desk.numbering.dirty()
+            || desk.editor.as_ref().is_some_and(|editor| editor.dirty(cx))
         {
             desk.confirm_close = true;
         } else {
@@ -384,6 +392,21 @@ impl Root {
         viewport: gpui::Size<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        if desk.numbering.open && !desk.confirm_close {
+            return self.modal_with_height(
+                div().flex().min_h_0().child(
+                    div()
+                        .id("salon-numbering-scroll")
+                        .min_h_0()
+                        .flex_1()
+                        .overflow_y_scroll()
+                        .child(self.render_numbering(&desk.numbering, cx)),
+                ),
+                (viewport.width - px(32.)).max(px(220.)).min(px(610.)),
+                (viewport.height - px(28.)).max(px(140.)),
+                Some(cx),
+            );
+        }
         if desk.media.open && !desk.confirm_close {
             return self.modal_with_height(
                 div().flex().min_h_0().child(
@@ -507,12 +530,19 @@ impl Root {
                     .as_ref()
                     .is_some_and(|editor| editor.profile.is_some())
                 {
-                    actions = actions.child(self.button(
-                        "salon-media",
-                        self.t(Key::ProfileMediaTitle),
-                        Kind::Ghost,
-                        cx.listener(|root, _, _, cx| root.open_profile_images(cx)),
-                    ));
+                    actions = actions
+                        .child(self.button(
+                            "salon-media",
+                            self.t(Key::ProfileMediaTitle),
+                            Kind::Ghost,
+                            cx.listener(|root, _, _, cx| root.open_profile_images(cx)),
+                        ))
+                        .child(self.button(
+                            "salon-numbering",
+                            self.t(Key::NumberingTitle),
+                            Kind::Ghost,
+                            cx.listener(|root, _, _, cx| root.open_numbering(cx)),
+                        ));
                 }
                 body.when(pending, |body| body.child(self.t(Key::SalonQueued)))
                     .when(
@@ -748,7 +778,7 @@ mod tests {
             editor.online = false;
             root.overlay = Overlay::SalonConfiguration(Box::new(Desk {
                 instance: Arc::new(()), editor: Some(editor), busy: false, work: SalonConfigurationWork::Idle,
-                reviewing_conflict: None, confirm_close: false, observed: None, message: None, read_failed: false, review_after_restore: false, media: profile_media::MediaDesk::default(),
+                reviewing_conflict: None, confirm_close: false, observed: None, message: None, read_failed: false, review_after_restore: false, media: profile_media::MediaDesk::default(), numbering: numbering::NumberingDesk::default(),
             }));
             assert!(root.preserve_open_salon_draft(cx));
             root.save_salon_configuration(cx);

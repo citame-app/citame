@@ -806,6 +806,20 @@
       "when": 1795311600000,
       "tag": "0114_salon_profile_media",
       "breakpoints": true
+    },
+    {
+      "idx": 115,
+      "version": "7",
+      "when": 1795315200000,
+      "tag": "0115_inventory_numbering",
+      "breakpoints": true
+    },
+    {
+      "idx": 116,
+      "version": "7",
+      "when": 1795315500000,
+      "tag": "0116_private_inventory_numbering",
+      "breakpoints": true
     }
   ]
 }

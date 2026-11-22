@@ -1,7 +1,9 @@
 import {
+  advanceInventoryNumberingSchema,
   bookingPolicyInputSchema,
   idSchema,
   initialSyncGeneration,
+  inventoryNumberingSeriesSchema,
   profileMediaWriteSchema,
   reviewedBookingPolicyInputSchema,
   reviewedBusinessProfileRequestSchema,
@@ -15,6 +17,7 @@ import type { AppEnv } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
 import { getBookingPolicy, publishBookingPolicy } from "../booking-protection/policy";
+import { advanceInventoryNumbering, reviewInventoryNumbering } from "./inventory-numbering";
 import { readProfileImage, reviewProfileMedia, saveProfileMedia } from "./profile-media";
 import {
   getSalonSettings,
@@ -70,6 +73,25 @@ export function settingsAdminRoutes({ db, config }: AppDeps) {
         ...toReviewedSettings(await getSalonSettings(db)),
         generation: config.syncReplicaGeneration,
       });
+    })
+    .get("/inventory-numbering", async (c) => {
+      requireRole(c.get("principal"), "owner");
+      return c.json(await reviewInventoryNumbering(db, config.syncReplicaGeneration), 200, {
+        "Cache-Control": "private, no-store",
+      });
+    })
+    .put("/inventory-numbering/:series", async (c) => {
+      const principal = c.get("principal");
+      requireRole(principal, "owner");
+      const series = parseOrThrow(inventoryNumberingSeriesSchema, c.req.param("series"));
+      const input = parseOrThrow(advanceInventoryNumberingSchema, await readJson(c));
+      return c.json(
+        await advanceInventoryNumbering(db, series, input, principal, config.syncReplicaGeneration),
+        200,
+        {
+          "Cache-Control": "private, no-store",
+        },
+      );
     })
     .get("/profile/images", async (c) => {
       requireRole(c.get("principal"), "owner");
