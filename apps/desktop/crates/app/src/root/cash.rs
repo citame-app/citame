@@ -247,7 +247,12 @@ impl Root {
                     Kind::Ghost,
                     cx.listener(|root, _, _, cx| root.open_sales_history(cx)),
                 ))
-                .child(self.button(
+            },
+        );
+        let body = body.when(
+            !matches!(desk, RegisterDesk::Ready(view) if view.form.is_some()),
+            |body| {
+                body.child(self.button(
                     "cash-gift-cards",
                     self.t(Key::GiftCards),
                     Kind::Ghost,

@@ -1,5 +1,5 @@
 use super::*;
-use crate::http::gift_cards::GiftPurchase;
+use crate::{http::gift_cards::GiftPurchase, sync::TransportError};
 
 impl Store {
     pub fn pending_gift_purchase(&self, actor: &str) -> Result<Option<GiftPurchase>> {
@@ -22,6 +22,19 @@ impl Store {
                 serde_json::to_string(&(&purchase.generation, purchase))?
             ],
         )? == 1)
+    }
+
+    pub fn settle_gift_purchase(
+        &self,
+        actor: &str,
+        purchase: &GiftPurchase,
+        result: std::result::Result<(), &TransportError>,
+    ) -> Result<bool> {
+        if !matches!(result, Ok(()) | Err(TransportError::BadRequest(_))) {
+            return Ok(false);
+        }
+        self.clear_gift_purchase(actor, purchase)?;
+        Ok(true)
     }
 
     pub fn clear_gift_purchase(&self, actor: &str, purchase: &GiftPurchase) -> Result<()> {
@@ -71,7 +84,18 @@ mod tests {
         assert_eq!(reopened.idempotency_key, purchase.idempotency_key);
         assert_eq!(reopened.generation, "reviewed");
         assert_eq!(reopened.amount_cents, 3500);
-        store.clear_gift_purchase("owner", &reopened).unwrap();
+        let timeout = TransportError::Offline("timed out".into());
+        assert!(
+            !store
+                .settle_gift_purchase("owner", &reopened, Err(&timeout))
+                .unwrap()
+        );
+        assert!(store.pending_gift_purchase("owner").unwrap().is_some());
+        assert!(
+            store
+                .settle_gift_purchase("owner", &reopened, Ok(()))
+                .unwrap()
+        );
         assert!(store.pending_gift_purchase("owner").unwrap().is_none());
     }
 }

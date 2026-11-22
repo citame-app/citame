@@ -1,6 +1,6 @@
 use super::*;
 use checkout::CheckoutReview;
-use sob_core::billing::{AppointmentCheckout, normalize_gift_card_code, parse_reviewed_amount};
+use sob_core::billing::{AppointmentCheckout, normalize_gift_card_code};
 use sob_core::http::{
     HttpTransport,
     gift_cards::{
@@ -8,7 +8,7 @@ use sob_core::http::{
         GiftPurchaseResult, GiftReveal, GiftStatus,
     },
 };
-use sob_core::sync::TransportError;
+use sob_core::{receipt_print::ReceiptPreview, sync::TransportError};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -27,6 +27,7 @@ enum Edit {
 
 pub(super) struct Desk {
     pub(super) receipt: Option<CheckoutReview>,
+    issued_receipt: bool,
     view: View,
     search: Entity<TextField>,
     filter: Option<GiftStatus>,
@@ -46,6 +47,7 @@ pub(super) struct Desk {
     purchase: Option<GiftPurchase>,
     request: Option<Arc<()>>,
     observed: Option<i64>,
+    refresh_after: Option<Instant>,
     can_manage: bool,
     error: Option<Key>,
     _buyer_changed: Option<Subscription>,
@@ -61,6 +63,12 @@ enum Request {
     Issue(GiftPurchase),
     Check(String),
     Reveal(Uuid),
+    Print {
+        id: Uuid,
+        salon: String,
+        tz: Tz,
+        locale: Locale,
+    },
     Checkout(Uuid),
     Edit {
         kind: Edit,
@@ -78,6 +86,7 @@ enum Loaded {
     Issued(Box<GiftPurchaseResult>),
     Balance(GiftBalance),
     Revealed(GiftReveal),
+    Print(ReceiptPreview),
     Receipt(Box<AppointmentCheckout>),
     Edited(GiftCard),
 }
@@ -99,6 +108,15 @@ impl Request {
             Self::Issue(purchase) => Loaded::Issued(Box::new(http.purchase_gift_card(&purchase)?)),
             Self::Check(code) => Loaded::Balance(http.check_gift_card(&code)?),
             Self::Reveal(id) => Loaded::Revealed(http.reveal_gift_card(id)?),
+            Self::Print {
+                id,
+                salon,
+                tz,
+                locale,
+            } => Loaded::Print(
+                ReceiptPreview::gift_voucher(&http.reveal_gift_card(id)?, &salon, tz, locale)
+                    .map_err(|error| TransportError::Server(error.to_string()))?,
+            ),
             Self::Checkout(id) => Loaded::Receipt(Box::new(http.open_saved_checkout(id)?)),
             Self::Edit {
                 kind,
@@ -171,6 +189,7 @@ impl Root {
         };
         let mut desk = Desk {
             receipt: None,
+            issued_receipt: false,
             view,
             search: cx.new(|cx| TextField::new(search, false, cx)),
             filter: None,
@@ -184,12 +203,13 @@ impl Root {
             label: cx.new(|cx| TextField::new("", false, cx)),
             buyer_search: cx.new(|cx| TextField::new("", false, cx)),
             buyer: None,
-            expiry: cx.new(|cx| TextField::new("AAAA-MM-DD", false, cx)),
+            expiry: cx.new(|cx| TextField::new("", false, cx)),
             reason: cx.new(|cx| TextField::new("", false, cx)),
             edit: None,
             purchase,
             request: None,
             observed: None,
+            refresh_after: None,
             can_manage: false,
             error: storage_error.then_some(Key::GiftStorageUnavailable),
             _buyer_changed: None,
@@ -242,6 +262,8 @@ impl Root {
     }
 
     pub(super) fn dismiss_gift_cards(&mut self, cx: &mut Context<Self>) {
+        let actor = self.svc.current_session().map(|session| session.user_id);
+        let storage_error = self.t(Key::GiftStorageUnavailable).to_owned();
         let Some(desk) = self.gift_cards_desk() else {
             return;
         };
@@ -252,8 +274,33 @@ impl Root {
             if !receipt.can_go_back() {
                 return;
             }
+            let purchase = desk.issued_receipt.then(|| desk.purchase.clone()).flatten();
+            let view = desk.view;
+            let acknowledged = match (actor, purchase) {
+                (Some(actor), Some(purchase)) => self
+                    .svc
+                    .store
+                    .settle_gift_purchase(&actor, &purchase, Ok(()))
+                    .unwrap_or(false),
+                (_, None) => true,
+                (None, Some(_)) => false,
+            };
+            let Some(desk) = self.gift_cards_desk() else {
+                return;
+            };
+            if !acknowledged {
+                if let Some(receipt) = &mut desk.receipt {
+                    receipt.show_error(storage_error);
+                }
+                cx.notify();
+                return;
+            }
             desk.receipt = None;
-            if let View::Detail(id) = desk.view {
+            if desk.issued_receipt {
+                desk.purchase = None;
+                desk.issued_receipt = false;
+            }
+            if let View::Detail(id) = view {
                 self.request_gift(Request::Detail(id, 1), cx);
             }
         } else if desk.revealed.take().is_some() || desk.edit.take().is_some() {
@@ -275,15 +322,21 @@ impl Root {
         let Some(desk) = self.gift_cards_desk() else {
             return;
         };
+        let changed = desk.observed != observed;
+        if (!online || reconnected || changed) && desk.revealed.take().is_some() {
+            cx.notify();
+        }
+        if (!online || reconnected || changed) && desk.checked.take().is_some() {
+            cx.notify();
+        }
         if !online {
-            desk.revealed = None;
-            desk.checked = None;
             return;
         }
         if desk.request.is_some()
             || desk.receipt.is_some()
             || desk.edit.is_some()
-            || (!reconnected && desk.observed == observed)
+            || (!reconnected
+                && (!changed || desk.refresh_after.is_some_and(|at| Instant::now() < at)))
         {
             return;
         }
@@ -325,6 +378,7 @@ impl Root {
         let token = Arc::new(());
         let issue = pending.is_some();
         let edit = matches!(&request, Request::Edit { .. });
+        let print = matches!(&request, Request::Print { .. });
         if edit || matches!(&request, Request::Checkout(_)) {
             desk.revealed = None;
         }
@@ -341,17 +395,15 @@ impl Root {
                     return;
                 }
                 let online = root.status.connectivity == Connectivity::Online;
-                let attempt_resolved = matches!(
-                    &reply,
-                    Ok(Loaded::Issued(_)) | Err(TransportError::BadRequest(_))
+                let revision = root.svc.store.live_view_revision("commerce").ok();
+                let retired = pending.as_ref().zip(reply.as_ref().err()).is_some_and(
+                    |((actor, purchase), error)| {
+                        root.svc
+                            .store
+                            .settle_gift_purchase(actor, purchase, Err(error))
+                            .unwrap_or(false)
+                    },
                 );
-                let kept = if let Some((actor, purchase)) = &pending
-                    && attempt_resolved
-                {
-                    root.svc.store.clear_gift_purchase(actor, purchase).is_err()
-                } else {
-                    !attempt_resolved
-                };
                 let Some(desk) = root.gift_cards_desk().filter(|desk| {
                     desk.request
                         .as_ref()
@@ -360,13 +412,16 @@ impl Root {
                     return;
                 };
                 desk.request = None;
-                desk.observed = observation;
                 match reply {
                     Ok(Loaded::List(page, capability)) => {
+                        desk.observed = observation;
+                        desk.refresh_after = None;
                         desk.page = Some(page);
                         desk.can_manage = capability;
                     }
                     Ok(Loaded::Detail(card, movements)) => {
+                        desk.observed = observation;
+                        desk.refresh_after = None;
                         if desk
                             .card
                             .as_ref()
@@ -379,24 +434,36 @@ impl Root {
                         desk.movements = Some(movements);
                     }
                     Ok(Loaded::Issued(purchase)) => {
+                        desk.issued_receipt = true;
                         desk.view = View::Detail(purchase.card.id);
                         desk.card = Some(purchase.card);
                         desk.movements = None;
-                        if !kept {
-                            desk.purchase = None;
-                        } else {
-                            desk.error = Some(Key::GiftStorageUnavailable);
-                        }
                         desk.receipt = Some(CheckoutReview::from_receipt(
                             purchase.checkout,
                             observation.unwrap_or(0),
                             cx,
                         ));
                     }
-                    Ok(Loaded::Balance(balance)) if online => desk.checked = Some(balance),
-                    Ok(Loaded::Revealed(reveal)) if online => {
+                    Ok(Loaded::Balance(balance)) if online && observation == revision => {
+                        desk.observed = observation;
+                        desk.checked = Some(balance);
+                    }
+                    Ok(Loaded::Revealed(reveal)) if online && observation == revision => {
+                        desk.observed = observation;
                         desk.card = Some(reveal.card);
                         desk.revealed = Some(reveal.code);
+                    }
+                    Ok(Loaded::Print(preview)) => {
+                        if online && observation == revision && desk.revealed.is_some() {
+                            cx.open_url(&preview.url());
+                            cx.background_executor()
+                                .spawn(async move {
+                                    preview.serve();
+                                })
+                                .detach();
+                        } else {
+                            desk.error = Some(Key::GiftPrintFailed);
+                        }
                     }
                     Ok(Loaded::Receipt(receipt)) => {
                         desk.receipt = Some(CheckoutReview::from_receipt(
@@ -412,6 +479,7 @@ impl Root {
                     }
                     Ok(_) => {}
                     Err(error) => {
+                        desk.refresh_after = Some(Instant::now() + Duration::from_secs(5));
                         let uncertain = matches!(
                             error,
                             TransportError::Offline(_)
@@ -419,7 +487,7 @@ impl Root {
                                 | TransportError::Unauthorized
                                 | TransportError::RateLimited(_)
                         );
-                        if issue && !kept {
+                        if issue && retired {
                             desk.purchase = None
                         }
                         if edit {
@@ -429,6 +497,7 @@ impl Root {
                             TransportError::ReplicaGenerationChanged => Key::GiftReviewRestored,
                             TransportError::BadRequest(_) if edit => Key::GiftReviewChanged,
                             TransportError::Forbidden(_) => Key::GiftAccessDenied,
+                            _ if print => Key::GiftPrintFailed,
                             _ if issue && uncertain => Key::GiftIssueUnconfirmed,
                             _ => Key::GiftUnavailable,
                         });
@@ -488,28 +557,20 @@ impl Root {
             }
             return;
         }
-        let amount = parse_reviewed_amount(desk.value.read(cx).text()).filter(|value| *value != 0);
-        let expires = expiry_date(tz, desk.expiry.read(cx).text());
-        let label = desk.label.read(cx).text().trim().to_owned();
-        let (Some(amount_cents), Some(expires_at), Some(generation)) =
-            (amount, expires, generation)
-        else {
+        let purchase = generation.and_then(|generation| {
+            GiftPurchase::review(
+                desk.value.read(cx).text(),
+                desk.label.read(cx).text(),
+                desk.buyer.as_ref().map(|(id, _)| *id),
+                expiry_date(tz, desk.expiry.read(cx).text())?,
+                generation,
+                Utc::now(),
+            )
+        });
+        let Some(purchase) = purchase else {
             desk.error = Some(Key::GiftIssueInvalid);
             cx.notify();
             return;
-        };
-        if label.chars().count() > 120 || expires_at.is_some_and(|date| date <= Utc::now()) {
-            desk.error = Some(Key::GiftIssueInvalid);
-            cx.notify();
-            return;
-        }
-        let purchase = GiftPurchase {
-            amount_cents,
-            label,
-            buyer_client_id: desk.buyer.as_ref().map(|(id, _)| *id),
-            expires_at,
-            idempotency_key: Uuid::now_v7(),
-            generation,
         };
         match self.svc.store.reserve_gift_purchase(&actor, &purchase) {
             Ok(true) => {
@@ -649,6 +710,25 @@ impl Root {
             generation,
         };
         self.request_gift(request, cx);
+    }
+
+    fn print_gift(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        let salon = self
+            .svc
+            .store
+            .salon_settings()
+            .ok()
+            .flatten()
+            .map_or_else(|| "Citame".to_owned(), |salon| salon.name);
+        self.request_gift(
+            Request::Print {
+                id,
+                salon,
+                tz: self.tz,
+                locale: self.locale,
+            },
+            cx,
+        );
     }
 
     fn gift_button(
@@ -1086,6 +1166,15 @@ impl Root {
                         },
                         cx,
                     ))
+                    .when(ready, |buttons| {
+                        buttons.child(self.gift_button(
+                            "print-gift-voucher",
+                            Key::GiftPrint,
+                            Kind::Ghost,
+                            move |root, cx| root.print_gift(id, cx),
+                            cx,
+                        ))
+                    })
                     .child(self.gift_button(
                         "hide-gift-code",
                         Key::GiftHideCode,
@@ -1252,5 +1341,25 @@ mod tests {
         assert_eq!(expiry.unwrap().to_rfc3339(), "2026-03-29T22:00:00+00:00");
         assert_eq!(expiry_date(chrono_tz::Europe::Madrid, ""), Some(None));
         assert_eq!(expiry_date(chrono_tz::Europe::Madrid, "2026-02-31"), None);
+    }
+    #[gpui::test]
+    async fn closed_gift_desk_reopens_the_same_unconfirmed_purchase(cx: &mut gpui::TestAppContext) {
+        let (_directory, window) = crate::root::tests::open(cx);
+        window.update(cx, |root, _, cx| {
+            let actor = root.svc.current_session().expect("local test session").user_id;
+            let purchase = GiftPurchase::review("25,00", "Regalo", None, None, "reviewed".into(), Utc::now()).unwrap();
+            assert!(root.svc.store.reserve_gift_purchase(&actor, &purchase).unwrap());
+            root.status.connectivity = Connectivity::Offline;
+            root.open_gift_cards(cx);
+            assert!(matches!(&root.overlay, Overlay::GiftCards(desk) if desk.view == View::Issue));
+            root.issue_gift(cx);
+            root.dismiss_gift_cards(cx);
+            root.dismiss_gift_cards(cx);
+            root.open_gift_cards(cx);
+            assert!(matches!(&root.overlay, Overlay::GiftCards(desk)
+                if desk.view == View::Issue
+                    && desk.purchase.as_ref().is_some_and(|saved| saved.idempotency_key == purchase.idempotency_key)));
+            assert_eq!(root.svc.store.outbox_len().unwrap(), 0);
+        }).unwrap();
     }
 }

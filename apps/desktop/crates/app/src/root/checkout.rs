@@ -62,6 +62,12 @@ impl CheckoutReview {
         }))
     }
 
+    pub(super) fn show_error(&mut self, message: String) {
+        if let Self::Receipt(form) = self {
+            form.error = Some(message);
+        }
+    }
+
     pub(super) fn can_go_back(&self) -> bool {
         !matches!(self, Self::Receipt(form) if form.busy
             || form.request.is_some()

@@ -107,6 +107,32 @@ pub struct GiftPurchase {
     pub generation: String,
 }
 
+impl GiftPurchase {
+    pub fn review(
+        amount: &str,
+        label: &str,
+        buyer_client_id: Option<Uuid>,
+        expires_at: Option<DateTime<Utc>>,
+        generation: String,
+        now: DateTime<Utc>,
+    ) -> Option<Self> {
+        let amount_cents =
+            crate::billing::parse_reviewed_amount(amount).filter(|value| *value != 0)?;
+        let label = label.trim();
+        if label.encode_utf16().count() > 120 || expires_at.is_some_and(|date| date <= now) {
+            return None;
+        }
+        Some(Self {
+            amount_cents,
+            label: label.to_owned(),
+            buyer_client_id,
+            expires_at,
+            idempotency_key: Uuid::now_v7(),
+            generation,
+        })
+    }
+}
+
 #[derive(Deserialize)]
 pub struct GiftPurchaseResult {
     pub card: GiftCard,
@@ -169,8 +195,10 @@ impl HttpTransport {
         input: &GiftPurchase,
     ) -> Result<GiftPurchaseResult, TransportError> {
         let headers = [("x-citame-generation", input.generation.as_str())];
-        let mut purchase: GiftPurchaseResult =
-            read_response(self.send_json_with_headers(PATH, input, &headers)?, false)?;
+        let mut purchase: GiftPurchaseResult = read_response_with(
+            self.send_json_with_headers(PATH, input, &headers)?,
+            gift_purchase_error,
+        )?;
         if parse_id(&purchase.checkout.id).ok() != Some(purchase.card.checkout_id)
             || purchase.card.amount_cents != input.amount_cents
             || purchase.checkout.total_cents != input.amount_cents
@@ -242,5 +270,50 @@ impl HttpTransport {
             self.get(&self.agent, path, Some("application/json"))?,
             false,
         )
+    }
+}
+
+fn gift_purchase_error(status: u16, retry_after: Option<&str>, body: &str) -> TransportError {
+    let error = review_transport_error(status, retry_after, body);
+    if matches!(error, TransportError::BadRequest(_)) {
+        let response = serde_json::from_str::<serde_json::Value>(body).ok();
+        let code = response
+            .as_ref()
+            .and_then(|body| body.pointer("/error/code"))
+            .and_then(serde_json::Value::as_str);
+        if !matches!(
+            (status, code),
+            (400, Some("validation_error"))
+                | (404, Some("not_found"))
+                | (409, Some("client_merged" | "storage_limit"))
+        ) {
+            return TransportError::Server(format!("Unconfirmed Cloud response (HTTP {status})"));
+        }
+    }
+    error
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gift_purchase_keeps_unconfirmed_responses_retryable() {
+        assert!(matches!(
+            gift_purchase_error(408, None, ""),
+            TransportError::Offline(_)
+        ));
+        assert!(matches!(
+            gift_purchase_error(404, None, "<html>upstream error</html>"),
+            TransportError::Server(_)
+        ));
+        assert!(matches!(
+            gift_purchase_error(404, None, r#"{"error":{"code":"not_found"}}"#),
+            TransportError::BadRequest(_)
+        ));
+        assert_eq!(
+            gift_purchase_error(409, None, r#"{"error":{"code":"sync_generation_changed"}}"#),
+            TransportError::ReplicaGenerationChanged
+        );
     }
 }
