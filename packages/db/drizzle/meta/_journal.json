@@ -848,6 +848,13 @@
       "when": 1795317900000,
       "tag": "0120_gift_card_eligible_services",
       "breakpoints": true
+    },
+    {
+      "idx": 121,
+      "version": "7",
+      "when": 1795318500000,
+      "tag": "0121_gift_storefront",
+      "breakpoints": true
     }
   ]
 }

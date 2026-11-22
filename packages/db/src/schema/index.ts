@@ -15,6 +15,7 @@ export * from "./desktop-device";
 export * from "./email-delivery";
 export * from "./gift-card";
 export * from "./gift-card-ledger";
+export * from "./gift-offer";
 export * from "./intake";
 export * from "./inventory";
 export * from "./inventory-classification";

@@ -5,6 +5,7 @@ import { PageContainer } from "~/components/pages";
 import { buttonClasses } from "~/components/ui/button";
 import { ChevronRightIcon, ClockIcon } from "~/components/ui/icons";
 import { Skeleton } from "~/components/ui/states";
+import { GiftStorefront } from "~/features/booking/gift-storefront";
 import {
   PublicBusinessProfile,
   publicProfileImageUrl,
@@ -22,16 +23,20 @@ export const Route = createFileRoute("/")({
   loader: {
     staleReloadMode: "blocking",
     handler: async ({ context }) => {
-      const [, , salon, published] = await Promise.all([
+      const [, , salon, published, gifts] = await Promise.all([
         context.queryClient.ensureQueryData(servicesQuery),
         context.queryClient.ensureQueryData(staffQuery),
         context.queryClient.ensureQueryData(salonQuery),
         api()
           .businessProfile()
           .catch(() => ({ profile: null, openingSchedule: undefined, images: undefined })),
+        api()
+          .giftCards.publicOffers()
+          .catch(() => ({ offers: [] })),
       ]);
       return {
         ...published,
+        giftOffers: gifts.offers,
         localDate: localDateOf(new Date().toISOString(), salon.timezone),
       };
     },
@@ -66,7 +71,7 @@ function HomeSkeleton() {
 }
 
 function Home() {
-  const { profile, openingSchedule, images, localDate } = Route.useLoaderData();
+  const { profile, openingSchedule, images, localDate, giftOffers } = Route.useLoaderData();
   const logo = images?.find(({ kind }) => kind === "logo");
   const cover = images?.find(({ kind }) => kind === "cover");
   const { t, locale } = useI18n();
@@ -222,6 +227,7 @@ function Home() {
         </div>
       </section>
 
+      <GiftStorefront offers={giftOffers} />
       {profile && (
         <PublicBusinessProfile
           profile={profile}

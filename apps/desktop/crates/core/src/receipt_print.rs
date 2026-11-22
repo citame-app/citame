@@ -346,6 +346,9 @@ fn gift_document(gift: &GiftReveal, salon: &str, tz: Tz, locale: Locale, nonce: 
     let label = |key| t(locale, key);
     let card = &gift.card;
     let balance = &card.balance;
+    let accent = card
+        .offer_theme
+        .map_or("#823054", |theme| theme.print_accent());
     let es = locale == Locale::EsAr;
     let lang = if es { "es-AR" } else { "en" };
     let date_format = if es {
@@ -387,7 +390,7 @@ fn gift_document(gift: &GiftReveal, salon: &str, tz: Tz, locale: Locale, nonce: 
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title><style nonce="{nonce}">
 body{{margin:0;color:#211c20;background:white;font:1rem/1.55 system-ui,sans-serif}}
-main{{margin:auto;max-width:38rem;padding:1.5rem;overflow-wrap:anywhere}}
+main{{margin:auto;max-width:38rem;padding:1.5rem;overflow-wrap:anywhere;border-top:6px solid {accent}}}
 h1,h2,p{{margin:0 0 .75rem}} code{{display:block;font-size:1.13rem;margin:1rem 0}}
 button{{font:inherit;padding:.65rem 1rem;background:#823054;color:white;border:0;border-radius:.35rem;margin-bottom:1.25rem}}
 @media print{{button{{display:none}} main{{max-width:none;padding:0}}}}

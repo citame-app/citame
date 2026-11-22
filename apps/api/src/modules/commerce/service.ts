@@ -363,9 +363,9 @@ export async function refreshStatus(tx: Tx, id: string, now = new Date()) {
 async function fulfillCheckout(tx: Tx, id: string) {
   await consumeReservedInventory(tx, id);
   await accrueCommissions(tx, id);
-  await activateCheckoutGifts(tx, id);
-  await activateCheckoutPasses(tx, id);
   const fulfilledAt = new Date();
+  await activateCheckoutGifts(tx, id, fulfilledAt);
+  await activateCheckoutPasses(tx, id);
   await tx.update(checkout).set({ fulfilledAt }).where(eq(checkout.id, id));
   await syncCheckoutRewards(tx, id, true);
   return fulfilledAt;

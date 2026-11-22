@@ -27,6 +27,97 @@ impl GiftStatus {
 
 pub const MAX_GIFT_SERVICES: usize = 50;
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GiftOfferTheme {
+    #[default]
+    Rose,
+    Sage,
+    Ink,
+}
+
+impl GiftOfferTheme {
+    pub fn print_accent(self) -> &'static str {
+        match self {
+            Self::Rose => "#a14468",
+            Self::Sage => "#3d7459",
+            Self::Ink => "#26354f",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GiftOfferTerms {
+    pub name: String,
+    pub description: String,
+    pub theme: GiftOfferTheme,
+    pub amount_cents: u32,
+    pub price_cents: u32,
+    pub validity_days: Option<u16>,
+    pub eligible_service_ids: Vec<Uuid>,
+    pub published: bool,
+}
+
+impl GiftOfferTerms {
+    pub fn canonical(mut self) -> Self {
+        // ECMAScript String.trim is used by the Zod contract.
+        fn whitespace(character: char) -> bool {
+            matches!(character, '\u{9}'..='\u{d}' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}'
+                | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}')
+        }
+        self.name = self.name.trim_matches(whitespace).to_owned();
+        self.description = self.description.trim_matches(whitespace).to_owned();
+        self.eligible_service_ids.sort_unstable();
+        self.eligible_service_ids.dedup();
+        self
+    }
+
+    pub fn valid(&self) -> bool {
+        !self.name.is_empty()
+            && self.name.encode_utf16().count() <= 120
+            && self.description.encode_utf16().count() <= 500
+            && (1..=999_999_999).contains(&self.amount_cents)
+            && (1..=999_999_999).contains(&self.price_cents)
+            && self
+                .validity_days
+                .is_none_or(|days| (1..=730).contains(&days))
+            && self.eligible_service_ids.len() <= MAX_GIFT_SERVICES
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GiftOffer {
+    pub id: Uuid,
+    pub version: u32,
+    #[serde(flatten)]
+    pub terms: GiftOfferTerms,
+}
+
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct GiftOfferReview {
+    pub proposal: GiftOffer,
+    pub generation: String,
+    pub catalogue_revision: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GiftOfferDesk {
+    pub offers: Vec<GiftOffer>,
+    pub generation: String,
+    pub catalogue_revision: String,
+    pub catalogue: Vec<GiftService>,
+}
+
+pub fn offer_save_is_terminal(result: Result<(), &TransportError>) -> bool {
+    matches!(
+        result,
+        Ok(()) | Err(TransportError::BadRequest(_) | TransportError::ReplicaGenerationChanged)
+    )
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 pub struct GiftService {
     pub id: Uuid,
@@ -53,6 +144,9 @@ pub struct GiftCard {
     pub id: Uuid,
     pub label: String,
     pub checkout_id: Uuid,
+    pub offer_id: Option<Uuid>,
+    pub offer_theme: Option<GiftOfferTheme>,
+    pub offer_validity_days: Option<u16>,
     pub amount_cents: u32,
     pub purchase_price_cents: Option<u32>,
     #[serde(flatten)]
@@ -214,6 +308,17 @@ impl GiftCatalogue {
         status: Option<GiftStatus>,
         now: DateTime<Utc>,
     ) -> GiftPage {
+        self.search_filtered(page, search, status, now, false)
+    }
+
+    pub fn search_filtered(
+        &self,
+        page: u32,
+        search: &str,
+        status: Option<GiftStatus>,
+        now: DateTime<Utc>,
+        pending_orders: bool,
+    ) -> GiftPage {
         const PAGE_SIZE: usize = 20;
         let label_term = search.to_lowercase();
         let page = usize::try_from(page.max(1)).unwrap_or(usize::MAX);
@@ -222,7 +327,9 @@ impl GiftCatalogue {
         let mut cards = Vec::with_capacity(PAGE_SIZE);
         for card in &self.cards {
             let current_status = card.balance.status_at(now);
-            if status.is_some_and(|status| current_status != status)
+            if (pending_orders
+                && (card.offer_id.is_none() || current_status != GiftStatus::Pending))
+                || status.is_some_and(|status| current_status != status)
                 || (!label_term.is_empty()
                     && !card.balance.code_last4.eq_ignore_ascii_case(search)
                     && !card.label.to_lowercase().contains(&label_term))
@@ -339,8 +446,21 @@ impl HttpTransport {
         search: &str,
         status: Option<GiftStatus>,
     ) -> Result<GiftPage, TransportError> {
+        self.gift_cards_filtered(page, search, status, false)
+    }
+
+    pub fn gift_cards_filtered(
+        &self,
+        page: u32,
+        search: &str,
+        status: Option<GiftStatus>,
+        pending_orders: bool,
+    ) -> Result<GiftPage, TransportError> {
         let mut query = url::form_urlencoded::Serializer::new(String::new());
         query.append_pair("page", &page.to_string());
+        if pending_orders {
+            query.append_pair("pendingOffer", "1");
+        }
         if !search.is_empty() {
             query.append_pair("search", search);
         }
@@ -348,6 +468,41 @@ impl HttpTransport {
             query.append_pair("status", status.wire());
         }
         self.gift_get(&format!("{PATH}?{}", query.finish()))
+    }
+
+    pub fn gift_offers(&self) -> Result<GiftOfferDesk, TransportError> {
+        self.gift_get(&format!("{PATH}/offers"))
+    }
+
+    pub fn save_gift_offer(&self, reviewed: &GiftOfferReview) -> Result<GiftOffer, TransportError> {
+        let offer = &reviewed.proposal;
+        let terms = offer.terms.clone().canonical();
+        if !terms.valid() || reviewed.generation.is_empty() || offer.version >= i32::MAX as u32 {
+            return Err(TransportError::BadRequest(
+                "Invalid gift offer review".into(),
+            ));
+        }
+        let mut fields = serde_json::to_value(&terms)
+            .map_err(|error| TransportError::BadRequest(error.to_string()))?;
+        fields["version"] = offer.version.into();
+        fields["generation"] = reviewed.generation.clone().into();
+        fields["catalogueRevision"] = reviewed.catalogue_revision.clone().into();
+        let response = self.send_put_json_with_headers(
+            &format!("{PATH}/offers/{}", offer.id),
+            &fields,
+            &[("x-citame-generation", &reviewed.generation)],
+        )?;
+        let saved: GiftOffer = read_response_with(response, gift_offer_save_error)?;
+        if saved.id != offer.id
+            || saved.version == 0
+            || !(offer.version..=offer.version.saturating_add(1)).contains(&saved.version)
+            || saved.terms != terms
+        {
+            return Err(TransportError::Server(
+                "Unexpected gift offer acknowledgement".into(),
+            ));
+        }
+        Ok(saved)
     }
 
     pub fn gift_eligible_services(&self) -> Result<Vec<GiftService>, TransportError> {
@@ -467,6 +622,24 @@ impl HttpTransport {
             false,
         )
     }
+}
+
+fn gift_offer_save_error(status: u16, retry_after: Option<&str>, body: &str) -> TransportError {
+    let error = review_transport_error(status, retry_after, body);
+    if matches!(error, TransportError::BadRequest(_)) {
+        let response = serde_json::from_str::<serde_json::Value>(body).ok();
+        let code = response
+            .as_ref()
+            .and_then(|body| body.pointer("/error/code"))
+            .and_then(serde_json::Value::as_str);
+        if !matches!(
+            (status, code),
+            (400, Some("validation_error")) | (409, Some("version_conflict"))
+        ) {
+            return TransportError::Server(format!("Unconfirmed Cloud response (HTTP {status})"));
+        }
+    }
+    error
 }
 
 fn gift_purchase_error(status: u16, retry_after: Option<&str>, body: &str) -> TransportError {

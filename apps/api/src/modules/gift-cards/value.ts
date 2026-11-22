@@ -25,7 +25,7 @@ export async function pendingGiftForCheckout(tx: Tx, id: string, principal: Prin
   if (assigned) throw new DomainError("invalid_state", "Gift card already has a purchase receipt");
   return row;
 }
-export async function activateCheckoutGifts(tx: Tx, checkoutId: string) {
+export async function activateCheckoutGifts(tx: Tx, checkoutId: string, now: Date) {
   const lines = await tx
     .select({ giftCardId: checkoutLine.giftCardId })
     .from(checkoutLine)
@@ -41,7 +41,14 @@ export async function activateCheckoutGifts(tx: Tx, checkoutId: string) {
       throw new DomainError("invalid_state", "Gift card cannot be activated");
     await tx
       .update(giftCard)
-      .set({ status: "active", balanceCents: card.amountCents, version: card.version + 1 })
+      .set({
+        status: "active",
+        balanceCents: card.amountCents,
+        version: card.version + 1,
+        ...(card.offerValidityDays === null
+          ? {}
+          : { expiresAt: new Date(now.getTime() + card.offerValidityDays * 86400_000) }),
+      })
       .where(eq(giftCard.id, card.id));
     await tx.insert(giftCardMovement).values({
       giftCardId: card.id,

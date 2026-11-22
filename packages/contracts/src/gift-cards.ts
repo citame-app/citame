@@ -5,13 +5,14 @@ import { giftCardCodeSchema } from "./gift-card-code";
 
 export { giftCardCodeSchema } from "./gift-card-code";
 
-const eligibleGiftServiceSchema = z.object({ id: idSchema, name: z.string() });
+export const eligibleGiftServiceSchema = z.object({ id: idSchema, name: z.string() });
 export const giftEligibleCatalogSchema = z.object({
   services: z.array(eligibleGiftServiceSchema),
 });
 export type GiftEligibleService = z.infer<typeof eligibleGiftServiceSchema>;
 export type GiftEligibleCatalog = z.infer<typeof giftEligibleCatalogSchema>;
 export const maximumGiftServices = 50;
+export const giftOfferThemeSchema = z.enum(["rose", "sage", "ink"]);
 export const giftCardPurchaseSchema = z
   .object({
     amountCents: moneyCentsSchema.positive(),
@@ -28,12 +29,16 @@ export const giftCardQuerySchema = z.object({
   page: z.coerce.number().int().min(1).max(100000).default(1),
   search: z.string().trim().max(100).default(""),
   status: giftCardStatusSchema.optional(),
+  pendingOffer: z.literal("1").optional(),
 });
 export const giftCardSchema = z.object({
   id: idSchema,
   label: z.string(),
   buyerClientId: idSchema.nullable(),
   checkoutId: idSchema,
+  offerId: idSchema.optional(),
+  offerTheme: giftOfferThemeSchema.optional(),
+  offerValidityDays: z.number().int().min(1).max(730).optional(),
   amountCents: moneyCentsSchema,
   purchasePriceCents: moneyCentsSchema.positive().optional(),
   eligibleServices: z.array(eligibleGiftServiceSchema).max(maximumGiftServices).optional(),

@@ -47,3 +47,11 @@ price retain the original request identity.
 An operator can issue a gift for up to fifty active treatments in the checkout currency. Store the confirmed service IDs and names with the card so the terms survive later catalogue edits and can be shown on vouchers and in Desktop's offline register. An empty list preserves the general-use terms of existing cards. Replay canonicalizes the selected IDs and returns the original receipt before reading the current catalogue.
 
 At payment time use each eligible service line's final amount after discounts. Ignore products, custom charges, tips and services already fully funded by a pass. The checkout lock serializes competing tenders. When several restricted cards overlap, a capacity check verifies that their combined amounts fit the eligible service lines. Revalidate after accepting a package or membership visit so the order of payment cannot double-fund a treatment. A rejected tender rolls back the payment and leaves the entitlement balance intact.
+
+### Public gift offers
+
+A catalogue operator drafts a named offer with a reviewed price, gift value, design, optional validity after settlement and eligible treatments. Publication is explicit and version-checked. A draft or an unavailable payment provider yields an empty public shelf. An offer that references a treatment no longer available for sale is hidden until the centre reviews it.
+
+A signed-in customer can order a published, reviewed version for their own account. The request carries the offer identity, version and an idempotency key. The server applies price and value. A retry returns the original receipt even after a later edit or withdrawal. Each order saves the treatment terms, design and validity. The validity clock starts once settlement activates the gift.
+
+Pending online orders are scoped to the operator's normal sales permissions. Opening an order uses its existing receipt, including any bank order awaiting confirmation. Issuing a card from the desk without a public offer remains a separate operation.

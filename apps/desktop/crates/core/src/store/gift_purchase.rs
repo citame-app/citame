@@ -1,7 +1,44 @@
 use super::*;
-use crate::{http::gift_cards::GiftPurchase, sync::TransportError};
+use crate::{
+    http::gift_cards::{GiftOfferReview, GiftPurchase, offer_save_is_terminal},
+    sync::TransportError,
+};
 
 impl Store {
+    pub fn pending_gift_offer(&self, actor: &str) -> Result<Option<GiftOfferReview>> {
+        self.get_meta(&format!("gift_offer_pending:{actor}"))?
+            .map(|value| Ok(serde_json::from_str(&value)?))
+            .transpose()
+    }
+
+    pub fn reserve_gift_offer(&self, actor: &str, offer: &GiftOfferReview) -> Result<bool> {
+        let identity = format!("gift_offer_pending:{actor}");
+        let data = serde_json::to_string(offer)?;
+        Ok(self.conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE meta.value = excluded.value",
+            params![identity, data],
+        )? == 1)
+    }
+
+    pub fn settle_gift_offer(
+        &self,
+        actor: &str,
+        offer: &GiftOfferReview,
+        result: std::result::Result<(), &TransportError>,
+    ) -> Result<()> {
+        if offer_save_is_terminal(result) {
+            self.conn.execute(
+                "DELETE FROM meta WHERE key = ?1 AND value = ?2",
+                params![
+                    format!("gift_offer_pending:{actor}"),
+                    serde_json::to_string(offer)?
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn pending_gift_purchase(&self, actor: &str) -> Result<Option<GiftPurchase>> {
         self.get_meta(&format!("gift_purchase_pending:{actor}"))?
             .map(|value| {
@@ -52,6 +89,49 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unconfirmed_gift_template_survives_restart_under_its_own_actor() {
+        use crate::http::gift_cards::{GiftOffer, GiftOfferTerms, GiftOfferTheme};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("replica.db");
+        let review = GiftOfferReview {
+            generation: "reviewed".into(),
+            catalogue_revision: "f".repeat(64),
+            proposal: GiftOffer {
+                id: uuid::Uuid::now_v7(),
+                version: 0,
+                terms: GiftOfferTerms {
+                    name: "Reviewed gift".into(),
+                    description: String::new(),
+                    theme: GiftOfferTheme::Rose,
+                    amount_cents: 3000,
+                    price_cents: 2200,
+                    validity_days: Some(30),
+                    eligible_service_ids: Vec::new(),
+                    published: true,
+                },
+            },
+        };
+        {
+            let store = Store::open(&path).unwrap();
+            assert!(store.reserve_gift_offer("owner", &review).unwrap());
+        }
+        let store = Store::open(&path).unwrap();
+        let recovered = store.pending_gift_offer("owner").unwrap().unwrap();
+        assert!(recovered == review);
+        assert!(store.pending_gift_offer("another").unwrap().is_none());
+        assert!(store.reserve_gift_offer("owner", &recovered).unwrap());
+        let mut other = recovered.clone();
+        other.proposal.id = uuid::Uuid::now_v7();
+        assert!(!store.reserve_gift_offer("owner", &other).unwrap());
+        store.settle_gift_offer("owner", &other, Ok(())).unwrap();
+        assert!(store.pending_gift_offer("owner").unwrap().is_some());
+        store
+            .settle_gift_offer("owner", &recovered, Ok(()))
+            .unwrap();
+        assert!(store.pending_gift_offer("owner").unwrap().is_none());
+    }
 
     #[test]
     fn gift_purchase_survives_a_restart_and_clears_only_the_exact_attempt() {

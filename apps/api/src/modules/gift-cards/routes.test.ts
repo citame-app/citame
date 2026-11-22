@@ -1,7 +1,13 @@
 import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from "bun:test";
 import {
+  giftCardListSchema,
   giftCardMovementListSchema,
+  giftCardPurchaseResponseSchema,
+  giftCardSchema,
+  giftOfferAdminListSchema,
+  giftOfferSchema,
   giftReplicaPageSchema,
+  publicGiftOfferListSchema,
   syncPullResponseSchema,
 } from "@sob/contracts";
 import { sql } from "drizzle-orm";
@@ -169,6 +175,155 @@ beforeEach(async () => {
   ]);
   refundOutcome = "success";
   dispatches = 0;
+});
+
+async function offerReview() {
+  const { generation, catalogueRevision } = giftOfferAdminListSchema.parse(
+    await (await call(owner, "/admin/gift-cards/offers")).json(),
+  );
+  return { generation, catalogueRevision };
+}
+
+test("a published offer freezes its checkout, enters the pending desk and activates at settlement", async () => {
+  await t.db.execute(sql`update service set currency = 'EUR' where id = ${fixtures.haircutId}`);
+  const offerId = key();
+  const route = `/admin/gift-cards/offers/${offerId}`;
+  const template = {
+    ...(await offerReview()),
+    name: "Skin care gift",
+    description: "A gift for the treatment you selected.",
+    theme: "sage",
+    amountCents: 3000,
+    priceCents: 2500,
+    validityDays: 30,
+    eligibleServiceIds: [fixtures.haircutId],
+    published: false,
+    version: 0,
+  };
+  const writeDraft = await call(owner, route, "PUT", template);
+  expect(writeDraft.status, await writeDraft.clone().text()).toBe(200);
+  const draft = giftOfferSchema.parse(await writeDraft.json());
+  expect(giftOfferSchema.parse(await (await call(owner, route, "PUT", template)).json())).toEqual(
+    draft,
+  );
+  const browse = async () =>
+    publicGiftOfferListSchema.parse(await (await t.app.request("/gift-offers")).json()).offers;
+  expect(await browse()).toEqual([]);
+  const orderRoute = "/me/gift-cards/storefront";
+  const request = { offerId, version: 2, idempotencyKey: key() };
+  expect((await call(client, orderRoute, "POST", request)).status).toBe(409);
+
+  const publish = { ...template, published: true, version: draft.version };
+  expect((await call(client, route, "PUT", publish)).status).toBe(403);
+  const published = await call(owner, route, "PUT", publish);
+  expect(published.status, await published.clone().text()).toBe(200);
+  expect(await browse()).toMatchObject([
+    {
+      id: offerId,
+      theme: "sage",
+      amountCents: 3000,
+      priceCents: 2500,
+      eligibleServices: [{ id: fixtures.haircutId }],
+    },
+  ]);
+  expect((await t.app.request(orderRoute, { method: "POST" })).status).toBe(401);
+  expect((await call(owner, orderRoute, "POST", request)).status).toBe(403);
+  expect((await call(client, orderRoute, "POST", { ...request, priceCents: 1 })).status).toBe(400);
+  const ordered = await call(client, orderRoute, "POST", request);
+  expect(ordered.status, await ordered.clone().text()).toBe(201);
+  const purchase = giftCardPurchaseResponseSchema.parse(await ordered.json());
+  expect(purchase.card).toMatchObject({
+    offerId,
+    buyerClientId: client.clientId,
+    status: "pending",
+    expiresAt: null,
+    offerValidityDays: 30,
+    balanceCents: 0,
+    amountCents: 3000,
+  });
+  expect(purchase.checkout.totalCents).toBe(2500);
+  const pending = async (who: Actor, mode: "admin" | "me" = "admin") =>
+    giftCardListSchema.parse(await (await call(who, `/${mode}/gift-cards?pendingOffer=1`)).json())
+      .cards;
+  expect(await pending(owner)).toMatchObject([{ id: purchase.card.id }]);
+  expect(await pending(other, "me")).toEqual([]);
+
+  const removed = await call(owner, route, "PUT", {
+    ...template,
+    version: 2,
+    priceCents: 1000,
+    theme: "ink",
+  });
+  expect(removed.status).toBe(200);
+  expect(await browse()).toEqual([]);
+  expect((await call(owner, route, "PUT", { ...publish, priceCents: 3000 })).status).toBe(409);
+  expect(
+    (await call(client, orderRoute, "POST", { ...request, idempotencyKey: key() })).status,
+  ).toBe(409);
+  const retry = await call(client, orderRoute, "POST", request);
+  expect(giftCardPurchaseResponseSchema.parse(await retry.json()).checkout).toEqual(
+    purchase.checkout,
+  );
+
+  const bank = await pay(purchase.checkout.id, "redsys_card", 2500);
+  expect(bank.status).toBe(201);
+  const { payment } = (await bank.json()) as { payment: { order: string } };
+  expect((await notify(payment.order, 2500)).status).toBe(200);
+  const issued = giftCardSchema.parse(
+    await (await call(client, `/me/gift-cards/${purchase.card.id}`)).json(),
+  );
+  expect(issued).toMatchObject({
+    status: "active",
+    balanceCents: 3000,
+    offerId,
+    offerTheme: "sage",
+  });
+  expect(Date.parse(issued.expiresAt ?? "") - Date.now()).toBeGreaterThan(29 * 86400_000);
+  expect(await pending(owner)).toEqual([]);
+});
+
+test("a reactivated treatment requires an explicit offer review before it can be ordered again", async () => {
+  await t.db.execute(sql`update service set currency = 'EUR' where id = ${fixtures.haircutId}`);
+  const id = key();
+  const route = `/admin/gift-cards/offers/${id}`;
+  const terms = {
+    ...(await offerReview()),
+    name: "Reviewed treatment",
+    amountCents: 1500,
+    priceCents: 1000,
+    eligibleServiceIds: [fixtures.haircutId],
+    published: true,
+    version: 0,
+  };
+  const browse = async () =>
+    publicGiftOfferListSchema.parse(await (await t.app.request("/gift-offers")).json()).offers;
+  expect((await call(owner, route, "PUT", terms)).status).toBe(200);
+  expect(await browse()).toMatchObject([{ id, version: 1 }]);
+  await t.db.execute(
+    sql`update service set active = false, catalog_version = catalog_version + 1 where id = ${fixtures.haircutId}`,
+  );
+  expect(await browse()).toEqual([]);
+  await t.db.execute(
+    sql`update service set active = true, catalog_version = catalog_version + 1 where id = ${fixtures.haircutId}`,
+  );
+  expect(await browse()).toEqual([]);
+  const request = { offerId: id, idempotencyKey: key(), version: 1 };
+  expect((await call(client, "/me/gift-cards/storefront", "POST", request)).status).toBe(409);
+  expect((await call(owner, route, "PUT", { ...terms, version: 1 })).status).toBe(409);
+  const fresh = await offerReview();
+  const restored = await call(owner, route, "PUT", {
+    ...terms,
+    ...fresh,
+    version: 1,
+    generation: "stale-generation",
+  });
+  expect(restored.status).toBe(409);
+  expect(await restored.json()).toMatchObject({ error: { code: "sync_generation_changed" } });
+  expect((await call(owner, route, "PUT", { ...terms, ...fresh, version: 1 })).status).toBe(200);
+  expect(await browse()).toMatchObject([{ id, version: 2 }]);
+  expect(
+    (await call(client, "/me/gift-cards/storefront", "POST", { ...request, version: 2 })).status,
+  ).toBe(201);
 });
 
 test("the offline register contains only cards in the current account scope", async () => {

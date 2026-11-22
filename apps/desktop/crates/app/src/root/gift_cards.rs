@@ -4,14 +4,16 @@ use sob_core::billing::{AppointmentCheckout, normalize_gift_card_code};
 use sob_core::http::{
     HttpTransport,
     gift_cards::{
-        GiftBalance, GiftCard, GiftMovementKind, GiftMovements, GiftPage, GiftPurchase,
-        GiftPurchaseResult, GiftReveal, GiftService, GiftStatus, MAX_GIFT_SERVICES,
+        GiftBalance, GiftCard, GiftMovementKind, GiftMovements, GiftOffer, GiftOfferDesk,
+        GiftOfferReview, GiftPage, GiftPurchase, GiftPurchaseResult, GiftReveal, GiftService,
+        GiftStatus, MAX_GIFT_SERVICES,
     },
 };
 use sob_core::{receipt_print::ReceiptPreview, sync::TransportError};
 use uuid::Uuid;
 
 mod offline;
+mod storefront;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum View {
@@ -19,6 +21,7 @@ enum View {
     Detail(Uuid),
     Issue,
     Check,
+    Offers,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -33,6 +36,8 @@ pub(super) struct Desk {
     view: View,
     search: Entity<TextField>,
     filter: Option<GiftStatus>,
+    pending_orders: bool,
+    offers: storefront::Offers,
     page: Option<GiftPage>,
     card: Option<GiftCard>,
     movements: Option<GiftMovements>,
@@ -82,10 +87,13 @@ enum Request {
         page: u32,
         search: String,
         status: Option<GiftStatus>,
+        pending_orders: bool,
     },
     Detail(Uuid, u32),
     Issue(GiftPurchase),
     EligibleServices,
+    OfferList,
+    SaveOffer(Box<GiftOfferReview>),
     Check(String),
     Reveal(Uuid),
     Print {
@@ -111,6 +119,8 @@ enum Loaded {
     Issued(Box<GiftPurchaseResult>),
     Balance(GiftBalance),
     EligibleServices(Vec<GiftService>),
+    OfferList(GiftOfferDesk),
+    SavedOffer(GiftOffer),
     Revealed(GiftReveal),
     Print(ReceiptPreview),
     Receipt(Box<AppointmentCheckout>),
@@ -124,14 +134,17 @@ impl Request {
                 page,
                 search,
                 status,
+                pending_orders,
             } => Loaded::List(
-                http.gift_cards(page, &search, status)?,
+                http.gift_cards_filtered(page, &search, status, pending_orders)?,
                 http.can_manage_gift_cards()?,
             ),
             Self::Detail(id, page) => {
                 Loaded::Detail(http.gift_card(id)?, http.gift_card_movements(id, page)?)
             }
             Self::Issue(purchase) => Loaded::Issued(Box::new(http.purchase_gift_card(&purchase)?)),
+            Self::OfferList => Loaded::OfferList(http.gift_offers()?),
+            Self::SaveOffer(reviewed) => Loaded::SavedOffer(http.save_gift_offer(&reviewed)?),
             Self::EligibleServices => Loaded::EligibleServices(http.gift_eligible_services()?),
             Self::Check(code) => Loaded::Balance(http.check_gift_card(&code)?),
             Self::Reveal(id) => Loaded::Revealed(http.reveal_gift_card(id)?),
@@ -220,6 +233,8 @@ impl Root {
             view,
             search: cx.new(|cx| TextField::new(search, false, cx)),
             filter: None,
+            pending_orders: false,
+            offers: storefront::Offers::default(),
             page: None,
             card: None,
             movements: None,
@@ -266,6 +281,7 @@ impl Root {
                     page: 1,
                     search: String::new(),
                     status: None,
+                    pending_orders: false,
                 },
                 true,
                 cx,
@@ -290,11 +306,13 @@ impl Root {
                 .update(cx, |field, cx| field.set_text(&search, cx));
         }
         let status = desk.filter;
+        let pending_orders = desk.pending_orders;
         self.request_gift(
             Request::List {
                 page,
                 search,
                 status,
+                pending_orders,
             },
             cx,
         );
@@ -323,6 +341,19 @@ impl Root {
             return;
         };
         if desk.request.is_some() {
+            return;
+        }
+        if desk.view == View::Offers
+            && let Some(has_saved_review) = desk.offers.close_editor()
+        {
+            desk.error = None;
+            if has_saved_review {
+                desk.view = View::List;
+                self.load_gift_list(1, cx);
+            } else {
+                self.request_gift(Request::OfferList, cx);
+            }
+            cx.notify();
             return;
         }
         if let Some(receipt) = &desk.receipt {
@@ -440,6 +471,7 @@ impl Root {
                 let page = desk.page.as_ref().map_or(1, |page| page.pagination.page);
                 self.load_gift_list(page, cx);
             }
+            View::Offers if !desk.offers.editing() => self.request_gift(Request::OfferList, cx),
             View::Detail(id) => {
                 let page = desk
                     .movements
@@ -472,10 +504,12 @@ impl Root {
                 page,
                 search,
                 status,
+                pending_orders,
             } => Some(Request::List {
                 page: *page,
                 search: search.clone(),
                 status: *status,
+                pending_orders: *pending_orders,
             }),
             Request::Detail(id, page) => Some(Request::Detail(*id, *page)),
             _ => None,
@@ -494,6 +528,13 @@ impl Root {
         let issue = pending.is_some();
         let edit = matches!(&request, Request::Edit { .. });
         let print = matches!(&request, Request::Print { .. });
+        let pending_offer = match &request {
+            Request::SaveOffer(reviewed) => cache_actor
+                .clone()
+                .map(|actor| (actor, reviewed.as_ref().clone())),
+            _ => None,
+        };
+        let save_offer = pending_offer.is_some();
         if edit || matches!(&request, Request::Checkout(_)) {
             desk.hide_code();
         }
@@ -531,6 +572,12 @@ impl Root {
                             .unwrap_or(false)
                     },
                 );
+                let settled_offer = pending_offer.as_ref().is_none_or(|(actor, reviewed)| {
+                    root.svc
+                        .store
+                        .settle_gift_offer(actor, reviewed, reply.as_ref().map(|_| ()))
+                        .is_ok()
+                });
                 let Some(desk) = root.gift_cards_desk().filter(|desk| {
                     desk.request
                         .as_ref()
@@ -539,6 +586,12 @@ impl Root {
                     return;
                 };
                 desk.request = None;
+                if !settled_offer {
+                    desk.error = Some(Key::GiftStorageUnavailable);
+                    cx.notify();
+                    return;
+                }
+
                 if let Some(cached_request) = cached_request {
                     if !online {
                         root.show_saved_gift(cached_request, true, cx);
@@ -611,6 +664,14 @@ impl Root {
                             cx,
                         ));
                     }
+                    Ok(Loaded::OfferList(offers)) => {
+                        desk.observed = observation;
+                        desk.offers.load(offers);
+                    }
+                    Ok(Loaded::SavedOffer(saved)) => {
+                        desk.offers.accept(saved);
+                        desk.observed = observation;
+                    }
                     Ok(Loaded::EligibleServices(services)) => {
                         desk.eligible_service_options = Some(services);
                     }
@@ -681,9 +742,14 @@ impl Root {
                         if edit {
                             desk.hide_code();
                         }
+                        if save_offer {
+                            desk.offers.save_failed(&error);
+                        }
                         desk.error = Some(match error {
                             TransportError::ReplicaGenerationChanged => Key::GiftReviewRestored,
-                            TransportError::BadRequest(_) if edit => Key::GiftReviewChanged,
+                            TransportError::BadRequest(_) if edit || save_offer => {
+                                Key::GiftReviewChanged
+                            }
                             TransportError::Forbidden(_) => Key::GiftAccessDenied,
                             _ if print => Key::GiftPrintFailed,
                             _ if issue && uncertain => Key::GiftIssueUnconfirmed,
@@ -972,6 +1038,7 @@ impl Root {
             View::List => self.render_gift_list(desk, ready, cx),
             View::Detail(id) => self.render_gift_detail(desk, id, ready, cx),
             View::Issue => self.render_gift_issue(desk, ready, cx),
+            View::Offers => self.render_gift_offers(desk, online, cx),
             View::Check => {
                 let body = div()
                     .flex()
@@ -1049,6 +1116,15 @@ impl Root {
                         |root, cx| root.open_gift_form(View::Issue, cx),
                         cx,
                     ))
+                    .when(self.can_edit_gift_offers(), |body| {
+                        body.child(self.gift_button(
+                            "gift-templates",
+                            Key::GiftOffers,
+                            Kind::Ghost,
+                            Root::open_gift_offers,
+                            cx,
+                        ))
+                    })
                     .child(self.gift_button(
                         "check-gift",
                         Key::GiftCheck,
@@ -1059,7 +1135,30 @@ impl Root {
             )
         });
         let body = body.when(browse, |body| {
-            body.child(desk.search.clone()).child(
+            body.child(self.gift_button(
+                "gift-pending-online-orders",
+                if desk.pending_orders {
+                    Key::GiftAllCards
+                } else {
+                    Key::GiftPendingOrders
+                },
+                if desk.pending_orders {
+                    Kind::Primary
+                } else {
+                    Kind::Ghost
+                },
+                |root, cx| {
+                    if let Some(desk) = root.gift_cards_desk() {
+                        desk.pending_orders = !desk.pending_orders;
+                        desk.filter = None;
+                        desk.page = None;
+                        root.load_gift_list(1, cx);
+                    }
+                },
+                cx,
+            ))
+            .child(desk.search.clone())
+            .child(
                 div()
                     .flex()
                     .flex_wrap()
@@ -1071,36 +1170,38 @@ impl Root {
                         |root, cx| root.load_gift_list(1, cx),
                         cx,
                     ))
-                    .children(
-                        [
-                            None,
-                            Some(GiftStatus::Pending),
-                            Some(GiftStatus::Active),
-                            Some(GiftStatus::Void),
-                            Some(GiftStatus::Expired),
-                        ]
-                        .into_iter()
-                        .enumerate()
-                        .map(|(index, status)| {
-                            self.gift_button(
-                                ("gift-status", index),
-                                status.map_or(Key::SalesAllStatuses, gift_status_key),
-                                if desk.filter == status {
-                                    Kind::Primary
-                                } else {
-                                    Kind::Ghost
-                                },
-                                move |root, cx| {
-                                    if let Some(desk) = root.gift_cards_desk() {
-                                        desk.filter = status;
-                                        desk.page = None;
-                                        root.load_gift_list(1, cx);
-                                    }
-                                },
-                                cx,
-                            )
-                        }),
-                    ),
+                    .when(!desk.pending_orders, |filters| {
+                        filters.children(
+                            [
+                                None,
+                                Some(GiftStatus::Pending),
+                                Some(GiftStatus::Active),
+                                Some(GiftStatus::Void),
+                                Some(GiftStatus::Expired),
+                            ]
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, status)| {
+                                self.gift_button(
+                                    ("gift-status", index),
+                                    status.map_or(Key::SalesAllStatuses, gift_status_key),
+                                    if desk.filter == status {
+                                        Kind::Primary
+                                    } else {
+                                        Kind::Ghost
+                                    },
+                                    move |root, cx| {
+                                        if let Some(desk) = root.gift_cards_desk() {
+                                            desk.filter = status;
+                                            desk.page = None;
+                                            root.load_gift_list(1, cx);
+                                        }
+                                    },
+                                    cx,
+                                )
+                            }),
+                        )
+                    }),
             )
         });
         let Some(page) = &desk.page else { return body };
@@ -1479,7 +1580,17 @@ impl Root {
                     ))
                 },
             )
-            .child(self.render_gift_balance(&card.balance));
+            .child(self.render_gift_balance(&card.balance))
+            .when_some(
+                card.offer_validity_days
+                    .filter(|_| card.balance.expires_at.is_none()),
+                |body, days| {
+                    body.child(format!(
+                        "{} · {days}",
+                        self.t(Key::GiftValidityAfterPayment)
+                    ))
+                },
+            );
         if let Some(edit) = desk.edit {
             return body
                 .child(self.label(if edit == Edit::Expiry {

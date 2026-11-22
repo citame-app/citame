@@ -5,6 +5,8 @@ import {
   giftCardPurchaseSchema,
   giftCardQuerySchema,
   giftCardReissueSchema,
+  giftOfferOrderSchema,
+  giftOfferWriteSchema,
   giftReplicaQuerySchema,
   idSchema,
 } from "@sob/contracts";
@@ -15,7 +17,8 @@ import type { AppEnv } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
 import { checkoutBankTenders, gatewayFor } from "../commerce/hosted-tenders";
-import { purchaseGift } from "./purchase";
+import { giftOffers, publicGiftOffers, saveGiftOffer } from "./offers";
+import { orderGiftOffer, purchaseGift } from "./purchase";
 import {
   authorizeGiftAccess,
   changeGiftExpiry,
@@ -30,7 +33,8 @@ import {
   revealGift,
 } from "./service";
 export function giftCardRoutes(deps: AppDeps) {
-  const bankTenders = checkoutBankTenders(deps, gatewayFor(deps));
+  const gateway = gatewayFor(deps);
+  const bankTenders = checkoutBankTenders(deps, gateway);
   return new Hono<AppEnv>()
     .use("*", async (c, next) => {
       authorizeGiftAccess(c.get("principal"));
@@ -38,6 +42,7 @@ export function giftCardRoutes(deps: AppDeps) {
       if (
         c.get("desktopRequest") &&
         (c.req.method === "PATCH" ||
+          c.req.method === "PUT" ||
           (c.req.method === "POST" && !/\/(?:check|code)$/.test(c.req.path))) &&
         c.req.header("x-citame-generation") !== deps.config.syncReplicaGeneration
       )
@@ -50,7 +55,14 @@ export function giftCardRoutes(deps: AppDeps) {
     .get("/", async (c) => {
       const query = parseOrThrow(giftCardQuerySchema, c.req.query());
       return c.json(
-        await listGifts(deps.db, c.get("principal"), query.page, query.search, query.status),
+        await listGifts(
+          deps.db,
+          c.get("principal"),
+          query.page,
+          query.search,
+          query.status,
+          query.pendingOffer === "1",
+        ),
       );
     })
     .post("/", async (c) => {
@@ -61,6 +73,36 @@ export function giftCardRoutes(deps: AppDeps) {
         deps.config.auth.secret,
       );
       return c.json({ card: result.card, checkout: { ...result.checkout, ...bankTenders } }, 201);
+    })
+    .post("/storefront", async (c) => {
+      const order = parseOrThrow(giftOfferOrderSchema, await readJson(c));
+      const result = await orderGiftOffer(
+        deps.db,
+        order,
+        c.get("principal"),
+        deps.config.auth.secret,
+        gateway !== null,
+      );
+      return c.json({ card: result.card, checkout: { ...result.checkout, ...bankTenders } }, 201);
+    })
+    .get("/offers", async (c) =>
+      c.json(await giftOffers(deps.db, c.get("principal"), deps.config.syncReplicaGeneration)),
+    )
+    .put("/offers/:id", async (c) => {
+      const input = parseOrThrow(giftOfferWriteSchema, await readJson(c));
+      if (input.generation !== deps.config.syncReplicaGeneration)
+        throw new DomainError(
+          "sync_generation_changed",
+          "Review gift templates on the restored server",
+        );
+      return c.json(
+        await saveGiftOffer(
+          deps.db,
+          parseOrThrow(idSchema, c.req.param("id")).toLowerCase(),
+          input,
+          c.get("principal"),
+        ),
+      );
     })
     .post("/check", async (c) =>
       c.json(
@@ -137,4 +179,13 @@ export function giftCardRoutes(deps: AppDeps) {
         ),
       );
     });
+}
+
+export function publicGiftOfferRoutes(deps: AppDeps) {
+  const paymentsAvailable = gatewayFor(deps) !== null;
+  return new Hono<AppEnv>().get("/", async (c) =>
+    c.json(await publicGiftOffers(deps.db, paymentsAvailable), 200, {
+      "Cache-Control": "no-store",
+    }),
+  );
 }

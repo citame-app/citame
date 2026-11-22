@@ -83,6 +83,7 @@ pub enum OfflineGiftQuery {
         page: u32,
         search: String,
         status: Option<GiftStatus>,
+        pending_orders: bool,
     },
     Detail(Uuid, u32),
 }
@@ -138,7 +139,14 @@ impl Store {
                 page,
                 search,
                 status,
-            } => OfflineGiftView::List(catalogue.search(page, &search, status, now)),
+                pending_orders,
+            } => OfflineGiftView::List(catalogue.search_filtered(
+                page,
+                &search,
+                status,
+                now,
+                pending_orders,
+            )),
             OfflineGiftQuery::Detail(id, page) => match catalogue.card(id, now) {
                 Some(card) => {
                     let saved_pages = self.gift_movement_pages(id)?;
