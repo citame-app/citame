@@ -166,7 +166,7 @@ function OpeningRanges({
       {ranges.map((range, index) => (
         <div
           key={rangeKeys.keys[index]}
-          className="grid grid-cols-2 items-end gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
+          className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,9rem),1fr))] items-end gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
         >
           {(["startTime", "endTime"] as const).map((key) => (
             <TextField
@@ -187,7 +187,7 @@ function OpeningRanges({
           <Button
             type="button"
             variant="ghost"
-            className="col-span-2 justify-self-start sm:col-span-1"
+            className="col-span-full justify-self-start sm:col-span-1"
             onClick={() => {
               rangeKeys.remove(index);
               onChange(ranges.filter((_, item) => item !== index));

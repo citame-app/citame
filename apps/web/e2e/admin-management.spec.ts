@@ -62,9 +62,36 @@ test("the owner can draft, publish, revise and withdraw the public business prof
     await monday.getByRole("button", { name: "Add opening period" }).click();
     await monday.getByLabel("Opens", { exact: true }).nth(1).fill("14:00");
     await monday.getByLabel("Closes", { exact: true }).nth(1).fill("18:00");
+    if (test.info().project.name === "mobile") {
+      const opens = await monday.getByLabel("Opens", { exact: true }).first().boundingBox();
+      const closes = await monday.getByLabel("Closes", { exact: true }).first().boundingBox();
+      const remove = await monday
+        .getByRole("button", { name: "Remove period" })
+        .first()
+        .boundingBox();
+      if (!opens || !closes || !remove) throw new Error("Missing a visible opening-period control");
+      expect(Math.min(opens.width, closes.width)).toBeGreaterThanOrEqual(128);
+      expect(remove.y).toBeGreaterThanOrEqual(closes.y + closes.height);
+    }
     const closure = salonDate(14);
     await form.getByRole("button", { name: "Add special date" }).click();
     await form.getByLabel("Special date", { exact: true }).fill(closure);
+    const viewport = page.viewportSize();
+    if (test.info().project.name === "mobile" && viewport) {
+      await page.setViewportSize({ width: 320, height: viewport.height });
+      const specialHours = form.getByRole("group", { name: "Special hours and closures" });
+      await specialHours.getByRole("button", { name: "Add opening period" }).click();
+      await specialHours.getByLabel("Opens", { exact: true }).fill("09:00");
+      await specialHours.getByLabel("Closes", { exact: true }).fill("17:00");
+      const opens = await specialHours.getByLabel("Opens", { exact: true }).boundingBox();
+      const closes = await specialHours.getByLabel("Closes", { exact: true }).boundingBox();
+      if (!opens || !closes) throw new Error("Missing a visible special-period control");
+      expect(Math.min(opens.width, closes.width)).toBeGreaterThanOrEqual(128);
+      expect(closes.y).toBeGreaterThanOrEqual(opens.y + opens.height);
+      await expectNoHorizontalScroll(page);
+      await specialHours.getByRole("button", { name: "Remove period" }).click();
+      await page.setViewportSize(viewport);
+    }
     await expectNoHorizontalScroll(page);
     await saveAndWait();
     await publicPage();
