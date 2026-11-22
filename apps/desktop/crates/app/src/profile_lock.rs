@@ -32,7 +32,7 @@ mod tests {
     use super::acquire;
 
     #[test]
-    fn the_same_profile_stays_unavailable_until_its_owner_exits() {
+    fn the_same_profile_stays_unavailable_until_the_lock_is_released() {
         let directory = tempfile::tempdir().unwrap();
         let profile = directory.path().join("profile");
         let owner = acquire(&profile).unwrap().unwrap();
