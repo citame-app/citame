@@ -603,8 +603,8 @@ mod tests {
                         "",
                         "current".into(),
                         IntakeSelection {
-                            submission_ids: vec![],
-                            responses: vec![],
+                            saved: vec![],
+                            inline: vec![],
                         },
                     )
                     .unwrap();
