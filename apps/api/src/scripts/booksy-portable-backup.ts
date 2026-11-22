@@ -203,7 +203,7 @@ export function verifyPortableBooksyRehearsal(
       replica.reannouncedServiceColors > replica.serviceColorsVerified ||
       (groupedCalendarLinesVerified === undefined) !== (frozenServicesVerified === undefined) ||
       (groupedCalendarLinesVerified !== undefined &&
-        groupedCalendarLinesVerified > candidate.calendarLines) ||
+        groupedCalendarLinesVerified !== candidate.calendarLines) ||
       (frozenServicesVerified !== undefined && frozenServicesVerified !== candidate.frozenServices)
     )
       incompleteRehearsal();

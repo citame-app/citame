@@ -223,6 +223,7 @@ test("operational receipts bind the expanded desktop evidence to the recovered c
     { groupedCalendarLinesVerified: 787 },
     { frozenServicesVerified: 817 },
     { groupedCalendarLinesVerified: 788, frozenServicesVerified: 817 },
+    { groupedCalendarLinesVerified: 0, frozenServicesVerified: 817 },
     { groupedCalendarLinesVerified: 787, frozenServicesVerified: 816 },
   ]) {
     expect(() => verify(incomplete)).toThrow("successful migrated rehearsal");

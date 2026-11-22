@@ -57,13 +57,10 @@ async function readReplicaChanges(db: Database, since: number) {
       if (
         raw?.entity !== "appointment" ||
         raw.op !== "upsert" ||
-        Object.keys(raw.data).length !== Object.keys(change.data).length ||
-        raw.data.serviceBadges?.some((badge, position) => {
-          const projected = change.data.serviceBadges?.[position];
-          return !projected || Object.keys(badge).length !== Object.keys(projected).length;
-        })
+        change.data.sourceCopy ||
+        !isDeepStrictEqual(raw.data, change.data)
       )
-        throw new Error("Recovered sync feed contains undocumented appointment fields");
+        throw new Error("Recovered sync feed contains undocumented or private appointment fields");
       visits.set(change.id, change.data);
     }
     if (!validated.hasMore) return { visits, serviceColors };
@@ -134,13 +131,13 @@ export async function rehearseRecoveredReplica(
     [...replay.serviceColors].some(([id, color]) => expectedColors.get(id) !== color)
   )
     throw new Error("Recovered sync catalogue colors differ");
-  const servicesByVisit = new Map<string, (typeof appointmentService.$inferSelect)[]>();
+  const servicesByAppointment = new Map<string, (typeof appointmentService.$inferSelect)[]>();
   for (const { snapshot } of frozenServices) {
-    const snapshots = servicesByVisit.get(snapshot.appointmentId) ?? [];
+    const snapshots = servicesByAppointment.get(snapshot.appointmentId) ?? [];
     if (snapshots.at(-1)?.position === snapshot.position)
       throw new Error("Recovered appointment has ambiguous frozen service order");
     snapshots.push(snapshot);
-    servicesByVisit.set(snapshot.appointmentId, snapshots);
+    servicesByAppointment.set(snapshot.appointmentId, snapshots);
   }
   const expectedById = new Map(expected.map((visit) => [visit.id, visit]));
   function verifyVisit(
@@ -163,7 +160,7 @@ export async function rehearseRecoveredReplica(
     )
       throw new Error("Recovered sync appointment differs");
     // Read the stored snapshots independently of the serialization used by sync.
-    const snapshots = servicesByVisit.get(visit.id) ?? [];
+    const snapshots = servicesByAppointment.get(visit.id) ?? [];
     if (
       row.services.length !== snapshots.length ||
       snapshots.some((snapshot, index) => {
