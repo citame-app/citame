@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { desktopSalonSettingsSchema } from "@sob/contracts";
 import { RECURRING_FIXTURE as fixture } from "../../api/test/recurring-values";
-import { expectNoHorizontalScroll } from "./admin-helpers";
+import { expectNoHorizontalScroll, salonDate } from "./admin-helpers";
 import { expectNoSeriousA11yViolations, signInThroughUi } from "./helpers";
 
 test("the owner can draft, publish, revise and withdraw the public business profile", async ({
@@ -48,10 +48,24 @@ test("the owner can draft, publish, revise and withdraw the public business prof
     await form.getByLabel("Public address").fill("9 Synthetic Street");
     await form.getByLabel("Website (HTTPS)").fill("https://example.test/studio");
     await form.getByRole("checkbox", { name: "Wi-Fi", exact: true }).check();
+    const monday = form.getByRole("group", { name: "Monday", exact: true });
+    await form.getByRole("checkbox", { name: "Set regular opening hours" }).check();
+    await monday.getByRole("button", { name: "Add opening period" }).click();
+    await monday.getByLabel("Opens", { exact: true }).fill("09:00");
+    await monday.getByLabel("Closes", { exact: true }).fill("12:00");
+    await monday.getByRole("button", { name: "Add opening period" }).click();
+    await monday.getByLabel("Opens", { exact: true }).nth(1).fill("14:00");
+    await monday.getByLabel("Closes", { exact: true }).nth(1).fill("18:00");
+    const closure = salonDate(14);
+    await form.getByRole("button", { name: "Add special date" }).click();
+    await form.getByLabel("Special date", { exact: true }).fill(closure);
     await expectNoHorizontalScroll(page);
     await saveAndWait();
     await publicPage();
     await expect(visitor.getByText(label)).toHaveCount(0);
+    await expect(visitor.getByRole("heading", { name: "Opening hours", exact: true })).toHaveCount(
+      0,
+    );
 
     await publish.check();
     await saveAndWait();
@@ -59,6 +73,10 @@ test("the owner can draft, publish, revise and withdraw the public business prof
     const profile = visitor.getByRole("region", { name: "About the centre" });
     await expect(profile.getByText(label)).toBeVisible();
     await expect(profile.getByText("9 Synthetic Street")).toBeVisible();
+    await expect(profile.getByText("09:00–12:00, 14:00–18:00", { exact: true })).toBeVisible();
+    const special = profile.locator(`time[datetime="${closure}"]`);
+    await expect(special).toBeVisible();
+    await expect(special.locator("../..").getByText("Closed", { exact: true })).toBeVisible();
     await expect(profile.getByRole("link", { name: "Website" })).toHaveAttribute(
       "href",
       "https://example.test/studio",

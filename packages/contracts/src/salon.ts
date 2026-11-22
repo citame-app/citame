@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { instantSchema, syncGenerationSchema } from "./common";
+import { instantSchema, localDateSchema, syncGenerationSchema } from "./common";
+import { dateShiftRangesSchema } from "./date-shifts";
 import { reminderLeadSchema } from "./notifications";
 
 export const phoneSchema = z
@@ -33,6 +34,23 @@ export const BUSINESS_AMENITIES = [
   "childrenWelcome",
   "petsWelcome",
 ] as const;
+export const OPENING_EXCEPTION_LIMIT = 366;
+const openingRanges = dateShiftRangesSchema.transform((ranges) =>
+  [...ranges].sort((a, b) => a.startTime.localeCompare(b.startTime)),
+);
+export const openingScheduleSchema = z.strictObject({
+  /** Sunday first. Null means a regular schedule has not been configured. */
+  weekly: z.array(openingRanges).length(7).nullable(),
+  exceptions: z
+    .array(z.strictObject({ date: localDateSchema, ranges: openingRanges }))
+    .max(OPENING_EXCEPTION_LIMIT)
+    .refine(
+      (entries) => new Set(entries.map(({ date }) => date)).size === entries.length,
+      "Provide only one opening-hours exception per date",
+    )
+    .transform((entries) => [...entries].sort((a, b) => a.date.localeCompare(b.date))),
+});
+export type OpeningSchedule = z.infer<typeof openingScheduleSchema>;
 export const businessProfileContentSchema = z.strictObject({
   description: shortText(600),
   category: shortText(80),
@@ -44,6 +62,7 @@ export const businessProfileContentSchema = z.strictObject({
   instagram: httpsLink,
   rules: shortText(400),
   mobileService: z.boolean(),
+  openingSchedule: openingScheduleSchema.optional(),
   amenities: z
     .array(z.enum(BUSINESS_AMENITIES))
     .max(BUSINESS_AMENITIES.length)
@@ -84,6 +103,7 @@ export const EMPTY_BUSINESS_PROFILE: BusinessProfile = {
   rules: null,
   mobileService: false,
   amenities: [],
+  openingSchedule: { weekly: null, exceptions: [] },
 };
 
 /** Public salon information: what the booking flow needs to render dates and limits. */

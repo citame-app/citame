@@ -16,6 +16,7 @@ import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { describeProblem } from "../problems";
 import { UnsavedGuard } from "../unsaved-guard";
+import { OpeningHoursEditor } from "./opening-hours-editor";
 
 const queryKey = ["admin", "settings", "profile"] as const;
 const fields = [
@@ -161,6 +162,14 @@ function ProfileEditor({ latest }: { latest: Snapshot }) {
             </label>
           ))}
         </fieldset>
+        {form.openingSchedule && (
+          <OpeningHoursEditor
+            key={`${base.generation}:${base.revision}`}
+            schedule={form.openingSchedule}
+            invalid={errors.has("openingSchedule")}
+            onChange={(value) => edit("openingSchedule", value)}
+          />
+        )}
         {(["mobileService", "published"] as const).map((key) => (
           <label key={key} className="flex min-h-11 items-center gap-2 text-sm">
             <input

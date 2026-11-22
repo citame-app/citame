@@ -1,8 +1,16 @@
-import type { PublicBusinessProfile as Profile } from "@sob/contracts";
+import type { DateShiftRange, PublicBusinessProfile as Profile } from "@sob/contracts";
+import { WEEKDAY_ORDER } from "~/features/admin/staff/hours";
 import { useI18n } from "~/i18n/react";
+import { formatDateWithYear } from "~/lib/format";
 
-export function PublicBusinessProfile({ profile }: { profile: Profile }) {
-  const { t } = useI18n();
+export function PublicBusinessProfile({
+  profile,
+  localDate,
+}: {
+  profile: Profile;
+  localDate: string;
+}) {
+  const { t, locale } = useI18n();
   const {
     address,
     phone,
@@ -15,9 +23,33 @@ export function PublicBusinessProfile({ profile }: { profile: Profile }) {
     rules,
     amenities,
     mobileService,
+    openingSchedule,
   } = profile;
-  if (!Object.values(profile).some((value) => (Array.isArray(value) ? value.length : value)))
-    return null;
+  const weekly = openingSchedule?.weekly;
+  const exceptions = openingSchedule?.exceptions.filter((entry) => entry.date >= localDate) ?? [];
+  const today =
+    exceptions.find((entry) => entry.date === localDate)?.ranges ??
+    weekly?.[new Date(`${localDate}T12:00:00Z`).getUTCDay()];
+  const hasDetails = [
+    address,
+    phone,
+    email,
+    description,
+    category,
+    website,
+    shop,
+    instagram,
+    rules,
+    amenities.length,
+    mobileService,
+    weekly,
+    exceptions.length,
+  ].some(Boolean);
+  if (!hasDetails) return null;
+  const hours = (ranges: DateShiftRange[]) =>
+    ranges.length
+      ? ranges.map(({ startTime, endTime }) => `${startTime}–${endTime}`).join(", ")
+      : t("settings.opening.closed");
   return (
     <section className="py-12 sm:py-16" aria-labelledby="public-business-heading">
       <div className="wrap editorial-wrap grid gap-8 lg:grid-cols-2">
@@ -99,6 +131,44 @@ export function PublicBusinessProfile({ profile }: { profile: Profile }) {
                 </li>
               )}
             </ul>
+          )}
+          {(weekly || exceptions.length > 0) && (
+            <div className="space-y-2">
+              <h3 className="text-heading">{t("settings.opening.title")}</h3>
+              {today && (
+                <p className="text-sm">
+                  <strong>{t("settings.opening.today")}</strong> · {hours(today)}
+                </p>
+              )}
+            </div>
+          )}
+          {weekly && (
+            <div className="space-y-2">
+              <h4 className="font-medium">{t("settings.opening.regular")}</h4>
+              <dl className="divide-y divide-line text-sm">
+                {WEEKDAY_ORDER.map((day) => (
+                  <div key={day} className="flex flex-wrap justify-between gap-x-3 py-2">
+                    <dt>{t(`hours.day.${day}`)}</dt>
+                    <dd className="tabular-nums">{hours(weekly[day] ?? [])}</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          )}
+          {exceptions.length > 0 && (
+            <div className="space-y-2">
+              <h4 className="font-medium">{t("settings.opening.exceptions")}</h4>
+              <dl className="divide-y divide-line text-sm">
+                {exceptions.map(({ date, ranges }) => (
+                  <div key={date} className="flex flex-wrap justify-between gap-x-3 py-2">
+                    <dt>
+                      <time dateTime={date}>{formatDateWithYear(date, locale)}</time>
+                    </dt>
+                    <dd className="tabular-nums">{hours(ranges)}</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
           )}
         </div>
       </div>

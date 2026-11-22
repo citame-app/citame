@@ -1,11 +1,24 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::{HttpTransport, TransportError, read_response};
+use super::{DateShiftRange, HttpTransport, TransportError, read_response};
 
 const PATH: &str = "/admin/settings/desktop";
 pub const SALON_SLOT_STEPS: [u32; 6] = [5, 10, 15, 20, 30, 60];
+pub const OPENING_EXCEPTION_LIMIT: usize = 366;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpeningSchedule {
+    pub weekly: Option<[Vec<DateShiftRange>; 7]>,
+    pub exceptions: Vec<OpeningException>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpeningException {
+    pub date: NaiveDate,
+    pub ranges: Vec<DateShiftRange>,
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,6 +35,8 @@ pub struct BusinessProfile {
     pub mobile_service: bool,
     pub published: bool,
     pub amenities: Vec<BusinessAmenity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opening_schedule: Option<OpeningSchedule>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

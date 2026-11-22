@@ -12,6 +12,7 @@ import {
   actor,
   type Fixtures,
   json,
+  MONDAY,
   MONDAY_0900,
   seedFixtures,
   setupApiTest,
@@ -42,6 +43,61 @@ beforeEach(async () => {
 const call = (who: Actor | null, method: string, body?: unknown) =>
   json(t.app, "/admin/settings", method, body, who?.cookie);
 const code = async (res: Response) => errorResponseSchema.parse(await res.json()).error.code;
+
+test("split opening hours and dated closures are published without changing bookable slots", async () => {
+  const available = async () => {
+    const result = await json(
+      t.app,
+      `/availability?serviceIds=${f.haircutId}&date=${MONDAY}`,
+      "GET",
+    );
+    expect(result.status).toBe(200);
+    return result.json();
+  };
+  const before = await available();
+  expect(before.slots.length).toBeGreaterThan(0);
+  const latest = desktopSalonSettingsSchema.parse(
+    await (await json(t.app, "/admin/settings/desktop", "GET", undefined, owner.cookie)).json(),
+  );
+  const morning = { startTime: "09:00", endTime: "12:00" };
+  const afternoon = { startTime: "14:00", endTime: "18:00" };
+  const weekly = [[], [afternoon, morning], [], [], [], [], []];
+  const exception = { date: MONDAY, ranges: [] };
+  const save = (openingSchedule: unknown, published: boolean) =>
+    json(
+      t.app,
+      "/admin/settings/profile",
+      "PUT",
+      {
+        generation: latest.generation,
+        expectedRevision: latest.revision,
+        changes: { openingSchedule, published },
+      },
+      owner.cookie,
+    );
+  expect((await save({ weekly, exceptions: [exception, exception] }, true)).status).toBe(400);
+  expect(
+    (
+      await save(
+        {
+          weekly: [[], [morning, { startTime: "11:00", endTime: "13:00" }], [], [], [], [], []],
+          exceptions: [],
+        },
+        true,
+      )
+    ).status,
+  ).toBe(400);
+  const result = await save({ weekly, exceptions: [exception] }, true);
+  expect(result.status, await result.clone().text()).toBe(200);
+  const publicData = publicBusinessProfileSchema.parse(
+    await (await json(t.app, "/salon/profile", "GET")).json(),
+  );
+  expect(publicData.profile?.openingSchedule).toEqual({
+    weekly: [[], [morning, afternoon], [], [], [], [], []],
+    exceptions: [exception],
+  });
+  expect(await available()).toEqual(before);
+});
 
 test("keeps the public profile draft private and publishes only reviewed owner changes", async () => {
   const read = (who: Actor) => json(t.app, "/admin/settings/desktop", "GET", undefined, who.cookie);

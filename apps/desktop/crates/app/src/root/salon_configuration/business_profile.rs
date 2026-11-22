@@ -1,6 +1,9 @@
 use super::*;
 use sob_core::http::{BusinessAmenity, BusinessProfile};
 
+mod opening_hours;
+use opening_hours::HoursEditor;
+
 struct TextSpec {
     label: Key,
     limit: usize,
@@ -84,6 +87,7 @@ pub(super) struct BusinessEditor {
     published: bool,
     mobile_service: bool,
     amenities: [bool; AMENITIES.len()],
+    hours: Option<HoursEditor>,
 }
 
 impl BusinessEditor {
@@ -103,6 +107,10 @@ impl BusinessEditor {
             published: profile.published,
             mobile_service: profile.mobile_service,
             amenities: AMENITIES.map(|(value, _)| profile.amenities.contains(&value)),
+            hours: profile
+                .opening_schedule
+                .as_ref()
+                .map(|schedule| HoursEditor::new(schedule, cx)),
         }
     }
 
@@ -117,6 +125,9 @@ impl BusinessEditor {
                 .collect(),
             ..BusinessProfile::default()
         };
+        if let Some(hours) = &self.hours {
+            profile.opening_schedule = Some(hours.draft(cx).ok_or(Key::OpeningInvalid)?);
+        }
         for (field, input) in FIELDS.iter().zip(&self.inputs) {
             let value = input.read(cx).text().trim();
             if value.is_empty() {
@@ -188,7 +199,7 @@ impl Root {
     fn edit_business_profile(
         &mut self,
         cx: &mut Context<Self>,
-        edit: impl FnOnce(&mut BusinessEditor),
+        edit: impl FnOnce(&mut BusinessEditor, &mut Context<Self>),
     ) {
         if let Overlay::SalonConfiguration(desk) = &mut self.overlay
             && desk.editable()
@@ -197,7 +208,7 @@ impl Root {
                 .as_mut()
                 .and_then(|editor| editor.profile.as_mut())
         {
-            edit(profile);
+            edit(profile, cx);
             cx.notify();
         }
     }
@@ -251,13 +262,16 @@ impl Root {
                             self.t(*label),
                             editor.amenities[index],
                             cx.listener(move |root, _, _, cx| {
-                                root.edit_business_profile(cx, |profile| {
+                                root.edit_business_profile(cx, |profile, _| {
                                     profile.amenities[index] = !profile.amenities[index]
                                 })
                             }),
                         )
                     })),
             )
+            .when_some(editor.hours.as_ref(), |view, hours| {
+                view.child(self.render_opening_hours(hours, cx))
+            })
             .child(
                 div()
                     .flex()
@@ -268,7 +282,7 @@ impl Root {
                         self.t(Key::BusinessMobileService),
                         editor.mobile_service,
                         cx.listener(|root, _, _, cx| {
-                            root.edit_business_profile(cx, |profile| {
+                            root.edit_business_profile(cx, |profile, _| {
                                 profile.mobile_service = !profile.mobile_service
                             })
                         }),
@@ -278,7 +292,7 @@ impl Root {
                         self.t(Key::BusinessPublish),
                         editor.published,
                         cx.listener(|root, _, _, cx| {
-                            root.edit_business_profile(cx, |profile| {
+                            root.edit_business_profile(cx, |profile, _| {
                                 profile.published = !profile.published
                             })
                         }),

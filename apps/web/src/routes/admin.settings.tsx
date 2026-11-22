@@ -23,6 +23,7 @@ const sections = {
     "settings.profile.website",
     "settings.profile.amenities",
     "settings.profile.rules",
+    "settings.opening.title",
     "settings.profile.category",
     "settings.profile.mobileService",
   ],

@@ -10,7 +10,7 @@ import { priceLabel } from "~/features/booking/service-price";
 import { createTranslator } from "~/i18n";
 import { useI18n } from "~/i18n/react";
 import { api } from "~/lib/api/instance";
-import { formatDuration } from "~/lib/format";
+import { formatDuration, localDateOf } from "~/lib/format";
 import { salonQuery, servicesQuery, staffQuery } from "~/lib/queries";
 import { pageMeta } from "~/lib/seo";
 
@@ -19,7 +19,7 @@ export const Route = createFileRoute("/")({
   loader: {
     staleReloadMode: "blocking",
     handler: async ({ context }) => {
-      const [, , , published] = await Promise.all([
+      const [, , salon, published] = await Promise.all([
         context.queryClient.ensureQueryData(servicesQuery),
         context.queryClient.ensureQueryData(staffQuery),
         context.queryClient.ensureQueryData(salonQuery),
@@ -27,7 +27,7 @@ export const Route = createFileRoute("/")({
           .businessProfile()
           .catch(() => ({ profile: null })),
       ]);
-      return published;
+      return { ...published, localDate: localDateOf(new Date().toISOString(), salon.timezone) };
     },
   },
   head: ({ match }) => {
@@ -60,7 +60,7 @@ function HomeSkeleton() {
 }
 
 function Home() {
-  const { profile } = Route.useLoaderData();
+  const { profile, localDate } = Route.useLoaderData();
   const { t, locale } = useI18n();
   const { data: salon } = useSuspenseQuery(salonQuery);
   const { data: services } = useSuspenseQuery(servicesQuery);
@@ -193,7 +193,7 @@ function Home() {
         </div>
       </section>
 
-      {profile && <PublicBusinessProfile profile={profile} />}
+      {profile && <PublicBusinessProfile profile={profile} localDate={localDate} />}
       <section aria-labelledby="how-title" className="salon-close editorial-section">
         <div className="wrap editorial-wrap">
           <header className="editorial-section-heading">
