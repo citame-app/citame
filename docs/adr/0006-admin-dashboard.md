@@ -141,3 +141,8 @@ The public profile can contain one logo, one cover and up to twelve centre photo
 - Two new runtime dependencies in `apps/web`: `@tanstack/react-table` 9.3.1 and `recharts` 3.10.1 (plus `react-is` 19.3.1, a Recharts peer).
 - The public header stays on admin pages (theme, language, account) while the footer is hidden; the shell adds the section navigation.
 - Known gaps: week view shows one team member at a time; the calendar is not virtualized (fine for one salon); the reschedule slot picker reads public availability, so the appointment's own current slot is not offered as free; reports show one currency; no push updates (Phase 4); the E2E suite assumes a fresh database for its fixtures (it randomizes dates to tolerate reruns).
+
+
+### Work and availability by professional
+
+A single-professional report can display the selected dates and the next 14 salon-local dates. The daily breakdown uses the same effective shifts, calendar blocks and visit timelines as team occupancy. The unavailable intervals are unioned and clipped to the report period. They omit internal reasons and customer information. The daily CSV uses minutes and an occupancy ratio, with an empty value when no shift capacity remains. The duration of completed and missed visits is based on the recorded appointment timeline.

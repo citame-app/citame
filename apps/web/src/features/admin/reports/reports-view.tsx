@@ -32,6 +32,7 @@ import {
 import { formatRate, hasOccupancyMinutes, REPORT_PRESETS, reportToCsv, sortBy } from "./logic";
 import { type ReportsSearch, rangeError, resolveRange } from "./range";
 import { StaffOccupancy } from "./staff-occupancy";
+import { StaffWorkReport } from "./staff-work";
 
 const topHelper = createColumnHelper<DataTableFeatures, ReportSummary["topServices"][number]>();
 const staffHelper = createColumnHelper<DataTableFeatures, ReportSummary["perStaff"][number]>();
@@ -556,6 +557,14 @@ export function ReportsView({
             </>
           )}
           {hasOccupancy && <StaffOccupancy staff={report.perStaff} />}
+          {visible && report.perStaff.length === 1 && report.perStaff[0] && (
+            <StaffWorkReport
+              staffId={report.perStaff[0].staffId}
+              viewerId={viewerId}
+              range={range}
+              onDownload={downloadCsv}
+            />
+          )}
         </>
       )}
     </div>

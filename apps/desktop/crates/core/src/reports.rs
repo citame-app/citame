@@ -22,6 +22,10 @@ impl ReportQuery {
         self.url("/admin/reports/summary", true, &[])
     }
 
+    pub(crate) fn staff_work_path(&self) -> String {
+        self.url("/admin/reports/staff-work", false, &[])
+    }
+
     pub(crate) fn clients_path(&self) -> String {
         self.url("/admin/reports/clients", false, &[])
     }
@@ -146,6 +150,7 @@ pub struct DailyReport {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StaffReport {
+    pub staff_id: Option<String>,
     pub display_name: String,
     pub no_show_rate: Option<f64>,
     pub occupancy: Option<StaffOccupancy>,
@@ -162,6 +167,62 @@ pub struct StaffOccupancy {
     pub completed_minutes: u64,
     pub no_show_minutes: u64,
     pub occupancy_rate: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StaffWorkReport {
+    pub staff_id: String,
+    pub timezone: String,
+    pub selected: StaffWorkPeriod,
+    pub upcoming: StaffWorkPeriod,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StaffWorkPeriod {
+    pub from: NaiveDate,
+    pub to: NaiveDate,
+    pub totals: StaffOccupancy,
+    pub days: Vec<StaffWorkDay>,
+    pub unavailable: Vec<StaffWorkBlock>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StaffWorkDay {
+    pub date: NaiveDate,
+    #[serde(flatten)]
+    pub occupancy: StaffOccupancy,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StaffWorkBlock {
+    pub starts_at: DateTime<Utc>,
+    pub ends_at: DateTime<Utc>,
+}
+
+impl StaffWorkPeriod {
+    pub fn to_csv(&self) -> String {
+        let mut csv = String::from(
+            "\u{feff}date,scheduled_minutes,blocked_minutes,reserved_minutes,completed_minutes,no_show_minutes,occupancy_rate\r\n",
+        );
+        for day in &self.days {
+            let [scheduled, blocked, reserved, completed, missed] = day.occupancy.minutes();
+            let rate = day
+                .occupancy
+                .occupancy_rate
+                .map_or_else(String::new, |rate| rate.to_string());
+            writeln!(
+                csv,
+                "{},{scheduled},{blocked},{reserved},{completed},{missed},{rate}\r",
+                day.date
+            )
+            .expect("writing into a String cannot fail");
+        }
+        csv
+    }
 }
 
 impl StaffOccupancy {

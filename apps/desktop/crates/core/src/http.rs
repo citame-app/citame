@@ -1201,6 +1201,32 @@ impl HttpTransport {
         Ok(appointments)
     }
 
+    pub fn staff_work_report(
+        &self,
+        query: &ReportQuery,
+    ) -> Result<crate::reports::StaffWorkReport, TransportError> {
+        let Some(staff_id) = query.staff_id.as_ref() else {
+            return Err(TransportError::BadRequest("Select a professional".into()));
+        };
+        let result: crate::reports::StaffWorkReport = read_response(
+            self.get(
+                &self.agent,
+                &query.staff_work_path(),
+                Some("application/json"),
+            )?,
+            false,
+        )?;
+        if result.staff_id != *staff_id
+            || result.selected.from != query.from
+            || result.selected.to != query.to
+        {
+            return Err(TransportError::Server(
+                "Unexpected work report scope".into(),
+            ));
+        }
+        Ok(result)
+    }
+
     pub fn report_summary(&self, query: &ReportQuery) -> Result<ReportSummary, TransportError> {
         self.read_report_summary(query, false)
     }

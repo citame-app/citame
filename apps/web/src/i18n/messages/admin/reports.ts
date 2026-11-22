@@ -96,6 +96,15 @@ export const reportsEn = {
   "reports.top.empty": "No completed services in this period.",
   "reports.staff.title": "By team member",
   "reports.staff.empty": "No appointments in this period.",
+  "reports.work.title": "Work and availability",
+  "reports.work.selected": "Selected dates",
+  "reports.work.upcoming": "Next 14 days",
+  "reports.work.date": "Date",
+  "reports.work.export": "Download daily CSV",
+  "reports.work.unavailable": "Unavailable periods",
+  "reports.work.none": "No unavailable periods",
+  "reports.work.basis":
+    "Times follow the salon's timezone. Completed and missed visits use their calendar duration.",
   "reports.occupancy.title": "Team occupancy",
   "reports.occupancy.help":
     "Times are in minutes. Occupancy compares reserved staff time with scheduled time after blocks, across all currencies. Completed and missed visits use their planned duration.",
@@ -215,6 +224,15 @@ export const reportsEsAR: Record<keyof typeof reportsEn, string> = {
   "reports.top.empty": "No hay servicios completados en este período.",
   "reports.staff.title": "Por integrante del equipo",
   "reports.staff.empty": "No hay turnos en este período.",
+  "reports.work.title": "Trabajo y disponibilidad",
+  "reports.work.selected": "Fechas seleccionadas",
+  "reports.work.upcoming": "Próximos 14 días",
+  "reports.work.date": "Fecha",
+  "reports.work.export": "Descargar CSV diario",
+  "reports.work.unavailable": "Franjas no disponibles",
+  "reports.work.none": "Sin franjas no disponibles",
+  "reports.work.basis":
+    "Horas en la zona del centro. Las citas realizadas y las inasistencias usan su duración en la agenda.",
   "reports.occupancy.title": "Ocupación del equipo",
   "reports.occupancy.help":
     "Tiempos en minutos. La ocupación compara el tiempo reservado con el horario disponible tras descontar bloqueos, en todas las monedas. Las citas realizadas y las inasistencias usan la duración prevista.",

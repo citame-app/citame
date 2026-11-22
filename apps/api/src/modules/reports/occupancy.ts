@@ -1,4 +1,4 @@
-import type { ReportQuery, StaffOccupancy } from "@sob/contracts";
+import type { ReportQuery, ReportStaffWorkPeriod, StaffOccupancy } from "@sob/contracts";
 import { appointment, staffReservation, timeOff, workingHours } from "@sob/db";
 import { and, eq, gt, inArray, isNull, lt } from "drizzle-orm";
 import type { Tx } from "../../tx";
@@ -44,12 +44,68 @@ const duration = (ranges: Interval[]) =>
   ranges.reduce((total, range) => total + range.end - range.start, 0);
 const minutes = (milliseconds: number) => Math.round(milliseconds / 60_000);
 
+type VisitInterval = Interval & { status: "completed" | "no_show" };
+const rate = (reserved: number, available: number) =>
+  available ? Math.round((reserved / available) * 10_000) / 10_000 : null;
+
+function measureOccupancy(
+  period: Interval,
+  shifts: Interval[],
+  blocks: Interval[],
+  appointments: Interval[],
+  visits: VisitInterval[],
+) {
+  const dayShifts = intersection([period], shifts);
+  const blocked = intersection(dayShifts, blocks);
+  const reserved = intersection(dayShifts, appointments);
+  const visitTime = { completed: 0, no_show: 0 };
+  for (const visit of visits) {
+    visitTime[visit.status] += Math.max(
+      0,
+      Math.min(period.end, visit.end) - Math.max(period.start, visit.start),
+    );
+  }
+  const scheduledTime = duration(dayShifts);
+  const blockedTime = duration(blocked);
+  const availableTime = scheduledTime - blockedTime;
+  const reservedTime = duration(reserved) - duration(intersection(reserved, blocked));
+  const summary: StaffOccupancy = {
+    scheduledMinutes: minutes(scheduledTime),
+    blockedMinutes: minutes(blockedTime),
+    reservedMinutes: minutes(reservedTime),
+    completedMinutes: minutes(visitTime.completed),
+    noShowMinutes: minutes(visitTime.no_show),
+    occupancyRate: rate(reservedTime, availableTime),
+  };
+  return { summary, availableTime, reservedTime };
+}
+
+function dailyPeriods(from: string, to: string, timezone: string) {
+  const windows = [];
+  const finish = Temporal.PlainDate.from(to);
+  let current = Temporal.PlainDate.from(from);
+  let start = current.toZonedDateTime(timezone).epochMilliseconds;
+  while (Temporal.PlainDate.compare(current, finish) <= 0) {
+    const next = current.add({ days: 1 });
+    const end = next.toZonedDateTime(timezone).epochMilliseconds;
+    windows.push({ date: current.toString(), start, end });
+    current = next;
+    start = end;
+  }
+  return windows;
+}
+
 export async function reportStaffOccupancy(
   db: Tx,
   staffIds: string[],
   query: ReportQuery,
   { timezone, fromAt, toAt }: { timezone: string; fromAt: string; toAt: string },
-): Promise<{ byStaff: Map<string, StaffOccupancy>; rate: number | null }> {
+  detailStaffId?: string,
+): Promise<{
+  byStaff: Map<string, StaffOccupancy>;
+  rate: number | null;
+  detail?: ReportStaffWorkPeriod;
+}> {
   if (!staffIds.length) return { byStaff: new Map(), rate: null };
   const from = new Date(fromAt);
   const to = new Date(toAt);
@@ -106,7 +162,7 @@ export async function reportStaffOccupancy(
         ),
       ),
   ]);
-  const period = [{ start: from.getTime(), end: to.getTime() }];
+  const period = { start: from.getTime(), end: to.getTime() };
   const weekly = byStaff(hours);
   const datedByStaff = byStaff(dated);
   const schedule = workingWindows({
@@ -137,39 +193,38 @@ export async function reportStaffOccupancy(
     union(items.map(({ start, end }) => ({ start: start.getTime(), end: end.getTime() })));
   let totalAvailable = 0;
   let totalReserved = 0;
-  const rate = (reserved: number, available: number) =>
-    available ? Math.round((reserved / available) * 10_000) / 10_000 : null;
+  let detail: ReportStaffWorkPeriod | undefined;
   const occupancyByStaff = new Map(
     staffIds.map((staffId) => {
-      const shifts = intersection(period, union(shiftsByStaff.get(staffId) ?? []));
-      const blocked = intersection(shifts, merged(blocksByStaff.get(staffId) ?? []));
-      const reserved = intersection(shifts, merged(reservationsByStaff.get(staffId) ?? []));
-      const visitTime = { completed: 0, no_show: 0 };
-      for (const visit of visitsByStaff.get(staffId) ?? []) {
-        if (visit.status === "completed" || visit.status === "no_show") {
-          visitTime[visit.status] +=
-            Math.min(to.getTime(), visit.end.getTime()) -
-            Math.max(from.getTime(), visit.start.getTime());
-        }
+      const shifts = union(shiftsByStaff.get(staffId) ?? []);
+      const blocks = merged(blocksByStaff.get(staffId) ?? []);
+      const reserved = merged(reservationsByStaff.get(staffId) ?? []);
+      const visits = (visitsByStaff.get(staffId) ?? []).flatMap(
+        ({ status, start, end }): VisitInterval[] =>
+          status === "completed" || status === "no_show"
+            ? [{ status, start: start.getTime(), end: end.getTime() }]
+            : [],
+      );
+      const measured = measureOccupancy(period, shifts, blocks, reserved, visits);
+      totalAvailable += measured.availableTime;
+      totalReserved += measured.reservedTime;
+      if (detailStaffId === staffId) {
+        detail = {
+          from: query.from,
+          to: query.to,
+          totals: measured.summary,
+          days: dailyPeriods(query.from, query.to, timezone).map(({ date, ...window }) => ({
+            date,
+            ...measureOccupancy(window, shifts, blocks, reserved, visits).summary,
+          })),
+          unavailable: intersection([period], blocks).map(({ start, end }) => ({
+            startsAt: new Date(start).toISOString(),
+            endsAt: new Date(end).toISOString(),
+          })),
+        };
       }
-      const scheduledTime = duration(shifts);
-      const blockedTime = duration(blocked);
-      const availableTime = scheduledTime - blockedTime;
-      const reservedTime = duration(reserved) - duration(intersection(reserved, blocked));
-      totalAvailable += availableTime;
-      totalReserved += reservedTime;
-      return [
-        staffId,
-        {
-          scheduledMinutes: minutes(scheduledTime),
-          blockedMinutes: minutes(blockedTime),
-          reservedMinutes: minutes(reservedTime),
-          completedMinutes: minutes(visitTime.completed),
-          noShowMinutes: minutes(visitTime.no_show),
-          occupancyRate: rate(reservedTime, availableTime),
-        },
-      ];
+      return [staffId, measured.summary];
     }),
   );
-  return { byStaff: occupancyByStaff, rate: rate(totalReserved, totalAvailable) };
+  return { byStaff: occupancyByStaff, rate: rate(totalReserved, totalAvailable), detail };
 }
