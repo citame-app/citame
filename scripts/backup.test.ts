@@ -86,6 +86,47 @@ test("backup then restore into a fresh database reproduces every table", async (
   const after = await fingerprint(target);
   expect(Object.values(before).reduce((total, table) => total + table.rows, 0)).toBeGreaterThan(10);
   expect(after).toEqual(before);
+
+  const recovered = new SQL(target);
+  const owner = new SQL(source.url);
+  const reader = `${restoreRole}_reader`;
+  try {
+    await owner.unsafe(`create role "${reader}" nologin`);
+    const checkPermission = recovered.begin(async (tx) => {
+      await tx.unsafe(`set local role "${reader}"`);
+      await tx`select next_number from public.inventory_numbering_status('orders')`;
+    });
+    await expect(checkPermission).rejects.toMatchObject({ errno: "42501" });
+    await expect(
+      recovered.begin(async (tx) => {
+        await tx.unsafe(`set local role "${reader}"`);
+        await tx`select changed from public.inventory_numbering_advance('orders', 1, 20)`;
+      }),
+    ).rejects.toMatchObject({ errno: "42501" });
+    const restoredOrderNumber =
+      await recovered`select next_number from public.inventory_numbering_status('orders')`;
+    expect(restoredOrderNumber).toEqual([{ next_number: 1 }]);
+    const rollback = new Error("restore test rolls back the sequence change");
+    await expect(
+      recovered.begin(async (tx) => {
+        await tx.unsafe(
+          `grant execute on function public.inventory_numbering_status(text) to "${reader}"`,
+        );
+        await tx.unsafe(
+          `grant execute on function public.inventory_numbering_advance(text,integer,integer) to "${reader}"`,
+        );
+        await tx.unsafe(`set local role "${reader}"`);
+        expect(
+          await tx`select next_number from public.inventory_numbering_advance('orders', 1, 20)`,
+        ).toEqual([{ next_number: 20 }]);
+        throw rollback;
+      }),
+    ).rejects.toBe(rollback);
+  } finally {
+    await recovered.close();
+    await owner.unsafe(`drop role if exists "${reader}"`);
+    await owner.close();
+  }
 }, 60_000);
 
 test("restore refuses a corrupted dump and a non-empty target", async () => {
@@ -128,9 +169,11 @@ test("restore refuses hidden tables and standalone objects in the target", async
     await admin.unsafe(`create database "${restrictedName}"`);
     await setup`create table private_record as select 'keep'::text as value`;
     await setup.unsafe(`grant create on schema public to "${restoreRole}"`);
-    expect(await restricted`
+    expect(
+      await restricted`
       select table_name from information_schema.tables where table_schema = 'public'
-    `).toHaveLength(0);
+    `,
+    ).toHaveLength(0);
 
     const expectOccupied = () => {
       const result = run(["bash", "scripts/restore.sh", dump, restrictedUrl.toString()], {
@@ -196,7 +239,7 @@ test("a failed dump leaves no published files or staging directory", () => {
 
 test("an explicitly empty Docker container cannot fall back to the default Compose project", () => {
   const rejected = run(["bash", "scripts/backup.sh", join(dir, "wrong-target.dump")], {
-    DATABASE_URL: source.url,
+    DATABASE_URL: "postgres://sob@localhost:5432/sob",
     PG_MODE: "docker",
     PG_CONTAINER: "",
   });
@@ -276,7 +319,8 @@ test("a truncated archive rolls back even with a matching checksum", async () =>
   const dump = join(dir, "truncated.dump");
   expect(run(["bash", "scripts/backup.sh", full], { DATABASE_URL: source.url }).exitCode).toBe(0);
   const archive = new Uint8Array(await Bun.file(full).arrayBuffer());
-  const truncated = archive.subarray(0, Math.floor(archive.length * 0.8));
+  // PostgreSQL 18 can append optimizer statistics after all the table data.
+  const truncated = archive.subarray(0, Math.floor(archive.length * 0.35));
   await Bun.write(dump, truncated);
   expect((await Bun.file(dump).stat()).size).toBe(truncated.length);
   const checksum = new Bun.CryptoHasher("sha256").update(truncated).digest("hex");
