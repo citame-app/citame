@@ -29,6 +29,7 @@ import {
   updateAppointment,
 } from "../appointments/service";
 import { updateClient } from "../clients/admin";
+import { saveInventoryBrandLogo } from "../inventory/brand-logo";
 import {
   reorderInventoryClassifications,
   saveInventoryClassification,
@@ -382,6 +383,17 @@ export async function applyMutation(
     case "inventory.classification_save": {
       const { id, ...input } = mutation.payload;
       await saveInventoryClassification(
+        db,
+        id,
+        { ...input, generation: ctx.generation },
+        principal,
+        ctx.generation,
+      );
+      return;
+    }
+    case "inventory.brand_logo": {
+      const { id, ...input } = mutation.payload;
+      await saveInventoryBrandLogo(
         db,
         id,
         { ...input, generation: ctx.generation },

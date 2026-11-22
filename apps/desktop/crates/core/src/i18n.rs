@@ -1282,6 +1282,7 @@ keys! {
     InventoryLedgerUse => ("Internal use", "Consumo interno"),
     InventoryLedgerCount => ("Stock counts", "Recuentos"),
     InventoryProductDetails => ("Product details", "Ficha del producto"),
+    InventoryBrandLogo => ("Brand logo", "Logotipo de marca"),
     InventoryProductPhoto => ("Product photo", "Foto del producto"),
     InventoryPhotoChoose => ("Choose JPEG, PNG or WebP", "Elegir JPEG, PNG o WebP"),
     InventoryPhotoSave => ("Save photo change", "Guardar cambio de foto"),

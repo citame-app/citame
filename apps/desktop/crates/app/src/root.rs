@@ -3608,6 +3608,7 @@ impl Root {
                     Key::InventoryProductDetails
                 }
                 sob_core::product_editor::PHOTO => Key::InventoryProductPhoto,
+                sob_core::inventory_classifications::BRAND_LOGO => Key::InventoryBrandLogo,
                 sob_core::inventory_documents::SUPPLIER_SAVE => Key::InventorySuppliers,
                 sob_core::inventory_documents::RECEIVE_STOCK => Key::InventoryReceipts,
                 sob_core::purchase_orders::PURCHASE_ORDER_WRITE => Key::InventoryOrders,
@@ -3900,6 +3901,22 @@ impl Root {
                                     Kind::Primary,
                                     cx.listener(move |root, _, _, cx| {
                                         root.open_warehouse_conflict(&id, cx)
+                                    }),
+                                ))
+                            },
+                        )
+                        .when(
+                            c.kind == sob_core::inventory_classifications::BRAND_LOGO
+                                && self.svc.store.can_queue_product_edits()
+                                && self.status.connectivity == Connectivity::Online,
+                            |row| {
+                                let id = c.mutation_id.clone();
+                                row.child(self.button(
+                                    ("review-brand-logo", i),
+                                    self.t(Key::InventoryDocumentReview),
+                                    Kind::Primary,
+                                    cx.listener(move |root, _, _, cx| {
+                                        root.open_brand_logo_conflict(&id, cx)
                                     }),
                                 ))
                             },

@@ -1,7 +1,9 @@
 import {
   type CreateProductInput,
+  type InventoryBrandLogoInput,
   type InventoryClassificationInput,
   type InventoryClassificationReorder,
+  inventoryBrandLogoSchema,
   inventoryClassificationListSchema,
   inventoryClassificationOrderResultSchema,
   inventoryClassificationSchema,
@@ -70,6 +72,12 @@ export function inventoryEndpoints(client: ApiClient) {
   return {
     classifications: () =>
       client.get("/admin/inventory/classifications", inventoryClassificationListSchema),
+    saveBrandLogo: (id: string, body: InventoryBrandLogoInput) =>
+      client.put(
+        `/admin/inventory/classifications/${id}/logo`,
+        body,
+        inventoryBrandLogoSchema.nullable(),
+      ),
     reorderClassifications: (body: InventoryClassificationReorder) =>
       client.put(
         "/admin/inventory/classifications/order",

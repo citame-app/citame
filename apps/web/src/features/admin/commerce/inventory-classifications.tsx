@@ -15,6 +15,7 @@ import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { useInventoryLiveRevision } from "../calendar/live-provider";
 import { UnsavedGuard } from "../unsaved-guard";
+import { BrandLogo, BrandLogoEditor } from "./brand-logo";
 import { ClassificationOrderList } from "./classification-order-list";
 
 export function useInventoryClassifications(enabled = true) {
@@ -52,9 +53,11 @@ export function InventoryClassifications({
   const [draft, setDraft] = useState<Draft>();
   const [baseline, setBaseline] = useState<InventoryClassification>();
   const [notice, setNotice] = useState(false);
+  const [logoBrandId, setLogoBrandId] = useState<string>();
   const review = catalogue.data;
   const entries = review?.entries ?? [];
   const current = entries.find((entry) => entry.id === draft?.id);
+  const logoBrand = entries.find((entry) => entry.id === logoBrandId && entry.kind === "brand");
   const stale = Boolean(
     draft &&
       review &&
@@ -66,7 +69,16 @@ export function InventoryClassifications({
     return () => onEditingChange(false);
   }, [editing, onEditingChange]);
   const save = useMutation({
-    mutationFn: ({ id, ...value }: Draft) => api().inventory.saveClassification(id, value),
+    mutationFn: ({ id, kind, parentId, name, active, position, version, generation }: Draft) =>
+      api().inventory.saveClassification(id, {
+        kind,
+        parentId,
+        name,
+        active,
+        position,
+        version,
+        generation,
+      }),
     onError: (error) => {
       if (isClassificationConflict(error)) void catalogue.refetch();
     },
@@ -258,6 +270,15 @@ export function InventoryClassifications({
           </div>
         )}
       </div>
+      {canWrite && logoBrand && (
+        <BrandLogoEditor
+          key={logoBrand.id}
+          brand={logoBrand}
+          generation={review.generation}
+          ready={!catalogue.isPlaceholderData}
+          onClose={() => setLogoBrandId(undefined)}
+        />
+      )}
       {notice && <p role="status">{t("inventory.classification.saved")}</p>}
       {order.isError &&
         (isClassificationConflict(order.error) ? (
@@ -289,6 +310,7 @@ export function InventoryClassifications({
                       movement={canWrite && movement}
                       canWrite={canWrite}
                       onEdit={edit}
+                      onLogo={root.kind === "brand" ? () => setLogoBrandId(root.id) : undefined}
                     />
                     {children.length > 0 && (
                       <ClassificationOrderList
@@ -323,23 +345,40 @@ function ClassificationRow({
   canWrite,
   movement,
   onEdit,
+  onLogo,
 }: {
   entry: InventoryClassification;
   movement: ReactNode;
   canWrite: boolean;
   onEdit: (entry: InventoryClassification) => void;
+  onLogo?: () => void;
 }) {
   const { t } = useI18n();
   return (
     <div className="flex min-h-11 flex-wrap items-center justify-between gap-2 py-2">
-      <span className="min-w-0 break-words">
-        {entry.name}
-        {!entry.active && (
-          <span className="ms-2 text-sm text-muted">{t("inventory.classification.archived")}</span>
-        )}
-      </span>
+      <div className="flex min-w-0 items-center gap-2">
+        {entry.kind === "brand" && <BrandLogo brand={entry} compact />}
+        <span className="min-w-0 break-words">
+          {entry.name}
+          {!entry.active && (
+            <span className="ms-2 text-sm text-muted">
+              {t("inventory.classification.archived")}
+            </span>
+          )}
+        </span>
+      </div>
       <div className="flex min-w-0 flex-wrap items-center gap-1">
         {movement}
+        {canWrite && onLogo && (
+          <Button
+            variant="secondary"
+            type="button"
+            aria-label={`${t("inventory.brandLogo.title")} · ${entry.name}`}
+            onClick={onLogo}
+          >
+            {t("inventory.brandLogo.title")}
+          </Button>
+        )}
         {canWrite && (
           <Button
             variant="secondary"

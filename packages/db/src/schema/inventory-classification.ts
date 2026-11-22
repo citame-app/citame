@@ -3,6 +3,7 @@ import {
   type AnyPgColumn,
   boolean,
   check,
+  customType,
   index,
   integer,
   pgTable,
@@ -38,4 +39,20 @@ export const inventoryClassification = pgTable(
       .where(sql`${t.parentId} is not null`),
     index("inventory_classification_parent_idx").on(t.parentId),
   ],
+);
+
+const logoBytes = customType<{ data: Uint8Array; driverData: Uint8Array }>({
+  dataType: () => "bytea",
+});
+
+export const inventoryBrandLogo = pgTable(
+  "inventory_brand_logo",
+  {
+    brandId: uuid()
+      .primaryKey()
+      .references(() => inventoryClassification.id, { onDelete: "cascade" }),
+    version: uuid().notNull(),
+    image: logoBytes(),
+  },
+  (t) => [check("inventory_brand_logo_size", sql`octet_length(${t.image}) between 1 and 262144`)],
 );

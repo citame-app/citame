@@ -622,6 +622,76 @@ test("reception can inspect product history from the catalog and ledger with rea
   }
 });
 
+test("brand logo upload and concurrent removal require the latest reviewed image", async ({
+  page,
+}) => {
+  const owner = await asOwner();
+  const name = `Brand logo ${crypto.randomUUID()}`;
+  const id = crypto.randomUUID();
+  const path = `/api/admin/inventory/classifications/${id}`;
+  try {
+    const { generation } = await (await owner.get("/api/admin/inventory/classifications")).json();
+    const brand = await owner.put(path, {
+      data: {
+        name,
+        kind: "brand",
+        parentId: null,
+        active: true,
+        position: 0,
+        version: 0,
+        generation,
+      },
+    });
+    expect(brand.status(), await brand.text()).toBe(200);
+    await signInAs(
+      page,
+      OWNER_EMAIL,
+      "/admin/commerce?view=inventory&inventoryTab=classifications",
+    );
+    await page.getByRole("button", { name: `Brand logo · ${name}`, exact: true }).click();
+    const sheet = page.getByRole("dialog", { name: `Brand logo · ${name}` });
+    const file = {
+      name: "fixture.jpg",
+      mimeType: "image/jpeg",
+      buffer: await clientPhotoFixture(),
+    };
+    const choose = sheet.getByLabel("Choose a logo");
+    const save = sheet.getByRole("button", { name: "Save logo", exact: true });
+    await choose.setInputFiles(file);
+    await page.keyboard.press("Escape");
+    const discard = page.getByRole("dialog", { name: "Discard file" });
+    await expect(discard).toBeVisible();
+    await discard.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(save).toBeEnabled();
+    const added = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`${path}/logo`) && response.request().method() === "PUT",
+    );
+    await save.click();
+    expect((await added).status()).toBe(200);
+    const { version } = await (await added).json();
+    const current = sheet.locator("img");
+    await expect(current).toHaveAttribute("src", `${path}/logo/${version}`);
+    await expect(choose).toBeEnabled();
+    await choose.setInputFiles(file);
+
+    const removed = await owner.put(`${path}/logo`, {
+      data: { imageBase64: null, version, generation },
+    });
+    expect(removed.status(), await removed.text()).toBe(200);
+    await expect(current).toHaveCount(0);
+    await expect(save).toBeDisabled();
+    await sheet.getByRole("button", { name: "Keep my selected file" }).click();
+    await expect(save).toBeEnabled();
+    await save.click();
+    await expect(current).toBeVisible();
+    await expectNoHorizontalScroll(page);
+    await expectNoSeriousA11yViolations(page);
+  } finally {
+    await owner.dispose();
+  }
+});
+
 test("a live catalogue refresh does not interrupt saving a brand", async ({ page }) => {
   const owner = await asOwner();
   const pattern = "**/api/admin/inventory/classifications";

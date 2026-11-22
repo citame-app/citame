@@ -1300,6 +1300,16 @@ impl HttpTransport {
         Ok(Some(product))
     }
 
+    pub fn inventory_brand_logo(
+        &self,
+        id: uuid::Uuid,
+        version: uuid::Uuid,
+    ) -> Result<Vec<u8>, TransportError> {
+        self.read_private_jpeg(&format!(
+            "/admin/inventory/classifications/{id}/logo/{version}"
+        ))
+    }
+
     pub fn inventory_classifications(
         &self,
     ) -> Result<crate::inventory_classifications::ClassificationCatalogue, TransportError> {

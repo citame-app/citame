@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { clientPhotoUploadSchema } from "./client-photos";
 import { idSchema, requiredTextSchema, syncGenerationSchema } from "./common";
 
 const uuid = idSchema.transform((id) => id.toLowerCase());
@@ -12,11 +13,20 @@ const fields = {
   active: z.boolean(),
 };
 
+export const inventoryBrandLogoSchema = z.object({ version: uuid, present: z.boolean() });
+export const inventoryBrandLogoInputSchema = z.strictObject({
+  version: uuid.nullable(),
+  imageBase64: clientPhotoUploadSchema.shape.imageBase64.nullable(),
+  generation: syncGenerationSchema,
+});
+export type InventoryBrandLogoInput = z.infer<typeof inventoryBrandLogoInputSchema>;
+
 export const inventoryClassificationSchema = z.object({
   ...fields,
   id: uuid,
   version: revision.positive(),
   name: z.string(),
+  logo: inventoryBrandLogoSchema.optional(),
 });
 export const inventoryClassificationListSchema = z.object({
   entries: z.array(inventoryClassificationSchema),

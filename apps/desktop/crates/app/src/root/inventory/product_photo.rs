@@ -95,7 +95,7 @@ impl Panel {
     }
 }
 
-fn tracked_image(image: Image, cx: &mut Context<Root>) -> Preview {
+pub(super) fn tracked_image(image: Image, cx: &mut Context<Root>) -> Preview {
     cx.new(|cx| {
         cx.on_release(|image: &mut Image, app| app.drop_image(image.clone(), None))
             .detach();
