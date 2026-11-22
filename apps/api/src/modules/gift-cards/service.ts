@@ -5,8 +5,28 @@ import {
   giftReplicaPageSize,
   permissionsFor,
 } from "@sob/contracts";
-import { checkoutLine, type Database, giftCard, giftCardMovement, syncChange } from "@sob/db";
-import { and, asc, count, desc, eq, ilike, inArray, max, or, sql } from "drizzle-orm";
+import {
+  checkoutLine,
+  type Database,
+  giftCard,
+  giftCardMovement,
+  service,
+  syncChange,
+} from "@sob/db";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  ilike,
+  inArray,
+  isNotNull,
+  isNull,
+  max,
+  or,
+  sql,
+} from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
 import { ownedClientIds, type Principal } from "../../auth/principal";
@@ -23,6 +43,33 @@ export async function giftEligibleCatalog(db: Connection): Promise<GiftEligibleC
       .filter(({ currency }) => currency === "EUR")
       .map(({ id, name }) => ({ id, name })),
   };
+}
+
+export function normalizedGiftServices(ids: string[] | undefined) {
+  return [...new Set(ids?.map((id) => id.toLowerCase()))].sort();
+}
+
+export async function reviewGiftServices(tx: Tx, eligibleServiceIds: string[]) {
+  if (!eligibleServiceIds.length) return [];
+  const chosen = await tx
+    .select({ id: service.id, name: service.name })
+    .from(service)
+    .where(
+      and(
+        inArray(service.id, eligibleServiceIds),
+        eq(service.active, true),
+        isNull(service.deletedAt),
+      ),
+    )
+    .orderBy(asc(service.id))
+    .for("share");
+  const catalog = new Set((await giftEligibleCatalog(tx)).services.map(({ id }) => id));
+  if (
+    chosen.length !== eligibleServiceIds.length ||
+    eligibleServiceIds.some((id) => !catalog.has(id))
+  )
+    throw new DomainError("validation_error", "Choose active services for the gift card");
+  return chosen;
 }
 
 export function authorizeGiftAccess(principal: Principal) {
@@ -77,6 +124,8 @@ function toGiftCard(
     label: row.label,
     buyerClientId: row.buyerClientId,
     checkoutId,
+    ...(row.offerId ? { offerId: row.offerId } : {}),
+    ...(row.offerTheme ? { offerTheme: row.offerTheme } : {}),
     amountCents: row.amountCents,
     purchasePriceCents: priceCents,
     ...(row.eligibleServices.length ? { eligibleServices: row.eligibleServices } : {}),
@@ -107,10 +156,12 @@ export async function listGifts(
   page = 1,
   search = "",
   status?: GiftCard["status"],
+  pendingOffer = false,
 ) {
   const escaped = search.replace(/[\\%_]/g, "\\$&");
   const where = and(
     giftScope(principal),
+    pendingOffer ? and(isNotNull(giftCard.offerId), eq(giftCard.status, "pending")) : undefined,
     status
       ? sql`(case when ${giftCard.status}='active' and ${giftCard.expiresAt}<=now() then 'expired'::text else ${giftCard.status}::text end)=${status}`
       : undefined,

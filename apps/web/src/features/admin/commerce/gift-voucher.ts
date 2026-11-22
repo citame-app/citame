@@ -12,6 +12,7 @@ type Voucher = Pick<
   | "status"
   | "expiresAt"
   | "eligibleServices"
+  | "offerTheme"
 >;
 export function printableGiftVoucher(
   doc: Document,
@@ -24,6 +25,10 @@ export function printableGiftVoucher(
   const main = doc.createElement("main");
   main.style.cssText =
     "font:16px/1.6 system-ui,sans-serif;color:#171717;background:#fff;padding:32px;max-width:720px;margin:auto";
+  if (card.offerTheme) {
+    const accents = { rose: "#a14468", sage: "#3d7459", ink: "#26354f" };
+    main.style.borderTop = `6px solid ${accents[card.offerTheme]}`;
+  }
   const append = (tag: string, value: string) => {
     const node = doc.createElement(tag);
     node.textContent = value;

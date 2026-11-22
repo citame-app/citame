@@ -30,6 +30,7 @@ export * from "./date-shifts";
 export * from "./email-delivery";
 export * from "./errors";
 export * from "./gift-cards";
+export * from "./gift-offers";
 export * from "./intake";
 export * from "./inventory";
 export * from "./inventory-classification";

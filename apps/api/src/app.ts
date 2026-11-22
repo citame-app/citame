@@ -29,7 +29,7 @@ import {
   commerceClientRoutes,
   redsysNotificationRoutes,
 } from "./modules/commerce/routes";
-import { giftCardRoutes } from "./modules/gift-cards/routes";
+import { giftCardRoutes, publicGiftOfferRoutes } from "./modules/gift-cards/routes";
 import { inventoryRoutes } from "./modules/inventory/routes";
 import {
   clientMarketingRoutes,
@@ -396,6 +396,7 @@ export function createApp(input: AppDeps): App {
   app.route("/admin/reviews", reviewAdminRoutes(deps));
   app.route("/admin/portfolio", portfolioAdminRoutes(deps));
   app.route("/benefit-plans", publicPlanRoutes(deps));
+  app.route("/gift-offers", publicGiftOfferRoutes(deps));
   app.route("/admin/benefit-plans", planAdminRoutes(deps));
   app.route("/admin/passes", passRoutes(deps));
   app.route("/me/passes", passRoutes(deps));

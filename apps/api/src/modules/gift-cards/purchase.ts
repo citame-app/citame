@@ -1,14 +1,31 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import type { GiftCardPurchaseInput } from "@sob/contracts";
-import { clientProfile, type Database, giftCard, service } from "@sob/db";
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import type { GiftCardPurchaseInput, GiftOfferOrder } from "@sob/contracts";
+import { clientProfile, type Database, giftCard, giftOffer } from "@sob/db";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { createCheckoutInTransaction, getCheckoutInTransaction } from "../commerce/service";
 import { giftCode, giftCodeHash } from "./code";
-import { authorizeGiftAccess, giftEligibleCatalog, giftView } from "./service";
-export async function purchaseGift(
+import {
+  authorizeGiftAccess,
+  giftView,
+  normalizedGiftServices,
+  reviewGiftServices,
+} from "./service";
+
+type GiftTerms = {
+  amountCents: number;
+  purchasePriceCents: number;
+  label: string;
+  expiresAt: string | null;
+  eligibleServiceIds: string[];
+};
+type GiftRequest =
+  | ({ kind: "direct"; buyerClientId: string | null; idempotencyKey: string } & GiftTerms)
+  | ({ kind: "storefront"; paymentsEnabled: boolean } & GiftOfferOrder);
+
+export function purchaseGift(
   db: Database,
   input: GiftCardPurchaseInput,
   principal: Principal,
@@ -23,36 +40,78 @@ export async function purchaseGift(
       (input.eligibleServiceIds?.length ?? 0) > 0)
   )
     throw new DomainError("forbidden", "Clients cannot customize gift purchase terms");
-  const eligibleServiceIds = [
-    ...new Set(input.eligibleServiceIds?.map((id) => id.toLowerCase())),
-  ].sort();
-  const purchasePriceCents = input.purchasePriceCents ?? input.amountCents;
-  const buyerClientId =
-    principal.role === "client" ? principal.clientId : (input.buyerClientId ?? null);
+  return createGift(
+    db,
+    {
+      kind: "direct",
+      amountCents: input.amountCents,
+      purchasePriceCents: input.purchasePriceCents ?? input.amountCents,
+      label: input.label,
+      buyerClientId:
+        principal.role === "client" ? principal.clientId : (input.buyerClientId ?? null),
+      expiresAt: input.expiresAt ?? null,
+      eligibleServiceIds: normalizedGiftServices(input.eligibleServiceIds),
+      idempotencyKey: input.idempotencyKey,
+    },
+    principal,
+    secret,
+  );
+}
+
+export function orderGiftOffer(
+  db: Database,
+  input: GiftOfferOrder,
+  principal: Principal,
+  secret: string,
+  paymentsEnabled: boolean,
+) {
+  if (principal.role !== "client" || !principal.clientId)
+    throw new DomainError("forbidden", "Use a customer account to order a public gift");
+  return createGift(
+    db,
+    {
+      kind: "storefront",
+      ...input,
+      offerId: input.offerId.toLowerCase(),
+      paymentsEnabled,
+    },
+    principal,
+    secret,
+  );
+}
+
+function purchaseHash(request: GiftRequest) {
+  const data =
+    request.kind === "storefront"
+      ? { offerId: request.offerId, offerVersion: request.version }
+      : {
+          amountCents: request.amountCents,
+          label: request.label,
+          buyerClientId: request.buyerClientId,
+          expiresAt: request.expiresAt,
+          ...(request.purchasePriceCents !== request.amountCents
+            ? { purchasePriceCents: request.purchasePriceCents }
+            : {}),
+          ...(request.eligibleServiceIds.length
+            ? { eligibleServiceIds: request.eligibleServiceIds }
+            : {}),
+        };
+  return createHash("sha256").update(JSON.stringify(data)).digest("hex");
+}
+
+function createGift(db: Database, request: GiftRequest, principal: Principal, secret: string) {
+  const { idempotencyKey } = request;
+  const buyerClientId = request.kind === "storefront" ? principal.clientId : request.buyerClientId;
   return db.transaction(async (tx) => {
     await tx.execute(
-      sql`select pg_advisory_xact_lock(hashtextextended(${`gift-purchase:${principal.userId}:${input.idempotencyKey}`}, 0))`,
+      sql`select pg_advisory_xact_lock(hashtextextended(${`gift-purchase:${principal.userId}:${idempotencyKey}`}, 0))`,
     );
-    const requestHash = createHash("sha256")
-      .update(
-        JSON.stringify({
-          amountCents: input.amountCents,
-          label: input.label,
-          buyerClientId,
-          expiresAt: input.expiresAt ?? null,
-          ...(purchasePriceCents !== input.amountCents ? { purchasePriceCents } : {}),
-          ...(eligibleServiceIds.length ? { eligibleServiceIds } : {}),
-        }),
-      )
-      .digest("hex");
+    const requestHash = purchaseHash(request);
     const [previous] = await tx
       .select()
       .from(giftCard)
       .where(
-        and(
-          eq(giftCard.createdBy, principal.userId),
-          eq(giftCard.idempotencyKey, input.idempotencyKey),
-        ),
+        and(eq(giftCard.createdBy, principal.userId), eq(giftCard.idempotencyKey, idempotencyKey)),
       );
     if (previous) {
       if (previous.requestHash !== requestHash)
@@ -60,7 +119,31 @@ export async function purchaseGift(
       const card = await giftView(tx, previous);
       return { card, checkout: await getCheckoutInTransaction(tx, card.checkoutId, principal) };
     }
-    if (input.expiresAt && new Date(input.expiresAt).getTime() <= Date.now())
+
+    let offer: typeof giftOffer.$inferSelect | undefined;
+    let terms: GiftTerms;
+    if (request.kind === "storefront") {
+      if (!request.paymentsEnabled)
+        throw new DomainError("payment_unavailable", "Online gift purchases are unavailable");
+      [offer] = await tx
+        .select()
+        .from(giftOffer)
+        .where(eq(giftOffer.id, request.offerId))
+        .for("share");
+      if (!offer?.published || offer.version !== request.version)
+        throw new DomainError("version_conflict", "Gift offer changed; review it before ordering");
+      terms = {
+        label: offer.name,
+        amountCents: offer.amountCents,
+        purchasePriceCents: offer.priceCents,
+        eligibleServiceIds: offer.eligibleServiceIds,
+        expiresAt: null,
+      };
+    } else {
+      terms = request;
+    }
+
+    if (terms.expiresAt && new Date(terms.expiresAt).getTime() <= Date.now())
       throw new DomainError("validation_error", "New gift expiry must be in the future");
     if (buyerClientId) {
       const [buyer] = await tx
@@ -69,28 +152,7 @@ export async function purchaseGift(
         .where(and(eq(clientProfile.id, buyerClientId), isNull(clientProfile.deletedAt)));
       if (!buyer) throw new DomainError("validation_error", "Choose an active buyer");
     }
-    const eligibleServices = eligibleServiceIds.length
-      ? await tx
-          .select({ id: service.id, name: service.name })
-          .from(service)
-          .where(
-            and(
-              inArray(service.id, eligibleServiceIds),
-              eq(service.active, true),
-              isNull(service.deletedAt),
-            ),
-          )
-          .orderBy(asc(service.id))
-          .for("share")
-      : [];
-    if (eligibleServiceIds.length) {
-      const catalog = new Set((await giftEligibleCatalog(tx)).services.map(({ id }) => id));
-      if (
-        eligibleServices.length !== eligibleServiceIds.length ||
-        eligibleServiceIds.some((id) => !catalog.has(id))
-      )
-        throw new DomainError("validation_error", "Choose active services for the gift card");
-    }
+    const eligibleServices = await reviewGiftServices(tx, terms.eligibleServiceIds);
     const id = randomUUID();
     const nonce = randomBytes(16).toString("hex");
     const code = giftCode(secret, id, nonce);
@@ -98,16 +160,19 @@ export async function purchaseGift(
       .insert(giftCard)
       .values({
         id,
-        label: input.label,
+        label: terms.label,
         buyerClientId,
-        amountCents: input.amountCents,
+        offerId: offer?.id,
+        offerValidityDays: offer?.validityDays,
+        offerTheme: offer?.theme,
+        amountCents: terms.amountCents,
         eligibleServices: sql`${JSON.stringify(eligibleServices)}::text::jsonb`,
         codeNonce: nonce,
         codeHash: giftCodeHash(code),
         codeLast4: code.slice(-4),
-        expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
+        expiresAt: terms.expiresAt ? new Date(terms.expiresAt) : null,
         createdBy: principal.userId,
-        idempotencyKey: input.idempotencyKey,
+        idempotencyKey,
         requestHash,
       })
       .returning();
@@ -123,7 +188,7 @@ export async function purchaseGift(
         idempotencyKey: `gift-checkout-${id}`,
       },
       principal,
-      { giftPurchase: { priceCents: purchasePriceCents } },
+      { giftPurchase: { priceCents: terms.purchasePriceCents } },
     );
     await recordAudit(tx, {
       actorUserId: principal.userId,
@@ -133,8 +198,9 @@ export async function purchaseGift(
       metadata: {
         checkoutId: sale.id,
         amountCents: row.amountCents,
-        purchasePriceCents,
-        eligibleServiceIds,
+        purchasePriceCents: terms.purchasePriceCents,
+        eligibleServiceIds: terms.eligibleServiceIds,
+        ...(offer ? { offerId: offer.id, offerVersion: offer.version } : {}),
       },
     });
     return { card: await giftView(tx, row), checkout: sale };

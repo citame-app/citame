@@ -12,6 +12,10 @@ export function RewardsView(props: {
   role: UserRole;
   accessPreset?: StaffAccessPreset | null;
   clientId?: string | null;
+  actorId?: string;
+  giftOfferId?: string;
+  initialGiftCardId?: string;
+  onGiftOrder?: (id?: string) => void;
   stampClientId?: string;
   initialTab?: "gift" | "packages" | "memberships" | "loyalty" | "stamps";
 }) {

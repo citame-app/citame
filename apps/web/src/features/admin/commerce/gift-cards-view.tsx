@@ -4,7 +4,6 @@ import {
   type GiftEligibleService,
   giftCardCodeSchema,
   giftCardStatusSchema,
-  maximumGiftServices,
   permissionsFor,
   type StaffAccessPreset,
   type UserRole,
@@ -24,6 +23,9 @@ import { formatMoney, localDateOf } from "~/lib/format";
 import { localDayBounds } from "~/lib/zoned";
 import { CheckoutPanel } from "./checkout-panel";
 import { GiftBalanceChecker } from "./gift-balance-checker";
+import { GiftOfferOrderForm } from "./gift-offer-order";
+import { GiftOffersView } from "./gift-offers-view";
+import { GiftServicePicker } from "./gift-service-picker";
 import { printGiftVoucher } from "./gift-voucher";
 import { invalidateCommerce } from "./invalidate";
 import { inputCents } from "./money";
@@ -31,10 +33,18 @@ export function GiftCardsView({
   mode,
   role,
   accessPreset,
+  actorId,
+  giftOfferId,
+  initialGiftCardId,
+  onGiftOrder,
 }: {
   mode: CommerceMode;
   role: UserRole;
   accessPreset?: StaffAccessPreset | null;
+  actorId?: string;
+  giftOfferId?: string;
+  initialGiftCardId?: string;
+  onGiftOrder?: (id?: string) => void;
 }) {
   const { t, locale } = useI18n();
   const [page, setPage] = useState(1);
@@ -43,10 +53,13 @@ export function GiftCardsView({
   const search = /^SOB(?:[ -]|[A-F0-9]+$)/i.test(searchInput.trim()) ? "" : searchInput;
   const [creating, setCreating] = useState(false);
   const [purchaseLocked, setPurchaseLocked] = useState(false);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(initialGiftCardId ?? null);
+  const [pendingOffer, setPendingOffer] = useState(false);
+  const [showOffers, setShowOffers] = useState(false);
+  const canEditOffers = mode === "admin" && permissionsFor(role, accessPreset).editCatalog;
   const cards = useQuery({
-    queryKey: ["gift-cards", mode, "list", page, search, status],
-    queryFn: () => api().giftCards.list(mode, page, search, status),
+    queryKey: ["gift-cards", mode, "list", page, search, status, pendingOffer],
+    queryFn: () => api().giftCards.list(mode, page, search, status, pendingOffer),
     refetchOnMount: "always",
     refetchInterval: 30_000,
   });
@@ -59,10 +72,25 @@ export function GiftCardsView({
     capabilities.isSuccess &&
     !capabilities.data.card &&
     !capabilities.data.bizum;
+  if (showOffers && canEditOffers)
+    return (
+      <div className="space-y-4">
+        <Button variant="ghost" onClick={() => setShowOffers(false)}>
+          {t("gift.back")}
+        </Button>
+        <GiftOffersView />
+      </div>
+    );
   if (selected)
     return (
       <div className="space-y-4">
-        <Button variant="ghost" onClick={() => setSelected(null)}>
+        <Button
+          variant="ghost"
+          onClick={() => {
+            setSelected(null);
+            if (initialGiftCardId) onGiftOrder?.();
+          }}
+        >
           {t("gift.back")}
         </Button>
         <GiftDetail id={selected} mode={mode} role={role} accessPreset={accessPreset} />
@@ -93,6 +121,52 @@ export function GiftCardsView({
           }}
         />
       )}
+      {mode === "client" && giftOfferId && actorId && (
+        <GiftOfferOrderForm
+          key={giftOfferId}
+          offerId={giftOfferId}
+          actorId={actorId}
+          onOrder={(id) => {
+            setSelected(id);
+            onGiftOrder?.(id);
+          }}
+        />
+      )}
+      {mode === "admin" && (
+        <fieldset className="flex flex-wrap gap-2">
+          <legend className="sr-only">{t("gift.title")}</legend>
+          <Button
+            variant={pendingOffer ? "secondary" : "primary"}
+            aria-pressed={!pendingOffer}
+            onClick={() => {
+              setPendingOffer(false);
+              setPage(1);
+            }}
+          >
+            {t("gift.title")}
+          </Button>
+          <Button
+            variant={pendingOffer ? "primary" : "secondary"}
+            aria-pressed={pendingOffer}
+            onClick={() => {
+              setPendingOffer(true);
+              setStatus(undefined);
+              setPage(1);
+            }}
+          >
+            {t("gift.storefront.pending")}
+          </Button>
+          {canEditOffers && (
+            <Button
+              variant="secondary"
+              disabled={purchaseLocked}
+              onClick={() => setShowOffers(true)}
+            >
+              {t("gift.storefront.templates")}
+            </Button>
+          )}
+        </fieldset>
+      )}
       <GiftBalanceChecker mode={mode} />
       <TextField
         label={t("gift.search")}
@@ -104,21 +178,23 @@ export function GiftCardsView({
           setPage(1);
         }}
       />
-      <SelectField
-        label={t("inventory.filter")}
-        value={status ?? ""}
-        options={[
-          { value: "", label: t("pos.allStatuses") },
-          ...giftCardStatusSchema.options.map((value) => ({
-            value,
-            label: t(`gift.status.${value}`),
-          })),
-        ]}
-        onChange={(v) => {
-          setStatus(v ? (v as GiftCard["status"]) : undefined);
-          setPage(1);
-        }}
-      />
+      {!pendingOffer && (
+        <SelectField
+          label={t("inventory.filter")}
+          value={status ?? ""}
+          options={[
+            { value: "", label: t("pos.allStatuses") },
+            ...giftCardStatusSchema.options.map((value) => ({
+              value,
+              label: t(`gift.status.${value}`),
+            })),
+          ]}
+          onChange={(v) => {
+            setStatus(v ? (v as GiftCard["status"]) : undefined);
+            setPage(1);
+          }}
+        />
+      )}
       {cards.isPending ? (
         <Skeleton className="h-48" />
       ) : cards.isError ? (
@@ -363,100 +439,6 @@ function GiftPurchaseForm({
         {t(uncertain ? "gift.retryPurchase" : "gift.create")}
       </Button>
     </form>
-  );
-}
-function GiftServicePicker({
-  selected,
-  disabled,
-  onChange,
-}: {
-  selected: GiftEligibleService[];
-  disabled: boolean;
-  onChange: (services: GiftEligibleService[]) => void;
-}) {
-  const { t, locale } = useI18n();
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState("");
-  const limitHelp = useId();
-  const catalog = useQuery({
-    queryKey: ["gift-cards", "eligible-services"],
-    queryFn: ({ signal }) => api().giftCards.eligibleServices(signal),
-    enabled: open,
-    staleTime: 30_000,
-  });
-  const selectedIds = new Set(selected.map(({ id }) => id));
-  const available = catalog.data?.services ?? [];
-  const availableIds = new Set(available.map(({ id }) => id));
-  const searchText = search.trim().toLocaleLowerCase(locale);
-  const matches = available.filter(
-    ({ id, name }) => !selectedIds.has(id) && name.toLocaleLowerCase(locale).includes(searchText),
-  );
-  const choices = [...selected, ...matches];
-  return (
-    <fieldset disabled={disabled} aria-describedby={limitHelp} className="min-w-0 sm:col-span-2">
-      <legend className="font-medium">{t("gift.eligibleServices")}</legend>
-      <div className="mt-2 space-y-2">
-        <p id={limitHelp} className="text-sm text-muted">
-          {selected.length
-            ? t("gift.selectedServices", { count: selected.length })
-            : t("gift.allServices")}
-        </p>
-        <Button
-          type="button"
-          variant="secondary"
-          aria-expanded={open}
-          onClick={() => setOpen(!open)}
-        >
-          {t(open ? "gift.hideServices" : "gift.chooseServices")}
-        </Button>
-        {open && (
-          <div className="space-y-2">
-            <TextField
-              label={t("gift.searchServices")}
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
-            {catalog.isPending && <Skeleton className="h-28" />}
-            {catalog.isError && (
-              <ErrorState error={catalog.error} onRetry={() => void catalog.refetch()} />
-            )}
-            {catalog.isSuccess && choices.length === 0 && (
-              <p className="text-sm text-muted">{t("gift.noServices")}</p>
-            )}
-            {choices.length > 0 && (
-              <ul className="max-h-56 overflow-y-auto rounded-lg border border-line">
-                {choices.map((service) => {
-                  const checked = selectedIds.has(service.id);
-                  return (
-                    <li key={service.id}>
-                      <label className="flex min-h-11 cursor-pointer items-center gap-3 px-3">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          className="h-4 w-4 accent-current"
-                          disabled={!checked && selected.length >= maximumGiftServices}
-                          onChange={() =>
-                            onChange(
-                              checked
-                                ? selected.filter(({ id }) => id !== service.id)
-                                : [...selected, service],
-                            )
-                          }
-                        />
-                        {service.name}
-                        {catalog.isSuccess && !availableIds.has(service.id) && (
-                          <span className="text-sm text-muted">{t("gift.inactiveService")}</span>
-                        )}
-                      </label>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
-        )}
-      </div>
-    </fieldset>
   );
 }
 function GiftDetail({

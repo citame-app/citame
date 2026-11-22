@@ -1,9 +1,13 @@
-import { permissionsFor } from "@sob/contracts";
+import { idSchema, permissionsFor } from "@sob/contracts";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { RewardsView } from "~/features/admin/commerce/rewards-view";
 export const Route = createFileRoute("/account/rewards")({
-  validateSearch: (search: Record<string, unknown>): { stamps?: boolean } => ({
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { stamps?: boolean; giftOffer?: string; giftCard?: string } => ({
     stamps: search.stamps === true ? true : undefined,
+    giftOffer: idSchema.safeParse(search.giftOffer).data,
+    giftCard: idSchema.safeParse(search.giftCard).data,
   }),
   beforeLoad: ({ context }) => {
     if (
@@ -17,7 +21,8 @@ export const Route = createFileRoute("/account/rewards")({
 });
 function RewardsPage() {
   const { session } = Route.useRouteContext();
-  const { stamps } = Route.useSearch();
+  const { stamps, giftOffer, giftCard } = Route.useSearch();
+  const navigate = Route.useNavigate();
   if (!session) return null;
   return (
     <RewardsView
@@ -27,6 +32,10 @@ function RewardsPage() {
       role={session.user.role}
       accessPreset={session.accessPreset}
       clientId={session.clientId}
+      actorId={session.user.id}
+      giftOfferId={giftOffer}
+      initialGiftCardId={giftCard}
+      onGiftOrder={(id) => void navigate({ search: id ? { giftCard: id } : {}, replace: true })}
     />
   );
 }
