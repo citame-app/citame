@@ -117,7 +117,7 @@ function ReportsPage() {
         hidden={section !== "overview" && !(section === "clients" && permissions.financialReports)}
       >
         <ReportsView
-          search={search}
+          search={all ? search : { ...search, staff: undefined }}
           onSearchChange={(next) =>
             void navigate({
               search: (current) => ({ ...next, section: current.section }),
@@ -128,7 +128,7 @@ function ReportsPage() {
           showClients={section === "clients" && permissions.financialReports}
           visible={section === "overview" || section === "clients"}
           showBusinessOverview={canViewBusinessOverview(permissions)}
-          viewerId={session.user.id}
+          viewerId={`${session.user.id}:${session.user.role}:${session.accessPreset ?? "default"}`}
         />
       </div>
       {(section === "financial" || visited.has("financial")) && permissions.financialReports && (

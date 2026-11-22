@@ -1,6 +1,7 @@
 use super::*;
 use sob_core::reports::{
-    ClientReport, Outcome, ReportQuery, ReportSummary, StatusCounts, decimal_amount,
+    ClientReport, Outcome, ReportQuery, ReportSummary, StaffWorkReport, StatusCounts,
+    decimal_amount,
 };
 use sob_core::sync::TransportError;
 
@@ -8,6 +9,7 @@ mod clients;
 mod financial;
 mod outcomes;
 mod profitability;
+mod staff_work;
 
 use sob_core::reports::financial::{AppointmentProfitability, FinancialReport};
 
@@ -19,10 +21,14 @@ enum ReportPage {
     Main,
     SettledItems,
     Forecast,
+    StaffWork,
 }
 
 enum ReportData {
-    Summary(Box<ReportSummary>),
+    Summary(
+        Box<ReportSummary>,
+        Option<Result<StaffWorkReport, TransportError>>,
+    ),
     Clients(ClientReport),
     Financial(Box<FinancialReport>),
     Profitability(AppointmentProfitability),
@@ -92,6 +98,10 @@ pub(super) struct Desk {
     currency: Option<String>,
     submitted: Option<ReportQuery>,
     summary: Option<ReportSummary>,
+    staff_work: Option<StaffWorkReport>,
+    staff_work_failed: bool,
+    staff_work_upcoming: bool,
+    staff_work_page: usize,
     mode: ReportMode,
     can_view_financial_reports: bool,
     client_sales: Option<ClientSalesScope>,
@@ -172,6 +182,10 @@ impl Root {
             currency: None,
             submitted: None,
             summary: None,
+            staff_work: None,
+            staff_work_failed: false,
+            staff_work_upcoming: false,
+            staff_work_page: 0,
             mode: if scoped {
                 ReportMode::Financial
             } else {
@@ -237,6 +251,9 @@ impl Root {
         };
         if desk.submitted.as_ref() != Some(&query) {
             desk.summary = None;
+            desk.staff_work = None;
+            desk.staff_work_failed = false;
+            desk.staff_work_page = 0;
             desk.client_report = None;
             desk.financial_report = None;
             desk.profitability_report = None;
@@ -258,7 +275,11 @@ impl Root {
         if desk.request.is_none() && desk.submitted.is_some() &&
             !matches!(desk.error, Some(Key::ReportRestricted | Key::ReportRange)) &&
             desk.retry_at.map_or(
-                desk.observed_cursor != status.cursor || self.status.connectivity != Connectivity::Online,
+                desk.observed_cursor != status.cursor || self.status.connectivity != Connectivity::Online
+                    || desk.staff_work.as_ref().is_some_and(|work| {
+                        let zone = work.timezone.parse().unwrap_or(self.tz);
+                        work.upcoming.from != Utc::now().with_timezone(&zone).date_naive()
+                    }),
                 |retry| Instant::now() >= retry,
             ))
         {
@@ -311,12 +332,26 @@ impl Root {
                         ReportMode::Profitability => transport
                             .appointment_profitability(&query, client_id.as_deref(), page, reviewed)
                             .map(ReportData::Profitability),
-                        ReportMode::Overview => transport
-                            .report_summary_with_overview(&query)
-                            .map(|summary| ReportData::Summary(Box::new(summary))),
+                        ReportMode::Overview => {
+                            transport
+                                .report_summary_with_overview(&query)
+                                .map(|summary| {
+                                    let work = if let [only] = summary.per_staff.as_slice() {
+                                        only.staff_id.as_ref().map(|staff_id| {
+                                            transport.staff_work_report(&ReportQuery {
+                                                staff_id: Some(staff_id.clone()),
+                                                ..query.clone()
+                                            })
+                                        })
+                                    } else {
+                                        None
+                                    };
+                                    ReportData::Summary(Box::new(summary), work)
+                                })
+                        }
                         ReportMode::Outcome(_) => transport
                             .report_summary(&query)
-                            .map(|summary| ReportData::Summary(Box::new(summary))),
+                            .map(|summary| ReportData::Summary(Box::new(summary), None)),
                     }
                 })
                 .await;
@@ -336,7 +371,14 @@ impl Root {
                 }
                 desk.request = None;
                 match result {
-                    Ok(ReportData::Summary(summary)) => {
+                    Ok(ReportData::Summary(summary, work)) => {
+                        let (staff_work, failed) = match work {
+                            Some(Ok(work)) => (Some(work), false),
+                            Some(Err(_)) => (None, true),
+                            None => (None, false),
+                        };
+                        desk.staff_work = staff_work;
+                        desk.staff_work_failed = failed;
                         if summary.appointment_breakdown.is_none() && !desk.group.shows_revenue() {
                             desk.group = Group::Day;
                             desk.page = 0;
@@ -355,6 +397,8 @@ impl Root {
                     }
                     Err(TransportError::Forbidden(_) | TransportError::Unauthorized) => {
                         desk.summary = None;
+                        desk.staff_work = None;
+                        desk.staff_work_failed = false;
                         desk.client_report = None;
                         desk.financial_report = None;
                         desk.profitability_report = None;
@@ -413,6 +457,7 @@ impl Root {
                 ReportPage::Main => desk.page = page,
                 ReportPage::SettledItems => desk.item_page = page,
                 ReportPage::Forecast => desk.forecast_page = page,
+                ReportPage::StaffWork => desk.staff_work_page = page,
             }
             cx.notify();
         }
@@ -704,6 +749,21 @@ impl Root {
                             view.child(self.render_report_period(desk, report, cx))
                                 .when(desk.mode == ReportMode::Overview, |view| {
                                     view.child(self.render_report_summary(desk, report, cx))
+                                        .when(desk.staff_work_failed, |view| {
+                                            view.child(self.t(Key::ReportStaffWorkError)).child(
+                                                self.button(
+                                                    "retry-staff-work",
+                                                    self.t(Key::ReportStaffWorkRetry),
+                                                    Kind::Ghost,
+                                                    cx.listener(|root, _, _, cx| {
+                                                        root.submit_report(cx)
+                                                    }),
+                                                ),
+                                            )
+                                        })
+                                        .when_some(desk.staff_work.as_ref(), |view, work| {
+                                            view.child(self.render_staff_work(desk, work, cx))
+                                        })
                                 })
                                 .when_some(desk.mode.outcome(), |view, status| {
                                     view.child(self.render_outcomes(desk, status, cx))
@@ -1089,22 +1149,26 @@ impl Root {
                         .child(
                             div()
                                 .min_w(px(680.))
-                                .child(report_table_row(
-                                    self.t(Group::Staff.label()).to_string(),
-                                    [
-                                        Key::OccupancyScheduled,
-                                        Key::OccupancyBlocked,
-                                        Key::OccupancyReserved,
-                                        Key::OccupancyCompleted,
-                                        Key::OccupancyMissed,
-                                    ]
-                                    .map(|key| self.t(key).to_string()),
-                                    Some(self.t(Key::OccupancyRate).to_string()),
-                                    true,
-                                ))
+                                .child(self.occupancy_table_head(Group::Staff.label()))
                                 .children(rows),
                         ),
                 ),
+        )
+    }
+
+    fn occupancy_table_head(&self, title: Key) -> impl IntoElement {
+        report_table_row(
+            self.t(title).to_string(),
+            [
+                Key::OccupancyScheduled,
+                Key::OccupancyBlocked,
+                Key::OccupancyReserved,
+                Key::OccupancyCompleted,
+                Key::OccupancyMissed,
+            ]
+            .map(|key| self.t(key).to_string()),
+            Some(self.t(Key::OccupancyRate).to_string()),
+            true,
         )
     }
 
@@ -1127,6 +1191,12 @@ impl Root {
                 "report-items-next",
                 Key::FinancialItemsPrevious,
                 Key::FinancialItemsNext,
+            ),
+            ReportPage::StaffWork => (
+                "report-staff-work-previous",
+                "report-staff-work-next",
+                Key::InboxPrevious,
+                Key::InboxNext,
             ),
             ReportPage::Forecast => (
                 "reports-forecast-previous",

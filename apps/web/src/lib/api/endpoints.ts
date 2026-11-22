@@ -64,6 +64,7 @@ import {
   profileMediaSnapshotSchema,
   publicBusinessProfileSchema,
   type ReportOutcomesQuery,
+  type ReportStaffWorkQuery,
   type ReportSummaryQuery,
   type ReviewedBusinessProfileRequest,
   type ReviewedStaffAccessInput,
@@ -71,6 +72,7 @@ import {
   type ReviewedUnlinkedRoleInput,
   reportClientsSchema,
   reportOutcomesPageSchema,
+  reportStaffWorkSchema,
   reportSummarySchema,
   reviewedStaffAccessSchema,
   type ServiceConfiguration,
@@ -419,6 +421,8 @@ export function createEndpoints(client: ApiClient) {
       },
       reports: (query: ReportSummaryQuery, signal?: AbortSignal) =>
         client.get("/admin/reports/summary", reportSummarySchema, { query, signal }),
+      staffWorkReport: (query: ReportStaffWorkQuery, signal?: AbortSignal) =>
+        client.get("/admin/reports/staff-work", reportStaffWorkSchema, { query, signal }),
       clientReport: (query: { from: string; to: string; staffId?: string }) =>
         client.get("/admin/reports/clients", reportClientsSchema, { query }),
       reportOutcomes: (query: ReportOutcomesQuery) =>

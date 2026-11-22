@@ -3,6 +3,7 @@ import {
   permissionsFor,
   reportOutcomesQuerySchema,
   reportQuerySchema,
+  reportStaffWorkQuerySchema,
   reportSummaryQuerySchema,
 } from "@sob/contracts";
 import { Hono } from "hono";
@@ -13,9 +14,10 @@ import { parseOrThrow } from "../../http";
 import { reportClients } from "./clients";
 import { reportOutcomes, reportOutcomesCsv } from "./outcomes";
 import { reportSummary } from "./service";
+import { reportStaffWork } from "./staff-work";
 
 /** Reporting, mounted at `/admin/reports` behind `requireAuth`. */
-export function reportRoutes({ db }: AppDeps) {
+export function reportRoutes({ db, now = () => new Date() }: AppDeps) {
   return new Hono<AppEnv>()
     .get("/summary", async (c) => {
       const { businessOverview, ...query } = parseOrThrow(reportSummaryQuerySchema, c.req.query());
@@ -32,6 +34,15 @@ export function reportRoutes({ db }: AppDeps) {
         ...summary,
         canReportClients: access.financialReports,
       });
+    })
+    .get("/staff-work", async (c) => {
+      const query = parseOrThrow(reportStaffWorkQuerySchema, c.req.query());
+      const scoped = authorizeReportQuery(c.get("principal"), query);
+      return c.json(
+        await reportStaffWork(db, { ...scoped, staffId: scoped.staffId ?? query.staffId }, now()),
+        200,
+        { "Cache-Control": "private, no-store" },
+      );
     })
     .get("/clients", async (c) => {
       const principal = c.get("principal");

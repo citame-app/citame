@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { idSchema, localDateSchema } from "./common";
+import { idSchema, instantSchema, localDateSchema } from "./common";
 import type { StaffPermissions } from "./permissions";
 
 /** Longest reportable window, in calendar days (both ends inclusive). */
@@ -116,6 +116,26 @@ const staffOccupancySchema = z.object({
   occupancyRate: rateSchema,
 });
 export type StaffOccupancy = z.infer<typeof staffOccupancySchema>;
+
+export const reportStaffWorkQuerySchema = reportQuerySchema.safeExtend({ staffId: idSchema });
+export type ReportStaffWorkQuery = z.infer<typeof reportStaffWorkQuerySchema>;
+export const reportStaffWorkDaySchema = staffOccupancySchema.extend({ date: localDateSchema });
+export type ReportStaffWorkDay = z.infer<typeof reportStaffWorkDaySchema>;
+const reportStaffWorkPeriodSchema = z.object({
+  from: localDateSchema,
+  to: localDateSchema,
+  totals: staffOccupancySchema,
+  days: z.array(reportStaffWorkDaySchema).max(REPORT_MAX_DAYS),
+  unavailable: z.array(z.object({ startsAt: instantSchema, endsAt: instantSchema })),
+});
+export type ReportStaffWorkPeriod = z.infer<typeof reportStaffWorkPeriodSchema>;
+export const reportStaffWorkSchema = z.object({
+  staffId: idSchema,
+  timezone: z.string(),
+  selected: reportStaffWorkPeriodSchema,
+  upcoming: reportStaffWorkPeriodSchema,
+});
+export type ReportStaffWork = z.infer<typeof reportStaffWorkSchema>;
 
 export const reportSummaryQuerySchema = reportQuerySchema.safeExtend({
   businessOverview: z.literal("1").optional(),

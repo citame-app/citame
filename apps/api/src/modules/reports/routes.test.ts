@@ -3,6 +3,7 @@ import {
   errorResponseSchema,
   reportClientsSchema,
   reportOutcomesPageSchema,
+  reportStaffWorkSchema,
   reportSummarySchema,
 } from "@sob/contracts";
 import {
@@ -788,4 +789,41 @@ test("report revenue separates currencies and advertises the available choices",
   expect(ars.totals.revenueCents).toBeGreaterThan(2500);
   expect(ars.currency).toBe("ARS");
   expect((await summary(owner, RANGE)).currency).toBe("EUR");
+});
+
+test("a professional can read their work by local day and upcoming blocks without another employee's notes", async () => {
+  await t.db.insert(dateShift).values({
+    staffId: f.anaId,
+    date: "2026-03-09",
+    ranges: [{ startTime: "09:00", endTime: "13:00" }],
+  });
+  await t.db.insert(timeOff).values({
+    staffId: f.anaId,
+    startsAt: new Date("2026-03-09T11:00Z"),
+    endsAt: new Date("2026-03-09T13:00Z"),
+    reason: "Personal reason outside the report",
+  });
+  const base = "/admin/reports/staff-work?from=2026-03-08&to=2026-03-09";
+  expect((await call(ana, `${base}&staffId=${f.beaId}`)).status).toBe(403);
+  expect((await call(client, `${base}&staffId=${f.anaId}`)).status).toBe(403);
+  const response = await call(ana, `${base}&staffId=${f.anaId}`);
+  expect(response.status).toBe(200);
+  expect(response.headers.get("cache-control")).toBe("private, no-store");
+  const body = await response.json();
+  expect(JSON.stringify(body)).not.toContain("Personal reason");
+  const report = reportStaffWorkSchema.parse(body);
+  expect(report).toMatchObject({
+    staffId: f.anaId,
+    timezone: "America/Argentina/Buenos_Aires",
+    selected: {
+      days: [
+        { date: "2026-03-08", scheduledMinutes: 0 },
+        { date: "2026-03-09", scheduledMinutes: 240, blockedMinutes: 60 },
+      ],
+      unavailable: [{ startsAt: "2026-03-09T11:00:00.000Z", endsAt: "2026-03-09T13:00:00.000Z" }],
+    },
+  });
+  expect(report.upcoming.days).toHaveLength(14);
+  expect(report.upcoming.days[0]?.date).toBe(report.upcoming.from);
+  expect(report.upcoming.days.at(-1)?.date).toBe(report.upcoming.to);
 });
