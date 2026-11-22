@@ -167,7 +167,7 @@ fn str_of(v: &Value, key: &str) -> Option<String> {
 }
 
 /// Applies the outbox, in order, on top of `map` (mirror state). Returns the ids of the
-/// appointments that carry unacknowledged edits.
+/// appointments with local edits that are waiting for the mirror to catch up.
 fn overlay(
     store: &Store,
     map: &mut HashMap<String, Appointment>,

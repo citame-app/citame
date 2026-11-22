@@ -72,22 +72,6 @@ impl Store {
         self.rows("SELECT payload FROM outbox WHERE kind = 'service.staff_replace' ORDER BY seq")
     }
 
-    // Keep confirmed catalogue changes visible until the authoritative pull catches up.
-    // The checkpoint key keeps its original name for existing replicas.
-    pub(super) fn retire_confirmed_catalogue_edits(tx: &Transaction, cursor: i64) -> Result<()> {
-        tx.execute(
-            "DELETE FROM outbox WHERE mutation_id IN (
-               SELECT substr(key, length('assignment_ack:') + 1) FROM meta
-               WHERE key GLOB 'assignment_ack:*' AND CAST(value AS INTEGER) <= ?1)",
-            [cursor],
-        )?;
-        tx.execute(
-            "DELETE FROM meta WHERE key GLOB 'assignment_ack:*' AND CAST(value AS INTEGER) <= ?1",
-            [cursor],
-        )?;
-        Ok(())
-    }
-
     pub fn service_assignment(&self, service_id: &str) -> Result<AssignmentSnapshot> {
         self.review_service_assignment(service_id, None)
     }

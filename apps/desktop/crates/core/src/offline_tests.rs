@@ -870,6 +870,140 @@ fn an_offline_booking_shows_up_pending_with_computed_end_and_queues_a_create() {
 }
 
 #[test]
+fn an_accepted_booking_and_its_new_client_survive_reopening_before_pull() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("replica.sqlite");
+    let mut store = Store::open(&file).unwrap();
+    seed(&mut store);
+    let date = day("2026-03-10");
+    let id = create_appointment_for_new_client(
+        &mut store,
+        new_appt("2026-03-10T13:00:00Z"),
+        "New client",
+        None,
+    )
+    .unwrap();
+    let pending = day_view(&store, date).unwrap();
+    let confirmed = column(&pending, "Bea").items[0].appointment.clone();
+    let (generation, batch) = store.push_snapshot(100).unwrap();
+    assert_eq!(batch.len(), 2);
+    let results: Vec<_> = batch
+        .iter()
+        .zip([8, 9])
+        .map(|(entry, seq)| MutationResult::Applied {
+            mutation_id: entry.mutation_id.clone(),
+            applied_seq: Some(seq),
+            replayed: false,
+        })
+        .collect();
+    store
+        .apply_push_results_in(&batch, &results, Some(&generation), Some(15))
+        .unwrap();
+    drop(store);
+
+    let mut store = Store::open(&file).unwrap();
+    assert!(store.push_snapshot(100).unwrap().1.is_empty());
+    let reopened = day_view(&store, date).unwrap();
+    let items = &column(&reopened, "Bea").items;
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].appointment.id, id);
+    assert_eq!(items[0].client_name, "New client");
+    assert!(items[0].pending);
+
+    store.apply_page(&[up(8, "client", &confirmed.client_id, json!({
+        "id": confirmed.client_id, "name": "New client", "createdAt": T0, "updatedAt": T0
+    }))], 8).unwrap();
+    let partial = day_view(&store, date).unwrap();
+    assert_eq!(column(&partial, "Bea").items[0].client_name, "New client");
+    assert!(column(&partial, "Bea").items[0].pending);
+    store
+        .apply_page(&[up(9, "appointment", &id, json!(confirmed))], 9)
+        .unwrap();
+    let synced = day_view(&store, date).unwrap();
+    let items = &column(&synced, "Bea").items;
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].appointment.id, id);
+    assert!(!items[0].pending);
+    assert_eq!(store.outbox_len().unwrap(), 0);
+}
+
+#[test]
+fn accepted_appointment_changes_follow_the_current_staff_scope_before_pull() {
+    let mut store = seeded();
+    store.set_meta("calendar_scope", BEA).unwrap();
+    let id = create_appointment(&mut store, new_appt("2026-03-10T13:00:00Z")).unwrap();
+    for (expected_kind, seq) in [("appointment.create", 8), ("appointment.cancel", 9)] {
+        if expected_kind == "appointment.cancel" {
+            cancel_appointment(&mut store, &id).unwrap();
+        }
+        let (generation, batch) = store.push_snapshot(100).unwrap();
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].kind, expected_kind);
+        store
+            .apply_push_results_in(
+                &batch,
+                &[MutationResult::Applied {
+                    mutation_id: batch[0].mutation_id.clone(),
+                    applied_seq: Some(seq),
+                    replayed: false,
+                }],
+                Some(&generation),
+                Some(15),
+            )
+            .unwrap();
+    }
+    let accepted = effective_appointment(&store, &id).unwrap().unwrap();
+    assert_eq!(accepted.status, AppointmentStatus::Cancelled);
+    assert_eq!(accepted.version, 2);
+    assert!(store.push_snapshot(100).unwrap().1.is_empty());
+
+    let generation = store.push_snapshot(100).unwrap().0;
+    store
+        .apply_visibility_scopes(Some(false), Some(ANA), &generation)
+        .unwrap();
+    assert!(effective_appointment(&store, &id).unwrap().is_none());
+    assert!(store.push_snapshot(100).unwrap().1.is_empty());
+}
+
+#[test]
+fn a_pulled_current_version_is_not_edited_twice_before_the_receipt_cursor() {
+    let mut store = seeded();
+    let moved_to = at("2026-03-09T17:00:00Z");
+    reschedule_appointment(&mut store, EXISTING, Some(moved_to), None).unwrap();
+    let (generation, batch) = store.push_snapshot(100).unwrap();
+    store
+        .apply_push_results_in(
+            &batch,
+            &[MutationResult::Applied {
+                mutation_id: batch[0].mutation_id.clone(),
+                applied_seq: Some(9),
+                replayed: false,
+            }],
+            Some(&generation),
+            Some(15),
+        )
+        .unwrap();
+    let confirmed = effective_appointment(&store, EXISTING).unwrap().unwrap();
+    assert_eq!((confirmed.starts_at, confirmed.version), (moved_to, 4));
+    // An earlier log entry can already return the server's current appointment projection.
+    store
+        .apply_page(&[up(8, "appointment", EXISTING, json!(confirmed))], 8)
+        .unwrap();
+    assert_eq!(
+        effective_appointment(&store, EXISTING)
+            .unwrap()
+            .unwrap()
+            .version,
+        4
+    );
+    cancel_appointment(&mut store, EXISTING).unwrap();
+    let (_, sendable) = store.push_snapshot(100).unwrap();
+    assert_eq!(sendable.len(), 1);
+    assert_eq!(sendable[0].kind, "appointment.cancel");
+    assert_eq!(sendable[0].payload["version"], 4);
+}
+
+#[test]
 fn booking_with_an_unknown_service_or_client_is_refused_locally() {
     let mut s = seeded();
     let mut bad = new_appt("2026-03-10T13:00:00Z");
