@@ -88,7 +88,7 @@ export function projectBooksyWaitlist(
   };
   const byDate = new Map<string, Source>();
   const lastSeen = new Map<number, { date: string; capturedAt: Temporal.Instant }>();
-  const observations = captured.map(({ sha256, payload }) => {
+  const observations = captured.flatMap(({ sha256, payload }) => {
     const bytes = Buffer.from(payload);
     if (createHash("sha256").update(bytes).digest("hex") !== sha256)
       throw new Error("Waitlist archive checksum differs");
@@ -100,7 +100,15 @@ export function projectBooksyWaitlist(
       url.pathname !== `/core/v2/business_api/me/businesses/${model.businessId}/waitlist/`
     )
       throw new Error("Unexpected waitlist source");
-    const { start, end } = dateRange.parse(Object.fromEntries(url.searchParams));
+    const query = url.searchParams;
+    // A filtered or paginated result cannot replace the complete list for a day.
+    if (
+      [...query.keys()].some((key) => key !== "start" && key !== "end") ||
+      query.getAll("start").length > 1 ||
+      query.getAll("end").length > 1
+    )
+      return [];
+    const { start, end } = dateRange.parse({ start: query.get("start"), end: query.get("end") });
     const day = Temporal.PlainDate.from(start);
     const span = day.until(Temporal.PlainDate.from(end)).days;
     if (span < 0 || span > 30) throw new Error("Unexpected waitlist observation range");
@@ -112,15 +120,17 @@ export function projectBooksyWaitlist(
       throw new Error("Duplicate waitlist references in one observation");
     if (data.results.some((r) => r.date < start || r.date > end))
       throw new Error("Waitlist entry falls outside the observed date range");
-    return {
-      day,
-      span,
-      source: {
-        capturedAt: Temporal.Instant.from(capture.capturedAt),
-        hash: sha256,
-        items: data.results,
+    return [
+      {
+        day,
+        span,
+        source: {
+          capturedAt: Temporal.Instant.from(capture.capturedAt),
+          hash: sha256,
+          items: data.results,
+        },
       },
-    };
+    ];
   });
   observations.sort(
     (a, b) =>
@@ -176,6 +186,7 @@ export function projectBooksyWaitlist(
   return {
     entries,
     observedDates: byDate.size,
+    ignoredObservations: captured.length - observations.length,
     observedAtByDate: new Map([...byDate].map(([date, source]) => [date, source.capturedAt])),
   };
 }

@@ -346,6 +346,8 @@ Los comprobantes privados `rehearsal-waitlist-gates.*` del 18 y 19 de noviembre 
 
 El cotejo de las 33 observaciones archivadas cubrió 211 fechas. Las dos solicitudes conservadas corresponden al 18/11/2026 y las observaciones no aportan servicio, profesional ni franja horaria. Se conservan con su fecha original y la web las muestra como solicitudes anteriores una vez transcurrida esa fecha. Para guardar una solicitud importada vigente, las ofertas deben estar pausadas y la preferencia de profesional debe confirmarse expresamente, incluida la opción de cualquier profesional cualificado. La API comprueba ambas condiciones. Si se reactivan las ofertas, repetir un guardado ya confirmado devuelve la misma entrada.
 
+Solo una petición con un inicio y un fin explícitos, sin filtros ni paginación, cuenta como observación completa de la lista de espera. Los originales se verifican y se conservan. El informe cuenta por separado las capturas descartadas por los parámetros de consulta. Una captura descartada no confirma un cambio de fecha ni la desaparición de una solicitud.
+
 Si la misma referencia aparece en otra fecha en una captura posterior, se toma esa fecha. Si después desaparece de la observación más reciente de esa fecha, queda fuera de la proyección de solicitudes revisables. Todas las observaciones originales permanecen en el archivo.
 
 Si cambia la duración de los servicios elegidos entre la revisión y el envío de una oferta, Citame deja la solicitud como no disponible y conserva el original para que el equipo pueda volver a revisar las condiciones.

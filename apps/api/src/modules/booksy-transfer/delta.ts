@@ -113,6 +113,8 @@ export function compareBooksyWaitlists(
     absenceUnverified,
     previousObservedDates: previous.observedDates,
     currentObservedDates: current.observedDates,
+    previousIgnoredObservations: previous.ignoredObservations,
+    currentIgnoredObservations: current.ignoredObservations,
     datesWithoutNewObservation: [...previous.observedAtByDate]
       .filter(([date, at]) => {
         const next = current.observedAtByDate.get(date);
