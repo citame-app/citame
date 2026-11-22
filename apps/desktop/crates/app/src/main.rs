@@ -4,6 +4,7 @@ mod config;
 mod field;
 #[cfg(target_os = "linux")]
 mod linux_window;
+mod profile_lock;
 mod root;
 mod services;
 mod theme;
@@ -57,6 +58,17 @@ fn main() {
     let startup = std::time::Instant::now();
     let report_startup = std::env::var_os("SOB_STARTUP_TIMINGS").is_some();
     let config = config::Config::from_env();
+    let _profile_lock = match profile_lock::acquire(&config.data_dir) {
+        Ok(Some(lock)) => lock,
+        Ok(None) => {
+            eprintln!("Citame is already open with this local profile.");
+            return;
+        }
+        Err(error) => {
+            eprintln!("Citame could not lock its local profile: {error}");
+            std::process::exit(1);
+        }
+    };
     #[cfg(target_os = "linux")]
     let application = linux_window::open_application();
     #[cfg(not(target_os = "linux"))]
