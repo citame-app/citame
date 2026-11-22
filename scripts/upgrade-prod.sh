@@ -99,7 +99,14 @@ if ! "${compose[@]}" run --rm --no-deps --pull never -T migrate "${migration[@]}
   exit 1
 fi
 
-"${compose[@]}" up -d --no-deps --no-build --pull never --wait api worker web
+if ! "${compose[@]}" up -d --no-deps --no-build --pull never --wait api worker web; then
+  printf '%s\n' "Migration succeeded, but Compose did not confirm healthy API, worker and web services." >&2
+  exit 1
+fi
+if ! python3 scripts/check-compose-storage.py upgrade-ready "${compose[@]}"; then
+  printf '%s\n' "Migration succeeded, but the upgraded service configuration could not be verified." >&2
+  exit 1
+fi
 if ! wait_for_web_api 15000; then
   printf '%s\n' "The web gateway could not reach the upgraded API. Migration succeeded. Check the API and web configuration." >&2
   exit 1

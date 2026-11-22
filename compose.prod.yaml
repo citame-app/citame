@@ -216,7 +216,7 @@ services:
           "CMD",
           "bun",
           "-e",
-          "fetch('http://127.0.0.1:4173/api/ready', { redirect: 'error' }).then(async r => process.exit(r.ok && (await r.json()).status === 'ready' ? 0 : 1)).catch(() => process.exit(1))",
+          "fetch('http://127.0.0.1:' + (process.env.PORT ?? 4173) + '/api/ready', { redirect: 'error' }).then(async r => process.exit(r.ok && (await r.json()).status === 'ready' ? 0 : 1)).catch(() => process.exit(1))",
         ]
       interval: 10s
       timeout: 3s

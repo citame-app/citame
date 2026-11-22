@@ -797,8 +797,30 @@ DOCKERFILE
   release_web_id=$(docker image inspect --format '{{.Id}}' "$SOB_WEB_IMAGE")
   [ "$release_api_id" != "$prior_api_id" ] && [ "$release_web_id" != "$prior_web_id" ] ||
     fail "the staged release did not contain distinct images"
-  bash scripts/upgrade-prod.sh --prebuilt --maintenance "${release_args[@]}" ||
-    fail "staged maintenance upgrade failed"
+  step "reject a live Web process with an unreachable API before replacing Caddy"
+  cat > "$SMOKE_DIR/broken-web.yaml" <<'YAML'
+services:
+  web:
+    extra_hosts:
+      - "api:127.0.0.1"
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const res = await fetch('http://127.0.0.1:4173/healthz'); process.exit(res.ok ? 0 : 1)"]
+YAML
+  broken_args=("${release_args[@]}" -f "$SMOKE_DIR/broken-web.yaml")
+  if bash scripts/upgrade-prod.sh --prebuilt --maintenance "${broken_args[@]}" > "$SMOKE_DIR/upgrade-web-failed.log" 2>&1; then
+    fail "the upgrade succeeded with an unreachable API gateway"
+  fi
+  grep -Fq "The web gateway could not reach the upgraded API" "$SMOKE_DIR/upgrade-web-failed.log" ||
+    fail "the upgrade did not report the failed gateway check"
+  [ "$caddy_before" = "$("${COMPOSE[@]}" ps -q caddy)" ] || fail "Caddy changed despite the failed gateway check"
+  [ "$booked_before" = "$(booked_row)" ] || fail "the gateway failure changed the booking"
+  [ "$("${COMPOSE[@]}" exec -T postgres psql -X -U sob -d sob -qAtc \
+    "SELECT to_regclass('public.smoke_upgrade_probe') IS NOT NULL")" = t ] ||
+    fail "the gateway failure lost the committed migration"
+
+  step "repair the upgraded gateway and refresh Caddy"
+  bash scripts/upgrade-prod.sh --prebuilt "${release_args[@]}" ||
+    fail "the corrected gateway upgrade failed"
   for svc in api worker web; do
     replaced=$("${COMPOSE[@]}" ps -q "$svc")
     [ -n "$replaced" ] && [ "$replaced" != "${service_before[$svc]}" ] ||
@@ -825,25 +847,7 @@ DOCKERFILE
     fail "the upgraded proxy did not redact the verification token"
   if grep -Fq "$probe" <<<"$edge_logs"; then fail "the upgraded proxy logged a verification token"; fi
 
-  step "reject a live Web process with an unreachable API before replacing Caddy"
-  cat > "$SMOKE_DIR/broken-web.yaml" <<'YAML'
-services:
-  web:
-    environment:
-      API_INTERNAL_URL: http://127.0.0.1:9
-    healthcheck:
-      test: ["CMD", "bun", "-e", "const res = await fetch('http://127.0.0.1:4173/healthz'); process.exit(res.ok ? 0 : 1)"]
-YAML
-  broken_args=("${release_args[@]}" -f "$SMOKE_DIR/broken-web.yaml")
-  if bash scripts/upgrade-prod.sh --prebuilt "${broken_args[@]}" > "$SMOKE_DIR/upgrade-web-failed.log" 2>&1; then
-    fail "the upgrade succeeded with an unreachable API gateway"
-  fi
-  grep -Fq "The web gateway could not reach the upgraded API" "$SMOKE_DIR/upgrade-web-failed.log" ||
-    fail "the upgrade did not report the failed gateway check"
-  [ "$replaced" = "$("${COMPOSE[@]}" ps -q caddy)" ] || fail "Caddy changed despite the failed gateway check"
-  [ "$booked_before" = "$(booked_row)" ] || fail "the gateway failure changed the booking"
-  bash scripts/upgrade-prod.sh --prebuilt "${release_args[@]}" || fail "the corrected gateway upgrade failed"
-  await_public_api || fail "the corrected gateway did not become publicly ready"
+
 fi
 
 if [ "${SMOKE_RESTORE:-0}" = 1 ]; then

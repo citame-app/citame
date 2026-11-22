@@ -213,7 +213,7 @@ The local rehearsals `review-email-ledger-recovery.*` and `next-day-0070-recover
 
 ## 4. Upgrades, migrations and rollback
 
-The upgrade command requires Python 3 on the deployment host. It compares the rendered Compose database and cache settings with the existing API and worker containers before building or migrating. Use the environment of the current installation, including its cache namespace and sync generation. To change databases, use the recovery procedure.
+The upgrade command requires Python 3 on the deployment host. Before building or migrating, it compares the rendered Compose database and cache settings with the existing API and worker containers and checks that Web is configured to reach the same project's API service. It checks those settings again on the running containers after rollout. Use the environment of the current installation, including its cache namespace and sync generation. To change databases, use the recovery procedure.
 
 1. Back up using section 3 and record the running image tag.
 2. Check out the release and run `scripts/upgrade-prod.sh` with the deployment's Compose project options. When building on the host, set `SOB_TAG` to a distinct version. For published images, set `SOB_API_IMAGE` and `SOB_WEB_IMAGE` to the release digests, pull them, and pass `--prebuilt` before the Compose options.
@@ -257,7 +257,7 @@ Migration `0071_review_request_live_view` adds review invitation notices to the 
 
 A failed migration still exits with a failure status after recovery. If recovery restarts the gateway, verify readiness at the public origin as well. The bundled Caddy proxy checks its upstream every two seconds and can still be waiting for its next check when the gateway's local probe passes. The disposable smoke requires the original API, worker, gateway and Caddy containers to remain in place and checks the preserved booking. It requires immediate public readiness when the gateway reconnects on its own and allows up to six seconds after a reported gateway restart.
 
-With `SMOKE_UPGRADE=1`, the smoke also builds distinct local prebuilt images for a successful maintenance upgrade. The API image embeds a synthetic migration that checks for database connections from other containers before applying its schema change. The smoke then checks the image ID of each replacement service, preserved booking data and public readiness. The release workflow separately verifies published image digests and provenance.
+With `SMOKE_UPGRADE=1`, the smoke builds distinct local prebuilt images for a maintenance upgrade. The API image embeds a synthetic migration that checks for database connections from other containers before applying its schema change. The smoke makes the gateway unreachable while its process health check still succeeds. It verifies that the committed schema and booking are preserved and that Caddy was left in place. It corrects the gateway and checks the replacement images and public readiness. The release workflow separately verifies published image digests and provenance.
 
 Migration `0062_damp_wiccan` adds the desktop device registry. Apply it before publishing the new API. Update the web and API before distributing the desktop client so it can register its key on first sign-in. Keep the same authorization origin and secret on every API replica.
 

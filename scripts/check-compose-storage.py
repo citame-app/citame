@@ -46,9 +46,22 @@ def container_environment(container):
     return dict(entry.split("=", 1) for entry in entries)
 
 
+def uses_compose_api(env, expected):
+    upstream = urlsplit(env["API_INTERNAL_URL"])
+    return (
+        upstream.username is None
+        and upstream.password is None
+        and upstream.path in ("", "/")
+        and not upstream.query
+        and not upstream.fragment
+        and destination(env, "API_INTERNAL_URL", 80)[:3] == expected
+    )
+
+
 def check(mode, compose):
     def refuse(reason):
-        sys.exit(f"{mode.capitalize()} refused: {reason}")
+        operation = "Recovery" if mode == "recovery" else "Upgrade"
+        sys.exit(f"{operation} refused: {reason}")
 
     def running(service):
         containers = read(compose + ["ps", "--quiet", "--status", "running", service]).split()
@@ -60,13 +73,17 @@ def check(mode, compose):
         services = json.loads(read(compose + ["config", "--format", "json"]))["services"]
         api_env = services["api"]["environment"]
         desired = storage(api_env)
+        expected_upstream = ("http", "api", int(api_env.get("PORT", 3000)))
+        if not uses_compose_api(services["web"]["environment"], expected_upstream):
+            qualifier = "" if mode == "recovery" else "configured "
+            refuse(f"the {qualifier}web gateway does not use the selected Compose API service.")
         if (
             storage(services["worker"]["environment"]) != desired
             or destination(services["migrate"]["environment"], "DATABASE_URL", 5432) != desired[0]
         ):
             refuse("API, worker and migrator target different storage.")
 
-        if mode == "recovery":
+        if mode != "upgrade":
             containers = running("api") + running("worker")
         else:
             containers = read(compose + ["ps", "--all", "--quiet", "api", "worker"]).split()
@@ -80,25 +97,16 @@ def check(mode, compose):
                     "installation. Load the intended deployment environment and verify the "
                     "containers were created with it before retrying."
                 )
-        if mode == "recovery":
-            expected_upstream = ("http", "api", int(api_env.get("PORT", 3000)))
-            web_container_envs = [container_environment(container) for container in running("web")]
-            for env in [services["web"]["environment"], *web_container_envs]:
-                upstream = urlsplit(env["API_INTERNAL_URL"])
-                if (
-                    upstream.username is not None
-                    or upstream.password is not None
-                    or upstream.path not in ("", "/")
-                    or upstream.query
-                    or upstream.fragment
-                    or destination(env, "API_INTERNAL_URL", 80)[:3] != expected_upstream
-                ):
-                    refuse("the web gateway does not use the selected Compose API service.")
+        if mode != "upgrade":
+            for container in running("web"):
+                if not uses_compose_api(container_environment(container), expected_upstream):
+                    qualifier = "" if mode == "recovery" else "running "
+                    refuse(f"the {qualifier}web gateway does not use the selected Compose API service.")
     except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError):
         refuse("unable to verify the installation's storage configuration.")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3 or sys.argv[1] not in ("upgrade", "recovery"):
-        sys.exit("Usage: check-compose-storage.py <upgrade|recovery> <compose command...>")
+    if len(sys.argv) < 3 or sys.argv[1] not in ("upgrade", "upgrade-ready", "recovery"):
+        sys.exit("Usage: check-compose-storage.py <upgrade|upgrade-ready|recovery> <compose command...>")
     check(sys.argv[1], sys.argv[2:])

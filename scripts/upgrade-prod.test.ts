@@ -11,6 +11,9 @@ async function exerciseUpgrade(
     migrationSucceeds = false,
     maintenance = true,
     caddy = false,
+    unhealthy = false,
+    desiredUpstream = "http://api:3000",
+    runningUpstream = "http://api:3000",
   } = {},
 ) {
   const dir = await mkdtemp(join(tmpdir(), "citame-upgrade-test-"));
@@ -22,8 +25,12 @@ async function exerciseUpgrade(
 printf '%s\\n' "$*" >> "$COMMAND_LOG"
 case "$*" in
   *'config --format json'*)
-    echo '{"services":{"api":{"environment":{"DATABASE_URL":"postgres://sob:next-password@postgres:5432/recovered","VALKEY_URL":"redis://valkey:6379","VALKEY_KEY_PREFIX":"recovery:","SYNC_REPLICA_GENERATION":"recovered"}},"worker":{"environment":{"DATABASE_URL":"postgres://sob:next-password@postgres:5432/recovered","VALKEY_URL":"redis://valkey:6379","VALKEY_KEY_PREFIX":"recovery:","SYNC_REPLICA_GENERATION":"recovered"}},"migrate":{"environment":{"DATABASE_URL":"postgres://sob:next-password@postgres:5432/recovered"}}}}' ;;
+    printf '{"services":{"api":{"environment":{"DATABASE_URL":"postgres://sob:next-password@postgres:5432/recovered","VALKEY_URL":"redis://valkey:6379","VALKEY_KEY_PREFIX":"recovery:","SYNC_REPLICA_GENERATION":"recovered"}},"worker":{"environment":{"DATABASE_URL":"postgres://sob:next-password@postgres:5432/recovered","VALKEY_URL":"redis://valkey:6379","VALKEY_KEY_PREFIX":"recovery:","SYNC_REPLICA_GENERATION":"recovered"}},"migrate":{"environment":{"DATABASE_URL":"postgres://sob:next-password@postgres:5432/recovered"}},"web":{"environment":{"API_INTERNAL_URL":"%s"}}}}\\n' "$DESIRED_UPSTREAM" ;;
   *'ps --all --quiet api worker'*) printf 'synthetic-api\\nsynthetic-worker\\n' ;;
+  *'ps --quiet --status running api'*) echo synthetic-api ;;
+  *'ps --quiet --status running worker'*) echo synthetic-worker ;;
+  "inspect --format {{json .Config.Env}} smoke-web")
+    printf '["API_INTERNAL_URL=%s"]\\n' "$RUNNING_UPSTREAM" ;;
   "inspect --format {{json .Config.Env}} synthetic-"*)
     case "$EXISTING" in
       database) database=sob; prefix=recovery:; generation=recovered ;;
@@ -48,6 +55,7 @@ case "$*" in
   *'ps --quiet caddy'*) if [[ "$CADDY_RUNNING" == 1 ]]; then echo smoke-caddy; fi ;;
   *'stop api worker'*) [[ "$STOP_FAILS" != 1 ]] ;;
   *'run --rm --no-deps --pull never -T migrate'*) [[ "$MIGRATION_SUCCEEDS" == 1 ]] ;;
+  *'up -d --no-deps --no-build --pull never --wait api worker web'*) [[ "$UNHEALTHY" != 1 ]] ;;
   *'exec -T web bun -e'*)
     [[ "$PROBE" == ready || ( "$PROBE" == after-restart && -f "$RESTARTED" ) ]] ;;
   *'restart --no-deps web'*) touch "$RESTARTED" ;;
@@ -67,6 +75,9 @@ esac
         STOP_FAILS: stopFails ? "1" : "0",
         CADDY_RUNNING: caddy ? "1" : "0",
         MIGRATION_SUCCEEDS: migrationSucceeds ? "1" : "0",
+        UNHEALTHY: unhealthy ? "1" : "0",
+        DESIRED_UPSTREAM: desiredUpstream,
+        RUNNING_UPSTREAM: runningUpstream,
         RESTARTED: join(dir, "restarted"),
       },
       stdout: "ignore",
@@ -114,6 +125,41 @@ test("a running Web container with an unreachable API fails the upgrade without 
   expect(commands).not.toContain("--force-recreate --wait caddy");
   expect(commands).not.toContain("start --wait");
   expect(stderr).toContain("The web gateway could not reach the upgraded API");
+});
+
+test("upgrade refuses another API as the gateway target before migration", async () => {
+  const { code, commands, stderr } = await exerciseUpgrade("ready", {
+    migrationSucceeds: true,
+    desiredUpstream: "http://another-installation:3000",
+  });
+  expect(code).toBe(1);
+  expect(commands).not.toContain("run --rm --no-deps --pull never -T migrate");
+  expect(stderr).toContain("the configured web gateway does not use the selected Compose API");
+});
+
+test("a different upstream in the running gateway blocks API probe and Caddy refresh", async () => {
+  const { code, commands, stderr } = await exerciseUpgrade("ready", {
+    migrationSucceeds: true,
+    caddy: true,
+    runningUpstream: "http://another-installation:3000",
+  });
+  expect(code).toBe(1);
+  expect(commands).not.toContain("exec -T web bun -e");
+  expect(commands).not.toContain("--force-recreate --wait caddy");
+  expect(stderr).toContain("the running web gateway does not use the selected Compose API");
+});
+
+test("upgrade reports an unhealthy Compose rollout after migration without resuming old writers", async () => {
+  const { code, commands, stderr } = await exerciseUpgrade("unavailable", {
+    migrationSucceeds: true,
+    caddy: true,
+    unhealthy: true,
+  });
+  expect(code).toBe(1);
+  expect(commands).toContain("--wait api worker web");
+  expect(commands).not.toContain("start --wait");
+  expect(commands).not.toContain("--force-recreate --wait caddy");
+  expect(stderr).toContain("Migration succeeded, but Compose did not confirm healthy");
 });
 
 test.each(["database", "cache", "generation"])(
