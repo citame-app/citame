@@ -684,6 +684,7 @@ test("a rejected classification draft requires review even while the catalogue r
   const pattern = "**/api/admin/inventory/classifications";
   const refreshStarted = Promise.withResolvers<void>();
   const releaseRefresh = Promise.withResolvers<void>();
+  let holdRefresh = false;
   try {
     const catalogue = await owner.get("/api/admin/inventory/classifications");
     expect(catalogue.status()).toBe(200);
@@ -695,6 +696,18 @@ test("a rejected classification draft requires review even while the catalogue r
     const created = await owner.put(url, { data: { ...fields, version: 0 } });
     expect(created.status(), await created.text()).toBe(200);
     const { version } = await created.json();
+    const baseline = await owner.get("/api/admin/inventory/classifications");
+    expect(baseline.status()).toBe(200);
+    const reviewedCatalogue = await baseline.json();
+    await page.route(pattern, async (route) => {
+      if (!holdRefresh) {
+        await route.fulfill({ json: reviewedCatalogue });
+        return;
+      }
+      refreshStarted.resolve();
+      await releaseRefresh.promise;
+      await route.continue();
+    });
     await signInAs(
       page,
       OWNER_EMAIL,
@@ -704,11 +717,7 @@ test("a rejected classification draft requires review even while the catalogue r
     const editor = page.getByRole("form", { name: "Edit classification" });
     const editedName = `${name} edited`;
     await editor.getByLabel("Name", { exact: true }).fill(editedName);
-    await page.route(pattern, async (route) => {
-      refreshStarted.resolve();
-      await releaseRefresh.promise;
-      await route.continue();
-    });
+    holdRefresh = true;
     const updated = await owner.put(url, { data: { ...fields, position: 42, version } });
     expect(updated.status(), await updated.text()).toBe(200);
     await refreshStarted.promise;
