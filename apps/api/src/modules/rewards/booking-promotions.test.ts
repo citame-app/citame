@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
+import { checkoutSchema } from "@sob/contracts";
 import { appointment, checkout, checkoutReward, passPeriod, service } from "@sob/db";
 import { eq } from "drizzle-orm";
 import {
@@ -162,7 +163,7 @@ test("a promotion applied at checkout cannot appear as an offer accepted at book
     idempotencyKey,
   });
   expect(sale.status, await sale.clone().text()).toBe(201);
-  const { id: saleId } = await sale.json();
+  const { id: saleId } = checkoutSchema.parse(await sale.json());
   const applied = await call(client, `/me/checkouts/${saleId}/reward`, "POST", {
     kind: "promotion",
     code,
