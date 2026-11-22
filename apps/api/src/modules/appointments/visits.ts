@@ -22,6 +22,7 @@ import { getBookingPolicy } from "../booking-protection/policy";
 import { assertProtectedPriceBasis, protectionView } from "../booking-protection/value";
 import { assertClientCanBook } from "../clients/controls";
 import { prepareBookingIntake } from "../clients/intake-booking";
+import { assertPeakReviews, quotePeakSlot } from "../peak-prices/service";
 import { filterResourceAvailability } from "../resources/reservations";
 import { assertOnlineServices, getBookableServices } from "../services/service";
 import { getSalonSettings } from "../settings/service";
@@ -84,6 +85,7 @@ export async function createVisit(
   principal: Principal,
   now: Date,
   reviewHash?: string,
+  peakPriceReviews?: (string | null)[],
 ): Promise<Visit> {
   return db.transaction(async (tx) => {
     await lockScheduling(tx);
@@ -96,7 +98,11 @@ export async function createVisit(
     const clientId = p.role === "client" ? p.clientId : input.clientId;
     if (!clientId) throw new DomainError("validation_error", "Choose a customer");
     const requestHash = createHash("sha256")
-      .update(JSON.stringify(canonical({ ...input, clientId, ...(desktop ? { reviewHash } : {}) })))
+      .update(
+        JSON.stringify(
+          canonical({ ...input, clientId, ...(desktop ? { reviewHash, peakPriceReviews } : {}) }),
+        ),
+      )
       .digest("hex");
     const [prior] = await tx
       .select()
@@ -117,16 +123,21 @@ export async function createVisit(
     if (new Set(all.map((s) => s.currency)).size !== 1)
       throw new DomainError("validation_error", "A visit must use one currency");
     await lockCalendars(tx, [...new Set(input.parts.map((part) => part.staffId))].sort());
+    let desktopReview: DesktopVisitPreview | undefined;
     if (desktop) {
       // Match the policy that was shown before any part can make a change.
       await getSalonSettings(tx, "share");
       await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('booking-policy',0))`);
-      const reviewed = await reviewDesktopVisit(tx, input, p, now, true);
-      if (reviewed.reviewHash !== reviewHash)
+      desktopReview = await reviewDesktopVisit(tx, input, p, now, true);
+      if (desktopReview.reviewHash !== reviewHash)
         throw new DomainError("version_conflict", "The visit terms changed; review again");
-      if (reviewed.parts.some((part) => !part.available))
+      assertPeakReviews(
+        desktopReview.parts.map((part) => part.peakPriceReview),
+        peakPriceReviews,
+      );
+      if (desktopReview.parts.some((part) => !part.available))
         throw new DomainError("slot_taken", "At least one step of the visit is unavailable");
-      if (reviewed.parts.some((part) => part.depositWaiverRequired))
+      if (desktopReview.parts.some((part) => part.depositWaiverRequired))
         throw new DomainError("invalid_state", "An authorized deposit waiver is required");
     }
     await tx
@@ -136,6 +147,9 @@ export async function createVisit(
     for (const [position, part] of input.parts.entries()) {
       const request = authorizeAppointmentCreate(p, {
         ...part,
+        ...(desktopReview
+          ? { peakPriceReview: desktopReview.parts[position]?.peakPriceReview }
+          : {}),
         clientId,
         startsAt,
         ...(input.notes ? { notes: input.notes } : {}),
@@ -191,7 +205,12 @@ async function reviewDesktopVisit(
       startsAt: startsAt.toISOString(),
     });
     const services = await getBookableServices(tx, part.serviceIds, part.serviceQuotes);
-    const priceCents = services.reduce((price, service) => price + service.priceCents, 0);
+    const peak = await quotePeakSlot(tx, services, startsAt, settings.timezone);
+    const priceCents = peak.services.reduce((price, service) => price + service.priceCents, 0);
+    const peakSurchargeCents = peak.services.reduce(
+      (price, service) => price + service.surchargeCents,
+      0,
+    );
     if (policy.enabled) assertProtectedPriceBasis(services, priceCents);
     if (policy.enabled && part.protectionWaiverReason && !canWaive)
       throw new DomainError("forbidden", "Only managers may waive a booking deposit");
@@ -227,6 +246,7 @@ async function reviewDesktopVisit(
       startsAt: startsAt.toISOString(),
       endsAt: endsAt.toISOString(),
       priceCents,
+      ...(peak.review ? { peakPriceReview: peak.review, peakSurchargeCents } : {}),
       priceStatus: services.some((s) => s.priceType === "variable")
         ? "pending"
         : services.some((s) => s.priceType === "from")

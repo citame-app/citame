@@ -39,6 +39,7 @@ import {
 } from "./modules/marketing/routes";
 import { meRoutes } from "./modules/me/routes";
 import { passRoutes, planAdminRoutes, publicPlanRoutes } from "./modules/passes/routes";
+import { peakPriceAdminRoutes, peakPricePreviewRoute } from "./modules/peak-prices/routes";
 import { reportRoutes } from "./modules/reports/routes";
 import { portfolioAdminRoutes, portfolioPublicRoutes } from "./modules/reputation/portfolio-routes";
 import {
@@ -384,6 +385,7 @@ export function createApp(input: AppDeps): App {
   app.route("/admin", adminRoutes(deps, auth));
   app.route("/admin/commerce", commerceAdminRoutes(deps));
   app.route("/admin/marketing", marketingAdminRoutes(deps, limiter));
+  app.route("/admin/peak-prices", peakPriceAdminRoutes(deps));
   app.route("/admin/clients", clientMarketingRoutes(deps));
   app.route("/admin/inventory", inventoryRoutes(deps));
   app.route("/admin/accounting", accountingRoutes(deps));
@@ -420,11 +422,13 @@ export function createApp(input: AppDeps): App {
   app.route("/services", servicesRoutes(deps));
   app.route("/staff", staffRoutes(deps));
   app.route("/availability", availabilityRoutes(deps));
+  app.route("/availability/peak-price", peakPricePreviewRoute(deps, true));
   // Everything that touches appointments needs a session; the routes enforce the role policy.
   app.use("/appointments", authenticated);
   app.use("/appointments/*", authenticated);
   if (deps.booksyConsultation)
     app.route("/appointments", booksySourceRoutes(deps.db, deps.booksyConsultation));
+  app.route("/appointments/peak-price", peakPricePreviewRoute(deps, false));
   app.route("/appointments", appointmentsRoutes(deps));
 
   app.use("/sync/*", authenticated);

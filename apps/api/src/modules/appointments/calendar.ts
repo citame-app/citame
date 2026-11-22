@@ -180,6 +180,7 @@ export async function getCalendar(
               }
             : {}),
           priceCents: s.reviewedPriceCents ?? s.priceCents,
+          ...(s.peakSurchargeCents ? { peakSurchargeCents: s.peakSurchargeCents } : {}),
           ...(s.priceType !== "fixed" ? { priceType: s.priceType } : {}),
           ...(s.sourceUnpriced && s.reviewedPriceCents === null
             ? { sourceUnpriced: true as const }

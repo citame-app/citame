@@ -2,6 +2,7 @@ import { z } from "zod";
 import { appointmentSchema, createAppointmentBaseSchema } from "./appointments";
 import { bookingPolicySchema } from "./booking-protection";
 import { idSchema, instantSchema, syncGenerationSchema } from "./common";
+import { peakPriceReviewSchema } from "./peak-prices";
 
 export const appointmentSeriesInputSchema = createAppointmentBaseSchema
   .omit({ id: true, promotion: true })
@@ -19,6 +20,7 @@ export type AppointmentSeriesInput = z.infer<typeof appointmentSeriesInputSchema
 export const appointmentSeriesCreateSchema = appointmentSeriesInputSchema.safeExtend({
   reviewHash: z.string().regex(/^[a-f0-9]{64}$/),
   idempotencyKey: z.string().min(8).max(120),
+  peakPriceReviews: z.array(peakPriceReviewSchema.nullable()).min(2).max(12).optional(),
 });
 export type AppointmentSeriesCreate = z.infer<typeof appointmentSeriesCreateSchema>;
 const desktopSeriesFields = {
@@ -45,7 +47,14 @@ export const appointmentSeriesPreviewSchema = z.object({
   currency: z.string(),
   policy: bookingPolicySchema,
   occurrences: z.array(
-    z.object({ startsAt: instantSchema, endsAt: instantSchema, available: z.boolean() }),
+    z.object({
+      startsAt: instantSchema,
+      endsAt: instantSchema,
+      available: z.boolean(),
+      priceCents: z.number().int().nonnegative().optional(),
+      peakSurchargeCents: z.number().int().positive().optional(),
+      peakPriceReview: peakPriceReviewSchema.optional(),
+    }),
   ),
 });
 export type AppointmentSeriesPreview = z.infer<typeof appointmentSeriesPreviewSchema>;

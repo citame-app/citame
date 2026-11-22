@@ -2027,6 +2027,7 @@ keys! {
     SeriesReview => ("Review recurring visits", "Revisar citas recurrentes"),
     SeriesRefresh => ("Refresh availability", "Actualizar disponibilidad"),
     SeriesConfirm => ("Book all visits", "Reservar todas las citas"),
+    PeakPriceSurcharge => ("Peak-time surcharge · {amount}", "Recargo de hora punta · {amount}"),
     SeriesPrice => ("Per visit: {price}", "Por cita: {price}"),
     SeriesAvailable => ("Available", "Disponible"),
     SeriesUnavailable => ("Unavailable", "No disponible"),

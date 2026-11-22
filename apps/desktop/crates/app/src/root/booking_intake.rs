@@ -641,7 +641,13 @@ impl Root {
         if let Some((preview, _)) = &review.series {
             let tz = preview.timezone.parse().unwrap_or(self.tz);
             let price = self.amount_label(preview.per_visit_cents, &preview.currency);
-            body = body.child(i18n::fill(self.t(Key::SeriesPrice), &[("price", &price)]));
+            let has_surcharge = preview
+                .occurrences
+                .iter()
+                .any(|visit| visit.peak_surcharge_cents.is_some());
+            if !has_surcharge {
+                body = body.child(i18n::fill(self.t(Key::SeriesPrice), &[("price", &price)]));
+            }
             if preview.policy.enabled {
                 body = body.child(
                     div()
@@ -667,6 +673,20 @@ impl Root {
                         local.format("%H:%M"),
                         end.format("%H:%M")
                     ))
+                    .when(has_surcharge, |row| {
+                        let amount = self.amount_label(
+                            visit.price_cents.unwrap_or(preview.per_visit_cents),
+                            &preview.currency,
+                        );
+                        row.child(amount)
+                            .when_some(visit.peak_surcharge_cents, |row, surcharge| {
+                                let amount = self.amount_label(surcharge, &preview.currency);
+                                row.child(i18n::fill(
+                                    self.t(Key::PeakPriceSurcharge),
+                                    &[("amount", &amount)],
+                                ))
+                            })
+                    })
                     .child(
                         div()
                             .text_color(if visit.available {

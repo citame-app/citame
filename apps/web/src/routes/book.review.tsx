@@ -9,6 +9,7 @@ import { useToast } from "~/components/ui/toast";
 import { InlineAuth } from "~/features/booking/auth-panel";
 import { BookingFrame } from "~/features/booking/frame";
 import { createBookingIntent } from "~/features/booking/intent";
+import { BookingPeakPrice, useBookingPeakPrice } from "~/features/booking/peak-price";
 import { PriceTermsConsent, usePriceTerms } from "~/features/booking/price-terms";
 import { BookingPromotionReview, useBookingPromotion } from "~/features/booking/promotion";
 import { BookingPolicyConsent } from "~/features/booking/protection";
@@ -96,8 +97,13 @@ function SingleReviewStep() {
   const finalPricePending = selectedServices.some((s) => needsFinalPrice(s.priceType));
   const priceTerms = usePriceTerms(selectedServices);
   const quotes = acceptedServiceQuotes(selectedServices);
+  const peak = useBookingPeakPrice(
+    selectedServices.map((service) => service.id),
+    search.slot,
+  );
+  const peakReady = peak.isSuccess && !peak.isFetching;
   const promotion = useBookingPromotion(
-    isClient && !finalPricePending && quotes && search.slot && search.slotStaff
+    isClient && peakReady && !finalPricePending && quotes && search.slot && search.slotStaff
       ? {
           staffId: search.slotStaff,
           serviceIds: search.services,
@@ -105,9 +111,11 @@ function SingleReviewStep() {
           startsAt: search.slot,
         }
       : null,
-    session?.user.id ?? "guest",
+    JSON.stringify([session?.user.id, peak.data?.review]),
   );
-  const reviewTotal = promotion.quote?.newTotalCents ?? totals.priceCents;
+  const surchargeCents =
+    peak.data?.services.reduce((sum, item) => sum + item.surchargeCents, 0) ?? 0;
+  const reviewTotal = promotion.quote?.newTotalCents ?? totals.priceCents + surchargeCents;
   const [acceptedPromotionHash, setAcceptedPromotionHash] = useState<string | null>(null);
 
   const policy = useQuery({
@@ -136,6 +144,7 @@ function SingleReviewStep() {
   const confirm = useMutation({
     mutationFn: () => {
       if (packet.current) return api().appointments.create(packet.current);
+      if (!peakReady) throw new Error("Review the current price for this time");
       if (!priceTerms.accepted) throw new Error("Accept the reviewed price terms");
       if (!promotion.ready) throw new Error("Review the current promotion");
       if (!policyAccepted) throw new Error("Review current booking policy");
@@ -143,6 +152,7 @@ function SingleReviewStep() {
       if (!search.slot || !search.slotStaff) throw new Error("incomplete booking");
       const request = {
         ...intake.payload,
+        ...(peak.data?.review ? { peakPriceReview: peak.data.review } : {}),
         ...(priceTerms.required ? { priceTermsAccepted: true } : {}),
         ...(variablePrice && policy.data?.enabled
           ? { protectionAcceptedDepositCents: policy.data.depositValue }
@@ -190,6 +200,12 @@ function SingleReviewStep() {
       if (error instanceof ApiError && error.code === "online_booking_paused") {
         void queryClient.invalidateQueries({ queryKey: ["salon"] });
         toast.error(t("booking.paused.title"));
+        return;
+      }
+      if (error instanceof ApiError && error.code === "peak_price_changed") {
+        setAcceptedVersion(null);
+        setAcceptedTotal(null);
+        void peak.refetch();
         return;
       }
       if (error instanceof ApiError && error.code === "booking_promotion_changed") {
@@ -263,7 +279,10 @@ function SingleReviewStep() {
       authRef.current?.focus();
       return;
     }
-    if (uncertain || (policyAccepted && intake.ready && promotion.ready && priceTerms.accepted))
+    if (
+      uncertain ||
+      (peakReady && policyAccepted && intake.ready && promotion.ready && priceTerms.accepted)
+    )
       confirm.mutate();
   }
 
@@ -287,7 +306,11 @@ function SingleReviewStep() {
           ctaDisabled={
             isStaff ||
             (!uncertain &&
-              (!policyAccepted || !intake.ready || !promotion.ready || !priceTerms.accepted))
+              (!peakReady ||
+                !policyAccepted ||
+                !intake.ready ||
+                !promotion.ready ||
+                !priceTerms.accepted))
           }
           onCta={onCta}
         />
@@ -331,6 +354,10 @@ function SingleReviewStep() {
         <fieldset disabled={confirm.isPending || uncertain} className="min-w-0">
           <BookingForms state={intake} />
         </fieldset>
+        {confirm.error instanceof ApiError && confirm.error.code === "peak_price_changed" && (
+          <p role="alert">{t("bookingPeak.changed")}</p>
+        )}
+        <BookingPeakPrice quote={peak} currency={selectedServices[0]?.currency ?? "EUR"} />
         <PriceTermsConsent state={priceTerms} disabled={confirm.isPending || uncertain} />
         {isClient && finalPricePending && (
           <p className="text-sm text-muted">{t("services.price.promotionLater")}</p>
@@ -365,7 +392,7 @@ function SingleReviewStep() {
           !(
             confirm.error instanceof ApiError &&
             (confirm.error.code === "unauthorized" ||
-              confirm.error.code === "booking_promotion_changed")
+              ["booking_promotion_changed", "peak_price_changed"].includes(confirm.error.code))
           ) && <ErrorState error={confirm.error} onRetry={() => confirm.mutate()} />}
 
         {isStaff && (

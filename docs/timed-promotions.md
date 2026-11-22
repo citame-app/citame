@@ -17,3 +17,11 @@ Apply migration `0039_robust_ozymandias.sql` before starting this API. Its nulla
 Timed codes can be verified on an **unpaid receipt** before a payment attempt and during the [online booking review](booking-promotions.md), which recalculates protected deposits. Showing offers automatically in public availability remains pending.
 
 Verification uses synthetic appointments and prices, including original-booking lead boundaries, local weekdays, exclusive ends, DST, changed quote revisions, allowed/rejected moves and frozen terms after an offer is disabled. Browser journeys cover uncertain creation recovery, explicit review/application, preserved receipts, Spanish, touch targets, accessibility and overflow. No real bank or external message is involved.
+
+## Peak-time pricing
+
+**Marketing → Peak-time pricing** lets a catalogue manager add a surcharge by weekday, salon-local start time and treatment. Midnight in the end field means the end of that day. An empty treatment selection applies to every eligible treatment. When multiple windows match, the highest percentage applies once per treatment. Its amount is rounded to the nearest cent. Existing bookings keep their confirmed price, including when moved.
+
+The public review and the web calendar's new appointment form show the surcharge before submission. Each grouped treatment uses its own start, and the team calendar's recurring preview shows the amount for each occurrence. Confirmation sends the reviewed pricing alongside the booking. If the pricing changes during review, the server rejects the write and the staff member or customer must review the new amount. Existing bookings, invoices and imports carry no surcharge from this feature.
+
+Migration `0122_scheduled_peak_prices.sql` adds an initially empty rule set and an optional surcharge column on service snapshots. Enable rules after validating the single-appointment and waiting-list flows on all supported clients. A booking flow without price review receives a conflict if a surcharge applies.

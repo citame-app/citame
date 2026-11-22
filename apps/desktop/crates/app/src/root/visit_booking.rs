@@ -562,6 +562,13 @@ impl Root {
                         .rounded_md()
                         .bg(theme::bg())
                         .child(label)
+                        .when_some(item.peak_surcharge_cents, |step, surcharge| {
+                            let amount = self.amount_label(surcharge, &preview.currency);
+                            step.child(div().text_sm().child(i18n::fill(
+                                self.t(Key::PeakPriceSurcharge),
+                                &[("amount", &amount)],
+                            )))
+                        })
                         .when(item.deposit_waiver_required, |step| {
                             step.child(
                                 div()

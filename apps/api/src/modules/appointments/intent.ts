@@ -11,6 +11,7 @@ export function appointmentIntentFingerprint(request: CreateAppointmentRequest):
     .update(
       bookingIntentKey(request) +
         (intake ? `\nintake:${intake}` : "") +
+        (request.peakPriceReview ? `\npeak-price:${request.peakPriceReview}` : "") +
         (request.promotion
           ? `\npromotion:${request.promotion.code}:${request.promotion.reviewHash}`
           : ""),

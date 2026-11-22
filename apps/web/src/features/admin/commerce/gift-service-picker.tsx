@@ -10,11 +10,13 @@ import { api } from "~/lib/api/instance";
 export function GiftServicePicker({
   selected,
   reviewedCatalogue,
+  maximum = maximumGiftServices,
   disabled,
   onChange,
 }: {
   selected: GiftEligibleService[];
   reviewedCatalogue?: GiftEligibleService[];
+  maximum?: number;
   disabled: boolean;
   onChange: (services: GiftEligibleService[]) => void;
 }) {
@@ -79,7 +81,7 @@ export function GiftServicePicker({
                           type="checkbox"
                           checked={checked}
                           className="h-4 w-4 accent-current"
-                          disabled={!checked && selected.length >= maximumGiftServices}
+                          disabled={!checked && selected.length >= maximum}
                           onChange={() =>
                             onChange(
                               checked

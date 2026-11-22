@@ -15,6 +15,7 @@ import { formatTime } from "~/lib/format";
 import { InlineAuth } from "./auth-panel";
 import { BookingFrame } from "./frame";
 import { bookingTotals } from "./logic";
+import { BookingPeakPrice, bookingPeakPriceKey, useBookingPeakPrice } from "./peak-price";
 import { PriceTermsConsent, usePriceTerms } from "./price-terms";
 import { BookingPromotionReview, useBookingPromotion } from "./promotion";
 import { BookingPolicyConsent } from "./protection";
@@ -52,26 +53,33 @@ function PartReview({
   const finalPricePending = services.some((s) => needsFinalPrice(s.priceType));
   const priceTerms = usePriceTerms(services);
   const variablePrice = services.some((s) => s.priceType === "variable");
+  const serviceIds = services.map((service) => service.id);
+  const peak = useBookingPeakPrice(serviceIds, startsAt);
+  const peakReady = peak.isSuccess && !peak.isFetching;
   const promotion = useBookingPromotion(
-    enabled && !finalPricePending && quotes
-      ? { serviceIds: services.map((s) => s.id), serviceQuotes: quotes, staffId, startsAt }
+    enabled && peakReady && !finalPricePending && quotes
+      ? { serviceIds, serviceQuotes: quotes, staffId, startsAt }
       : null,
-    subjectKey,
+    JSON.stringify([subjectKey, peak.data?.review]),
   );
   const subtotal = bookingTotals(
     services,
     services.map((s) => s.id),
   ).priceCents;
-  const total = promotion.quote?.newTotalCents ?? subtotal;
+  const surchargeCents =
+    peak.data?.services.reduce((sum, item) => sum + item.surchargeCents, 0) ?? 0;
+  const total = promotion.quote?.newTotalCents ?? subtotal + surchargeCents;
   const [accepted, setAccepted] = useState<string | null>(null);
   const terms = JSON.stringify({
     version: policy.version,
     total,
     hash: promotion.payload?.reviewHash ?? null,
+    peak: peak.data?.review,
   });
   const review: ReviewedPart = {
     ready:
       enabled &&
+      peakReady &&
       intake.ready &&
       priceTerms.accepted &&
       promotion.ready &&
@@ -80,8 +88,9 @@ function PartReview({
     total,
     payload: {
       staffId,
-      serviceIds: services.map((s) => s.id),
+      serviceIds,
       serviceQuotes: quotes,
+      ...(peak.data?.review ? { peakPriceReview: peak.data.review } : {}),
       ...intake.payload,
       ...(priceTerms.required ? { priceTermsAccepted: true } : {}),
       ...(variablePrice && policy.enabled
@@ -99,6 +108,7 @@ function PartReview({
   }, [signature, onReview]);
   return (
     <fieldset disabled={disabled} className="min-w-0 space-y-4">
+      <BookingPeakPrice quote={peak} currency={services[0]?.currency ?? "EUR"} />
       <PriceTermsConsent state={priceTerms} disabled={disabled} />
       <p className="font-semibold">
         {totalPriceLabel(t, locale, services, total, services[0]?.currency ?? "EUR", true)}
@@ -249,6 +259,10 @@ export function VisitReview({ booking }: { booking: BookingContext }) {
       if (unknown) return;
       packet.current = null;
       recoveryPending.current = false;
+      if (error instanceof ApiError && error.code === "peak_price_changed") {
+        void queries.invalidateQueries({ queryKey: bookingPeakPriceKey });
+        return;
+      }
       if (error instanceof ApiError && ["version_conflict", "not_found"].includes(error.code)) {
         void queries.invalidateQueries({ queryKey: ["services"] });
         booking.go("services", { services: search.services }, { replace: true });
@@ -302,7 +316,11 @@ export function VisitReview({ booking }: { booking: BookingContext }) {
       <div className="space-y-5">
         <BookingRecoveryGuard pending={recoveryPending} />
         {uncertain && <p role="alert">{t("bookingPromotion.uncertain")}</p>}
-        {confirm.isError && <ErrorState error={confirm.error} />}
+        {confirm.error instanceof ApiError && confirm.error.code === "peak_price_changed" ? (
+          <p role="alert">{t("bookingPeak.changed")}</p>
+        ) : (
+          confirm.isError && <ErrorState error={confirm.error} />
+        )}
         {!session && <InlineAuth ref={auth} />}
         {session && !isClient && <p role="alert">{t("booking.review.staff.body")}</p>}
         {policy.isError && (

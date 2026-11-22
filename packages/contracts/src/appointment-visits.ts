@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { appointmentSchema, createAppointmentBaseSchema } from "./appointments";
 import { idSchema, instantSchema, LIMITS, localDateSchema, syncGenerationSchema } from "./common";
+import { peakPriceReviewSchema } from "./peak-prices";
 
 const visitPartSchema = createAppointmentBaseSchema.omit({
   id: true,
@@ -46,6 +47,7 @@ export const desktopVisitInputSchema = visitCreateSchema
   });
 export const desktopVisitCreateSchema = desktopVisitInputSchema.safeExtend({
   reviewHash: z.string().regex(/^[a-f0-9]{64}$/),
+  peakPriceReviews: z.array(peakPriceReviewSchema.nullable()).min(2).max(8).optional(),
 });
 export type DesktopVisitInput = z.infer<typeof desktopVisitInputSchema>;
 export type DesktopVisitCreate = z.infer<typeof desktopVisitCreateSchema>;
@@ -61,6 +63,8 @@ export const desktopVisitPreviewSchema = z.object({
         startsAt: instantSchema,
         endsAt: instantSchema,
         priceCents: z.number().int().nonnegative(),
+        peakSurchargeCents: z.number().int().positive().optional(),
+        peakPriceReview: peakPriceReviewSchema.optional(),
         priceStatus: z.enum(["fixed", "from", "pending"]),
         depositWaiverRequired: z.boolean(),
         available: z.boolean(),

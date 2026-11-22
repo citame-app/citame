@@ -127,6 +127,9 @@ pub struct SeriesOccurrence {
     pub starts_at: DateTime<Utc>,
     pub ends_at: DateTime<Utc>,
     pub available: bool,
+    pub price_cents: Option<i64>,
+    pub peak_surcharge_cents: Option<i64>,
+    pub peak_price_review: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -137,6 +140,8 @@ pub struct ReviewedSeries {
     review_hash: String,
     idempotency_key: String,
     appointment_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    peak_price_reviews: Option<Vec<Option<String>>>,
     #[serde(skip_serializing)]
     reviewed_starts: Vec<DateTime<Utc>>,
 }
@@ -293,6 +298,17 @@ impl SeriesPacket {
             review_hash: preview.review_hash.clone(),
             idempotency_key: uuid::Uuid::now_v7().to_string(),
             appointment_ids,
+            peak_price_reviews: preview
+                .occurrences
+                .iter()
+                .any(|date| date.peak_price_review.is_some())
+                .then(|| {
+                    preview
+                        .occurrences
+                        .iter()
+                        .map(|date| date.peak_price_review.clone())
+                        .collect()
+                }),
             reviewed_starts: preview
                 .occurrences
                 .iter()
