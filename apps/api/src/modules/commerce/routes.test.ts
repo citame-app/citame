@@ -722,9 +722,17 @@ test("a hosted checkout stays unpaid until a matching signed bank notification",
   const response = await pay(sale.id, "redsys_card", 10000, crypto.randomUUID(), client);
   expect(response.status).toBe(201);
   const started = (await response.json()) as {
-    payment: { order: string; status: string };
+    payment: { id: string; order: string; status: string };
     form: { action: string };
   };
+  const continuation = `/checkouts/${sale.id}/payments/${started.payment.id}/continue`;
+  const resume = await call(client, `/me${continuation}`, "POST", {});
+  expect(resume.status).toBe(200);
+  expect(resume.headers.get("Cache-Control")).toBe("private, no-store");
+  expect(await resume.json()).toEqual(started.form);
+  expect((await call(other, `/me${continuation}`, "POST", {})).status).toBe(404);
+  const ownerResume = await call(owner, `/admin/commerce${continuation}`, "POST", {});
+  expect(await ownerResume.json()).toEqual(started.form);
   expect(started.form.action).toContain("sis-t.redsys.es");
   expect(started.payment.status).toBe("pending");
   expect(
@@ -735,13 +743,41 @@ test("a hosted checkout stays unpaid until a matching signed bank notification",
   expect((await notify(started.payment.order)).status).toBe(200);
   expect((await notify(started.payment.order)).status).toBe(200);
   const paid = checkoutSchema.parse(await (await call(client, `/me/checkouts/${sale.id}`)).json());
-  expect(paid).toMatchObject({ status: "paid", paidCents: 10000, balanceCents: 0 });
+  expect(paid).toMatchObject({
+    status: "paid",
+    paidCents: 10000,
+    balanceCents: 0,
+  });
   expect(paid.payments).toHaveLength(1);
+  expect((await call(client, `/me${continuation}`, "POST", {})).status).toBe(409);
   expect((await notify(started.payment.order, { Ds_Response: "0190" })).status).toBe(200);
   expect(
     checkoutSchema.parse(await (await call(client, `/me/checkouts/${sale.id}`)).json()).status,
   ).toBe("paid");
 });
+test("a stale generation in a Desktop cookie session cannot start a bank order", async () => {
+  const sale = await checkout();
+  const response = await t.app.request(`/admin/commerce/checkouts/${sale.id}/payments`, {
+    method: "POST",
+    headers: {
+      cookie: owner.cookie,
+      "content-type": "application/json",
+      "x-citame-generation": "obsolete",
+    },
+    body: JSON.stringify({
+      method: "redsys_bizum",
+      amountCents: 10000,
+      idempotencyKey: crypto.randomUUID(),
+    }),
+  });
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({ error: { code: "sync_generation_changed" } });
+  const current = checkoutSchema.parse(
+    await (await call(owner, `/admin/commerce/checkouts/${sale.id}`)).json(),
+  );
+  expect(current.payments).toHaveLength(0);
+});
+
 test("a bank decline releases the balance and pending attempts prevent a second collection", async () => {
   const sale = await checkout();
   const started = (await (await pay(sale.id, "redsys_bizum", 10000)).json()) as {

@@ -37,6 +37,7 @@ export function CommerceView({
   view,
   onViewChange,
   checkoutId,
+  bankPaymentId,
   rewardClientId,
   onCheckoutChange,
   inventoryNavigation,
@@ -48,6 +49,7 @@ export function CommerceView({
   view?: CommerceViewName;
   onViewChange?: (view: CommerceViewName) => void;
   checkoutId?: string;
+  bankPaymentId?: string;
   rewardClientId?: string;
   onCheckoutChange?: (id: string | null) => void;
   inventoryNavigation?: InventoryNavigation;
@@ -150,7 +152,15 @@ export function CommerceView({
         title={t("commerce.receipt")}
         size="lg"
       >
-        {selected && <CheckoutPanel id={selected} mode="admin" role={role} />}
+        {selected && (
+          <CheckoutPanel
+            key={selected}
+            id={selected}
+            mode="admin"
+            role={role}
+            bankPaymentId={bankPaymentId}
+          />
+        )}
       </Sheet>
     </div>
   );

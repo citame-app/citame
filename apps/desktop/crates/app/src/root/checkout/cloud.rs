@@ -8,6 +8,14 @@ impl ReceiptForm {
 
 impl Root {
     fn open_cloud_receipt(&mut self, cx: &mut Context<Self>) {
+        let payment = self.checkout_review_mut().and_then(|review| match review {
+            CheckoutReview::Receipt(form) => form.receipt.hosted_bank_payment_id(),
+            _ => None,
+        });
+        self.open_cloud_receipt_for(payment, cx);
+    }
+
+    pub(super) fn open_cloud_receipt_for(&mut self, payment: Option<Uuid>, cx: &mut Context<Self>) {
         let Some(session) = self
             .svc
             .current_session()
@@ -36,9 +44,14 @@ impl Root {
             let handoff = cx
                 .background_executor()
                 .spawn(async move {
-                    auth.begin_browser_receipt(&session, receipt_id)
-                        .ok()
-                        .flatten()
+                    match payment {
+                        Some(payment) => {
+                            auth.begin_browser_bank_payment(&session, receipt_id, payment)
+                        }
+                        None => auth.begin_browser_receipt(&session, receipt_id),
+                    }
+                    .ok()
+                    .flatten()
                 })
                 .await;
             let opened = root
@@ -60,6 +73,8 @@ impl Root {
                     }
                     if let Some(handoff) = &handoff
                         && form.can_open_in_cloud()
+                        && payment
+                            .is_none_or(|id| form.receipt.hosted_bank_payment_id() == Some(id))
                     {
                         cx.open_url(&handoff.url());
                         return true;
@@ -104,7 +119,11 @@ impl Root {
         }
         div().child(self.button(
             "checkout-open-cloud",
-            self.t(Key::CheckoutCloudOpen),
+            self.t(if form.receipt.has_hosted_bank_payment() {
+                Key::CheckoutOpenPendingBank
+            } else {
+                Key::CheckoutCloudOpen
+            }),
             Kind::Ghost,
             cx.listener(|root, _, _, cx| root.open_cloud_receipt(cx)),
         ))

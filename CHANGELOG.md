@@ -8,6 +8,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Added
 
+- Desktop prepares Redsys card and Bizum payments for the reviewed amount. The linked browser opens the exact receipt and can continue the same pending bank order after reloading. Citame updates the receipt when the bank confirms payment.
+
 - Desktop can search and browse the saved gift register offline. The register shows when balances were saved, retains previously opened movement pages, and clears the saved data when account visibility changes.
 
 - Desktop can browse previously loaded active and history waitlist pages offline. Offer actions continue to use the current server state.

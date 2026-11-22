@@ -4397,6 +4397,72 @@ fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
 }
 
 #[test]
+#[ignore = "needs the isolated web gateway with synthetic Redsys and Bizum configured"]
+fn native_prepares_card_and_bizum_then_reopens_same_bank_order_through_the_proxy() {
+    let mut browser = Device::sign_in();
+    browser.sync();
+    let generation = browser.store.verified_reviewed_generation().unwrap();
+    let device = proxy_device();
+    let base = env("SOB_TEST_API_URL");
+    for (method, name) in [
+        (ReceiptTender::RedsysCard, "redsys_card"),
+        (ReceiptTender::RedsysBizum, "redsys_bizum"),
+    ] {
+        let receipt = device
+            .transport
+            .create_walk_in_sale(&WalkInSale {
+                idempotency_key: uuid::Uuid::now_v7(),
+                client_id: None,
+                staff_id: None,
+                use_client_discount: None,
+                lines: vec![SaleItem::Custom {
+                    description: "Synthetic Redsys handoff".into(),
+                    unit_amount_cents: 4200,
+                    quantity: 1,
+                }],
+                discount_cents: 0,
+                tip_cents: 0,
+            })
+            .unwrap();
+        let attempt = PaymentAttempt::for_bank(method, 1500, &receipt, &generation).unwrap();
+        for _ in 0..2 {
+            let (pending, handoff) = device
+                .transport
+                .record_checkout_payment_with_handoff(&receipt, &attempt)
+                .unwrap();
+            assert_eq!(handoff, pending.hosted_bank_payment_id());
+            assert_eq!(pending.paid_cents, 0);
+            assert!(pending.has_hosted_bank_payment());
+        }
+        let endpoint = format!("/admin/commerce/checkouts/{}", receipt.id);
+        let web = browser.rest_get(&endpoint);
+        assert_eq!(web["payments"].as_array().unwrap().len(), 1);
+        let pending = &web["payments"][0];
+        assert_eq!(pending["method"], name);
+        assert_eq!(pending["amountCents"], 1500);
+        let payment = pending["id"].as_str().unwrap();
+        let cookie = device
+            .browser_bank_payment_cookie(receipt.id.parse().unwrap(), payment.parse().unwrap());
+        let mut response = ureq::post(&format!("{base}/api{endpoint}/payments/{payment}/continue"))
+            .header("Origin", &base)
+            .header("Cookie", cookie)
+            .content_type("application/json")
+            .send("{}")
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        assert_eq!(response.headers()["cache-control"], "private, no-store");
+        let form: serde_json::Value =
+            serde_json::from_str(&response.body_mut().read_to_string().unwrap()).unwrap();
+        assert_eq!(
+            form["action"],
+            "https://sis-t.redsys.es:25443/sis/realizarPago"
+        );
+        assert_eq!(form["fields"]["Ds_SignatureVersion"], "HMAC_SHA512_V2");
+        assert_eq!(browser.rest_get(&endpoint)["payments"], web["payments"]);
+    }
+}
+
+#[test]
 #[ignore = "requires smoke stack"]
 fn native_gift_card_redeems_and_refunds_once_through_the_proxy() {
     use sob_core::billing::{SaleItem, WalkInSale};

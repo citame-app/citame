@@ -31,7 +31,12 @@ function PaymentReturn() {
         ) : result.isError ? (
           <ErrorState error={result.error} onRetry={() => void result.refetch()} />
         ) : (
-          <CheckoutPanel id={result.data.id} mode="client" role={session?.user.role ?? "client"} />
+          <CheckoutPanel
+            id={result.data.id}
+            bankPaymentId={result.data.payments.find((payment) => payment.order === order)?.id}
+            mode="client"
+            role={session?.user.role ?? "client"}
+          />
         )}
       </div>
     </PageContainer>

@@ -14,6 +14,7 @@ import { requirePermission } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
+import { checkoutBankTenders, gatewayFor } from "../commerce/hosted-tenders";
 import { purchaseGift } from "./purchase";
 import {
   authorizeGiftAccess,
@@ -28,6 +29,7 @@ import {
   revealGift,
 } from "./service";
 export function giftCardRoutes(deps: AppDeps) {
+  const bankTenders = checkoutBankTenders(deps, gatewayFor(deps));
   return new Hono<AppEnv>()
     .use("*", async (c, next) => {
       authorizeGiftAccess(c.get("principal"));
@@ -50,17 +52,15 @@ export function giftCardRoutes(deps: AppDeps) {
         await listGifts(deps.db, c.get("principal"), query.page, query.search, query.status),
       );
     })
-    .post("/", async (c) =>
-      c.json(
-        await purchaseGift(
-          deps.db,
-          parseOrThrow(giftCardPurchaseSchema, await readJson(c)),
-          c.get("principal"),
-          deps.config.auth.secret,
-        ),
-        201,
-      ),
-    )
+    .post("/", async (c) => {
+      const result = await purchaseGift(
+        deps.db,
+        parseOrThrow(giftCardPurchaseSchema, await readJson(c)),
+        c.get("principal"),
+        deps.config.auth.secret,
+      );
+      return c.json({ card: result.card, checkout: { ...result.checkout, ...bankTenders } }, 201);
+    })
     .post("/check", async (c) =>
       c.json(
         await checkGift(

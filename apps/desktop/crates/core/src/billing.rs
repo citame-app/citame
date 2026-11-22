@@ -145,6 +145,7 @@ pub struct AppointmentCheckout {
     pub reward: Option<ReceiptReward>,
     pub balance_cents: u32,
     pub payable_cents: Option<u32>,
+    bank_tenders: Option<BankTenders>,
     pub external_balance: Option<ExternalBalance>,
     pub pricing_version: Option<u32>,
     #[serde(default)]
@@ -418,10 +419,68 @@ impl AppointmentCheckout {
             .then_some(PaymentAttention::Pending)
     }
 
+    pub(crate) fn contains_bank_payment(&self, id: Uuid, attempt: &PaymentAttempt) -> bool {
+        let method = match attempt.method {
+            ReceiptTender::RedsysCard => "redsys_card",
+            ReceiptTender::RedsysBizum => "redsys_bizum",
+            _ => return false,
+        };
+        self.payments.iter().any(|payment| {
+            payment.id == Some(id)
+                && payment.amount_cents == attempt.amount_cents
+                && payment.method.as_deref() == Some(method)
+                && payment
+                    .order
+                    .as_ref()
+                    .is_some_and(|order| !order.is_empty())
+                && !payment.merchant_initiated
+        })
+    }
+
+    pub fn has_hosted_bank_payment(&self) -> bool {
+        self.hosted_bank_payment_id().is_some()
+    }
+
+    pub fn hosted_bank_payment_id(&self) -> Option<Uuid> {
+        if self.status != "open" {
+            return None;
+        }
+        self.payments.iter().find_map(|payment| {
+            let method = match payment.method.as_deref()? {
+                "redsys_card" => ReceiptTender::RedsysCard,
+                "redsys_bizum" => ReceiptTender::RedsysBizum,
+                _ => return None,
+            };
+            if payment.status != "pending"
+                || payment.order.as_ref().is_none_or(String::is_empty)
+                || payment.merchant_initiated
+                || payment.amount_cents > self.payable_balance()
+                || self.bank_generation(method).is_none()
+            {
+                return None;
+            }
+            payment.id
+        })
+    }
+
+    pub fn bank_generation(&self, tender: ReceiptTender) -> Option<&str> {
+        let capability = self.bank_tenders.as_ref()?;
+        let enabled = match tender {
+            ReceiptTender::RedsysCard => capability.card,
+            ReceiptTender::RedsysBizum => capability.bizum,
+            _ => false,
+        };
+        enabled.then_some(capability.generation.as_str())
+    }
+
     pub fn collectible_cents(&self) -> u32 {
         if self.status != "open" || self.has_unresolved_payment() {
             return 0;
         }
+        self.payable_balance()
+    }
+
+    fn payable_balance(&self) -> u32 {
         if self.lines.iter().any(|line| line.price_pending) {
             return if self
                 .protection
@@ -821,14 +880,29 @@ impl RefundAttempt {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct BankTenders {
+    card: bool,
+    bizum: bool,
+    generation: String,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReceiptTender {
     Cash,
     ExternalCard,
+    RedsysCard,
+    RedsysBizum,
     GiftCard,
     Package,
     Membership,
+}
+
+impl ReceiptTender {
+    pub fn is_bank(self) -> bool {
+        matches!(self, Self::RedsysCard | Self::RedsysBizum)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -853,6 +927,8 @@ pub struct PaymentAttempt {
     pass_period_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) checkout_line_id: Option<Uuid>,
+    #[serde(skip)]
+    pub(crate) bank_generation: Option<String>,
 }
 
 impl PaymentAttempt {
@@ -864,7 +940,26 @@ impl PaymentAttempt {
             gift_card_code: None,
             pass_period_id: None,
             checkout_line_id: None,
+            bank_generation: None,
         }
+    }
+
+    pub fn for_bank(
+        method: ReceiptTender,
+        amount_cents: u32,
+        receipt: &AppointmentCheckout,
+        generation: &str,
+    ) -> Option<Self> {
+        if !method.is_bank()
+            || receipt.bank_generation(method) != Some(generation)
+            || amount_cents == 0
+            || amount_cents > receipt.collectible_cents()
+        {
+            return None;
+        }
+        let mut attempt = Self::new(method, amount_cents);
+        attempt.bank_generation = Some(generation.to_owned());
+        Some(attempt)
     }
 
     pub fn with_gift_card(amount_cents: u32, code: &str) -> Option<Self> {
@@ -878,6 +973,18 @@ impl PaymentAttempt {
         attempt.pass_period_id = Some(choice.period_id);
         attempt.checkout_line_id = Some(choice.line_id);
         attempt
+    }
+
+    pub fn bank_review_is_current(
+        &self,
+        receipt: &AppointmentCheckout,
+        verified_generation: Option<&str>,
+    ) -> bool {
+        !self.method.is_bank()
+            || self.bank_generation.as_deref().is_some_and(|generation| {
+                verified_generation == Some(generation)
+                    && receipt.bank_generation(self.method) == Some(generation)
+            })
     }
 
     pub fn tender(&self) -> ReceiptTender {

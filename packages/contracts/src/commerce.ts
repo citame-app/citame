@@ -285,6 +285,13 @@ export const checkoutSchema = z.object({
   canRefund: z.boolean().optional(),
   canReturnPoints: z.boolean().optional(),
   canDispatchBankRefunds: z.boolean().optional(),
+  bankTenders: z
+    .object({
+      card: z.boolean(),
+      bizum: z.boolean(),
+      generation: syncGenerationSchema,
+    })
+    .optional(),
   refundReviewGeneration: syncGenerationSchema.optional(),
   stockReturnGeneration: syncGenerationSchema.optional(),
   id: idSchema,

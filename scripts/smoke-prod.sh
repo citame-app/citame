@@ -66,6 +66,14 @@ services:
       RATE_LIMIT_GLOBAL_MAX: "1500"
       RATE_LIMIT_AUTH_MAX: "90"
       RATE_LIMIT_OAUTH_MAX: "360"
+      # This fixture signs hosted forms locally and never submits them to the bank.
+      PAYMENT_PROVIDER: redsys
+      REDSYS_ENVIRONMENT: test
+      REDSYS_MERCHANT_CODE: "999008881"
+      REDSYS_TERMINAL: "1"
+      REDSYS_SECRET_KEY: "synthetic-local-redsys-test-key"
+      REDSYS_SECRET_KEY_FILE: ""
+      REDSYS_BIZUM_ENABLED: "true"
 YAML
   smoke_overlays+=(-f "$SMOKE_DIR/desktop-limits.yaml")
 fi

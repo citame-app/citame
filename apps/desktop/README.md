@@ -104,6 +104,8 @@ The **Waitlist** button opens the active queue, all requests and the Booksy requ
 
 Choose **Open appointment receipt** from an eligible EUR appointment to open the same receipt as the web desk. The receipt shows the server-calculated discount, the current balance and the amount collectible now. A reconciled Booksy part-payment also shows the amount already paid in Booksy. Register the amount received in cash or on the card terminal, or redeem an eligible gift card using its code. Combine these methods to collect a remaining balance. For a customer with an eligible prepaid plan, choose the plan and service to redeem one visit on the receipt. Refunding that tender restores the full visit to the plan. Cash needs an open register. The desktop submits the payment online and reuses the request key when confirming the same attempt again after an interrupted response.
 
+When Redsys is configured, choose online card or Bizum and review the amount on the receipt. **Prepare bank payment** creates one pending bank order and opens that exact order in the linked browser session. The browser can reopen a pending order after a reload. Citame updates the shared receipt when the bank confirms the payment.
+
 Open **Cash register → Gift cards** with a connection to save the complete register visible to
 your account. Desktop shows the date of the saved copy and allows local searches and filters when
 offline. It also retains up to 64 recently opened movement pages. Codes are revealed and balances
@@ -189,7 +191,7 @@ The arm64 build targets Apple Silicon, including M3. The standard GitHub arm64 r
 
 ## Functional scope
 
-This client covers the appointment desk, notifications, waitlist requests, appointment receipts, cash register management, the online unpaid appointments and billing review queue, inventory browsing, product photos, pack content, per-product stock operations, the global stock ledger and CSV, operational, client and financial reports, commission rates, statements and recording completed payouts, sync conflict review, team portraits, schedule templates, dated shifts and general salon settings. Client selection and basic contact management work locally. Advanced client management, team account administration, hosted payments, prepaid plan administration, marketing and provider configuration are available in the web app. The private Booksy consultation environment provides read-only access to the imported calendar.
+This client covers the appointment desk, notifications, waitlist requests, appointment receipts, cash register management, the online unpaid appointments and billing review queue, inventory browsing, product photos, pack content, per-product stock operations, the global stock ledger and CSV, operational, client and financial reports, commission rates, statements and recording completed payouts, sync conflict review, team portraits, schedule templates, dated shifts and general salon settings. Client selection and basic contact management work locally. Advanced client management, team account administration, prepaid plan administration, marketing and provider configuration are available in the web app. The private Booksy consultation environment provides read-only access to the imported calendar.
 
 If an open appointment changes in Cloud, Desktop asks you to review the current appointment before moving it, cancelling it or recording the outcome. Reviewing keeps any proposed time and professional changes. Cancellation requires confirmation again.
 
