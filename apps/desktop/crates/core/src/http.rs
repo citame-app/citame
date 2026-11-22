@@ -613,6 +613,15 @@ impl HttpTransport {
         checkout: &AppointmentCheckout,
         attempt: &PaymentAttempt,
     ) -> Result<AppointmentCheckout, TransportError> {
+        self.record_checkout_payment_with_handoff(checkout, attempt)
+            .map(|(receipt, _)| receipt)
+    }
+
+    pub fn record_checkout_payment_with_handoff(
+        &self,
+        checkout: &AppointmentCheckout,
+        attempt: &PaymentAttempt,
+    ) -> Result<(AppointmentCheckout, Option<uuid::Uuid>), TransportError> {
         if attempt.amount_cents == 0 || attempt.amount_cents > checkout.collectible_cents() {
             return Err(TransportError::BadRequest(
                 "The payment exceeds the collectible amount or this receipt cannot be paid".into(),
@@ -705,7 +714,11 @@ impl HttpTransport {
                 "The confirmed bank order was not found on the receipt".into(),
             ));
         }
-        Ok(refreshed)
+        let handoff = result.payment.id.filter(|id| {
+            bank && result.payment.status == "pending"
+                && refreshed.hosted_bank_payment_id() == Some(*id)
+        });
+        Ok((refreshed, handoff))
     }
 
     pub fn void_checkout(

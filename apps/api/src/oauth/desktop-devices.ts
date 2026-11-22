@@ -19,7 +19,7 @@ import type { AppConfig } from "../config";
 import { DomainError } from "../errors";
 import { parseOrThrow, readJson } from "../http";
 import { BearerError, type TokenVerifier } from "../mcp/verify";
-import { saleRow } from "../modules/commerce/service";
+import { saleRow, receiptHasHostedOrder } from "../modules/commerce/service";
 import { desktopResource } from "./desktop";
 import { desktopWorkspacePath } from "./desktop-workspaces";
 
@@ -100,7 +100,12 @@ async function browserPath(
       if (error instanceof DomainError && error.code === "not_found") return null;
       throw error;
     }
-    return `${sales}?${new URLSearchParams({ checkout: saved.receipt })}`;
+    const query = new URLSearchParams({ checkout: saved.receipt });
+    if (saved.bankPayment) {
+      if (!(await receiptHasHostedOrder(db, saved.receipt, saved.bankPayment))) return null;
+      query.set("bankPayment", saved.bankPayment);
+    }
+    return `${sales}?${query}`;
   }
   const query = new URLSearchParams({ date: saved.calendar.date, view: saved.calendar.view });
   if (saved.calendar.staff) query.set("staff", saved.calendar.staff);
@@ -306,7 +311,12 @@ export function createDesktopDevices({
           "workspace" in input
             ? [origin, "workspace", input.workspace]
             : "receipt" in input
-              ? [origin, "receipt", input.receipt]
+              ? [
+                  origin,
+                  "receipt",
+                  input.receipt,
+                  ...(input.bankPayment ? ["bank-payment", input.bankPayment] : []),
+                ]
               : [origin, input.calendar.date, input.calendar.view, input.calendar.staff ?? ""];
         const device = await verifyProof("browser-ticket", input.proof, binding);
         source = { kind: "device", id: device.id };

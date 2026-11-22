@@ -158,6 +158,19 @@ impl ProxyDevice {
         self.browser_cookie(handoff, &format!("/admin/commerce?checkout={receipt}"))
     }
 
+    pub fn browser_bank_payment_cookie(&self, receipt: uuid::Uuid, payment: uuid::Uuid) -> String {
+        let session = self.session.read().unwrap().clone().unwrap();
+        let handoff = self
+            .auth
+            .begin_browser_bank_payment(&session, receipt, payment)
+            .unwrap()
+            .unwrap();
+        self.browser_cookie(
+            handoff,
+            &format!("/admin/commerce?checkout={receipt}&bankPayment={payment}"),
+        )
+    }
+
     fn browser_cookie(&self, handoff: BrowserHandoff, destination: &str) -> String {
         let url = Url::parse(&handoff.url()).unwrap();
         let server = std::thread::spawn(move || handoff.serve());

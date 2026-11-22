@@ -258,6 +258,19 @@ test("a pending bank order can be continued after reopening the receipt", async 
   ]);
 });
 
+test("a receipt opened for a particular order cannot continue a replacement", async () => {
+  online = true;
+  const replaced = "0198f5a0-7b1c-7000-8000-000000000101";
+  payments = [{
+    id, status: "pending", method: "redsys_bizum", amountCents: 2500, order: "1234567890",
+    createdAt: "2026-03-09T12:00:00.000Z",
+  }];
+  renderApp(<CheckoutPanel id={id} mode="admin" role="owner" bankPaymentId={replaced} />);
+  await screen.findByText("The selected bank order cannot be opened. Check the receipt history.");
+  expect(screen.queryByRole("button", { name: "Open pending bank payment" })).toBeNull();
+  expect(requests.some((request) => request.method === "POST")).toBe(false);
+});
+
 test("Spanish users get a clear unavailable state when online payments have not been configured", async () => {
   renderApp(<CheckoutPanel id={id} mode="client" role="client" />, { locale: "es-AR" });
   await screen.findByText("Haircut");

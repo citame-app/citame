@@ -983,6 +983,14 @@ fn checkout_retries_the_same_bank_reservation_and_leaves_it_unpaid() {
         "status": "pending", "order": "1234abcd5678",
     });
     receipt["payments"] = json!([started.clone()]);
+    let mut settled = started.clone();
+    settled["status"] = json!("failed");
+    let replacement = Uuid::now_v7();
+    let mut refreshed = receipt.clone();
+    refreshed["payments"] = json!([settled.clone(), {
+        "id": replacement, "method": "redsys_card", "amountCents": 1200,
+        "status": "pending", "order": "4321dcba8765",
+    }]);
     let (base, seen) = serve(vec![
         http("408 Request Timeout", &[], ""),
         http(
@@ -991,15 +999,28 @@ fn checkout_retries_the_same_bank_reservation_and_leaves_it_unpaid() {
             &json!({ "payment": started }).to_string(),
         ),
         http("200 OK", &[], &receipt.to_string()),
+        http(
+            "201 Created",
+            &[],
+            &json!({ "payment": settled }).to_string(),
+        ),
+        http("200 OK", &[], &refreshed.to_string()),
     ]);
     let transport = signed_in(&base);
     assert!(matches!(
         transport.record_checkout_payment(&open, &attempt),
         Err(TransportError::Offline(_))
     ));
-    let updated = transport.record_checkout_payment(&open, &attempt).unwrap();
+    let (updated, handoff) = transport
+        .record_checkout_payment_with_handoff(&open, &attempt)
+        .unwrap();
     assert_eq!(updated.paid_cents, 0);
-    assert!(updated.has_hosted_bank_payment());
+    assert_eq!(handoff, Some(payment));
+    let (reopened, handoff) = transport
+        .record_checkout_payment_with_handoff(&open, &attempt)
+        .unwrap();
+    assert_eq!(reopened.hosted_bank_payment_id(), Some(replacement));
+    assert_eq!(handoff, None);
     let requests = seen.lock().unwrap();
     assert_eq!(
         requests[0].split_once("\r\n\r\n").unwrap().1,

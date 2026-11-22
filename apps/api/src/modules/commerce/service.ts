@@ -959,6 +959,21 @@ async function assertHostedBalance(
   );
 }
 
+export async function receiptHasHostedOrder(db: Database, receipt: string, paymentId: string) {
+  const [payment] = await db
+    .select({ id: checkoutPayment.id })
+    .from(checkoutPayment)
+    .where(
+      and(
+        eq(checkoutPayment.checkoutId, receipt),
+        eq(checkoutPayment.id, paymentId),
+        eq(checkoutPayment.merchantInitiated, false),
+        inArray(checkoutPayment.method, ["redsys_card", "redsys_bizum"]),
+      ),
+    );
+  return Boolean(payment);
+}
+
 export async function resumeHostedPayment(
   db: Database,
   checkoutId: string,

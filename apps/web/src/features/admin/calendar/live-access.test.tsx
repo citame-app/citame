@@ -201,3 +201,60 @@ test("a client merge replaces the in-flight first business overview load", async
     refresh.mockRestore();
   }
 });
+
+test("a live bank reservation replaces an in-flight first checkout load", async () => {
+  globalThis.EventSource = Stream as unknown as typeof EventSource;
+  const stale = Promise.withResolvers<string>();
+  let firstSignal: AbortSignal | undefined;
+  const readReceipt = mock((signal: AbortSignal) => {
+    if (readReceipt.mock.calls.length > 1) return Promise.resolve("Bank order pending");
+    firstSignal = signal;
+    return stale.promise;
+  });
+  globalThis.fetch = mock(async () =>
+    Response.json({
+      changes: [],
+      refresh: ["commerce"],
+      nextCursor: 11,
+      headSeq: 11,
+      hasMore: false,
+    }),
+  ) as unknown as typeof fetch;
+
+  function ReceiptNavigation() {
+    const [opened, setOpened] = useState(false);
+    const receipt = useQuery({
+      queryKey: ["commerce", "admin", "checkout", staffId],
+      queryFn: ({ signal }) => readReceipt(signal),
+      enabled: opened,
+    });
+    return opened ? (
+      receipt.data && <p>{receipt.data}</p>
+    ) : (
+      <button type="button" onClick={() => setOpened(true)}>
+        Open receipt
+      </button>
+    );
+  }
+
+  const view = renderApp(
+    <CalendarLiveProvider>
+      <ReceiptNavigation />
+    </CalendarLiveProvider>,
+  );
+  const refresh = spyOn(view.queryClient, "invalidateQueries");
+  try {
+    act(() => Stream.instance.send(10));
+    await waitFor(() => expect(refresh).toHaveBeenCalledWith({ queryKey: ["commerce"] }));
+    fireEvent.click(screen.getByRole("button", { name: "Open receipt" }));
+    expect(readReceipt).toHaveBeenCalledTimes(1);
+    act(() => Stream.instance.send(11));
+    expect(await screen.findByText("Bank order pending")).toBeVisible();
+    expect(firstSignal?.aborted).toBe(true);
+    await act(async () => stale.resolve("Stale receipt"));
+    expect(screen.queryByText("Stale receipt")).toBeNull();
+  } finally {
+    stale.resolve("Stale receipt");
+    refresh.mockRestore();
+  }
+});

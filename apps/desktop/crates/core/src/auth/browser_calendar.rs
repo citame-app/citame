@@ -103,6 +103,21 @@ impl BetterAuthSession {
         )
     }
 
+    pub fn begin_browser_bank_payment(
+        &self,
+        session: &Session,
+        receipt: uuid::Uuid,
+        payment: uuid::Uuid,
+    ) -> Result<Option<BrowserHandoff>, AuthError> {
+        let receipt = receipt.to_string();
+        let payment = payment.to_string();
+        self.begin_browser_handoff(
+            session,
+            serde_json::json!({ "receipt": receipt, "bankPayment": payment }),
+            &["receipt", &receipt, "bank-payment", &payment],
+        )
+    }
+
     fn begin_browser_handoff(
         &self,
         session: &Session,

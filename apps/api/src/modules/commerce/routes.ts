@@ -252,10 +252,11 @@ export function commerceAdminRoutes(deps: AppDeps) {
     })
     .post("/checkouts/:id/payments", async (c) => {
       const input = parseOrThrow(startPaymentSchema, await readJson(c));
+      const generation = c.req.header("x-citame-generation");
       if (
-        c.get("desktopRequest") &&
+        (c.get("desktopRequest") || generation !== undefined) &&
         (input.method === "redsys_card" || input.method === "redsys_bizum") &&
-        c.req.header("x-citame-generation") !== deps.config.syncReplicaGeneration
+        generation !== deps.config.syncReplicaGeneration
       )
         throw new DomainError(
           "sync_generation_changed",

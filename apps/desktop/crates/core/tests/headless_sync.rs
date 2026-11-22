@@ -4426,14 +4426,14 @@ fn native_prepares_card_and_bizum_then_reopens_same_bank_order_through_the_proxy
             .unwrap();
         let attempt = PaymentAttempt::for_bank(method, 1500, &receipt, &generation).unwrap();
         for _ in 0..2 {
-            let pending = device
+            let (pending, handoff) = device
                 .transport
-                .record_checkout_payment(&receipt, &attempt)
+                .record_checkout_payment_with_handoff(&receipt, &attempt)
                 .unwrap();
+            assert_eq!(handoff, pending.hosted_bank_payment_id());
             assert_eq!(pending.paid_cents, 0);
             assert!(pending.has_hosted_bank_payment());
         }
-        let cookie = device.browser_receipt_cookie(receipt.id.parse().unwrap());
         let endpoint = format!("/admin/commerce/checkouts/{}", receipt.id);
         let web = browser.rest_get(&endpoint);
         assert_eq!(web["payments"].as_array().unwrap().len(), 1);
@@ -4441,6 +4441,8 @@ fn native_prepares_card_and_bizum_then_reopens_same_bank_order_through_the_proxy
         assert_eq!(pending["method"], name);
         assert_eq!(pending["amountCents"], 1500);
         let payment = pending["id"].as_str().unwrap();
+        let cookie = device
+            .browser_bank_payment_cookie(receipt.id.parse().unwrap(), payment.parse().unwrap());
         let mut response = ureq::post(&format!("{base}/api{endpoint}/payments/{payment}/continue"))
             .header("Origin", &base)
             .header("Cookie", cookie)

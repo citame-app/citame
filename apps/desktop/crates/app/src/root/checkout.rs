@@ -330,9 +330,7 @@ impl Root {
             }
             return;
         };
-        if request.tender().is_bank()
-            && generation.as_deref() != form.receipt.bank_generation(request.tender())
-        {
+        if !request.bank_review_is_current(&form.receipt, generation.as_deref()) {
             form.request = None;
             form.error = Some(review_bank);
             cx.notify();
@@ -348,7 +346,9 @@ impl Root {
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { transport.record_checkout_payment(&receipt, &submitted) })
+                .spawn(async move {
+                    transport.record_checkout_payment_with_handoff(&receipt, &submitted)
+                })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if !Arc::ptr_eq(&session, &this.svc.session) || this.svc.current_session().is_none()
@@ -367,10 +367,10 @@ impl Root {
                     return;
                 }
                 form.busy = false;
-                let mut open_bank = false;
+                let mut open_bank = None;
                 match result {
-                    Ok(receipt) => {
-                        open_bank = request.tender().is_bank() && receipt.has_hosted_bank_payment();
+                    Ok((receipt, handoff)) => {
+                        open_bank = handoff;
                         form.amount.update(cx, |field, cx| {
                             field.set_text(&amount_entry(receipt.collectible_cents()), cx);
                         });
@@ -392,8 +392,8 @@ impl Root {
                     }
                     Err(_) => form.error = Some(fallback.to_owned()),
                 }
-                if open_bank {
-                    this.open_cloud_receipt(cx);
+                if let Some(payment) = open_bank {
+                    this.open_cloud_receipt_for(Some(payment), cx);
                 }
                 cx.notify();
             });

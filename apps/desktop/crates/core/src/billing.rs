@@ -438,21 +438,29 @@ impl AppointmentCheckout {
     }
 
     pub fn has_hosted_bank_payment(&self) -> bool {
-        self.status == "open"
-            && self.payments.iter().any(|payment| {
-                payment.status == "pending"
-                    && payment.order.is_some()
-                    && !payment.merchant_initiated
-                    && match payment.method.as_deref() {
-                        Some("redsys_card") => {
-                            self.bank_generation(ReceiptTender::RedsysCard).is_some()
-                        }
-                        Some("redsys_bizum") => {
-                            self.bank_generation(ReceiptTender::RedsysBizum).is_some()
-                        }
-                        _ => false,
-                    }
-            })
+        self.hosted_bank_payment_id().is_some()
+    }
+
+    pub fn hosted_bank_payment_id(&self) -> Option<Uuid> {
+        if self.status != "open" {
+            return None;
+        }
+        self.payments.iter().find_map(|payment| {
+            let method = match payment.method.as_deref()? {
+                "redsys_card" => ReceiptTender::RedsysCard,
+                "redsys_bizum" => ReceiptTender::RedsysBizum,
+                _ => return None,
+            };
+            if payment.status != "pending"
+                || payment.order.as_ref().is_none_or(String::is_empty)
+                || payment.merchant_initiated
+                || payment.amount_cents > self.payable_balance()
+                || self.bank_generation(method).is_none()
+            {
+                return None;
+            }
+            payment.id
+        })
     }
 
     pub fn bank_generation(&self, tender: ReceiptTender) -> Option<&str> {
@@ -469,6 +477,10 @@ impl AppointmentCheckout {
         if self.status != "open" || self.has_unresolved_payment() {
             return 0;
         }
+        self.payable_balance()
+    }
+
+    fn payable_balance(&self) -> u32 {
         if self.lines.iter().any(|line| line.price_pending) {
             return if self
                 .protection
@@ -961,6 +973,18 @@ impl PaymentAttempt {
         attempt.pass_period_id = Some(choice.period_id);
         attempt.checkout_line_id = Some(choice.line_id);
         attempt
+    }
+
+    pub fn bank_review_is_current(
+        &self,
+        receipt: &AppointmentCheckout,
+        verified_generation: Option<&str>,
+    ) -> bool {
+        !self.method.is_bank()
+            || self.bank_generation.as_deref().is_some_and(|generation| {
+                verified_generation == Some(generation)
+                    && receipt.bank_generation(self.method) == Some(generation)
+            })
     }
 
     pub fn tender(&self) -> ReceiptTender {

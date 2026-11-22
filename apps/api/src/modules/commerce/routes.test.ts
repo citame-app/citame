@@ -755,6 +755,27 @@ test("a hosted checkout stays unpaid until a matching signed bank notification",
     checkoutSchema.parse(await (await call(client, `/me/checkouts/${sale.id}`)).json()).status,
   ).toBe("paid");
 });
+test("a stale generation in a Desktop cookie session cannot start a bank order", async () => {
+  const sale = await checkout();
+  const response = await t.app.request(`/admin/commerce/checkouts/${sale.id}/payments`, {
+    method: "POST",
+    headers: {
+      cookie: owner.cookie,
+      "content-type": "application/json",
+      "x-citame-generation": "obsolete",
+    },
+    body: JSON.stringify({
+      method: "redsys_bizum",
+      amountCents: 10000,
+      idempotencyKey: crypto.randomUUID(),
+    }),
+  });
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({ error: { code: "sync_generation_changed" } });
+  const current = checkoutSchema.parse(await (await call(owner, `/admin/commerce/checkouts/${sale.id}`)).json());
+  expect(current.payments).toHaveLength(0);
+});
+
 test("a bank decline releases the balance and pending attempts prevent a second collection", async () => {
   const sale = await checkout();
   const started = (await (await pay(sale.id, "redsys_bizum", 10000)).json()) as {

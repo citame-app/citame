@@ -65,8 +65,8 @@ export function commerceEndpoints(client: ApiClient) {
       client.post(`${base(mode)}/checkouts`, input, checkoutSchema),
     finalizePrices: (id: string, input: CheckoutPrices) =>
       client.put(`/admin/commerce/checkouts/${id}/prices`, input, checkoutSchema),
-    get: (id: string, mode: CommerceMode) =>
-      client.get(`${base(mode)}/checkouts/${id}`, checkoutSchema),
+    get: (id: string, mode: CommerceMode, signal?: AbortSignal) =>
+      client.get(`${base(mode)}/checkouts/${id}`, checkoutSchema, { signal }),
     byOrder: (order: string) =>
       client.get(`/me/payments/by-order/${encodeURIComponent(order)}`, checkoutSchema),
     void: (id: string, mode: CommerceMode) =>

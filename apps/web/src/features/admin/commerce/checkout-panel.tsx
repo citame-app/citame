@@ -28,17 +28,19 @@ export function CheckoutPanel({
   id,
   mode,
   role,
+  bankPaymentId,
 }: {
   id: string;
   mode: CommerceMode;
   role: UserRole;
+  bankPaymentId?: string;
 }) {
   const { t, locale, timeZone } = useI18n();
   const queries = useQueryClient();
   const online = useOnline();
   const sale = useQuery({
     queryKey: ["commerce", mode, "checkout", id],
-    queryFn: () => api().commerce.get(id, mode),
+    queryFn: ({ signal }) => api().commerce.get(id, mode, signal),
     refetchInterval: (query) =>
       query.state.data?.payments.some((p) => p.status === "pending") ||
       query.state.data?.refunds.some((r) => r.status === "dispatched")
@@ -142,6 +144,7 @@ export function CheckoutPanel({
   const pendingBank = order.payments.find(
     (p) =>
       p.status === "pending" &&
+      (!bankPaymentId || p.id === bankPaymentId) &&
       p.amountCents <= payableCents &&
       p.order &&
       !p.merchantInitiated &&
@@ -294,6 +297,9 @@ export function CheckoutPanel({
       {pending && order.balanceCents > 0 && <p role="status">{t("commerce.pending")}</p>}
       {!pending && order.balanceCents > 0 && order.payments.some((p) => p.status === "failed") && (
         <p role="status">{t("commerce.declined")}</p>
+      )}
+      {bankPaymentId && pending && !pendingBank && (
+        <p role="status">{t("commerce.originalBankUnavailable")}</p>
       )}
       {pendingBank && !form && order.status === "open" && !review && (
         <div className="space-y-2">
