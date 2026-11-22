@@ -100,21 +100,19 @@ export function projectBooksyWaitlist(
       url.pathname !== `/core/v2/business_api/me/businesses/${model.businessId}/waitlist/`
     )
       throw new Error("Unexpected waitlist source");
-    const query = url.searchParams;
-    // A filtered or paginated result cannot replace the complete list for a day.
-    if (
-      [...query.keys()].some((key) => key !== "start" && key !== "end") ||
-      query.getAll("start").length > 1 ||
-      query.getAll("end").length > 1
-    )
-      return [];
-    const { start, end } = dateRange.parse({ start: query.get("start"), end: query.get("end") });
-    const day = Temporal.PlainDate.from(start);
-    const span = day.until(Temporal.PlainDate.from(end)).days;
-    if (span < 0 || span > 30) throw new Error("Unexpected waitlist observation range");
     const body = JSON.parse(capture.data.body);
     if (fingerprint(body) !== fingerprint(capture.data.data))
       throw new Error("Waitlist source response differs from retained data");
+
+    const query = url.searchParams;
+    // A filtered or paginated result cannot replace the complete list for a day.
+    if (query.size !== 2) return [];
+    const bounds = dateRange.safeParse({ start: query.get("start"), end: query.get("end") });
+    if (!bounds.success) return [];
+    const { start, end } = bounds.data;
+    const day = Temporal.PlainDate.from(start);
+    const span = day.until(Temporal.PlainDate.from(end)).days;
+    if (span < 0 || span > 30) throw new Error("Unexpected waitlist observation range");
     const data = rows.parse(body);
     if (new Set(data.results.map((row) => row.id)).size !== data.results.length)
       throw new Error("Duplicate waitlist references in one observation");

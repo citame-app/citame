@@ -26,6 +26,7 @@ function capture(
   results: (typeof row)[],
   day = "2026-11-18",
   query = `start=${day}&end=${day}`,
+  parsedResults = results,
 ) {
   const data = { results };
   const payload = Buffer.from(
@@ -33,7 +34,7 @@ function capture(
       source: `https://es.booksy.com/core/v2/business_api/me/businesses/${businessId}/waitlist/?${query}`,
       businessId,
       capturedAt,
-      data: { data, body: JSON.stringify(data) },
+      data: { data: { results: parsedResults }, body: JSON.stringify(data) },
     }),
   );
   return { payload, sha256: createHash("sha256").update(payload).digest("hex") };
@@ -66,6 +67,11 @@ test("filtered or ambiguous waitlist observations never replace a complete captu
   const partial = extras.map((suffix, index) =>
     capture(`2026-11-17T1${index + 2}:00:00Z`, [], date, `${range}&${suffix}`),
   );
+  partial.push(
+    capture("2026-11-17T16:00:00Z", [], date, `start=${date}`),
+    capture("2026-11-17T16:00:00Z", [], date, `end=${date}`),
+    capture("2026-11-17T16:00:00Z", [], date, `start=invalid&end=${date}`),
+  );
   const destination = "2026-11-19";
   const filteredMove = capture(
     "2026-11-17T16:00:00Z",
@@ -78,14 +84,18 @@ test("filtered or ambiguous waitlist observations never replace a complete captu
   expect(after).toMatchObject({
     entries: before.entries,
     observedDates: 1,
-    ignoredObservations: 5,
+    ignoredObservations: 8,
   });
   expect(compareBooksyWaitlists(before, projectBooksyWaitlist(partial, source))).toMatchObject({
     absentOnReobservedDate: [],
     absenceUnverified: [sourceUuid(businessId, "waitlist", String(row.id))],
     currentObservedDates: 0,
-    currentIgnoredObservations: 4,
+    currentIgnoredObservations: 7,
   });
+  const inconsistent = capture("2026-11-17T16:00:00Z", [], date, `${range}&page=2`, [row]);
+  expect(() => projectBooksyWaitlist([original, inconsistent], source)).toThrow(
+    "response differs from retained data",
+  );
 });
 
 test("a later date change wins regardless of the order in which dates were first observed", () => {
