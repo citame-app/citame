@@ -96,9 +96,13 @@ export const campaignCancelSchema = z.object({ version: z.number().int().positiv
 export const campaignTestEmailSchema = z.strictObject({
   version: z.number().int().positive(),
   requestId: idSchema,
+  replaceUnconfirmed: z.literal(true).optional(),
 });
-export const campaignTestEmailReceiptSchema = z.object({ ok: z.literal(true) });
+export const campaignTestEmailReceiptSchema = z.object({
+  status: z.enum(["accepted", "pending", "unconfirmed", "rejected"]),
+});
 export type CampaignTestEmail = z.infer<typeof campaignTestEmailSchema>;
+export type CampaignTestEmailReceipt = z.infer<typeof campaignTestEmailReceiptSchema>;
 export const marketingConsentSchema = z.object({
   clientId: idSchema,
   email: z.object({

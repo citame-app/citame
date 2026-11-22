@@ -2,6 +2,7 @@ import {
   type Campaign,
   type CampaignDraft,
   type CampaignQueue,
+  type CampaignTestEmail,
   campaignDraftSchema,
   campaignStatusSchema,
 } from "@sob/contracts";
@@ -596,12 +597,12 @@ function CampaignReview({
     queryFn: () => api().marketing.capabilities(),
   });
   const testEmail = useMutation({
-    mutationFn: (requestId: string) =>
-      api().marketing.testEmail(campaign.id, {
-        version: campaign.version,
-        requestId,
-      }),
+    mutationFn: (request: CampaignTestEmail) => api().marketing.testEmail(campaign.id, request),
   });
+  const testStatus = testEmail.data?.status;
+  const retryTest = testEmail.isError || testStatus === "pending";
+  const reviewMatches =
+    audience.data?.campaignId === campaign.id && audience.data.version === campaign.version;
   let scheduledFor: string | null = null,
     invalidDate = false;
   try {
@@ -716,30 +717,53 @@ function CampaignReview({
           {campaign.trigger !== "manual" && (
             <p className="text-sm text-muted">{t("marketing.automaticHelp")}</p>
           )}
-          {isOwner && capabilities.data?.canTestEmail && campaign.channel !== "sms" && (
-            <div className="space-y-2">
-              <Button
-                variant="secondary"
-                loading={testEmail.isPending}
-                disabled={!online || testEmail.isPending || queue.isPending}
-                onClick={() =>
-                  testEmail.mutate(
-                    (testEmail.isError && testEmail.variables) || crypto.randomUUID(),
-                  )
-                }
-              >
-                {t("marketing.testEmail")}
-              </Button>
-              <p role="status" className="text-sm text-success-fg">
-                {testEmail.isSuccess && t("marketing.testEmailSent")}
-              </p>
-              {testEmail.isError && (
-                <p role="alert" className="text-sm text-danger-fg">
-                  {t("marketing.testEmailFailed")}
+          {isOwner &&
+            capabilities.data?.canTestEmail &&
+            campaign.channel !== "sms" &&
+            reviewMatches &&
+            !audience.isError && (
+              <div className="space-y-2">
+                <Button
+                  variant="secondary"
+                  loading={testEmail.isPending}
+                  disabled={
+                    !online || audience.isFetching || testEmail.isPending || queue.isPending
+                  }
+                  onClick={() =>
+                    testEmail.mutate(
+                      (retryTest && testEmail.variables) || {
+                        version: campaign.version,
+                        requestId: crypto.randomUUID(),
+                        ...(testStatus === "unconfirmed" ? { replaceUnconfirmed: true } : {}),
+                      },
+                    )
+                  }
+                >
+                  {t(
+                    retryTest
+                      ? "marketing.testEmailCheck"
+                      : testStatus === "unconfirmed"
+                        ? "marketing.testEmailAgain"
+                        : "marketing.testEmail",
+                  )}
+                </Button>
+                <p role="status" className="text-sm text-success-fg">
+                  {testStatus === "accepted" && t("marketing.testEmailSent")}
+                  {testStatus === "pending" && t("marketing.testEmailPending")}
                 </p>
-              )}
-            </div>
-          )}
+                {(testEmail.isError ||
+                  testStatus === "unconfirmed" ||
+                  testStatus === "rejected") && (
+                  <p role="alert" className="text-sm text-danger-fg">
+                    {t(
+                      testStatus === "rejected"
+                        ? "marketing.testEmailRejected"
+                        : "marketing.testEmailFailed",
+                    )}
+                  </p>
+                )}
+              </div>
+            )}
           {capabilities.isError ? (
             <ErrorState error={capabilities.error} />
           ) : (

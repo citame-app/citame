@@ -75,7 +75,7 @@ fn campaign_test_email_replays_the_same_review_and_checks_the_server_generation(
     let id = "0198f5a0-7b1c-7000-8000-000000000210";
     let request_id = uuid::Uuid::now_v7();
     let (base, writes) = serve(vec![
-        http("200 OK", &[], r#"{"ok":true}"#),
+        http("200 OK", &[], r#"{"status":"accepted"}"#),
         http(
             "409 Conflict",
             &[],
@@ -83,10 +83,13 @@ fn campaign_test_email_replays_the_same_review_and_checks_the_server_generation(
         ),
     ]);
     let desk = signed_in(&base);
-    desk.send_campaign_test_email(id, "reviewed", 3, request_id)
-        .unwrap();
+    assert_eq!(
+        desk.send_campaign_test_email(id, "reviewed", 3, request_id, false)
+            .unwrap(),
+        marketing::TestEmailStatus::Accepted,
+    );
     assert!(matches!(
-        desk.send_campaign_test_email(id, "reviewed", 3, request_id),
+        desk.send_campaign_test_email(id, "reviewed", 3, request_id, false),
         Err(marketing::MutationError::Transport(
             TransportError::ReplicaGenerationChanged
         ))

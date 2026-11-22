@@ -54,7 +54,7 @@ test("an owner can retry a test email without creating another request", async (
       attempts.push(JSON.parse(String(init?.body)));
       return attempts.length === 1
         ? Response.json({ error: { code: "invalid_state" } }, { status: 409 })
-        : Response.json({ ok: true });
+        : Response.json({ status: "accepted" });
     }
     return Response.json({}, { status: 404 });
   }) as unknown as typeof fetch;
@@ -64,7 +64,7 @@ test("an owner can retry a test email without creating another request", async (
   const label = "Send test to my email";
   fireEvent.click(await screen.findByRole("button", { name: label }));
   expect(await screen.findByText(/couldn't confirm the test email/)).toBeVisible();
-  fireEvent.click(screen.getByRole("button", { name: label }));
+  fireEvent.click(screen.getByRole("button", { name: "Check test delivery" }));
   expect(await screen.findByText("Test email accepted. Check your inbox.")).toBeVisible();
   expect(attempts).toHaveLength(2);
   expect(attempts[0]).toMatchObject({ version: 3, requestId: expect.any(String) });

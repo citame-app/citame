@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { createServer } from "node:net";
-import { auditLog, marketingDelivery, user } from "@sob/db";
-import { eq } from "drizzle-orm";
+import { campaignTestEmailReceiptSchema } from "@sob/contracts";
+import { auditLog, marketingCampaign, marketingDelivery, user } from "@sob/db";
+import { eq, sql } from "drizzle-orm";
 import { actor, json, seedFixtures, setupApiTest } from "../../../test/helpers";
 
 const messages: { to: string; content: string }[] = [];
+let smtpResult: "accept" | "reject" | "disconnect" = "accept";
 const smtp = createServer((socket) => {
   let buffer = "";
   let body: string[] | undefined;
@@ -19,8 +21,18 @@ const smtp = createServer((socket) => {
       buffer = buffer.slice(end + 2);
       if (body) {
         if (line === ".") {
+          if (smtpResult === "reject") {
+            body = undefined;
+            socket.write("550 rejected by test fixture\r\n");
+            end = buffer.indexOf("\r\n");
+            continue;
+          }
           messages.push({ to, content: body.join("\r\n") });
           body = undefined;
+          if (smtpResult === "disconnect") {
+            socket.destroy();
+            return;
+          }
           socket.write("250 queued by test fixture\r\n");
         } else {
           body.push(line);
@@ -59,8 +71,10 @@ afterAll(async () => {
   await new Promise<void>((closed) => smtp.close(() => closed()));
 });
 
-test("only the verified owner receives a reviewed test, with a safe replay", async () => {
+async function prepareDraft() {
   await t.reset();
+  messages.length = 0;
+  smtpResult = "accept";
   const fixtures = await seedFixtures(t.db);
   const [owner, staff] = await Promise.all([
     actor(t, "owner", "preview-owner@example.com"),
@@ -89,23 +103,40 @@ test("only the verified owner receives a reviewed test, with a safe replay", asy
     owner.cookie,
   );
   expect(create.status, await create.clone().text()).toBe(201);
+  return { owner, staff, id, root };
+}
+
+test("only the verified owner receives a reviewed test, with a safe replay", async () => {
+  const { owner, staff, id, root } = await prepareDraft();
   const path = `${root}/${id}/test-email`;
   const packet = { version: 1, requestId: crypto.randomUUID() };
   const send = (cookie: string, body: unknown = packet) => json(t.app, path, "POST", body, cookie);
   expect((await send(staff.cookie)).status).toBe(403);
+  expect((await send(owner.cookie, { ...packet, oversized: "x".repeat(5000) })).status).toBe(413);
   expect((await send(owner.cookie, { ...packet, to: "external@example.com" })).status).toBe(400);
   await t.db.update(user).set({ emailVerified: false }).where(eq(user.id, owner.userId));
   expect((await send(owner.cookie)).status).toBe(403);
+  const capabilities = await json(
+    t.app,
+    "/admin/marketing/capabilities",
+    "GET",
+    undefined,
+    owner.cookie,
+  );
+  expect(await capabilities.json()).toMatchObject({ canTestEmail: false });
   await t.db.update(user).set({ emailVerified: true }).where(eq(user.id, owner.userId));
   expect((await send(owner.cookie, { ...packet, version: 2 })).status).toBe(409);
   expect(messages).toHaveLength(0);
 
   for (const response of await Promise.all([send(owner.cookie), send(owner.cookie)])) {
-    expect([200, 409]).toContain(response.status);
+    expect(response.status).toBe(200);
+    expect(["accepted", "pending"]).toContain(
+      campaignTestEmailReceiptSchema.parse(await response.json()).status,
+    );
   }
   const retry = await send(owner.cookie);
   expect(retry.status).toBe(200);
-  expect(await retry.json()).toEqual({ ok: true });
+  expect(await retry.json()).toEqual({ status: "accepted" });
   const audit = await t.db
     .select({ action: auditLog.action, metadata: auditLog.metadata })
     .from(auditLog)
@@ -119,4 +150,71 @@ test("only the verified owner receives a reviewed test, with a safe replay", asy
   expect(messages[0]?.content).toContain("Subject: [Prueba / Test] Hello preview-owner");
   expect(messages[0]?.content).not.toContain("/marketing/opt-out");
   expect(await t.db.select().from(marketingDelivery)).toEqual([]);
+});
+
+test("an SMTP rejection permits a fresh test and an ambiguous send requires another explicit action", async () => {
+  const { owner, id, root } = await prepareDraft();
+  const send = async (requestId: string, replaceUnconfirmed?: true) => {
+    const response = await json(
+      t.app,
+      `${root}/${id}/test-email`,
+      "POST",
+      { version: 1, requestId, replaceUnconfirmed },
+      owner.cookie,
+    );
+    expect(response.status, await response.clone().text()).toBe(200);
+    return campaignTestEmailReceiptSchema.parse(await response.json()).status;
+  };
+  smtpResult = "reject";
+  const rejected = crypto.randomUUID();
+  expect(await send(rejected)).toBe("rejected");
+  expect(await send(rejected)).toBe("rejected");
+  expect(messages).toHaveLength(0);
+
+  smtpResult = "disconnect";
+  const interrupted = crypto.randomUUID();
+  expect(await send(interrupted)).toBe("unconfirmed");
+  expect(messages).toHaveLength(1);
+
+  t.clock.advance(61);
+  smtpResult = "accept";
+  expect(await send(interrupted)).toBe("unconfirmed");
+  expect(await send(crypto.randomUUID())).toBe("unconfirmed");
+  expect(messages).toHaveLength(1);
+  expect(await send(crypto.randomUUID(), true)).toBe("accepted");
+  expect(messages).toHaveLength(2);
+});
+
+test("a draft edit in flight invalidates the reviewed test before the SMTP claim", async () => {
+  const { owner, id, root } = await prepareDraft();
+  let request: Promise<Response> | undefined;
+  await t.db.transaction(async (tx) => {
+    await tx
+      .update(marketingCampaign)
+      .set({ version: 2, subject: "Edited draft" })
+      .where(eq(marketingCampaign.id, id));
+    request = json(
+      t.app,
+      `${root}/${id}/test-email`,
+      "POST",
+      { version: 1, requestId: crypto.randomUUID() },
+      owner.cookie,
+    );
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const [row] = await t.db.execute<{ blocked: boolean }>(sql`
+        select exists (
+          select from pg_stat_activity
+          where datname = current_database()
+            and wait_event_type = 'Lock'
+            and query like '%from "marketing_campaign"%for update%'
+        ) as blocked
+      `);
+      if (row?.blocked) return;
+      await Bun.sleep(10);
+    }
+    throw new Error("Expected the reviewed send to wait for the draft edit");
+  });
+  const response = await request;
+  expect(response?.status).toBe(409);
+  expect(messages).toHaveLength(0);
 });
