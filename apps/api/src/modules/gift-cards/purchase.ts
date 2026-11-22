@@ -59,7 +59,7 @@ export async function purchaseGift(
         .select({ id: clientProfile.id })
         .from(clientProfile)
         .where(and(eq(clientProfile.id, buyerClientId), isNull(clientProfile.deletedAt)));
-      if (!buyer) throw new DomainError("not_found", "Buyer client not found");
+      if (!buyer) throw new DomainError("validation_error", "Choose an active buyer");
     }
     const id = randomUUID();
     const nonce = randomBytes(16).toString("hex");

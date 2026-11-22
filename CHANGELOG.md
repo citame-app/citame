@@ -19,6 +19,7 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 - Desktop receipts support final service prices, walk-in checkout, transaction history with date, tender and status filters, sale attribution, customer discounts, gift card redemption, eligible prepaid service redemptions and returns, and refunds for cash, external-card, and gift card payments. Voiding an unpaid receipt releases its reserved stock. Desktop records physical product returns from fulfilled receipts. Desktop preserves unconfirmed requests across restarts, and Cloud preserves them across reloads in the same tab.
 - Desktop prints the reviewed receipt in a temporary browser preview, including when the open receipt is offline.
+- Desktop issues and manages gift cards from the cash desk. Purchases can reopen the same receipt after an interrupted request. Web and Desktop refresh gift cards after balance and code changes. Desktop prints vouchers in a one-use local preview.
 - The Desktop management menu opens permitted Cloud areas in the browser with the linked account.
 - Desktop edits existing service prices, timing, presentation and booking availability with the same catalogue permissions as Cloud. A stale draft must be reviewed before publishing.
 - The Desktop service editor saves service details and performer assignments together, including when the draft was edited offline.

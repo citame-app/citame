@@ -37,10 +37,15 @@ impl ReceiptPreview {
         timezone: Tz,
         locale: Locale,
     ) -> io::Result<Self> {
+        let code_matches =
+            crate::billing::normalize_gift_card_code(&gift.code).is_some_and(|code| {
+                gift.card.balance.code_last4.len() == 4
+                    && code.ends_with(&gift.card.balance.code_last4)
+            });
         if !matches!(
             gift.card.balance.status,
             GiftStatus::Active | GiftStatus::Expired
-        ) || crate::billing::normalize_gift_card_code(&gift.code).is_none()
+        ) || !code_matches
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -70,8 +75,12 @@ impl ReceiptPreview {
     }
 
     pub fn serve(self) -> bool {
+        self.serve_while(|| true)
+    }
+
+    pub fn serve_while(self, valid: impl Fn() -> bool) -> bool {
         let deadline = Instant::now() + PREVIEW_LIFETIME;
-        while Instant::now() < deadline {
+        while Instant::now() < deadline && valid() {
             let mut socket = match self.listener.accept() {
                 Ok((socket, _)) => socket,
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -89,7 +98,7 @@ impl ReceiptPreview {
             {
                 continue;
             }
-            if self.accepts(&mut socket, deadline) {
+            if self.accepts(&mut socket, deadline) && valid() {
                 return write!(
                     socket,
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'none'; script-src 'nonce-{}'; style-src 'nonce-{}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\r\nX-Content-Type-Options: nosniff\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -446,6 +455,9 @@ mod tests {
         assert!(preview.body.contains("10:15"));
         assert!(preview.body.contains(&gift.code));
         assert!(!preview.url().contains(&gift.code));
+        let address = preview.listener.local_addr().unwrap();
+        assert!(!preview.serve_while(|| false));
+        assert!(TcpStream::connect(address).is_err());
         gift.card.balance.status = GiftStatus::Void;
         assert!(
             ReceiptPreview::gift_voucher(&gift, "Salón", chrono_tz::UTC, Locale::EsAr).is_err()

@@ -283,9 +283,7 @@ fn gift_purchase_error(status: u16, retry_after: Option<&str>, body: &str) -> Tr
             .and_then(serde_json::Value::as_str);
         if !matches!(
             (status, code),
-            (400, Some("validation_error"))
-                | (404, Some("not_found"))
-                | (409, Some("client_merged" | "storage_limit"))
+            (400, Some("validation_error")) | (409, Some("client_merged" | "storage_limit"))
         ) {
             return TransportError::Server(format!("Unconfirmed Cloud response (HTTP {status})"));
         }
@@ -309,6 +307,10 @@ mod tests {
         ));
         assert!(matches!(
             gift_purchase_error(404, None, r#"{"error":{"code":"not_found"}}"#),
+            TransportError::Server(_)
+        ));
+        assert!(matches!(
+            gift_purchase_error(400, None, r#"{"error":{"code":"validation_error"}}"#),
             TransportError::BadRequest(_)
         ));
         assert_eq!(

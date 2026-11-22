@@ -1604,6 +1604,7 @@ keys! {
     GiftCards => ("Gift cards", "Tarjetas regalo"),
     GiftSearch => ("Search by label or last four characters", "Buscar por nombre o los últimos cuatro caracteres"),
     GiftIssue => ("Issue a gift card", "Emitir tarjeta regalo"),
+    GiftCheckAgain => ("The balance may have changed. Enter the code to check again.", "El saldo puede haber cambiado. Introduce el código para consultarlo de nuevo."),
     GiftCheck => ("Check balance", "Consultar saldo"),
     GiftPending => ("Awaiting payment", "Pendiente de pago"),
     GiftActive => ("Active", "Activa"),

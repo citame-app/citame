@@ -35,6 +35,7 @@ pub(super) struct Desk {
     card: Option<GiftCard>,
     movements: Option<GiftMovements>,
     revealed: Option<String>,
+    private_access: Arc<()>,
     checker: Entity<TextField>,
     checked: Option<GiftBalance>,
     value: Entity<TextField>,
@@ -51,6 +52,13 @@ pub(super) struct Desk {
     can_manage: bool,
     error: Option<Key>,
     _buyer_changed: Option<Subscription>,
+}
+
+impl Desk {
+    fn hide_code(&mut self) -> bool {
+        self.private_access = Arc::new(());
+        self.revealed.take().is_some()
+    }
 }
 
 enum Request {
@@ -197,6 +205,7 @@ impl Root {
             card: None,
             movements: None,
             revealed: None,
+            private_access: Arc::new(()),
             checker: cx.new(|cx| TextField::new("SOB-…", true, cx)),
             checked: None,
             value: cx.new(|cx| TextField::new("EUR", false, cx)),
@@ -255,7 +264,7 @@ impl Root {
         desk.view = View::Detail(id);
         desk.card = None;
         desk.movements = None;
-        desk.revealed = None;
+        desk.hide_code();
         desk.edit = None;
         self.request_gift(Request::Detail(id, 1), cx);
         cx.notify();
@@ -303,7 +312,10 @@ impl Root {
             if let View::Detail(id) = view {
                 self.request_gift(Request::Detail(id, 1), cx);
             }
-        } else if desk.revealed.take().is_some() || desk.edit.take().is_some() {
+        } else if desk.revealed.is_some() {
+            desk.hide_code();
+            desk.error = None;
+        } else if desk.edit.take().is_some() {
             desk.error = None;
         } else if desk.view == View::List {
             self.load_register(cx);
@@ -323,10 +335,14 @@ impl Root {
             return;
         };
         let changed = desk.observed != observed;
-        if (!online || reconnected || changed) && desk.revealed.take().is_some() {
-            cx.notify();
+        if !online || reconnected || changed && desk.revealed.is_some() {
+            let hidden = desk.hide_code();
+            if hidden {
+                cx.notify();
+            }
         }
         if (!online || reconnected || changed) && desk.checked.take().is_some() {
+            desk.error = Some(Key::GiftCheckAgain);
             cx.notify();
         }
         if !online {
@@ -380,8 +396,9 @@ impl Root {
         let edit = matches!(&request, Request::Edit { .. });
         let print = matches!(&request, Request::Print { .. });
         if edit || matches!(&request, Request::Checkout(_)) {
-            desk.revealed = None;
+            desk.hide_code();
         }
+        let private_access = Arc::downgrade(&desk.private_access);
         desk.request = Some(token.clone());
         desk.error = None;
         cx.notify();
@@ -412,6 +429,7 @@ impl Root {
                     return;
                 };
                 desk.request = None;
+                let fresh = online && observation == revision && private_access.strong_count() > 0;
                 match reply {
                     Ok(Loaded::List(page, capability)) => {
                         desk.observed = observation;
@@ -428,7 +446,7 @@ impl Root {
                             .is_none_or(|before| before.code_revision != card.code_revision)
                             || matches!(card.balance.status, GiftStatus::Pending | GiftStatus::Void)
                         {
-                            desk.revealed = None;
+                            desk.hide_code();
                         }
                         desk.card = Some(card);
                         desk.movements = Some(movements);
@@ -444,23 +462,40 @@ impl Root {
                             cx,
                         ));
                     }
-                    Ok(Loaded::Balance(balance)) if online && observation == revision => {
+                    Ok(Loaded::Balance(balance)) if fresh => {
                         desk.observed = observation;
                         desk.checked = Some(balance);
                     }
-                    Ok(Loaded::Revealed(reveal)) if online && observation == revision => {
+                    Ok(Loaded::Revealed(reveal)) if fresh => {
                         desk.observed = observation;
                         desk.card = Some(reveal.card);
                         desk.revealed = Some(reveal.code);
                     }
                     Ok(Loaded::Print(preview)) => {
-                        if online && observation == revision && desk.revealed.is_some() {
+                        if fresh && desk.revealed.is_some() {
                             cx.open_url(&preview.url());
-                            cx.background_executor()
-                                .spawn(async move {
-                                    preview.serve();
-                                })
-                                .detach();
+                            let preview_access = private_access.clone();
+                            let task = cx.background_executor().spawn(async move {
+                                preview.serve_while(|| preview_access.strong_count() > 0)
+                            });
+                            cx.spawn(async move |root, cx| {
+                                if task.await || private_access.strong_count() == 0 {
+                                    return;
+                                }
+                                let _ = root.update(cx, |root, cx| {
+                                    let Some(desk) = root.gift_cards_desk() else {
+                                        return;
+                                    };
+                                    if std::sync::Weak::ptr_eq(
+                                        &private_access,
+                                        &Arc::downgrade(&desk.private_access),
+                                    ) {
+                                        desk.error = Some(Key::GiftPrintFailed);
+                                        cx.notify();
+                                    }
+                                });
+                            })
+                            .detach();
                         } else {
                             desk.error = Some(Key::GiftPrintFailed);
                         }
@@ -474,10 +509,11 @@ impl Root {
                     }
                     Ok(Loaded::Edited(card)) => {
                         desk.card = Some(card);
-                        desk.revealed = None;
+                        desk.hide_code();
                         desk.edit = None;
                     }
-                    Ok(_) => {}
+                    Ok(Loaded::Balance(_)) => desk.error = Some(Key::GiftCheckAgain),
+                    Ok(Loaded::Revealed(_)) => desk.error = Some(Key::GiftReviewChanged),
                     Err(error) => {
                         desk.refresh_after = Some(Instant::now() + Duration::from_secs(5));
                         let uncertain = matches!(
@@ -491,7 +527,7 @@ impl Root {
                             desk.purchase = None
                         }
                         if edit {
-                            desk.revealed = None
+                            desk.hide_code();
                         }
                         desk.error = Some(match error {
                             TransportError::ReplicaGenerationChanged => Key::GiftReviewRestored,
@@ -672,7 +708,7 @@ impl Root {
         desk.expiry
             .update(cx, |field, cx| field.set_text(&expiry, cx));
         desk.reason.update(cx, |field, cx| field.clear(cx));
-        desk.revealed = None;
+        desk.hide_code();
         desk.edit = Some(kind);
         desk.error = None;
         cx.notify();
@@ -1181,7 +1217,7 @@ impl Root {
                         Kind::Ghost,
                         |root, cx| {
                             if let Some(desk) = root.gift_cards_desk() {
-                                desk.revealed = None;
+                                desk.hide_code();
                                 cx.notify();
                             }
                         },
@@ -1359,6 +1395,20 @@ mod tests {
             assert!(matches!(&root.overlay, Overlay::GiftCards(desk)
                 if desk.view == View::Issue
                     && desk.purchase.as_ref().is_some_and(|saved| saved.idempotency_key == purchase.idempotency_key)));
+            let receipt: AppointmentCheckout = serde_json::from_value(serde_json::json!({
+                "id": Uuid::now_v7(), "currency": "EUR", "status": "open",
+                "totalCents": 2500, "paidCents": 0, "discountCents": 0,
+                "balanceCents": 2500, "payments": []
+            })).unwrap();
+            let desk = root.gift_cards_desk().unwrap();
+            desk.issued_receipt = true;
+            desk.view = View::Detail(Uuid::now_v7());
+            desk.receipt = Some(CheckoutReview::from_receipt(receipt, 0, cx));
+            assert!(root.svc.store.pending_gift_purchase(&actor).unwrap().is_some());
+            root.dismiss_gift_cards(cx);
+            assert!(root.svc.store.pending_gift_purchase(&actor).unwrap().is_none());
+            assert!(matches!(&root.overlay, Overlay::GiftCards(desk)
+                if matches!(desk.view, View::Detail(_)) && desk.receipt.is_none()));
             assert_eq!(root.svc.store.outbox_len().unwrap(), 0);
         }).unwrap();
     }
