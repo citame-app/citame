@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -206,6 +206,10 @@ if [ "$1" = --check-installation ]; then
 fi
 test "$SOB_API_URL" = http://127.0.0.1:1 && test -n "$SOB_DATA_DIR" && test "$SOB_STARTUP_TIMINGS" = 1 || exit 2
 if [ "$MACOS_GUI_RESULT" = failure ]; then exit 3; fi
+if [ "$MACOS_GUI_RESULT" = cancel ]; then
+  printf '%s\\n' "$$" > "$MACOS_GUI_PID_FILE"
+  exec /bin/sleep 30
+fi
 if [ "$MACOS_GUI_RESULT" = ignore-term ]; then trap '' TERM; fi
 if [ "$MACOS_GUI_RESULT" != timeout ]; then printf 'citame startup first frame callback: 24 ms\n'; fi
 exec /bin/sleep 30
@@ -306,6 +310,52 @@ exec /bin/sleep 30
     expect(timedOut.exitCode).not.toBe(0);
     expect(timedOut.stderr.toString()).toContain("did not open its first window");
     expect(readdirSync(output)).toEqual([]);
+
+    const archive = join(dir, "cancel.zip");
+    const contents = join(`${archive}.bundle`, "Contents");
+    const staged = join(contents, "MacOS", "sob-desktop");
+    mkdirSync(join(contents, "MacOS"), { recursive: true });
+    mkdirSync(join(contents, "Resources"), { recursive: true });
+    await Bun.write(staged, Bun.file(binary));
+    chmodSync(staged, 0o755);
+    await Bun.write(join(contents, "Info.plist"), "mock plist");
+    await Bun.write(join(contents, "Resources", "Citame.icns"), "mock icon");
+    const pidFile = join(dir, "macos-probe.pid");
+    const verifier = Bun.spawn(["bash", "scripts/verify-desktop-macos.sh", archive, "arm64"], {
+      stdout: "ignore",
+      stderr: "ignore",
+      env: {
+        ...process.env,
+        PATH: `${dir}:${process.env.PATH}`,
+        NOTARY_LOG: events,
+        MACOS_TEST_ARCH: "arm64",
+        MACOS_BINARY_MINIMUM: "15.0",
+        ...adHocVerification,
+        MACOS_GUI_RESULT: "cancel",
+        MACOS_GUI_PID_FILE: pidFile,
+      },
+    });
+    let probePid: number | undefined;
+    try {
+      for (let attempt = 0; attempt < 40 && !(await Bun.file(pidFile).exists()); attempt++)
+        await Bun.sleep(50);
+      const reportedPid = Number(await Bun.file(pidFile).text());
+      expect(reportedPid).toBeGreaterThan(1);
+      probePid = reportedPid;
+      verifier.kill("SIGTERM");
+      expect(await verifier.exited).toBe(143);
+      expect(() => process.kill(reportedPid, 0)).toThrow();
+    } finally {
+      if (verifier.exitCode === null) verifier.kill();
+      if (probePid) {
+        try {
+          process.kill(probePid);
+        } catch {
+          // The verifier already cleaned up the probe.
+        }
+      }
+    }
+
     const start = performance.now();
     const window = run(
       "Accepted",

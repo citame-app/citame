@@ -9,7 +9,20 @@ case "$arch" in x86_64|arm64) ;; *) echo "Unsupported architecture: $arch" >&2; 
 [ "$(uname -m)" = "$arch" ] || { echo "The ZIP must be tested on a native $arch host" >&2; exit 1; }
 
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+probe_pid=""
+cleanup() {
+  if [ -n "$probe_pid" ]; then
+    # Cancel the helper while the extracted executable still exists.
+    if [[ $'\n'"$(jobs -pr; jobs -ps)"$'\n' == *$'\n'"$probe_pid"$'\n'* ]]; then
+      kill -TERM "$probe_pid" 2>/dev/null || true
+    fi
+    wait "$probe_pid" 2>/dev/null || true
+  fi
+  rm -rf "$work"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 
 ditto -x -k "$archive" "$work"
@@ -48,5 +61,8 @@ test "$("$binary" --check-installation)" = "Citame $version SQLite ready"
 echo "Citame $version ZIP verified on $arch"
 
 if [ "${CITAME_MAC_VERIFY_GUI:-0}" = 1 ]; then
-  bash "$script_dir/verify-desktop-startup.sh" "$binary"
+  bash "$script_dir/verify-desktop-startup.sh" "$binary" &
+  probe_pid=$!
+  wait "$probe_pid"
+  probe_pid=""
 fi

@@ -12,8 +12,8 @@ fi
 work="$(mktemp -d "${TMPDIR:-/tmp}/citame-desktop-frame.XXXXXX")"
 app_pid=""
 probe_running() {
-  # Resolve the original subprocess through our job table, even if it was stopped.
-  [[ "$(jobs -pr)" == "$app_pid" || "$(jobs -ps)" == "$app_pid" ]]
+  # Match one PID in the job table. A signal can interrupt a foreground sleep.
+  [[ $'\n'"$(jobs -pr; jobs -ps)"$'\n' == *$'\n'"$app_pid"$'\n'* ]]
 }
 
 wait_for_probe_exit() {
@@ -29,10 +29,10 @@ cleanup() {
   local cleanup_failed=0
   if [ -n "$app_pid" ]; then
     if probe_running; then
-      kill %+ 2>/dev/null || true
+      kill -TERM "$app_pid" 2>/dev/null || true
     fi
     if ! wait_for_probe_exit 3; then
-      kill -KILL %+ 2>/dev/null || true
+      kill -KILL "$app_pid" 2>/dev/null || true
       if ! wait_for_probe_exit 2; then
         echo "The packaged application's test process did not exit" >&2
         cleanup_failed=1
