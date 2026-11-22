@@ -275,7 +275,7 @@ for (const scheme of ["light", "dark"] as const) {
       ).toBeDisabled();
       await expectNoSeriousA11yViolations(page, `Marketing review ${scheme}`);
       await page.screenshot({
-        path: `/tmp/citame-marketing-${scheme}-${info.project.name}.png`,
+        path: info.outputPath("marketing.png"),
         fullPage: true,
       });
       await review.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -293,7 +293,7 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(notice).toHaveValue("180");
       await expectNoSeriousA11yViolations(page, `Settings ${scheme}`);
       await page.screenshot({
-        path: `/tmp/citame-management-${scheme}-${info.project.name}.png`,
+        path: info.outputPath("management.png"),
         fullPage: true,
       });
     });
