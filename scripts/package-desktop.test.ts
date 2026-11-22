@@ -101,6 +101,50 @@ test("packaging refuses a missing executable instead of producing an empty relea
   expect(result.stderr.toString()).toContain("executable");
 });
 
+test("the installed desktop startup probe uses an isolated profile and stops its process", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "citame-desktop-startup-"));
+  try {
+    const binary = join(dir, "installed Citame");
+    const profile = join(dir, "original-profile");
+    const processInfo = join(dir, "process");
+    await Bun.write(
+      binary,
+      `#!/bin/sh
+test "$SOB_API_URL" = http://127.0.0.1:1 && test "$SOB_STARTUP_TIMINGS" = 1 || exit 2
+test "$SOB_DATA_DIR" != "$TEST_ORIGINAL_PROFILE" || exit 3
+printf '%s\\n%s\\n' "$$" "$SOB_DATA_DIR" > "$TEST_PROCESS_INFO"
+printf 'citame startup first frame callback: 24 ms\\n'
+exec /bin/sleep 30
+`,
+    );
+    chmodSync(binary, 0o755);
+    const result = Bun.spawnSync(
+      ["bash", "scripts/verify-desktop-startup.sh", binary],
+      {
+        timeout: 8_000,
+        env: {
+          ...process.env,
+          TMPDIR: dir,
+          SOB_DATA_DIR: profile,
+          TEST_ORIGINAL_PROFILE: profile,
+          TEST_PROCESS_INFO: processInfo,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(result.stdout.toString()).toContain(
+      "citame startup first frame callback: 24 ms",
+    );
+    const [pid] = (await Bun.file(processInfo).text()).split("\n");
+    expect(() => process.kill(Number(pid), 0)).toThrow();
+    expect(readdirSync(dir).sort()).toEqual(["installed Citame", "process"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 10_000);
+
 test("macOS packaging verifies the extracted revision, startup and notarization before emitting a ZIP", async () => {
   const dir = mkdtempSync(join(tmpdir(), "citame-macos-package-"));
   const binary = join(dir, "sob-desktop");

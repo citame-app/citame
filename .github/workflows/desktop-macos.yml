@@ -12,6 +12,7 @@ on:
       - "apps/desktop/**"
       - "apps/web/public/icon-512.png"
       - "scripts/*desktop-macos*.sh"
+      - "scripts/verify-desktop-startup.sh"
       - "scripts/release.ts"
       - ".github/workflows/desktop-macos.yml"
       - ".github/workflows/release.yml"
