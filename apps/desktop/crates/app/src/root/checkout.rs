@@ -111,6 +111,8 @@ fn tender_label(method: ReceiptTender) -> Key {
     match method {
         ReceiptTender::Cash => Key::CheckoutCash,
         ReceiptTender::ExternalCard => Key::CheckoutExternalCard,
+        ReceiptTender::RedsysCard => Key::SalesBankCard,
+        ReceiptTender::RedsysBizum => Key::SalesBizum,
         ReceiptTender::GiftCard => Key::SalesGiftCard,
         ReceiptTender::Package => Key::SalesPackage,
         ReceiptTender::Membership => Key::SalesMembership,
@@ -285,6 +287,8 @@ impl Root {
         else {
             return;
         };
+        let generation = self.svc.store.verified_reviewed_generation().ok();
+        let review_bank = self.t(Key::CheckoutBankReviewAgain).to_owned();
         let Some(CheckoutReview::Receipt(form)) = self.checkout_review_mut() else {
             return;
         };
@@ -308,7 +312,11 @@ impl Root {
                 let Some((selected, amount)) = form.selected.zip(form.reviewed_amount(cx)) else {
                     return;
                 };
-                if selected == ReceiptTender::GiftCard {
+                if selected.is_bank() {
+                    generation.as_deref().and_then(|generation| {
+                        PaymentAttempt::for_bank(selected, amount, &form.receipt, generation)
+                    })
+                } else if selected == ReceiptTender::GiftCard {
                     PaymentAttempt::with_gift_card(amount, form.gift_code.read(cx).text())
                 } else {
                     Some(PaymentAttempt::new(selected, amount))
@@ -316,8 +324,20 @@ impl Root {
             };
         }
         let Some(request) = form.request.clone() else {
+            if form.selected.is_some_and(ReceiptTender::is_bank) {
+                form.error = Some(review_bank);
+                cx.notify();
+            }
             return;
         };
+        if request.tender().is_bank()
+            && generation.as_deref() != form.receipt.bank_generation(request.tender())
+        {
+            form.request = None;
+            form.error = Some(review_bank);
+            cx.notify();
+            return;
+        }
         form.busy = true;
         form.error = None;
         let receipt = form.receipt.clone();
@@ -339,15 +359,18 @@ impl Root {
                     this.svc.wake(Wake::Manual);
                 }
                 let fallback = this.t(Key::CheckoutNotConfirmed);
+                let bank_review = this.t(Key::CheckoutBankReviewAgain);
                 let Some(CheckoutReview::Receipt(form)) = this.checkout_review_mut() else {
                     return;
                 };
-                if form.request != Some(request) {
+                if form.request.as_ref() != Some(&request) {
                     return;
                 }
                 form.busy = false;
+                let mut open_bank = false;
                 match result {
                     Ok(receipt) => {
+                        open_bank = request.tender().is_bank() && receipt.has_hosted_bank_payment();
                         form.amount.update(cx, |field, cx| {
                             field.set_text(&amount_entry(receipt.collectible_cents()), cx);
                         });
@@ -363,7 +386,14 @@ impl Root {
                         form.request = None;
                         form.error = Some(message);
                     }
+                    Err(TransportError::ReplicaGenerationChanged) if request.tender().is_bank() => {
+                        form.request = None;
+                        form.error = Some(bank_review.into());
+                    }
                     Err(_) => form.error = Some(fallback.to_owned()),
+                }
+                if open_bank {
+                    this.open_cloud_receipt(cx);
                 }
                 cx.notify();
             });
@@ -702,11 +732,17 @@ impl Root {
                             [
                                 (ReceiptTender::Cash, "checkout-cash"),
                                 (ReceiptTender::ExternalCard, "checkout-card"),
+                                (ReceiptTender::RedsysCard, "checkout-redsys-card"),
+                                (ReceiptTender::RedsysBizum, "checkout-bizum"),
                                 (ReceiptTender::GiftCard, "checkout-gift"),
                             ]
                             .into_iter()
-                            .filter(|(tender, _)| {
-                                *tender != ReceiptTender::GiftCard || receipt.allows_gift_card()
+                            .filter(|(tender, _)| match tender {
+                                ReceiptTender::GiftCard => receipt.allows_gift_card(),
+                                tender if tender.is_bank() => {
+                                    receipt.bank_generation(*tender).is_some()
+                                }
+                                _ => true,
                             })
                             .map(|(tender, id)| {
                                 self.button(
@@ -765,7 +801,11 @@ impl Root {
                                 "checkout-confirm",
                                 format!(
                                     "{} · {} · {}",
-                                    self.t(Key::ConfirmCheckoutPayment),
+                                    self.t(if method.is_bank() {
+                                        Key::CheckoutPrepareBank
+                                    } else {
+                                        Key::ConfirmCheckoutPayment
+                                    }),
                                     self.t(tender_label(method)),
                                     money(i64::from(amount))
                                 ),

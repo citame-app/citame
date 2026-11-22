@@ -27,6 +27,9 @@ export const commerceEn = {
   "commerce.record": "Record payment",
   "commerce.continue": "Continue to payment",
   "commerce.bankSubmit": "Pay securely with Redsys",
+  "commerce.resumeBank": "Open pending bank payment",
+  "commerce.resumeBankError":
+    "This payment could not be opened. Check its status before trying again.",
   "commerce.bankHelp": "You will enter your payment details on the bank’s secure page.",
   "commerce.testMode": "Test mode — this is not a live payment",
   "commerce.unavailable": "Online payment is not available yet. Please contact the salon.",
@@ -123,6 +126,9 @@ export const commerceEsAR: Record<keyof typeof commerceEn, string> = {
   "commerce.record": "Registrar cobro",
   "commerce.continue": "Continuar al pago",
   "commerce.bankSubmit": "Pagar de forma segura con Redsys",
+  "commerce.resumeBank": "Abrir pago bancario pendiente",
+  "commerce.resumeBankError":
+    "No se pudo abrir este pago. Comprueba su estado antes de reintentar.",
   "commerce.bankHelp": "Introducirás los datos de pago en la página segura del banco.",
   "commerce.testMode": "Modo de pruebas — no es un pago real",
   "commerce.unavailable": "El pago online todavía no está disponible. Contacta con el salón.",

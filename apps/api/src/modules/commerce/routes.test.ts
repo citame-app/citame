@@ -722,9 +722,17 @@ test("a hosted checkout stays unpaid until a matching signed bank notification",
   const response = await pay(sale.id, "redsys_card", 10000, crypto.randomUUID(), client);
   expect(response.status).toBe(201);
   const started = (await response.json()) as {
-    payment: { order: string; status: string };
+    payment: { id: string; order: string; status: string };
     form: { action: string };
   };
+  const continuation = `/checkouts/${sale.id}/payments/${started.payment.id}/continue`;
+  const resume = await call(client, `/me${continuation}`, "POST", {});
+  expect(resume.status).toBe(200);
+  expect(resume.headers.get("Cache-Control")).toBe("private, no-store");
+  expect(await resume.json()).toEqual(started.form);
+  expect((await call(other, `/me${continuation}`, "POST", {})).status).toBe(404);
+  const ownerResume = await call(owner, `/admin/commerce${continuation}`, "POST", {});
+  expect(await ownerResume.json()).toEqual(started.form);
   expect(started.form.action).toContain("sis-t.redsys.es");
   expect(started.payment.status).toBe("pending");
   expect(
@@ -735,8 +743,13 @@ test("a hosted checkout stays unpaid until a matching signed bank notification",
   expect((await notify(started.payment.order)).status).toBe(200);
   expect((await notify(started.payment.order)).status).toBe(200);
   const paid = checkoutSchema.parse(await (await call(client, `/me/checkouts/${sale.id}`)).json());
-  expect(paid).toMatchObject({ status: "paid", paidCents: 10000, balanceCents: 0 });
+  expect(paid).toMatchObject({
+    status: "paid",
+    paidCents: 10000,
+    balanceCents: 0,
+  });
   expect(paid.payments).toHaveLength(1);
+  expect((await call(client, `/me${continuation}`, "POST", {})).status).toBe(409);
   expect((await notify(started.payment.order, { Ds_Response: "0190" })).status).toBe(200);
   expect(
     checkoutSchema.parse(await (await call(client, `/me/checkouts/${sale.id}`)).json()).status,

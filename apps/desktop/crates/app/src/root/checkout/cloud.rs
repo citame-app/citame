@@ -7,7 +7,7 @@ impl ReceiptForm {
 }
 
 impl Root {
-    fn open_cloud_receipt(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn open_cloud_receipt(&mut self, cx: &mut Context<Self>) {
         let Some(session) = self
             .svc
             .current_session()
@@ -104,7 +104,11 @@ impl Root {
         }
         div().child(self.button(
             "checkout-open-cloud",
-            self.t(Key::CheckoutCloudOpen),
+            self.t(if form.receipt.has_hosted_bank_payment() {
+                Key::CheckoutOpenPendingBank
+            } else {
+                Key::CheckoutCloudOpen
+            }),
             Kind::Ghost,
             cx.listener(|root, _, _, cx| root.open_cloud_receipt(cx)),
         ))

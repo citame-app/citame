@@ -795,8 +795,7 @@ export async function startPayment(
           eq(checkoutPayment.idempotencyKey, input.idempotencyKey),
         ),
       );
-    if (sale.appointmentId && (!previous || previous.status === "pending"))
-      await assertAppointmentBillable(tx, sale.appointmentId);
+    if (sale.appointmentId && !previous) await assertAppointmentBillable(tx, sale.appointmentId);
     let payment = previous;
     if (previous) checkReplay(previous, requestHash);
     else {
@@ -899,16 +898,8 @@ export async function startPayment(
       });
     }
     if (!payment) throw new Error("Missing payment after transaction");
-    const form =
-      bank && !payment.merchantInitiated && payment.bankOrder && payment.status === "pending"
-        ? gateway?.checkout({
-            order: payment.bankOrder,
-            amountCents: payment.amountCents,
-            currency: payment.currency,
-            method: payment.method === "redsys_bizum" ? "bizum" : "card",
-            createMandate: payment.mandateRequested,
-          })
-        : undefined;
+    const form = hostedForm(payment, gateway, bizumEnabled);
+    if (previous && form) await assertHostedBalance(tx, sale, payment, now);
     return {
       payment: {
         id: payment.id,
@@ -917,10 +908,83 @@ export async function startPayment(
         method: payment.method,
         status: payment.status,
       },
-      form: form ?? null,
+      form,
     };
   });
 }
+function hostedForm(
+  payment: typeof checkoutPayment.$inferSelect,
+  gateway: PaymentGateway | null,
+  bizumEnabled: boolean,
+) {
+  if (
+    !gateway ||
+    payment.merchantInitiated ||
+    !payment.bankOrder ||
+    payment.status !== "pending" ||
+    (payment.method !== "redsys_card" && !(payment.method === "redsys_bizum" && bizumEnabled))
+  )
+    return null;
+
+  return gateway.checkout({
+    order: payment.bankOrder,
+    amountCents: payment.amountCents,
+    currency: payment.currency,
+    method: payment.method === "redsys_bizum" ? "bizum" : "card",
+    createMandate: payment.mandateRequested,
+  });
+}
+
+async function assertHostedBalance(
+  tx: Tx,
+  sale: typeof checkout.$inferSelect,
+  payment: typeof checkoutPayment.$inferSelect,
+  now: Date,
+) {
+  if (sale.appointmentId) await assertAppointmentBillable(tx, sale.appointmentId);
+  const view = await snapshot(tx, sale, now);
+  if (
+    sale.status !== "open" ||
+    payment.amountCents > view.balanceCents ||
+    (view.lines.some((line) => line.pricePending) && view.protection?.state !== "pending")
+  )
+    throw new DomainError("invalid_state", "This payment can no longer be continued");
+  await assertProtectedPayment(
+    tx,
+    sale,
+    payment.amountCents,
+    payment.method,
+    view.balanceCents,
+    now,
+  );
+}
+
+export async function resumeHostedPayment(
+  db: Database,
+  checkoutId: string,
+  paymentId: string,
+  principal: Principal,
+  gateway: PaymentGateway | null,
+  bizumEnabled: boolean,
+  now: Date,
+) {
+  return db.transaction(
+    async (tx) => {
+      const sale = await saleRow(tx, checkoutId, principal);
+      const [payment] = await tx
+        .select()
+        .from(checkoutPayment)
+        .where(and(eq(checkoutPayment.checkoutId, checkoutId), eq(checkoutPayment.id, paymentId)));
+      if (!payment) throw new DomainError("not_found", "Payment not found");
+      const form = hostedForm(payment, gateway, bizumEnabled);
+      if (!form) throw new DomainError("invalid_state", "This payment can no longer be continued");
+      await assertHostedBalance(tx, sale, payment, now);
+      return form;
+    },
+    { isolationLevel: "repeatable read", accessMode: "read only" },
+  );
+}
+
 export async function receiveBankNotification(
   db: Database,
   gateway: PaymentGateway,

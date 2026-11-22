@@ -640,6 +640,7 @@ impl HttpTransport {
         #[derive(serde::Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Payment {
+            id: Option<uuid::Uuid>,
             method: ReceiptTender,
             amount_cents: u32,
             status: String,
@@ -654,9 +655,34 @@ impl HttpTransport {
             .as_deref()
             .map(parse_id)
             .transpose()?;
-        let path = format!("/admin/commerce/checkouts/{id}");
-        let result: Started = self.post_json(&format!("{path}/payments"), attempt)?;
-        if result.payment.status != "succeeded"
+        let path = format!("/admin/commerce/checkouts/{id}/payments");
+        let bank = attempt.method.is_bank();
+        let result: Started = if bank {
+            let generation = attempt
+                .bank_generation
+                .as_deref()
+                .filter(|generation| checkout.bank_generation(attempt.method) == Some(*generation))
+                .ok_or(TransportError::ReplicaGenerationChanged)?;
+            read_response_with(
+                self.send_json_with_headers(
+                    &path,
+                    attempt,
+                    &[("x-citame-generation", generation)],
+                )?,
+                review_transport_error,
+            )?
+        } else {
+            self.post_json(&path, attempt)?
+        };
+        let accepted = if bank {
+            matches!(
+                result.payment.status.as_str(),
+                "pending" | "succeeded" | "failed" | "reconciliation"
+            )
+        } else {
+            result.payment.status == "succeeded"
+        };
+        if !accepted
             || result.payment.method != attempt.method
             || result.payment.amount_cents != attempt.amount_cents
         {
@@ -664,11 +690,22 @@ impl HttpTransport {
                 "Invalid payment acknowledgement".into(),
             ));
         }
-        self.refresh_checkout(checkout).map_err(|_| {
+        let refreshed = self.refresh_checkout(checkout).map_err(|_| {
             TransportError::Server(
                 "Payment recorded, but the receipt could not be refreshed".into(),
             )
-        })
+        })?;
+        if bank
+            && !result
+                .payment
+                .id
+                .is_some_and(|id| refreshed.contains_bank_payment(id, attempt))
+        {
+            return Err(TransportError::Server(
+                "The confirmed bank order was not found on the receipt".into(),
+            ));
+        }
+        Ok(refreshed)
     }
 
     pub fn void_checkout(

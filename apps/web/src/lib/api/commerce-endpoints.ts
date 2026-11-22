@@ -8,6 +8,7 @@ import {
   checkoutListSchema,
   checkoutRefundSchema,
   checkoutSchema,
+  hostedPaymentFormSchema,
   type ImportedPriceReview,
   type ImportedSettlement,
   type ImportedUnpaidReview,
@@ -72,6 +73,12 @@ export function commerceEndpoints(client: ApiClient) {
       client.post(`${base(mode)}/checkouts/${id}/void`, {}, checkoutSchema),
     pay: (id: string, input: StartPaymentInput, mode: CommerceMode) =>
       client.post(`${base(mode)}/checkouts/${id}/payments`, input, startedPaymentSchema),
+    continueBankPayment: (checkoutId: string, paymentId: string, mode: CommerceMode) =>
+      client.post(
+        `${base(mode)}/checkouts/${checkoutId}/payments/${paymentId}/continue`,
+        {},
+        hostedPaymentFormSchema,
+      ),
     cash: () =>
       client.get(
         "/admin/commerce/cash-sessions/current",
