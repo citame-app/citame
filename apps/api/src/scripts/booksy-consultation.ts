@@ -19,7 +19,11 @@ import { createAuth } from "../auth/auth";
 import { loadConfig } from "../config";
 import { restoreLegacyBooksyPaymentEvidence } from "../modules/booksy-transfer/operational-rehearsal";
 import { loadBooksySourceModel } from "../modules/booksy-transfer/source-store";
-import { privateCliError, privateWrite, readPrivateArchiveFile } from "../modules/booksy-transfer/vault";
+import {
+  privateCliError,
+  privateWrite,
+  readPrivateArchiveFile,
+} from "../modules/booksy-transfer/vault";
 
 const slots = {
   archive: { apiPort: 4301, webPort: 4276, name: "consultation", cacheScope: "" },
@@ -40,7 +44,9 @@ const localOwnerSchema = z.object({
   secret: z.string().min(32),
 });
 
-export async function readBooksyLocalOwner(file: string): Promise<z.infer<typeof localOwnerSchema>> {
+export async function readBooksyLocalOwner(
+  file: string,
+): Promise<z.infer<typeof localOwnerSchema>> {
   const { bytes } = await readPrivateArchiveFile(file);
   try {
     return localOwnerSchema.parse(JSON.parse(bytes.toString("utf8")));
@@ -55,17 +61,10 @@ if (import.meta.main) {
   let closeCache: (() => void) | undefined;
   let closeApp: (() => Promise<void>) | undefined;
   try {
-    const [directory, snapshotHash, mode = "archive", startup, ...extra] =
-      process.argv.slice(2);
+    const [directory, snapshotHash, mode = "archive", startup, ...extra] = process.argv.slice(2);
     const desktopTest = mode === "--desktop-test";
-    const prepared =
-      desktopTest &&
-      (startup === "--prepared" || startup === "--check-prepared");
-    if (
-      extra.length ||
-      !Object.hasOwn(slots, mode) ||
-      (startup !== undefined && !prepared)
-    )
+    const prepared = desktopTest && (startup === "--prepared" || startup === "--check-prepared");
+    if (extra.length || !Object.hasOwn(slots, mode) || (startup !== undefined && !prepared))
       throw new Error("Unexpected consultation arguments");
     const native = mode !== "archive" && !desktopTest;
     const slot = slots[mode as keyof typeof slots];
@@ -107,10 +106,7 @@ if (import.meta.main) {
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
       if (prepared)
-        throw new Error(
-          "The prepared desktop copy is missing its local owner file",
-          { cause: e },
-        );
+        throw new Error("The prepared desktop copy is missing its local owner file", { cause: e });
       credentials = {
         email: desktopTest ? "pruebas@citame.localhost.invalid" : "owner@citame.localhost.invalid",
         password: randomBytes(24).toString("base64url"),
@@ -136,15 +132,10 @@ if (import.meta.main) {
     closeCache = () => valkey.close();
     config.auth.cookiePrefix = `citame-booksy-${slot.name}`;
     await valkey.send("PING", []);
-    const existing = await db.db
-      .select()
-      .from(user)
-      .where(eq(user.email, credentials.email));
+    const existing = await db.db.select().from(user).where(eq(user.email, credentials.email));
     if (prepared) {
       if (existing[0]?.role !== "owner")
-        throw new Error(
-          "The prepared desktop copy is missing the configured owner",
-        );
+        throw new Error("The prepared desktop copy is missing the configured owner");
       const owner = existing[0];
       const [credential, duplicate] = await db.db
         .select({ hash: account.password })
@@ -156,19 +147,18 @@ if (import.meta.main) {
       const auth = createAuth({ db: db.db, valkey, config });
       try {
         const { password } = await auth.$context;
-        const valid = await password.verify({
-          hash: credential.hash,
-          password: credentials.password,
-        }).catch(() => false);
+        const valid = await password
+          .verify({
+            hash: credential.hash,
+            password: credentials.password,
+          })
+          .catch(() => false);
         if (!valid) throw new Error("The local owner credentials do not match the prepared copy");
       } finally {
         await auth.mailer.stop();
       }
-      const [settings] = await db.db
-        .select({ id: salonSettings.id })
-        .from(salonSettings);
-      if (!settings)
-        throw new Error("The prepared desktop copy is missing salon settings");
+      const [settings] = await db.db.select({ id: salonSettings.id }).from(salonSettings);
+      if (!settings) throw new Error("The prepared desktop copy is missing salon settings");
     } else if (!existing.length) {
       const auth = createAuth({ db: db.db, valkey, config });
       try {
@@ -205,9 +195,7 @@ if (import.meta.main) {
     if (startup === "--check-prepared") {
       valkey.close();
       await db.close();
-      console.log(
-        JSON.stringify({ status: "prepared", database: "ok", valkey: "ok" }),
-      );
+      console.log(JSON.stringify({ status: "prepared", database: "ok", valkey: "ok" }));
       process.exit(0);
     }
     const app = createApp({

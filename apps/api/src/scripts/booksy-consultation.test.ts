@@ -5,9 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readBooksyLocalOwner } from "./booksy-consultation";
 
-const script = fileURLToPath(
-  new URL("./booksy-consultation.ts", import.meta.url),
-);
+const script = fileURLToPath(new URL("./booksy-consultation.ts", import.meta.url));
 
 test("prepared startup and its check are restricted to the isolated desktop copy", () => {
   const launch = (mode: string, ...flags: string[]) =>
@@ -25,17 +23,11 @@ test("prepared startup and its check are restricted to the isolated desktop copy
     expect(desktop.stderr.toString()).toContain("Expected private directory");
     const archive = launch("archive", flag);
     expect(archive.exitCode).toBe(1);
-    expect(archive.stderr.toString()).toContain(
-      "Unexpected consultation arguments",
-    );
+    expect(archive.stderr.toString()).toContain("Unexpected consultation arguments");
   }
-  expect(
-    launch(
-      "--desktop-test",
-      "--prepared",
-      "--check-prepared",
-    ).stderr.toString(),
-  ).toContain("Unexpected consultation arguments");
+  expect(launch("--desktop-test", "--prepared", "--check-prepared").stderr.toString()).toContain(
+    "Unexpected consultation arguments",
+  );
 });
 
 test("local owner credentials require a private file and hide invalid JSON", async () => {
@@ -44,7 +36,9 @@ test("local owner credentials require a private file and hide invalid JSON", asy
   try {
     await writeFile(file, '{"password":DO_NOT_PRINT_THIS}', { mode: 0o644 });
     await chmod(file, 0o644);
-    await expect(readBooksyLocalOwner(file)).rejects.toThrow("Expected an operator-owned private file");
+    await expect(readBooksyLocalOwner(file)).rejects.toThrow(
+      "Expected an operator-owned private file",
+    );
     await chmod(file, 0o600);
     await expect(readBooksyLocalOwner(file)).rejects.toThrow(/^Invalid local owner credentials$/);
   } finally {
