@@ -19,11 +19,13 @@ export const peakPriceRuleSchema = z
     path: ["endMinute"],
     message: "The end must be later on the same day",
   });
+export const peakPriceRulesSchema = z.array(peakPriceRuleSchema).max(MAX_PEAK_PRICE_RULES);
+
 export const peakPricePolicySchema = z
   .object({
     version: z.number().int().nonnegative().max(2_147_483_647),
     generation: syncGenerationSchema,
-    rules: z.array(peakPriceRuleSchema).max(MAX_PEAK_PRICE_RULES),
+    rules: peakPriceRulesSchema,
   })
   .strict();
 
@@ -48,6 +50,10 @@ export const peakPriceQuoteSchema = z.object({
     }),
   ),
 });
+
+export const peakPriceSnapshotSchema = peakPricePolicySchema
+  .omit({ generation: true })
+  .extend({ timezone: z.string() });
 
 export type PeakPriceRule = z.infer<typeof peakPriceRuleSchema>;
 export type PeakPricePolicy = z.infer<typeof peakPricePolicySchema>;

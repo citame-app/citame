@@ -117,6 +117,7 @@ const shared: Record<SyncEntity | SyncLiveView, readonly (readonly string[])[]> 
   whatsapp_settings: [["admin", "whatsapp", "connection"]],
   resource_catalogue: [...calendar, ["appointments"], ["admin", "resources"]],
   service_combinations: [["combinations"]],
+  peak_prices: [["peak-price-policy"], ["booking-peak-price"]],
 };
 
 export function liveQueryKeys(changes?: Iterable<SyncEntity | SyncLiveView>) {

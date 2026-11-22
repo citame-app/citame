@@ -7,7 +7,7 @@ import {
   peakPricePolicySchema,
 } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { TextField } from "~/components/ui/field";
 import { SelectField } from "~/components/ui/select-field";
@@ -74,6 +74,14 @@ function PeakPricesEditor({ initial }: { initial: PeakPricePolicy }) {
   const services = catalog.data?.services.filter((service) => service.active) ?? [];
   const rules = draft.map(({ key: _, ...rule }) => rule);
   const dirty = JSON.stringify(rules) !== JSON.stringify(baseline.rules);
+  const reverted =
+    baseline.generation !== initial.generation || baseline.version !== initial.version;
+  useEffect(() => {
+    if (!dirty && reverted) {
+      setBaseline(initial);
+      setDraft(draftRules(initial));
+    }
+  }, [dirty, initial, reverted]);
   const save = useMutation({
     mutationFn: (policy: PeakPricePolicy) => api().admin.peakPrices.save(policy),
     onSuccess: (policy) => {

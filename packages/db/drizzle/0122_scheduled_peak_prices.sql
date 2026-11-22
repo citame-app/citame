@@ -15,4 +15,4 @@ ALTER TABLE appointment_service ADD CONSTRAINT appointment_service_peak_price_va
 CREATE CONSTRAINT TRIGGER sync_peak_price_policy
 AFTER INSERT OR UPDATE OR DELETE ON peak_price_policy
 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
-EXECUTE FUNCTION sync_record_live_view('commerce');
+EXECUTE FUNCTION sync_record_live_view('peak_prices');

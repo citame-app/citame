@@ -190,6 +190,7 @@ struct PullMetadata<'a> {
     catalogue_access: Option<bool>,
     resource_pools: Option<&'a [crate::resource_pools::ManagedPool]>,
     combinations: Option<&'a [crate::combinations::ManagedCombination]>,
+    peak_prices: Option<&'a crate::booking::PeakPriceSnapshot>,
     inventory_access: Option<bool>,
     inventory_read_access: Option<bool>,
     portfolio_uploads: bool,
@@ -428,6 +429,12 @@ impl Store {
         Ok(self
             .conn
             .pragma_query_value(None, "user_version", |r| r.get(0))?)
+    }
+
+    pub fn peak_price_snapshot(&self) -> Result<Option<crate::booking::PeakPriceSnapshot>> {
+        self.get_meta("peak_price_snapshot")?
+            .map(|raw| serde_json::from_str(&raw).map_err(CoreError::from))
+            .transpose()
     }
 
     pub fn get_meta(&self, key: &str) -> Result<Option<String>> {
@@ -1069,6 +1076,7 @@ impl Store {
                 catalogue_access: page.viewer_edit_catalogue,
                 resource_pools: page.resource_pools.as_deref(),
                 combinations: page.combinations.as_deref(),
+                peak_prices: page.peak_prices.as_ref(),
                 inventory_access: page.viewer_write_inventory,
                 inventory_read_access: page.viewer_read_inventory.or(page.viewer_write_inventory),
                 portfolio_uploads: page.portfolio_uploads.unwrap_or(false),
@@ -1121,6 +1129,10 @@ impl Store {
         if metadata.generation.is_some() {
             Self::apply_portfolio_upload_support_at(&tx, metadata.portfolio_uploads)?;
             gift_cache::apply_scope_at(&tx, metadata.gift_cards_scope)?;
+        }
+        if let Some(prices) = metadata.peak_prices {
+            prices.validate()?;
+            Self::set_meta_at(&tx, "peak_price_snapshot", &serde_json::to_string(prices)?)?;
         }
         let mut received_pools = false;
         let mut received_combinations = false;
@@ -1306,7 +1318,7 @@ impl Store {
             tx.execute(&format!("DELETE FROM {t}"), [])?;
         }
         tx.execute(
-            "DELETE FROM meta WHERE key IN ('cursor','client_groups_cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','resource_pool_catalogue','service_combinations',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
+            "DELETE FROM meta WHERE key IN ('cursor','client_groups_cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','resource_pool_catalogue','service_combinations','peak_price_snapshot',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
             [CATALOG_COLORS_CACHED, SALON_CONFIGURATION_CACHE, SALON_CONFIGURATION_ACK, SALON_CONFIGURATION_UNAVAILABLE],
         )?;
         tx.execute("DELETE FROM local_booking_confirmation", [])?;

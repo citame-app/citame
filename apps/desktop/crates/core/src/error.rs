@@ -18,6 +18,8 @@ pub enum CoreError {
     CatalogueVersionChanged,
     #[error("the selected service has booking details waiting to sync")]
     CatalogueEditPending,
+    #[error("the reviewed peak-time price changed")]
+    PeakPriceReviewChanged,
     #[error("a team photo is being saved in another window")]
     StaffPortraitDraftBusy,
     #[error("this time overlaps a schedule block")]

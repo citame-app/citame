@@ -194,6 +194,7 @@ export function requireAuth(
               : "PUT")) ||
         (path === "/admin/whatsapp/rules/reviewed" && method !== "PATCH") ||
         (path === "/admin/whatsapp/disconnect/reviewed" && method !== "POST") ||
+        (path === "/admin/peak-prices" && method !== "GET" && method !== "PUT") ||
         (path === "/admin/email-delivery" && method !== "GET" && method !== "PUT") ||
         (path === "/admin/email-delivery/test-reviewed" && method !== "POST") ||
         (path === "/admin/settings/desktop" && method !== "GET" && method !== "PUT") ||

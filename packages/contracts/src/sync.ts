@@ -19,6 +19,7 @@ import {
 import { purchaseOrderSyncPayloadSchema } from "./inventory-orders";
 import { stockReceiptInputSchema, supplierInputSchema } from "./inventory-receipts";
 import { stockTransferSyncPayloadSchema, warehouseInputSchema } from "./inventory-warehouses";
+import { peakPriceSnapshotSchema } from "./peak-prices";
 import { portfolioUploadSchema } from "./portfolio";
 import {
   resourceCreateSchema,
@@ -538,6 +539,8 @@ export const syncPullQuerySchema = z.object({
   resourcePools: z.enum(["full", "delta"]).optional(),
   combinationCatalogue: z.literal("1").optional(),
   combinations: z.enum(["full", "delta"]).optional(),
+  peakPrices: z.enum(["full", "delta"]).optional(),
+  peakPriceViews: z.literal("1").optional(),
   inventoryAccess: z.literal("1").optional(),
   booksyPaymentReview: z.literal("1").optional(),
   clientGroups: z.literal("1").optional(),
@@ -678,6 +681,7 @@ export const syncLiveViewSchema = z.enum([
   "whatsapp_settings",
   "resource_catalogue",
   "service_combinations",
+  "peak_prices",
 ]);
 export type SyncLiveView = z.infer<typeof syncLiveViewSchema>;
 
@@ -689,6 +693,7 @@ export const syncPullResponseSchema = z.object({
   catalogColors: z.record(idSchema, z.string().regex(/^#[0-9a-fA-F]{6}$/)).optional(),
   resourcePools: z.array(resourceSchema).max(50).optional(),
   combinations: z.array(serviceCombinationSchema).max(100).optional(),
+  peakPrices: peakPriceSnapshotSchema.optional(),
   changes: z.array(syncChangeSchema),
   /** Store this and send it as `since` next time. Never decreases. */
   nextCursor: z.number().int().min(0),

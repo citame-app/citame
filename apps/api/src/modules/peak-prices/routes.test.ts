@@ -207,3 +207,50 @@ test("two treatments use their individual starts, including the first treatment'
   );
   expect(quote.services.map((line) => line.surchargeCents)).toEqual([0, 1000]);
 });
+
+test("the desktop delta carries schedule edits and an offline booking with a stale review conflicts", async () => {
+  const before = await call("/sync/pull?since=0&limit=100&peakPrices=full&peakPriceViews=1");
+  const original = (await before.json()) as { nextCursor: number; generation: string };
+  expect(original).toMatchObject({ peakPrices: { version: 0, rules: [] } });
+  const state = await policy();
+  const saved = await call("/admin/peak-prices", "PUT", { ...state, rules: [rule(1500)] });
+  expect(saved.status).toBe(200);
+  const delta = await call(
+    `/sync/pull?since=${original.nextCursor}&limit=100&peakPrices=delta&peakPriceViews=1`,
+  );
+  expect(await delta.json()).toMatchObject({
+    refresh: ["peak_prices"],
+    peakPrices: { version: 1, timezone: "America/Argentina/Buenos_Aires" },
+  });
+  const approved = await preview();
+  const write = (at: string, peakPriceReview?: string) =>
+    call("/sync/push", "POST", {
+      deviceId: "peak-price-desktop-qa",
+      generation: original.generation,
+      mutations: [
+        {
+          mutationId: Bun.randomUUIDv7(),
+          createdAt: "2026-03-02T12:00:00.000Z",
+          kind: "appointment.create",
+          payload: {
+            id: crypto.randomUUID(),
+            staffId: f.anaId,
+            clientId: f.clientId,
+            serviceIds: [f.haircutId],
+            startsAt: at,
+            peakPriceReview,
+          },
+        },
+      ],
+    });
+  const rejected = await write(startsAt);
+  expect(rejected.status, await rejected.clone().text()).toBe(200);
+  expect(await rejected.json()).toMatchObject({
+    results: [{ status: "rejected", reason: "conflict" }],
+  });
+  expect(await t.db.select().from(appointment)).toHaveLength(0);
+  const accepted = await write(startsAt, approved.review ?? undefined);
+  expect(accepted.status, await accepted.clone().text()).toBe(200);
+  expect(await accepted.json()).toMatchObject({ results: [{ status: "applied" }] });
+  expect(await t.db.select().from(appointment)).toHaveLength(1);
+});

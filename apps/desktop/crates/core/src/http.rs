@@ -2037,6 +2037,30 @@ impl HttpTransport {
         Ok(viewer.user.role == "owner" || viewer.access_preset.as_deref() == Some("manager"))
     }
 
+    pub fn peak_price_policy(&self) -> Result<crate::booking::PeakPricePolicy, TransportError> {
+        read_response(self.get(&self.agent, "/admin/peak-prices", None)?, false)
+    }
+
+    pub fn write_peak_price_policy(
+        &self,
+        policy: &crate::booking::PeakPricePolicy,
+    ) -> Result<crate::booking::PeakPricePolicy, PolicyWriteError> {
+        let response = self.send_put_json("/admin/peak-prices", policy)?;
+        read_response_with(response, |status, retry_after, body| {
+            let parsed = serde_json::from_str::<serde_json::Value>(body).ok();
+            let code = parsed
+                .as_ref()
+                .and_then(|value| value.pointer("/error/code"))
+                .and_then(|value| value.as_str());
+            if (status, code) == (409, Some("version_conflict"))
+                || (status, code) == (409, Some("sync_generation_changed"))
+            {
+                return PolicyWriteError::Conflict;
+            }
+            classify_status(status, retry_after, body, false).into()
+        })
+    }
+
     pub fn booking_peak_price(
         &self,
         terms: &BookingTerms,
@@ -2419,16 +2443,17 @@ impl HttpTransport {
             .map(|snapshots| {
                 let mode = |full| if full { "full" } else { "delta" };
                 format!(
-                    "&resourcePools={}&combinations={}",
+                    "&resourcePools={}&combinations={}&peakPrices={}",
                     mode(snapshots.full_resource_pools),
-                    mode(snapshots.full_combinations)
+                    mode(snapshots.full_combinations),
+                    mode(snapshots.full_peak_prices)
                 )
             })
             .unwrap_or_default();
         let resp = self.get(
             &self.agent,
             &format!(
-                "/sync/pull?since={since}&limit={limit}{catalog}&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&emailDelivery=1&marketingViews=1&promotionViews=1&loyaltyViews=1&whatsappDesk=1&resourceCatalogue=1&inventoryAccess=1&booksyPaymentReview=1&clientGroups=1{catalogue_snapshots}"
+                "/sync/pull?since={since}&limit={limit}{catalog}&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&peakPriceViews=1&emailDelivery=1&marketingViews=1&promotionViews=1&loyaltyViews=1&whatsappDesk=1&resourceCatalogue=1&inventoryAccess=1&booksyPaymentReview=1&clientGroups=1{catalogue_snapshots}"
             ),
             None,
         )?;

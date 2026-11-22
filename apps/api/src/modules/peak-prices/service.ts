@@ -3,7 +3,8 @@ import {
   type PeakPricePolicy,
   type PeakPriceQuote,
   type PeakPriceRule,
-  peakPricePolicySchema,
+  peakPriceRulesSchema,
+  peakPriceSnapshotSchema,
   type Service,
 } from "@sob/contracts";
 import { type Database, peakPricePolicy, service } from "@sob/db";
@@ -16,16 +17,23 @@ import { lockScheduling, type Tx } from "../../tx";
 import { getBookableServices, onlineServicesByIds } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 
+async function loadPeakPriceRules(
+  db: Database | Tx,
+): Promise<Pick<PeakPricePolicy, "version" | "rules">> {
+  const [row] = await db.select().from(peakPricePolicy).where(eq(peakPricePolicy.id, 1));
+  return { version: row?.version ?? 0, rules: peakPriceRulesSchema.parse(row?.rules ?? []) };
+}
+
 export async function readPeakPricePolicy(
   db: Database | Tx,
   generation: string,
 ): Promise<PeakPricePolicy> {
-  const [row] = await db.select().from(peakPricePolicy).where(eq(peakPricePolicy.id, 1));
-  return peakPricePolicySchema.parse({
-    version: row?.version ?? 0,
-    rules: row?.rules ?? [],
-    generation,
-  });
+  return { ...(await loadPeakPriceRules(db)), generation };
+}
+
+export async function offlinePeakPriceSnapshot(db: Database | Tx) {
+  const { timezone } = await getSalonSettings(db);
+  return peakPriceSnapshotSchema.parse({ ...(await loadPeakPriceRules(db)), timezone });
 }
 
 function normalizeRules(rules: PeakPriceRule[]) {
@@ -150,7 +158,13 @@ export function pricePeakSlot(
             policy.version,
             timeZone,
             instant,
-            lines,
+            lines.map((line) => [
+              line.serviceId,
+              line.currency,
+              line.baseCents,
+              line.surchargeCents,
+              line.priceCents,
+            ]),
             services.map(({ quoteHash }) => quoteHash),
           ]),
         )
@@ -165,7 +179,7 @@ export async function quotePeakSlot(
   startsAt: Date,
   timeZone: string,
 ) {
-  const policy = await readPeakPricePolicy(db, "initial");
+  const policy = await loadPeakPriceRules(db);
   return pricePeakSlot(policy, services, startsAt, timeZone);
 }
 

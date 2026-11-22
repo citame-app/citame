@@ -75,6 +75,7 @@ export function rejectionReason(
       slot_taken: "slot_taken",
       slot_unavailable: "slot_unavailable",
       version_conflict: "conflict",
+      peak_price_changed: "conflict",
       invalid_state: "invalid_state",
       promotion_timing_mismatch: "invalid_state",
       booking_promotion_changed: "invalid_state",

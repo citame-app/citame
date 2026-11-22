@@ -1129,7 +1129,12 @@ impl Root {
         cx.notify();
     }
 
+    #[cfg(test)]
     fn book(&mut self, cx: &mut Context<Self>) {
+        self.book_reviewed(None, cx);
+    }
+
+    fn book_reviewed(&mut self, peak_review: Option<&str>, cx: &mut Context<Self>) {
         if matches!(&self.overlay, Overlay::New(form) if !form.visit_parts.is_empty()) {
             self.review_grouped_visit(cx);
             return;
@@ -1234,13 +1239,14 @@ impl Root {
             return;
         }
         let result = if has_client {
-            ops::create_appointment(&mut self.svc.store, booking)
+            ops::create_appointment_reviewed(&mut self.svc.store, booking, peak_review)
         } else {
-            ops::create_appointment_for_new_client(
+            ops::create_appointment_for_new_client_reviewed(
                 &mut self.svc.store,
                 booking,
                 &name,
                 (!phone.is_empty()).then_some(phone.as_str()),
+                peak_review,
             )
         };
         match result {
@@ -1269,6 +1275,7 @@ impl Root {
                 CoreError::PendingClient => Key::BookingIntakeClientSync,
                 CoreError::CalendarGenerationChanged => Key::BookingIntakeRestore,
                 CoreError::IncompatibleServices => Key::ErrIncompatibleServices,
+                CoreError::PeakPriceReviewChanged => Key::PeakPriceChanged,
                 CoreError::CatalogueEditPending => Key::ErrCatalogueEditPending,
                 _ => Key::ErrGeneric,
             });
@@ -2794,6 +2801,50 @@ impl Root {
             return self.render_booking_intake(f, review, viewport, cx);
         }
         const CLIENT_LIMIT: usize = 12;
+        let offline_price =
+            if self.status.connectivity != Connectivity::Online && !f.services.is_empty() {
+                self.svc
+                    .store
+                    .peak_price_snapshot()
+                    .ok()
+                    .flatten()
+                    .and_then(|snapshot| {
+                        let start = salon_local_instant(self.tz, f.date, f.minutes)?;
+                        snapshot
+                            .quote(
+                                start,
+                                f.services.iter().filter_map(|id| {
+                                    self.services.iter().find(|service| &service.id == id)
+                                }),
+                            )
+                            .ok()
+                    })
+            } else {
+                None
+            };
+        let price_adjustment = offline_price
+            .as_ref()
+            .filter(|price| price.review.is_some())
+            .and_then(|price| {
+                let currency = f
+                    .services
+                    .first()
+                    .and_then(|id| self.services.iter().find(|service| &service.id == id))
+                    .map(|service| service.currency.as_str())?;
+                let surcharge = self.amount_label(
+                    price.services.iter().map(|line| line.surcharge_cents).sum(),
+                    currency,
+                );
+                let total = self.amount_label(
+                    price.services.iter().map(|line| line.price_cents).sum(),
+                    currency,
+                );
+                Some(format!(
+                    "{} · {total}",
+                    i18n::fill(self.t(Key::PeakPriceSurcharge), &[("amount", &surcharge)])
+                ))
+            });
+        let peak_review = offline_price.and_then(|price| price.review);
         let wide = viewport.width >= px(850.);
         let start_label = format!(
             "{} {:02}:{:02}",
@@ -3052,6 +3103,9 @@ impl Root {
             .pt_3()
             .border_t_1()
             .border_color(theme::line())
+            .when_some(price_adjustment, |row, adjustment| {
+                row.child(div().text_sm().child(adjustment))
+            })
             .child(div().text_sm().text_color(theme::muted()).child(i18n::fill(
                 self.t(Key::ServiceSelection),
                 &[
@@ -3080,7 +3134,9 @@ impl Root {
                                 Key::Book
                             }),
                             Kind::Primary,
-                            cx.listener(|this, _, _, cx| this.book(cx)),
+                            cx.listener(move |this, _, _, cx| {
+                                this.book_reviewed(peak_review.as_deref(), cx)
+                            }),
                         )
                         .tab_index(0)
                         .focus(|style| style.border_color(theme::text())),
@@ -3686,7 +3742,9 @@ impl Root {
                         ),
                 )
                 .child(div().text_sm().child(
-                    if c.kind == "appointment.create" && c.reason == "conflict" {
+                    if c.kind == "appointment.create"
+                        && (c.reason == "conflict" || c.payload.get("peakPriceReview").is_some())
+                    {
                         self.t(Key::ConflictReviewedTerms)
                     } else if matches!(
                         c.kind.as_str(),

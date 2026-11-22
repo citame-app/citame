@@ -246,6 +246,7 @@ export function createEndpoints(client: ApiClient) {
             portfolio: "1",
             intakeViews: "1",
             bookingPolicy: "1",
+            peakPriceViews: "1",
             emailDelivery: "1",
             marketingViews: "1",
             promotionViews: "1",

@@ -254,10 +254,22 @@ pub fn performed_services(store: &Store, staff_id: &str) -> Result<Vec<String>> 
 
 /// Returns the new appointment id.
 pub fn create_appointment(store: &mut Store, new: NewAppointment) -> Result<String> {
-    store.write_transaction(|store| queue_appointment(store, new))
+    create_appointment_reviewed(store, new, None)
 }
 
-fn queue_appointment(store: &mut Store, new: NewAppointment) -> Result<String> {
+pub fn create_appointment_reviewed(
+    store: &mut Store,
+    new: NewAppointment,
+    review: Option<&str>,
+) -> Result<String> {
+    store.write_transaction(|store| queue_appointment(store, new, review))
+}
+
+fn queue_appointment(
+    store: &mut Store,
+    new: NewAppointment,
+    review: Option<&str>,
+) -> Result<String> {
     let Some((_, client_name)) = known_clients(store)?
         .into_iter()
         .find(|(id, _)| *id == new.client_id)
@@ -267,13 +279,38 @@ fn queue_appointment(store: &mut Store, new: NewAppointment) -> Result<String> {
             new.client_id
         )));
     };
-    let (quotes, reviewed) = reviewed_service_terms(store, &new)?;
+    let (quotes, mut reviewed) = reviewed_service_terms(store, &new)?;
+    let prices = match store.peak_price_snapshot()? {
+        Some(snapshot) => {
+            let services = store.services()?;
+            Some(
+                snapshot.quote(
+                    new.starts_at,
+                    new.service_ids
+                        .iter()
+                        .filter_map(|id| services.iter().find(|service| &service.id == id)),
+                )?,
+            )
+        }
+        None => None,
+    };
+    if prices.as_ref().and_then(|quote| quote.review.as_deref()) != review {
+        return Err(CoreError::PeakPriceReviewChanged);
+    }
+    if let Some(prices) = prices.as_ref().filter(|quote| quote.review.is_some()) {
+        for (snapshot, line) in reviewed.iter_mut().zip(&prices.services) {
+            snapshot.price_cents = line.price_cents;
+        }
+    }
     let id = uuid::Uuid::now_v7().to_string();
     let mut p = Map::new();
     p.insert("id".into(), json!(id));
     p.insert("staffId".into(), json!(new.staff_id));
     p.insert("serviceIds".into(), json!(new.service_ids));
     p.insert("serviceQuotes".into(), json!(quotes));
+    if let Some(review) = review {
+        p.insert("peakPriceReview".into(), json!(review));
+    }
     p.insert("_reviewedServices".into(), json!(reviewed));
     p.insert("startsAt".into(), json!(iso(new.starts_at)));
     p.insert("clientId".into(), json!(new.client_id));
@@ -420,13 +457,23 @@ pub(crate) fn reviewed_service_terms(
 
 pub fn create_appointment_for_new_client(
     store: &mut Store,
-    mut new: NewAppointment,
+    new: NewAppointment,
     name: &str,
     phone: Option<&str>,
 ) -> Result<String> {
+    create_appointment_for_new_client_reviewed(store, new, name, phone, None)
+}
+
+pub fn create_appointment_for_new_client_reviewed(
+    store: &mut Store,
+    mut new: NewAppointment,
+    name: &str,
+    phone: Option<&str>,
+    review: Option<&str>,
+) -> Result<String> {
     store.write_transaction(|store| {
         new.client_id = create_client(store, name, phone)?;
-        queue_appointment(store, new)
+        queue_appointment(store, new, review)
     })
 }
 
@@ -845,7 +892,7 @@ fn resolve_conflict_in_transaction(
         } => {
             match c.kind.as_str() {
                 "appointment.create" => {
-                    if c.reason == "conflict" {
+                    if c.reason == "conflict" || c.payload.get("peakPriceReview").is_some() {
                         return Err(CoreError::Invalid("The reviewed booking terms changed; drop this proposal and review a new booking".into()));
                     }
                     // A rejection is final: same appointment id, new mutation id.
