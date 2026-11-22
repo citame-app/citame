@@ -386,7 +386,7 @@ pub struct Root {
     pending_stamp: Option<loyalty::PendingStamp>,
     data_version: Option<i64>,
     notice_cursor: i64,
-    notices: Vec<(Appointment, Instant)>,
+    notices: Vec<(CalendarNoticeKind, Appointment, Instant)>,
     inbox_generation: u64,
     reward_badge: inbox::RewardBadge,
     waitlist_generation: u64,
@@ -741,7 +741,7 @@ impl Root {
         if minute_changed {
             self.calendar_now = wall_now;
         }
-        self.notices.retain(|(_, deadline)| *deadline > now);
+        self.expire_notices(now);
         let status = self.svc.status();
         let reconnected = status.connectivity == Connectivity::Online
             && self.status.connectivity != Connectivity::Online;
@@ -839,6 +839,7 @@ impl Root {
         }
         self.calendar_scope = scope;
         self.replica_generation = generation;
+        self.refresh_open_waitlist_scope();
         self.refresh_notices();
         let store = &self.svc.store;
         let previous_time_off_scope = std::mem::take(&mut self.time_off_scope);
@@ -4546,11 +4547,47 @@ mod tests {
             let day = appointment.starts_at.with_timezone(&root.tz).date_naive();
             root.date = day + Span::days(7);
             root.calendar_mode = CalendarMode::Week;
-            root.notices
-                .push((appointment, Instant::now() + Duration::from_secs(12)));
+            root.notices.push((
+                CalendarNoticeKind::New,
+                appointment,
+                Instant::now() + Duration::from_secs(12),
+            ));
             root.show_notice(EXISTING, cx);
             assert_eq!(root.date, day);
             assert_eq!(root.calendar_mode, CalendarMode::Day);
+            assert!(root.notices.is_empty());
+            assert!(matches!(&root.overlay, Overlay::Details(details) if details.id == EXISTING));
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    async fn a_cancellation_notice_stays_available_without_replacing_an_open_draft(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, win) = open(cx);
+        win.update(cx, |root, window, cx| {
+            let mut cancelled = root.svc.store.appointment(EXISTING).unwrap().unwrap();
+            cancelled.status = AppointmentStatus::Cancelled;
+            cancelled.version += 1;
+            root.svc
+                .store
+                .apply_page(&[up(10, "appointment", EXISTING, json!(cancelled))], 10)
+                .unwrap();
+            root.notices.push((
+                CalendarNoticeKind::Cancelled,
+                cancelled,
+                Instant::now() + Duration::from_secs(12),
+            ));
+            root.open_new(window, cx);
+            root.show_notice(EXISTING, cx);
+            assert!(matches!(&root.overlay, Overlay::New(_)));
+            assert_eq!(root.notices.len(), 1);
+            let later = Instant::now() + Duration::from_secs(60);
+            root.expire_notices(later);
+            assert!(root.notices[0].2 > later);
+            root.dismiss_overlay(cx);
+            root.show_notice(EXISTING, cx);
             assert!(root.notices.is_empty());
             assert!(matches!(&root.overlay, Overlay::Details(details) if details.id == EXISTING));
         })

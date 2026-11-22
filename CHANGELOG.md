@@ -8,6 +8,10 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Added
 
+- Desktop can browse previously loaded active and history waitlist pages offline. Offer actions continue to use the current server state.
+
+- Desktop shows live notices when an appointment is moved or cancelled from another client, alongside the existing new-booking notices.
+
 - Cloud and Desktop group appointment outcomes by the promotion reviewed at booking, with the same filters and CSV export as the appointment report.
 
 - The Booksy recovery verifier checks trusted operational copy and bidirectional write receipts against the selected snapshot, encrypted backup, rehearsal date and full release migration ledger.

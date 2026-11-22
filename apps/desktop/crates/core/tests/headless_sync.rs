@@ -5409,8 +5409,9 @@ fn the_stream_nudge_makes_the_runner_pull_without_polling() {
     assert!(reader.clients().unwrap().iter().any(|c| c.name == name));
     let notices = reader.booking_notices_after(0).unwrap();
     assert_eq!(notices.len(), 1);
-    assert_eq!(notices[0].1.id, appointment_id);
-    assert_eq!(notices[0].1.client_name.as_deref(), Some(name.as_str()));
+    assert_eq!(notices[0].1, CalendarNoticeKind::New);
+    assert_eq!(notices[0].2.id, appointment_id);
+    assert_eq!(notices[0].2.client_name.as_deref(), Some(name.as_str()));
 
     let initial = b
         .transport
@@ -5606,7 +5607,9 @@ fn wait(max: Duration, what: &str, mut f: impl FnMut() -> bool) {
 #[ignore = "needs the real API, Postgres and Valkey (see README)"]
 fn native_calendar_inbox_reads_lifecycle_and_archives_a_notice() {
     let mut device = Device::sign_in();
+    let mut observer = Device::sign_in();
     device.sync();
+    observer.sync();
     let catalogue = catalog(&device);
     let starts_at = free_slot(&device, &catalogue.staff);
     let client = ops::create_client(&mut device.store, "Native inbox test", None).unwrap();
@@ -5616,6 +5619,14 @@ fn native_calendar_inbox_reads_lifecycle_and_archives_a_notice() {
     )
     .unwrap();
     device.sync();
+    let notice_cursor = observer.store.booking_notice_head().unwrap();
+    observer.sync();
+    let notices = observer.store.booking_notices_after(notice_cursor).unwrap();
+    assert_eq!(
+        (notices[0].1, notices[0].2.id.as_str()),
+        (CalendarNoticeKind::New, id.as_str())
+    );
+    let notice_cursor = notices[0].0;
     ops::reschedule_appointment(
         &mut device.store,
         &id,
@@ -5624,8 +5635,38 @@ fn native_calendar_inbox_reads_lifecycle_and_archives_a_notice() {
     )
     .unwrap();
     device.sync();
+    observer.sync();
+    let notices = observer.store.booking_notices_after(notice_cursor).unwrap();
+    assert_eq!(
+        (notices[0].1, notices[0].2.id.as_str()),
+        (CalendarNoticeKind::Rescheduled, id.as_str())
+    );
+    assert!(
+        device
+            .store
+            .booking_notices_after(0)
+            .unwrap()
+            .iter()
+            .all(|(_, _, row)| row.id != id)
+    );
+    assert_eq!(notices[0].2.starts_at, starts_at + Span::hours(1));
+    let notice_cursor = notices[0].0;
     ops::cancel_appointment(&mut device.store, &id).unwrap();
     device.sync();
+    observer.sync();
+    let notices = observer.store.booking_notices_after(notice_cursor).unwrap();
+    assert_eq!(
+        (notices[0].1, notices[0].2.id.as_str()),
+        (CalendarNoticeKind::Cancelled, id.as_str())
+    );
+    assert!(
+        !device
+            .store
+            .booking_notices_after(0)
+            .unwrap()
+            .iter()
+            .any(|(_, _, appointment)| appointment.id == id)
+    );
 
     let inbox = device.transport.calendar_inbox(false, 1).unwrap();
     let notices = inbox
@@ -6437,7 +6478,7 @@ fn native_reviews_and_books_the_whole_itinerary_through_the_proxy() {
             .booking_notices_after(notice_head)
             .unwrap()
             .iter()
-            .all(|(_, notice)| appointments.iter().all(|a| a.id != notice.id))
+            .all(|(_, _, notice)| appointments.iter().all(|a| a.id != notice.id))
     );
 }
 
@@ -6522,7 +6563,7 @@ fn native_reviews_a_recurring_series_and_retries_the_same_request_through_the_pr
             .booking_notices_after(origin_notice)
             .unwrap()
             .iter()
-            .all(|(_, notice)| visits.iter().all(|visit| notice.id != visit.id))
+            .all(|(_, _, notice)| visits.iter().all(|visit| notice.id != visit.id))
     );
     let moved = free_slot_matching(&browser, &catalog.staff, |slot| {
         slot != first && slot != second
@@ -6653,7 +6694,7 @@ fn native_books_with_current_intake_and_an_inline_client_through_the_proxy() {
             .booking_notices_after(origin_notice)
             .unwrap()
             .iter()
-            .all(|(_, notice)| notice.id != appointment.id)
+            .all(|(_, _, notice)| notice.id != appointment.id)
     );
     let local = browser.store.appointment(&appointment.id).unwrap().unwrap();
     assert_ne!(local.client_id, household_contact);

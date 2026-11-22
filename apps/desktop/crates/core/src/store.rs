@@ -19,8 +19,11 @@ use crate::model::*;
 use crate::reports::commissions::SavedCommissionPayout;
 use crate::sync::{CATALOG_COLORS_CACHED, CatalogColors};
 
+mod calendar_notices;
 mod staff_portrait_draft;
+mod waitlist_cache;
 pub use staff_portrait_draft::StaffPortraitDraft;
+pub use waitlist_cache::{SavedWaitlistPages, WaitlistCacheScope};
 
 fn pending_bank_refund_key(checkout_id: uuid::Uuid, actor_user_id: &str) -> String {
     format!("bank_refund_pending:{checkout_id}:{actor_user_id}")
@@ -144,6 +147,19 @@ const MIGRATIONS: &[&str] = &[
         ON appointment (json_extract(json, '$.itineraryId'), starts_at_ms, id)
         WHERE json_extract(json, '$.itineraryId') IS NOT NULL;
     "#,
+    r#"
+    ALTER TABLE booking_notice ADD COLUMN kind TEXT NOT NULL DEFAULT 'new'
+        CHECK (kind IN ('new', 'rescheduled', 'cancelled'));
+    CREATE TABLE local_calendar_ack (
+        seq INTEGER PRIMARY KEY,
+        appointment_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        staff_id TEXT,
+        starts_at_ms INTEGER
+    );
+    CREATE INDEX local_calendar_ack_version ON local_calendar_ack(appointment_id,version);
+    "#,
 ];
 
 const MIRROR_TABLES: &[&str] = &[
@@ -209,7 +225,7 @@ fn upsert_json(tx: &Transaction, table: &str, id: &str, json: &str) -> Result<()
     Ok(())
 }
 
-fn apply_change(tx: &Transaction, c: &RawChange) -> Result<()> {
+fn apply_change(tx: &Transaction, c: &RawChange, alert: bool) -> Result<()> {
     const KNOWN: &[&str] = &[
         "appointment",
         "client",
@@ -236,7 +252,7 @@ fn apply_change(tx: &Transaction, c: &RawChange) -> Result<()> {
             )?;
             Ok(())
         }
-        "upsert" => upsert(tx, c),
+        "upsert" => upsert(tx, c, alert),
         other => Err(CoreError::Protocol(format!(
             "unknown op {other:?} at seq {}",
             c.seq
@@ -244,11 +260,16 @@ fn apply_change(tx: &Transaction, c: &RawChange) -> Result<()> {
     }
 }
 
-fn upsert(tx: &Transaction, c: &RawChange) -> Result<()> {
+fn upsert(tx: &Transaction, c: &RawChange, alert: bool) -> Result<()> {
     let id = c.id.as_str();
     match c.entity.as_str() {
         "appointment" => {
             let a: Appointment = parse(&c.data, "appointment", id)?;
+            let notice = if alert {
+                calendar_notices::classify(tx, &a)?
+            } else {
+                None
+            };
             tx.execute(
                 "INSERT INTO appointment (id, staff_id, starts_at_ms, ends_at_ms, status, version, json)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
@@ -265,6 +286,7 @@ fn upsert(tx: &Transaction, c: &RawChange) -> Result<()> {
                     serde_json::to_string(&a)?
                 ],
             )?;
+            calendar_notices::apply(tx, &a.id, notice)?;
         }
         "client" => {
             let v: Client = parse(&c.data, "client", id)?;
@@ -1119,26 +1141,7 @@ impl Store {
             .unwrap_or(0);
         let mut applied = 0;
         for c in changes.iter().filter(|change| change.seq > cursor) {
-            let fresh_booking = alert
-                && c.entity == "appointment" && c.op == "upsert"
-                && c.data.as_ref().is_some_and(|data|
-                    data["status"] == "booked"
-                        && data["version"].as_i64() == Some(1)
-                        && data["importedFromBooksy"].as_bool() != Some(true)
-                        && data["visitGroupId"].is_null())
-                && !tx.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM appointment WHERE id=?1
-                       UNION ALL SELECT 1 FROM local_booking_confirmation WHERE appointment_id=?1
-                       UNION ALL SELECT 1 FROM outbox WHERE entity_id=?1 AND kind='appointment.create')",
-                    params![c.id], |row| row.get::<_, bool>(0),
-                )?;
-            apply_change(&tx, c)?;
-            if fresh_booking {
-                tx.execute(
-                    "INSERT OR IGNORE INTO booking_notice (appointment_id) VALUES (?1)",
-                    params![c.id],
-                )?;
-            }
+            apply_change(&tx, c, alert)?;
             if c.entity == "appointment" {
                 tx.execute(
                     "DELETE FROM local_booking_confirmation WHERE appointment_id=?1",
@@ -1150,6 +1153,10 @@ impl Store {
         tx.execute(
             "DELETE FROM local_booking_confirmation WHERE applied_seq <= ?1",
             params![next_cursor],
+        )?;
+        tx.execute(
+            "DELETE FROM local_calendar_ack WHERE seq <= ?1",
+            [next_cursor],
         )?;
         if alert {
             tx.execute("DELETE FROM booking_notice WHERE id NOT IN (SELECT id FROM booking_notice ORDER BY id DESC LIMIT 12)",[])?;
@@ -1283,10 +1290,12 @@ impl Store {
             tx.execute(&format!("DELETE FROM {t}"), [])?;
         }
         tx.execute(
-            "DELETE FROM meta WHERE key IN ('cursor','client_groups_cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','desk_waitlist','resource_pool_catalogue','service_combinations',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
+            "DELETE FROM meta WHERE key IN ('cursor','client_groups_cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','resource_pool_catalogue','service_combinations',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
             [CATALOG_COLORS_CACHED, SALON_CONFIGURATION_CACHE, SALON_CONFIGURATION_ACK, SALON_CONFIGURATION_UNAVAILABLE],
         )?;
         tx.execute("DELETE FROM local_booking_confirmation", [])?;
+        tx.execute("DELETE FROM local_calendar_ack", [])?;
+        waitlist_cache::invalidate_visibility(tx)?;
         Self::apply_inventory_access_at(tx, false)?;
         Self::apply_inventory_read_access_at(tx, false)?;
         Ok(())
@@ -1324,6 +1333,8 @@ impl Store {
         let restart = Self::meta_at(&tx, "cursor")?.is_some_and(|cursor| cursor != "0");
         if restart {
             Self::clear_replica(&tx)?;
+        } else {
+            waitlist_cache::invalidate_visibility(&tx)?;
         }
         for (key, scope) in changes {
             tx.execute(
@@ -1360,37 +1371,6 @@ impl Store {
             [],
         )?;
         Ok(())
-    }
-
-    pub fn waitlist_cache(&self) -> Result<Option<crate::waitlist::WaitlistPage>> {
-        self.get_meta("desk_waitlist")?
-            .map(|raw| serde_json::from_str(&raw).map_err(CoreError::from))
-            .transpose()
-    }
-
-    pub fn cache_waitlist(&self, page: &crate::waitlist::WaitlistPage) -> Result<()> {
-        self.set_meta("desk_waitlist", &serde_json::to_string(page)?)
-    }
-
-    pub fn clear_waitlist_cache(&self) -> Result<()> {
-        self.conn
-            .execute("DELETE FROM meta WHERE key = 'desk_waitlist'", [])?;
-        Ok(())
-    }
-
-    pub fn booking_notices_after(&self, after: i64) -> Result<Vec<(i64, Appointment)>> {
-        let mut query = self.conn.prepare(
-            "SELECT n.id,a.json FROM booking_notice n JOIN appointment a ON a.id=n.appointment_id
-             WHERE n.id>?1 AND a.status='booked' ORDER BY n.id DESC LIMIT 3",
-        )?;
-        let rows = query.query_map(params![after], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-        })?;
-        rows.map(|row| {
-            let (id, json) = row?;
-            Ok((id, serde_json::from_str(&json)?))
-        })
-        .collect()
     }
 
     fn rows<T: DeserializeOwned>(&self, sql: &str) -> Result<Vec<T>> {
@@ -1802,6 +1782,13 @@ impl Store {
                              VALUES (?1,?2)",
                             params![s.entity_id, applied_seq],
                         )?;
+                    }
+                    if matches!(
+                        s.kind.as_str(),
+                        "appointment.create" | "appointment.reschedule" | "appointment.cancel"
+                    ) && let Some(seq) = applied_seq
+                    {
+                        calendar_notices::remember_applied(&tx, s, *seq)?;
                     }
                     if let Some(through) = response_head
                         && s.kind == "settings.update"

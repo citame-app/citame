@@ -21,6 +21,11 @@ pub(super) struct PolicyReview {
 }
 
 impl OfferReview {
+    pub(super) fn is_acceptance_retry(&self, action: &Action) -> bool {
+        matches!(action, Action::Accept(id, input)
+            if id == &self.entry.id && self.request.as_ref() == Some(input))
+    }
+
     pub(super) fn editable_intake(&mut self) -> Option<&mut Vec<IntakeDraft>> {
         self.request.is_none().then_some(&mut self.forms)
     }
@@ -85,12 +90,26 @@ impl Root {
     }
 
     fn load_waitlist_offer_requirements(&mut self, cx: &mut Context<Self>) {
+        if self.status.connectivity != Connectivity::Online {
+            return;
+        }
         let Some(transport) = self.svc.transport() else {
             return;
         };
         let Overlay::Waitlist(desk) = &mut self.overlay else {
             return;
         };
+        let Ok(scope) = self.svc.store.waitlist_cache_scope() else {
+            return;
+        };
+        if desk.cached {
+            return;
+        }
+        if !scope.permits_read() || Some(&scope) != desk.scope.as_ref() {
+            desk.reject_scope();
+            cx.notify();
+            return;
+        }
         let Some(review) = desk
             .offer_review
             .as_mut()
@@ -122,6 +141,11 @@ impl Root {
                     return;
                 };
                 desk.busy = false;
+                if this.svc.store.waitlist_cache_scope().ok().as_ref() != Some(&scope) {
+                    desk.reject_scope();
+                    cx.notify();
+                    return;
+                }
                 match result {
                     Ok((requirements, can_waive)) => {
                         if let Some(review) = &mut desk.offer_review {
@@ -527,7 +551,9 @@ pub(in crate::root) fn show_intake_test_offer(root: &mut Root, cx: &mut Context<
     root.overlay = Overlay::Waitlist(Box::new(Desk {
         active: true,
         page: 1,
+        scope: root.svc.store.waitlist_cache_scope().ok(),
         data: None,
+        saved_pages: vec![],
         busy: false,
         cached: false,
         error: None,
@@ -548,4 +574,48 @@ pub(in crate::root) fn show_intake_test_offer(root: &mut Root, cx: &mut Context<
             confirming_requeue: false,
         }),
     }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[gpui::test]
+    async fn an_uncertain_acceptance_can_retry_the_frozen_request_on_a_saved_page(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_dir, window) = super::super::super::tests::open(cx);
+        window
+            .update(cx, |root, _, cx| {
+                root.status.connectivity = Connectivity::Online;
+                show_intake_test_offer(root, cx);
+                let Overlay::Waitlist(desk) = &mut root.overlay else {
+                    panic!("missing waitlist");
+                };
+                desk.cached = true;
+                let review = desk.offer_review.as_mut().unwrap();
+                let input = review
+                    .entry
+                    .reviewed_acceptance(
+                        Utc::now(),
+                        false,
+                        "",
+                        "current".into(),
+                        IntakeSelection {
+                            saved: vec![],
+                            inline: vec![],
+                        },
+                    )
+                    .unwrap();
+                review.request = Some(input.clone());
+                let id = review.entry.id.clone();
+                let mut other = input;
+                other.idempotency_key.push_str("-other");
+                root.waitlist_request(Action::Accept(id, other), cx);
+                assert!(matches!(&root.overlay, Overlay::Waitlist(desk) if !desk.busy));
+                root.confirm_waitlist_offer(cx);
+                assert!(matches!(&root.overlay, Overlay::Waitlist(desk) if desk.busy));
+            })
+            .unwrap();
+    }
 }
