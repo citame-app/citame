@@ -80,12 +80,18 @@ export function ReportsView({
   role,
   now: fixedNow,
   showClients = false,
+  visible = true,
+  showBusinessOverview = false,
+  viewerId,
 }: {
   search: ReportsSearch;
   onSearchChange: (search: ReportsSearch) => void;
   role: UserRole;
   now?: Date;
   showClients?: boolean;
+  visible?: boolean;
+  showBusinessOverview?: boolean;
+  viewerId?: string;
 }) {
   const { t, locale, timeZone } = useI18n();
   const toast = useToast();
@@ -97,16 +103,20 @@ export function ReportsView({
   const staff = useQuery({ ...adminStaffQuery, enabled: role === "owner" });
   const scoped = { ...range, ...(search.staff ? { staffId: search.staff } : {}) };
   const query = useQuery({
-    ...reportQuery({
-      ...scoped,
-      currency: search.currency,
-    }),
-    enabled: problem === null && !showClients,
+    ...reportQuery(
+      {
+        ...scoped,
+        currency: search.currency,
+        businessOverview: showBusinessOverview && !showClients ? "1" : undefined,
+      },
+      viewerId,
+    ),
+    enabled: visible && problem === null && !showClients,
   });
   const clients = useQuery({
     queryKey: ["admin", "report", "clients", scoped],
     queryFn: () => api().admin.clientReport(scoped),
-    enabled: problem === null && showClients,
+    enabled: visible && problem === null && showClients,
   });
   const [topSort, setTopSort] = useState<SortingState>([{ id: "count", desc: true }]);
   const [staffSort, setStaffSort] = useState<SortingState>([{ id: "revenue", desc: true }]);
@@ -252,6 +262,30 @@ export function ReportsView({
           value: formatRate(totals.noShowRate, locale),
           hint: totals.noShowRate === null ? t("reports.tile.noShowRate.none") : undefined,
         },
+        ...(showBusinessOverview && report?.businessOverview
+          ? [
+              {
+                label: t("reports.overview.visitingClients"),
+                value: String(report.businessOverview.visitingClients),
+                hint: t("reports.overview.allServiceCurrencies"),
+              },
+              {
+                label: t("reports.overview.occupancy"),
+                value: formatRate(report.businessOverview.occupancyRate, locale),
+                hint: t("reports.overview.allServiceCurrencies"),
+              },
+              {
+                label: t("reports.overview.netCollections"),
+                value: formatMoney(report.businessOverview.netCollectedCents, "EUR", locale),
+                hint: t("reports.overview.moneyOnly"),
+              },
+              {
+                label: t("reports.overview.lowStock"),
+                value: String(report.businessOverview.lowStockProducts),
+                hint: t("reports.overview.centreStock"),
+              },
+            ]
+          : []),
       ]
     : [];
 

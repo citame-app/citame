@@ -2,13 +2,14 @@ import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { useQuery } from "@tanstack/react-query";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
-import { calendarQuery } from "~/lib/admin-queries";
+import { calendarQuery, reportQuery } from "~/lib/admin-queries";
 import { renderApp } from "../../../../test/render";
 import { CalendarLiveProvider } from "./live-provider";
 
 const staffId = "0198f5a0-7b1c-7000-8000-000000000201";
 const colleagueId = "0198f5a0-7b1c-7000-8000-000000000202";
 const date = { from: "2026-11-23T00:00:00.000Z", to: "2026-11-24T00:00:00.000Z" };
+const reportDates = { from: "2026-11-23", to: "2026-11-23" };
 const fetchBefore = globalThis.fetch;
 const eventSourceBefore = globalThis.EventSource;
 afterEach(() => {
@@ -39,6 +40,21 @@ function CalendarNavigation() {
   ) : (
     <button type="button" onClick={() => setOpened(true)}>
       Open calendar
+    </button>
+  );
+}
+
+function OverviewNavigation() {
+  const [opened, setOpened] = useState(false);
+  const query = useQuery({
+    ...reportQuery({ ...reportDates, businessOverview: "1" }),
+    enabled: opened,
+  });
+  return opened ? (
+    query.data && <p>Clients served: {query.data.businessOverview?.visitingClients}</p>
+  ) : (
+    <button type="button" onClick={() => setOpened(true)}>
+      Open overview
     </button>
   );
 }
@@ -119,6 +135,69 @@ test("a live appointment change replaces an in-flight first calendar load", asyn
     expect(calendarRequests).toBe(2);
   } finally {
     staleResponse.resolve(Response.json({}));
+    refresh.mockRestore();
+  }
+});
+
+test("a client merge replaces the in-flight first business overview load", async () => {
+  globalThis.EventSource = Stream as unknown as typeof EventSource;
+  const report = (visitingClients: number) => ({
+    ...reportDates,
+    timezone: "Europe/Madrid",
+    staffId: null,
+    totals: {
+      appointments: 2,
+      byStatus: { booked: 0, completed: 2, cancelled: 0, no_show: 0 },
+      revenueCents: 0,
+      noShowRate: 0,
+    },
+    series: [],
+    topServices: [],
+    perStaff: [],
+    businessOverview: {
+      visitingClients,
+      occupancyRate: null,
+      netCollectedCents: 0,
+      lowStockProducts: 0,
+    },
+  });
+  const staleResponse = Promise.withResolvers<Response>();
+  let firstSignal: AbortSignal | null | undefined;
+  const summary = mock(async (signal: AbortSignal | null | undefined) => {
+    if (summary.mock.calls.length === 1) {
+      firstSignal = signal;
+      return staleResponse.promise;
+    }
+    return Response.json(report(1));
+  });
+  globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes("/admin/reports/summary")) return summary(init?.signal);
+    return Response.json({
+      changes: [{ seq: 11, entity: "client", id: colleagueId, op: "delete", data: null }],
+      nextCursor: 11,
+      headSeq: 11,
+      hasMore: false,
+    });
+  }) as unknown as typeof fetch;
+  const view = renderApp(
+    <CalendarLiveProvider>
+      <OverviewNavigation />
+    </CalendarLiveProvider>,
+  );
+  const refresh = spyOn(view.queryClient, "invalidateQueries");
+  try {
+    act(() => Stream.instance.send(10));
+    await waitFor(() => expect(refresh).toHaveBeenCalledWith({ queryKey: ["admin", "report"] }));
+    fireEvent.click(screen.getByRole("button", { name: "Open overview" }));
+    expect(summary).toHaveBeenCalledTimes(1);
+    act(() => Stream.instance.send(11));
+    expect(await screen.findByText("Clients served: 1")).toBeVisible();
+    expect(firstSignal?.aborted).toBe(true);
+    expect(summary).toHaveBeenCalledTimes(2);
+    await act(async () => staleResponse.resolve(Response.json(report(2))));
+    expect(screen.queryByText("Clients served: 2")).toBeNull();
+  } finally {
+    staleResponse.resolve(Response.json(report(2)));
     refresh.mockRestore();
   }
 });

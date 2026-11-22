@@ -47,8 +47,7 @@ const shared: Record<SyncEntity | SyncLiveView, readonly (readonly string[])[]> 
     ["admin", "clients"],
     ["admin", "client"],
     ["admin", "calendar"],
-    ["admin", "report", "outcomes"],
-    ["admin", "report", "clients"],
+    report,
     ["waitlist"],
   ],
   service: [

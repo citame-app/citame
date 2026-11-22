@@ -4,7 +4,7 @@ import { and, count, sql } from "drizzle-orm";
 import { requirePermission } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import { streamCsv } from "../../csv";
-import { type ProductRow, productFilter, productOrder } from "./service";
+import { lowStockPredicate, type ProductRow, productFilter, productOrder } from "./service";
 
 export async function inventoryReport(db: Database, filters: ProductFilters, principal: Principal) {
   requirePermission(principal, "readInventory");
@@ -14,10 +14,7 @@ export async function inventoryReport(db: Database, filters: ProductFilters, pri
       products: count(),
       onHand: sql`coalesce(sum(${retailProduct.stockOnHand}), 0)`.mapWith(Number),
       reserved: sql`coalesce(sum(${retailProduct.stockReserved}), 0)`.mapWith(Number),
-      lowStockProducts: sql`count(*) filter (
-        where ${retailProduct.stockOnHand} - ${retailProduct.stockReserved}
-          <= ${retailProduct.lowStockThreshold}
-      )`.mapWith(Number),
+      lowStockProducts: sql`count(*) filter (where ${lowStockPredicate})`.mapWith(Number),
       ...(readCosts
         ? {
             knownCostCents: sql<string>`coalesce(sum(${retailProduct.stockOnHand}::numeric

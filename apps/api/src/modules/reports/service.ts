@@ -12,6 +12,7 @@ import { confirmedBookingPromotionJoin } from "../rewards/booking-attribution";
 import { getSalonSettings } from "../settings/service";
 import { requireStaff } from "../staff/admin";
 import { buildReportSummary, type DayStaffStatusRow, type ServiceRow } from "./aggregate";
+import { reportBusinessOverview } from "./business-overview";
 import { reportStaffOccupancy } from "./occupancy";
 
 type BucketRow = {
@@ -47,8 +48,12 @@ type BreakdownBucketRow = {
  * decides which local day an instant belongs to (`starts_at AT TIME ZONE <salon timezone>`);
  * the JavaScript side only sums and ranks the buckets (see `aggregate.ts`).
  */
-export async function reportSummary(db: Database, query: ReportQuery): Promise<ReportSummary> {
-  return db.transaction((tx) => reportSummarySnapshot(tx, query), {
+export async function reportSummary(
+  db: Database,
+  query: ReportQuery,
+  includeBusinessOverview = false,
+): Promise<ReportSummary> {
+  return db.transaction((tx) => reportSummarySnapshot(tx, query, includeBusinessOverview), {
     isolationLevel: "repeatable read",
     accessMode: "read only",
   });
@@ -82,7 +87,11 @@ export async function reportScope(db: Database | Tx, query: ReportQuery) {
   return { timezone, fromAt, toAt, onlyStaff, currency, currencies, currencyAppointments };
 }
 
-async function reportSummarySnapshot(db: Tx, query: ReportQuery): Promise<ReportSummary> {
+async function reportSummarySnapshot(
+  db: Tx,
+  query: ReportQuery,
+  includeBusinessOverview: boolean,
+): Promise<ReportSummary> {
   const { timezone, fromAt, toAt, onlyStaff, currency, currencies, currencyAppointments } =
     await reportScope(db, query);
   const knownPrice = sql`case
@@ -228,21 +237,30 @@ async function reportSummarySnapshot(db: Tx, query: ReportQuery): Promise<Report
     serviceRows,
     staff,
   });
-  const occupancy = await reportStaffOccupancy(
-    db,
-    staff.map(({ id }) => id),
-    query,
-    {
-      timezone,
-      fromAt,
-      toAt,
-    },
-  );
+  const [occupancy, businessOverview] = await Promise.all([
+    reportStaffOccupancy(
+      db,
+      staff.map(({ id }) => id),
+      query,
+      { timezone, fromAt, toAt },
+    ),
+    includeBusinessOverview
+      ? reportBusinessOverview(db, { fromAt, toAt, onlyStaff, staffId: query.staffId })
+      : undefined,
+  ]);
   return {
     ...summary,
+    ...(businessOverview
+      ? {
+          businessOverview: {
+            ...businessOverview,
+            occupancyRate: occupancy.rate,
+          },
+        }
+      : {}),
     perStaff: summary.perStaff.map((member) => ({
       ...member,
-      occupancy: occupancy.get(member.staffId),
+      occupancy: occupancy.byStaff.get(member.staffId),
     })),
     currency,
     currencies,

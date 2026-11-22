@@ -187,6 +187,7 @@ test("a marker-only page refreshes cash even without replica rows", async () => 
   await waitFor(() => expect(h.onChanges).toHaveBeenCalledWith([], ["commerce"]));
   expect([...liveQueryKeys(["commerce"])]).toContainEqual(["commerce"]);
   expect([...liveQueryKeys(["client"])]).toContainEqual(["admin", "clients"]);
+  expect([...liveQueryKeys(["client"])]).toContainEqual(["admin", "report"]);
   h.send(11);
   expect(pull).toHaveBeenCalledTimes(1);
 });

@@ -1,10 +1,17 @@
 import { type SQL, sql } from "drizzle-orm";
-import { completedRefundStatus, recordedPaymentStatuses } from "./money";
+import { completedRefundStatus, recordedPaymentStatuses, storedValuePaymentMethods } from "./money";
 
 const paymentStatuses = sql.join(
   recordedPaymentStatuses.map((status) => sql`${status}`),
   sql`, `,
 );
+
+const storedValueMethods = sql.join(
+  storedValuePaymentMethods.map((method) => sql`${method}`),
+  sql`, `,
+);
+export const externallyCollectedMovement = sql`method not in (${storedValueMethods})`;
+export const netMovement = sql`sum(case when refund then -amount else amount end)`;
 
 /** Each report joins the receipt as c. Filter by its attributed professional and client identity. */
 export function checkoutReportScope(staffId?: string, clientId?: string) {

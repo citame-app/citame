@@ -153,6 +153,9 @@ function classificationFilter(kind: "category" | "brand", id: string) {
   );
 }
 
+export const lowStockPredicate = sql`${retailProduct.stockOnHand} - ${retailProduct.stockReserved}
+  <= ${retailProduct.lowStockThreshold}`;
+
 export function productFilter(query: ProductFilters) {
   const escaped = query.search.replace(/[\\%_]/g, "\\$&");
   return and(
@@ -170,9 +173,7 @@ export function productFilter(query: ProductFilters) {
           eq(retailProduct.barcode, query.search),
         )
       : undefined,
-    query.lowStock
-      ? sql`${retailProduct.stockOnHand} - ${retailProduct.stockReserved} <= ${retailProduct.lowStockThreshold}`
-      : undefined,
+    query.lowStock ? lowStockPredicate : undefined,
   );
 }
 

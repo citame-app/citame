@@ -1,4 +1,4 @@
-import { permissionsFor } from "@sob/contracts";
+import { canViewBusinessOverview, permissionsFor } from "@sob/contracts";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { PageHeading } from "~/components/pages";
@@ -126,6 +126,9 @@ function ReportsPage() {
           }
           role={all ? "owner" : session.user.role}
           showClients={section === "clients" && permissions.financialReports}
+          visible={section === "overview" || section === "clients"}
+          showBusinessOverview={canViewBusinessOverview(permissions)}
+          viewerId={session.user.id}
         />
       </div>
       {(section === "financial" || visited.has("financial")) && permissions.financialReports && (

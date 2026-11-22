@@ -113,6 +113,17 @@ pub(super) struct Desk {
     outcomes: outcomes::Desk,
 }
 
+fn occupancy_label(rate: Option<f64>) -> String {
+    rate.map_or_else(
+        || "—".to_string(),
+        |rate| {
+            // The API returns four decimal places. Round the integer basis points at the display boundary.
+            let basis_points = (rate * 10_000.).round() as u32;
+            format!("{}%", (basis_points + 50) / 100)
+        },
+    )
+}
+
 pub(super) fn parse_report_date(value: &str) -> Option<NaiveDate> {
     let input = value.trim();
     let date = NaiveDate::parse_from_str(input, "%Y-%m-%d").ok()?;
@@ -300,7 +311,10 @@ impl Root {
                         ReportMode::Profitability => transport
                             .appointment_profitability(&query, client_id.as_deref(), page, reviewed)
                             .map(ReportData::Profitability),
-                        ReportMode::Overview | ReportMode::Outcome(_) => transport
+                        ReportMode::Overview => transport
+                            .report_summary_with_overview(&query)
+                            .map(|summary| ReportData::Summary(Box::new(summary))),
+                        ReportMode::Outcome(_) => transport
                             .report_summary(&query)
                             .map(|summary| ReportData::Summary(Box::new(summary))),
                     }
@@ -863,31 +877,62 @@ impl Root {
                 .collect(),
             None => Vec::new(),
         };
+        let mut metrics = vec![
+            (
+                Key::ReportAppointments,
+                report.totals.appointments.to_string(),
+                None,
+            ),
+            (
+                Key::ReportCompleted,
+                report.totals.by_status.completed.to_string(),
+                None,
+            ),
+            (
+                Key::ReportNoShow,
+                report.totals.by_status.no_show.to_string(),
+                None,
+            ),
+            (
+                Key::ReportRevenue,
+                self.report_amount(report.totals.revenue_cents, currency),
+                None,
+            ),
+        ];
+        if let Some(overview) = &report.business_overview {
+            metrics.extend([
+                (
+                    Key::ReportVisitingClients,
+                    overview.visiting_clients.to_string(),
+                    Some(Key::ReportAllServiceCurrencies),
+                ),
+                (
+                    Key::ReportOverviewOccupancy,
+                    occupancy_label(overview.occupancy_rate),
+                    Some(Key::ReportAllServiceCurrencies),
+                ),
+                (
+                    Key::ReportOverviewNetCollections,
+                    self.amount_label(overview.net_collected_cents, "EUR"),
+                    Some(Key::ReportRecordedNet),
+                ),
+                (
+                    Key::ReportOverviewLowStock,
+                    overview.low_stock_products.to_string(),
+                    Some(Key::ReportCentreStock),
+                ),
+            ]);
+        }
         div()
             .flex()
             .flex_col()
             .gap_3()
             .child(
-                div().flex().flex_wrap().gap_2().children(
-                    [
-                        (
-                            Key::ReportAppointments,
-                            report.totals.appointments.to_string(),
-                        ),
-                        (
-                            Key::ReportCompleted,
-                            report.totals.by_status.completed.to_string(),
-                        ),
-                        (
-                            Key::ReportNoShow,
-                            report.totals.by_status.no_show.to_string(),
-                        ),
-                        (
-                            Key::ReportRevenue,
-                            self.report_amount(report.totals.revenue_cents, currency),
-                        ),
-                    ]
-                    .map(|(key, value)| {
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .children(metrics.into_iter().map(|(key, value, hint)| {
                         div()
                             .flex_1()
                             .min_w(px(120.))
@@ -907,8 +952,15 @@ impl Root {
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(value),
                             )
-                    }),
-                ),
+                            .when_some(hint, |tile, hint| {
+                                tile.child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(theme::muted())
+                                        .child(self.t(hint)),
+                                )
+                            })
+                    })),
             )
             .when(report.totals.unpriced_services > 0, |view| {
                 view.child(
@@ -997,10 +1049,7 @@ impl Root {
         let rows: Vec<_> = staff
             .filter_map(|entry| {
                 let occupancy = entry.occupancy.as_ref()?;
-                let rate = occupancy.occupancy_rate.map_or_else(
-                    || "—".to_string(),
-                    |rate| format!("{}%", (rate * 100.).round()),
-                );
+                let rate = occupancy_label(occupancy.occupancy_rate);
                 Some(report_table_row(
                     entry.display_name.clone(),
                     occupancy.minutes().map(|value| value.to_string()),
@@ -1162,6 +1211,22 @@ fn report_date_field(date: &str, cx: &mut Context<TextField>) -> TextField {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+
+    #[test]
+    fn occupancy_rounds_the_server_rate_to_the_nearest_percent() {
+        for (rate, expected) in [
+            (None, "—"),
+            (Some(0.), "0%"),
+            (Some(0.1449), "14%"),
+            (Some(0.145), "15%"),
+            (Some(0.285), "29%"),
+            (Some(0.565), "57%"),
+            (Some(0.575), "58%"),
+            (Some(1.), "100%"),
+        ] {
+            assert_eq!(occupancy_label(rate), expected);
+        }
+    }
 
     #[gpui::test]
     async fn an_empty_report_exposes_capacity_and_csv_only_if_there_are_scheduled_minutes(

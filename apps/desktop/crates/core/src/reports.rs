@@ -204,7 +204,17 @@ pub struct AppointmentBreakdown {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct BusinessOverview {
+    pub visiting_clients: u64,
+    pub occupancy_rate: Option<f64>,
+    pub net_collected_cents: i64,
+    pub low_stock_products: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReportSummary {
+    pub business_overview: Option<BusinessOverview>,
     pub from: NaiveDate,
     pub to: NaiveDate,
     pub currency: Option<String>,

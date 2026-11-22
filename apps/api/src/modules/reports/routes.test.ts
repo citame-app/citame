@@ -275,6 +275,42 @@ test("ranks clients by net recorded collections in the salon period and staff sc
     expect.objectContaining({ clientId: f.clientId, netCents: 8000 }),
   ]);
   expect((await call(ana, path)).status).toBe(403);
+
+  for (const [sku, openingStock] of [
+    ["SUMMARY-LOW", 2],
+    ["SUMMARY-WELL-STOCKED", 7],
+  ] as const) {
+    const product = await json(
+      t.app,
+      "/admin/inventory/products",
+      "POST",
+      {
+        name: sku,
+        sku,
+        priceCents: 2000,
+        openingStock,
+        lowStockThreshold: 2,
+        idempotencyKey: crypto.randomUUID(),
+      },
+      owner.cookie,
+    );
+    expect(product.status).toBe(201);
+  }
+  const clients = reportClientsSchema.parse(await (await call(owner, path)).json());
+  const all = await summary(owner, `${RANGE}&businessOverview=1`);
+  expect(all.businessOverview).toMatchObject({
+    visitingClients: clients.totals.newClients + clients.totals.returningClients,
+    netCollectedCents: 39000,
+    lowStockProducts: 1,
+  });
+  const filtered = await summary(owner, `${RANGE}&staffId=${f.anaId}&businessOverview=1`);
+  expect(filtered.businessOverview).toMatchObject({
+    netCollectedCents: 36000,
+    lowStockProducts: 1,
+    occupancyRate: filtered.perStaff[0]?.occupancy?.occupancyRate,
+  });
+  expect((await summary(ana, `${RANGE}&businessOverview=1`)).businessOverview).toBeUndefined();
+  expect((await summary(owner, RANGE)).businessOverview).toBeUndefined();
 });
 
 test("completed imported services contribute their reviewed price to every report breakdown", async () => {
