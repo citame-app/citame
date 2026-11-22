@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { fileURLToPath } from "node:url";
 import { meResponseSchema } from "@sob/contracts";
 import { account, appointment, auditLog, clientProfile, staffProfile, user } from "@sob/db";
 import { eq, sql } from "drizzle-orm";
@@ -254,6 +255,35 @@ describe("assignRole", () => {
 
 describe("bootstrapOwner", () => {
   const input = { email: "owner@example.com", password: PASSWORD, name: "Owner" };
+
+  test("the idempotent CLI finishes authentication initialization before closing its database", async () => {
+    await bootstrapOwner(deps, input);
+    const script = fileURLToPath(new URL("../scripts/bootstrap-owner.ts", import.meta.url));
+    const child = Bun.spawn([process.execPath, "--no-env-file", script], {
+      env: {
+        PATH: process.env.PATH,
+        DATABASE_URL: t.url,
+        VALKEY_URL: process.env.VALKEY_URL,
+        VALKEY_KEY_PREFIX: t.valkey.prefix,
+        BETTER_AUTH_SECRET: t.config.auth.secret,
+        OWNER_EMAIL: input.email,
+        OWNER_PASSWORD: input.password,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+      signal: AbortSignal.timeout(5000),
+    });
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    expect({ code, stdout, stderr }).toEqual({
+      code: 0,
+      stdout: `Owner account for ${input.email} already exists; nothing changed.\n`,
+      stderr: "",
+    });
+  });
 
   test("creates the first owner exactly once; running it again changes nothing", async () => {
     const first = await bootstrapOwner(deps, input);
