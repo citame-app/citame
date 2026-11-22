@@ -52,6 +52,7 @@ enum Group {
     Service,
     Category,
     Addon,
+    Promotion,
     Staff,
 }
 
@@ -63,6 +64,7 @@ impl Group {
             Self::Service => Key::ReportService,
             Self::Category => Key::ReportCategory,
             Self::Addon => Key::ReportAddon,
+            Self::Promotion => Key::ReportBookingPromotion,
             Self::Staff => Key::ReportStaff,
         }
     }
@@ -687,21 +689,17 @@ impl Root {
         report: &ReportSummary,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        let groups: &[Group] = if report.appointment_breakdown.is_some() {
-            &[
-                Group::Day,
-                Group::Hour,
-                Group::Service,
-                Group::Category,
-                Group::Addon,
-                Group::Staff,
-            ]
-        } else {
-            &[Group::Day, Group::Staff]
-        };
+        let mut groups = vec![Group::Day];
+        if report.appointment_breakdown.is_some() {
+            groups.extend([Group::Hour, Group::Service, Group::Category, Group::Addon]);
+            if report.promotion_breakdown.is_some() {
+                groups.push(Group::Promotion);
+            }
+        }
+        groups.push(Group::Staff);
         let has_appointments = report.totals.appointments > 0;
         let has_occupancy = report.has_occupancy_minutes();
-        let group = if has_appointments {
+        let group = if has_appointments && groups.contains(&desk.group) {
             desk.group
         } else {
             Group::Staff
@@ -715,6 +713,7 @@ impl Root {
                 Group::Service => breakdown.service.as_slice(),
                 Group::Category => breakdown.category.as_slice(),
                 Group::Addon => breakdown.addon.as_slice(),
+                Group::Promotion => report.promotion_breakdown.as_deref().unwrap_or_default(),
                 Group::Day | Group::Staff => &[],
             });
         let total = match group {

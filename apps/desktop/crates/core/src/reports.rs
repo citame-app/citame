@@ -195,6 +195,7 @@ pub struct ReportSummary {
     pub per_staff: Vec<StaffReport>,
     pub top_services: Vec<TopService>,
     pub appointment_breakdown: Option<AppointmentBreakdown>,
+    pub promotion_breakdown: Option<Vec<BreakdownRow>>,
     #[serde(default)]
     pub can_report_clients: bool,
 }
@@ -470,10 +471,14 @@ impl ReportSummary {
             output.push_str("\r\n");
             csv_row(&mut output, ["group", "label"].into_iter().chain(COUNTS));
             for (kind, rows) in [
-                ("hour", &breakdown.hour),
-                ("service", &breakdown.service),
-                ("category", &breakdown.category),
-                ("addon", &breakdown.addon),
+                ("hour", breakdown.hour.as_slice()),
+                ("service", breakdown.service.as_slice()),
+                ("category", breakdown.category.as_slice()),
+                ("addon", breakdown.addon.as_slice()),
+                (
+                    "promotion",
+                    self.promotion_breakdown.as_deref().unwrap_or_default(),
+                ),
             ] {
                 for row in rows {
                     csv_row(
@@ -486,5 +491,40 @@ impl ReportSummary {
             }
         }
         output
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exports_booking_promotion_outcomes_and_accepts_older_reports() {
+        let mut response = serde_json::json!({
+            "from": "2026-03-09",
+            "to": "2026-03-09",
+            "totals": {
+                "appointments": 3,
+                "byStatus": {"booked": 0, "completed": 2, "cancelled": 0, "no_show": 1},
+                "revenueCents": 0
+            },
+            "series": [],
+            "perStaff": [],
+            "topServices": [],
+            "appointmentBreakdown": {"hour": [], "service": [], "category": [], "addon": []}
+        });
+        let older: ReportSummary = serde_json::from_value(response.clone()).unwrap();
+        assert!(older.promotion_breakdown.is_none());
+        response["promotionBreakdown"] = serde_json::json!([{
+            "label": "March offer (MARCH10)",
+            "appointments": 3,
+            "byStatus": {"booked": 0, "completed": 2, "cancelled": 0, "no_show": 1}
+        }]);
+        let report: ReportSummary = serde_json::from_value(response).unwrap();
+        assert!(
+            report
+                .to_csv()
+                .contains("promotion,March offer (MARCH10),3,0,2,0,1\r\n")
+        );
     }
 }

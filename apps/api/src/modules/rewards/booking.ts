@@ -117,6 +117,8 @@ export async function quoteBookingPromotion(
     accessMode: "read only",
   });
 }
+export const BOOKING_PROMOTION_KEY_PREFIX = "booking-promotion-";
+
 /** Called within creation, after client/calendar locks; every write rolls back with the visit. */
 export async function applyBookingPromotion(
   tx: Tx,
@@ -162,6 +164,7 @@ export async function applyBookingPromotion(
       "booking_promotion_changed",
       "Booking promotion terms changed; review the current offer",
     );
+  const idempotencyKey = `${BOOKING_PROMOTION_KEY_PREFIX}${booking.id}`;
   const sale = await createCheckoutInTransaction(
     tx,
     {
@@ -170,7 +173,7 @@ export async function applyBookingPromotion(
       lines: [],
       discountCents: 0,
       tipCents: 0,
-      idempotencyKey: `booking-promotion-${booking.id}`,
+      idempotencyKey,
     },
     p,
   );
@@ -183,7 +186,7 @@ export async function applyBookingPromotion(
       expectedPromotionVersion: quote.promotionVersion,
       expectedTotalCents: quote.currentTotalCents,
       expectedDiscountCents: quote.discountCents,
-      idempotencyKey: `booking-promotion-${booking.id}`,
+      idempotencyKey,
     },
     p,
     now,

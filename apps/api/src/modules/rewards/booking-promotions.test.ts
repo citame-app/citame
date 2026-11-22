@@ -111,6 +111,70 @@ test("the booking review quotes its own current offer and creates one server-pri
   expect((await call(client, "/appointments", "POST", input)).status).toBe(201);
   expect(await t.db.select().from(appointment)).toHaveLength(1);
 });
+test("appointment reports preserve the offer used at booking and count the visit by current status", async () => {
+  const promotion = await offer();
+  const input = request((await quote()).reviewHash);
+  expect((await call(client, "/appointments", "POST", input)).status).toBe(201);
+
+  const renamed = await call(owner, `/admin/rewards/promotions/${promotion.id}`, "PUT", {
+    ...terms,
+    name: "Renamed offer",
+    code: "NEW10",
+    version: promotion.version,
+  });
+  expect(renamed.status).toBe(200);
+
+  const report = async (query: string) => {
+    const response = await call(owner, `/admin/reports/summary?${query}`);
+    expect(response.status).toBe(200);
+    return response.json();
+  };
+  const range = "from=2026-03-09&to=2026-03-09";
+  const row = { label: "Fixture booking offer (BOOKING10)", appointments: 1 };
+  expect(await report(range)).toMatchObject({
+    promotionBreakdown: [{ ...row, byStatus: { booked: 1 } }],
+  });
+  expect(await report(`${range}&staffId=${f.beaId}`)).toMatchObject({ promotionBreakdown: [] });
+  expect(await report(`${range}&currency=USD`)).toMatchObject({ promotionBreakdown: [] });
+  expect(await report("from=2026-03-10&to=2026-03-10")).toMatchObject({ promotionBreakdown: [] });
+
+  const cancellation = await call(client, `/appointments/${input.id}`, "PATCH", {
+    version: 1,
+    status: "cancelled",
+  });
+  expect(cancellation.status).toBe(200);
+  expect((await t.db.select().from(checkoutReward))[0]?.state).toBe("released");
+  expect(await report(range)).toMatchObject({
+    promotionBreakdown: [{ ...row, byStatus: { booked: 0, cancelled: 1 } }],
+  });
+});
+
+test("a promotion applied at checkout cannot appear as an offer accepted at booking", async () => {
+  const { version } = await offer();
+  const id = crypto.randomUUID();
+  const { code, ...booking } = selection;
+  expect((await call(client, "/appointments", "POST", { ...booking, id })).status).toBe(201);
+  const idempotencyKey = `booking-promotion-${id}`;
+  const sale = await call(client, "/me/checkouts", "POST", {
+    appointmentId: id,
+    currency: "EUR",
+    lines: [],
+    idempotencyKey,
+  });
+  expect(sale.status, await sale.clone().text()).toBe(201);
+  const { id: saleId } = await sale.json();
+  const applied = await call(client, `/me/checkouts/${saleId}/reward`, "POST", {
+    kind: "promotion",
+    code,
+    expectedTotalCents: 10000,
+    expectedDiscountCents: 1000,
+    expectedPromotionVersion: version,
+    idempotencyKey,
+  });
+  expect(applied.status, await applied.clone().text()).toBe(200);
+  const report = await call(owner, "/admin/reports/summary?from=2026-03-09&to=2026-03-09");
+  expect(await report.json()).toMatchObject({ promotionBreakdown: [] });
+});
 test("changing offer terms invalidates the booking review without leaving a visit or consuming quota", async () => {
   const p = await offer();
   const q = await quote();
