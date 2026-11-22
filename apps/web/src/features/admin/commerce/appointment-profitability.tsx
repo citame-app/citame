@@ -4,10 +4,12 @@ import { useState } from "react";
 import { Button } from "~/components/ui/button";
 import { TextField } from "~/components/ui/field";
 import { ErrorState, Skeleton } from "~/components/ui/states";
+import { useToast } from "~/components/ui/toast";
 import { useI18n } from "~/i18n/react";
 import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { formatDateWithYear, formatMoney, formatTime, localDateOf } from "~/lib/format";
+import { UnsavedGuard } from "../unsaved-guard";
 import { BreakdownPager, FinancialBreakdown, type Heading } from "./financial-breakdowns";
 import { centsInput, inputCents } from "./money";
 
@@ -16,18 +18,34 @@ const queryScope = ["accounting", "appointment-profitability"] as const;
 export function AppointmentProfitability({
   range,
   headingLevel,
+  paging,
 }: {
   range: SalesReportQuery;
   headingLevel: Heading;
+  paging?: { page: number; setPage: (page: number) => void };
 }) {
   const { t } = useI18n();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState((paging?.page ?? 1) > 1);
+  const [editing, setEditing] = useState(false);
   return (
     <section className="space-y-3">
-      <Button type="button" variant="secondary" aria-expanded={open} onClick={() => setOpen(!open)}>
+      <Button
+        type="button"
+        variant="secondary"
+        aria-expanded={open}
+        disabled={editing}
+        onClick={() => setOpen(!open)}
+      >
         {t("accounting.profitability.title")}
       </Button>
-      {open && <ProfitabilityRows range={range} headingLevel={headingLevel} />}
+      {open && (
+        <ProfitabilityRows
+          range={range}
+          headingLevel={headingLevel}
+          paging={paging}
+          setEditing={setEditing}
+        />
+      )}
     </section>
   );
 }
@@ -35,12 +53,18 @@ export function AppointmentProfitability({
 function ProfitabilityRows({
   range,
   headingLevel,
+  paging,
+  setEditing,
 }: {
   range: SalesReportQuery;
   headingLevel: Heading;
+  paging?: { page: number; setPage: (page: number) => void };
+  setEditing: (editing: boolean) => void;
 }) {
   const { t, locale } = useI18n();
-  const [page, setPage] = useState(1);
+  const [localPage, setLocalPage] = useState(1);
+  const page = paging?.page ?? localPage;
+  const setPage = paging?.setPage ?? setLocalPage;
   const [reviewed, setReviewed] = useState<{
     row: AppointmentProfitabilityRow;
     generation: string;
@@ -48,6 +72,17 @@ function ProfitabilityRows({
   const report = useQuery({
     queryKey: [...queryScope, range, page],
     queryFn: () => api().accounting.appointmentProfitability({ ...range, page }),
+    refetchInterval: 30_000,
+  });
+  const review = useQuery({
+    queryKey: [...queryScope, range, "review", reviewed?.row.appointmentId],
+    queryFn: () =>
+      api().accounting.appointmentProfitability({
+        ...range,
+        page: 1,
+        reviewAppointmentId: reviewed?.row.appointmentId,
+      }),
+    enabled: reviewed !== null,
     refetchInterval: 30_000,
   });
   if (report.isPending) return <Skeleton className="h-32" />;
@@ -60,24 +95,31 @@ function ProfitabilityRows({
   const params = new URLSearchParams({ from: range.from, to: range.to });
   if (range.staffId) params.set("staffId", range.staffId);
   if (range.clientId) params.set("clientId", range.clientId);
-  const quoteLabel = (row: AppointmentProfitabilityRow) => {
+  const appointmentLabel = (row: AppointmentProfitabilityRow) => {
     const date = formatDateWithYear(localDateOf(row.startsAt, timezone), locale);
     const time = formatTime(row.startsAt, timezone, locale);
-    return [date, time, row.staffName].filter(Boolean).join(" · ");
+    return [[date, time].join(" "), row.staffName, row.checkoutId.slice(-8)]
+      .filter(Boolean)
+      .join(" · ");
   };
   return (
     <>
       {report.isError && <ErrorState error={report.error} onRetry={() => void report.refetch()} />}
+      {review.isError && <ErrorState error={review.error} onRetry={() => void review.refetch()} />}
       {reviewed && (
         <CostEditor
           key={reviewed.row.appointmentId}
           initial={reviewed.row}
           initialGeneration={reviewed.generation}
-          latestGeneration={generation}
-          latest={rows.find((row) => row.appointmentId === reviewed.row.appointmentId)}
-          title={quoteLabel(reviewed.row)}
-          reload={() => void report.refetch()}
-          close={() => setReviewed(null)}
+          latestGeneration={review.data?.generation ?? reviewed.generation}
+          latest={review.isError ? undefined : (review.data?.reviewed ?? undefined)}
+          missing={review.data?.reviewed === null}
+          title={appointmentLabel(reviewed.row)}
+          reload={() => void review.refetch()}
+          close={() => {
+            setReviewed(null);
+            setEditing(false);
+          }}
         />
       )}
       <FinancialBreakdown
@@ -108,7 +150,7 @@ function ProfitabilityRows({
         }
         rows={rows.map((row) => ({
           key: row.checkoutId,
-          label: quoteLabel(row),
+          label: appointmentLabel(row),
           values: [
             displayMoney(row.netSalesCents),
             row.unknownProductLines
@@ -129,7 +171,10 @@ function ProfitabilityRows({
               type="button"
               variant="ghost"
               disabled={reviewed !== null || report.isError}
-              onClick={() => setReviewed({ row, generation })}
+              onClick={() => {
+                setReviewed({ row, generation });
+                setEditing(true);
+              }}
             >
               {t("accounting.profitability.edit")}
             </Button>
@@ -153,6 +198,7 @@ function CostEditor({
   initialGeneration,
   latestGeneration,
   latest,
+  missing,
   title,
   reload,
   close,
@@ -161,18 +207,21 @@ function CostEditor({
   initialGeneration: string;
   latestGeneration: string;
   latest: AppointmentProfitabilityRow | undefined;
+  missing: boolean;
   title: string;
   reload: () => void;
   close: () => void;
 }) {
   const { t, locale } = useI18n();
   const queryClient = useQueryClient();
-  const initialValue = (value: number | null | undefined) =>
-    value == null ? "" : centsInput(value);
-  const [labour, setLabour] = useState(() => initialValue(initial.directCosts?.labourCents));
-  const [materials, setMaterials] = useState(() =>
-    initialValue(initial.directCosts?.materialsCents),
-  );
+  const toast = useToast();
+  const inputValue = (value: number | null | undefined) => (value == null ? "" : centsInput(value));
+  const [baseline, setBaseline] = useState(() => ({
+    labour: inputValue(initial.directCosts?.labourCents),
+    materials: inputValue(initial.directCosts?.materialsCents),
+  }));
+  const [labour, setLabour] = useState(baseline.labour);
+  const [materials, setMaterials] = useState(baseline.materials);
   const [version, setVersion] = useState(initial.directCosts?.version ?? null);
   const [generation, setGeneration] = useState(initialGeneration);
   const stale =
@@ -188,6 +237,7 @@ function CostEditor({
       }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryScope });
+      toast.success(t("accounting.profitability.saved"));
       close();
     },
   });
@@ -204,7 +254,11 @@ function CostEditor({
         if (valid && latest && !stale && !save.isPending) save.mutate();
       }}
     >
+      <UnsavedGuard
+        dirty={(labour !== baseline.labour || materials !== baseline.materials) && !save.isSuccess}
+      />
       <p className="font-semibold">{title}</p>
+      {missing && <p role="status">{t("accounting.profitability.notInScope")}</p>}
       <p className="text-sm text-muted">{t("accounting.profitability.costHelp")}</p>
       <div className="grid gap-3 sm:grid-cols-2">
         <TextField
@@ -232,6 +286,13 @@ function CostEditor({
             type="button"
             variant="secondary"
             onClick={() => {
+              const current = {
+                labour: inputValue(latest.directCosts?.labourCents),
+                materials: inputValue(latest.directCosts?.materialsCents),
+              };
+              if (labour === baseline.labour) setLabour(current.labour);
+              if (materials === baseline.materials) setMaterials(current.materials);
+              setBaseline(current);
               setVersion(latest.directCosts?.version ?? null);
               setGeneration(latestGeneration);
               save.reset();

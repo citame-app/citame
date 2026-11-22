@@ -4830,7 +4830,7 @@ fn native_reviews_appointment_costs_and_exports_margin_through_the_proxy() {
     let read = || {
         device
             .transport
-            .appointment_profitability(&query, Some(&booking.client_id), 1)
+            .appointment_profitability(&query, Some(&booking.client_id), 1, None)
             .unwrap()
     };
     let unreviewed = read();

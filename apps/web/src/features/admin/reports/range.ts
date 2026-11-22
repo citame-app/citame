@@ -12,6 +12,7 @@ export interface ReportsSearch {
   currency?: string;
   client?: string;
   section?: ReportSection;
+  marginPage?: number;
 }
 
 export function validateReportsSearch(raw: Record<string, unknown>): ReportsSearch {
@@ -22,8 +23,12 @@ export function validateReportsSearch(raw: Record<string, unknown>): ReportsSear
   const staff = idSchema.safeParse(raw.staff);
   const client = idSchema.safeParse(raw.client);
   const section = reportSections.find((value) => value === raw.section);
+  const marginPage = typeof raw.marginPage === "number" ? raw.marginPage : 0;
   return {
     preset,
+    ...(Number.isInteger(marginPage) && marginPage > 1 && marginPage <= 100000
+      ? { marginPage }
+      : {}),
     ...(preset === "custom" && from.success ? { from: from.data } : {}),
     ...(preset === "custom" && to.success ? { to: to.data } : {}),
     ...(staff.success ? { staff: staff.data } : {}),

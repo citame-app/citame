@@ -455,8 +455,19 @@ for (const scheme of ["light", "dark"] as const)
         await expect(margins.getByText("Costs pending", { exact: true })).toBeVisible();
         await margins.getByRole("button", { name: "Review costs" }).click();
         await page.getByRole("textbox", { name: "Labour (EUR)", exact: true }).fill("20");
-        await page.getByRole("textbox", { name: "Materials (EUR)", exact: true }).fill("25");
-        await page.getByRole("button", { name: "Save reviewed costs" }).click();
+        const saveCosts = page.getByRole("button", { name: "Save reviewed costs" });
+        await expect(saveCosts).toBeEnabled();
+        const marginPath = `/api/admin/accounting/appointment-profitability?from=${paymentDate}&to=${paymentDate}`;
+        const { generation } = await (await owner.get(marginPath)).json();
+        const costsPath = `/api/admin/accounting/appointment-profitability/${forecastVisit.id}/costs`;
+        const concurrentCosts = await owner.put(costsPath, {
+          data: { generation, version: null, labourCents: null, materialsCents: 2500 },
+        });
+        expect(concurrentCosts.status(), await concurrentCosts.text()).toBe(200);
+        await saveCosts.click();
+        await page.getByRole("button", { name: "Retry", exact: true }).click();
+        await page.getByRole("button", { name: "Use the current revision", exact: true }).click();
+        await saveCosts.click();
         await expect(margins.getByText("€55", { exact: true })).toBeVisible();
         await expectNoHorizontalScroll(page);
         await expectNoSeriousA11yViolations(page, `appointment margins EN ${scheme}`);

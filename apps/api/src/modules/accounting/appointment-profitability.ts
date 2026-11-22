@@ -140,6 +140,18 @@ export async function reportAppointmentProfitability(
           PAGE_SIZE,
           sql`offset ${(query.page - 1) * PAGE_SIZE}`,
         ),
+        ...(query.reviewAppointmentId
+          ? {
+              reviewed:
+                (
+                  await readProfitabilityRows(
+                    tx,
+                    sql`${eligible} and c.appointment_id = ${query.reviewAppointmentId}`,
+                    1,
+                  )
+                )[0] ?? null,
+            }
+          : {}),
         pagination: { page: query.page, pageSize: PAGE_SIZE, total: count?.total ?? 0 },
       };
     },

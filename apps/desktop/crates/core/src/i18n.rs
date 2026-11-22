@@ -1135,6 +1135,7 @@ keys! {
     ProfitabilitySave => ("Save reviewed costs", "Guardar costes revisados"),
     ProfitabilityProductCostPending => ("{amount} known · {count} pending", "{amount} conocido · {count} pendiente(s)"),
     ProfitabilityHelp => ("Enter the direct labour cost excluding commission and the materials used. Enter zero when there was no cost, or leave the field blank if the amount is pending.", "Indica el coste directo de personal sin comisión y los materiales utilizados. Escribe cero si no hubo coste o deja el campo en blanco si falta revisarlo."),
+    ProfitabilityMissing => ("This receipt is no longer in the report.", "El recibo ya no figura en este informe."),
     ProfitabilityChanged => ("Costs changed. Current labour {labour} and materials {materials}. Your draft is still open.", "Los costes cambiaron. Personal actual {labour} y materiales {materials}. Tus cambios siguen en el formulario."),
     ProfitabilityUseRevision => ("Use the current revision", "Usar la revisión actual"),
     ProfitabilityMissingCosts => ("Costs pending", "Costes pendientes"),

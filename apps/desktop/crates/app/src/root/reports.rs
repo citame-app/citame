@@ -271,6 +271,10 @@ impl Root {
         let session = self.svc.session.clone();
         let mode = desk.mode;
         let page = (desk.page as u32).saturating_add(1);
+        let reviewed = desk
+            .profitability_draft
+            .as_ref()
+            .map(|draft| draft.appointment_id);
         let client_id = desk
             .client_sales
             .as_ref()
@@ -294,7 +298,7 @@ impl Root {
                         }
                         .map(|report| ReportData::Financial(Box::new(report))),
                         ReportMode::Profitability => transport
-                            .appointment_profitability(&query, client_id.as_deref(), page)
+                            .appointment_profitability(&query, client_id.as_deref(), page, reviewed)
                             .map(ReportData::Profitability),
                         ReportMode::Overview | ReportMode::Outcome(_) => transport
                             .report_summary(&query)

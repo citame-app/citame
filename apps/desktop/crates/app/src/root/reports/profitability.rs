@@ -6,13 +6,45 @@ use sob_core::reports::financial::{
 use uuid::Uuid;
 
 pub(super) struct CostDraft {
-    appointment_id: Uuid,
+    pub(super) appointment_id: Uuid,
+    baseline: (Option<u32>, Option<u32>),
     version: Option<u32>,
     generation: String,
     labour: Entity<TextField>,
     materials: Entity<TextField>,
     pending: bool,
     error: Option<Key>,
+}
+
+impl CostDraft {
+    fn is_stale(&self, row: &AppointmentMargin, generation: &str) -> bool {
+        row.direct_costs.as_ref().map(|cost| cost.version) != self.version
+            || generation != self.generation
+    }
+
+    fn adopt_revision(
+        &mut self,
+        version: Option<u32>,
+        generation: &str,
+        amounts: (Option<u32>, Option<u32>),
+        cx: &mut Context<Root>,
+    ) {
+        for (field, baseline, latest) in [
+            (&self.labour, self.baseline.0, amounts.0),
+            (&self.materials, self.baseline.1, amounts.1),
+        ] {
+            if optional_amount(field.read(cx).text()) == Some(baseline) {
+                let value = latest
+                    .map(|cents| decimal_amount(u64::from(cents)))
+                    .unwrap_or_default();
+                field.update(cx, |input, cx| input.set_text(&value, cx));
+            }
+        }
+        self.baseline = amounts;
+        self.version = version;
+        self.generation = generation.to_owned();
+        self.error = None;
+    }
 }
 
 fn optional_amount(value: &str) -> Option<Option<u32>> {
@@ -63,6 +95,10 @@ impl Root {
         let costs = row.direct_costs.as_ref();
         desk.profitability_draft = Some(CostDraft {
             appointment_id,
+            baseline: (
+                costs.and_then(|cost| cost.labour_cents),
+                costs.and_then(|cost| cost.materials_cents),
+            ),
             version: costs.map(|cost| cost.version),
             generation: report.generation.clone(),
             labour: field(costs.and_then(|cost| cost.labour_cents), cx),
@@ -70,7 +106,7 @@ impl Root {
             pending: false,
             error: None,
         });
-        cx.notify();
+        self.load_report(self.status.cursor, cx);
     }
 
     fn save_cost_draft(&mut self, cx: &mut Context<Self>) {
@@ -91,15 +127,13 @@ impl Root {
             return;
         };
         let Some(row) = report
-            .rows
-            .iter()
-            .find(|row| row.appointment_id == draft.appointment_id)
+            .reviewed
+            .as_ref()
+            .filter(|row| row.appointment_id == draft.appointment_id)
         else {
             return;
         };
-        if row.direct_costs.as_ref().map(|cost| cost.version) != draft.version
-            || report.generation != draft.generation
-        {
+        if draft.is_stale(row, &report.generation) {
             return;
         }
         let Some((labour_cents, materials_cents)) = optional_amount(draft.labour.read(cx).text())
@@ -259,9 +293,9 @@ impl Root {
             })
             .when_some(desk.profitability_draft.as_ref(), |view, draft| {
                 let row = report
-                    .rows
-                    .iter()
-                    .find(|row| row.appointment_id == draft.appointment_id);
+                    .reviewed
+                    .as_ref()
+                    .filter(|row| row.appointment_id == draft.appointment_id);
                 view.child(self.render_cost_draft(
                     draft,
                     row,
@@ -377,9 +411,11 @@ impl Root {
         let local = row.starts_at.with_timezone(&zone);
         let date = i18n::date_label(self.locale, local.date_naive());
         let time = local.format("%H:%M");
+        let receipt = row.checkout_id.simple().to_string();
+        let reference = &receipt[receipt.len() - 8..];
         row.staff_name.as_ref().map_or_else(
-            || format!("{date} {time}"),
-            |name| format!("{date} {time} · {name}"),
+            || format!("{date} {time} · {reference}"),
+            |name| format!("{date} {time} · {name} · {reference}"),
         )
     }
 
@@ -394,8 +430,11 @@ impl Root {
     ) -> gpui::Div {
         let latest = row.and_then(|row| row.direct_costs.as_ref());
         let version = latest.map(|cost| cost.version);
-        let stale =
-            row.is_some() && (version != draft.version || latest_generation != draft.generation);
+        let stale = row.is_some_and(|row| draft.is_stale(row, latest_generation));
+        let amounts = (
+            latest.and_then(|cost| cost.labour_cents),
+            latest.and_then(|cost| cost.materials_cents),
+        );
         let latest_generation = latest_generation.to_owned();
         let valid = optional_amount(draft.labour.read(cx).text()).is_some()
             && optional_amount(draft.materials.read(cx).text()).is_some();
@@ -437,7 +476,10 @@ impl Root {
                     }),
                 ),
             )
-            .when(stale, |view| {
+            .when(ready && row.is_none(), |view| {
+                view.child(self.t(Key::ProfitabilityMissing))
+            })
+            .when(ready && stale, |view| {
                 view.child(i18n::fill(
                     self.t(Key::ProfitabilityChanged),
                     &[
@@ -457,9 +499,7 @@ impl Root {
                             if let Overlay::Reports(desk) = &mut root.overlay
                                 && let Some(draft) = &mut desk.profitability_draft
                             {
-                                draft.version = version;
-                                draft.generation = latest_generation.clone();
-                                draft.error = None;
+                                draft.adopt_revision(version, &latest_generation, amounts, cx);
                                 cx.notify();
                             }
                         }),

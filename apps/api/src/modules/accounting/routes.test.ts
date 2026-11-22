@@ -359,6 +359,14 @@ test("appointment profitability uses reviewed direct costs and keeps refunded re
       },
     ],
   });
+  const outsidePage = await call(
+    owner,
+    `${reportPath}&page=2&reviewAppointmentId=${appointmentId}`,
+  );
+  expect(await outsidePage.json()).toMatchObject({
+    rows: [],
+    reviewed: { appointmentId, directCosts: { version: 1 } },
+  });
   const otherDesk = await call(owner, `${reportPath}&staffId=${other.staffId}`);
   expect(await otherDesk.json()).toMatchObject({ rows: [], pagination: { total: 0 } });
   const exported = await call(owner, reportPath.replace("?", "/export?"));

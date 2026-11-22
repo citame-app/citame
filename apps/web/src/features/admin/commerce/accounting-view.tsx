@@ -20,16 +20,20 @@ import {
   ScheduledRevenue,
 } from "./financial-breakdowns";
 import { centsInput, inputCents } from "./money";
+type MarginPaging = { page: number; setPage: (page: number) => void };
+
 export function AccountingView({
   role,
   section = "all",
   salesFilters,
   onApplySalesFilters,
+  marginPaging,
 }: {
   role: UserRole;
   section?: "all" | "reports" | "commissions";
   salesFilters?: SalesReportFilters;
   onApplySalesFilters?: (filters: SalesReportFilters) => void;
+  marginPaging?: MarginPaging;
 }) {
   const { t } = useI18n();
   const [selected, setSelected] = useState("");
@@ -49,7 +53,11 @@ export function AccountingView({
         {t(role === "owner" ? "accounting.title" : "accounting.own")}
       </h2>
       {role === "owner" && section !== "commissions" && (
-        <SalesReport filters={salesFilters} onApply={onApplySalesFilters} />
+        <SalesReport
+          filters={salesFilters}
+          onApply={onApplySalesFilters}
+          marginPaging={marginPaging}
+        />
       )}
       {role === "owner" &&
         section !== "reports" &&
@@ -406,10 +414,12 @@ export function SalesReport({
   clientId,
   filters,
   onApply,
+  marginPaging,
 }: {
   clientId?: string;
   filters?: SalesReportFilters;
   onApply?: (filters: SalesReportFilters) => void;
+  marginPaging?: MarginPaging;
 }) {
   const { t, locale, timeZone } = useI18n();
   const today = new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date());
@@ -703,6 +713,7 @@ export function SalesReport({
             <AppointmentProfitability
               key={JSON.stringify(["profitability", range])}
               range={range}
+              paging={marginPaging}
               headingLevel={clientId ? "h3" : "h4"}
             />
           )}

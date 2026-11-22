@@ -1615,13 +1615,14 @@ impl HttpTransport {
         query: &ReportQuery,
         client_id: Option<&str>,
         page: u32,
+        reviewed: Option<uuid::Uuid>,
     ) -> Result<AppointmentProfitability, TransportError> {
+        let mut path = query.profitability_path(client_id, Some(page));
+        if let Some(id) = reviewed {
+            path.push_str(&format!("&reviewAppointmentId={id}"));
+        }
         read_response(
-            self.get(
-                &self.agent,
-                &query.profitability_path(client_id, Some(page)),
-                Some("application/json"),
-            )?,
+            self.get(&self.agent, &path, Some("application/json"))?,
             false,
         )
     }

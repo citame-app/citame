@@ -145,6 +145,7 @@ export const appointmentDirectCostInputSchema = appointmentCostAmounts
   .strict();
 export type AppointmentDirectCostInput = z.infer<typeof appointmentDirectCostInputSchema>;
 export const appointmentProfitabilityQuerySchema = salesReportQuerySchema.safeExtend({
+  reviewAppointmentId: idSchema.optional(),
   page: z.coerce.number().int().min(1).max(100000).default(1),
 });
 export type AppointmentProfitabilityQuery = z.infer<typeof appointmentProfitabilityQuerySchema>;
@@ -170,6 +171,7 @@ export const appointmentProfitabilitySchema = z.object({
   to: localDateSchema,
   timezone: z.string(),
   rows: z.array(appointmentProfitabilityRowSchema),
+  reviewed: appointmentProfitabilityRowSchema.nullable().optional(),
   pagination: pageInfoSchema,
 });
 export type AppointmentProfitability = z.infer<typeof appointmentProfitabilitySchema>;

@@ -106,6 +106,7 @@ pub struct AppointmentProfitability {
     pub generation: String,
     pub timezone: String,
     pub rows: Vec<AppointmentMargin>,
+    pub reviewed: Option<AppointmentMargin>,
     pub pagination: MarginPagination,
 }
 
@@ -121,6 +122,7 @@ pub struct MarginPagination {
 #[serde(rename_all = "camelCase")]
 pub struct AppointmentMargin {
     pub appointment_id: uuid::Uuid,
+    pub checkout_id: uuid::Uuid,
     pub starts_at: DateTime<Utc>,
     pub staff_name: Option<String>,
     pub net_sales_cents: Option<i64>,
