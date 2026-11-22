@@ -41,3 +41,9 @@ or reserved. A full refund revokes the original gift value. Reject a refund that
 spent value. Reversing a failed bank refund releases its reservation. Excess bank captures
 remain refundable without changing the gift value. Purchases and retries for an equal value and
 price retain the original request identity.
+
+### Service-restricted gifts
+
+An operator can issue a gift for up to fifty active treatments in the checkout currency. Store the confirmed service IDs and names with the card so the terms survive later catalogue edits and can be shown on vouchers and in Desktop's offline register. An empty list preserves the general-use terms of existing cards. Replay canonicalizes the selected IDs and returns the original receipt before reading the current catalogue.
+
+At payment time use each eligible service line's final amount after discounts. Ignore products, custom charges, tips and services already fully funded by a pass. The checkout lock serializes competing tenders. When several restricted cards overlap, a capacity check verifies that their combined amounts fit the eligible service lines. Revalidate after accepting a package or membership visit so the order of payment cannot double-fund a treatment. A rejected tender rolls back the payment and leaves the entitlement balance intact.

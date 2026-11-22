@@ -1,5 +1,10 @@
 import { createHash, randomBytes } from "node:crypto";
-import { type GiftCard, giftReplicaPageSize, permissionsFor } from "@sob/contracts";
+import {
+  type GiftCard,
+  type GiftEligibleCatalog,
+  giftReplicaPageSize,
+  permissionsFor,
+} from "@sob/contracts";
 import { checkoutLine, type Database, giftCard, giftCardMovement, syncChange } from "@sob/db";
 import { and, asc, count, desc, eq, ilike, inArray, max, or, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
@@ -7,9 +12,19 @@ import { requirePermission } from "../../auth/policy";
 import { ownedClientIds, type Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
+import { listServices } from "../services/service";
 import { giftCode, giftCodeHash } from "./code";
 
 type Connection = Database | Tx;
+export async function giftEligibleCatalog(db: Connection): Promise<GiftEligibleCatalog> {
+  const services = await listServices(db, true);
+  return {
+    services: services
+      .filter(({ currency }) => currency === "EUR")
+      .map(({ id, name }) => ({ id, name })),
+  };
+}
+
 export function authorizeGiftAccess(principal: Principal) {
   if (principal.role !== "client") requirePermission(principal, "commerce");
 }
@@ -64,6 +79,7 @@ function toGiftCard(
     checkoutId,
     amountCents: row.amountCents,
     purchasePriceCents: priceCents,
+    ...(row.eligibleServices.length ? { eligibleServices: row.eligibleServices } : {}),
     balanceCents: row.balanceCents,
     reservedCents: row.reservedCents,
     availableCents: row.balanceCents - row.reservedCents,
@@ -182,6 +198,7 @@ export async function checkGift(db: Database, code: string, principal: Principal
     .where(eq(giftCard.codeHash, giftCodeHash(code)));
   if (!row) throw new DomainError("not_found", "Gift card not found");
   return {
+    ...(row.eligibleServices.length ? { eligibleServices: row.eligibleServices } : {}),
     balanceCents: row.balanceCents,
     reservedCents: row.reservedCents,
     availableCents: row.balanceCents - row.reservedCents,

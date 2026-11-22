@@ -5,7 +5,13 @@ import { printDocument } from "./print-receipt";
 
 type Voucher = Pick<
   GiftCard,
-  "label" | "amountCents" | "availableCents" | "currency" | "status" | "expiresAt"
+  | "label"
+  | "amountCents"
+  | "availableCents"
+  | "currency"
+  | "status"
+  | "expiresAt"
+  | "eligibleServices"
 >;
 export function printableGiftVoucher(
   doc: Document,
@@ -29,6 +35,13 @@ export function printableGiftVoucher(
   append("p", t(`gift.status.${card.status}`));
   append("p", t("gift.value", { amount: formatMoney(card.amountCents, "EUR", locale) }));
   append("p", t("gift.available", { amount: formatMoney(card.availableCents, "EUR", locale) }));
+  if (card.eligibleServices?.length)
+    append(
+      "p",
+      t("gift.restrictedServices", {
+        services: card.eligibleServices.map((service) => service.name).join(", "),
+      }),
+    );
   append("pre", code);
   append("p", t("gift.codeHelp"));
   append(

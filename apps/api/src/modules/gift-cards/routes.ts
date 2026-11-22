@@ -21,6 +21,7 @@ import {
   changeGiftExpiry,
   checkGift,
   getGift,
+  giftEligibleCatalog,
   giftHistory,
   giftReplicaPage,
   giftReplicaScope,
@@ -70,6 +71,10 @@ export function giftCardRoutes(deps: AppDeps) {
         ),
       ),
     )
+    .get("/eligible-services", async (c) => {
+      requirePermission(c.get("principal"), "commerce");
+      return c.json(await giftEligibleCatalog(deps.db));
+    })
     .get("/replica", async (c) => {
       const query = parseOrThrow(giftReplicaQuerySchema, c.req.query());
       return c.json({

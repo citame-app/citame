@@ -63,7 +63,7 @@ if [ "${SMOKE_DESKTOP:-0}" = 1 ]; then
 services:
   api:
     environment:
-      RATE_LIMIT_GLOBAL_MAX: "1500"
+      RATE_LIMIT_GLOBAL_MAX: "5000"
       RATE_LIMIT_AUTH_MAX: "90"
       RATE_LIMIT_OAUTH_MAX: "360"
       # This fixture signs hosted forms locally and never submits them to the bank.

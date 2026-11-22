@@ -25,9 +25,19 @@ impl GiftStatus {
     }
 }
 
+pub const MAX_GIFT_SERVICES: usize = 50;
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct GiftService {
+    pub id: Uuid,
+    pub name: String,
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GiftBalance {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub eligible_services: Vec<GiftService>,
     pub balance_cents: u32,
     pub reserved_cents: u32,
     pub available_cents: u32,
@@ -105,6 +115,8 @@ pub struct GiftReplicaStamp {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GiftPurchase {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub eligible_service_ids: Vec<Uuid>,
     pub amount_cents: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub purchase_price_cents: Option<u32>,
@@ -120,6 +132,13 @@ pub struct GiftPurchase {
 impl GiftPurchase {
     pub fn price_cents(&self) -> u32 {
         self.purchase_price_cents.unwrap_or(self.amount_cents)
+    }
+
+    pub fn restrict_to(mut self, ids: &[Uuid]) -> Option<Self> {
+        self.eligible_service_ids = ids.to_vec();
+        self.eligible_service_ids.sort_unstable();
+        self.eligible_service_ids.dedup();
+        (self.eligible_service_ids.len() <= MAX_GIFT_SERVICES).then_some(self)
     }
 
     pub fn review(
@@ -144,6 +163,7 @@ impl GiftPurchase {
             return None;
         }
         Some(Self {
+            eligible_service_ids: Vec::new(),
             amount_cents,
             purchase_price_cents,
             label: label.to_owned(),
@@ -330,6 +350,16 @@ impl HttpTransport {
         self.gift_get(&format!("{PATH}?{}", query.finish()))
     }
 
+    pub fn gift_eligible_services(&self) -> Result<Vec<GiftService>, TransportError> {
+        #[derive(Deserialize)]
+        struct Catalog {
+            services: Vec<GiftService>,
+        }
+        Ok(self
+            .gift_get::<Catalog>(&format!("{PATH}/eligible-services"))?
+            .services)
+    }
+
     pub fn gift_card(&self, id: Uuid) -> Result<GiftCard, TransportError> {
         self.gift_get(&format!("{PATH}/{id}"))
     }
@@ -351,6 +381,14 @@ impl HttpTransport {
             self.send_json_with_headers(PATH, input, &headers)?,
             gift_purchase_error,
         )?;
+        let mut eligible_service_ids = purchase
+            .card
+            .balance
+            .eligible_services
+            .iter()
+            .map(|service| service.id)
+            .collect::<Vec<_>>();
+        eligible_service_ids.sort_unstable();
         if parse_id(&purchase.checkout.id).ok() != Some(purchase.card.checkout_id)
             || purchase.card.amount_cents != input.amount_cents
             || purchase.checkout.total_cents != input.price_cents()
@@ -360,6 +398,7 @@ impl HttpTransport {
                 .unwrap_or(purchase.card.amount_cents)
                 != input.price_cents()
             || purchase.card.balance.currency != "EUR"
+            || eligible_service_ids != input.eligible_service_ids
         {
             return Err(TransportError::Server(
                 "Unexpected gift purchase receipt".into(),

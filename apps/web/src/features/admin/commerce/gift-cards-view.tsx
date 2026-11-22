@@ -1,14 +1,16 @@
 import {
   type GiftCard,
   type GiftCardPurchaseInput,
+  type GiftEligibleService,
   giftCardCodeSchema,
   giftCardStatusSchema,
+  maximumGiftServices,
   permissionsFor,
   type StaffAccessPreset,
   type UserRole,
 } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { TextField } from "~/components/ui/field";
 import { SelectField } from "~/components/ui/select-field";
@@ -189,6 +191,8 @@ function GiftPurchaseForm({
   const [amount, setAmount] = useState("");
   const [price, setPrice] = useState("");
   const [validating, setValidating] = useState(false);
+  const formTitle = useId();
+  const [selectedServices, setSelectedServices] = useState<GiftEligibleService[]>([]);
   const amountCents = inputCents(amount);
   const salePriceCents = mode === "admin" && price.trim() ? inputCents(price) : undefined;
   const amountInvalid = (amountCents ?? 0) <= 0;
@@ -223,6 +227,7 @@ function GiftPurchaseForm({
   const locked = save.isPending || uncertain;
   return (
     <form
+      aria-labelledby={formTitle}
       className="grid gap-4 rounded-xl border border-line bg-surface p-4 sm:grid-cols-2"
       onSubmit={(event) => {
         event.preventDefault();
@@ -246,6 +251,9 @@ function GiftPurchaseForm({
                   ? { purchasePriceCents: salePriceCents }
                   : {}),
                 ...(buyer ? { buyerClientId: buyer } : {}),
+                ...(selectedServices.length
+                  ? { eligibleServiceIds: selectedServices.map(({ id }) => id) }
+                  : {}),
                 expiresAt: expiry ? localDayBounds(expiry, timeZone).to : null,
               }
             : {}),
@@ -254,7 +262,9 @@ function GiftPurchaseForm({
         save.mutate(packet.current);
       }}
     >
-      <h3 className="font-semibold sm:col-span-2">{t("gift.new")}</h3>
+      <h3 id={formTitle} className="font-semibold sm:col-span-2">
+        {t("gift.new")}
+      </h3>
       <TextField
         label={t("gift.amount")}
         name="gift-value"
@@ -294,6 +304,14 @@ function GiftPurchaseForm({
       />
       {mode === "admin" && (
         <>
+          <GiftServicePicker
+            disabled={locked}
+            selected={selectedServices}
+            onChange={(services) => {
+              setSelectedServices(services);
+              save.reset();
+            }}
+          />
           <TextField
             label={t("gift.validThrough")}
             type="date"
@@ -347,6 +365,100 @@ function GiftPurchaseForm({
     </form>
   );
 }
+function GiftServicePicker({
+  selected,
+  disabled,
+  onChange,
+}: {
+  selected: GiftEligibleService[];
+  disabled: boolean;
+  onChange: (services: GiftEligibleService[]) => void;
+}) {
+  const { t, locale } = useI18n();
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const limitHelp = useId();
+  const catalog = useQuery({
+    queryKey: ["gift-cards", "eligible-services"],
+    queryFn: ({ signal }) => api().giftCards.eligibleServices(signal),
+    enabled: open,
+    staleTime: 30_000,
+  });
+  const selectedIds = new Set(selected.map(({ id }) => id));
+  const available = catalog.data?.services ?? [];
+  const availableIds = new Set(available.map(({ id }) => id));
+  const searchText = search.trim().toLocaleLowerCase(locale);
+  const matches = available.filter(
+    ({ id, name }) => !selectedIds.has(id) && name.toLocaleLowerCase(locale).includes(searchText),
+  );
+  const choices = [...selected, ...matches];
+  return (
+    <fieldset disabled={disabled} aria-describedby={limitHelp} className="min-w-0 sm:col-span-2">
+      <legend className="font-medium">{t("gift.eligibleServices")}</legend>
+      <div className="mt-2 space-y-2">
+        <p id={limitHelp} className="text-sm text-muted">
+          {selected.length
+            ? t("gift.selectedServices", { count: selected.length })
+            : t("gift.allServices")}
+        </p>
+        <Button
+          type="button"
+          variant="secondary"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+        >
+          {t(open ? "gift.hideServices" : "gift.chooseServices")}
+        </Button>
+        {open && (
+          <div className="space-y-2">
+            <TextField
+              label={t("gift.searchServices")}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+            {catalog.isPending && <Skeleton className="h-28" />}
+            {catalog.isError && (
+              <ErrorState error={catalog.error} onRetry={() => void catalog.refetch()} />
+            )}
+            {catalog.isSuccess && choices.length === 0 && (
+              <p className="text-sm text-muted">{t("gift.noServices")}</p>
+            )}
+            {choices.length > 0 && (
+              <ul className="max-h-56 overflow-y-auto rounded-lg border border-line">
+                {choices.map((service) => {
+                  const checked = selectedIds.has(service.id);
+                  return (
+                    <li key={service.id}>
+                      <label className="flex min-h-11 cursor-pointer items-center gap-3 px-3">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          className="h-4 w-4 accent-current"
+                          disabled={!checked && selected.length >= maximumGiftServices}
+                          onChange={() =>
+                            onChange(
+                              checked
+                                ? selected.filter(({ id }) => id !== service.id)
+                                : [...selected, service],
+                            )
+                          }
+                        />
+                        {service.name}
+                        {catalog.isSuccess && !availableIds.has(service.id) && (
+                          <span className="text-sm text-muted">{t("gift.inactiveService")}</span>
+                        )}
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
+    </fieldset>
+  );
+}
 function GiftDetail({
   id,
   mode,
@@ -382,6 +494,13 @@ function GiftDetail({
       <p role="status">{t(`gift.status.${current.status}`)}</p>
       <div className="rounded-xl border border-line bg-surface p-4">
         <p>{t("gift.value", { amount: money(current.amountCents) })}</p>
+        {!!current.eligibleServices?.length && (
+          <p>
+            {t("gift.restrictedServices", {
+              services: current.eligibleServices.map((service) => service.name).join(", "),
+            })}
+          </p>
+        )}
         {current.purchasePriceCents !== undefined &&
           current.purchasePriceCents !== current.amountCents && (
             <p>{t("gift.paidPrice", { amount: money(current.purchasePriceCents) })}</p>

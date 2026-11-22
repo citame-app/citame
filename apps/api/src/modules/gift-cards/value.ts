@@ -13,6 +13,7 @@ import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
 import { giftCodeHash } from "./code";
+import { assertGiftServiceCoverage } from "./eligibility";
 export async function pendingGiftForCheckout(tx: Tx, id: string, principal: Principal) {
   const [row] = await tx.select().from(giftCard).where(eq(giftCard.id, id)).for("update");
   if (row?.status !== "pending" || row.createdBy !== principal.userId)
@@ -106,6 +107,11 @@ export async function redeemGift(
       "invalid_state",
       "Gift card is invalid, expired or has insufficient available value",
     );
+  if (card.eligibleServices.length)
+    await assertGiftServiceCoverage(tx, checkoutId, {
+      amountCents,
+      services: card.eligibleServices,
+    });
   await tx
     .update(giftCard)
     .set({ balanceCents: card.balanceCents - amountCents, version: card.version + 1 })

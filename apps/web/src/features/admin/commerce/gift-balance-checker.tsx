@@ -48,6 +48,13 @@ export function GiftBalanceChecker({ mode }: { mode: CommerceMode }) {
           <p>{t(`gift.status.${check.data.status}`)}</p>
           <p>{t("gift.available", { amount: money(check.data.availableCents) })}</p>
           <p>{t("gift.reserved", { amount: money(check.data.reservedCents) })}</p>
+          {!!check.data.eligibleServices?.length && (
+            <p>
+              {t("gift.restrictedServices", {
+                services: check.data.eligibleServices.map((service) => service.name).join(", "),
+              })}
+            </p>
+          )}
         </div>
       )}
     </form>

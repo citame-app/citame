@@ -4473,6 +4473,7 @@ fn native_gift_card_redeems_and_refunds_once_through_the_proxy() {
     let generation = browser.store.verified_reviewed_generation().unwrap();
     let device = proxy_device();
     let purchase = GiftPurchase {
+        eligible_service_ids: Vec::new(),
         amount_cents: 2000,
         purchase_price_cents: Some(1700),
         label: format!("Synthetic native gift {}", uuid::Uuid::now_v7()),
@@ -4666,6 +4667,123 @@ fn native_gift_card_redeems_and_refunds_once_through_the_proxy() {
     assert_eq!(native.balance.available_cents, 1100);
     let history = device.transport.gift_card_movements(gift_id, 1).unwrap();
     assert_eq!(history.pagination.total, 3);
+}
+
+#[test]
+#[ignore = "requires smoke stack"]
+fn native_gift_card_preserves_restrictions_through_the_proxy() {
+    use sob_core::billing::{SaleItem, WalkInSale};
+    use sob_core::http::gift_cards::GiftPurchase;
+
+    let mut browser = Device::sign_in();
+    browser.sync();
+    let staff = catalog(&browser).staff;
+    let treatment = browser.rest_post(
+        "/admin/services",
+        json!({
+            "name": "Synthetic eligible gift treatment",
+            "durationMinutes": 30,
+            "priceCents": 1800,
+            "currency": "EUR",
+            "staffIds": [staff],
+        }),
+    );
+    let service_id: uuid::Uuid = treatment["id"].as_str().unwrap().parse().unwrap();
+    let generation = browser.store.verified_reviewed_generation().unwrap();
+    let device = proxy_device();
+    assert!(
+        device
+            .transport
+            .gift_eligible_services()
+            .unwrap()
+            .iter()
+            .any(|service| service.id == service_id)
+    );
+    let draft = GiftPurchase::review(
+        "30",
+        "",
+        "Synthetic restricted gift",
+        None,
+        None,
+        generation,
+        Utc::now(),
+    )
+    .unwrap()
+    .restrict_to(&[service_id])
+    .unwrap();
+    let purchase = device.transport.purchase_gift_card(&draft).unwrap();
+    let terms = &purchase.card.balance.eligible_services;
+    assert_eq!(terms.len(), 1);
+    assert_eq!(terms[0].id, service_id);
+    device
+        .transport
+        .record_checkout_payment(
+            &purchase.checkout,
+            &PaymentAttempt::new(ReceiptTender::ExternalCard, 3000),
+        )
+        .unwrap();
+    let code = device
+        .transport
+        .reveal_gift_card(purchase.card.id)
+        .unwrap()
+        .code;
+    let receipt = device
+        .transport
+        .create_walk_in_sale(&WalkInSale {
+            idempotency_key: uuid::Uuid::now_v7(),
+            client_id: None,
+            staff_id: None,
+            use_client_discount: None,
+            lines: vec![
+                SaleItem::Service {
+                    service_id,
+                    quantity: 1,
+                },
+                SaleItem::Custom {
+                    description: "Synthetic unrelated charge".into(),
+                    unit_amount_cents: 900,
+                    quantity: 1,
+                },
+            ],
+            discount_cents: 0,
+            tip_cents: 0,
+        })
+        .unwrap();
+    let over = PaymentAttempt::with_gift_card(1801, &code).unwrap();
+    assert!(
+        device
+            .transport
+            .record_checkout_payment(&receipt, &over)
+            .is_err()
+    );
+    let eligible = PaymentAttempt::with_gift_card(1800, &code).unwrap();
+    let paid = device
+        .transport
+        .record_checkout_payment(&receipt, &eligible)
+        .unwrap();
+    assert_eq!(paid.balance_cents, 900);
+
+    browser.sync();
+    let fence = browser.store.gift_cache_scope().unwrap().unwrap();
+    let cache = device
+        .transport
+        .gift_catalogue(&fence.scope, &fence.generation)
+        .unwrap();
+    let actor = browser.rest_get("/me")["user"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        browser
+            .store
+            .save_gift_catalogue(&fence, &actor, cache)
+            .unwrap()
+    );
+    let reopened = Store::open(&browser.path).unwrap();
+    let saved = reopened.gift_catalogue(&actor).unwrap().unwrap();
+    let card = saved.card(purchase.card.id, Utc::now()).unwrap();
+    assert_eq!(card.balance.eligible_services[0].id, service_id);
+    assert_eq!(card.balance.available_cents, 1200);
 }
 
 #[test]

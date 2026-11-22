@@ -58,6 +58,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let database = dir.path().join("replica.db");
         let purchase = GiftPurchase {
+            eligible_service_ids: Vec::new(),
             amount_cents: 3500,
             purchase_price_cents: Some(2700),
             label: "Synthetic gift".into(),

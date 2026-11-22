@@ -5,7 +5,7 @@ use sob_core::http::{
     HttpTransport,
     gift_cards::{
         GiftBalance, GiftCard, GiftMovementKind, GiftMovements, GiftPage, GiftPurchase,
-        GiftPurchaseResult, GiftReveal, GiftStatus,
+        GiftPurchaseResult, GiftReveal, GiftService, GiftStatus, MAX_GIFT_SERVICES,
     },
 };
 use sob_core::{receipt_print::ReceiptPreview, sync::TransportError};
@@ -44,6 +44,10 @@ pub(super) struct Desk {
     checked: Option<GiftBalance>,
     value: Entity<TextField>,
     purchase_price: Entity<TextField>,
+    choose_services: bool,
+    service_search: Entity<TextField>,
+    selected_services: Vec<GiftService>,
+    eligible_service_options: Option<Vec<GiftService>>,
     label: Entity<TextField>,
     buyer_search: Entity<TextField>,
     buyer: Option<(Uuid, String)>,
@@ -63,6 +67,7 @@ pub(super) struct Desk {
     catalogue_retry: Option<Instant>,
     error: Option<Key>,
     _buyer_changed: Option<Subscription>,
+    _service_search_changed: Option<Subscription>,
 }
 
 impl Desk {
@@ -80,6 +85,7 @@ enum Request {
     },
     Detail(Uuid, u32),
     Issue(GiftPurchase),
+    EligibleServices,
     Check(String),
     Reveal(Uuid),
     Print {
@@ -104,6 +110,7 @@ enum Loaded {
     Detail(GiftCard, GiftMovements),
     Issued(Box<GiftPurchaseResult>),
     Balance(GiftBalance),
+    EligibleServices(Vec<GiftService>),
     Revealed(GiftReveal),
     Print(ReceiptPreview),
     Receipt(Box<AppointmentCheckout>),
@@ -125,6 +132,7 @@ impl Request {
                 Loaded::Detail(http.gift_card(id)?, http.gift_card_movements(id, page)?)
             }
             Self::Issue(purchase) => Loaded::Issued(Box::new(http.purchase_gift_card(&purchase)?)),
+            Self::EligibleServices => Loaded::EligibleServices(http.gift_eligible_services()?),
             Self::Check(code) => Loaded::Balance(http.check_gift_card(&code)?),
             Self::Reveal(id) => Loaded::Revealed(http.reveal_gift_card(id)?),
             Self::Print {
@@ -223,6 +231,10 @@ impl Root {
             checked: None,
             value: cx.new(|cx| TextField::new("EUR", false, cx)),
             purchase_price: cx.new(|cx| TextField::new("EUR", false, cx)),
+            choose_services: false,
+            service_search: cx.new(|cx| TextField::new("", false, cx)),
+            selected_services: Vec::new(),
+            eligible_service_options: None,
             label: cx.new(|cx| TextField::new("", false, cx)),
             buyer_search: cx.new(|cx| TextField::new("", false, cx)),
             buyer: None,
@@ -242,8 +254,11 @@ impl Root {
             catalogue_retry: None,
             error: storage_error.then_some(Key::GiftStorageUnavailable),
             _buyer_changed: None,
+            _service_search_changed: None,
         };
         desk._buyer_changed = Some(cx.observe(&desk.buyer_search, |_, _, cx| cx.notify()));
+        desk._service_search_changed =
+            Some(cx.observe(&desk.service_search, |_, _, cx| cx.notify()));
         self.overlay = Overlay::GiftCards(Box::new(desk));
         if view == View::List && !storage_error {
             self.show_saved_gift(
@@ -596,6 +611,9 @@ impl Root {
                             cx,
                         ));
                     }
+                    Ok(Loaded::EligibleServices(services)) => {
+                        desk.eligible_service_options = Some(services);
+                    }
                     Ok(Loaded::Balance(balance)) if fresh => {
                         desk.observed = observation;
                         desk.checked = Some(balance);
@@ -694,6 +712,7 @@ impl Root {
             for field in [
                 &desk.value,
                 &desk.purchase_price,
+                &desk.service_search,
                 &desk.label,
                 &desk.buyer_search,
                 &desk.expiry,
@@ -701,6 +720,9 @@ impl Root {
                 field.update(cx, |field, cx| field.clear(cx));
             }
             desk.buyer = None;
+            desk.choose_services = false;
+            desk.selected_services.clear();
+            desk.eligible_service_options = None;
         }
         cx.notify();
     }
@@ -742,6 +764,13 @@ impl Root {
                 expiry_date(tz, desk.expiry.read(cx).text())?,
                 generation,
                 Utc::now(),
+            )?
+            .restrict_to(
+                &desk
+                    .selected_services
+                    .iter()
+                    .map(|service| service.id)
+                    .collect::<Vec<_>>(),
             )
         });
         let Some(purchase) = purchase else {
@@ -1156,6 +1185,15 @@ impl Root {
                 self.t(Key::GiftBalance),
                 money(balance.balance_cents)
             ))
+            .when(!balance.eligible_services.is_empty(), |body| {
+                let names = balance
+                    .eligible_services
+                    .iter()
+                    .map(|service| service.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                body.child(format!("{} · {names}", self.t(Key::GiftEligibleServices)))
+            })
             .when(balance.reserved_cents > 0, |body| {
                 body.child(format!(
                     "{} · {}",
@@ -1191,6 +1229,13 @@ impl Root {
                     self.amount_label(i64::from(price), "EUR")
                 ))
             });
+            if !pending.eligible_service_ids.is_empty() {
+                body = body.child(format!(
+                    "{} ({})",
+                    self.t(Key::GiftSelectedServices),
+                    pending.eligible_service_ids.len()
+                ));
+            }
             if !pending.label.is_empty() {
                 body = body.child(pending.label.clone());
             }
@@ -1237,6 +1282,7 @@ impl Root {
             .child(self.label(Key::GiftPurchasePriceInput))
             .child(desk.purchase_price.clone())
             .child(div().text_sm().child(self.t(Key::GiftPurchasePriceHelp)))
+            .child(self.render_gift_service_choices(desk, ready, cx))
             .child(self.label(Key::GiftLabel))
             .child(desk.label.clone())
             .child(self.label(Key::GiftExpiryInput))
@@ -1284,6 +1330,104 @@ impl Root {
                     cx,
                 ))
             })
+    }
+
+    fn render_gift_service_choices(
+        &self,
+        desk: &Desk,
+        ready: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let selected_count = desk.selected_services.len();
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(self.label(Key::GiftEligibleServices))
+            .child(if selected_count == 0 {
+                self.t(Key::GiftAllServices).to_owned()
+            } else {
+                format!("{} ({selected_count})", self.t(Key::GiftSelectedServices))
+            });
+        if !ready {
+            return body;
+        }
+        body = body.child(self.gift_button(
+            "gift-toggle-treatment-list",
+            if desk.choose_services {
+                Key::GiftHideServices
+            } else {
+                Key::GiftChooseServices
+            },
+            Kind::Ghost,
+            |root, cx| {
+                if let Some(desk) = root.gift_cards_desk() {
+                    desk.choose_services = !desk.choose_services;
+                    if desk.choose_services {
+                        desk.eligible_service_options = None;
+                        root.request_gift(Request::EligibleServices, cx);
+                    }
+                    cx.notify();
+                }
+            },
+            cx,
+        ));
+        if !desk.choose_services {
+            return body;
+        }
+
+        let search = desk.service_search.read(cx).text().trim().to_lowercase();
+        let selected = desk
+            .selected_services
+            .iter()
+            .cloned()
+            .map(|service| (service, true));
+        let available = desk
+            .eligible_service_options
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter(|service| {
+                !desk
+                    .selected_services
+                    .iter()
+                    .any(|selected| selected.id == service.id)
+                    && service.name.to_lowercase().contains(&search)
+            })
+            .take(12)
+            .cloned()
+            .map(|service| (service, false));
+        let choices = selected.chain(available).collect::<Vec<_>>();
+        body.child(self.label(Key::GiftSearchServices))
+            .child(desk.service_search.clone())
+            .when(
+                desk.eligible_service_options.is_some() && choices.is_empty(),
+                |body| body.child(self.t(Key::GiftNoServices)),
+            )
+            .children(choices.into_iter().map(|(service, selected)| {
+                let id = service.id;
+                let name = &service.name;
+                self.button(
+                    SharedString::from(format!("gift-service-{id}")),
+                    format!("{} {name}", if selected { "☑" } else { "☐" }),
+                    if selected { Kind::Primary } else { Kind::Ghost },
+                    cx.listener(move |root, _, _, cx| {
+                        if let Some(desk) = root.gift_cards_desk() {
+                            if selected {
+                                desk.selected_services.retain(|selected| selected.id != id);
+                            } else if desk.selected_services.len() < MAX_GIFT_SERVICES
+                                && !desk
+                                    .selected_services
+                                    .iter()
+                                    .any(|selected| selected.id == id)
+                            {
+                                desk.selected_services.push(service.clone());
+                            }
+                            cx.notify();
+                        }
+                    }),
+                )
+            }))
     }
 
     fn render_gift_detail(

@@ -9,7 +9,10 @@ import {
   publicService,
 } from "./options";
 
-export async function listServices(db: Database, includeInternal = false): Promise<Service[]> {
+export async function listServices(
+  db: Pick<Database, "select">,
+  includeInternal = false,
+): Promise<Service[]> {
   const rows = await activeCatalogRows(
     db,
     await db
