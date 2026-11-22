@@ -18,6 +18,11 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { lockScheduling, type Tx } from "../../tx";
 import { IMPORTED_STAFF_UNIT_START } from "../availability/staff-reservations";
+import {
+  booksyPaymentReviews,
+  externallySettledAppointments,
+  importedPartialPayments,
+} from "../commerce/appointment-billing";
 import { repackResourceUnits } from "../resources/plan";
 import { IMPORTED_RESOURCE_UNIT_START } from "../resources/reservations";
 import { booksyLocalDayBounds } from "./local-day";
@@ -689,17 +694,19 @@ function verifiedBookingLinks(
   return [...bookings.values()];
 }
 
-async function assertNoNativeEffects(tx: Tx) {
-  const [effects] = await tx.execute<{
-    receipts: number;
-    payments: number;
-    bookingProtections: number;
-    cancellationFees: number;
-    reminders: number;
-    waitlistEntries: number;
-    waitlistOffers: number;
-    waitlistEnabled: boolean;
-  }>(sql`
+type NativeEffects = {
+  receipts: number;
+  payments: number;
+  bookingProtections: number;
+  cancellationFees: number;
+  reminders: number;
+  waitlistEntries: number;
+  waitlistOffers: number;
+  waitlistEnabled: boolean;
+};
+
+async function readNativeEffects(tx: Tx): Promise<NativeEffects> {
+  const [effects] = await tx.execute<NativeEffects>(sql`
     select (select count(*)::int from checkout) as receipts,
            (select count(*)::int from checkout_payment) as payments,
            (select count(*)::int from booking_protection) as "bookingProtections",
@@ -709,12 +716,27 @@ async function assertNoNativeEffects(tx: Tx) {
            (select count(*)::int from waitlist_offer) as "waitlistOffers",
            coalesce((select (terms->>'enabled')::boolean from waitlist_policy where id=1),false) as "waitlistEnabled"
   `);
-  if (!effects || Object.values(effects).some(Boolean))
-    throw new Error("The candidate contains operational effects or an enabled waitlist");
-  return effects;
+  if (!effects) throw new Error("Native operational effects could not be counted");
+  return effects as NativeEffects;
 }
 
-async function assertCandidateSettings(tx: Tx, timezone: string) {
+function assertNoNativeEffects(effects: NativeEffects) {
+  if (Object.values(effects).some(Boolean))
+    throw new Error("The candidate contains operational effects or an enabled waitlist");
+}
+
+async function summarizeLocalPaymentReviews(tx: Tx, plan: NativePlan) {
+  const ids = plan.visits.map(({ item }) => item.id);
+  if (!ids.length) return { confirmedUnpaid: 0, externallySettled: 0, partialPayments: 0 };
+  const states = await booksyPaymentReviews(tx, ids);
+  return {
+    confirmedUnpaid: [...states.values()].filter((state) => state === "confirmed_unpaid").length,
+    externallySettled: (await externallySettledAppointments(tx, ids)).size,
+    partialPayments: (await importedPartialPayments(tx, ids)).size,
+  };
+}
+
+async function assertReconciliationSettings(tx: Tx, timezone: string, preparedCopy: boolean) {
   const [settings] = await tx
     .select({
       timezone: salonSettings.timezone,
@@ -725,8 +747,7 @@ async function assertCandidateSettings(tx: Tx, timezone: string) {
   if (
     !settings ||
     settings.timezone !== timezone ||
-    settings.firstReminder !== null ||
-    settings.secondReminder !== null
+    (!preparedCopy && (settings.firstReminder !== null || settings.secondReminder !== null))
   )
     throw new Error("The candidate must use the source timezone and pause appointment reminders");
 }
@@ -791,7 +812,12 @@ export async function inspectNativeBooksy(
   db: Database,
   snapshotHash: string,
   date: string,
-  options: { bookingLinks?: boolean; priceHolds?: "day" | "all"; paymentEvidence?: boolean } = {},
+  options: {
+    bookingLinks?: boolean;
+    priceHolds?: "day" | "all";
+    paymentEvidence?: boolean;
+    preparedCopy?: boolean;
+  } = {},
 ) {
   return db.transaction(
     async (tx) => {
@@ -799,12 +825,13 @@ export async function inspectNativeBooksy(
       const { start, end } = booksyLocalDayBounds(date, model.base.timezone);
       if (date < model.fromDate || date > model.throughDate)
         throw new Error("The requested day is outside the captured calendar");
-      await assertCandidateSettings(tx, model.base.timezone);
+      await assertReconciliationSettings(tx, model.base.timezone, options.preparedCopy === true);
       const base = await verifyBooksyProjection(tx, model.base, { candidate: true });
       const plan = planNativeRehearsal(model);
       const capacity = await expectedNativeCapacity(tx, plan);
       const servicePositions = await verifyNativeProjection(tx, plan, capacity);
-      if (options.paymentEvidence) await verifyNativePaymentEvidence(tx, plan);
+      if (options.paymentEvidence || options.preparedCopy)
+        await verifyNativePaymentEvidence(tx, plan);
       const waitlist = await planBooksyWaitlist(tx, model);
       const waitlistRows = await tx.select().from(waitlistSourceEntry);
       const expectedWaitlist = new Map(waitlist.entries.map((row) => [row.id, row]));
@@ -813,7 +840,7 @@ export async function inspectNativeBooksy(
         waitlistRows.some((row) => {
           const { linkedEntryId, ...original } = row;
           return (
-            linkedEntryId !== null ||
+            (!options.preparedCopy && linkedEntryId !== null) ||
             stableJson(original) !== stableJson(expectedWaitlist.get(row.id))
           );
         })
@@ -855,7 +882,8 @@ export async function inspectNativeBooksy(
       )
         throw new Error("The native staff blocks differ from the source");
 
-      const sideEffects = await assertNoNativeEffects(tx);
+      const sideEffects = await readNativeEffects(tx);
+      if (!options.preparedCopy) assertNoNativeEffects(sideEffects);
 
       const report = planBooksyTransfer(model.base).review;
       if (!report.canRehearse) throw new Error("The retained source plan failed validation");
@@ -886,6 +914,14 @@ export async function inspectNativeBooksy(
         .map(({ kind }) => ({ code: "unprojected_record", kind }));
       return {
         snapshotHash,
+        ...(options.preparedCopy
+          ? {
+              inspectionMode: "prepared-copy" as const,
+              localPaymentReviews: await summarizeLocalPaymentReviews(tx, plan),
+              linkedWaitlistRequests: waitlistRows.filter((row) => row.linkedEntryId !== null)
+                .length,
+            }
+          : {}),
         source: {
           capturedAt: model.capturedAt,
           fromDate: model.fromDate,
@@ -908,7 +944,9 @@ export async function inspectNativeBooksy(
           resourceAssignments: dailyVisits.filter((row) => row.resource).length,
           billingEvidence: summarizeNativeBilling(dailyVisits),
         },
-        scheduleByStart: summarizeNativeSchedule(plan.visits, model.base.timezone),
+        ...(!options.preparedCopy
+          ? { scheduleByStart: summarizeNativeSchedule(plan.visits, model.base.timezone) }
+          : {}),
         ...(options.bookingLinks
           ? { bookingLinks: verifiedBookingLinks(plan.visits, servicePositions) }
           : {}),
@@ -1043,7 +1081,7 @@ export async function rehearseNativeBooksy(
             reminderSecondLeadMinutes: null,
           })
           .onConflictDoNothing();
-        await assertCandidateSettings(tx, model.base.timezone);
+        await assertReconciliationSettings(tx, model.base.timezone, false);
       }
       if (plan.resourceRules.length) {
         const [prior] = await tx
@@ -1148,7 +1186,7 @@ export async function rehearseNativeBooksy(
       await tx.execute(sql`set constraints all immediate`);
       await verifyNativeProjection(tx, plan, capacity);
       await verifyNativePaymentEvidence(tx, plan);
-      await assertNoNativeEffects(tx);
+      assertNoNativeEffects(await readNativeEffects(tx));
       if (mode === "rollback") throw rollback;
     });
   } catch (error) {

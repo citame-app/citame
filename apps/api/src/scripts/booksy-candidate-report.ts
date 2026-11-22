@@ -1,6 +1,6 @@
 import { realpath, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { connectToNamedDatabase, NO_DB_TIMEOUTS } from "@sob/db";
+import { booksyDesktopTestDatabase, connectToNamedDatabase, NO_DB_TIMEOUTS } from "@sob/db";
 import { inspectNativeBooksy } from "../modules/booksy-transfer/operational-rehearsal";
 import { fingerprint } from "../modules/booksy-transfer/plan";
 import {
@@ -17,6 +17,7 @@ import { checkContainer } from "./booksy-backup";
 if (import.meta.main) {
   try {
     const [hash, date, option, path, ...extra] = process.argv.slice(2);
+    const preparedCopy = option === "--prepared-copy";
     const connection = process.env.BOOKSY_REHEARSAL_DATABASE_URL;
     if (
       !hash ||
@@ -25,7 +26,10 @@ if (import.meta.main) {
       !connection ||
       extra.length ||
       (option !== undefined &&
-        (!path || !["--booking-links", "--price-review", "--price-review-all"].includes(option)))
+        (!path ||
+          !["--booking-links", "--price-review", "--price-review-all", "--prepared-copy"].includes(
+            option,
+          )))
     ) {
       throw new Error("Expected the private connection file, snapshot hash and a calendar date");
     }
@@ -37,16 +41,20 @@ if (import.meta.main) {
     }
     const url = new URL(connection);
     const candidate = /^\/sob_booksy_candidate_(\d{8})_\d+$/.exec(url.pathname);
+    const database = url.pathname.slice(1);
     if (
       url.hostname !== "127.0.0.1" ||
       url.username !== "citame_import" ||
-      !candidate ||
+      !(preparedCopy ? booksyDesktopTestDatabase.test(database) : candidate) ||
       url.search ||
       url.hash
     ) {
-      throw new Error("Expected an isolated local candidate");
+      throw new Error("Expected an isolated local Booksy copy");
     }
-    await checkContainer(url, `citame-booksy-rehearsal-${candidate[1]}`);
+    const container = preparedCopy ? path : candidate && `citame-booksy-rehearsal-${candidate[1]}`;
+    if (!container || !/^citame-booksy-rehearsal-\d{8}$/.test(container))
+      throw new Error("Expected the private rehearsal container");
+    await checkContainer(url, container);
     const priceScope =
       option === "--price-review-all" ? "all" : option === "--price-review" ? "day" : undefined;
     const snapshot = priceScope ? await readPrivateBooksySnapshot(path!) : null;
@@ -56,6 +64,7 @@ if (import.meta.main) {
       const { bookingLinks, priceHolds, ...report } = await inspectNativeBooksy(db, hash, date, {
         bookingLinks: !!directory,
         priceHolds: priceScope,
+        preparedCopy,
       });
       if (directory && bookingLinks) {
         await privateWriteVerified(
@@ -103,7 +112,7 @@ if (import.meta.main) {
   } catch {
     // Database and parser errors can include original notes, references or connection information.
     console.error(
-      "Candidate report failed. Check the connection, snapshot, date and optional private input or output path.",
+      "Booksy reconciliation failed. Check the isolated copy, snapshot, date and any private option argument.",
     );
     process.exitCode = 1;
   }

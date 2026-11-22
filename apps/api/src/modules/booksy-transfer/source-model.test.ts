@@ -8,6 +8,8 @@ import {
   appointment,
   appointmentContext,
   appointmentService,
+  auditLog,
+  checkout,
   retailProduct,
   salonSettings,
   staffReservation,
@@ -1024,7 +1026,12 @@ test("candidate reconciliation rejects invented processing and an inactive staff
     expect(verified.priceHolds).toBeUndefined();
     const verifyPaymentEvidence = () =>
       inspectNativeBooksy(db, hash, source.fromDate, { paymentEvidence: true });
+    const inspectPreparedCopy = () =>
+      inspectNativeBooksy(db, hash, source.fromDate, { preparedCopy: true });
     await expect(verifyPaymentEvidence()).rejects.toThrow(
+      "Native payment holds differ from the archived reservation evidence",
+    );
+    await expect(inspectPreparedCopy()).rejects.toThrow(
       "Native payment holds differ from the archived reservation evidence",
     );
     await db
@@ -1032,6 +1039,47 @@ test("candidate reconciliation rejects invented processing and an inactive staff
       .set({ sourcePaymentUnverified: true })
       .where(eq(appointmentContext.appointmentId, booking.id));
     expect((await verifyPaymentEvidence()).nativeFieldsVerified).toBe(true);
+    const draftId = crypto.randomUUID();
+    await db.insert(checkout).values({
+      id: draftId,
+      subtotalCents: 1200,
+      totalCents: 1200,
+      idempotencyKey: draftId,
+      requestHash: "prepared-copy-test",
+    });
+    await expect(report()).rejects.toThrow("The candidate contains operational effects");
+    const paymentLines = await db
+      .select({ id: appointmentContext.id, version: appointmentContext.billingVersion })
+      .from(appointmentContext)
+      .where(eq(appointmentContext.appointmentId, booking.id));
+    const unpaidReviewId = crypto.randomUUID();
+    await db.insert(auditLog).values({
+      id: unpaidReviewId,
+      action: "commerce.imported_unpaid_confirmed",
+      entity: "appointment",
+      entityId: booking.id,
+      metadata: {
+        snapshot: JSON.stringify(paymentLines.map(({ id, version }) => `${id}:${version}`).sort()),
+        reference: "Synthetic review",
+      },
+    });
+    await db.update(salonSettings).set({ reminderFirstLeadMinutes: 1440 });
+    const prepared = await inspectPreparedCopy();
+    expect(prepared.inspectionMode).toBe("prepared-copy");
+    expect(prepared.nativeFieldsVerified).toBe(true);
+    expect(prepared.canCutOver).toBe(false);
+    expect(prepared.candidate.receipts).toBe(1);
+    expect(prepared.candidate.payments).toBe(0);
+    expect(prepared.localPaymentReviews).toEqual({
+      confirmedUnpaid: 1,
+      externallySettled: 0,
+      partialPayments: 0,
+    });
+    expect(prepared.scheduleByStart).toBeUndefined();
+    expect(await db.select({ id: checkout.id }).from(checkout)).toEqual([{ id: draftId }]);
+    await db.delete(checkout).where(eq(checkout.id, draftId));
+    await db.delete(auditLog).where(eq(auditLog.id, unpaidReviewId));
+    await db.update(salonSettings).set({ reminderFirstLeadMinutes: null });
     const withPrivateLinks = await inspectNativeBooksy(db, hash, source.fromDate, {
       bookingLinks: true,
       priceHolds: "day",
