@@ -20,6 +20,8 @@ import {
   mcpListScheduleOutput,
   mcpListServicesInput,
   mcpListServicesOutput,
+  mcpQuoteAppointmentPriceInput,
+  mcpQuoteAppointmentPriceOutput,
   type OAuthScope,
 } from "@sob/contracts";
 import type { Database } from "@sob/db";
@@ -45,6 +47,7 @@ import {
 import { findAvailability } from "../modules/availability/service";
 import { getBookingPolicy } from "../modules/booking-protection/policy";
 import { listClients } from "../modules/clients/admin";
+import { previewPeakSlot } from "../modules/peak-prices/service";
 import { listServices } from "../modules/services/service";
 import { listStaff } from "../modules/staff/service";
 import { bookingOutcome } from "../observability/booking";
@@ -151,6 +154,21 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
   );
 
   server.registerTool(
+    "quote_appointment_price",
+    {
+      title: "Review a selected appointment price",
+      description:
+        "Returns the price, any peak-time surcharge and a review token for the selected time. Show the complete price to the customer and get explicit confirmation before sending the token to create_appointment. A null review means no peak-time surcharge.",
+      inputSchema: mcpQuoteAppointmentPriceInput.shape,
+      outputSchema: mcpQuoteAppointmentPriceOutput.shape,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    guarded(ctx, "quote_appointment_price", (args: z.infer<typeof mcpQuoteAppointmentPriceInput>) =>
+      previewPeakSlot(db, args.serviceIds, args.startsAt, true),
+    ),
+  );
+
+  server.registerTool(
     "list_my_appointments",
     {
       title: "List appointments",
@@ -194,7 +212,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Book an appointment",
       description:
-        "Books an appointment at a start time returned by find_availability. Clients book for themselves; centre staff need schedule:write and must pass clientId (use find_client or list_clients). Pass a requestId you generate so a retry after a timeout cannot double-book. Record a requested professional only when the client asked for them.",
+        "Books an appointment at a start time returned by find_availability. Clients book for themselves; centre staff need schedule:write and must pass clientId (use find_client or list_clients). Review the price with quote_appointment_price and get explicit customer consent for any surcharge. Pass a requestId you generate so a retry after a timeout cannot double-book. Record a requested professional only when the client asked for them.",
       inputSchema: mcpCreateAppointmentInput.shape,
       outputSchema: mcpCreateAppointmentOutput.shape,
       annotations: {

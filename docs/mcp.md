@@ -28,7 +28,7 @@ Hosts must send the RFC 8707 `resource` parameter (the MCP URL) when authorizing
 
 | Scope                                           | What the user is told                                        | Tools                                                        |
 | ----------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
-| `mcp:read`                                     | View services, availability and the appointments you can see | `list_services`, `find_availability`, `list_my_appointments` |
+| `mcp:read`                                     | View services, availability and the appointments you can see | `list_services`, `find_availability`, `list_my_appointments`, `quote_appointment_price` |
 | `mcp:book`                                      | Book and cancel your own appointments as a customer          | `create_appointment`, `cancel_appointment`                   |
 | `schedule:read` (staff and owner accounts only) | Read the staff schedule and look up clients                  | `list_schedule`, `find_client`                               |
 | `offline_access`                                | Stay connected until you remove access                       | refresh tokens                                               |
@@ -93,7 +93,7 @@ Appointment notes are written by clients, so staff and owner tokens receive `not
 ## Booking flow an assistant should follow
 
 1. `list_services` for ids.
-2. `find_availability` for the day the user wants.
+2. `find_availability` for the day the user wants. Call `quote_appointment_price` for the chosen start and show the price of each service, including any surcharge, before confirming. Supply its non-null `review` as `peakPriceReview` only after the customer accepts. If `peak_price_changed` comes back, request a fresh quote and review it again.
 3. `create_appointment` with a slot copied exactly and a fresh `requestId`. On `slot_taken` go back to step 2.
 4. Confirm to the user. `cancel_appointment` undoes it.
 

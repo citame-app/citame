@@ -63,6 +63,8 @@ struct Contact {
 pub struct ReviewedBooking {
     #[serde(flatten)]
     terms: BookingTerms,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    peak_price_review: Option<String>,
     #[serde(flatten)]
     forms: ReviewedForms,
 }
@@ -75,6 +77,21 @@ struct ReviewedForms {
     intake_submission_ids: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     intake_responses: Vec<IntakeResponse>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeakPriceQuote {
+    pub review: Option<String>,
+    pub services: Vec<PeakPriceLine>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeakPriceLine {
+    pub service_id: String,
+    pub surcharge_cents: i64,
+    pub price_cents: i64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
@@ -166,6 +183,8 @@ pub enum BookingError {
     SlotUnavailable,
     #[error("the reviewed catalogue changed")]
     CatalogueChanged,
+    #[error("the reviewed peak-time price changed")]
+    PeakPriceChanged,
     #[error("access to the requested booking changed")]
     AccessChanged,
     #[error("this booking identity is associated with a different request")]
@@ -253,6 +272,7 @@ impl BookingTerms {
     pub fn reviewed(&self, review_hash: String, intake: IntakeSelection) -> ReviewedBooking {
         ReviewedBooking {
             terms: self.clone(),
+            peak_price_review: None,
             forms: ReviewedForms {
                 intake_review_hash: review_hash,
                 intake_submission_ids: intake.saved,
@@ -263,6 +283,11 @@ impl BookingTerms {
 }
 
 impl ReviewedBooking {
+    pub fn with_peak_price_review(mut self, quote: Option<&PeakPriceQuote>) -> Self {
+        self.peak_price_review = quote.and_then(|quote| quote.review.clone());
+        self
+    }
+
     /// Keep an opaque origin marker only. The booking and its responses stay in memory.
     pub fn mark_local_dispatch(&self, store: &mut Store) -> Result<()> {
         store.mark_local_booking_dispatch(&self.terms.id, &self.terms.generation)

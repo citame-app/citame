@@ -18,6 +18,8 @@ import {
   setupApiTest,
 } from "../../../test/helpers";
 
+import { pricePeakSlot } from "./service";
+
 let t: Awaited<ReturnType<typeof setupApiTest>>;
 let f: Fixtures;
 let owner: Actor;
@@ -180,4 +182,28 @@ test("series preview binds the price of each occurrence and cannot charge an unr
     { priceCents: 11400, peakSurchargeCents: 1400 },
     { priceCents: 11400, peakSurchargeCents: 1400 },
   ]);
+});
+
+test("two treatments use their individual starts, including the first treatment's cleanup", () => {
+  const services = ["first", "second"].map((id) => ({
+    id,
+    name: id,
+    description: null,
+    currency: "EUR",
+    durationMinutes: 30,
+    bufferMinutes: 10,
+    priceCents: 10000,
+  }));
+  const quote = pricePeakSlot(
+    {
+      version: 1,
+      rules: [
+        { weekday: 1, startMinute: 580, endMinute: 600, increaseBasisPoints: 1000, serviceIds: [] },
+      ],
+    },
+    services,
+    new Date(startsAt),
+    "America/Argentina/Buenos_Aires",
+  );
+  expect(quote.services.map((line) => line.surchargeCents)).toEqual([0, 1000]);
 });

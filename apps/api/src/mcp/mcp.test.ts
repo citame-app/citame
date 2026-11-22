@@ -46,6 +46,7 @@ const CLIENT_TOOLS = [
   "find_availability",
   "list_my_appointments",
   "list_services",
+  "quote_appointment_price",
 ];
 
 async function appointmentCount(): Promise<number> {

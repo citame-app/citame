@@ -29,6 +29,9 @@ import { verifyArtifacts } from "./vault";
 export const archivedServiceColumns = {
   ...getTableColumns(appointmentService),
   priceType: sql<string>`coalesce(to_jsonb(${appointmentService})->>'price_type','fixed')`,
+  peakSurchargeCents: sql<
+    number | null
+  >`(to_jsonb(${appointmentService})->>'peak_surcharge_cents')::integer`,
   reviewedPriceCents: sql<
     number | null
   >`(to_jsonb(${appointmentService})->>'reviewed_price_cents')::integer`,

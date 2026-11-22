@@ -82,6 +82,7 @@ export const waitlistOfferSchema = z.object({
       processing: processingTimeSchema.optional(),
       bufferMinutes: z.number().int().nonnegative(),
       priceCents: z.number().int().nonnegative(),
+      peakSurchargeCents: z.number().int().positive().optional(),
       priceType: servicePriceTypeSchema.optional(),
       bookingIntervalMinutes: z.number().int().min(1).max(120).optional(),
       clientInstructions: z.string().optional(),

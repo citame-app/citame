@@ -1,8 +1,8 @@
 use super::intake_editor::{self, IntakeDraft};
 use super::*;
 use sob_core::booking::{
-    BookingAttempt, BookingConfirmation, BookingError, BookingTerms, Cadence, Recurrence,
-    ReviewedBooking, ReviewedSeries, SeriesPreview,
+    BookingAttempt, BookingConfirmation, BookingError, BookingTerms, Cadence, PeakPriceQuote,
+    Recurrence, ReviewedBooking, ReviewedSeries, SeriesPreview,
 };
 use sob_core::sync::TransportError;
 
@@ -12,6 +12,8 @@ pub(super) struct BookingReview {
     service_summary: Vec<String>,
     forms: Vec<IntakeDraft>,
     review_hash: Option<String>,
+    peak_price: Option<PeakPriceQuote>,
+    requires_explicit_confirmation: bool,
     submitted: Option<BookingAttempt>,
     series: Option<(SeriesPreview, ReviewedSeries)>,
     can_waive: bool,
@@ -30,7 +32,11 @@ impl BookingReview {
     fn packet(&self, cx: &App) -> Option<ReviewedBooking> {
         let hash = self.review_hash.as_ref()?;
         let selection = intake_editor::selection(&self.forms, cx)?;
-        Some(self.terms.reviewed(hash.clone(), selection))
+        Some(
+            self.terms
+                .reviewed(hash.clone(), selection)
+                .with_peak_price_review(self.peak_price.as_ref()),
+        )
     }
 }
 
@@ -231,6 +237,8 @@ impl Root {
             identity: Arc::new(()),
             forms: Vec::new(),
             review_hash: None,
+            peak_price: None,
+            requires_explicit_confirmation: false,
             submitted: None,
             series: None,
             can_waive: false,
@@ -267,6 +275,7 @@ impl Root {
         let session = self.svc.session.clone();
         review.busy = true;
         review.review_hash = None;
+        review.peak_price = None;
         review.series = None;
         form.error = None;
         cx.notify();
@@ -276,7 +285,12 @@ impl Root {
                 .spawn(async move {
                     let requirements = transport.direct_booking_requirements(&terms)?;
                     let can_waive = series && transport.can_waive_deposit()?;
-                    Ok::<_, TransportError>((requirements, can_waive))
+                    let peak_price = if series {
+                        None
+                    } else {
+                        Some(transport.booking_peak_price(&terms)?)
+                    };
+                    Ok::<_, TransportError>((requirements, can_waive, peak_price))
                 })
                 .await;
             let _ = view.update(cx, |root, cx| {
@@ -296,7 +310,7 @@ impl Root {
                 };
                 review.busy = false;
                 match result {
-                    Ok((requirements, can_waive)) => {
+                    Ok((requirements, can_waive, peak_price)) => {
                         let Some(generation) = requirements.desktop_generation.clone() else {
                             form.error = Some(Key::BookingIntakeUnavailable);
                             cx.notify();
@@ -312,7 +326,14 @@ impl Root {
                         intake_editor::refresh(&mut review.forms, requirements, root.locale, cx);
                         review.review_hash = Some(hash);
                         review.can_waive = can_waive;
-                        if review.forms.is_empty() && !can_waive {
+                        review.requires_explicit_confirmation |= peak_price
+                            .as_ref()
+                            .is_some_and(|price| price.review.is_some());
+                        review.peak_price = peak_price;
+                        if review.forms.is_empty()
+                            && !can_waive
+                            && !review.requires_explicit_confirmation
+                        {
                             root.confirm_booking_intake(cx);
                             return;
                         }
@@ -429,6 +450,14 @@ impl Root {
                             form.intake = None;
                             form.error = Some(Key::ConflictSlotTaken);
                         }
+                    }
+                    Err(BookingError::PeakPriceChanged) => {
+                        review.submitted = None;
+                        review.series = None;
+                        review.review_hash = None;
+                        review.peak_price = None;
+                        review.requires_explicit_confirmation = true;
+                        form.error = Some(Key::PeakPriceChanged);
                     }
                     Err(BookingError::CatalogueChanged) => {
                         form.intake = None;
@@ -606,12 +635,37 @@ impl Root {
                     .text_sm()
                     .child(self.date_time_label(review.terms.starts_at())),
             );
-        body = body.children(
-            review
-                .service_summary
-                .iter()
-                .map(|summary| div().text_sm().child(summary.clone())),
-        );
+        let adjusted = review
+            .peak_price
+            .as_ref()
+            .filter(|quote| quote.review.is_some());
+        if let Some(quote) = adjusted {
+            body = body.children(review.terms.services().iter().map(|service| {
+                let line = quote
+                    .services
+                    .iter()
+                    .find(|line| service.service_id.as_deref() == Some(line.service_id.as_str()));
+                let price = line.map_or(service.price_cents, |line| line.price_cents);
+                let amount = self.amount_label(price, &service.currency);
+                div()
+                    .text_sm()
+                    .child(format!("{} · {amount}", service.name))
+                    .when_some(line.filter(|line| line.surcharge_cents > 0), |row, line| {
+                        let amount = self.amount_label(line.surcharge_cents, &service.currency);
+                        row.child(div().text_color(theme::muted()).child(i18n::fill(
+                            self.t(Key::PeakPriceSurcharge),
+                            &[("amount", &amount)],
+                        )))
+                    })
+            }));
+        } else {
+            body = body.children(
+                review
+                    .service_summary
+                    .iter()
+                    .map(|summary| div().text_sm().child(summary.clone())),
+            );
+        }
         if !awaiting
             && review.series.is_none()
             && review.review_hash.is_some()

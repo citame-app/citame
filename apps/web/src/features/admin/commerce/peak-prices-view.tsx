@@ -1,4 +1,11 @@
-import { type PeakPricePolicy, type PeakPriceRule, peakPricePolicySchema } from "@sob/contracts";
+import {
+  MAX_PEAK_PRICE_BASIS_POINTS,
+  MAX_PEAK_PRICE_RULES,
+  MAX_PEAK_PRICE_SERVICES,
+  type PeakPricePolicy,
+  type PeakPriceRule,
+  peakPricePolicySchema,
+} from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Button } from "~/components/ui/button";
@@ -146,7 +153,7 @@ function PeakPricesEditor({ initial }: { initial: PeakPricePolicy }) {
                 label={t("peakPrices.increase")}
                 type="number"
                 min="0.01"
-                max="100"
+                max={MAX_PEAK_PRICE_BASIS_POINTS / 100}
                 step="0.01"
                 required
                 value={
@@ -166,7 +173,8 @@ function PeakPricesEditor({ initial }: { initial: PeakPricePolicy }) {
                   name: catalog.data.services.find((service) => service.id === id)?.name ?? id,
                 }))}
                 reviewedCatalogue={services}
-                maximum={200}
+                maximum={MAX_PEAK_PRICE_SERVICES}
+                emptySelectionHint={t("peakPrices.allServices")}
                 disabled={save.isPending}
                 onChange={(selected) => setRule(key, { serviceIds: selected.map(({ id }) => id) })}
               />
@@ -175,7 +183,7 @@ function PeakPricesEditor({ initial }: { initial: PeakPricePolicy }) {
               <Button
                 type="button"
                 variant="secondary"
-                disabled={draft.length >= 100}
+                disabled={draft.length >= MAX_PEAK_PRICE_RULES}
                 onClick={() => append({ ...rule, weekday: (rule.weekday % 7) + 1 })}
               >
                 {t("peakPrices.copy")}
@@ -197,7 +205,7 @@ function PeakPricesEditor({ initial }: { initial: PeakPricePolicy }) {
           <Button
             type="button"
             variant="secondary"
-            disabled={draft.length >= 100}
+            disabled={draft.length >= MAX_PEAK_PRICE_RULES}
             onClick={() =>
               append({
                 weekday: 1,

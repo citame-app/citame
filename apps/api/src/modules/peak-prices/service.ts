@@ -95,6 +95,15 @@ export async function savePeakPricePolicy(
   });
 }
 
+function rulesAt(rules: PeakPriceRule[], startsAtMs: number, timeZone: string) {
+  const local = Temporal.Instant.fromEpochMilliseconds(startsAtMs).toZonedDateTimeISO(timeZone);
+  const minute = local.hour * 60 + local.minute;
+  return rules.filter(
+    (rule) =>
+      rule.weekday === local.dayOfWeek && rule.startMinute <= minute && minute < rule.endMinute,
+  );
+}
+
 /** Base catalogue prices, exact slot and reviewed policy jointly define the final amount. */
 export function pricePeakSlot(
   policy: Pick<PeakPricePolicy, "version" | "rules">,
@@ -103,15 +112,13 @@ export function pricePeakSlot(
   timeZone: string,
 ): PeakPriceQuote {
   const instant = startsAt.toISOString();
-  const local = Temporal.Instant.fromEpochMilliseconds(startsAt.getTime()).toZonedDateTimeISO(
-    timeZone,
-  );
-  const minute = local.hour * 60 + local.minute;
-  const candidates = policy.rules.filter(
-    (rule) =>
-      rule.weekday === local.dayOfWeek && rule.startMinute <= minute && minute < rule.endMinute,
-  );
+  let offsetMinutes = 0;
   const lines = services.map((item) => {
+    const serviceOffset = offsetMinutes;
+    offsetMinutes += item.durationMinutes + item.bufferMinutes;
+    const candidates = policy.rules.length
+      ? rulesAt(policy.rules, startsAt.getTime() + serviceOffset * 60_000, timeZone)
+      : [];
     const baseCents = item.priceCents;
     const eligible =
       item.priceType === undefined || item.priceType === "fixed" || item.priceType === "from";

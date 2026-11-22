@@ -219,7 +219,7 @@ async function reviewDesktopVisit(
       throw new DomainError("validation_error", "The professional does not perform these services");
     await prepareBookingIntake(tx, request, input.clientId, principal.userId, now, services, true);
     const endsAt = new Date(startsAt.getTime() + totalBlockMinutes(services) * 60000);
-    let available = true;
+    let available: boolean;
     try {
       await assertBookable(tx, {
         staffId: part.staffId,

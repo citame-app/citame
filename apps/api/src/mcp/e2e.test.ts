@@ -179,6 +179,7 @@ describe("MCP client end to end over HTTP", () => {
       "find_availability",
       "list_my_appointments",
       "list_services",
+      "quote_appointment_price",
     ]);
     const cancel = tools.find((tool) => tool.name === "cancel_appointment");
     expect(cancel?.annotations?.destructiveHint).toBe(true);

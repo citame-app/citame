@@ -255,8 +255,9 @@ export function VisitReview({ booking }: { booking: BookingContext }) {
         error instanceof NetworkError ||
         error instanceof ResponseShapeError ||
         (error instanceof ApiError && error.status >= 500);
-      setUncertain(unknown);
-      if (unknown) return;
+      const stalePeakPrice = error instanceof ApiError && error.code === "peak_price_changed";
+      setUncertain(unknown && !stalePeakPrice);
+      if (unknown && !stalePeakPrice) return;
       packet.current = null;
       recoveryPending.current = false;
       if (error instanceof ApiError && error.code === "peak_price_changed") {

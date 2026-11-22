@@ -1,14 +1,18 @@
 import { z } from "zod";
 import { idSchema, instantSchema, syncGenerationSchema } from "./common";
 
+export const MAX_PEAK_PRICE_RULES = 100;
+export const MAX_PEAK_PRICE_SERVICES = 200;
+export const MAX_PEAK_PRICE_BASIS_POINTS = 10_000;
+
 export const peakPriceReviewSchema = z.string().regex(/^[a-f0-9]{64}$/);
 export const peakPriceRuleSchema = z
   .object({
     weekday: z.number().int().min(1).max(7),
     startMinute: z.number().int().min(0).max(1439),
     endMinute: z.number().int().min(1).max(1440),
-    increaseBasisPoints: z.number().int().min(1).max(10_000),
-    serviceIds: z.array(idSchema).max(200).default([]),
+    increaseBasisPoints: z.number().int().min(1).max(MAX_PEAK_PRICE_BASIS_POINTS),
+    serviceIds: z.array(idSchema).max(MAX_PEAK_PRICE_SERVICES).default([]),
   })
   .strict()
   .refine((rule) => rule.startMinute < rule.endMinute, {
@@ -19,7 +23,7 @@ export const peakPricePolicySchema = z
   .object({
     version: z.number().int().nonnegative().max(2_147_483_647),
     generation: syncGenerationSchema,
-    rules: z.array(peakPriceRuleSchema).max(100),
+    rules: z.array(peakPriceRuleSchema).max(MAX_PEAK_PRICE_RULES),
   })
   .strict();
 

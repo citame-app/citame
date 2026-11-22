@@ -18,6 +18,7 @@ import { lockCalendars, lockScheduling, type Tx } from "../../tx";
 import { createAppointment, loadSnapshots, toAppointment } from "../appointments/service";
 import { getBookingPolicy } from "../booking-protection/policy";
 import { protectionView } from "../booking-protection/value";
+import { quotePeakSlot } from "../peak-prices/service";
 import { getBookableServices } from "../services/service";
 import { assertOnlineBookingEnabled, getSalonSettings } from "../settings/service";
 import { offerServices } from "./matching";
@@ -126,12 +127,18 @@ export async function acceptWaitlist(
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('booking-policy',0))`);
     const settings = await getSalonSettings(tx);
     assertOnlineBookingEnabled(settings, p.role);
-    const current = offerServices(await getBookableServices(tx, entry.serviceIds));
+    const services = await getBookableServices(tx, entry.serviceIds);
+    const price = await quotePeakSlot(tx, services, offer.startsAt, settings.timezone);
+    const current = offerServices(services, price.services);
     const policy = await getBookingPolicy(tx);
     if (
       settings.timezone !== entry.timezone ||
       input.expectedTotalCents !== offer.priceCents ||
-      selectionHash({ services: current, policy }) !== offer.catalogHash
+      selectionHash({
+        services: current,
+        policy,
+        ...(price.review ? { peakPriceReview: price.review } : {}),
+      }) !== offer.catalogHash
     )
       throw new DomainError(
         "version_conflict",
@@ -142,7 +149,12 @@ export async function acceptWaitlist(
       .update(waitlistOffer)
       .set({ state: "cancelled" })
       .where(eq(waitlistOffer.id, offer.id));
-    const created = await createAppointment(tx, booking, { userId: p.userId }, { now });
+    const created = await createAppointment(
+      tx,
+      { ...booking, peakPriceReview: price.review ?? undefined },
+      { userId: p.userId },
+      { now },
+    );
     await tx
       .update(waitlistOffer)
       .set({

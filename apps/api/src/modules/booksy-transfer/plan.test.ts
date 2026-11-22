@@ -41,6 +41,12 @@ test("old staff receipts survive the absence migration and still detect a portra
 
 test("old service receipts survive the migration and still detect a change to unknown pricing", () => {
   const original = { id: "booked-service", priceCents: 0 };
+  expect(targetFingerprint("appointmentServices", { ...original, peakSurchargeCents: null })).toBe(
+    fingerprint(original),
+  );
+  expect(targetFingerprint("appointmentServices", { ...original, peakSurchargeCents: 1 })).not.toBe(
+    fingerprint(original),
+  );
   expect(targetFingerprint("appointmentServices", { ...original, sourceUnpriced: false })).toBe(
     fingerprint(original),
   );

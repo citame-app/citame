@@ -21,7 +21,7 @@ import { useI18n } from "~/i18n/react";
 import { ApiError } from "~/lib/api/client";
 import type { CommerceMode } from "~/lib/api/commerce-endpoints";
 import { api } from "~/lib/api/instance";
-import { formatDateLong, formatTime, localDateOf } from "~/lib/format";
+import { formatDateLong, formatMoney, formatTime, localDateOf } from "~/lib/format";
 export function WaitlistOfferReview({
   entry,
   mode,
@@ -110,7 +110,16 @@ export function WaitlistOfferReview({
         {offer.services.map((s) => (
           <li key={s.id} className="flex min-w-0 items-start justify-between gap-3">
             <span className="min-w-0 break-words">{s.name}</span>
-            <span className="shrink-0">{priceLabel(t, locale, s, true)}</span>
+            <div className="shrink-0 text-right">
+              <p>{priceLabel(t, locale, s, true)}</p>
+              {s.peakSurchargeCents && (
+                <p className="text-sm text-muted">
+                  {t("bookingPeak.surcharge", {
+                    amount: formatMoney(s.peakSurchargeCents, s.currency, locale),
+                  })}
+                </p>
+              )}
+            </div>
           </li>
         ))}
       </ul>

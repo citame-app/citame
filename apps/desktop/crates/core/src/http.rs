@@ -2037,6 +2037,23 @@ impl HttpTransport {
         Ok(viewer.user.role == "owner" || viewer.access_preset.as_deref() == Some("manager"))
     }
 
+    pub fn booking_peak_price(
+        &self,
+        terms: &BookingTerms,
+    ) -> Result<crate::booking::PeakPriceQuote, TransportError> {
+        let services = terms.service_ids().join(",");
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("serviceIds", &services)
+            .append_pair("startsAt", &terms.starts_at().to_rfc3339())
+            .finish();
+        let response = self.get(
+            &self.agent,
+            &format!("/appointments/peak-price?{query}"),
+            None,
+        )?;
+        read_response(response, false)
+    }
+
     pub fn direct_booking_requirements(
         &self,
         terms: &BookingTerms,
@@ -2231,6 +2248,7 @@ fn classify_booking_error(status: u16, retry_after: Option<&str>, body: &str) ->
         (409, Some("intake_required")) => BookingError::IntakeChanged,
         (409, Some("slot_taken" | "slot_unavailable")) => BookingError::SlotUnavailable,
         (409, Some("version_conflict")) => BookingError::CatalogueChanged,
+        (409, Some("peak_price_changed")) => BookingError::PeakPriceChanged,
         (409, Some("booking_intent_conflict")) => BookingError::IntentConflict,
         (401, Some("unauthorized")) | (403, Some("forbidden")) | (404, Some("not_found")) => {
             BookingError::AccessChanged

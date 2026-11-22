@@ -1,3 +1,4 @@
+import type { PeakPriceQuote } from "@sob/contracts";
 import {
   clientProfile,
   type Database,
@@ -19,6 +20,7 @@ import { repackStaff } from "../availability/staff-reservations";
 import { serviceWorkWindows } from "../availability/work-windows";
 import { getBookingPolicy } from "../booking-protection/policy";
 import { assertClientCanBook } from "../clients/controls";
+import { quotePeakSlot } from "../peak-prices/service";
 import { reserveResources } from "../resources/reservations";
 import { assertOnlineServices, getBookableServices, type ServiceRow } from "../services/service";
 import { getSalonSettings } from "../settings/service";
@@ -27,19 +29,24 @@ import { type EntryRow, getWaitlistPolicy, localToday, selectionHash } from "./s
 
 type Connection = Database | Tx;
 
-export function offerServices(services: ServiceRow[]) {
-  return services.map((s) => ({
-    id: s.id,
-    name: s.name,
-    durationMinutes: s.durationMinutes,
-    bufferMinutes: s.bufferMinutes,
-    ...(s.processing ? { processing: s.processing } : {}),
-    priceCents: s.priceCents,
-    ...(s.priceType ? { priceType: s.priceType } : {}),
-    ...(s.bookingIntervalMinutes ? { bookingIntervalMinutes: s.bookingIntervalMinutes } : {}),
-    ...(s.clientInstructions ? { clientInstructions: s.clientInstructions } : {}),
-    currency: s.currency,
-  }));
+export function offerServices(services: ServiceRow[], prices: PeakPriceQuote["services"]) {
+  const quotedByService = new Map(prices.map((line) => [line.serviceId, line]));
+  return services.map((s) => {
+    const quote = quotedByService.get(s.id);
+    return {
+      id: s.id,
+      name: s.name,
+      durationMinutes: s.durationMinutes,
+      bufferMinutes: s.bufferMinutes,
+      ...(s.processing ? { processing: s.processing } : {}),
+      priceCents: quote?.priceCents ?? s.priceCents,
+      ...(quote?.surchargeCents ? { peakSurchargeCents: quote.surchargeCents } : {}),
+      ...(s.priceType ? { priceType: s.priceType } : {}),
+      ...(s.bookingIntervalMinutes ? { bookingIntervalMinutes: s.bookingIntervalMinutes } : {}),
+      ...(s.clientInstructions ? { clientInstructions: s.clientInstructions } : {}),
+      currency: s.currency,
+    };
+  });
 }
 async function finishEntry(tx: Tx, entry: EntryRow, state: "expired" | "unavailable", now: Date) {
   await tx
@@ -331,7 +338,9 @@ async function matchEntry(db: Connection, id: string, now: Date): Promise<boolea
             and(eq(waitlistEntry.clientId, entry.clientId), gte(waitlistOffer.createdAt, dayStart)),
           );
         if ((latestDaily?.n ?? 0) >= 3) return false;
-        const snapshots = offerServices(await getBookableServices(tx, entry.serviceIds));
+        const services = await getBookableServices(tx, entry.serviceIds);
+        const price = await quotePeakSlot(tx, services, new Date(slot.startsAt), settings.timezone);
+        const snapshots = offerServices(services, price.services);
         const bookingPolicy = await getBookingPolicy(tx);
         const priceCents = snapshots.reduce((n, s) => n + s.priceCents, 0);
         if (priceCents > 999999999) {
@@ -351,7 +360,11 @@ async function matchEntry(db: Connection, id: string, now: Date): Promise<boolea
               ? { workWindows: sql`${JSON.stringify(serviceWorkWindows(snapshots))}::jsonb` }
               : {}),
             policy: bookingPolicy,
-            catalogHash: selectionHash({ services: snapshots, policy: bookingPolicy }),
+            catalogHash: selectionHash({
+              services: snapshots,
+              policy: bookingPolicy,
+              ...(price.review ? { peakPriceReview: price.review } : {}),
+            }),
             priceCents,
             currency: snapshots[0]?.currency ?? "EUR",
             createdAt: now,

@@ -39,6 +39,7 @@ export function targetFingerprint(kind: string, row: Record<string, unknown>) {
     if (row.priceType === "fixed") delete originalFields.priceType;
     if (row.sourceUnpriced === false) delete originalFields.sourceUnpriced;
     if (row.reviewedPriceCents === null) delete originalFields.reviewedPriceCents;
+    if (row.peakSurchargeCents === null) delete originalFields.peakSurchargeCents;
     return fingerprint(originalFields);
   }
   return fingerprint(row);
