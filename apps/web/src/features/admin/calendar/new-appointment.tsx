@@ -2,6 +2,7 @@ import {
   type Appointment,
   type AppointmentSeriesInput,
   type AppointmentSeriesPreview,
+  type CreateAppointmentRequest,
   permissionsFor,
   type StaffAccessPreset,
   type UserRole,
@@ -21,7 +22,7 @@ import { acceptedServiceQuotes } from "~/features/booking/quotes";
 import { BookingForms, useBookingForms } from "~/features/intake/booking-forms";
 import { useI18n } from "~/i18n/react";
 import { adminStaffQuery, clientsQuery } from "~/lib/admin-queries";
-import { ApiError } from "~/lib/api/client";
+import { ApiError, NetworkError, ResponseShapeError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { formatDateLong, formatDuration, formatMoney, formatTime, localDateOf } from "~/lib/format";
 import { salonQuery } from "~/lib/queries";
@@ -103,6 +104,7 @@ function AppointmentDraft({
   const timeRef = useRef<HTMLInputElement>(null);
   const formId = useId();
   const submitting = useRef(false);
+  const requests = useRef(new Map<string, CreateAppointmentRequest>());
 
   const [values, setValues] = useState<WalkInValues>({
     clientMode: "existing",
@@ -157,6 +159,7 @@ function AppointmentDraft({
     timeZone,
   });
   const reviewed = review?.signature === signature ? review : null;
+  const recoverable = requests.current.has(signature);
   const unavailableVisit = reviewed?.data.occurrences.some((occurrence) => !occurrence.available);
   const seriesHasSurcharge = reviewed?.data.occurrences.some(
     (occurrence) => occurrence.peakSurchargeCents,
@@ -197,7 +200,9 @@ function AppointmentDraft({
     onError: (error) => setFailure(describeProblem(error)),
   });
   const create = useMutation({
-    mutationFn: async (startsAt: string) => {
+    mutationFn: async ({ startsAt, draft }: { startsAt: string; draft: string }) => {
+      const previous = requests.current.get(draft);
+      if (previous) return api().appointments.create(previous);
       if (!intake.ready) throw new Error("Complete the current forms");
       if (cadence !== "none") {
         if (!reviewed) throw new Error("Review the recurring visits first");
@@ -226,9 +231,12 @@ function AppointmentDraft({
         serviceQuotes: acceptedServiceQuotes(chosen),
         ...(waiver.trim() ? { protectionWaiverReason: waiver.trim() } : {}),
       };
-      return api().appointments.create({ ...request, id: intent(request) });
+      const packet = { ...request, id: intent(request) };
+      requests.current.set(draft, packet);
+      return api().appointments.create(packet);
     },
-    onSuccess: (appointment) => {
+    onSuccess: (appointment, { draft }) => {
+      requests.current.delete(draft);
       toast.success(
         cadence === "none"
           ? t("calendar.toast.created")
@@ -240,7 +248,16 @@ function AppointmentDraft({
       onCreated?.(appointment);
       onOpenChange(false);
     },
-    onError: (error) => {
+    onError: (error, { draft }) => {
+      if (
+        !(
+          error instanceof NetworkError ||
+          error instanceof ResponseShapeError ||
+          (error instanceof ApiError && error.status >= 500)
+        )
+      ) {
+        requests.current.delete(draft);
+      }
       if (error instanceof ApiError && error.code === "peak_price_changed") {
         if (cadence === "none") void peak.refetch();
         else setReview(null);
@@ -278,6 +295,10 @@ function AppointmentDraft({
 
   function submit() {
     if (submitting.current || unavailableVisit) return;
+    if (requests.current.has(signature)) {
+      void runSubmission(() => create.mutateAsync({ startsAt, draft: signature }));
+      return;
+    }
     const found = validateWalkIn({ ...values, startsAt });
     setShowErrors(Object.keys(found).length > 0);
     setFailure(null);
@@ -309,7 +330,7 @@ function AppointmentDraft({
         }),
       );
     } else if (cadence !== "none" || peakReady)
-      void runSubmission(() => create.mutateAsync(startsAt));
+      void runSubmission(() => create.mutateAsync({ startsAt, draft: signature }));
   }
 
   const errors = useMemo(
@@ -348,7 +369,10 @@ function AppointmentDraft({
           </Button>
           <Button
             loading={create.isPending || preview.isPending}
-            disabled={!intake.ready || unavailableVisit || (cadence === "none" && peak.isFetching)}
+            disabled={
+              !recoverable &&
+              (!intake.ready || unavailableVisit || (cadence === "none" && peak.isFetching))
+            }
             type="submit"
             form={formId}
           >
