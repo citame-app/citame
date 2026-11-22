@@ -275,7 +275,11 @@ impl Root {
         if desk.request.is_none() && desk.submitted.is_some() &&
             !matches!(desk.error, Some(Key::ReportRestricted | Key::ReportRange)) &&
             desk.retry_at.map_or(
-                desk.observed_cursor != status.cursor || self.status.connectivity != Connectivity::Online,
+                desk.observed_cursor != status.cursor || self.status.connectivity != Connectivity::Online
+                    || desk.staff_work.as_ref().is_some_and(|work| {
+                        let zone = work.timezone.parse().unwrap_or(self.tz);
+                        work.upcoming.from != Utc::now().with_timezone(&zone).date_naive()
+                    }),
                 |retry| Instant::now() >= retry,
             ))
         {
@@ -746,7 +750,16 @@ impl Root {
                                 .when(desk.mode == ReportMode::Overview, |view| {
                                     view.child(self.render_report_summary(desk, report, cx))
                                         .when(desk.staff_work_failed, |view| {
-                                            view.child(self.t(Key::ReportStaffWorkError))
+                                            view.child(self.t(Key::ReportStaffWorkError)).child(
+                                                self.button(
+                                                    "retry-staff-work",
+                                                    self.t(Key::ReportStaffWorkRetry),
+                                                    Kind::Ghost,
+                                                    cx.listener(|root, _, _, cx| {
+                                                        root.submit_report(cx)
+                                                    }),
+                                                ),
+                                            )
                                         })
                                         .when_some(desk.staff_work.as_ref(), |view, work| {
                                             view.child(self.render_staff_work(desk, work, cx))
@@ -1136,22 +1149,26 @@ impl Root {
                         .child(
                             div()
                                 .min_w(px(680.))
-                                .child(report_table_row(
-                                    self.t(Group::Staff.label()).to_string(),
-                                    [
-                                        Key::OccupancyScheduled,
-                                        Key::OccupancyBlocked,
-                                        Key::OccupancyReserved,
-                                        Key::OccupancyCompleted,
-                                        Key::OccupancyMissed,
-                                    ]
-                                    .map(|key| self.t(key).to_string()),
-                                    Some(self.t(Key::OccupancyRate).to_string()),
-                                    true,
-                                ))
+                                .child(self.occupancy_table_head(Group::Staff.label()))
                                 .children(rows),
                         ),
                 ),
+        )
+    }
+
+    fn occupancy_table_head(&self, title: Key) -> impl IntoElement {
+        report_table_row(
+            self.t(title).to_string(),
+            [
+                Key::OccupancyScheduled,
+                Key::OccupancyBlocked,
+                Key::OccupancyReserved,
+                Key::OccupancyCompleted,
+                Key::OccupancyMissed,
+            ]
+            .map(|key| self.t(key).to_string()),
+            Some(self.t(Key::OccupancyRate).to_string()),
+            true,
         )
     }
 

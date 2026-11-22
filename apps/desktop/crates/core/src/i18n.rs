@@ -1013,6 +1013,7 @@ keys! {
     ReportStaffWorkUpcoming => ("Next 14 days", "Próximos 14 días"),
     ReportStaffWorkBlocks => ("Unavailable periods", "Franjas no disponibles"),
     ReportStaffWorkNoBlocks => ("No unavailable periods", "Sin franjas no disponibles"),
+    ReportStaffWorkRetry => ("Reload daily report", "Volver a cargar el informe diario"),
     ReportStaffWorkError => ("The daily work report could not be loaded.", "No se ha podido cargar el informe diario de trabajo."),
     ReportStaffWorkExport => ("Download daily CSV", "Descargar CSV diario"),
     TeamOccupancy => ("Team occupancy", "Ocupación del equipo"),

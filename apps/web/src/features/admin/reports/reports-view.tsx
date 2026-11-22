@@ -18,6 +18,7 @@ import { EmptyState, ErrorState, Skeleton } from "~/components/ui/states";
 import { useToast } from "~/components/ui/toast";
 import { useI18n } from "~/i18n/react";
 import { adminStaffQuery, reportQuery } from "~/lib/admin-queries";
+import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { formatDateWithYear, formatMoney, localDateOf } from "~/lib/format";
 import { useNow } from "../use-now";
@@ -122,7 +123,9 @@ export function ReportsView({
   const [topSort, setTopSort] = useState<SortingState>([{ id: "count", desc: true }]);
   const [staffSort, setStaffSort] = useState<SortingState>([{ id: "revenue", desc: true }]);
 
-  const report = showClients ? undefined : query.data;
+  const denied =
+    query.error instanceof ApiError && (query.error.status === 401 || query.error.status === 403);
+  const report = showClients || denied ? undefined : query.data;
   const hasOccupancy = report ? hasOccupancyMinutes(report.perStaff) : false;
   const canExportSummary = report && (report.totals.appointments > 0 || hasOccupancy);
   const currency = report?.currency ?? "ARS";
@@ -225,11 +228,15 @@ export function ReportsView({
   }
 
   function downloadCsv(data: string, name: string) {
+    downloadFile(data, `${name}-${range.from}-${range.to}.csv`);
+  }
+
+  function downloadFile(data: string, filename: string) {
     const blob = new Blob([data], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${name}-${range.from}-${range.to}.csv`;
+    link.download = filename;
     document.body.append(link);
     link.click();
     link.remove();
@@ -561,8 +568,9 @@ export function ReportsView({
             <StaffWorkReport
               staffId={report.perStaff[0].staffId}
               viewerId={viewerId}
+              today={today}
               range={range}
-              onDownload={downloadCsv}
+              onDownload={downloadFile}
             />
           )}
         </>

@@ -118,6 +118,7 @@ const staffOccupancySchema = z.object({
 export type StaffOccupancy = z.infer<typeof staffOccupancySchema>;
 
 export const reportStaffWorkQuerySchema = reportQuerySchema.safeExtend({ staffId: idSchema });
+export type ReportStaffWorkQuery = z.infer<typeof reportStaffWorkQuerySchema>;
 export const reportStaffWorkDaySchema = staffOccupancySchema.extend({ date: localDateSchema });
 export type ReportStaffWorkDay = z.infer<typeof reportStaffWorkDaySchema>;
 const reportStaffWorkPeriodSchema = z.object({

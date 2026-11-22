@@ -1,5 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderApp } from "../../../../test/render";
 import { StaffWorkReport } from "./staff-work";
 
@@ -41,25 +41,38 @@ test("a staff work report switches periods and exports the visible days", async 
       ],
     },
   };
+  let denied = false;
   const load = mock(async (input: RequestInfo | URL) => {
     const url = new URL(String(input), "http://localhost");
     expect(url.pathname).toBe("/api/admin/reports/staff-work");
     expect(url.searchParams.get("staffId")).toBe(staffId);
+    if (denied)
+      return Response.json(
+        { error: { code: "forbidden", message: "Scope changed" } },
+        { status: 403 },
+      );
     return Response.json(report);
   });
   globalThis.fetch = load as unknown as typeof fetch;
   const download = mock(() => {});
-  renderApp(<StaffWorkReport staffId={staffId} range={report.selected} onDownload={download} />, {
-    locale: "es-AR",
-  });
+  const { queryClient } = renderApp(
+    <StaffWorkReport staffId={staffId} range={report.selected} onDownload={download} />,
+    {
+      locale: "es-AR",
+    },
+  );
   expect(await screen.findByRole("table", { name: "Fechas seleccionadas" })).toBeInTheDocument();
   expect(screen.getByText("Sin franjas no disponibles")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Próximos 14 días" }));
   expect(screen.getByRole("table", { name: "Próximos 14 días" })).toBeInTheDocument();
-  expect(screen.getByRole("listitem")).toHaveTextContent(/11:00.*11:30/);
+  expect(screen.getByText(/11:00.*11:30/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Descargar CSV diario" }));
   expect(download).toHaveBeenCalledWith(
     expect.stringContaining("2026-11-22,240,30,90,60,30,0.4286"),
     "staff-work-2026-11-22-2026-11-22.csv",
   );
+  denied = true;
+  await queryClient.invalidateQueries({ queryKey: ["admin", "report", "staff-work"] });
+  await waitFor(() => expect(screen.queryByRole("table", { name: "Próximos 14 días" })).toBeNull());
+  expect(screen.queryByRole("button", { name: "Descargar CSV diario" })).toBeNull();
 });

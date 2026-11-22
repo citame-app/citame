@@ -122,19 +122,7 @@ impl Root {
             .child(
                 div()
                     .min_w(px(680.))
-                    .child(report_table_row(
-                        self.t(Key::ReportDay).to_string(),
-                        [
-                            Key::OccupancyScheduled,
-                            Key::OccupancyBlocked,
-                            Key::OccupancyReserved,
-                            Key::OccupancyCompleted,
-                            Key::OccupancyMissed,
-                        ]
-                        .map(|key| self.t(key).to_string()),
-                        Some(self.t(Key::OccupancyRate).to_string()),
-                        true,
-                    ))
+                    .child(self.occupancy_table_head(Key::ReportDay))
                     .children(
                         period
                             .days

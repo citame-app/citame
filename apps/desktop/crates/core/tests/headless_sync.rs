@@ -8397,3 +8397,37 @@ fn a_rust_offline_peak_quote_is_accepted_and_an_outdated_one_becomes_a_conflict(
     updated.rules = baseline.rules;
     cloud.transport.write_peak_price_policy(&updated).unwrap();
 }
+
+#[test]
+#[ignore = "requires the real proxy, OAuth and fixture database (see README)"]
+fn native_staff_work_report_matches_cloud_through_the_proxy() {
+    let desktop = proxy_device();
+    let mut store = Store::open_in_memory().unwrap();
+    sync::pull_all(&mut store, &*desktop.transport).unwrap();
+    let professional = store.staff().unwrap().remove(0);
+    let today = Utc::now()
+        .with_timezone(&salon_tz(&store).unwrap())
+        .date_naive();
+    let end = today + Span::days(2);
+    let query = ReportQuery {
+        staff_id: Some(professional.id.clone()),
+        from: today,
+        to: end,
+        currency: None,
+    };
+    let native = desktop.transport.staff_work_report(&query).unwrap();
+    assert_eq!(native.staff_id, professional.id);
+    assert_eq!(native.selected.days.len(), 3);
+    assert_eq!(native.upcoming.days.len(), 14);
+    assert_eq!(native.upcoming.from, today);
+    assert_eq!(
+        native.selected.totals.scheduled_minutes,
+        native
+            .selected
+            .days
+            .iter()
+            .map(|day| day.occupancy.scheduled_minutes)
+            .sum::<u64>(),
+    );
+    assert!(native.selected.to_csv().contains(&format!("{today},")));
+}
