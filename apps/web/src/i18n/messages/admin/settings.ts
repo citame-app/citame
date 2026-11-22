@@ -28,6 +28,7 @@ export const settingsEn = {
   "settings.media.remove": "Remove image",
   "settings.media.removeBody": "Remove this image from the profile and its drafts.",
   "settings.media.save": "Save image draft",
+  "settings.media.saved": "Image updated",
   "settings.media.error": "The image could not be saved. Check the file and try again.",
   "settings.media.conflict":
     "The profile or images changed. Review the latest version before saving.",
@@ -128,6 +129,7 @@ export const settingsEsAR: Record<keyof typeof settingsEn, string> = {
   "settings.media.remove": "Eliminar imagen",
   "settings.media.removeBody": "Elimina esta imagen de la ficha y sus borradores.",
   "settings.media.save": "Guardar borrador de imagen",
+  "settings.media.saved": "Imagen actualizada",
   "settings.media.error": "No se pudo guardar la imagen. Revisa el archivo e inténtalo de nuevo.",
   "settings.media.conflict":
     "La ficha o sus imágenes cambiaron. Revisa la última versión antes de guardar.",

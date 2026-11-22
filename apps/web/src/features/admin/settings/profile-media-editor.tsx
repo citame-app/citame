@@ -6,7 +6,7 @@ import {
 } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { ConfirmDialog } from "~/components/ui/dialog";
 import { TextField } from "~/components/ui/field";
@@ -37,6 +37,7 @@ export function ProfileMediaEditor() {
   const router = useRouter();
   const cache = useQueryClient();
   const toast = useToast();
+  const latestNotice = useRef<string>(undefined);
   const online = useOnline();
   const query = useQuery({ queryKey: key, queryFn: () => api().admin.settings.profileImages() });
   const data = query.data;
@@ -71,7 +72,7 @@ export function ProfileMediaEditor() {
       cache.setQueryData(key, snapshot);
       if ("draft" in input) setDraft(null);
       setRemoval(null);
-      toast.success(t("settings.saved"));
+      latestNotice.current = toast.success(t("settings.media.saved"), latestNotice.current);
       await cache.invalidateQueries({ queryKey: ["admin", "settings"] });
       void router.invalidate();
     },

@@ -13,6 +13,15 @@ function Trigger() {
       <button type="button" onClick={() => toast.error("Something went wrong")}>
         error
       </button>
+      <button
+        type="button"
+        onClick={() => {
+          const previous = toast.success("Draft saved");
+          toast.success("Image published", previous);
+        }}
+      >
+        replace
+      </button>
     </>
   );
 }
@@ -42,5 +51,14 @@ describe("toast", () => {
     await waitFor(() =>
       expect(screen.queryByText("Appointment cancelled")).not.toBeInTheDocument(),
     );
+  });
+
+  test("a replacement keeps one success message for the same action sequence", async () => {
+    renderApp(<Trigger />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "replace" }));
+    });
+    expect(await screen.findByText("Image published")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Draft saved")).not.toBeInTheDocument());
   });
 });

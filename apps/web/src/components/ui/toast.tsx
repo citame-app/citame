@@ -62,7 +62,10 @@ export function ToastHost({ children }: { children: ReactNode }) {
 export function useToast() {
   const manager = Toast.useToastManager();
   return {
-    success: (title: string) => manager.add({ title, type: "success" }),
+    success: (title: string, previousId?: string) => {
+      if (previousId) manager.close(previousId);
+      return manager.add({ title, type: "success" });
+    },
     error: (title: string) => manager.add({ title, type: "error", timeout: 8000 }),
     info: (title: string) => manager.add({ title, type: "info" }),
   };
