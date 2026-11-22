@@ -70,6 +70,8 @@ For catalogue changes, the owner can use `list_catalog_services` and pass the cu
 
 For physical cash movements, read the active session with `get_cash_session` and confirm the amount, direction and reason with the operator. Call `record_cash_movement` with that session ID and a stable idempotency key. When closing, pass the reviewed expected balance alongside the actual count so intervening movements trigger a version conflict.
 
+Use `get_staff_work_report` with `operations:read`, the professional's `staffId`, and two local calendar dates for `from` and `to`. The result matches the daily Web and Desktop report and includes a 14-day window starting today in the centre's time zone. Staff with operational report access and their own calendar only can read their own figures. The report includes durations and unavailable intervals without appointment notes or time-off reasons.
+
 Approve the exact booking, cash count or other change in the host before calling a write tool. Review a schedule-exception preview before applying its hash. Reuse the same idempotency key for a retry of the same action. Tool annotations are advisory to hosts; OAuth authorization and the normal service checks are enforced by Citame.
 
 ## Booking tools

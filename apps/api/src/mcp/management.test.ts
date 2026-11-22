@@ -198,6 +198,45 @@ test("owner read tools expose bounded summaries, and a read-only grant cannot wr
   }
 });
 
+test("the daily staff work tool shares the REST report and enforces the current calendar access", async () => {
+  const tool = "get_staff_work_report";
+  const owner = await actor(t, "owner", "report-owner@example.com");
+  const staff = await actor(t, "staff", "report-staff@example.com", { staffProfileId: f.anaId });
+  const ownerToken = (await tokenFor(t, owner, "operations:read")).tokens.access_token;
+  const staffToken = (await tokenFor(t, staff, "operations:read")).tokens.access_token;
+  const personalToken = (await tokenFor(t, owner, "mcp:read")).tokens.access_token;
+  expect(await listTools(t.app, ownerToken)).toContain(tool);
+  expect(await listTools(t.app, personalToken)).not.toContain(tool);
+
+  const own = { from: MONDAY, to: MONDAY, staffId: f.anaId };
+  const other = { ...own, staffId: f.beaId };
+  const rest = await json(
+    t.app,
+    `/admin/reports/staff-work?${new URLSearchParams(own)}`,
+    "GET",
+    undefined,
+    owner.cookie,
+  );
+  expect(rest.status).toBe(200);
+  const expected = await rest.json();
+  const ownerReport = await callTool(t.app, ownerToken, tool, own);
+  const staffReport = await callTool(t.app, staffToken, tool, own);
+  expect(ownerReport.data?.data).toEqual(expected);
+  expect(staffReport.data?.data).toEqual(expected);
+  expect(staffReport.data?.data?.upcoming.days).toHaveLength(14);
+  expect((await callTool(t.app, ownerToken, tool, other)).data?.data?.staffId).toBe(f.beaId);
+  expect((await callTool(t.app, staffToken, tool, other)).data?.error?.code).toBe("forbidden");
+  expect((await callTool(t.app, ownerToken, tool, { ...own, staffId: undefined })).isError).toBe(
+    true,
+  );
+
+  await t.db
+    .update(staffProfile)
+    .set({ accessPreset: "restricted" })
+    .where(eq(staffProfile.id, f.anaId));
+  expect(await listTools(t.app, staffToken)).not.toContain(tool);
+});
+
 test("MCP booking protection uses the reviewed policy generation and version", async () => {
   const owner = await actor(t, "owner", "policy-owner@example.com");
   const token = (await tokenFor(t, owner, "operations:read settings:write")).tokens.access_token;

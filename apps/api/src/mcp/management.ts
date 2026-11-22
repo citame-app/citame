@@ -976,6 +976,15 @@ export function registerManagementTools(
     (query) => ({ path: "/reports/summary", query }),
   );
   add(
+    "get_staff_work_report",
+    "Read one professional's daily scheduled, blocked and reserved minutes and unavailable intervals for a date range and the next 14 days. Staff without team calendar access can only read their own report.",
+    read("operationalReports"),
+    "GET",
+    C.reportStaffWorkQuerySchema,
+    C.reportStaffWorkSchema,
+    (query) => ({ path: "/reports/staff-work", query }),
+  );
+  add(
     "get_sales_report",
     "Read financial sales aggregates for a date range.",
     read("financialReports"),
