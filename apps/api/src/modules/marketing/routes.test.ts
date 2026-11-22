@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import {
   type Campaign,
+  campaignComparisonSchema,
   campaignPreviewSchema,
   campaignSchema,
   marketingConsentSchema,
@@ -204,6 +205,32 @@ test("booking invitations queue only the selected contacts with consent", async 
     ["marketing-client@example.com", ...contacts.map(({ email }) => email)].sort(),
   );
   expect(email.calls[0]?.html).toContain(`<a href="${t.config.notifications.publicUrl}/book">`);
+});
+
+test("compares campaign delivery totals in selection order and protects private campaigns", async () => {
+  await allow();
+  const regular = await create({ name: "Regular" });
+  if (!client.clientId) throw new Error("Expected a client profile");
+  const invitation = await create({
+    name: "Selected",
+    audience: { selectedClientIds: [client.clientId] },
+  });
+  await queue(invitation);
+
+  const path = (ids: string[]) => `/admin/marketing/campaigns/comparison?ids=${ids.join(",")}`;
+  const selected = [invitation.id, regular.id];
+  const response = await call(owner, path(selected));
+  expect(response.status, await response.clone().text()).toBe(200);
+  const body = await response.json();
+  const { campaigns } = campaignComparisonSchema.parse(body);
+  expect(campaigns.map(({ id, counts }) => [id, counts.pending])).toEqual([
+    [invitation.id, 1],
+    [regular.id, 0],
+  ]);
+  expect(body).toEqual({ campaigns });
+  expect((await call(owner, path([regular.id, regular.id.toUpperCase()]))).status).toBe(400);
+  expect((await call(owner, path([regular.id, crypto.randomUUID()]))).status).toBe(404);
+  expect((await call(client, path(selected))).status).toBe(403);
 });
 
 test("campaigns require marketing access; commercial consent defaults to off independently of booking reminders", async () => {

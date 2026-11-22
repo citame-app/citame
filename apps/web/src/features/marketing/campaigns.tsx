@@ -1,4 +1,5 @@
 import {
+  CAMPAIGN_COMPARISON_MAX,
   type Campaign,
   type CampaignDraft,
   type CampaignQueue,
@@ -97,6 +98,10 @@ export function CampaignsView({ viewerId, isOwner }: { viewerId: string; isOwner
   } | null>(null);
   const [review, setReview] = useState<Campaign | null>(null);
   const [detail, setDetail] = useState<Campaign | null>(null);
+  const [selected, setSelected] = useState<Pick<Campaign, "id" | "name">[]>([]);
+  const [comparing, setComparing] = useState(false);
+  const removeSelection = (id: string) =>
+    setSelected((items) => items.filter((item) => item.id !== id));
   const [saved, setSaved] = useState(false);
   const queries = useQueryClient();
   const query = useQuery({
@@ -186,6 +191,32 @@ export function CampaignsView({ viewerId, isOwner }: { viewerId: string; isOwner
           }}
         />
       </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          variant="secondary"
+          disabled={selected.length < 2 || query.isError}
+          onClick={() => setComparing(true)}
+        >
+          {t("marketing.compare")}
+        </Button>
+        <p className="text-sm text-muted">
+          {t("marketing.comparisonSelection", {
+            count: selected.length,
+            max: CAMPAIGN_COMPARISON_MAX,
+          })}
+        </p>
+        {selected.map((item) => (
+          <Button
+            key={item.id}
+            variant="secondary"
+            onClick={() => removeSelection(item.id)}
+            aria-label={t("marketing.invitationRemove", { name: item.name })}
+            className="max-w-full"
+          >
+            <span className="truncate">{item.name}</span> <span aria-hidden="true">×</span>
+          </Button>
+        ))}
+      </div>
       {query.isPending ? (
         <Skeleton className="h-56" />
       ) : query.isError ? (
@@ -197,7 +228,31 @@ export function CampaignsView({ viewerId, isOwner }: { viewerId: string; isOwner
           ) : (
             <ul className="divide-y divide-line rounded-xl border border-line bg-surface">
               {query.data.campaigns.map((c) => (
-                <li key={c.id}>
+                <li key={c.id} className="flex items-center pl-2">
+                  <label className="grid size-11 shrink-0 cursor-pointer place-items-center">
+                    <input
+                      type="checkbox"
+                      className="size-4 shrink-0"
+                      aria-label={t("marketing.selectComparison", { name: c.name })}
+                      checked={selected.some(({ id }) => id === c.id)}
+                      disabled={
+                        selected.length >= CAMPAIGN_COMPARISON_MAX &&
+                        !selected.some(({ id }) => id === c.id)
+                      }
+                      onChange={(event) => {
+                        if (event.currentTarget.checked) {
+                          setSelected((items) =>
+                            items.length < CAMPAIGN_COMPARISON_MAX
+                              ? [...items, { id: c.id, name: c.name }]
+                              : items,
+                          );
+                        } else {
+                          removeSelection(c.id);
+                        }
+                      }}
+                    />
+                  </label>
+
                   <button
                     type="button"
                     className="flex min-h-24 w-full flex-wrap items-center justify-between gap-4 p-5 text-left hover:bg-sunken"
@@ -241,6 +296,13 @@ export function CampaignsView({ viewerId, isOwner }: { viewerId: string; isOwner
             </Button>
           </div>
         </>
+      )}
+      {comparing && (
+        <CampaignComparison
+          viewerId={viewerId}
+          ids={selected.map(({ id }) => id)}
+          onClose={() => setComparing(false)}
+        />
       )}
       {editing && (
         <CampaignEditor
@@ -292,6 +354,95 @@ export function CampaignsView({ viewerId, isOwner }: { viewerId: string; isOwner
     </section>
   );
 }
+function CampaignComparison({
+  viewerId,
+  ids,
+  onClose,
+}: {
+  viewerId: string;
+  ids: string[];
+  onClose: () => void;
+}) {
+  const { t } = useI18n();
+  const result = useQuery({
+    queryKey: ["marketing", "comparison", viewerId, ids],
+    queryFn: () => api().marketing.compare(ids),
+    refetchOnMount: "always",
+    refetchInterval: 15000,
+  });
+  const metrics = [
+    "pending",
+    "processing",
+    "sent",
+    "skipped",
+    "failed",
+    "unknown",
+    "cancelled",
+  ] as const;
+  const heading = "sticky left-0 z-10 border-b border-line bg-surface px-4 py-3 text-left";
+  return (
+    <Sheet
+      open
+      size="lg"
+      onOpenChange={(open) => !open && onClose()}
+      title={t("marketing.compare")}
+    >
+      <p className="mb-4 text-sm text-muted">{t("marketing.comparisonHelp")}</p>
+      {result.isError ? (
+        <ErrorState error={result.error} onRetry={() => void result.refetch()} />
+      ) : result.isPending || (result.isFetching && !result.isFetchedAfterMount) ? (
+        <Skeleton className="h-56" />
+      ) : (
+        <section
+          aria-label={t("marketing.comparisonMetrics")}
+          // biome-ignore lint/a11y/noNoninteractiveTabindex: The scroll region needs keyboard access.
+          tabIndex={0}
+          className="max-w-full overflow-auto rounded-lg border border-line focus-visible:outline"
+        >
+          <table className="w-full text-sm">
+            <caption className="sr-only">{t("marketing.comparisonMetrics")}</caption>
+            <thead>
+              <tr>
+                <th scope="col" className={heading}>
+                  {t("marketing.comparisonMetrics")}
+                </th>
+                {result.data.campaigns.map((campaign) => (
+                  <th
+                    key={campaign.id}
+                    scope="col"
+                    className="min-w-36 border-b border-line p-3 text-right"
+                  >
+                    <span className="block max-w-52 [overflow-wrap:anywhere]">{campaign.name}</span>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {(["status", "channel", ...metrics] as const).map((metric) => (
+                <tr key={metric}>
+                  <th scope="row" className={heading}>
+                    {t(metric === "sent" ? "marketing.providerAccepted" : `marketing.${metric}`)}
+                  </th>
+                  {result.data.campaigns.map((campaign) => (
+                    <td
+                      key={campaign.id}
+                      className="border-b border-line p-3 text-right tabular-nums"
+                    >
+                      {metric === "channel" || metric === "status"
+                        ? t(`marketing.${campaign[metric]}`)
+                        : campaign.counts[metric]}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+    </Sheet>
+  );
+}
+
 function CampaignEditor({
   initial,
   copy,

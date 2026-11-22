@@ -59,6 +59,7 @@ describe("route mapping", () => {
       "/admin/rewards/stamps/cards/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
       "/admin/marketing/capabilities",
       "/admin/marketing/campaigns?page=2",
+      "/admin/marketing/campaigns/comparison?ids=aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa%2Cbbbbbbbb-1111-4111-8111-bbbbbbbbbbbb",
       "/admin/marketing/campaigns/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
       "/admin/marketing/campaigns/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/preview",
       "/admin/marketing/campaigns/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/deliveries",

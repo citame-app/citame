@@ -1,4 +1,10 @@
 export const marketingEn = {
+  "marketing.compare": "Compare campaigns",
+  "marketing.comparisonSelection": "{count} selected (maximum {max})",
+  "marketing.selectComparison": "Select {name} for comparison",
+  "marketing.comparisonHelp": "Delivery totals for the lifetime of each campaign.",
+  "marketing.comparisonMetrics": "Campaign metrics",
+  "marketing.providerAccepted": "Accepted by provider",
   "marketing.invite": "Invite to book",
   "marketing.invitationSubject": "Book your next appointment at {{salon_name}}",
   "marketing.invitationBody":
@@ -124,6 +130,12 @@ export const marketingEn = {
   "marketing.optoutDone": "You are unsubscribed from offers on this channel.",
 } as const;
 export const marketingEs: Record<keyof typeof marketingEn, string> = {
+  "marketing.compare": "Comparar campañas",
+  "marketing.comparisonSelection": "{count} seleccionadas (máximo {max})",
+  "marketing.selectComparison": "Seleccionar {name} para comparar",
+  "marketing.comparisonHelp": "Totales de entregas desde el inicio de cada campaña.",
+  "marketing.comparisonMetrics": "Métricas",
+  "marketing.providerAccepted": "Aceptados por el proveedor",
   "marketing.invite": "Invitar a reservar",
   "marketing.invitationSubject": "Reserva tu próxima cita en {{salon_name}}",
   "marketing.invitationBody":

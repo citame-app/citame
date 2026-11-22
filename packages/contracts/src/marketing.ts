@@ -75,6 +75,20 @@ export const campaignSchema = campaignDraftSchema.extend({
   counts: campaignCountsSchema,
   selectedContacts: z.array(z.object({ id: idSchema, name: z.string() })).optional(),
 });
+export const CAMPAIGN_COMPARISON_MAX = 4;
+export const campaignComparisonQuerySchema = z.object({
+  ids: z
+    .string()
+    .max(CAMPAIGN_COMPARISON_MAX * 37 - 1)
+    .transform((value) => value.toLowerCase().split(","))
+    .pipe(z.array(idSchema).min(2).max(CAMPAIGN_COMPARISON_MAX))
+    .refine((ids) => new Set(ids).size === ids.length),
+});
+export const campaignComparisonSchema = z.object({
+  campaigns: z.array(
+    campaignSchema.pick({ id: true, name: true, channel: true, status: true, counts: true }),
+  ),
+});
 export const campaignListSchema = z.object({
   campaigns: z.array(campaignSchema),
   pagination: pageInfoSchema,

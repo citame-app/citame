@@ -54,8 +54,8 @@ export async function campaignRow(db: Connection, id: string, lock = false) {
   if (!row) throw new DomainError("not_found", "Campaign not found");
   return row;
 }
-export async function campaignViews(db: Connection, rows: CampaignRow[]): Promise<Campaign[]> {
-  const counts = rows.length
+async function campaignCounts(db: Connection, ids: string[]) {
+  const counts = ids.length
     ? await db
         .select({
           campaignId: marketingDelivery.campaignId,
@@ -63,19 +63,21 @@ export async function campaignViews(db: Connection, rows: CampaignRow[]): Promis
           n: count(),
         })
         .from(marketingDelivery)
-        .where(
-          inArray(
-            marketingDelivery.campaignId,
-            rows.map((row) => row.id),
-          ),
-        )
+        .where(inArray(marketingDelivery.campaignId, ids))
         .groupBy(marketingDelivery.campaignId, marketingDelivery.status)
     : [];
-  const totals = new Map(rows.map((row) => [row.id, emptyCampaignCounts()]));
+  const totals = new Map(ids.map((id) => [id, emptyCampaignCounts()]));
   for (const row of counts) {
     const target = totals.get(row.campaignId);
     if (target) target[row.status] = row.n;
   }
+  return totals;
+}
+export async function campaignViews(db: Connection, rows: CampaignRow[]): Promise<Campaign[]> {
+  const totals = await campaignCounts(
+    db,
+    rows.map((row) => row.id),
+  );
   const contactIds = [...new Set(rows.flatMap((row) => row.audience.selectedClientIds ?? []))];
   const contacts = contactIds.length
     ? await db
@@ -113,6 +115,33 @@ export async function getCampaign(db: Database, id: string, p: Principal) {
     isolationLevel: "repeatable read",
     accessMode: "read only",
   });
+}
+export async function compareCampaigns(db: Database, ids: string[], p: Principal) {
+  requirePermission(p, "editCatalog");
+  return db.transaction(
+    async (tx) => {
+      const rows = await tx
+        .select({
+          id: marketingCampaign.id,
+          name: marketingCampaign.name,
+          channel: marketingCampaign.channel,
+          status: marketingCampaign.status,
+        })
+        .from(marketingCampaign)
+        .where(and(inArray(marketingCampaign.id, ids), editablePurpose()));
+      if (rows.length !== ids.length) throw new DomainError("not_found", "Campaign not found");
+      const byId = new Map(rows.map((row) => [row.id, row]));
+      const counts = await campaignCounts(tx, ids);
+      return {
+        campaigns: ids.map((id) => {
+          const row = byId.get(id);
+          if (!row) throw new DomainError("not_found", "Campaign not found");
+          return { ...row, counts: counts.get(id) ?? emptyCampaignCounts() };
+        }),
+      };
+    },
+    { isolationLevel: "repeatable read", accessMode: "read only" },
+  );
 }
 export async function listCampaigns(db: Database, q: CampaignQuery, p: Principal) {
   requirePermission(p, "editCatalog");
