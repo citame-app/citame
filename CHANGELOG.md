@@ -61,6 +61,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Changed
 
+- CI preserves browser traces from failed attempts even when the retry passes.
+
 - The web proxy bounds the wait for API response headers and keeps established sync streams open.
 - The agenda's new appointment form keeps one pending submission and starts a clean draft when a different slot is selected.
 - Recurring appointment reviews mark individual dates unavailable and use the same professional capacity and processing windows as appointment creation.
