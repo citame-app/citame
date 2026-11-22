@@ -20,7 +20,9 @@ use crate::reports::commissions::SavedCommissionPayout;
 use crate::sync::{CATALOG_COLORS_CACHED, CatalogColors};
 
 mod calendar_notices;
+mod staff_portrait_draft;
 mod waitlist_cache;
+pub use staff_portrait_draft::StaffPortraitDraft;
 pub use waitlist_cache::{SavedWaitlistPages, WaitlistCacheScope};
 
 fn pending_bank_refund_key(checkout_id: uuid::Uuid, actor_user_id: &str) -> String {

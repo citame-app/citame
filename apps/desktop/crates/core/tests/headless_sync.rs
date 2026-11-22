@@ -1893,6 +1893,141 @@ fn native_document_numbering_uses_the_reviewed_connection_through_the_proxy() {
 
 #[test]
 #[ignore = "needs the isolated production smoke stack behind the web gateway (see README)"]
+fn native_recovers_reviews_and_sends_a_private_staff_photo_through_the_proxy() {
+    use sob_core::http::PortraitUpdate;
+    use sob_core::staff_portrait_image::prepare_photo;
+    use uuid::Uuid;
+
+    let device = proxy_device();
+    let directory = tempfile::tempdir().unwrap();
+    let raster = directory.path().join("staff-photo.png");
+    image::RgbImage::from_pixel(64, 32, image::Rgb([54, 92, 107]))
+        .save(&raster)
+        .unwrap();
+    let jpeg = prepare_photo(&raster).unwrap();
+    let path = directory.path().join("replica.db");
+    let team = device.transport.portrait_directory().unwrap();
+    assert!(team.can_edit);
+    let staff_id = team.staff.iter().find(|row| row.active).unwrap().id.clone();
+    let id = Uuid::now_v7();
+    {
+        let store = Store::open(&path).unwrap();
+        assert!(
+            store
+                .reserve_staff_portrait_draft(id, staff_id.parse().unwrap(), &jpeg)
+                .unwrap()
+        );
+    }
+    let store = Store::open(&path).unwrap();
+    let recovered = store.staff_portrait_draft().unwrap().unwrap();
+    assert_eq!(recovered.id, id);
+    assert_eq!(recovered.jpeg, jpeg);
+    let claim = store.claim_staff_portrait_draft(id).unwrap().unwrap();
+    assert!(
+        device
+            .transport
+            .set_staff_portrait(
+                &staff_id,
+                PortraitUpdate::Upload {
+                    version: Some(Uuid::now_v7().to_string()),
+                    jpeg: recovered.jpeg.clone(),
+                }
+            )
+            .is_err()
+    );
+    drop(claim);
+    assert_eq!(store.staff_portrait_draft().unwrap().unwrap().jpeg, jpeg);
+
+    let latest = device.transport.portrait_directory().unwrap();
+    let reviewed = latest.staff.iter().find(|row| row.id == staff_id).unwrap();
+    let claim = store.claim_staff_portrait_draft(id).unwrap().unwrap();
+    device
+        .transport
+        .set_staff_portrait(
+            &staff_id,
+            PortraitUpdate::Upload {
+                version: reviewed.upload_version().map(str::to_owned),
+                jpeg: recovered.jpeg,
+            },
+        )
+        .unwrap();
+    claim.confirm().unwrap();
+    drop(store);
+    assert!(
+        Store::open(&path)
+            .unwrap()
+            .staff_portrait_draft()
+            .unwrap()
+            .is_none()
+    );
+    let refreshed = device.transport.portrait_directory().unwrap();
+    let updated = refreshed
+        .staff
+        .iter()
+        .find(|row| row.id == staff_id)
+        .unwrap();
+    assert_ne!(updated.portrait_version, reviewed.portrait_version);
+    assert!(!updated.portrait_published);
+    let private_version = updated.portrait_version.as_deref().unwrap();
+    assert!(
+        device
+            .transport
+            .staff_portrait(&staff_id, private_version)
+            .unwrap()
+            .starts_with(&[255, 216, 255])
+    );
+    let public_agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .max_redirects(0)
+        .build()
+        .into();
+    let public_status = |version| {
+        let url = device
+            .base
+            .join(&format!("/api/staff/{staff_id}/portrait/{version}"))
+            .unwrap();
+        public_agent
+            .get(url.as_str())
+            .call()
+            .unwrap()
+            .status()
+            .as_u16()
+    };
+    assert_eq!(public_status(private_version), 404);
+    device
+        .transport
+        .set_staff_portrait(
+            &staff_id,
+            PortraitUpdate::Publish {
+                version: private_version.into(),
+                published: true,
+            },
+        )
+        .unwrap();
+    let published = device.transport.portrait_directory().unwrap();
+    let published = published
+        .staff
+        .iter()
+        .find(|row| row.id == staff_id)
+        .unwrap();
+    assert!(published.portrait_published);
+    let public_version = published.portrait_version.as_deref().unwrap();
+    assert_eq!(public_status(public_version), 200);
+    device
+        .transport
+        .set_staff_portrait(
+            &staff_id,
+            PortraitUpdate::Publish {
+                version: public_version.into(),
+                published: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(public_status(public_version), 404);
+}
+
+#[test]
+#[ignore = "needs the isolated production smoke stack behind the web gateway (see README)"]
 fn native_profile_images_use_the_reviewed_connection_through_the_proxy() {
     use sob_core::http::{ProfileImageAction, ProfileImageKind};
     use sob_core::staff_portrait_image::prepare_photo;

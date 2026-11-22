@@ -3,6 +3,113 @@ use serde_json::{Value, json};
 use super::*;
 
 #[test]
+fn a_staff_portrait_draft_survives_reopening_and_a_later_draft_cannot_be_cleared_by_its_old_id() {
+    use image::{Rgb, RgbImage, codecs::jpeg::JpegEncoder};
+    use uuid::Uuid;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("replica.db");
+    let mut jpeg = Vec::new();
+    JpegEncoder::new(&mut jpeg)
+        .encode_image(&RgbImage::from_pixel(8, 8, Rgb([52, 74, 81])))
+        .unwrap();
+    let staff = Uuid::now_v7();
+    let first = Uuid::now_v7();
+    {
+        let store = Store::open(&path).unwrap();
+        assert!(
+            store
+                .reserve_staff_portrait_draft(first, staff, &jpeg)
+                .unwrap()
+        );
+    }
+
+    let store = Store::open(&path).unwrap();
+    let restored = store.staff_portrait_draft().unwrap().unwrap();
+    assert_eq!(restored.id, first);
+    assert_eq!(restored.staff_id, staff);
+    assert_eq!(restored.jpeg, jpeg);
+    let other = Uuid::now_v7();
+    let second_window = Store::open(&path).unwrap();
+    let claim = store.claim_staff_portrait_draft(first).unwrap().unwrap();
+    assert!(matches!(
+        second_window.claim_staff_portrait_draft(first),
+        Err(CoreError::StaffPortraitDraftBusy)
+    ));
+    assert!(matches!(
+        second_window.clear_staff_portrait_draft(first),
+        Err(CoreError::StaffPortraitDraftBusy)
+    ));
+    assert!(matches!(
+        second_window.reserve_staff_portrait_draft(other, staff, &jpeg),
+        Err(CoreError::StaffPortraitDraftBusy)
+    ));
+    drop(claim);
+    assert!(
+        !store
+            .reserve_staff_portrait_draft(other, staff, &jpeg)
+            .unwrap()
+    );
+    assert!(store.clear_staff_portrait_draft(first).unwrap());
+    assert!(
+        store
+            .reserve_staff_portrait_draft(other, staff, &jpeg)
+            .unwrap()
+    );
+    assert!(!store.clear_staff_portrait_draft(first).unwrap());
+    assert_eq!(store.staff_portrait_draft().unwrap().unwrap().id, other);
+    assert!(!store.clear_unreadable_staff_portrait_draft().unwrap());
+    let claim = store.claim_staff_portrait_draft(other).unwrap().unwrap();
+    claim.confirm().unwrap();
+    assert!(second_window.staff_portrait_draft().unwrap().is_none());
+}
+
+#[test]
+fn a_confirmed_staff_portrait_cannot_resend_when_removing_its_local_record_fails() {
+    use image::{Rgb, RgbImage, codecs::jpeg::JpegEncoder};
+    use uuid::Uuid;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("replica.db");
+    let store = Store::open(&path).unwrap();
+    let id = Uuid::now_v7();
+    let mut jpeg = Vec::new();
+    JpegEncoder::new(&mut jpeg)
+        .encode_image(&RgbImage::from_pixel(8, 8, Rgb([52, 74, 81])))
+        .unwrap();
+    assert!(
+        store
+            .reserve_staff_portrait_draft(id, Uuid::now_v7(), &jpeg)
+            .unwrap()
+    );
+    store
+        .conn
+        .execute_batch(
+            "CREATE TRIGGER fail_portrait_cleanup BEFORE DELETE ON meta
+         WHEN old.key = 'staff_portrait_draft'
+         BEGIN SELECT RAISE(ABORT, 'simulated cleanup error'); END;",
+        )
+        .unwrap();
+    let claim = store.claim_staff_portrait_draft(id).unwrap().unwrap();
+    assert!(claim.confirm().is_err());
+    drop(store);
+
+    let reopened = Store::open(&path).unwrap();
+    assert!(reopened.staff_portrait_draft().unwrap().unwrap().confirmed);
+    assert!(reopened.claim_staff_portrait_draft(id).unwrap().is_none());
+    reopened
+        .conn
+        .execute_batch("DROP TRIGGER fail_portrait_cleanup")
+        .unwrap();
+    assert!(reopened.clear_staff_portrait_draft(id).unwrap());
+
+    reopened.set_meta("staff_portrait_draft", "{").unwrap();
+    assert!(reopened.staff_portrait_draft().is_err());
+    assert!(reopened.clear_unreadable_staff_portrait_draft().unwrap());
+    assert!(reopened.staff_portrait_draft().unwrap().is_none());
+}
+
+#[test]
 fn reviewed_commission_payout_survives_restart_and_clears_only_the_acknowledged_request() {
     use crate::reports::commissions::CommissionPayoutReview;
 
