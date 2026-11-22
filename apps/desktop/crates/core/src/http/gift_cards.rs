@@ -46,6 +46,48 @@ impl GiftOfferTheme {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GiftOfferTerms {
+    pub name: String,
+    pub description: String,
+    pub theme: GiftOfferTheme,
+    pub amount_cents: u32,
+    pub price_cents: u32,
+    pub validity_days: Option<u16>,
+    pub eligible_service_ids: Vec<Uuid>,
+    pub published: bool,
+}
+
+impl GiftOfferTerms {
+    pub fn valid(&self) -> bool {
+        !self.name.trim().is_empty()
+            && self.name.encode_utf16().count() <= 120
+            && self.description.encode_utf16().count() <= 500
+            && (1..=999_999_999).contains(&self.amount_cents)
+            && (1..=999_999_999).contains(&self.price_cents)
+            && self
+                .validity_days
+                .is_none_or(|days| (1..=730).contains(&days))
+            && self.eligible_service_ids.len() <= MAX_GIFT_SERVICES
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GiftOffer {
+    pub id: Uuid,
+    pub version: u32,
+    #[serde(flatten)]
+    pub terms: GiftOfferTerms,
+}
+
+#[derive(Clone)]
+pub struct GiftOfferReview {
+    pub proposal: GiftOffer,
+    pub generation: String,
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 pub struct GiftService {
     pub id: Uuid,
@@ -396,6 +438,42 @@ impl HttpTransport {
             query.append_pair("status", status.wire());
         }
         self.gift_get(&format!("{PATH}?{}", query.finish()))
+    }
+
+    pub fn gift_offers(&self) -> Result<Vec<GiftOffer>, TransportError> {
+        #[derive(Deserialize)]
+        struct Catalog {
+            offers: Vec<GiftOffer>,
+        }
+        Ok(self.gift_get::<Catalog>(&format!("{PATH}/offers"))?.offers)
+    }
+
+    pub fn save_gift_offer(&self, reviewed: &GiftOfferReview) -> Result<GiftOffer, TransportError> {
+        let offer = &reviewed.proposal;
+        if !offer.terms.valid() || reviewed.generation.is_empty() {
+            return Err(TransportError::BadRequest(
+                "Invalid gift offer review".into(),
+            ));
+        }
+        let mut fields = serde_json::to_value(&offer.terms)
+            .map_err(|error| TransportError::BadRequest(error.to_string()))?;
+        fields["version"] = offer.version.into();
+        let response = self.send_put_json_with_headers(
+            &format!("{PATH}/offers/{}", offer.id),
+            &fields,
+            &[("x-citame-generation", &reviewed.generation)],
+        )?;
+        let saved: GiftOffer = read_response_with(response, review_transport_error)?;
+        if saved.id != offer.id
+            || saved.version == 0
+            || !(offer.version..=offer.version.saturating_add(1)).contains(&saved.version)
+            || saved.terms != offer.terms
+        {
+            return Err(TransportError::Server(
+                "Unexpected gift offer acknowledgement".into(),
+            ));
+        }
+        Ok(saved)
     }
 
     pub fn gift_eligible_services(&self) -> Result<Vec<GiftService>, TransportError> {

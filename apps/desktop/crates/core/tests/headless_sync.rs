@@ -4671,6 +4671,103 @@ fn native_gift_card_redeems_and_refunds_once_through_the_proxy() {
 
 #[test]
 #[ignore = "requires smoke stack"]
+fn native_reviews_gift_templates_through_the_proxy() {
+    use sob_core::http::gift_cards::{GiftOffer, GiftOfferReview, GiftOfferTerms, GiftOfferTheme};
+
+    let mut browser = Device::sign_in();
+    browser.sync();
+    let device = proxy_device();
+    let generation = browser.store.verified_reviewed_generation().unwrap();
+    let id = uuid::Uuid::now_v7();
+    let reviewed = GiftOfferReview {
+        generation,
+        proposal: GiftOffer {
+            id,
+            version: 0,
+            terms: GiftOfferTerms {
+                name: "Synthetic native gift template".into(),
+                description: "Reviewed preview".into(),
+                theme: GiftOfferTheme::Sage,
+                amount_cents: 3000,
+                price_cents: 2500,
+                validity_days: Some(30),
+                eligible_service_ids: Vec::new(),
+                published: false,
+            },
+        },
+    };
+    let mut wrong_generation = reviewed.clone();
+    wrong_generation.generation = "older-history".into();
+    assert!(matches!(
+        device.transport.save_gift_offer(&wrong_generation),
+        Err(sob_core::sync::TransportError::ReplicaGenerationChanged)
+    ));
+    let draft = device.transport.save_gift_offer(&reviewed).unwrap();
+    assert_eq!(draft.version, 1);
+    assert_eq!(
+        device.transport.save_gift_offer(&reviewed).unwrap().version,
+        1
+    );
+    let web = browser.rest_get("/admin/gift-cards/offers");
+    assert!(
+        web["offers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|offer| offer["id"] == id.to_string()
+                && offer["version"] == 1
+                && offer["published"] == false)
+    );
+
+    let mut publish = reviewed.clone();
+    publish.proposal = draft;
+    publish.proposal.terms.published = true;
+    let published = device.transport.save_gift_offer(&publish).unwrap();
+    assert_eq!(published.version, 2);
+    assert_eq!(
+        device.transport.save_gift_offer(&publish).unwrap().version,
+        2
+    );
+    let visible = browser.rest_get("/gift-offers");
+    assert!(
+        visible["offers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|offer| offer["id"] == id.to_string()
+                && offer["priceCents"] == 2500
+                && offer["amountCents"] == 3000)
+    );
+
+    let mut stale = publish.clone();
+    stale.proposal.terms.price_cents = 900;
+    assert!(device.transport.save_gift_offer(&stale).is_err());
+    let mut archive = publish;
+    archive.proposal = published;
+    archive.proposal.terms.published = false;
+    assert_eq!(
+        device.transport.save_gift_offer(&archive).unwrap().version,
+        3
+    );
+    assert!(
+        device
+            .transport
+            .gift_offers()
+            .unwrap()
+            .iter()
+            .any(|offer| offer.id == id && !offer.terms.published && offer.version == 3)
+    );
+    assert!(
+        !browser.rest_get("/gift-offers")["offers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|offer| offer["id"] == id.to_string())
+    );
+}
+
+#[test]
+#[ignore = "requires smoke stack"]
 fn native_gift_card_preserves_restrictions_through_the_proxy() {
     use sob_core::billing::{SaleItem, WalkInSale};
     use sob_core::http::gift_cards::GiftPurchase;

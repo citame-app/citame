@@ -144,7 +144,9 @@ export function requireAuth(
         ? method === "POST"
         : path.endsWith("/expiry")
           ? method === "PATCH"
-          : method === "GET" || (path === "/admin/gift-cards" && method === "POST");
+          : method === "GET" ||
+            (path === "/admin/gift-cards" && method === "POST") ||
+            (method === "PUT" && /^\/admin\/gift-cards\/offers\/[\da-f-]+$/.test(path));
       const rewardsAllowed =
         path === "/admin/rewards/stamps/program" || path === "/admin/rewards/policy/reviewed"
           ? method === "GET" || method === "PUT"

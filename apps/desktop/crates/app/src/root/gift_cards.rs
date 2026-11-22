@@ -4,14 +4,16 @@ use sob_core::billing::{AppointmentCheckout, normalize_gift_card_code};
 use sob_core::http::{
     HttpTransport,
     gift_cards::{
-        GiftBalance, GiftCard, GiftMovementKind, GiftMovements, GiftPage, GiftPurchase,
-        GiftPurchaseResult, GiftReveal, GiftService, GiftStatus, MAX_GIFT_SERVICES,
+        GiftBalance, GiftCard, GiftMovementKind, GiftMovements, GiftOffer, GiftOfferReview,
+        GiftPage, GiftPurchase, GiftPurchaseResult, GiftReveal, GiftService, GiftStatus,
+        MAX_GIFT_SERVICES,
     },
 };
 use sob_core::{receipt_print::ReceiptPreview, sync::TransportError};
 use uuid::Uuid;
 
 mod offline;
+mod storefront;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum View {
@@ -19,6 +21,7 @@ enum View {
     Detail(Uuid),
     Issue,
     Check,
+    Offers,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -34,6 +37,7 @@ pub(super) struct Desk {
     search: Entity<TextField>,
     filter: Option<GiftStatus>,
     pending_orders: bool,
+    offers: storefront::Offers,
     page: Option<GiftPage>,
     card: Option<GiftCard>,
     movements: Option<GiftMovements>,
@@ -88,6 +92,8 @@ enum Request {
     Detail(Uuid, u32),
     Issue(GiftPurchase),
     EligibleServices,
+    OfferList,
+    SaveOffer(Box<GiftOfferReview>),
     Check(String),
     Reveal(Uuid),
     Print {
@@ -113,6 +119,8 @@ enum Loaded {
     Issued(Box<GiftPurchaseResult>),
     Balance(GiftBalance),
     EligibleServices(Vec<GiftService>),
+    OfferList(Vec<GiftOffer>, Vec<GiftService>),
+    SavedOffer(GiftOffer),
     Revealed(GiftReveal),
     Print(ReceiptPreview),
     Receipt(Box<AppointmentCheckout>),
@@ -135,6 +143,10 @@ impl Request {
                 Loaded::Detail(http.gift_card(id)?, http.gift_card_movements(id, page)?)
             }
             Self::Issue(purchase) => Loaded::Issued(Box::new(http.purchase_gift_card(&purchase)?)),
+            Self::OfferList => {
+                Loaded::OfferList(http.gift_offers()?, http.gift_eligible_services()?)
+            }
+            Self::SaveOffer(reviewed) => Loaded::SavedOffer(http.save_gift_offer(&reviewed)?),
             Self::EligibleServices => Loaded::EligibleServices(http.gift_eligible_services()?),
             Self::Check(code) => Loaded::Balance(http.check_gift_card(&code)?),
             Self::Reveal(id) => Loaded::Revealed(http.reveal_gift_card(id)?),
@@ -224,6 +236,7 @@ impl Root {
             search: cx.new(|cx| TextField::new(search, false, cx)),
             filter: None,
             pending_orders: false,
+            offers: storefront::Offers::default(),
             page: None,
             card: None,
             movements: None,
@@ -330,6 +343,14 @@ impl Root {
             return;
         };
         if desk.request.is_some() {
+            return;
+        }
+        if desk.view == View::Offers && desk.offers.close_editor() {
+            if !desk.offers.editing() {
+                desk.error = None;
+                self.request_gift(Request::OfferList, cx);
+            }
+            cx.notify();
             return;
         }
         if let Some(receipt) = &desk.receipt {
@@ -447,6 +468,7 @@ impl Root {
                 let page = desk.page.as_ref().map_or(1, |page| page.pagination.page);
                 self.load_gift_list(page, cx);
             }
+            View::Offers if !desk.offers.editing() => self.request_gift(Request::OfferList, cx),
             View::Detail(id) => {
                 let page = desk
                     .movements
@@ -503,6 +525,7 @@ impl Root {
         let issue = pending.is_some();
         let edit = matches!(&request, Request::Edit { .. });
         let print = matches!(&request, Request::Print { .. });
+        let save_offer = matches!(&request, Request::SaveOffer(_));
         if edit || matches!(&request, Request::Checkout(_)) {
             desk.hide_code();
         }
@@ -620,6 +643,15 @@ impl Root {
                             cx,
                         ));
                     }
+                    Ok(Loaded::OfferList(rows, catalogue)) => {
+                        desk.observed = observation;
+                        desk.offers.rows = Some(rows);
+                        desk.offers.catalogue = catalogue;
+                    }
+                    Ok(Loaded::SavedOffer(saved)) => {
+                        desk.offers.accept(saved);
+                        desk.observed = observation;
+                    }
                     Ok(Loaded::EligibleServices(services)) => {
                         desk.eligible_service_options = Some(services);
                     }
@@ -690,9 +722,14 @@ impl Root {
                         if edit {
                             desk.hide_code();
                         }
+                        if save_offer {
+                            desk.offers.save_failed(&error);
+                        }
                         desk.error = Some(match error {
                             TransportError::ReplicaGenerationChanged => Key::GiftReviewRestored,
-                            TransportError::BadRequest(_) if edit => Key::GiftReviewChanged,
+                            TransportError::BadRequest(_) if edit || save_offer => {
+                                Key::GiftReviewChanged
+                            }
                             TransportError::Forbidden(_) => Key::GiftAccessDenied,
                             _ if print => Key::GiftPrintFailed,
                             _ if issue && uncertain => Key::GiftIssueUnconfirmed,
@@ -981,6 +1018,7 @@ impl Root {
             View::List => self.render_gift_list(desk, ready, cx),
             View::Detail(id) => self.render_gift_detail(desk, id, ready, cx),
             View::Issue => self.render_gift_issue(desk, ready, cx),
+            View::Offers => self.render_gift_offers(desk, online, cx),
             View::Check => {
                 let body = div()
                     .flex()
@@ -1058,6 +1096,15 @@ impl Root {
                         |root, cx| root.open_gift_form(View::Issue, cx),
                         cx,
                     ))
+                    .when(self.can_edit_gift_offers(), |body| {
+                        body.child(self.gift_button(
+                            "gift-templates",
+                            Key::GiftOffers,
+                            Kind::Ghost,
+                            Root::open_gift_offers,
+                            cx,
+                        ))
+                    })
                     .child(self.gift_button(
                         "check-gift",
                         Key::GiftCheck,

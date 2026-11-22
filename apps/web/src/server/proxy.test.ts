@@ -68,6 +68,8 @@ describe("route mapping", () => {
       "/admin/gift-cards?status=active",
       "/admin/gift-cards/check",
       "/admin/gift-cards/eligible-services",
+      "/admin/gift-cards/offers",
+      "/admin/gift-cards/offers/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
       "/admin/gift-cards/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
       "/admin/gift-cards/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/movements",
       "/admin/gift-cards/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/code",
