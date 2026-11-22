@@ -3,6 +3,7 @@ import type { ReportSummary } from "@sob/contracts";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderApp } from "../../../../test/render";
 import { clientGroupReportCsv, clientReportCsv } from "./client-report";
+import { reportToCsv } from "./logic";
 import { ReportsView } from "./reports-view";
 
 const ANA = "0198f5a0-7b1c-7000-8000-000000000201";
@@ -280,6 +281,26 @@ describe("ReportsView", () => {
     expect(within(table).getByText("Hair")).toBeInTheDocument();
     fireEvent.change(group, { target: { value: "addon" } });
     expect(screen.getByText("No appointments in this breakdown.")).toBeInTheDocument();
+  });
+
+  test("shows the booking promotion and its appointment outcomes", async () => {
+    report.promotionBreakdown = [
+      { key: "march", label: "March offer (MARCH10)", ...slice(2, 1, 0) },
+    ];
+    open();
+    const table = await screen.findByRole("table", { name: "Appointment breakdown" });
+    const group = screen.getByRole("combobox", { name: "Group by" });
+    fireEvent.change(group, { target: { value: "promotion" } });
+    expect(
+      within(table).getByRole("columnheader", { name: "Booking promotion" }),
+    ).toBeInTheDocument();
+    const row = within(table).getByRole("row", { name: /March offer/ });
+    expect(
+      within(row)
+        .getAllByRole("cell")
+        .map((cell) => cell.textContent),
+    ).toEqual(["March offer (MARCH10)", "3", "0", "2", "0", "1"]);
+    expect(reportToCsv(report)).toContain("promotion,March offer (MARCH10),3,0,2,0,1\r\n");
   });
 
   test("loads a detailed outcome only when expanded and downloads the selected status", async () => {

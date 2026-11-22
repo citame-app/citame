@@ -155,5 +155,7 @@ export const reportSummarySchema = z.object({
   appointmentBreakdown: z
     .record(z.enum(reportBreakdownKinds), z.array(reportBreakdownRowSchema))
     .optional(),
+  /** Appointment outcomes grouped by the offer name and code reviewed at booking. */
+  promotionBreakdown: z.array(reportBreakdownRowSchema).optional(),
 });
 export type ReportSummary = z.infer<typeof reportSummarySchema>;
