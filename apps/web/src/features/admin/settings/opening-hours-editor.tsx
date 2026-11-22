@@ -164,11 +164,14 @@ function OpeningRanges({
     <div className="space-y-2">
       {ranges.length === 0 && <p className="text-sm text-muted">{t("settings.opening.closed")}</p>}
       {ranges.map((range, index) => (
-        <div key={rangeKeys.keys[index]} className="flex flex-wrap items-end gap-2">
+        <div
+          key={rangeKeys.keys[index]}
+          className="grid grid-cols-2 items-end gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
+        >
           {(["startTime", "endTime"] as const).map((key) => (
             <TextField
               key={key}
-              className="min-w-0 flex-1"
+              className="min-w-0"
               type="time"
               name={`${name}-${index}-${key}`}
               label={t(`settings.opening.${key}`)}
@@ -184,6 +187,7 @@ function OpeningRanges({
           <Button
             type="button"
             variant="ghost"
+            className="col-span-2 justify-self-start sm:col-span-1"
             onClick={() => {
               rangeKeys.remove(index);
               onChange(ranges.filter((_, item) => item !== index));
