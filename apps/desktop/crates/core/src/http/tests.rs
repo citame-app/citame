@@ -1604,6 +1604,7 @@ fn staff_portrait_transport_loads_authorized_directory_and_fences_writes() {
     let body = |index: usize| -> serde_json::Value {
         serde_json::from_str(requests[index].split_once("\r\n\r\n").unwrap().1).unwrap()
     };
+    assert!(requests[0].starts_with("GET /admin/staff/portrait-directory "));
     assert!(requests[1].starts_with(&format!("GET /admin/staff/{id}/portrait?v={version} ")));
     assert!(requests[2].starts_with(&format!("PUT /admin/staff/{id}/portrait/publication ")));
     assert_eq!(
@@ -1618,6 +1619,19 @@ fn staff_portrait_transport_loads_authorized_directory_and_fences_writes() {
         body(5),
         serde_json::json!({"version":absence,"imageBase64":"/9j/"})
     );
+}
+
+#[test]
+fn the_portrait_directory_still_loads_from_an_older_direct_api() {
+    let (base, seen) = serve(vec![
+        http("404 Not Found", &[], ""),
+        http("200 OK", &[], r#"{"staff":[],"canEditPortraits":true}"#),
+    ]);
+    let directory = signed_in(&base).portrait_directory().unwrap();
+    assert!(directory.can_edit && directory.staff.is_empty());
+    let requests = seen.lock().unwrap();
+    assert!(requests[0].starts_with("GET /admin/staff/portrait-directory "));
+    assert!(requests[1].starts_with("GET /admin/staff "));
 }
 
 #[test]

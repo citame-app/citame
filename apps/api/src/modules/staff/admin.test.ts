@@ -132,6 +132,20 @@ test("manages one private portrait per member with revision and access checks", 
   expect((await call(owner, "PUT", path, { ...input, version: absenceVersion })).status).toBe(409);
 });
 
+test("the desktop portrait directory uses the same permissions as the staff directory", async () => {
+  for (const who of [owner, ana, client, null]) {
+    const canonical = await call(who, "GET", "/admin/staff");
+    const desktop = await call(who, "GET", "/admin/staff/portrait-directory");
+    expect(desktop.status).toBe(canonical.status);
+    if (desktop.ok) {
+      expect(desktop.headers.get("cache-control")).toBe("private, no-store");
+      expect(listAdminStaffResponseSchema.parse(await desktop.json())).toEqual(
+        listAdminStaffResponseSchema.parse(await canonical.json()),
+      );
+    }
+  }
+});
+
 test("public portrait access requires a current publication on an active member", async () => {
   const imageBase64 = (
     await sharp({ create: { width: 40, height: 40, channels: 3, background: "#87556a" } })

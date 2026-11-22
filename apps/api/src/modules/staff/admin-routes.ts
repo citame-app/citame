@@ -16,7 +16,7 @@ import {
   updateStaffRequestSchema,
   updateTimeOffRequestSchema,
 } from "@sob/contracts";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import type { AppDeps } from "../../app";
 import {
   authorizeStaffAdmin,
@@ -50,6 +50,15 @@ import { getTeamShiftWeek } from "./team-shifts";
  */
 export function staffAdminRoutes({ db, config, now = () => new Date() }: AppDeps) {
   const staffId = (param: string) => parseOrThrow(idSchema, param);
+  const directory = async (c: Context<AppEnv>) => {
+    const principal = c.get("principal");
+    const scope = authorizeStaffList(principal);
+    c.header("cache-control", "private, no-store");
+    return c.json({
+      staff: await listAdminStaff(db, scope),
+      canEditPortraits: permissionsFor(principal.role, principal.accessPreset).editSchedules,
+    });
+  };
 
   return new Hono<AppEnv>()
     .get("/:id/portrait", (c) =>
@@ -94,15 +103,8 @@ export function staffAdminRoutes({ db, config, now = () => new Date() }: AppDeps
         ),
       ),
     )
-    .get("/", async (c) => {
-      const principal = c.get("principal");
-      const scope = authorizeStaffList(principal);
-      c.header("cache-control", "private, no-store");
-      return c.json({
-        staff: await listAdminStaff(db, scope),
-        canEditPortraits: permissionsFor(principal.role, principal.accessPreset).editSchedules,
-      });
-    })
+    .get("/", directory)
+    .get("/portrait-directory", directory)
     .get("/team-shifts", async (c) => {
       requirePermission(c.get("principal"), "editSchedules");
       c.header("cache-control", "private, no-store");

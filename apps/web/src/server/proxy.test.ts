@@ -65,6 +65,9 @@ describe("route mapping", () => {
       "/admin/marketing/campaigns/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/queue",
       "/admin/marketing/campaigns/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/cancel",
       "/appointments/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/context",
+      "/admin/staff/portrait-directory",
+      "/admin/staff/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/portrait?v=bbbbbbbb-1111-4111-8111-bbbbbbbbbbbb",
+      "/admin/staff/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/portrait/publication",
       "/admin/staff/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/date-shifts?from=2026-11-20&to=2026-11-20",
       "/admin/staff/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/date-shifts/preview",
       "/admin/staff/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/working-hours",
@@ -156,6 +159,8 @@ describe("route mapping", () => {
     expect(proxy.matches(new URL("http://web/sync/private"))).toBe(false);
     expect(proxy.matches(new URL("http://web/appointments/booksy-context/import"))).toBe(false);
     expect(proxy.matches(new URL("http://web/appointments"))).toBe(false);
+    expect(proxy.matches(new URL("http://web/admin/staff"))).toBe(false);
+    expect(proxy.matches(new URL("http://web/admin/staff/portrait-directory/private"))).toBe(false);
     expect(
       proxy.matches(
         new URL("http://web/admin/staff/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/date-shifts/private"),
