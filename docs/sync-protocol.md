@@ -19,7 +19,7 @@ Guarantee: if you have seen `seq = n`, you have seen every change that will ever
 
 1. **Write locally first.** Apply the user's action to local SQLite, append a mutation to the outbox, show the row as "pending sync".
 2. **Push** the outbox head (up to 100 mutations, in creation order) with `POST /sync/push`. Keep one request in flight. Wait for an applied receipt before sending another edit that depends on it for the same appointment.
-3. On `applied`, remove the mutation from the send queue. Desktop persists the receipt cursor and keeps the calendar projection for an accepted appointment or its new client until the ordered pull reaches that cursor. On `rejected`, move the mutation and any dependent appointment edits to the conflict inbox for review. On `retry`, keep the mutation and its dependents in the send queue for backoff.
+3. On `applied`, remove the mutation from the send queue. Desktop persists the receipt cursor and keeps the calendar projection for an accepted appointment, its new client or a time block until the ordered pull reaches that cursor. On `rejected`, move the mutation and any dependent appointment edits to the conflict inbox for review. On `retry`, keep the mutation and its dependents in the send queue for backoff.
 4. **Pull** with `GET /sync/pull?since=<cursor>`; apply the changes and store `nextCursor` in the same local transaction; repeat immediately while `hasMore` is true.
 5. Keep `GET /sync/stream` open; on every `change` event, pull. Also pull on startup, on reconnect, and every 60 s as a safety net.
 
@@ -29,7 +29,7 @@ Every pull page returns `generation`. Send the generation of the local mirror wi
 
 When a pull reports a different generation, the desktop atomically moves queued mutations to local Conflicts, resets the mirror and cursor, and stores the new generation. It rebuilds from zero even if the old cursor is still below the new head. The rebuild state survives restart and the client waits for the final page before accepting edits. Previously open conflicts also require manual review. Upgrade older desktops before reconnecting them. The pull endpoint stays available, but older apps with pending changes may stop before reaching it when their push is rejected.
 
-Show the local version while an appointment edit waits for its receipt. After acknowledgement, prefer the canonical row as soon as its version includes or supersedes the edit. Retire the confirmed projection and its receipt together when the pull cursor catches up. This preserves the calendar across a restart or network failure between push and pull.
+Show the local version while a calendar edit waits for its receipt. After acknowledgement, prefer the canonical row as soon as its version includes or supersedes the edit. Retire the confirmed projection and its receipt together when the pull cursor catches up or when the pull returns a tombstone for that entity. Use the current calendar scope to decide which effective appointments and time blocks to display. This preserves the calendar across a restart or network failure between push and pull.
 
 Clients that understand the `unknown_booksy_payment` appointment billing hold request
 `booksyPaymentReview=1` on pull. Clients using the original reason set receive an

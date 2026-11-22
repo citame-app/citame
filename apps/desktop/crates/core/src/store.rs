@@ -1142,6 +1142,17 @@ impl Store {
         let mut applied = 0;
         for c in changes.iter().filter(|change| change.seq > cursor) {
             apply_change(&tx, c, alert)?;
+            if c.op == "delete"
+                && matches!(c.entity.as_str(), "appointment" | "client" | "time_off")
+            {
+                // An older log entry can already carry the server's current tombstone.
+                tx.execute(
+                    "UPDATE meta SET value = '0' WHERE key IN (
+                       SELECT 'assignment_ack:' || mutation_id FROM outbox
+                       WHERE entity_id = ?1 AND kind GLOB (?2 || '.*'))",
+                    params![c.id, c.entity],
+                )?;
+            }
             if c.entity == "appointment" {
                 tx.execute(
                     "DELETE FROM local_booking_confirmation WHERE appointment_id=?1",
@@ -1662,28 +1673,25 @@ impl Store {
 
     pub(crate) fn calendar_outbox(&self) -> Result<Vec<OutboxEntry>> {
         let mut stmt = self.conn.prepare(&format!(
-            "WITH scopes AS (
-               SELECT (SELECT value FROM meta WHERE key = 'calendar_scope') AS calendar,
-                      (SELECT value FROM meta WHERE key = 'client_directory') AS directory
-             )
-             SELECT {OUTBOX_COLS} FROM outbox CROSS JOIN scopes
+            "SELECT {OUTBOX_COLS} FROM outbox
              WHERE (kind GLOB 'appointment.*' OR kind GLOB 'client.*' OR kind GLOB 'time_off.*')
                AND (
                  NOT EXISTS (SELECT 1 FROM meta WHERE key = 'assignment_ack:' || mutation_id)
-                 OR CASE WHEN kind = 'client.create' THEN
-                   directory IS NOT 'denied'
+                 OR CASE
+                 WHEN kind = 'client.create' THEN
+                   (SELECT value FROM meta WHERE key = 'client_directory') IS NOT 'denied'
                    AND NOT EXISTS (SELECT 1 FROM client WHERE id = outbox.entity_id)
-                 ELSE
-                   (calendar IS NULL OR calendar = 'all' OR calendar =
-                         coalesce(json_extract(payload, '$.staffId'),
-                           (SELECT json_extract(prior.payload, '$.staffId') FROM outbox prior
-                            WHERE prior.entity_id = outbox.entity_id AND prior.seq < outbox.seq
-                              AND prior.kind GLOB 'appointment.*'
-                              AND json_extract(prior.payload, '$.staffId') IS NOT NULL
-                              AND EXISTS (SELECT 1 FROM meta WHERE key = 'assignment_ack:' || prior.mutation_id)
-                            ORDER BY prior.seq DESC LIMIT 1),
-                           (SELECT staff_id FROM appointment WHERE id = outbox.entity_id)))
-                   AND NOT EXISTS (
+                 WHEN kind = 'time_off.create' THEN
+                   NOT EXISTS (SELECT 1 FROM time_off WHERE id = outbox.entity_id)
+                 WHEN kind = 'time_off.update' THEN NOT EXISTS (
+                     SELECT 1 FROM time_off
+                     WHERE id = outbox.entity_id
+                       AND julianday(json_extract(json, '$.updatedAt')) > coalesce(
+                         julianday(json_extract(payload, '$.expectedUpdatedAt')),
+                         julianday(outbox.created_at, '-0.001 seconds'))
+                   )
+                 WHEN kind = 'time_off.delete' THEN 1
+                 ELSE NOT EXISTS (
                      SELECT 1 FROM appointment
                      WHERE id = outbox.entity_id AND version > coalesce(json_extract(payload, '$.version'), 0)
                    )
@@ -1756,7 +1764,7 @@ impl Store {
     }
 
     fn keeps_calendar_projection(tx: &Transaction, entry: &OutboxEntry) -> Result<bool> {
-        if entry.kind.starts_with("appointment.") {
+        if entry.kind.starts_with("appointment.") || entry.kind.starts_with("time_off.") {
             return Ok(true);
         }
         if entry.kind != "client.create" {
@@ -1768,6 +1776,14 @@ impl Store {
             [&entry.entity_id],
             |r| r.get(0),
         )?)
+    }
+
+    fn acknowledge_outbox(tx: &Transaction, entry: &OutboxEntry, through: i64) -> Result<()> {
+        Self::set_meta_at(
+            tx,
+            &format!("assignment_ack:{}", entry.mutation_id),
+            &through.to_string(),
+        )
     }
 
     /// Records the server's verdicts for a batch in order. Rejections become conflicts.
@@ -1850,11 +1866,7 @@ impl Store {
                     if let Some(head) = response_head
                         && Self::keeps_calendar_projection(&tx, s)?
                     {
-                        Self::set_meta_at(
-                            &tx,
-                            &format!("assignment_ack:{}", s.mutation_id),
-                            &applied_seq.unwrap_or(head).to_string(),
-                        )?;
+                        Self::acknowledge_outbox(&tx, s, applied_seq.unwrap_or(head))?;
                     } else if let Some(through) = response_head
                         && s.kind == "settings.update"
                         && s.payload.get("expectedRevision").is_some()
@@ -1883,11 +1895,7 @@ impl Store {
                                     | crate::http::PORTFOLIO_UPLOAD
                             ))
                     {
-                        Self::set_meta_at(
-                            &tx,
-                            &format!("assignment_ack:{}", s.mutation_id),
-                            &through.max(applied_seq.unwrap_or(0)).to_string(),
-                        )?;
+                        Self::acknowledge_outbox(&tx, s, through.max(applied_seq.unwrap_or(0)))?;
                     } else {
                         tx.execute(
                             "DELETE FROM outbox WHERE mutation_id = ?1",

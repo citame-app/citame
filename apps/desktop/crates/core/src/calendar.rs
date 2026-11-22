@@ -318,6 +318,9 @@ fn overlay_calendar_outbox(
             _ => {}
         }
     }
+    if let Some(scope) = store.get_meta("calendar_scope")?.filter(|s| s != "all") {
+        map.retain(|_, appointment| appointment.staff_id == scope);
+    }
     Ok(pending)
 }
 
@@ -588,8 +591,7 @@ pub(crate) fn effective_appointments_between(
         .collect())
 }
 
-/// Pending edits remain local until their result is acknowledged. Rejected edits are shown
-/// in the conflict inbox and the mirror remains the authoritative fallback.
+/// Keep local edits visible while the mirror catches up to the server's receipt.
 pub fn effective_time_off(
     store: &Store,
     from: DateTime<Utc>,
@@ -640,9 +642,16 @@ pub fn effective_time_off(
             _ => {}
         }
     }
+    let scope = store.get_meta("calendar_scope")?;
     let mut rows: Vec<_> = blocks
         .into_values()
-        .filter(|b| b.time_off.starts_at < to && b.time_off.ends_at > from)
+        .filter(|b| {
+            b.time_off.starts_at < to
+                && b.time_off.ends_at > from
+                && scope
+                    .as_deref()
+                    .is_none_or(|staff| staff == "all" || staff == b.time_off.staff_id)
+        })
         .collect();
     rows.sort_by(|a, b| {
         a.time_off

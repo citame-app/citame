@@ -811,6 +811,61 @@ fn offline_blocks_move_between_days_and_keep_existing_visits() {
 }
 
 #[test]
+fn accepted_time_off_keeps_the_slot_blocked_until_pull_and_a_delete_keeps_it_open() {
+    let mut store = seeded();
+    let start = at("2026-03-09T15:00:00Z");
+    let end = at("2026-03-09T16:00:00Z");
+    let id = ops::create_time_off(&mut store, ANA, start, end, "Lunch").unwrap();
+    for (expected_kind, seq) in [("time_off.create", 9), ("time_off.delete", 11)] {
+        let (generation, batch) = store.push_snapshot(100).unwrap();
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].kind, expected_kind);
+        store
+            .apply_push_results_in(
+                &batch,
+                &[MutationResult::Applied {
+                    mutation_id: batch[0].mutation_id.clone(),
+                    applied_seq: Some(seq),
+                    replayed: false,
+                }],
+                Some(&generation),
+                Some(15),
+            )
+            .unwrap();
+        assert!(store.push_snapshot(100).unwrap().1.is_empty());
+        let blocks = effective_time_off(&store, start, end).unwrap();
+        if expected_kind == "time_off.create" {
+            assert_eq!(blocks.len(), 1);
+            assert_eq!(blocks[0].time_off.id, id);
+            assert!(blocks[0].pending);
+            store
+                .apply_page(&[up(8, "time_off", &id, json!(blocks[0].time_off))], 8)
+                .unwrap();
+            let canonical = effective_time_off(&store, start, end).unwrap();
+            assert_eq!(canonical.len(), 1);
+            assert!(!canonical[0].pending);
+            ops::delete_time_off(&mut store, &canonical[0].time_off).unwrap();
+        } else {
+            assert!(blocks.is_empty());
+        }
+    }
+    store
+        .apply_page(
+            &[RawChange {
+                seq: 10,
+                entity: "time_off".into(),
+                id,
+                op: "delete".into(),
+                data: None,
+            }],
+            10,
+        )
+        .unwrap();
+    assert!(effective_time_off(&store, start, end).unwrap().is_empty());
+    assert_eq!(store.outbox_len().unwrap(), 0);
+}
+
+#[test]
 fn days_are_cut_in_the_salon_timezone_not_utc() {
     let mut s = seeded();
     // 02:00 UTC on the 9th is 23:00 on the 8th in Buenos Aires (UTC-3).
@@ -930,11 +985,11 @@ fn an_accepted_booking_and_its_new_client_survive_reopening_before_pull() {
 #[test]
 fn accepted_appointment_changes_follow_the_current_staff_scope_before_pull() {
     let mut store = seeded();
-    store.set_meta("calendar_scope", BEA).unwrap();
+    store.set_meta("calendar_scope", "all").unwrap();
     let id = create_appointment(&mut store, new_appt("2026-03-10T13:00:00Z")).unwrap();
-    for (expected_kind, seq) in [("appointment.create", 8), ("appointment.cancel", 9)] {
-        if expected_kind == "appointment.cancel" {
-            cancel_appointment(&mut store, &id).unwrap();
+    for (expected_kind, seq) in [("appointment.create", 8), ("appointment.reschedule", 9)] {
+        if expected_kind == "appointment.reschedule" {
+            reschedule_appointment(&mut store, &id, None, Some(ANA)).unwrap();
         }
         let (generation, batch) = store.push_snapshot(100).unwrap();
         assert_eq!(batch.len(), 1);
@@ -952,17 +1007,52 @@ fn accepted_appointment_changes_follow_the_current_staff_scope_before_pull() {
             )
             .unwrap();
     }
-    let accepted = effective_appointment(&store, &id).unwrap().unwrap();
-    assert_eq!(accepted.status, AppointmentStatus::Cancelled);
-    assert_eq!(accepted.version, 2);
-    assert!(store.push_snapshot(100).unwrap().1.is_empty());
-
     let generation = store.push_snapshot(100).unwrap().0;
     store
         .apply_visibility_scopes(Some(false), Some(ANA), &generation)
         .unwrap();
+    let accepted = effective_appointment(&store, &id).unwrap().unwrap();
+    assert_eq!(accepted.staff_id, ANA);
+    assert_eq!(accepted.version, 2);
+    store
+        .apply_visibility_scopes(Some(false), Some(BEA), &generation)
+        .unwrap();
     assert!(effective_appointment(&store, &id).unwrap().is_none());
     assert!(store.push_snapshot(100).unwrap().1.is_empty());
+}
+
+#[test]
+fn an_early_authoritative_tombstone_retires_the_accepted_create() {
+    let mut store = seeded();
+    let id = create_appointment(&mut store, new_appt("2026-03-10T13:00:00Z")).unwrap();
+    let (generation, batch) = store.push_snapshot(100).unwrap();
+    store
+        .apply_push_results_in(
+            &batch,
+            &[MutationResult::Applied {
+                mutation_id: batch[0].mutation_id.clone(),
+                applied_seq: Some(9),
+                replayed: false,
+            }],
+            Some(&generation),
+            Some(15),
+        )
+        .unwrap();
+    assert!(effective_appointment(&store, &id).unwrap().is_some());
+    store
+        .apply_page(
+            &[RawChange {
+                seq: 8,
+                entity: "appointment".into(),
+                id: id.clone(),
+                op: "delete".into(),
+                data: None,
+            }],
+            8,
+        )
+        .unwrap();
+    assert!(effective_appointment(&store, &id).unwrap().is_none());
+    assert_eq!(store.outbox_len().unwrap(), 0);
 }
 
 #[test]
