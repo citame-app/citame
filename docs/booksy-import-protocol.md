@@ -521,6 +521,18 @@ La web y la API de la copia editable de pruebas escuchan en `127.0.0.1` y arranc
 
 Con los argumentos de la copia local, añade `--prepared` después de `--desktop-test` para arrancar sobre una copia ya preparada. El arranque comprueba el snapshot archivado, el registro exacto de migraciones, la credencial del propietario, los ajustes y Valkey antes de abrir el puerto. Omite las migraciones, la reparación del archivo y la creación inicial del propietario y sus ajustes. Usa `--check-prepared` en ese mismo lugar para comprobar esos requisitos sin abrir el servicio ni iniciar una sesión.
 
+To reconcile an editable copy against its private archive, point the connection at the `sob_booksy_desktop_test_YYYYMMDD` database and run the prepared-copy report.
+
+```sh
+cd apps/api
+umask 077
+bun --env-file=/ruta/privada/conexion-preparada.env src/scripts/booksy-candidate-report.ts \
+  HASH_SNAPSHOT YYYY-MM-DD --prepared-copy citame-booksy-rehearsal-YYYYMMDD \
+  > /ruta/privada/cotejo-copia-preparada.json
+```
+
+The report uses a read-only transaction to match bookings, services, staff, resources, notes and indicators against the archive. It counts local checkout records, payments, payment reviews, reminders and waitlist activity. It checks opening stock as part of the baseline. Extra stock movements or reservations, or changes to the projected records, require separate reconciliation before the baseline can match. The report keeps `canCutOver: false`.
+
 La sesión HTTP propietaria comprobó 47 líneas de 38 reservas, 49 servicios y siete profesionales. GPUI abrió el perfil de pruebas ya vinculado y alcanzó el último cursor del servidor con 787 líneas, 47 de ellas del día 20, y la cola de cambios y conflictos vacía. Esta copia sirve para probar la operación local. La autorización de corte sigue el procedimiento de la sección siguiente.
 
 El cotejo de Caja para el 20/11/2026 devolvió 44 líneas en **Por cobrar** y tres en **Citas por conciliar** por importe original desconocido. La ruta web y la de escritorio devolvieron los mismos datos y exigieron autenticación. El informe de la candidata verificó 1.053 originales e identificó 27 servicios de 23 reservas con el cobro bloqueado por importe desconocido en todo el horizonte. La última cita de origen sigue sin estar demostrada.
