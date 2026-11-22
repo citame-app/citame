@@ -1,9 +1,11 @@
 import {
+  type GiftReplicaPage,
   giftCardCodeInputSchema,
   giftCardExpirySchema,
   giftCardPurchaseSchema,
   giftCardQuerySchema,
   giftCardReissueSchema,
+  giftReplicaQuerySchema,
   idSchema,
 } from "@sob/contracts";
 import { Hono } from "hono";
@@ -20,6 +22,7 @@ import {
   getGift,
   giftHistory,
   giftReplicaPage,
+  giftReplicaScope,
   listGifts,
   reissueGift,
   revealGift,
@@ -68,24 +71,32 @@ export function giftCardRoutes(deps: AppDeps) {
       ),
     )
     .get("/replica", async (c) => {
-      const query = parseOrThrow(giftCardQuerySchema, c.req.query());
+      const query = parseOrThrow(giftReplicaQuerySchema, c.req.query());
       return c.json({
         ...(await giftReplicaPage(deps.db, c.get("principal"), query.page)),
         generation: deps.config.syncReplicaGeneration,
-      });
+      } satisfies GiftReplicaPage);
     })
     .get("/:id", async (c) =>
       c.json(await getGift(deps.db, parseOrThrow(idSchema, c.req.param("id")), c.get("principal"))),
     )
     .get("/:id/movements", async (c) => {
       const query = parseOrThrow(giftCardQuerySchema, c.req.query());
+      const principal = c.get("principal");
+      const history = await giftHistory(
+        deps.db,
+        parseOrThrow(idSchema, c.req.param("id")),
+        principal,
+        query.page,
+      );
+      const scope = giftReplicaScope(principal);
       return c.json(
-        await giftHistory(
-          deps.db,
-          parseOrThrow(idSchema, c.req.param("id")),
-          c.get("principal"),
-          query.page,
-        ),
+        scope
+          ? {
+              ...history,
+              replica: { scope, generation: deps.config.syncReplicaGeneration },
+            }
+          : history,
       );
     })
     .post("/:id/code", async (c) =>

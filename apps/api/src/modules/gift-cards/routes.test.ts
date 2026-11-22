@@ -1,5 +1,9 @@
 import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from "bun:test";
-import { syncPullResponseSchema } from "@sob/contracts";
+import {
+  giftCardMovementListSchema,
+  giftReplicaPageSchema,
+  syncPullResponseSchema,
+} from "@sob/contracts";
 import { sql } from "drizzle-orm";
 import {
   type Actor,
@@ -180,13 +184,9 @@ test("the offline register contains only cards in the current account scope", as
   const response = await call(owner, replica);
   expect(response.status).toBe(200);
   expect(response.headers.get("Cache-Control")).toBe("private, no-store");
-  const snapshot = (await response.json()) as {
-    scope: string;
-    revision: number;
-    through: number;
-    rows: Record<string, unknown>[];
-  };
-  expect(snapshot.scope).toBe(ownerScope);
+  const raw = await response.json();
+  const snapshot = giftReplicaPageSchema.parse(raw);
+  expect(snapshot.scope).toBe(ownerScope ?? "");
   expect(snapshot.through).toBeGreaterThanOrEqual(snapshot.revision);
   expect(snapshot.rows).toEqual([
     expect.objectContaining({
@@ -198,12 +198,18 @@ test("the offline register contains only cards in the current account scope", as
   const [masked] = snapshot.rows;
   expect(masked).not.toHaveProperty("buyerClientId");
   expect(masked).not.toHaveProperty("code");
-  expect(JSON.stringify(snapshot)).not.toContain(gift.code);
+  expect(JSON.stringify(raw)).not.toContain(gift.code);
+  expect(JSON.stringify(raw)).not.toContain("buyerClientId");
+  const history = await call(owner, `/admin/gift-cards/${gift.card.id}/movements`);
+  expect(giftCardMovementListSchema.parse(await history.json()).replica).toEqual({
+    scope: snapshot.scope,
+    generation: snapshot.generation,
+  });
   const own = await call(professional, replica);
   expect(own.status).toBe(200);
-  const restrictedSnapshot = await own.json();
+  const restrictedSnapshot = giftReplicaPageSchema.parse(await own.json());
   expect(restrictedSnapshot.rows).toEqual([]);
-  expect(restrictedSnapshot.scope).not.toBe(ownerScope);
+  expect(restrictedSnapshot.scope).not.toBe(snapshot.scope);
   await t.db.execute(
     sql`update staff_profile set access_preset='restricted' where user_id=${professional.userId}`,
   );

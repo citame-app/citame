@@ -92,6 +92,13 @@ pub struct GiftMovement {
 pub struct GiftMovements {
     pub movements: Vec<GiftMovement>,
     pub pagination: GiftPagination,
+    pub replica: Option<GiftReplicaStamp>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct GiftReplicaStamp {
+    pub scope: String,
+    pub generation: String,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -159,7 +166,7 @@ struct ReplicaPage {
 pub struct GiftCatalogue {
     pub scope: String,
     pub generation: String,
-    pub revision: i64,
+    pub through: i64,
     pub saved_at: DateTime<Utc>,
     pub cards: Vec<GiftCard>,
 }
@@ -280,7 +287,7 @@ impl HttpTransport {
                 return Ok(GiftCatalogue {
                     scope: scope.to_owned(),
                     generation: generation.to_owned(),
-                    revision: response.through,
+                    through: response.through,
                     saved_at: Utc::now(),
                     cards,
                 });

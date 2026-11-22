@@ -4,6 +4,7 @@ import { calendarAppointmentSchema } from "./calendar";
 import { clientEmailChangeSchema } from "./clients";
 import { idSchema, instantSchema, LIMITS, localDateSchema, syncGenerationSchema } from "./common";
 import { dateShiftRangesSchema } from "./date-shifts";
+import { giftReplicaScopeSchema } from "./gift-cards";
 import {
   createProductSchema,
   productPhotoInputSchema,

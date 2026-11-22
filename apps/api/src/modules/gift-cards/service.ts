@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { type GiftCard, permissionsFor } from "@sob/contracts";
+import { type GiftCard, giftReplicaPageSize, permissionsFor } from "@sob/contracts";
 import { checkoutLine, type Database, giftCard, giftCardMovement, syncChange } from "@sob/db";
 import { and, asc, count, desc, eq, ilike, inArray, max, or, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
@@ -117,7 +117,7 @@ export async function listGifts(
 export async function giftReplicaPage(db: Database, principal: Principal, page: number) {
   const scope = giftReplicaScope(principal);
   if (!scope) throw new DomainError("forbidden", "Gift register access is required");
-  const pageSize = 128;
+  const pageSize = giftReplicaPageSize;
   return db.transaction(
     async (tx) => {
       const [snapshot] = await tx

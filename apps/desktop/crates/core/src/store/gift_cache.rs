@@ -1,5 +1,6 @@
 use super::*;
-use crate::http::gift_cards::{GiftCard, GiftCatalogue, GiftMovements};
+use crate::http::HttpTransport;
+use crate::http::gift_cards::{GiftCard, GiftCatalogue, GiftMovements, GiftPage, GiftStatus};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -65,7 +66,7 @@ pub(super) fn apply_scope_at(conn: &Connection, scope: Option<&str>) -> Result<(
 #[derive(Serialize, Deserialize)]
 struct SavedRegister {
     actor: String,
-    revision: i64,
+    through: i64,
     saved_at: DateTime<Utc>,
     cards: Vec<GiftCard>,
 }
@@ -77,7 +78,88 @@ pub struct SavedGiftMovements {
     pub history: GiftMovements,
 }
 
+pub enum OfflineGiftQuery {
+    List {
+        page: u32,
+        search: String,
+        status: Option<GiftStatus>,
+    },
+    Detail(Uuid, u32),
+}
+
+pub enum OfflineGiftView {
+    List(GiftPage),
+    Detail {
+        card: Box<GiftCard>,
+        movements: Option<SavedGiftMovements>,
+        saved_pages: Vec<u32>,
+    },
+    Missing,
+}
+
 impl Store {
+    pub fn refresh_gift_register(
+        &mut self,
+        transport: &HttpTransport,
+        fence: &GiftCacheScope,
+        actor: &str,
+        minimum_seq: i64,
+    ) -> bool {
+        if self
+            .gift_catalogue(actor)
+            .ok()
+            .flatten()
+            .is_some_and(|saved| {
+                saved.through >= minimum_seq
+                    && saved.scope == fence.scope
+                    && saved.generation == fence.generation
+            })
+        {
+            return true;
+        }
+        let Ok(snapshot) = transport.gift_catalogue(&fence.scope, &fence.generation) else {
+            return false;
+        };
+        self.save_gift_catalogue(fence, actor, snapshot)
+            .unwrap_or(false)
+    }
+
+    pub fn read_offline_gift_register(
+        &self,
+        actor: &str,
+        query: OfflineGiftQuery,
+        now: DateTime<Utc>,
+    ) -> Result<Option<(DateTime<Utc>, OfflineGiftView)>> {
+        let Some(catalogue) = self.gift_catalogue(actor)? else {
+            return Ok(None);
+        };
+        let view = match query {
+            OfflineGiftQuery::List {
+                page,
+                search,
+                status,
+            } => OfflineGiftView::List(catalogue.search(page, &search, status, now)),
+            OfflineGiftQuery::Detail(id, page) => match catalogue.card(id, now) {
+                Some(card) => {
+                    let saved_pages = self.gift_movement_pages(id)?;
+                    let selected = if page == 1 && !saved_pages.contains(&1) {
+                        saved_pages.first().copied().unwrap_or(page)
+                    } else {
+                        page
+                    };
+                    let movements = self.gift_movement_history(actor, id, selected)?;
+                    OfflineGiftView::Detail {
+                        card: Box::new(card),
+                        movements,
+                        saved_pages,
+                    }
+                }
+                None => OfflineGiftView::Missing,
+            },
+        };
+        Ok(Some((catalogue.saved_at, view)))
+    }
+
     pub fn gift_cache_scope(&self) -> Result<Option<GiftCacheScope>> {
         if self.verified_reviewed_generation().is_err() {
             return Ok(None);
@@ -107,7 +189,7 @@ impl Store {
         Ok((saved.actor == actor).then_some(GiftCatalogue {
             scope: fence.scope,
             generation: fence.generation,
-            revision: saved.revision,
+            through: saved.through,
             saved_at: saved.saved_at,
             cards: saved.cards,
         }))
@@ -122,10 +204,10 @@ impl Store {
         if fence.scope != catalogue.scope || fence.generation != catalogue.generation {
             return Ok(false);
         }
-        let revision = catalogue.revision;
+        let through = catalogue.through;
         let raw = serde_json::to_string(&SavedRegister {
             actor: actor.to_owned(),
-            revision,
+            through,
             saved_at: catalogue.saved_at,
             cards: catalogue.cards,
         })?;
@@ -138,15 +220,15 @@ impl Store {
         let local_revision = Self::meta_at(&tx, "live_view:commerce")?
             .and_then(|value| value.parse::<i64>().ok())
             .unwrap_or_default();
-        if revision < local_revision {
+        if through < local_revision {
             return Ok(false);
         }
         Ok({
             let changed = tx.execute(
                 "INSERT INTO meta(key,value) VALUES(?1,?2)
                  ON CONFLICT(key) DO UPDATE SET value=excluded.value
-                 WHERE CAST(json_extract(meta.value, '$.revision') AS INTEGER) <= ?3",
-                params![CATALOGUE, raw, revision],
+                 WHERE CAST(json_extract(meta.value, '$.through') AS INTEGER) <= ?3",
+                params![CATALOGUE, raw, through],
             )?;
             tx.commit()?;
             changed != 0
@@ -171,6 +253,21 @@ impl Store {
         Ok(result)
     }
 
+    pub fn gift_movement_pages(&self, card_id: Uuid) -> Result<Vec<u32>> {
+        let prefix = format!("{MOVEMENTS}:{card_id}:");
+        let mut query = self
+            .conn
+            .prepare("SELECT key FROM meta WHERE key GLOB ?1")?;
+        let mut pages = query
+            .query_map([format!("{prefix}*")], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .iter()
+            .filter_map(|key| key.strip_prefix(&prefix)?.parse().ok())
+            .collect::<Vec<_>>();
+        pages.sort_unstable();
+        Ok(pages)
+    }
+
     pub fn save_gift_movement_history(
         &mut self,
         fence: &GiftCacheScope,
@@ -179,6 +276,11 @@ impl Store {
         history: &GiftMovements,
         saved_at: DateTime<Utc>,
     ) -> Result<()> {
+        if history.replica.as_ref().is_none_or(|response| {
+            response.scope != fence.scope || response.generation != fence.generation
+        }) {
+            return Ok(());
+        }
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -237,7 +339,7 @@ mod tests {
         let snapshot = || GiftCatalogue {
             scope: fence.scope.clone(),
             generation: fence.generation.clone(),
-            revision: 7,
+            through: 7,
             saved_at,
             cards: vec![sample()],
         };
@@ -255,6 +357,7 @@ mod tests {
         );
         let history = serde_json::from_value(json!({
             "movements": [],
+            "replica": { "scope": fence.scope, "generation": fence.generation },
             "pagination": { "page": 1, "pageSize": 20, "total": 0 }
         }))
         .unwrap();

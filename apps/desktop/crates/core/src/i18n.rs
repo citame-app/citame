@@ -1642,7 +1642,7 @@ keys! {
     GiftRedemptionRefund => ("Redemption refunded", "Devolución del canje"),
     GiftPurchaseRefund => ("Purchase refunded", "Devolución de la compra"),
     GiftPurchaseRefundReversal => ("Purchase refund reversed", "Anulación de devolución de la compra"),
-    GiftOfflineSnapshot => ("Offline · Gift register saved at", "Sin conexión · Registro de tarjetas guardado a las"),
+    GiftOfflineSnapshot => ("Gift register last saved", "Última copia del registro de tarjetas"),
     GiftOfflineMovements => ("This page of movements was not saved for offline use.", "Esta página del historial no está guardada para consultarla sin conexión."),
     GiftOffline => ("Connect to manage gift cards.", "Conéctate para gestionar las tarjetas regalo."),
     GiftAccessDenied => ("Your account cannot perform this action.", "Tu cuenta no puede realizar esta acción."),

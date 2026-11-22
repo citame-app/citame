@@ -104,6 +104,11 @@ The **Waitlist** button opens the active queue, all requests and the Booksy requ
 
 Choose **Open appointment receipt** from an eligible EUR appointment to open the same receipt as the web desk. The receipt shows the server-calculated discount, the current balance and the amount collectible now. A reconciled Booksy part-payment also shows the amount already paid in Booksy. Register the amount received in cash or on the card terminal, or redeem an eligible gift card using its code. Combine these methods to collect a remaining balance. For a customer with an eligible prepaid plan, choose the plan and service to redeem one visit on the receipt. Refunding that tender restores the full visit to the plan. Cash needs an open register. The desktop submits the payment online and reuses the request key when confirming the same attempt again after an interrupted response.
 
+Open **Cash register → Gift cards** with a connection to save the complete register visible to
+your account. Desktop shows the date of the saved copy and allows local searches and filters when
+offline. It also retains up to 64 recently opened movement pages. Codes are revealed and balances
+are changed using the online register. Signing out or losing access clears the offline copy.
+
 **Cash register** opens the shared till for accounts with cash management permission. Enter the opening float, record cash deposits or withdrawals with a reason, or reconcile the counted cash at closing. Citame displays the expected amount, the difference and the most recent movements. Register operations need a connection. If another operator changes the expected amount before closing, reload the register and review the count again.
 
 **Reports** opens the shared operational report. The period uses the centre's local dates. Accounts with access to all calendars can filter by team member, and the server limits other authorized accounts to their own appointments. The table groups results by day, start hour, service, category, add-on or team member. Save CSV exports the report shown in the panel. An open report updates as sync advances and when the device reconnects. While offline, the application can display the last result fetched in that panel.

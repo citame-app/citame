@@ -1,12 +1,13 @@
 use super::*;
-use sob_core::store::{Store, gift_cache::GiftCacheScope};
+use sob_core::store::{
+    Store,
+    gift_cache::{GiftCacheScope, OfflineGiftQuery, OfflineGiftView},
+};
 
-pub(super) type CacheVersion = (GiftCacheScope, i64);
-
-enum CachedView {
-    List(GiftPage),
-    Detail(Box<GiftCard>, Option<GiftMovements>),
-    Missing,
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct CacheVersion {
+    scope: GiftCacheScope,
+    minimum_seq: i64,
 }
 
 impl Root {
@@ -21,7 +22,10 @@ impl Root {
             return;
         };
         let revision = self.svc.store.live_view_revision("commerce").unwrap_or(0);
-        let version = (scope, revision);
+        let version = CacheVersion {
+            scope,
+            minimum_seq: revision,
+        };
         let Some(desk) = self.gift_cards_desk() else {
             return;
         };
@@ -43,26 +47,12 @@ impl Root {
                     let Ok(mut store) = Store::open(&path) else {
                         return false;
                     };
-                    if store
-                        .gift_catalogue(&session.user_id)
-                        .ok()
-                        .flatten()
-                        .is_some_and(|saved| {
-                            saved.revision >= revision
-                                && saved.scope == version.0.scope
-                                && saved.generation == version.0.generation
-                        })
-                    {
-                        return true;
-                    }
-                    let Ok(snapshot) =
-                        transport.gift_catalogue(&version.0.scope, &version.0.generation)
-                    else {
-                        return false;
-                    };
-                    store
-                        .save_gift_catalogue(&version.0, &session.user_id, snapshot)
-                        .unwrap_or(false)
+                    store.refresh_gift_register(
+                        &transport,
+                        &version.scope,
+                        &session.user_id,
+                        version.minimum_seq,
+                    )
                 })
                 .await;
             let _ = root.update(cx, |root, _| {
@@ -88,10 +78,25 @@ impl Root {
         .detach();
     }
 
-    pub(super) fn show_offline_gift(&mut self, request: Request, cx: &mut Context<Self>) {
-        if !matches!(request, Request::List { .. } | Request::Detail(_, _)) {
-            return;
-        }
+    pub(super) fn show_saved_gift(
+        &mut self,
+        request: Request,
+        refresh_online: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let query = match request {
+            Request::List {
+                page,
+                search,
+                status,
+            } => OfflineGiftQuery::List {
+                page,
+                search,
+                status,
+            },
+            Request::Detail(id, page) => OfflineGiftQuery::Detail(id, page),
+            _ => return,
+        };
         let Some(session) = self.svc.current_session() else {
             return;
         };
@@ -110,28 +115,10 @@ impl Root {
                 .background_executor()
                 .spawn(async move {
                     let store = Store::open(&path).ok()?;
-                    let catalogue = store.gift_catalogue(&session.user_id).ok().flatten()?;
-                    let now = Utc::now();
-                    let view = match request {
-                        Request::List {
-                            page,
-                            search,
-                            status,
-                        } => CachedView::List(catalogue.search(page, &search, status, now)),
-                        Request::Detail(id, page) => match catalogue.card(id, now) {
-                            Some(card) => {
-                                let history = store
-                                    .gift_movement_history(&session.user_id, id, page)
-                                    .ok()
-                                    .flatten()
-                                    .map(|saved| saved.history);
-                                CachedView::Detail(Box::new(card), history)
-                            }
-                            None => CachedView::Missing,
-                        },
-                        _ => return None,
-                    };
-                    Some((catalogue.saved_at, view))
+                    store
+                        .read_offline_gift_register(&session.user_id, query, Utc::now())
+                        .ok()
+                        .flatten()
                 })
                 .await;
             let _ = root.update(cx, |root, cx| {
@@ -148,25 +135,24 @@ impl Root {
                     return;
                 };
                 desk.request = None;
-                if online {
-                    root.refresh_gift_cards(true, cx);
-                    return;
-                }
                 let loaded = scope.is_some() && current == scope;
                 let result = if loaded { result } else { None };
                 if let Some((at, view)) = result {
                     desk.cached_at = Some(at);
                     match view {
-                        CachedView::List(page) => desk.page = Some(page),
-                        CachedView::Detail(card, movements) => {
+                        OfflineGiftView::List(page) => desk.page = Some(page),
+                        OfflineGiftView::Detail {
+                            card,
+                            movements,
+                            saved_pages,
+                        } => {
                             desk.card = Some(*card);
-                            if movements.is_some() || desk.movements.is_none() {
-                                desk.movements = movements;
-                            } else {
-                                desk.error = Some(Key::GiftOfflineMovements);
-                            }
+                            desk.saved_movement_pages = saved_pages;
+                            desk.movements_saved_at =
+                                movements.as_ref().map(|saved| saved.saved_at);
+                            desk.movements = movements.map(|saved| saved.history);
                         }
-                        CachedView::Missing => {
+                        OfflineGiftView::Missing => {
                             desk.card = None;
                             desk.movements = None;
                         }
@@ -178,6 +164,9 @@ impl Root {
                     desk.movements = None;
                 }
                 cx.notify();
+                if online && refresh_online {
+                    root.refresh_gift_cards(true, cx);
+                }
             });
         })
         .detach();

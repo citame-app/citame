@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { checkoutSchema, idempotencyKeySchema, moneyCentsSchema } from "./commerce";
-import { idSchema, instantSchema, pageInfoSchema } from "./common";
+import { idSchema, instantSchema, pageInfoSchema, syncGenerationSchema } from "./common";
 import { giftCardCodeSchema } from "./gift-card-code";
 
 export { giftCardCodeSchema } from "./gift-card-code";
@@ -36,6 +36,21 @@ export const giftCardSchema = z.object({
   version: z.number().int().positive(),
   createdAt: instantSchema,
 });
+export const giftReplicaScopeSchema = z.string().regex(/^[a-f0-9]{64}$/);
+export const giftReplicaStampSchema = z.object({
+  scope: giftReplicaScopeSchema,
+  generation: syncGenerationSchema,
+});
+export const giftReplicaQuerySchema = giftCardQuerySchema.pick({ page: true }).strict();
+export const giftReplicaPageSize = 128;
+export const giftReplicaPageSchema = giftReplicaStampSchema.extend({
+  revision: z.number().int().nonnegative(),
+  through: z.number().int().nonnegative(),
+  rows: z.array(giftCardSchema.omit({ buyerClientId: true })).max(giftReplicaPageSize),
+  hasMore: z.boolean(),
+});
+export type GiftReplicaPage = z.infer<typeof giftReplicaPageSchema>;
+
 export const giftCardListSchema = z.object({
   cards: z.array(giftCardSchema),
   pagination: pageInfoSchema,
@@ -69,6 +84,7 @@ export type GiftCardPurchaseInput = z.infer<typeof giftCardPurchaseSchema>;
 export type GiftCard = z.infer<typeof giftCardSchema>;
 
 export const giftCardMovementListSchema = z.object({
+  replica: giftReplicaStampSchema.optional(),
   movements: z.array(
     z.object({
       id: idSchema,
