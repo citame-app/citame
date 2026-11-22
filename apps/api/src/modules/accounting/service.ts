@@ -26,6 +26,7 @@ import { multiplyDivide, storedValuePaymentMethods } from "../commerce/money";
 import { checkoutReportScope, recordedCheckoutMovements } from "../commerce/report-movements";
 import { getSalonSettings } from "../settings/service";
 import { requireStaff } from "../staff/admin";
+import { reportPromotionCollections } from "./promotion-collections";
 import { redeemedAtSettlement, settledSales } from "./settled-families";
 
 type Connection = Database | Tx;
@@ -405,6 +406,7 @@ export async function salesReport(db: Database, query: SalesReportQuery, princip
         membershipAccessFeesCents: Number(fees?.amount ?? 0),
         bookingFeesCents: Number(bookingFees?.amount ?? 0),
         ...sales,
+        promotionCollections: await reportPromotionCollections(tx, fromAt, toAt, scope),
         productCostCents: Number(costs?.cost ?? 0),
         unknownCostLines: costs?.unknown ?? 0,
         methods,

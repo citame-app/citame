@@ -12,8 +12,8 @@ import { api } from "~/lib/api/instance";
 import { formatMoney } from "~/lib/format";
 import { presetRange } from "../reports/logic";
 import { downloadCsv } from "./csv";
+import { PromotionCollections, SalesFamilies } from "./financial-breakdowns";
 import { centsInput, inputCents } from "./money";
-import { SalesFamilies } from "./sales-families";
 export function AccountingView({
   role,
   section = "all",
@@ -558,6 +558,27 @@ export function SalesReport({
                         ]),
                       ]
                     : []),
+                  ...(report.data.promotionCollections
+                    ? [
+                        [],
+                        [
+                          "promotion_name",
+                          "promotion_code",
+                          "collected_cents",
+                          "refunded_cents",
+                          "net_cents",
+                          "currency",
+                        ],
+                        ...report.data.promotionCollections.map((row) => [
+                          row.name,
+                          row.code,
+                          row.collectedCents,
+                          row.refundedCents,
+                          row.netCents,
+                          "EUR",
+                        ]),
+                      ]
+                    : []),
                 ],
                 report.data.client
                   ? `client-sales-${report.data.client.id}-${report.data.from}-${report.data.to}.csv`
@@ -598,6 +619,12 @@ export function SalesReport({
           {report.data.settledByFamily && (
             <SalesFamilies
               rows={report.data.settledByFamily}
+              headingLevel={clientId ? "h3" : "h4"}
+            />
+          )}
+          {report.data.promotionCollections && (
+            <PromotionCollections
+              rows={report.data.promotionCollections}
               headingLevel={clientId ? "h3" : "h4"}
             />
           )}

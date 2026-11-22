@@ -208,6 +208,31 @@ for (const scheme of ["light", "dark"] as const)
           fullPage: true,
         });
 
+        const paid = await owner.post(
+          `/api/admin/commerce/checkouts/${visit.protection.checkoutId}/payments`,
+          {
+            data: {
+              method: "external_card",
+              amountCents: 1875,
+              idempotencyKey: crypto.randomUUID(),
+            },
+          },
+        );
+        expect(paid.status(), await paid.text()).toBe(201);
+        const { payment } = (await paid.json()) as { payment: { id: string } };
+        const receiptAfterPayment = await owner.get(
+          `/api/admin/commerce/checkouts/${visit.protection.checkoutId}`,
+        );
+        expect(receiptAfterPayment.ok()).toBe(true);
+        const { payments } = (await receiptAfterPayment.json()) as {
+          payments: { id: string; createdAt: string; updatedAt?: string }[];
+        };
+        const recordedPayment = payments.find(({ id }) => id === payment.id);
+        if (!recordedPayment) throw new Error("Missing recorded payment");
+        // Confirming a protected deposit advances the appointment's concurrency version.
+        const currentVisit = await owner.get(`/api/appointments/${visit.id}/context`);
+        expect(currentVisit.ok()).toBe(true);
+        visit.version = (await currentVisit.json()).appointmentVersion;
         const cancelled = await owner.patch(`/api/appointments/${visit.id}`, {
           data: { version: visit.version, status: "cancelled" },
         });
@@ -252,6 +277,42 @@ for (const scheme of ["light", "dark"] as const)
         await expectNoHorizontalScroll(page);
         await expectNoSeriousA11yViolations(page, `booking promotion report ${scheme}`);
         await localized.screenshot({ path: info.outputPath("booking-promotion-report-es.png") });
+
+        const paymentDate = new Intl.DateTimeFormat("sv-SE", {
+          timeZone: "America/Argentina/Buenos_Aires",
+        }).format(new Date(recordedPayment.updatedAt ?? recordedPayment.createdAt));
+        await page.getByRole("button", { name: "Informes económicos", exact: true }).click();
+        const financial = page.getByRole("region", { name: "Ventas y cobros", exact: true });
+        await financial.getByLabel("Desde", { exact: true }).fill(paymentDate);
+        await financial.getByLabel("Hasta", { exact: true }).fill(paymentDate);
+        await financial.getByRole("combobox", { name: "Profesional" }).selectOption(staff.id);
+        await financial.getByRole("button", { name: "Aplicar filtros", exact: true }).click();
+        const mobile = info.project.name === "mobile";
+        const collections = financial.getByRole(mobile ? "list" : "table", {
+          name: "Cobros por promoción de reserva",
+        });
+        const collectedRow = collections.getByRole(mobile ? "listitem" : "row").filter({
+          hasText: offerLabel,
+        });
+        const amounts = collectedRow.getByRole(mobile ? "definition" : "cell");
+        await expect(amounts).toHaveCount(3);
+        await expect(amounts.first()).toContainText("18,75");
+        const financialDownload = page.waitForEvent("download", { timeout: 10000 });
+        await financial.getByRole("button", { name: "Exportar resumen económico (CSV)" }).click();
+        expect(await readFile(await (await financialDownload).path(), "utf8")).toContain(
+          `"${terms.name}","${code}","1875","0","1875","EUR"`,
+        );
+        await expectNoHorizontalScroll(page);
+        await expectNoSeriousA11yViolations(page, `booking promotion collections ${scheme}`);
+        await collections.screenshot({ path: info.outputPath("promotion-collections-es.png") });
+        await switchLocale(page, "English");
+        const english = page.getByRole(mobile ? "list" : "table", {
+          name: "Collections by booking promotion",
+        });
+        await expect(english.getByText(offerLabel, { exact: true })).toBeVisible();
+        await expectNoHorizontalScroll(page);
+        await expectNoSeriousA11yViolations(page, `booking promotion collections EN ${scheme}`);
+        await english.screenshot({ path: info.outputPath("promotion-collections-en.png") });
       } finally {
         if (visit)
           await owner.patch(`/api/appointments/${visit.id}`, {

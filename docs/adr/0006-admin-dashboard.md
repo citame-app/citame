@@ -80,6 +80,10 @@ The overview and its CSV in Web and Desktop count visits by the promotion name a
 
 Attribution requires the original receipt and the server's confirmation in the appointment creation audit, written together at booking. A coupon added later during checkout does not appear in this breakdown. The counts describe appointment outcomes. Financial reports continue to use settled sales and returns.
 
+### Collections by booking promotion
+
+Financial reports in Cloud and Desktop show captured external payments, completed refunds and the net collected per promotion name and code recorded at booking. They use the same original receipt and audit evidence as the appointment breakdown. A coupon added during checkout and tender from gift cards, packages or memberships are excluded. Payment and refund confirmation dates determine the salon-local reporting period, independently of the appointment day. Refunds on a receipt paid in an earlier period can produce negative net collections. The date, professional and optional client scope match the existing financial report. Both clients include the rows in the financial CSV. The report requires financial report and checkout permissions.
+
 ### Client net collections
 
 Cloud and Desktop use the same client report and export the ten highest positive net collections in EUR. The calculation uses recorded external payments and completed refunds in the selected salon-local dates and the checkout's staff scope. It groups historical checkouts under the current client identity after merges. Anonymous sales, deleted client profiles and redemptions of stored value are outside the ranking. The report requires financial and client directory permissions.
