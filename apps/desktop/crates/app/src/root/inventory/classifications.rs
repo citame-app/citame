@@ -1,6 +1,7 @@
 use super::*;
 use sob_core::inventory_classifications::{
-    Classification, ClassificationKind, ClassificationProposal, SAVE,
+    Classification, ClassificationCatalogue, ClassificationKind, ClassificationMove,
+    ClassificationProposal, QueuedClassificationOrder, SAVE,
 };
 use uuid::Uuid;
 
@@ -19,6 +20,36 @@ pub(super) struct Panel {
     draft: Option<Draft>,
     notice: Option<Key>,
     discard: bool,
+    handles: std::cell::RefCell<HashMap<Uuid, gpui::FocusHandle>>,
+    order_conflict: Option<(String, QueuedClassificationOrder)>,
+}
+
+#[derive(Clone)]
+struct ClassificationDrag {
+    catalogue: Arc<ClassificationCatalogue>,
+    source: Uuid,
+    kind: ClassificationKind,
+    parent: Option<Uuid>,
+    label: String,
+}
+
+impl ClassificationDrag {
+    fn accepts(&self, id: Uuid, kind: ClassificationKind, parent: Option<Uuid>) -> bool {
+        self.source != id && self.kind == kind && self.parent == parent
+    }
+}
+
+struct ClassificationDragLabel(String);
+
+impl Render for ClassificationDragLabel {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_3()
+            .py_2()
+            .rounded_md()
+            .bg(theme::accent_soft())
+            .child(self.0.clone())
+    }
 }
 
 #[derive(Default)]
@@ -381,6 +412,148 @@ impl Root {
         cx.notify();
     }
 
+    pub(in crate::root) fn open_classification_order_conflict(
+        &mut self,
+        id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(order) = self.svc.store.inventory_order_conflict(id).ok().flatten() else {
+            return;
+        };
+        self.prepare_inventory(cx);
+        self.open_classifications(cx);
+        if let Some(panel) = self.classifications_panel() {
+            panel.order_conflict = Some((id.to_owned(), order));
+            panel.notice = Some(Key::InventoryClassificationOrderChanged);
+        }
+    }
+
+    fn move_classification(
+        &mut self,
+        catalogue: &ClassificationCatalogue,
+        source: Uuid,
+        target: Uuid,
+        after: bool,
+        replaces: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(order) = catalogue
+            .reviewed_order(source)
+            .and_then(|group| group.move_to(source, target, after))
+        else {
+            return;
+        };
+        let movement = ClassificationMove {
+            source,
+            anchor: target,
+            after,
+        };
+        let result =
+            self.svc
+                .store
+                .queue_inventory_order(&catalogue.generation, movement, &order, replaces);
+        if let Some(panel) = self.classifications_panel() {
+            panel.notice = Some(match result {
+                Ok(()) => {
+                    panel.order_conflict = None;
+                    Key::InventoryDocumentQueued
+                }
+                Err(CoreError::CatalogueEditPending) => Key::InventoryWarehousePending,
+                Err(_) => Key::InventoryClassificationOrderChanged,
+            });
+        }
+        if result.is_ok() {
+            self.edited(cx);
+        } else {
+            self.load_classifications(cx);
+        }
+        cx.notify();
+    }
+
+    fn render_classification_controls(
+        &self,
+        panel: &Panel,
+        catalogue: &Arc<ClassificationCatalogue>,
+        entry: &Classification,
+        neighbors: (Option<Uuid>, Option<Uuid>),
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let (previous, next) = neighbors;
+        let source = entry.id;
+        let focus = panel
+            .handles
+            .borrow_mut()
+            .entry(source)
+            .or_insert_with(|| cx.focus_handle().tab_stop(true))
+            .clone();
+        let drag = ClassificationDrag {
+            catalogue: catalogue.clone(),
+            source,
+            kind: entry.kind,
+            parent: entry.parent_id,
+            label: entry.name.clone(),
+        };
+        let keys = catalogue.clone();
+        let handle = div()
+            .id(SharedString::from(format!(
+                "classification-handle-{source}"
+            )))
+            .debug_selector(move || format!("classification-handle-{source}"))
+            .track_focus(&focus)
+            .cursor_grab()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .border_1()
+            .border_color(theme::line())
+            .focus(|style| style.border_color(theme::accent()))
+            .on_mouse_down(gpui::MouseButton::Left, move |_, window, _| {
+                focus.focus(window)
+            })
+            .on_key_down(
+                cx.listener(move |root, event: &gpui::KeyDownEvent, window, cx| {
+                    let key = &event.keystroke;
+                    if key.key == "escape" && cx.stop_active_drag(window) {
+                        cx.stop_propagation();
+                        return;
+                    }
+                    if enabled && key.modifiers.alt && (key.key == "up" || key.key == "down") {
+                        let after = key.key == "down";
+                        if let Some(target) = if after { next } else { previous } {
+                            root.move_classification(&keys, source, target, after, None, cx);
+                        }
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            .when(enabled, |handle| {
+                handle.on_drag(drag, |payload, _, _, cx| {
+                    cx.new(|_| ClassificationDragLabel(payload.label.clone()))
+                })
+            })
+            .child("⠿");
+        div().flex().items_center().gap_1().child(handle).children(
+            [
+                (previous, false, Key::InventoryClassificationMoveUp),
+                (next, true, Key::InventoryClassificationMoveDown),
+            ]
+            .into_iter()
+            .filter_map(|(target, after, key)| {
+                let id = target.filter(|_| enabled)?;
+                let catalogue = catalogue.clone();
+                Some(self.button(
+                    SharedString::from(format!("classification-{source}-{after}")),
+                    self.t(key),
+                    Kind::Ghost,
+                    cx.listener(move |root, _, _, cx| {
+                        root.move_classification(&catalogue, source, id, after, None, cx)
+                    }),
+                ))
+            }),
+        )
+    }
+
     pub(super) fn render_classifications(
         &self,
         panel: &Panel,
@@ -404,7 +577,13 @@ impl Root {
             )
             .when_some(panel.notice, |body, key| body.child(self.t(key)))
             .when(loading, |body| body.child(self.t(Key::InventoryLoading)));
-        let Some(list) = self.svc.store.inventory_classifications().ok().flatten() else {
+        let Some(list) = self
+            .svc
+            .store
+            .displayed_inventory_classifications()
+            .ok()
+            .flatten()
+        else {
             return body
                 .child(self.t(Key::InventoryClassificationsUnavailable))
                 .when(!loading, |body| {
@@ -416,7 +595,8 @@ impl Root {
                     ))
                 });
         };
-        let write = self.svc.store.can_queue_product_edits() && !loading;
+        let editable = self.svc.store.can_queue_product_edits();
+        let write = editable && !loading;
         if panel.discard {
             return body
                 .child(self.t(Key::SalonConfirmDiscard))
@@ -548,6 +728,107 @@ impl Root {
                     ))
                 });
         }
+        let pending_orders = self
+            .svc
+            .store
+            .pending_inventory_orders()
+            .unwrap_or_default();
+        let pending_groups = self
+            .svc
+            .store
+            .classification_order_pending_groups()
+            .unwrap_or_default();
+        let pending_entries = self
+            .svc
+            .store
+            .pending_inventory_classifications()
+            .unwrap_or_default();
+        let ordering = write && panel.order_conflict.is_none();
+        let list = Arc::new(list);
+        let body = body
+            .when(ordering && list.entries.len() > 1, |body| {
+                body.child(self.t(Key::InventoryClassificationOrderHelp))
+            })
+            .when(!pending_orders.is_empty(), |body| {
+                body.child(self.t(Key::InventoryClassificationOrderQueued))
+            })
+            .when_some(panel.order_conflict.as_ref(), |body, (id, pending)| {
+                let movement = pending.movement;
+                let source = movement.source;
+                let target = Some((movement.anchor, movement.after));
+                let action = pending.review(&list);
+                let described = target.and_then(|(target, after)| {
+                    let name = list
+                        .entries
+                        .iter()
+                        .find(|entry| entry.id == source)?
+                        .name
+                        .clone();
+                    let reference = list
+                        .entries
+                        .iter()
+                        .find(|entry| entry.id == target)?
+                        .name
+                        .clone();
+                    Some(format!(
+                        "{name} · {} · {reference}",
+                        self.t(if after {
+                            Key::InventoryClassificationAfter
+                        } else {
+                            Key::InventoryClassificationBefore
+                        })
+                    ))
+                });
+                body.when_some(described, |body, text| body.child(text))
+                    .when_some(
+                        action.filter(|order| {
+                            current
+                                && write
+                                && !pending_groups.contains(&(order.kind, order.parent_id))
+                        }),
+                        |body, _| {
+                            let (target, after) = (movement.anchor, movement.after);
+                            let id = id.clone();
+                            let list = list.clone();
+                            body.child(self.button(
+                                "classification-order-review",
+                                self.t(Key::InventoryClassificationReapplyOrder),
+                                Kind::Primary,
+                                cx.listener(move |root, _, _, cx| {
+                                    root.move_classification(
+                                        &list,
+                                        source,
+                                        target,
+                                        after,
+                                        Some(&id),
+                                        cx,
+                                    )
+                                }),
+                            ))
+                        },
+                    )
+            });
+        let mut by_group: HashMap<_, Vec<&Classification>> = HashMap::new();
+        for row in &list.entries {
+            by_group
+                .entry((row.kind, row.parent_id))
+                .or_default()
+                .push(row);
+        }
+        let neighbors: HashMap<_, _> = by_group
+            .values()
+            .flat_map(|group| {
+                group.iter().enumerate().map(|(index, row)| {
+                    let previous = index
+                        .checked_sub(1)
+                        .and_then(|index| group.get(index))
+                        .map(|row| row.id);
+                    let next = group.get(index + 1).map(|row| row.id);
+                    (row.id, (previous, next))
+                })
+            })
+            .collect();
+
         let mut rows = Vec::new();
         for root in list
             .entries
@@ -556,10 +837,11 @@ impl Root {
         {
             rows.push((root.name.clone(), root.clone()));
             rows.extend(
-                list.entries
-                    .iter()
-                    .filter(|row| row.parent_id == Some(root.id))
-                    .map(|row| (format!("{} / {}", root.name, row.name), row.clone())),
+                by_group
+                    .get(&(ClassificationKind::Category, Some(root.id)))
+                    .into_iter()
+                    .flatten()
+                    .map(|row| (format!("{} / {}", root.name, row.name), (*row).clone())),
             );
         }
         body.when(write, |body| {
@@ -586,27 +868,84 @@ impl Root {
                     )),
             )
         })
-        .children(
-            self.svc
-                .store
-                .pending_inventory_classifications()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|row| {
-                    div().text_sm().child(format!(
-                        "{} · {}",
-                        row.name,
-                        self.t(Key::InventoryDocumentQueued)
-                    ))
-                }),
-        )
-        .children(rows.into_iter().enumerate().map(|(index, (name, entry))| {
+        .children(pending_entries.into_iter().map(|row| {
+            div().text_sm().child(format!(
+                "{} · {}",
+                row.name,
+                self.t(Key::InventoryDocumentQueued)
+            ))
+        }))
+        .children(rows.iter().enumerate().map(|(index, (name, entry))| {
+            let entry = entry.clone();
+            let id = entry.id;
+            let kind = entry.kind;
+            let parent = entry.parent_id;
+            let (previous, next) = neighbors.get(&id).copied().unwrap_or_default();
+            let group_pending = pending_groups.contains(&(kind, parent));
+            let write = write && !group_pending;
+            let ordering = ordering && !group_pending;
             div()
+                .id(SharedString::from(format!("classification-row-{id}")))
+                .debug_selector(move || format!("classification-row-{id}"))
                 .flex()
                 .justify_between()
                 .items_center()
                 .gap_2()
-                .child(name)
+                .child(name.clone())
+                .when(
+                    self.svc.store.can_queue_product_edits()
+                        && (previous.is_some() || next.is_some()),
+                    |row| {
+                        row.child(self.render_classification_controls(
+                            panel,
+                            &list,
+                            &entry,
+                            (previous, next),
+                            ordering,
+                            cx,
+                        ))
+                    },
+                )
+                .when(ordering, |row| {
+                    let bounds = std::rc::Rc::new(std::cell::Cell::new(None));
+                    let measure = bounds.clone();
+                    row.relative()
+                        .child(
+                            gpui::canvas(
+                                move |rect, _, _| measure.set(Some(rect)),
+                                |_, _, _, _| {},
+                            )
+                            .absolute()
+                            .inset_0(),
+                        )
+                        .can_drop(move |payload, _, _| {
+                            payload
+                                .downcast_ref::<ClassificationDrag>()
+                                .is_some_and(|drag| drag.accepts(id, kind, parent))
+                        })
+                        .drag_over::<ClassificationDrag>(move |style, payload, _, _| {
+                            if payload.accepts(id, kind, parent) {
+                                style.bg(theme::accent_soft())
+                            } else {
+                                style
+                            }
+                        })
+                        .on_drop(
+                            cx.listener(move |root, drag: &ClassificationDrag, window, cx| {
+                                if let Some(rect) = bounds.get() {
+                                    let after = window.mouse_position().y >= rect.center().y;
+                                    root.move_classification(
+                                        &drag.catalogue,
+                                        drag.source,
+                                        id,
+                                        after,
+                                        None,
+                                        cx,
+                                    );
+                                }
+                            }),
+                        )
+                })
                 .when(!entry.active, |row| {
                     row.child(self.t(Key::InventoryWarehouseArchived))
                 })
@@ -629,6 +968,94 @@ mod tests {
     use super::*;
     use gpui::TestAppContext;
     use sob_core::inventory_classifications::ClassificationCatalogue;
+
+    #[gpui::test]
+    async fn dragging_a_classification_enqueues_the_reviewed_order_offline(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, config) = crate::root::tests::desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        let first = Uuid::from_u128(11);
+        let second = Uuid::from_u128(12);
+        let brand_first = Uuid::from_u128(13);
+        let brand_second = Uuid::from_u128(14);
+        root.update(cx, |root, cx| {
+            let generation = root.svc.store.verified_reviewed_generation().unwrap();
+            root.svc
+                .store
+                .set_meta("inventory_write_access", &generation)
+                .unwrap();
+            root.svc
+                .store
+                .remember_inventory_classifications(&ClassificationCatalogue {
+                    generation,
+                    entries: [first, second, brand_first, brand_second]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, id)| Classification {
+                            id,
+                            kind: if index < 2 {
+                                ClassificationKind::Category
+                            } else {
+                                ClassificationKind::Brand
+                            },
+                            parent_id: None,
+                            name: format!("Category {index}"),
+                            position: index as u32,
+                            active: true,
+                            version: 1,
+                        })
+                        .collect(),
+                })
+                .unwrap();
+            root.prepare_inventory(cx);
+            root.open_classifications(cx);
+        });
+        cx.run_until_parked();
+        let start = cx
+            .debug_bounds("classification-handle-00000000-0000-0000-0000-00000000000b")
+            .unwrap()
+            .center();
+        let end = cx
+            .debug_bounds("classification-row-00000000-0000-0000-0000-00000000000c")
+            .unwrap();
+        let end = gpui::point(end.center().x, end.center().y + px(1.));
+        cx.simulate_mouse_down(start, gpui::MouseButton::Left, Default::default());
+        cx.simulate_mouse_move(end, gpui::MouseButton::Left, Default::default());
+        cx.run_until_parked();
+        cx.simulate_mouse_up(end, gpui::MouseButton::Left, Default::default());
+        cx.run_until_parked();
+        let keyboard = cx
+            .debug_bounds("classification-handle-00000000-0000-0000-0000-00000000000d")
+            .unwrap();
+        cx.simulate_click(keyboard.center(), Default::default());
+        cx.simulate_keystrokes("alt-down");
+        cx.run_until_parked();
+        root.update(cx, |root, _| {
+            let pending = root.svc.store.pending_inventory_orders().unwrap();
+            assert_eq!(pending.len(), 2);
+            let order = &pending[0].order;
+            assert_eq!(
+                order
+                    .entries
+                    .iter()
+                    .map(|entry| entry.id)
+                    .collect::<Vec<_>>(),
+                [second, first]
+            );
+            assert_eq!(
+                pending[1]
+                    .order
+                    .entries
+                    .iter()
+                    .map(|entry| entry.id)
+                    .collect::<Vec<_>>(),
+                [brand_second, brand_first]
+            );
+            let original = root.svc.store.inventory_classifications().unwrap().unwrap();
+            assert_eq!(original.entries[0].id, first);
+        });
+    }
 
     #[gpui::test]
     async fn an_offline_classification_editor_keeps_the_draft_in_the_outbox(

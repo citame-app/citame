@@ -1775,6 +1775,9 @@ impl Store {
                     if s.kind == crate::service_resources::MUTATION_KIND {
                         Self::acknowledge_service_resources_at(&tx, s)?;
                     }
+                    if s.kind == crate::inventory_classifications::REORDER {
+                        Self::acknowledge_inventory_order_at(&tx, s)?;
+                    }
                     if s.kind == "appointment.create" {
                         tx.execute(
                             "INSERT OR REPLACE INTO local_booking_confirmation (appointment_id,applied_seq)
@@ -1817,6 +1820,7 @@ impl Store {
                                 | crate::warehouses::TRANSFER
                                 | crate::warehouses::ADJUST
                                 | crate::inventory_classifications::SAVE
+                                | crate::inventory_classifications::REORDER
                         )
                     {
                         Self::set_meta_at(
@@ -1848,6 +1852,7 @@ impl Store {
                                 | crate::warehouses::TRANSFER
                                 | crate::warehouses::ADJUST
                                 | crate::inventory_classifications::SAVE
+                                | crate::inventory_classifications::REORDER
                         )
                     {
                         Self::apply_inventory_access_at(&tx, false)?;

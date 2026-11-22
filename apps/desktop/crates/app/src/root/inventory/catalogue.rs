@@ -177,7 +177,7 @@ impl Root {
         let entries = self
             .svc
             .store
-            .inventory_classifications()
+            .displayed_inventory_classifications()
             .ok()
             .flatten()
             .map(|list| list.entries)
@@ -382,7 +382,7 @@ impl Root {
         let roots = self
             .svc
             .store
-            .inventory_classifications()
+            .displayed_inventory_classifications()
             .ok()
             .flatten()
             .map(|catalogue| catalogue.entries)

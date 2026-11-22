@@ -1,12 +1,18 @@
-import type { InventoryClassificationInput } from "@sob/contracts";
+import type { InventoryClassificationInput, InventoryClassificationReorder } from "@sob/contracts";
 import { type Database, inventoryClassification, pgErrorCode, retailProduct } from "@sob/db";
-import { and, asc, eq, or, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, or, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { lockInventoryClassification } from "./classification-fields";
 import { requireCurrentInventoryWriter } from "./service";
+
+const classificationOrder = [
+  asc(inventoryClassification.position),
+  asc(sql`lower(${inventoryClassification.name})`),
+  asc(inventoryClassification.id),
+] as const;
 
 export async function listInventoryClassifications(
   db: Database,
@@ -20,9 +26,7 @@ export async function listInventoryClassifications(
     .orderBy(
       asc(inventoryClassification.kind),
       asc(inventoryClassification.parentId),
-      asc(inventoryClassification.position),
-      asc(sql`lower(${inventoryClassification.name})`),
-      asc(inventoryClassification.id),
+      ...classificationOrder,
     );
   return { entries, generation };
 }
@@ -149,4 +153,68 @@ export async function saveInventoryClassification(
       );
     throw error;
   }
+}
+
+export async function reorderInventoryClassifications(
+  db: Database,
+  input: InventoryClassificationReorder,
+  principal: Principal,
+  generation: string,
+) {
+  if (input.generation !== generation)
+    throw new DomainError("sync_generation_changed", "Refresh classifications after a restore");
+  const { kind, parentId, entries } = input;
+  if (
+    (kind === "brand" && parentId) ||
+    new Set(entries.map(({ id }) => id)).size !== entries.length
+  )
+    throw new DomainError("validation_error", "Choose distinct classifications in the same group");
+
+  return db.transaction(async (tx) => {
+    const writer = await requireCurrentInventoryWriter(tx, principal.userId);
+    await lockInventoryClassification(tx);
+    const siblings = await tx
+      .select({
+        id: inventoryClassification.id,
+        version: inventoryClassification.version,
+        position: inventoryClassification.position,
+      })
+      .from(inventoryClassification)
+      .where(
+        and(
+          eq(inventoryClassification.kind, kind),
+          parentId
+            ? eq(inventoryClassification.parentId, parentId)
+            : isNull(inventoryClassification.parentId),
+        ),
+      )
+      .orderBy(...classificationOrder);
+    const byId = new Map(siblings.map((row) => [row.id, row]));
+    if (
+      siblings.length !== entries.length ||
+      entries.some(({ id, version }) => byId.get(id)?.version !== version)
+    )
+      throw new DomainError("version_conflict", "The group changed. Review the current order.");
+    if (siblings.every(({ id }, index) => entries[index]?.id === id)) return { ok: true as const };
+    const changes = entries.flatMap(({ id, version }, position) => {
+      if (byId.get(id)?.position === position) return [];
+      if (version === 2147483647)
+        throw new DomainError("version_conflict", "A classification is at its revision limit");
+      return [{ id, position }];
+    });
+    await tx.execute(sql`
+      update inventory_classification as entry
+      set position = next.position, version = entry.version + 1
+      from jsonb_to_recordset(${JSON.stringify(changes)}::text::jsonb) as next(id uuid, position integer)
+      where entry.id = next.id
+    `);
+    await recordAudit(tx, {
+      actorUserId: writer.userId,
+      action: "inventory.classifications_reordered",
+      entity: "inventory_classification",
+      entityId: parentId ?? kind,
+      metadata: { kind, moved: changes.length },
+    });
+    return { ok: true as const };
+  });
 }

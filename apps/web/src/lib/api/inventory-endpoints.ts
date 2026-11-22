@@ -1,7 +1,9 @@
 import {
   type CreateProductInput,
   type InventoryClassificationInput,
+  type InventoryClassificationReorder,
   inventoryClassificationListSchema,
+  inventoryClassificationOrderResultSchema,
   inventoryClassificationSchema,
   inventoryFacetsSchema,
   inventoryReportSchema,
@@ -68,6 +70,12 @@ export function inventoryEndpoints(client: ApiClient) {
   return {
     classifications: () =>
       client.get("/admin/inventory/classifications", inventoryClassificationListSchema),
+    reorderClassifications: (body: InventoryClassificationReorder) =>
+      client.put(
+        "/admin/inventory/classifications/order",
+        body,
+        inventoryClassificationOrderResultSchema,
+      ),
     saveClassification: (id: string, body: InventoryClassificationInput) =>
       client.put(`/admin/inventory/classifications/${id}`, body, inventoryClassificationSchema),
     warehouses: () => client.get("/admin/inventory/warehouses", warehouseListSchema),

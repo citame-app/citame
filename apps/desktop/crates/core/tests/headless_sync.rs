@@ -7311,7 +7311,9 @@ fn native_stock_adjustment_to_an_empty_warehouse_replays_and_reviews_after_resta
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_classifications_replay_after_restart_and_keep_legacy_product_stock() {
-    use sob_core::inventory_classifications::{Classification, ClassificationKind};
+    use sob_core::inventory_classifications::{
+        Classification, ClassificationKind, ClassificationMove,
+    };
     use sob_core::product_editor::ProductReview;
     use uuid::Uuid;
 
@@ -7399,6 +7401,80 @@ fn native_classifications_replay_after_restart_and_keep_legacy_product_stock() {
     assert_eq!(product.stock_on_hand, 5);
     assert_eq!(product.category.as_deref(), Some(parent.name.as_str()));
     assert_eq!(product.brand.as_deref(), Some("Legacy detail"));
+    assert_eq!(
+        product.classification.unwrap().subcategory_id,
+        Some(subcategory.id)
+    );
+    store.remember_inventory_classifications(&list).unwrap();
+    let other = Classification {
+        id: Uuid::now_v7(),
+        position: 3,
+        name: "Another native child".into(),
+        ..subcategory.clone()
+    };
+    store
+        .queue_inventory_classification(&generation, other.clone(), None)
+        .unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*desktop.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let list = desktop.transport.inventory_classifications().unwrap();
+    store.remember_inventory_classifications(&list).unwrap();
+    let order = list
+        .reviewed_order(other.id)
+        .unwrap()
+        .move_to(other.id, subcategory.id, false)
+        .unwrap();
+    store
+        .queue_inventory_order(
+            &generation,
+            ClassificationMove {
+                source: other.id,
+                anchor: subcategory.id,
+                after: false,
+            },
+            &order,
+            None,
+        )
+        .unwrap();
+    drop(store);
+
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(store.pending_inventory_orders().unwrap()[0].order, order);
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*desktop.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    assert!(store.pending_inventory_orders().unwrap().is_empty());
+    let cached = store.inventory_classifications().unwrap().unwrap();
+    assert_eq!(
+        cached
+            .reviewed_order(other.id)
+            .unwrap()
+            .entries
+            .iter()
+            .map(|entry| entry.id)
+            .collect::<Vec<_>>(),
+        [other.id, subcategory.id]
+    );
+    let remote = web.rest_get("/admin/inventory/classifications");
+    let visible = remote["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["parentId"] == parent.id.to_string())
+        .map(|row| row["id"].as_str().unwrap().parse::<Uuid>().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(visible, [other.id, subcategory.id]);
+    let product = desktop.transport.inventory_product(product_id).unwrap();
+    assert_eq!(product.stock_on_hand, 5);
     assert_eq!(
         product.classification.unwrap().subcategory_id,
         Some(subcategory.id)

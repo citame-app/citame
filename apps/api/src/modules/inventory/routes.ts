@@ -2,6 +2,7 @@ import {
   createProductSchema,
   idSchema,
   inventoryClassificationInputSchema,
+  inventoryClassificationReorderSchema,
   productExportQuerySchema,
   productFiltersSchema,
   productPhotoInputSchema,
@@ -27,7 +28,11 @@ import type { AppDeps } from "../../app";
 import { requirePermission } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
-import { listInventoryClassifications, saveInventoryClassification } from "./classifications";
+import {
+  listInventoryClassifications,
+  reorderInventoryClassifications,
+  saveInventoryClassification,
+} from "./classifications";
 import { exportStockLedger, inventoryFacets, stockLedger } from "./ledger";
 import { getPurchaseOrder, listPurchaseOrders, writePurchaseOrder } from "./orders";
 import { readProductPhoto, saveProductPhoto } from "./photo";
@@ -71,6 +76,16 @@ export function inventoryRoutes(deps: AppDeps) {
       c.json(await listInventoryClassifications(deps.db, c.get("principal"), generation), 200, {
         "Cache-Control": "private, no-store",
       }),
+    )
+    .put("/classifications/order", async (c) =>
+      c.json(
+        await reorderInventoryClassifications(
+          deps.db,
+          parseOrThrow(inventoryClassificationReorderSchema, await readJson(c)),
+          c.get("principal"),
+          generation,
+        ),
+      ),
     )
     .put("/classifications/:id", async (c) =>
       c.json(

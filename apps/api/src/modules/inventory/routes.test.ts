@@ -1495,3 +1495,78 @@ test("reviewed classifications preserve existing labels, product stock and histo
     classification: { categoryId: newParentId, subcategoryId: childId, brandId: null },
   });
 });
+
+test("a reviewed classification reorder persists atomically and fences concurrent edits", async () => {
+  const path = "/admin/inventory/classifications";
+  async function catalogue() {
+    const result = await call(owner, path);
+    expect(result.status).toBe(200);
+    return inventoryClassificationListSchema.parse(await result.json());
+  }
+  const ids = [
+    crypto.randomUUID(),
+    crypto.randomUUID(),
+    crypto.randomUUID(),
+    crypto.randomUUID(),
+  ] as const;
+  const [first, middle, last, brand] = ids;
+  const { generation } = await catalogue();
+  for (const [index, id] of ids.entries()) {
+    const result = await call(owner, `${path}/${id}`, "PUT", {
+      generation,
+      kind: index === 3 ? "brand" : "category",
+      parentId: null,
+      name: ["Apple", "Berry", "Cherry", "Maker"][index],
+      version: 0,
+      position: 0,
+      active: index !== 1,
+    });
+    expect(result.status, await result.clone().text()).toBe(200);
+  }
+  const order = (list: Awaited<ReturnType<typeof catalogue>>) =>
+    list.entries
+      .filter(({ kind }) => kind === "category")
+      .map(({ id, version }) => ({ id, version }));
+  const original = await catalogue();
+  const categories = order(original);
+  expect(categories.map(({ id }) => id)).toEqual([first, middle, last]);
+  const update = (who: Actor, input: unknown) => call(who, `${path}/order`, "PUT", input);
+  const payload = { kind: "category", parentId: null, entries: categories.toReversed() };
+  const reviewed = { ...payload, generation };
+  expect((await update(staff, reviewed)).status).toBe(403);
+  expect((await update(owner, { ...reviewed, generation: "old-replica" })).status).toBe(409);
+  expect((await update(owner, { ...reviewed, entries: categories.slice(1) })).status).toBe(409);
+  expect(
+    (await update(owner, { ...reviewed, entries: [...categories, categories[0]] })).status,
+  ).toBe(400);
+  const replaced = [...categories.slice(0, 2), { id: brand, version: 1 }];
+  expect((await update(owner, { ...reviewed, entries: replaced })).status).toBe(409);
+  expect(await catalogue()).toEqual(original);
+  const rest = await update(owner, reviewed);
+  expect(rest.status, await rest.clone().text()).toBe(200);
+  const changed = await catalogue();
+  expect(order(changed).map(({ id }) => id)).toEqual([last, middle, first]);
+  expect(changed.entries.find((row) => row.id === brand)).toEqual(
+    original.entries.find((row) => row.id === brand),
+  );
+  expect(changed.entries.find((row) => row.id === middle)?.active).toBe(false);
+  expect((await update(owner, reviewed)).status).toBe(409);
+
+  const entries = order(changed).toReversed();
+  const reorder = {
+    kind: "inventory.classification_reorder",
+    mutationId: mid(),
+    createdAt: new Date().toISOString(),
+    payload: { ...payload, entries, move: { source: first, anchor: last, after: false } },
+  };
+  const result = (await push(t, owner, [reorder])).body;
+  expect(result.results[0]).toMatchObject({ status: "applied" });
+  expect(result.headSeq).toBeGreaterThan(0);
+  const after = await catalogue();
+  expect(order(after).map(({ id }) => id)).toEqual([first, middle, last]);
+  expect((await push(t, owner, [reorder])).body.results[0]).toMatchObject({
+    status: "applied",
+    replayed: true,
+  });
+  expect(await catalogue()).toEqual(after);
+});

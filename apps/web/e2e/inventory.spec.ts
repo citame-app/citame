@@ -785,3 +785,70 @@ test("inventory categories, subcategories and brands can be assigned and filtere
   await expect(page.getByRole("heading", { name: product, exact: true })).toBeVisible();
   await expectNoHorizontalScroll(page);
 });
+
+test("sorts sibling classifications from the keyboard and by dragging", async ({ page }) => {
+  const owner = await asOwner();
+  const path = "/api/admin/inventory/classifications";
+  const parentId = crypto.randomUUID();
+  const ids = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()] as const;
+  const suffix = crypto.randomUUID();
+  const names = [`Apple ${suffix}`, `Berry ${suffix}`, `Cherry ${suffix}`];
+  try {
+    const list = await owner.get(path);
+    expect(list.status()).toBe(200);
+    const { generation } = await list.json();
+    for (const [index, id] of [parentId, ...ids].entries()) {
+      const result = await owner.put(`${path}/${id}`, {
+        data: {
+          generation,
+          kind: "category",
+          name: index === 0 ? `0 seasonal ${suffix}` : names[index - 1],
+          parentId: index === 0 ? null : parentId,
+          active: true,
+          position: 0,
+          version: 0,
+        },
+      });
+      expect(result.status(), await result.text()).toBe(200);
+    }
+    await signInAs(
+      page,
+      OWNER_EMAIL,
+      "/admin/commerce?view=inventory&inventoryTab=classifications",
+    );
+    const group = page.locator(`li[data-entry="${parentId}"] ul`);
+    const order = () =>
+      group
+        .locator(":scope > li")
+        .evaluateAll((items) => items.map((item) => item.getAttribute("data-entry")));
+    const handle = page.getByRole("button", { name: `Drag to reorder ${names[0]}` });
+    await expect(handle).toBeVisible();
+    await expect.poll(order).toEqual(ids);
+    await handle.press("Alt+ArrowDown");
+    const keyboardOrder = [ids[1], ids[0], ids[2]];
+    await expect.poll(order).toEqual(keyboardOrder);
+    await expect(handle).toBeFocused();
+    await expectNoHorizontalScroll(page);
+
+    if (test.info().project.name === "desktop") {
+      const last = page.locator(`li[data-entry="${ids[2]}"]`);
+      await handle.scrollIntoViewIfNeeded();
+      await last.scrollIntoViewIfNeeded();
+      const start = await handle.boundingBox();
+      const end = await last.boundingBox();
+      if (!start || !end) throw new Error("Missing visible drag targets");
+      await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(end.x + end.width / 2, end.y + end.height - 4, { steps: 12 });
+      await page.mouse.up();
+      await expect.poll(order).toEqual([ids[1], ids[2], ids[0]]);
+    }
+    await page.reload();
+    await expect(handle).toBeVisible();
+    await expect
+      .poll(order)
+      .toEqual(test.info().project.name === "desktop" ? [ids[1], ids[2], ids[0]] : keyboardOrder);
+  } finally {
+    await owner.dispose();
+  }
+});

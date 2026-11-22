@@ -29,7 +29,10 @@ import {
   updateAppointment,
 } from "../appointments/service";
 import { updateClient } from "../clients/admin";
-import { saveInventoryClassification } from "../inventory/classifications";
+import {
+  reorderInventoryClassifications,
+  saveInventoryClassification,
+} from "../inventory/classifications";
 import { writePurchaseOrder } from "../inventory/orders";
 import { saveProductPhoto } from "../inventory/photo";
 import { receiveStockDocument, saveSupplier } from "../inventory/receipts";
@@ -382,6 +385,16 @@ export async function applyMutation(
         db,
         id,
         { ...input, generation: ctx.generation },
+        principal,
+        ctx.generation,
+      );
+      return;
+    }
+    case "inventory.classification_reorder": {
+      const { move: _move, ...order } = mutation.payload;
+      await reorderInventoryClassifications(
+        db,
+        { ...order, generation: ctx.generation },
         principal,
         ctx.generation,
       );

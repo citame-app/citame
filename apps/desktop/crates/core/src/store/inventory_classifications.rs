@@ -1,6 +1,7 @@
 use super::*;
 use crate::inventory_classifications::{
-    Classification, ClassificationCatalogue, ClassificationKind, ClassificationProposal, SAVE,
+    Classification, ClassificationCatalogue, ClassificationKind, ClassificationMove,
+    ClassificationOrder, ClassificationProposal, QueuedClassificationOrder, REORDER, SAVE,
 };
 
 const CLASSIFICATIONS: &str = "inventory_classifications";
@@ -44,8 +45,131 @@ impl Store {
         rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
     }
 
-    pub fn inventory_classification_choices(&self) -> Result<Option<ClassificationCatalogue>> {
+    pub fn pending_inventory_orders(&self) -> Result<Vec<QueuedClassificationOrder>> {
+        if !self.can_read_cached_orders() {
+            return Ok(Vec::new());
+        }
+        let mut query = self
+            .conn
+            .prepare("SELECT payload FROM outbox WHERE kind = ?1 ORDER BY seq")?;
+        let rows = query.query_map([REORDER], |row| row.get::<_, String>(0))?;
+        rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+    }
+
+    pub fn inventory_order_conflict(&self, id: &str) -> Result<Option<QueuedClassificationOrder>> {
+        self.conflict(id)?
+            .filter(|row| row.kind == REORDER)
+            .map(|row| Ok(serde_json::from_value(row.payload)?))
+            .transpose()
+    }
+
+    pub fn displayed_inventory_classifications(&self) -> Result<Option<ClassificationCatalogue>> {
         let Some(mut catalogue) = self.inventory_classifications()? else {
+            return Ok(None);
+        };
+        for pending in self.pending_inventory_orders()? {
+            catalogue.apply_reviewed_order(&pending.order);
+        }
+        Ok(Some(catalogue))
+    }
+
+    pub fn classification_order_pending_groups(
+        &self,
+    ) -> Result<std::collections::HashSet<(ClassificationKind, Option<uuid::Uuid>)>> {
+        let mut groups = self
+            .pending_inventory_orders()?
+            .into_iter()
+            .map(|pending| (pending.order.kind, pending.order.parent_id))
+            .collect::<std::collections::HashSet<_>>();
+        let saved = self.pending_inventory_classifications()?;
+        if let Some(catalogue) = self.inventory_classifications()? {
+            let saved_ids = saved
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<std::collections::HashSet<_>>();
+            groups.extend(
+                catalogue
+                    .entries
+                    .iter()
+                    .filter(|entry| saved_ids.contains(&entry.id))
+                    .map(|entry| (entry.kind, entry.parent_id)),
+            );
+        }
+        groups.extend(saved.into_iter().map(|entry| (entry.kind, entry.parent_id)));
+        Ok(groups)
+    }
+
+    pub(super) fn acknowledge_inventory_order_at(
+        conn: &Connection,
+        sent: &OutboxEntry,
+    ) -> Result<()> {
+        let Some(cached) = Self::meta_at(conn, CLASSIFICATIONS)? else {
+            return Ok(());
+        };
+        let mut catalogue: ClassificationCatalogue = serde_json::from_str(&cached)?;
+        let pending: QueuedClassificationOrder = serde_json::from_value(sent.payload.clone())?;
+        if catalogue.generation == Self::generation_at(conn)?
+            && catalogue.acknowledge_order(&pending.order)
+        {
+            Self::set_meta_at(conn, CLASSIFICATIONS, &serde_json::to_string(&catalogue)?)?;
+        }
+        Ok(())
+    }
+
+    pub fn queue_inventory_order(
+        &mut self,
+        generation: &str,
+        movement: ClassificationMove,
+        order: &ClassificationOrder,
+        replaces: Option<&str>,
+    ) -> Result<()> {
+        self.write_transaction(|store| {
+            if !store.can_queue_product_edits()
+                || store.verified_reviewed_generation()? != generation
+            {
+                return Err(CoreError::CalendarGenerationChanged);
+            }
+            if store
+                .classification_order_pending_groups()?
+                .contains(&(order.kind, order.parent_id))
+            {
+                return Err(CoreError::CatalogueEditPending);
+            }
+            let mut catalogue = store
+                .inventory_classifications()?
+                .filter(|list| list.generation == generation)
+                .ok_or(CoreError::CalendarGenerationChanged)?;
+            if order.entries.len() < 2
+                || !order.entries.iter().any(|row| row.id == movement.source)
+                || !order.entries.iter().any(|row| row.id == movement.anchor)
+                || !catalogue.apply_reviewed_order(order)
+            {
+                return Err(CoreError::CatalogueVersionChanged);
+            }
+            if let Some(id) = replaces {
+                store
+                    .conflict(id)?
+                    .filter(|row| {
+                        row.kind == REORDER && row.entity_id == movement.source.to_string()
+                    })
+                    .ok_or_else(|| CoreError::NotFound("inventory classification order".into()))?;
+                store.resolve_conflict(id, "resubmitted")?;
+            }
+            let payload = QueuedClassificationOrder {
+                order: order.clone(),
+                movement,
+            };
+            store.enqueue(
+                REORDER,
+                &movement.source.to_string(),
+                serde_json::to_value(payload)?,
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn inventory_classification_choices(&self) -> Result<Option<ClassificationCatalogue>> {
+        let Some(mut catalogue) = self.displayed_inventory_classifications()? else {
             return Ok(None);
         };
         for pending in self.pending_inventory_classifications()? {
@@ -79,6 +203,12 @@ impl Store {
                 .entries
                 .iter()
                 .find(|entry| entry.id == proposal.id);
+            if store.pending_inventory_orders()?.iter().any(|pending| {
+                pending.order.matches_group(&proposal)
+                    || current.is_some_and(|current| pending.order.matches_group(current))
+            }) {
+                return Err(CoreError::CatalogueEditPending);
+            }
             if current.map_or(0, |entry| entry.version) != proposal.version
                 || current.is_some_and(|entry| entry.kind != proposal.kind)
             {
