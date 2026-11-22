@@ -1,6 +1,12 @@
 import { z } from "zod";
 import { idempotencyKeySchema, moneyCentsSchema } from "./commerce";
-import { idSchema, instantSchema, pageInfoSchema, syncGenerationSchema } from "./common";
+import {
+  idSchema,
+  instantSchema,
+  localDateSchema,
+  pageInfoSchema,
+  syncGenerationSchema,
+} from "./common";
 import { reportQuerySchema } from "./reports";
 
 const basisPoints = z.number().int().min(0).max(10000);
@@ -95,6 +101,20 @@ export const settledSaleItemSchema = salesFamilyTotalSchema.extend({
   quantity: z.number().int().nonnegative().nullable(),
 });
 export type SettledSaleItem = z.infer<typeof settledSaleItemSchema>;
+const forecastRow = z.object({
+  date: localDateSchema,
+  appointmentLines: z.number().int().positive(),
+});
+export const revenueForecastSchema = z.object({
+  asOf: instantSchema,
+  rows: z.array(
+    z.union([
+      forecastRow.extend({ currency: z.string().regex(/^[A-Z]{3}$/), amountCents: aggregateMoney }),
+      forecastRow.extend({ currency: z.null(), amountCents: z.null() }),
+    ]),
+  ),
+});
+export type RevenueForecast = z.infer<typeof revenueForecastSchema>;
 export const promotionCollectionSchema = z.object({
   name: z.string(),
   code: z.string(),
@@ -131,6 +151,7 @@ export const salesReportSchema = z.object({
   unknownCostLines: z.number().int().nonnegative(),
   settledByFamily: z.array(salesFamilyTotalSchema).optional(),
   settledByItem: z.array(settledSaleItemSchema).optional(),
+  revenueForecast: revenueForecastSchema.optional(),
   promotionCollections: z.array(promotionCollectionSchema).optional(),
   methods: z.array(
     z.object({ method: z.string(), collectedCents: aggregateMoney, refundedCents: aggregateMoney }),

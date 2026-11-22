@@ -1,4 +1,4 @@
-use std::fmt::Write;
+use std::{collections::BTreeMap, fmt::Write};
 
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use serde::Deserialize;
@@ -42,6 +42,7 @@ pub struct FinancialReport {
     pub unknown_cost_lines: u64,
     pub settled_by_family: Option<Vec<SalesFamilyTotal>>,
     pub settled_by_item: Option<Vec<SettledSaleItem>>,
+    pub revenue_forecast: Option<RevenueForecast>,
     pub promotion_collections: Option<Vec<PromotionCollection>>,
     pub methods: Vec<FinancialMethod>,
     pub cash_sessions: Vec<FinancialSession>,
@@ -70,6 +71,37 @@ pub struct SettledSaleItem {
     pub quantity: Option<i64>,
     pub amount_cents: i64,
     pub tax_cents: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevenueForecast {
+    pub as_of: DateTime<Utc>,
+    pub rows: Vec<ForecastDay>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForecastDay {
+    pub date: NaiveDate,
+    pub currency: Option<String>,
+    pub appointment_lines: u64,
+    pub amount_cents: Option<i64>,
+}
+
+impl RevenueForecast {
+    pub fn totals(&self) -> (BTreeMap<&str, i64>, u64) {
+        let mut amounts = BTreeMap::new();
+        let mut pending = 0;
+        for row in &self.rows {
+            if let (Some(currency), Some(cents)) = (row.currency.as_deref(), row.amount_cents) {
+                *amounts.entry(currency).or_default() += cents;
+            } else {
+                pending += row.appointment_lines;
+            }
+        }
+        (amounts, pending)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -287,6 +319,24 @@ impl FinancialReport {
                     optional(row.quantity),
                     row.amount_cents,
                     row.tax_cents
+                );
+            }
+        }
+        if let Some(forecast) = &self.revenue_forecast {
+            let _ = write!(
+                csv,
+                "\r\n\r\n\"forecast_as_of\",\"{}\"",
+                instant(forecast.as_of)
+            );
+            csv.push_str("\r\n\"forecast_date\",\"currency\",\"appointment_lines\",\"scheduled_service_value_cents\"");
+            for row in &forecast.rows {
+                let _ = write!(
+                    csv,
+                    "\r\n\"{}\",{},\"{}\",\"{}\"",
+                    row.date,
+                    csv_text(row.currency.as_deref().unwrap_or_default()),
+                    row.appointment_lines,
+                    optional(row.amount_cents)
                 );
             }
         }

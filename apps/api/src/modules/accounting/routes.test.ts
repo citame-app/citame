@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import {
+  checkoutSchema,
   commissionPayoutSchema,
   reviewedCommissionPolicySchema,
   syncPullResponseSchema,
@@ -299,6 +300,114 @@ test("settled families exclude tips and put historical receipts without matching
         taxCents: 0,
       },
     ],
+  });
+});
+
+test("forecast separates future booked service value by currency and keeps unpriced lines visible", async () => {
+  const timezone = "America/Argentina/Buenos_Aires";
+  const today = Temporal.Now.plainDateISO(timezone);
+  const date = today.add({ days: 5 });
+  const toInstant = (day: Temporal.PlainDate, hour: number) =>
+    new Date(day.toZonedDateTime({ timeZone: timezone, plainTime: { hour } }).epochMilliseconds);
+  const fixture = async (
+    startsAt: Date,
+    staffId: string,
+    lines: Array<{
+      currency: string;
+      priceCents: number;
+      sourceUnpriced?: boolean;
+      priceType?: "from";
+    }>,
+    status: "booked" | "cancelled" = "booked",
+  ) => {
+    const [created] = await t.db
+      .insert(appointment)
+      .values({
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + 30 * 60_000),
+        staffId,
+        clientId: client.clientId!,
+        status,
+      })
+      .returning();
+    if (!created) throw new Error("Missing forecast fixture");
+    await t.db.insert(appointmentService).values(
+      lines.map((line, position) => ({
+        appointmentId: created.id,
+        position,
+        name: "Forecast service",
+        durationMinutes: 30,
+        bufferMinutes: 0,
+        ...line,
+      })),
+    );
+    return created.id;
+  };
+  const priced = await fixture(toInstant(date, 10), staff.staffId!, [
+    { currency: "EUR", priceCents: 10000 },
+  ]);
+  await sale({ appointmentId: priced });
+  await fixture(toInstant(date, 11), staff.staffId!, [
+    { currency: "EUR", priceCents: 8000 },
+    { currency: "EUR", priceCents: 0, sourceUnpriced: true },
+  ]);
+  // This line begins on the next UTC date and belongs to the selected salon date.
+  await fixture(toInstant(date, 23), other.staffId!, [{ currency: "ARS", priceCents: 6000 }]);
+  const provisional = await fixture(toInstant(date, 14), staff.staffId!, [
+    { currency: "EUR", priceCents: 3000, priceType: "from" },
+  ]);
+  const provisionalSale = await sale({ appointmentId: provisional, discountCents: 0, tipCents: 0 });
+  await fixture(
+    toInstant(date, 13),
+    other.staffId!,
+    [{ currency: "EUR", priceCents: 3000 }],
+    "cancelled",
+  );
+  const yesterday = today.subtract({ days: 1 });
+  await fixture(toInstant(yesterday, 11), staff.staffId!, [{ currency: "EUR", priceCents: 4000 }]);
+
+  const path = `/admin/accounting/sales?from=${yesterday}&to=${date}`;
+  const report = await call(owner, path);
+  expect(report.status).toBe(200);
+  expect(await report.json()).toMatchObject({
+    revenueForecast: {
+      rows: [
+        { date: String(date), currency: "ARS", appointmentLines: 1, amountCents: 6000 },
+        { date: String(date), currency: "EUR", appointmentLines: 1, amountCents: 9000 },
+        { date: String(date), currency: null, appointmentLines: 2, amountCents: null },
+      ],
+    },
+  });
+  const scoped = await call(owner, `${path}&staffId=${staff.staffId}&clientId=${client.clientId}`);
+  expect(await scoped.json()).toMatchObject({
+    revenueForecast: {
+      rows: [
+        { currency: "EUR", appointmentLines: 1, amountCents: 9000 },
+        { currency: null, appointmentLines: 2, amountCents: null },
+      ],
+    },
+  });
+  expect((await call(staff, path)).status).toBe(403);
+  const receiptPath = `/admin/commerce/checkouts/${provisionalSale.id}`;
+  const receipt = checkoutSchema.parse(await (await call(owner, receiptPath)).json());
+  const line = receipt.lines[0];
+  if (!line) throw new Error("Missing provisional price line");
+  expect(
+    (
+      await call(owner, `${receiptPath}/prices`, "PUT", {
+        version: receipt.pricingVersion,
+        lines: [{ id: line.id, unitAmountCents: 5000 }],
+      })
+    ).status,
+  ).toBe(200);
+  expect(await (await call(owner, path)).json()).toMatchObject({
+    revenueForecast: {
+      rows: [
+        { currency: "ARS", appointmentLines: 1, amountCents: 6000 },
+        { currency: "EUR", appointmentLines: 2, amountCents: 14000 },
+        { currency: null, appointmentLines: 1, amountCents: null },
+      ],
+    },
   });
 });
 

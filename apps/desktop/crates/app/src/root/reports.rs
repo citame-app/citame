@@ -17,6 +17,7 @@ const RETRY_DELAY: Duration = Duration::from_secs(5);
 enum ReportPage {
     Main,
     SettledItems,
+    Forecast,
 }
 
 enum ReportData {
@@ -96,6 +97,7 @@ pub(super) struct Desk {
     group: Group,
     page: usize,
     item_page: usize,
+    forecast_page: usize,
     request: Option<Arc<()>>,
     observed_cursor: i64,
     retry_at: Option<Instant>,
@@ -165,6 +167,7 @@ impl Root {
             group: Group::Day,
             page: 0,
             item_page: 0,
+            forecast_page: 0,
             request: None,
             observed_cursor: 0,
             retry_at: None,
@@ -216,6 +219,7 @@ impl Root {
             desk.financial_report = None;
             desk.page = 0;
             desk.item_page = 0;
+            desk.forecast_page = 0;
             desk.outcomes.reset_page();
         }
         desk.submitted = Some(query);
@@ -364,8 +368,21 @@ impl Root {
             match target {
                 ReportPage::Main => desk.page = page,
                 ReportPage::SettledItems => desk.item_page = page,
+                ReportPage::Forecast => desk.forecast_page = page,
             }
             cx.notify();
+        }
+    }
+
+    fn report_next_thirty_days(&mut self, cx: &mut Context<Self>) {
+        if let Overlay::Reports(desk) = &mut self.overlay {
+            let today = Utc::now().with_timezone(&self.tz).date_naive();
+            let last = today + Span::days(29);
+            desk.from
+                .update(cx, |field, cx| field.set_text(&today.to_string(), cx));
+            desk.to
+                .update(cx, |field, cx| field.set_text(&last.to_string(), cx));
+            self.submit_report(cx);
         }
     }
 
@@ -558,7 +575,15 @@ impl Root {
                                 self.t(Key::ReportApply),
                                 Kind::Primary,
                                 cx.listener(|root, _, _, cx| root.submit_report(cx)),
-                            )),
+                            ))
+                            .when(desk.mode == ReportMode::Financial, |filters| {
+                                filters.child(self.button(
+                                    "reports-next-thirty-days",
+                                    self.t(Key::FinancialForecastNext30),
+                                    Kind::Ghost,
+                                    cx.listener(|root, _, _, cx| root.report_next_thirty_days(cx)),
+                                ))
+                            }),
                     )
                     .when(self.calendar_scope.as_deref() == Some("all"), |view| {
                         view.child(
@@ -1014,6 +1039,12 @@ impl Root {
                 "report-items-next",
                 Key::FinancialItemsPrevious,
                 Key::FinancialItemsNext,
+            ),
+            ReportPage::Forecast => (
+                "reports-forecast-previous",
+                "reports-forecast-next",
+                Key::InboxPrevious,
+                Key::InboxNext,
             ),
         };
         div()

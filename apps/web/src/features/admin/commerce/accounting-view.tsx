@@ -9,10 +9,15 @@ import { EmptyState, ErrorState, Skeleton, useOnline } from "~/components/ui/sta
 import { useI18n } from "~/i18n/react";
 import { adminStaffQuery } from "~/lib/admin-queries";
 import { api } from "~/lib/api/instance";
-import { formatMoney } from "~/lib/format";
+import { addDaysLocal, formatMoney } from "~/lib/format";
 import { presetRange } from "../reports/logic";
 import { downloadCsv } from "./csv";
-import { PromotionCollections, SalesFamilies, SalesItems } from "./financial-breakdowns";
+import {
+  PromotionCollections,
+  SalesFamilies,
+  SalesItems,
+  ScheduledRevenue,
+} from "./financial-breakdowns";
 import { centsInput, inputCents } from "./money";
 export function AccountingView({
   role,
@@ -420,6 +425,11 @@ export function SalesReport({
     refetchInterval: 30_000,
   });
   const money = (value: number) => formatMoney(value, "EUR", locale);
+  const applyRange = (start: string, end: string) => {
+    const next = { from: start, to: end, staffId: professional || undefined };
+    if (onApply) onApply(next);
+    else setRange({ ...next, clientId });
+  };
   return (
     <section className="space-y-4" aria-label={t("accounting.sales")}>
       {clientId ? (
@@ -441,9 +451,7 @@ export function SalesReport({
         className="flex flex-wrap items-end gap-3"
         onSubmit={(e) => {
           e.preventDefault();
-          const next = { from, to, staffId: professional || undefined };
-          if (onApply) onApply(next);
-          else setRange({ ...next, clientId });
+          applyRange(from, to);
         }}
       >
         <TextField
@@ -475,6 +483,18 @@ export function SalesReport({
           onChange={setProfessional}
         />
         <Button type="submit">{t("accounting.load")}</Button>
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={() => {
+            const end = addDaysLocal(today, 29);
+            setFrom(today);
+            setTo(end);
+            applyRange(today, end);
+          }}
+        >
+          {t("accounting.forecast.next30")}
+        </Button>
       </form>
       {staff.isError && !staff.data && (
         <ErrorState error={staff.error} onRetry={() => void staff.refetch()} />
@@ -602,6 +622,24 @@ export function SalesReport({
                         ]),
                       ]
                     : []),
+                  ...(report.data.revenueForecast
+                    ? [
+                        [],
+                        ["forecast_as_of", report.data.revenueForecast.asOf],
+                        [
+                          "forecast_date",
+                          "currency",
+                          "appointment_lines",
+                          "scheduled_service_value_cents",
+                        ],
+                        ...report.data.revenueForecast.rows.map((row) => [
+                          row.date,
+                          row.currency,
+                          row.appointmentLines,
+                          row.amountCents,
+                        ]),
+                      ]
+                    : []),
                 ],
                 report.data.client
                   ? `client-sales-${report.data.client.id}-${report.data.from}-${report.data.to}.csv`
@@ -639,6 +677,20 @@ export function SalesReport({
           <p className="text-sm text-muted">
             {t("accounting.unknown", { count: report.data.unknownCostLines })}
           </p>
+          {report.data.revenueForecast && (
+            <ScheduledRevenue
+              key={JSON.stringify([
+                "forecast",
+                report.data.from,
+                report.data.to,
+                range.staffId,
+                clientId,
+              ])}
+              forecast={report.data.revenueForecast}
+              headingLevel={clientId ? "h3" : "h4"}
+              timezone={report.data.timezone}
+            />
+          )}
           {report.data.settledByFamily && (
             <SalesFamilies
               rows={report.data.settledByFamily}

@@ -36,6 +36,7 @@ for (const scheme of ["light", "dark"] as const)
         },
       };
       let serviceId = "";
+      let forecastVisit: { id: string; version: number } | undefined;
       let visit:
         | {
             id: string;
@@ -240,6 +241,7 @@ for (const scheme of ["light", "dark"] as const)
         const day = new Intl.DateTimeFormat("sv-SE", {
           timeZone: "America/Argentina/Buenos_Aires",
         }).format(new Date(visit.startsAt));
+        const freedStart = visit.startsAt;
         visit = undefined;
         await page.context().clearCookies();
         const reportPath = `/admin/reports?preset=custom&from=${day}&to=${day}&staff=${staff.id}`;
@@ -335,6 +337,34 @@ for (const scheme of ["light", "dark"] as const)
         await expectNoHorizontalScroll(page);
         await expectNoSeriousA11yViolations(page, `booking promotion collections ${scheme}`);
         await collections.screenshot({ path: info.outputPath("promotion-collections-es.png") });
+        const forecastClient = await owner.post("/api/admin/clients", {
+          data: { name: `Forecast fixture ${code}` },
+        });
+        expect(forecastClient.status(), await forecastClient.text()).toBe(201);
+        const bookedForForecast = await owner.post("/api/appointments", {
+          data: {
+            staffId: staff.id,
+            clientId: (await forecastClient.json()).id,
+            serviceIds: [serviceId],
+            startsAt: freedStart,
+            override: true,
+          },
+        });
+        expect(bookedForForecast.status(), await bookedForForecast.text()).toBe(201);
+        forecastVisit = await bookedForForecast.json();
+        await financial.getByRole("button", { name: "Próximos 30 días" }).click();
+        const forecast = financial.getByRole(mobile ? "list" : "table", {
+          name: "Previsión de ingresos de la agenda",
+        });
+        await expect(
+          forecast
+            .getByRole(mobile ? "listitem" : "row")
+            .filter({ hasText: /EUR/ })
+            .first(),
+        ).toBeVisible();
+        await forecast.screenshot({ path: info.outputPath("revenue-forecast-es.png") });
+        await expectNoHorizontalScroll(page);
+        await expectNoSeriousA11yViolations(page, `booking revenue forecast ${scheme}`);
         await switchLocale(page, "English");
         const english = page.getByRole(mobile ? "list" : "table", {
           name: "Collections by booking promotion",
@@ -348,7 +378,22 @@ for (const scheme of ["light", "dark"] as const)
         await expectNoHorizontalScroll(page);
         await expectNoSeriousA11yViolations(page, `booking promotion collections EN ${scheme}`);
         await english.screenshot({ path: info.outputPath("promotion-collections-en.png") });
+        await page.getByRole("button", { name: "Next 30 days" }).click();
+        const englishForecast = page.getByRole(mobile ? "list" : "table", {
+          name: "Revenue forecast from bookings",
+        });
+        await expect(
+          englishForecast
+            .getByRole(mobile ? "listitem" : "row")
+            .filter({ hasText: /EUR/ })
+            .first(),
+        ).toBeVisible();
+        await englishForecast.screenshot({ path: info.outputPath("revenue-forecast-en.png") });
       } finally {
+        if (forecastVisit)
+          await owner.patch(`/api/appointments/${forecastVisit.id}`, {
+            data: { version: forecastVisit.version, status: "cancelled" },
+          });
         if (visit)
           await owner.patch(`/api/appointments/${visit.id}`, {
             data: { version: visit.version, status: "cancelled" },

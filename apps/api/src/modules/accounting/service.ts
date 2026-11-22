@@ -27,6 +27,7 @@ import { checkoutReportScope, recordedCheckoutMovements } from "../commerce/repo
 import { getSalonSettings } from "../settings/service";
 import { requireStaff } from "../staff/admin";
 import { reportPromotionCollections } from "./promotion-collections";
+import { reportRevenueForecast } from "./revenue-forecast";
 import { redeemedAtSettlement, settledSales } from "./settled-families";
 
 type Connection = Database | Tx;
@@ -407,6 +408,13 @@ export async function salesReport(db: Database, query: SalesReportQuery, princip
         bookingFeesCents: Number(bookingFees?.amount ?? 0),
         ...sales,
         promotionCollections: await reportPromotionCollections(tx, fromAt, toAt, scope),
+        revenueForecast: await reportRevenueForecast(tx, {
+          fromAt,
+          toAt,
+          timezone,
+          staffId: query.staffId,
+          clientId: client?.id,
+        }),
         productCostCents: Number(costs?.cost ?? 0),
         unknownCostLines: costs?.unknown ?? 0,
         methods,
