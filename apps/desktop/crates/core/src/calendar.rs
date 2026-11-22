@@ -252,7 +252,7 @@ fn overlay_calendar_outbox(
                         itinerary_id: None,
                         staff_id,
                         client_id: str_of(p, "clientId").unwrap_or_default(),
-                        client_name: None,
+                        client_name: str_of(p, "_clientName"),
                         starts_at,
                         ends_at: starts_at + Duration::minutes(block),
                         status: AppointmentStatus::Booked,

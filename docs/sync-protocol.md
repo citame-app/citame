@@ -31,6 +31,8 @@ When a pull reports a different generation, the desktop atomically moves queued 
 
 Show the local version while a calendar edit waits for its receipt. After acknowledgement, prefer the canonical row as soon as its version includes or supersedes the edit. Retire the confirmed projection and its receipt together when the pull cursor catches up or when the pull returns a tombstone for that entity. Use the current calendar scope to decide which effective appointments and time blocks to display. This preserves the calendar across a restart or network failure between push and pull.
 
+An acknowledged time block remains visible and blocks booking. Editing it again requires the authoritative block revision, because the server can adjust the device's edit timestamp. The display name of a newly booked client stays on the local appointment even if the client directory is no longer available to that account.
+
 Clients that understand the `unknown_booksy_payment` appointment billing hold request
 `booksyPaymentReview=1` on pull. Clients using the original reason set receive an
 `unknown_amount` hold, so collection stays disabled across upgrades. A payment review

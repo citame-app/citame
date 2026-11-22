@@ -838,6 +838,7 @@ fn accepted_time_off_keeps_the_slot_blocked_until_pull_and_a_delete_keeps_it_ope
             assert_eq!(blocks.len(), 1);
             assert_eq!(blocks[0].time_off.id, id);
             assert!(blocks[0].pending);
+            assert!(ops::delete_time_off(&mut store, &blocks[0].time_off).is_err());
             store
                 .apply_page(&[up(8, "time_off", &id, json!(blocks[0].time_off))], 8)
                 .unwrap();
@@ -942,6 +943,7 @@ fn an_accepted_booking_and_its_new_client_survive_reopening_before_pull() {
     let confirmed = column(&pending, "Bea").items[0].appointment.clone();
     let (generation, batch) = store.push_snapshot(100).unwrap();
     assert_eq!(batch.len(), 2);
+    assert!(batch[1].to_wire().payload.get("_clientName").is_none());
     let results: Vec<_> = batch
         .iter()
         .zip([8, 9])
@@ -964,6 +966,19 @@ fn an_accepted_booking_and_its_new_client_survive_reopening_before_pull() {
     assert_eq!(items[0].appointment.id, id);
     assert_eq!(items[0].client_name, "New client");
     assert!(items[0].pending);
+    store.set_meta("client_directory", "denied").unwrap();
+    let booking_only = day_view(&store, date).unwrap();
+    assert_eq!(
+        column(&booking_only, "Bea").items[0].client_name,
+        "New client"
+    );
+    assert!(
+        known_clients(&store)
+            .unwrap()
+            .iter()
+            .all(|(_, name)| name != "New client")
+    );
+    store.set_meta("client_directory", "allowed").unwrap();
 
     store.apply_page(&[up(8, "client", &confirmed.client_id, json!({
         "id": confirmed.client_id, "name": "New client", "createdAt": T0, "updatedAt": T0

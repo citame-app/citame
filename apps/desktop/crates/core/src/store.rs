@@ -1704,6 +1704,16 @@ impl Store {
             .collect::<rusqlite::Result<_>>()?)
     }
 
+    pub(crate) fn has_acknowledged_time_off(&self, id: &str) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM outbox WHERE entity_id = ?1
+               AND kind IN ('time_off.create', 'time_off.update')
+               AND EXISTS (SELECT 1 FROM meta WHERE key = 'assignment_ack:' || mutation_id))",
+            [id],
+            |row| row.get(0),
+        )?)
+    }
+
     pub(crate) fn conflicted_appointment_ids(&self) -> Result<HashSet<String>> {
         let mut stmt = self.conn.prepare(
             "SELECT entity_id FROM conflict WHERE kind GLOB 'appointment.*' AND resolved_at IS NULL"
