@@ -4,6 +4,9 @@ use sob_core::http::{
 };
 use sob_core::store::SalonConfigurationWork;
 
+mod business_profile;
+use business_profile::BusinessEditor;
+
 const LABELS: [Key; 6] = [
     Key::SalonName,
     Key::SalonTimezone,
@@ -43,6 +46,8 @@ struct Editor {
     inputs: [Entity<TextField>; 6],
     online: bool,
     step: u32,
+    profile: Option<BusinessEditor>,
+    show_profile: bool,
 }
 
 impl Editor {
@@ -71,11 +76,17 @@ impl Editor {
             cx.observe(&field, |_, _, cx| cx.notify()).detach();
             field
         });
+        let profile = input
+            .business_profile
+            .as_ref()
+            .map(|profile| BusinessEditor::new(profile, cx));
         Self {
             online: input.online_booking_enabled,
             step: input.slot_granularity_minutes,
             saved,
             inputs,
+            profile,
+            show_profile: false,
         }
     }
 
@@ -84,7 +95,7 @@ impl Editor {
             .inputs
             .each_ref()
             .map(|input| input.read(cx).text().trim());
-        SalonConfigurationDraft {
+        let mut draft = SalonConfigurationDraft {
             name,
             timezone: zone,
             slot_step: self.step,
@@ -94,7 +105,11 @@ impl Editor {
             first_reminder: first,
             second_reminder: second,
         }
-        .validated()
+        .validated()?;
+        if let Some(profile) = &self.profile {
+            draft.business_profile = Some(profile.draft(cx)?);
+        }
+        Some(draft)
     }
 
     fn dirty(&self, cx: &App) -> bool {
@@ -272,7 +287,13 @@ impl Root {
                         } else if desk.message != Some(Key::SalonSaved) {
                             desk.message = None;
                         }
-                        desk.editor = Some(Editor::new(saved, draft, labels, cx));
+                        let mut editor = Editor::new(saved, draft, labels, cx);
+                        editor.show_profile = editor.profile.is_some()
+                            && desk
+                                .editor
+                                .as_ref()
+                                .is_some_and(|previous| previous.show_profile);
+                        desk.editor = Some(editor);
                         desk.read_failed = false;
                         desk.review_after_restore = false;
                     }
@@ -489,6 +510,9 @@ impl Root {
         field: &str,
         value: &serde_json::Value,
     ) -> Option<gpui::Div> {
+        if field == "businessProfile" {
+            return Some(div().text_sm().child(self.t(Key::BusinessProfileTitle)));
+        }
         let label = match field {
             "name" => Key::SalonName,
             "timezone" => Key::SalonTimezone,
@@ -522,6 +546,55 @@ impl Root {
     }
 
     fn render_salon_editor(&self, editor: &Editor, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .min_h(px(0.))
+            .flex_shrink()
+            .when(editor.profile.is_some(), |view| {
+                view.child(
+                    div().flex().flex_wrap().gap_2().children(
+                        [
+                            (false, Key::SalonConfiguration),
+                            (true, Key::BusinessProfileTitle),
+                        ]
+                        .map(|(show_profile, label)| {
+                            self.button(
+                                ("salon-settings-section", show_profile as usize),
+                                self.t(label),
+                                if show_profile == editor.show_profile {
+                                    Kind::Primary
+                                } else {
+                                    Kind::Ghost
+                                },
+                                cx.listener(move |root, _, _, cx| {
+                                    if let Overlay::SalonConfiguration(desk) = &mut root.overlay
+                                        && let Some(editor) = &mut desk.editor
+                                    {
+                                        editor.show_profile = show_profile;
+                                        cx.notify();
+                                    }
+                                }),
+                            )
+                        }),
+                    ),
+                )
+            })
+            .when(!editor.show_profile, |view| {
+                view.child(self.render_general_salon_settings(editor, cx))
+            })
+            .when_some(
+                editor.profile.as_ref().filter(|_| editor.show_profile),
+                |view, profile| view.child(self.render_business_profile(profile, cx)),
+            )
+    }
+
+    fn render_general_salon_settings(
+        &self,
+        editor: &Editor,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let minutes = self.t(Key::SalonMinutes);
         div()
             .id("salon-options-scroll")

@@ -1,8 +1,11 @@
-import type {
-  OwnerSalonSettings,
-  ReviewedSalonSettings,
-  SalonResponse,
-  UpdateSalonSettingsRequest,
+import { isDeepStrictEqual } from "node:util";
+import {
+  businessProfileSchema,
+  EMPTY_BUSINESS_PROFILE,
+  type OwnerSalonSettings,
+  type ReviewedSalonSettings,
+  type SalonResponse,
+  type UpdateSalonSettingsRequest,
 } from "@sob/contracts";
 import { type Database, salonSettings } from "@sob/db";
 import { eq } from "drizzle-orm";
@@ -20,7 +23,11 @@ export async function getSalonSettings(db: Pick<Database, "select">, lock?: "sha
 
 type Row = Awaited<ReturnType<typeof getSalonSettings>>;
 
+const businessProfile = (settings: Row) =>
+  businessProfileSchema.parse({ ...EMPTY_BUSINESS_PROFILE, ...settings.businessProfile });
+
 export function toSalonResponse(settings: Row): SalonResponse {
+  const { published, ...profile } = businessProfile(settings);
   return {
     name: settings.name,
     timezone: settings.timezone,
@@ -28,6 +35,7 @@ export function toSalonResponse(settings: Row): SalonResponse {
     minNoticeMinutes: settings.minNoticeMinutes,
     maxDaysAhead: settings.maxDaysAhead,
     onlineBookingEnabled: settings.onlineBookingEnabled,
+    ...(published ? { profile } : {}),
   };
 }
 
@@ -41,6 +49,7 @@ export function toOwnerSettings(settings: Row): OwnerSalonSettings {
     ...toSalonResponse(settings),
     reminderFirstLeadMinutes: settings.reminderFirstLeadMinutes,
     reminderSecondLeadMinutes: settings.reminderSecondLeadMinutes,
+    businessProfile: businessProfile(settings),
   };
 }
 
@@ -89,11 +98,16 @@ async function writeSettings(
 ) {
   return db.transaction(async (tx) => {
     const current = await getSalonSettings(tx, "update");
-    const changes = Object.fromEntries(
+    const changes: Partial<typeof salonSettings.$inferInsert> = Object.fromEntries(
       EDITABLE.filter((key) => input[key] !== undefined && input[key] !== current[key]).map(
         (key) => [key, input[key]],
       ),
     );
+    if (input.businessProfile !== undefined) {
+      const original = businessProfile(current);
+      const next = { ...original, ...input.businessProfile };
+      if (!isDeepStrictEqual(next, original)) changes.businessProfile = next;
+    }
     const fields = Object.keys(changes);
     if (fields.length === 0) return current;
     if (expectedRevision && Date.parse(expectedRevision) !== current.updatedAt.getTime())

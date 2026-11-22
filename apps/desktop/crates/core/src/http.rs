@@ -105,8 +105,8 @@ pub use date_shifts::{
     DatedShiftReview, DatedShiftSelection, ReviewedDatedShift,
 };
 pub use salon_configuration::{
-    ReviewedSalonConfiguration, SALON_SLOT_STEPS, SalonConfiguration, SalonConfigurationDraft,
-    SalonConfigurationWrite,
+    BusinessAmenity, BusinessProfile, ReviewedSalonConfiguration, SALON_SLOT_STEPS,
+    SalonConfiguration, SalonConfigurationDraft, SalonConfigurationWrite,
 };
 
 /// The stream is reconnected at least this often. ureq bounds the whole body, not each read,

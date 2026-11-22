@@ -7,5 +7,9 @@ import { getSalonSettings, toSalonResponse } from "./service";
 export function salonRoutes({ db }: Pick<AppDeps, "db">) {
   return new Hono()
     .get("/booking-policy", async (c) => c.json(await getBookingPolicy(db)))
-    .get("/", async (c) => c.json(toSalonResponse(await getSalonSettings(db))));
+    .get("/", async (c) =>
+      c.json(toSalonResponse(await getSalonSettings(db)), 200, {
+        "Cache-Control": "public, no-cache",
+      }),
+    );
 }

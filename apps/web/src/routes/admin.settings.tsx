@@ -4,6 +4,7 @@ import { PageHeading } from "~/components/pages";
 import { TextField } from "~/components/ui/field";
 import { adminHead } from "~/features/admin/route-head";
 import { BookingPolicyForm } from "~/features/admin/settings/booking-policy-form";
+import { BusinessProfileForm } from "~/features/admin/settings/business-profile-form";
 import { EmailDelivery } from "~/features/admin/settings/email-delivery-form";
 import { SettingsView } from "~/features/admin/settings/settings-view";
 import { UnsavedGuard } from "~/features/admin/unsaved-guard";
@@ -13,6 +14,18 @@ import { useI18n } from "~/i18n/react";
 
 const sections = {
   business: ["pos.business", "settings.name", "settings.timezone"],
+  profile: [
+    "settings.profile.title",
+    "settings.profile.description",
+    "settings.profile.address",
+    "settings.profile.phone",
+    "settings.profile.email",
+    "settings.profile.website",
+    "settings.profile.amenities",
+    "settings.profile.rules",
+    "settings.profile.category",
+    "settings.profile.mobileService",
+  ],
   booking: [
     "pos.booking",
     "settings.section.booking",
@@ -148,7 +161,7 @@ function SettingsPage() {
         <div className="min-w-0">
           <div
             id="salon-settings"
-            hidden={section === "email" || section === "protection" || section === "documents"}
+            hidden={section !== "business" && section !== "booking" && section !== "reminders"}
             className="settings-section"
           >
             <SettingsView
@@ -159,6 +172,9 @@ function SettingsPage() {
               }
               onInvalidSection={(value) => void navigate({ search: { section: value } })}
             />
+          </div>
+          <div id="business-profile" hidden={section !== "profile"} className="settings-section">
+            {visited.has("profile") && <BusinessProfileForm />}
           </div>
           <div id="email-delivery" hidden={section !== "email"} className="settings-section">
             {visited.has("email") && session && <EmailDelivery email={session.user.email} />}

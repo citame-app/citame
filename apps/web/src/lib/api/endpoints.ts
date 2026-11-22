@@ -36,6 +36,7 @@ import {
   clientPhotoSchema,
   clientPhotosSchema,
   desktopDevicesSchema,
+  desktopSalonSettingsSchema,
   type EmailDeliveryInput,
   type EmailDeliverySettings,
   emailDeliverySettingsSchema,
@@ -59,6 +60,7 @@ import {
   reportClientsSchema,
   reportOutcomesPageSchema,
   reportSummarySchema,
+  reviewedSalonSettingsSchema,
   reviewedStaffAccessSchema,
   type ServiceConfiguration,
   type SetServiceStaffRequest,
@@ -395,6 +397,13 @@ export function createEndpoints(client: ApiClient) {
         client.get("/admin/reports/outcomes", reportOutcomesPageSchema, { query }),
       settings: {
         get: () => client.get("/admin/settings", ownerSalonSettingsSchema),
+        reviewed: () => client.get("/admin/settings/desktop", desktopSalonSettingsSchema),
+        saveReviewed: (expectedRevision: string, changes: UpdateSalonSettingsRequest) =>
+          client.put(
+            "/admin/settings/desktop",
+            { expectedRevision, changes },
+            reviewedSalonSettingsSchema,
+          ),
         update: (request: UpdateSalonSettingsRequest) =>
           client.patch("/admin/settings", request, ownerSalonSettingsSchema),
       },

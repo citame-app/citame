@@ -2,6 +2,72 @@ import { z } from "zod";
 import { instantSchema, syncGenerationSchema } from "./common";
 import { reminderLeadSchema } from "./notifications";
 
+export const phoneSchema = z
+  .string()
+  .trim()
+  .regex(/^\+?[\d\s().-]{6,32}$/, "Enter a valid phone number")
+  .refine((value) => (value.match(/\d/g) ?? []).length >= 6, "Enter a valid phone number");
+
+const shortText = (limit: number) =>
+  z
+    .string()
+    .trim()
+    .min(1)
+    .max(limit)
+    .regex(/^[^\p{Cc}\u2028\u2029]+$/u)
+    .nullable();
+const httpsLink = z
+  .string()
+  .trim()
+  .max(500)
+  .refine((value) => {
+    const link = URL.parse(value);
+    return link?.protocol === "https:" && !!link.hostname && !link.username && !link.password;
+  }, "Enter an HTTPS link")
+  .nullable();
+export const BUSINESS_AMENITIES = [
+  "wifi",
+  "parking",
+  "accessibleEntrance",
+  "cardPayments",
+  "childrenWelcome",
+  "petsWelcome",
+] as const;
+export const businessProfileContentSchema = z.strictObject({
+  description: shortText(600),
+  category: shortText(80),
+  address: shortText(240),
+  phone: phoneSchema.regex(/^[^\p{Cc}]+$/u).nullable(),
+  email: z.string().trim().max(254).pipe(z.email()).nullable(),
+  website: httpsLink,
+  shop: httpsLink,
+  instagram: httpsLink,
+  rules: shortText(400),
+  mobileService: z.boolean(),
+  amenities: z
+    .array(z.enum(BUSINESS_AMENITIES))
+    .max(BUSINESS_AMENITIES.length)
+    .transform((values) => BUSINESS_AMENITIES.filter((value) => values.includes(value))),
+});
+export const businessProfileSchema = businessProfileContentSchema.extend({
+  published: z.boolean(),
+});
+export type BusinessProfile = z.infer<typeof businessProfileSchema>;
+export const EMPTY_BUSINESS_PROFILE: BusinessProfile = {
+  published: false,
+  description: null,
+  category: null,
+  address: null,
+  phone: null,
+  email: null,
+  website: null,
+  shop: null,
+  instagram: null,
+  rules: null,
+  mobileService: false,
+  amenities: [],
+};
+
 /** Public salon information: what the booking flow needs to render dates and limits. */
 export const salonResponseSchema = z.object({
   name: z.string().min(1),
@@ -11,6 +77,7 @@ export const salonResponseSchema = z.object({
   minNoticeMinutes: z.number().int().min(0),
   maxDaysAhead: z.number().int().positive(),
   onlineBookingEnabled: z.boolean().optional(),
+  profile: businessProfileContentSchema.optional(),
 });
 export type SalonResponse = z.infer<typeof salonResponseSchema>;
 
@@ -20,15 +87,9 @@ export const ownerSalonSettingsSchema = salonResponseSchema.extend({
   reminderFirstLeadMinutes: reminderLeadSchema,
   /** Minutes before the start for the second reminder (default 120 = 2 h); null turns it off. */
   reminderSecondLeadMinutes: reminderLeadSchema,
+  businessProfile: businessProfileSchema.optional(),
 });
 export type OwnerSalonSettings = z.infer<typeof ownerSalonSettingsSchema>;
-
-/** Digits plus the usual separators; at least 6 digits. Format is not enforced beyond that. */
-export const phoneSchema = z
-  .string()
-  .trim()
-  .regex(/^\+?[\d\s().-]{6,32}$/, "Enter a valid phone number")
-  .refine((value) => (value.match(/\d/g) ?? []).length >= 6, "Enter a valid phone number");
 
 /** Self-service profile edit: name and (for clients) phone. */
 export const updateProfileRequestSchema = z
@@ -81,6 +142,12 @@ export const updateSalonSettingsRequestSchema = z
     onlineBookingEnabled: z.boolean(),
     reminderFirstLeadMinutes: reminderLeadSchema,
     reminderSecondLeadMinutes: reminderLeadSchema,
+    businessProfile: businessProfileSchema
+      .partial()
+      .refine(
+        (value) => Object.values(value).some((field) => field !== undefined),
+        "Provide a profile change",
+      ),
   })
   .partial()
   .refine((value) => Object.values(value).some((v) => v !== undefined), {

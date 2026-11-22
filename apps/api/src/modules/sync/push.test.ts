@@ -1315,7 +1315,13 @@ describe("other last-writer-wins entities and tombstones", () => {
     const cursor = (await pull(t, owner)).headSeq;
     const queued = mutation(
       "settings.update",
-      { expectedRevision: revision, changes: { onlineBookingEnabled: false } },
+      {
+        expectedRevision: revision,
+        changes: {
+          onlineBookingEnabled: false,
+          businessProfile: { address: "Private fixture address" },
+        },
+      },
       { createdAt: "2020-01-01T00:00:00.000Z" },
     );
     const staff = mutation("settings.update", {
@@ -1327,20 +1333,33 @@ describe("other last-writer-wins entities and tombstones", () => {
       reason: "forbidden",
     });
     expect((await push(t, owner, [queued])).body.results[0]).toMatchObject({ status: "applied" });
-    expect(await read()).toMatchObject({ onlineBookingEnabled: false });
+    expect(await read()).toMatchObject({
+      onlineBookingEnabled: false,
+      businessProfile: { published: false, address: "Private fixture address" },
+    });
     const ownerChanges = (await pull(t, owner, { since: cursor })).changes;
     expect(ownerChanges.find((change) => change.entity === "salon_settings")).toMatchObject({
       data: {
         onlineBookingEnabled: false,
-        ownerConfiguration: { onlineBookingEnabled: false, reminderFirstLeadMinutes: 1440 },
+        ownerConfiguration: {
+          onlineBookingEnabled: false,
+          reminderFirstLeadMinutes: 1440,
+          businessProfile: { published: false, address: "Private fixture address" },
+        },
       },
     });
     const staffChanges = (await pull(t, ana, { since: cursor })).changes;
     expect(staffChanges.find((change) => change.entity === "salon_settings")?.data).toMatchObject({
       ownerConfiguration: null,
     });
+    expect(JSON.stringify(staffChanges)).not.toContain("Private fixture address");
     expect(
-      (await call(owner, "PATCH", "/admin/settings", { onlineBookingEnabled: true })).status,
+      (
+        await call(owner, "PATCH", "/admin/settings", {
+          onlineBookingEnabled: true,
+          businessProfile: { category: "Beauty studio" },
+        })
+      ).status,
     ).toBe(200);
     const reopened = await read();
     expect((await push(t, owner, [queued])).body.results[0]).toMatchObject({
@@ -1349,7 +1368,11 @@ describe("other last-writer-wins entities and tombstones", () => {
     });
     const stale = mutation("settings.update", {
       expectedRevision: revision,
-      changes: { onlineBookingEnabled: false, minNoticeMinutes: minNoticeMinutes === 70 ? 80 : 70 },
+      changes: {
+        onlineBookingEnabled: false,
+        minNoticeMinutes: minNoticeMinutes === 70 ? 80 : 70,
+        businessProfile: { published: true },
+      },
     });
     expect((await push(t, owner, [stale])).body.results[0]).toMatchObject({
       status: "rejected",

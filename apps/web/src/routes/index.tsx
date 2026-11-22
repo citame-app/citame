@@ -5,6 +5,7 @@ import { PageContainer } from "~/components/pages";
 import { buttonClasses } from "~/components/ui/button";
 import { ChevronRightIcon, ClockIcon } from "~/components/ui/icons";
 import { Skeleton } from "~/components/ui/states";
+import { PublicBusinessProfile } from "~/features/booking/public-business-profile";
 import { priceLabel } from "~/features/booking/service-price";
 import { createTranslator } from "~/i18n";
 import { useI18n } from "~/i18n/react";
@@ -182,6 +183,7 @@ function Home() {
         </div>
       </section>
 
+      {salon.profile && <PublicBusinessProfile profile={salon.profile} />}
       <section aria-labelledby="how-title" className="salon-close editorial-section">
         <div className="wrap editorial-wrap">
           <header className="editorial-section-heading">

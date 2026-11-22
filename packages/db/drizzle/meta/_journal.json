@@ -792,6 +792,13 @@
       "when": 1795298060000,
       "tag": "0112_stamp_reward_notices",
       "breakpoints": true
+    },
+    {
+      "idx": 113,
+      "version": "7",
+      "when": 1795306794868,
+      "tag": "0113_salon_business_profile",
+      "breakpoints": true
     }
   ]
 }

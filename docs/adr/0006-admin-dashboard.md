@@ -86,6 +86,12 @@ The client profile opens a scoped financial report in Cloud and Desktop. The exi
 
 Cloud and Desktop use the same report snapshot for the selected salon-local dates and team member. Effective shifts use the current weekly schedule and dated overrides. The report counts overlapping blocks once and clips them to the shift. Reserved staff work includes active bookings and completed visits inside the remaining shift. Simultaneous reservations count once, and processing gaps are taken from each appointment's frozen work plan. Completed and missed time sums each visit's calendar duration within the report dates, including concurrent visits. Occupancy uses all currencies and is blank when no shift time remains. Schedule changes refresh open reports. The report and its CSV measure planned time from the calendar. Attendance records would be required to report hours actually worked.
 
+### Public business profile
+
+The owner can prepare a private profile in Web or Desktop with a description, category, address, public contact details, HTTPS links, amenities, home visits and house rules. The booking homepage displays the saved profile only while publication is enabled. The salon endpoint revalidates public reads, and the sync feed exposes unpublished details only to the owner.
+
+Both editors use the salon settings revision. The native editor queues changed fields while offline. A stale revision requires review against the current settings before saving again. Review merges only the fields edited in the draft, including explicit clears, so unrelated remote updates are retained.
+
 ## Consequences
 
 - Two new runtime dependencies in `apps/web`: `@tanstack/react-table` 9.3.1 and `recharts` 3.10.1 (plus `react-is` 19.3.1, a Recharts peer).

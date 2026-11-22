@@ -1,5 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { errorResponseSchema, salonResponseSchema } from "@sob/contracts";
+import {
+  desktopSalonSettingsSchema,
+  errorResponseSchema,
+  salonResponseSchema,
+} from "@sob/contracts";
 import { auditLog } from "@sob/db";
 import { eq } from "drizzle-orm";
 import {
@@ -37,6 +41,74 @@ beforeEach(async () => {
 const call = (who: Actor | null, method: string, body?: unknown) =>
   json(t.app, "/admin/settings", method, body, who?.cookie);
 const code = async (res: Response) => errorResponseSchema.parse(await res.json()).error.code;
+
+test("keeps the public profile draft private and publishes only reviewed owner changes", async () => {
+  const reviewed = (who: Actor, method = "GET", body?: unknown) =>
+    json(t.app, "/admin/settings/desktop", method, body, who.cookie);
+  const publicSalon = async () => {
+    const response = await json(t.app, "/salon", "GET");
+    expect(response.headers.get("cache-control")).toBe("public, no-cache");
+    return salonResponseSchema.parse(await response.json());
+  };
+  const initial = desktopSalonSettingsSchema.parse(await (await reviewed(owner)).json());
+  expect(initial.businessProfile).toMatchObject({ published: false, address: null });
+  expect(await publicSalon()).not.toHaveProperty("profile");
+  expect((await reviewed(ana)).status).toBe(403);
+  expect((await call(client, "PATCH", { businessProfile: { published: true } })).status).toBe(403);
+  for (const website of [
+    "javascript:alert(1)",
+    "http://example.test",
+    "https://user@example.test",
+  ]) {
+    expect((await call(owner, "PATCH", { businessProfile: { website } })).status).toBe(400);
+  }
+  const description = "Synthetic salon profile";
+  const draft = await reviewed(owner, "PUT", {
+    expectedRevision: initial.revision,
+    changes: {
+      businessProfile: {
+        description,
+        amenities: ["wifi", "wifi"],
+        website: "https://example.test",
+      },
+    },
+  });
+  expect(draft.status, await draft.clone().text()).toBe(200);
+  expect(await draft.json()).toMatchObject({
+    businessProfile: { published: false, description, amenities: ["wifi"] },
+  });
+  expect(await publicSalon()).not.toHaveProperty("profile");
+  const staffSync = await json(t.app, "/sync/pull?since=0&limit=200", "GET", undefined, ana.cookie);
+  expect(staffSync.status).toBe(200);
+  expect(await staffSync.text()).not.toContain(description);
+  expect(
+    (
+      await reviewed(owner, "PUT", {
+        expectedRevision: initial.revision,
+        changes: { businessProfile: { published: true } },
+      })
+    ).status,
+  ).toBe(409);
+  const latest = desktopSalonSettingsSchema.parse(await (await reviewed(owner)).json());
+  expect(
+    (
+      await reviewed(owner, "PUT", {
+        expectedRevision: latest.revision,
+        changes: { businessProfile: { published: true, address: "7 Test Street" } },
+      })
+    ).status,
+  ).toBe(200);
+  expect((await publicSalon()).profile).toMatchObject({
+    description,
+    address: "7 Test Street",
+    amenities: ["wifi"],
+    website: "https://example.test",
+  });
+  expect((await publicSalon()).profile).not.toHaveProperty("published");
+  expect((await call(owner, "PATCH", { businessProfile: { published: false } })).status).toBe(200);
+  expect(await publicSalon()).not.toHaveProperty("profile");
+  expect(await (await reviewed(owner)).json()).toMatchObject({ businessProfile: { description } });
+});
 
 describe("access control", () => {
   test("anonymous is 401; staff and clients are 403 and nothing changes", async () => {

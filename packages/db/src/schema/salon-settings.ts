@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { boolean, check, integer, pgTable, text } from "drizzle-orm/pg-core";
+import { boolean, check, integer, jsonb, pgTable, text } from "drizzle-orm/pg-core";
 import { createdAt, updatedAt } from "./helpers";
 
 /** Single-row table (id is pinned to 1) holding salon-wide configuration. */
@@ -18,6 +18,7 @@ export const salonSettings = pgTable(
     reminderFirstLeadMinutes: integer().default(1440),
     /** Lead of the second reminder, in minutes; null disables it. */
     reminderSecondLeadMinutes: integer().default(120),
+    businessProfile: jsonb().$type<Record<string, unknown>>().notNull().default({}),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
