@@ -706,6 +706,35 @@ fn a_newer_projection_compares_against_the_acknowledged_local_move() {
 }
 
 #[test]
+fn a_remote_change_before_the_first_pull_of_a_local_booking_still_notifies() {
+    for (status, kind) in [
+        ("booked", CalendarNoticeKind::Rescheduled),
+        ("cancelled", CalendarNoticeKind::Cancelled),
+    ] {
+        let mut store = Store::open_in_memory().unwrap();
+        let local = store
+            .enqueue(
+                "appointment.create",
+                A1,
+                json!({
+                    "id": A1, "staffId": "st1", "startsAt": "2026-03-09T11:00:00Z",
+                }),
+            )
+            .unwrap();
+        store
+            .apply_push_results(std::slice::from_ref(&local), &[applied(&local.mutation_id)])
+            .unwrap();
+        let mut current = appt_change(1, A1, 2);
+        current.data.as_mut().unwrap()["status"] = json!(status);
+        store
+            .apply_sync_page(&[current], 2, true, true, &[], None)
+            .unwrap();
+        let notices = store.booking_notices_after(0).unwrap();
+        assert_eq!((notices[0].1, notices[0].2.id.as_str()), (kind, A1));
+    }
+}
+
+#[test]
 fn booksy_origin_refreshes_an_existing_appointment_at_the_same_version() {
     let mut store = Store::open_in_memory().unwrap();
     let mut imported = appt_change(1, A1, 1);

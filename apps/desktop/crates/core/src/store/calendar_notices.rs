@@ -78,7 +78,12 @@ fn local_position(tx: &Transaction, id: &str, through_version: i64) -> Result<Op
 }
 
 pub(super) fn remember_applied(tx: &Transaction, entry: &OutboxEntry, seq: i64) -> Result<()> {
-    let Some(reviewed_version) = entry.payload["version"].as_i64() else {
+    let reviewed_version = if entry.kind == "appointment.create" {
+        Some(0)
+    } else {
+        entry.payload["version"].as_i64()
+    };
+    let Some(reviewed_version) = reviewed_version else {
         return Ok(());
     };
     let Some(version) = reviewed_version.checked_add(1) else {
@@ -113,16 +118,22 @@ pub(super) fn classify(
     tx: &Transaction,
     appointment: &Appointment,
 ) -> Result<Option<NoticeUpdate>> {
-    if let Some(previous) = mirrored_position(tx, &appointment.id)? {
-        if appointment.version <= previous.version {
-            return Ok(None);
-        }
-        // Pull returns the current row, which can be newer than its sequence
-        // or appear at a later sequence after re-announcement. Compare against
-        // an acknowledged local position when the mirror has not seen it yet.
-        let local = local_position(tx, &appointment.id, appointment.version)?
-            .filter(|position| position.version > previous.version);
-        let basis = local.as_ref().unwrap_or(&previous);
+    let previous = mirrored_position(tx, &appointment.id)?;
+    if previous
+        .as_ref()
+        .is_some_and(|state| state.version >= appointment.version)
+    {
+        return Ok(None);
+    }
+    // Pull returns the current row, which can be newer than its sequence
+    // or appear at a later sequence after re-announcement. Compare against
+    // an acknowledged local position when the mirror has not seen it yet.
+    let local = local_position(tx, &appointment.id, appointment.version)?.filter(|position| {
+        previous
+            .as_ref()
+            .is_none_or(|state| position.version > state.version)
+    });
+    if let Some(basis) = local.as_ref().or(previous.as_ref()) {
         if basis.version < appointment.version && basis.status == "booked" {
             let kind = match appointment.status {
                 AppointmentStatus::Cancelled => Some(CalendarNoticeKind::Cancelled),

@@ -1794,7 +1794,7 @@ impl Store {
                     }
                     if matches!(
                         s.kind.as_str(),
-                        "appointment.reschedule" | "appointment.cancel"
+                        "appointment.create" | "appointment.reschedule" | "appointment.cancel"
                     ) && let Some(seq) = applied_seq
                     {
                         calendar_notices::remember_applied(&tx, s, *seq)?;
