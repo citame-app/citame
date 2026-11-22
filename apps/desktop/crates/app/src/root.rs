@@ -818,6 +818,7 @@ impl Root {
                 && !self.preserve_open_booking_policy_draft(cx)
                 && !self.preserve_open_assignment_draft()
                 && !self.preserve_open_staff_access(cx)
+                && !self.preserve_open_staff_portrait_draft()
                 && !self.preserve_open_catalogue()
                 && !self.preserve_open_resource_requirements()
                 && !self.preserve_open_resource_pools(generation.as_deref())
@@ -2644,8 +2645,10 @@ impl Root {
             Overlay::Reviews(desk) if desk.confirm.is_some() && !desk.busy => {
                 desk.confirm = None;
             }
-            Overlay::StaffPortraits(desk) if desk.confirming_removal => {
-                desk.confirming_removal = false;
+            Overlay::StaffPortraits(desk) => {
+                if desk.dismiss() {
+                    self.overlay = Overlay::None;
+                }
             }
             Overlay::Details(details) if details.price_review.is_some() => {
                 details.price_review = None;
