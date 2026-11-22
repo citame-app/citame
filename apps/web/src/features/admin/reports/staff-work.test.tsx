@@ -1,5 +1,7 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { setTimeout as nextTask } from "node:timers/promises";
+import { act, fireEvent, screen } from "@testing-library/react";
+import { ApiError } from "~/lib/api/client";
 import { renderApp } from "../../../../test/render";
 import { StaffWorkReport } from "./staff-work";
 
@@ -41,16 +43,10 @@ test("a staff work report switches periods and exports the visible days", async 
       ],
     },
   };
-  let denied = false;
   const load = mock(async (input: RequestInfo | URL) => {
     const url = new URL(String(input), "http://localhost");
     expect(url.pathname).toBe("/api/admin/reports/staff-work");
     expect(url.searchParams.get("staffId")).toBe(staffId);
-    if (denied)
-      return Response.json(
-        { error: { code: "forbidden", message: "Scope changed" } },
-        { status: 403 },
-      );
     return Response.json(report);
   });
   globalThis.fetch = load as unknown as typeof fetch;
@@ -71,8 +67,16 @@ test("a staff work report switches periods and exports the visible days", async 
     expect.stringContaining("2026-11-22,240,30,90,60,30,0.4286"),
     "staff-work-2026-11-22-2026-11-22.csv",
   );
-  denied = true;
-  await queryClient.invalidateQueries({ queryKey: ["admin", "report", "staff-work"] });
-  await waitFor(() => expect(screen.queryByRole("table", { name: "Próximos 14 días" })).toBeNull());
+  const cached = queryClient.getQueryCache().find({
+    queryKey: ["admin", "report", "staff-work"],
+    exact: false,
+  });
+  if (!cached) throw new Error("Missing previously authorized work report");
+  await act(async () => {
+    cached.setState({ status: "error", error: new ApiError("forbidden", 403, "Scope changed") });
+    // React Query batches observer notifications on the next task.
+    await nextTask(0);
+  });
+  expect(screen.queryByRole("table", { name: "Próximos 14 días" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Descargar CSV diario" })).toBeNull();
 });
