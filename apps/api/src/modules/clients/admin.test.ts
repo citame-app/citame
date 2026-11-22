@@ -139,6 +139,8 @@ describe("GET /admin/clients", () => {
     expect(await names("5555")).toEqual(["Marta Gomez"]);
     expect(await names("(11) 4444")).toEqual(["Zoe Ruiz"]);
     expect(await names("nobody")).toEqual([]);
+    await t.db.insert(clientProfile).values({ name: "Cliente 5555" });
+    expect(await names("Cliente 5555")).toEqual(["Cliente 5555"]);
   });
 
   test("wildcard characters in the search are literal", async () => {
