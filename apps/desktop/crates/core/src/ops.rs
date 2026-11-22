@@ -77,12 +77,17 @@ pub fn create_time_off(
 }
 
 fn verify_block(store: &Store, expected: &TimeOff) -> Result<()> {
-    if !effective_time_off(store, expected.starts_at, expected.ends_at)?
-        .iter()
-        .any(|block| &block.time_off == expected)
-    {
+    let Some(block) = effective_time_off(store, expected.starts_at, expected.ends_at)?
+        .into_iter()
+        .find(|block| &block.time_off == expected)
+    else {
         return Err(CoreError::Invalid(
             "The block changed. Close it and open the latest version.".into(),
+        ));
+    };
+    if block.pending && store.has_acknowledged_time_off(&expected.id)? {
+        return Err(CoreError::Invalid(
+            "Synchronize to load the confirmed time block before editing it.".into(),
         ));
     }
     Ok(())
@@ -253,15 +258,15 @@ pub fn create_appointment(store: &mut Store, new: NewAppointment) -> Result<Stri
 }
 
 fn queue_appointment(store: &mut Store, new: NewAppointment) -> Result<String> {
-    if !known_clients(store)?
-        .iter()
-        .any(|(id, _)| *id == new.client_id)
-    {
+    let Some((_, client_name)) = known_clients(store)?
+        .into_iter()
+        .find(|(id, _)| *id == new.client_id)
+    else {
         return Err(CoreError::Invalid(format!(
             "unknown client {}",
             new.client_id
         )));
-    }
+    };
     let (quotes, reviewed) = reviewed_service_terms(store, &new)?;
     let id = uuid::Uuid::now_v7().to_string();
     let mut p = Map::new();
@@ -272,6 +277,7 @@ fn queue_appointment(store: &mut Store, new: NewAppointment) -> Result<String> {
     p.insert("_reviewedServices".into(), json!(reviewed));
     p.insert("startsAt".into(), json!(iso(new.starts_at)));
     p.insert("clientId".into(), json!(new.client_id));
+    p.insert("_clientName".into(), json!(client_name));
     if let Some(n) = new.notes.filter(|n| !n.trim().is_empty()) {
         p.insert("notes".into(), json!(n));
     }

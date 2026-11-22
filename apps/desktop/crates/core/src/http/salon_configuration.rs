@@ -262,7 +262,7 @@ impl SalonConfigurationWrite {
                 changes.remove("businessProfile");
             }
         }
-        (!changes.is_empty()).then(|| Self {
+        (!changes.is_empty()).then_some(Self {
             expected_revision: expected.revision,
             changes,
         })
