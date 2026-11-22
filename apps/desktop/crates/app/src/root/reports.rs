@@ -13,6 +13,12 @@ use sob_core::reports::financial::FinancialReport;
 const PAGE_SIZE: usize = 15;
 const RETRY_DELAY: Duration = Duration::from_secs(5);
 
+#[derive(Clone, Copy)]
+enum ReportPage {
+    Main,
+    SettledItems,
+}
+
 enum ReportData {
     Summary(Box<ReportSummary>),
     Clients(ClientReport),
@@ -89,6 +95,7 @@ pub(super) struct Desk {
     financial_report: Option<FinancialReport>,
     group: Group,
     page: usize,
+    item_page: usize,
     request: Option<Arc<()>>,
     observed_cursor: i64,
     retry_at: Option<Instant>,
@@ -157,6 +164,7 @@ impl Root {
             financial_report: None,
             group: Group::Day,
             page: 0,
+            item_page: 0,
             request: None,
             observed_cursor: 0,
             retry_at: None,
@@ -207,6 +215,7 @@ impl Root {
             desk.client_report = None;
             desk.financial_report = None;
             desk.page = 0;
+            desk.item_page = 0;
             desk.outcomes.reset_page();
         }
         desk.submitted = Some(query);
@@ -350,9 +359,12 @@ impl Root {
         }
     }
 
-    fn report_page(&mut self, page: usize, cx: &mut Context<Self>) {
+    fn report_page(&mut self, target: ReportPage, page: usize, cx: &mut Context<Self>) {
         if let Overlay::Reports(desk) = &mut self.overlay {
-            desk.page = page;
+            match target {
+                ReportPage::Main => desk.page = page,
+                ReportPage::SettledItems => desk.item_page = page,
+            }
             cx.notify();
         }
     }
@@ -905,7 +917,7 @@ impl Root {
                 )
             })
             .when((has_appointments || has_occupancy) && pages > 1, |view| {
-                view.child(self.render_report_pager(page, pages, cx))
+                view.child(self.render_report_pager(ReportPage::Main, page, pages, cx))
             })
             .when(group == Group::Staff && has_occupancy, |view| {
                 view.children(self.render_staff_occupancy(report, start))
@@ -983,7 +995,27 @@ impl Root {
         )
     }
 
-    fn render_report_pager(&self, page: usize, pages: usize, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_report_pager(
+        &self,
+        target: ReportPage,
+        page: usize,
+        pages: usize,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let (previous_id, next_id, previous_label, next_label) = match target {
+            ReportPage::Main => (
+                "reports-previous",
+                "reports-next",
+                Key::InboxPrevious,
+                Key::InboxNext,
+            ),
+            ReportPage::SettledItems => (
+                "report-items-previous",
+                "report-items-next",
+                Key::FinancialItemsPrevious,
+                Key::FinancialItemsNext,
+            ),
+        };
         div()
             .flex()
             .justify_end()
@@ -991,10 +1023,10 @@ impl Root {
             .gap_2()
             .when(page > 0, |view| {
                 view.child(self.button(
-                    "reports-previous",
-                    self.t(Key::InboxPrevious),
+                    previous_id,
+                    self.t(previous_label),
                     Kind::Ghost,
-                    cx.listener(move |root, _, _, cx| root.report_page(page - 1, cx)),
+                    cx.listener(move |root, _, _, cx| root.report_page(target, page - 1, cx)),
                 ))
             })
             .child(
@@ -1005,10 +1037,10 @@ impl Root {
             )
             .when(page + 1 < pages, |view| {
                 view.child(self.button(
-                    "reports-next",
-                    self.t(Key::InboxNext),
+                    next_id,
+                    self.t(next_label),
                     Kind::Ghost,
-                    cx.listener(move |root, _, _, cx| root.report_page(page + 1, cx)),
+                    cx.listener(move |root, _, _, cx| root.report_page(target, page + 1, cx)),
                 ))
             })
     }
@@ -1202,7 +1234,7 @@ mod tests {
         root.update(cx, |root, cx| {
             assert!(matches!(&root.overlay, Overlay::Reports(desk)
                 if desk.export_notice == Some(Key::ReportExportFailed)));
-            root.report_page(1, cx);
+            root.report_page(ReportPage::Main, 1, cx);
             root.report_group(Group::Hour, cx);
             assert!(matches!(&root.overlay, Overlay::Reports(desk) if desk.page == 0));
             root.dismiss_overlay(cx);

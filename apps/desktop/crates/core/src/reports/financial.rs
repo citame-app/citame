@@ -41,6 +41,7 @@ pub struct FinancialReport {
     pub booking_fees_cents: i64,
     pub unknown_cost_lines: u64,
     pub settled_by_family: Option<Vec<SalesFamilyTotal>>,
+    pub settled_by_item: Option<Vec<SettledSaleItem>>,
     pub promotion_collections: Option<Vec<PromotionCollection>>,
     pub methods: Vec<FinancialMethod>,
     pub cash_sessions: Vec<FinancialSession>,
@@ -56,6 +57,17 @@ pub struct FinancialClient {
 #[serde(rename_all = "camelCase")]
 pub struct SalesFamilyTotal {
     pub family: SalesFamily,
+    pub amount_cents: i64,
+    pub tax_cents: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettledSaleItem {
+    pub family: SalesFamily,
+    pub item_id: Option<uuid::Uuid>,
+    pub name: Option<String>,
+    pub quantity: Option<i64>,
     pub amount_cents: i64,
     pub tax_cents: i64,
 }
@@ -260,6 +272,21 @@ impl FinancialReport {
                     row.collected_cents,
                     row.refunded_cents,
                     row.net_cents
+                );
+            }
+        }
+        if let Some(rows) = &self.settled_by_item {
+            csv.push_str("\r\n\r\n\"sale_family\",\"item_id\",\"item_name\",\"quantity\",\"settled_amount_cents\",\"included_tax_cents\",\"currency\"");
+            for row in rows {
+                let (family, _) = row.family.descriptor();
+                let _ = write!(
+                    csv,
+                    "\r\n\"{family}\",\"{}\",{},\"{}\",\"{}\",\"{}\",\"{CURRENCY}\"",
+                    row.item_id.map(|id| id.to_string()).unwrap_or_default(),
+                    csv_text(row.name.as_deref().unwrap_or_default()),
+                    optional(row.quantity),
+                    row.amount_cents,
+                    row.tax_cents
                 );
             }
         }

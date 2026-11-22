@@ -12,7 +12,7 @@ import { api } from "~/lib/api/instance";
 import { formatMoney } from "~/lib/format";
 import { presetRange } from "../reports/logic";
 import { downloadCsv } from "./csv";
-import { PromotionCollections, SalesFamilies } from "./financial-breakdowns";
+import { PromotionCollections, SalesFamilies, SalesItems } from "./financial-breakdowns";
 import { centsInput, inputCents } from "./money";
 export function AccountingView({
   role,
@@ -579,6 +579,29 @@ export function SalesReport({
                         ]),
                       ]
                     : []),
+                  ...(report.data.settledByItem
+                    ? [
+                        [],
+                        [
+                          "sale_family",
+                          "item_id",
+                          "item_name",
+                          "quantity",
+                          "settled_amount_cents",
+                          "included_tax_cents",
+                          "currency",
+                        ],
+                        ...report.data.settledByItem.map((row) => [
+                          row.family,
+                          row.itemId,
+                          row.name,
+                          row.quantity,
+                          row.amountCents,
+                          row.taxCents,
+                          "EUR",
+                        ]),
+                      ]
+                    : []),
                 ],
                 report.data.client
                   ? `client-sales-${report.data.client.id}-${report.data.from}-${report.data.to}.csv`
@@ -625,6 +648,13 @@ export function SalesReport({
           {report.data.promotionCollections && (
             <PromotionCollections
               rows={report.data.promotionCollections}
+              headingLevel={clientId ? "h3" : "h4"}
+            />
+          )}
+          {report.data.settledByItem && (
+            <SalesItems
+              key={JSON.stringify([report.data.from, report.data.to, range.staffId, clientId])}
+              rows={report.data.settledByItem}
               headingLevel={clientId ? "h3" : "h4"}
             />
           )}

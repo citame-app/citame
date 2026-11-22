@@ -1,5 +1,5 @@
 use super::*;
-use sob_core::reports::financial::CURRENCY;
+use sob_core::reports::financial::{CURRENCY, SettledSaleItem};
 
 impl Root {
     pub(super) fn render_financial_report(
@@ -161,6 +161,9 @@ impl Root {
                     )
                 }))
             })
+            .when_some(report.settled_by_item.as_ref(), |view, rows| {
+                view.child(self.render_settled_items(desk, rows, cx))
+            })
             .when(!report.methods.is_empty(), |view| {
                 view.child(
                     div()
@@ -236,7 +239,74 @@ impl Root {
                     }),
             )
             .when(pages > 1, |view| {
-                view.child(self.render_report_pager(page, pages, cx))
+                view.child(self.render_report_pager(ReportPage::Main, page, pages, cx))
+            })
+    }
+
+    fn render_settled_items(
+        &self,
+        desk: &Desk,
+        rows: &[SettledSaleItem],
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let pages = rows.len().div_ceil(PAGE_SIZE).max(1);
+        let page = desk.item_page.min(pages - 1);
+        div()
+            .debug_selector(|| "settled-sales-items".to_string())
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(self.t(Key::FinancialItems)),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme::muted())
+                    .child(self.t(Key::FinancialItemsBasis)),
+            )
+            .when(rows.is_empty(), |view| {
+                view.child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::muted())
+                        .child(self.t(Key::FinancialFamiliesEmpty)),
+                )
+            })
+            .children(
+                rows.iter()
+                    .skip(page * PAGE_SIZE)
+                    .take(PAGE_SIZE)
+                    .map(|row| {
+                        let family = self.t(row.family.descriptor().1);
+                        let label = row
+                            .name
+                            .as_ref()
+                            .map_or_else(|| family.to_owned(), |name| format!("{name} · {family}"));
+                        self.financial_row(
+                            &label,
+                            [
+                                (
+                                    Key::FinancialItemQuantity,
+                                    row.quantity
+                                        .map_or_else(|| "—".into(), |count| count.to_string()),
+                                ),
+                                (
+                                    Key::FinancialFamilyAmount,
+                                    self.amount_label(row.amount_cents, CURRENCY),
+                                ),
+                                (
+                                    Key::FinancialTax,
+                                    self.amount_label(row.tax_cents, CURRENCY),
+                                ),
+                            ],
+                        )
+                    }),
+            )
+            .when(pages > 1, |view| {
+                view.child(self.render_report_pager(ReportPage::SettledItems, page, pages, cx))
             })
     }
 
@@ -300,6 +370,14 @@ mod tests {
             assert!(desk.submitted.as_ref() == Some(&query));
             desk.request = None;
             desk.error = None;
+            let mut item_rows = vec![
+                serde_json::json!({ "family": "product", "itemId": null, "name": "=Classic shampoo", "quantity": 2, "amountCents": 900, "taxCents": 156 }),
+                serde_json::json!({ "family": "unallocated", "itemId": null, "name": null, "quantity": null, "amountCents": 100, "taxCents": 17 }),
+            ];
+            item_rows.extend((1..PAGE_SIZE).map(|index| serde_json::json!({
+                "family": "custom", "itemId": null, "name": format!("Manual item {index}"),
+                "quantity": 1, "amountCents": 100, "taxCents": 0,
+            })));
             desk.financial_report = Some(serde_json::from_value(serde_json::json!({
                 "from": query.from,
                 "to": query.to,
@@ -316,6 +394,7 @@ mod tests {
                     { "family": "product", "amountCents": 900, "taxCents": 156 },
                     { "family": "unallocated", "amountCents": 100, "taxCents": 17 }
                 ],
+                "settledByItem": item_rows,
                 "promotionCollections": [
                     { "name": "=Original offer", "code": "OFFER", "collectedCents": 0, "refundedCents": 125, "netCents": -125 }
                 ],
@@ -327,6 +406,7 @@ mod tests {
         cx.run_until_parked();
         assert!(cx.debug_bounds("financial-report").is_some());
         assert!(cx.debug_bounds("promotion-collections").is_some());
+        assert!(cx.debug_bounds("settled-sales-items").is_some());
         let output = dir.path().join("financial.csv");
         root.update(cx, |root, cx| root.save_report(cx));
         cx.simulate_new_path_selection(|_| Some(output.clone()));
@@ -342,6 +422,20 @@ mod tests {
         assert!(csv.contains("\"unallocated\",\"100\",\"17\",\"EUR\""));
         assert!(csv.contains("\"promotion_name\",\"promotion_code\",\"collected_cents\",\"refunded_cents\",\"net_cents\",\"currency\""));
         assert!(csv.contains("\"'=Original offer\",\"OFFER\",\"0\",\"125\",\"-125\",\"EUR\""));
+        assert!(
+            csv.contains("\"product\",\"\",\"'=Classic shampoo\",\"2\",\"900\",\"156\",\"EUR\"")
+        );
+        assert!(csv.contains("\"unallocated\",\"\",\"\",\"\",\"100\",\"17\",\"EUR\""));
+        assert!(csv.contains(&format!(
+            "\"custom\",\"\",\"Manual item {}\",\"1\",\"100\",\"0\",\"EUR\"",
+            PAGE_SIZE - 1
+        )));
+        root.update(cx, |root, cx| {
+            root.report_page(ReportPage::SettledItems, 1, cx);
+            assert!(matches!(&root.overlay, Overlay::Reports(desk)
+                if desk.item_page == 1 && desk.page == 0));
+        });
+        cx.run_until_parked();
 
         let revoked = dir.path().join("revoked.csv");
         root.update(cx, |root, cx| {

@@ -89,6 +89,12 @@ export const salesFamilyTotalSchema = z.object({
   taxCents: signedMoney,
 });
 export type SalesFamilyTotal = z.infer<typeof salesFamilyTotalSchema>;
+export const settledSaleItemSchema = salesFamilyTotalSchema.extend({
+  itemId: idSchema.nullable(),
+  name: z.string().nullable(),
+  quantity: z.number().int().nonnegative().nullable(),
+});
+export type SettledSaleItem = z.infer<typeof settledSaleItemSchema>;
 export const promotionCollectionSchema = z.object({
   name: z.string(),
   code: z.string(),
@@ -124,6 +130,7 @@ export const salesReportSchema = z.object({
   productCostCents: aggregateMoney,
   unknownCostLines: z.number().int().nonnegative(),
   settledByFamily: z.array(salesFamilyTotalSchema).optional(),
+  settledByItem: z.array(settledSaleItemSchema).optional(),
   promotionCollections: z.array(promotionCollectionSchema).optional(),
   methods: z.array(
     z.object({ method: z.string(), collectedCents: aggregateMoney, refundedCents: aggregateMoney }),

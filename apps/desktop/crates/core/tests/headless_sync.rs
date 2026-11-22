@@ -5593,6 +5593,35 @@ fn cash_updates_are_visible_to_the_connected_native_replica_and_web_api() {
     assert_eq!(closed.expected_cents, Some(2425));
     assert_eq!(closed.difference_cents, Some(0));
 
+    let item_name = format!("Synthetic settled item {}", uuid::Uuid::now_v7());
+    let checkout = browser.rest_post(
+        "/admin/commerce/checkouts",
+        json!({
+            "lines": [{ "kind": "custom", "description": item_name, "quantity": 2, "unitAmountCents": 600 }],
+            "idempotencyKey": uuid::Uuid::now_v7()
+        }),
+    );
+    browser.rest_post(
+        &format!("/admin/commerce/checkouts/{}/payments", checkout["id"].as_str().unwrap()),
+        json!({ "method": "external_card", "amountCents": 1200, "idempotencyKey": uuid::Uuid::now_v7() }),
+    );
+    let ledger = native.transport.financial_report(&report).unwrap();
+    let item = ledger
+        .settled_by_item
+        .as_ref()
+        .unwrap()
+        .iter()
+        .find(|row| row.name.as_deref() == Some(&item_name))
+        .expect("settled line reaches native report");
+    assert_eq!(item.family.descriptor().0, "custom");
+    assert_eq!(
+        (item.quantity, item.amount_cents, item.tax_cents),
+        (Some(2), 1200, 0)
+    );
+    assert!(ledger.to_csv().contains(&format!(
+        "\"custom\",\"\",\"{item_name}\",\"2\",\"1200\",\"0\",\"EUR\""
+    )));
+
     stop.store(true, Ordering::SeqCst);
     runner.stop();
     drop(listener);

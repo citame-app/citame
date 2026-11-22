@@ -92,6 +92,14 @@ Cloud and Desktop use the same client report and export the ten highest positive
 
 The client profile opens a scoped financial report in Cloud and Desktop. The existing financial report endpoint accepts a client identifier and resolves it to the current profile within the reporting snapshot. Date and professional filters apply to the same checkout ledger and settlement calculations as the centre report. Scoped exports identify the client and keep the settled family, included tax, external collections and refunds distinct. Cash register sessions remain available in the centre report. The client view requires financial report and client directory permissions.
 
+### Settled sales by item and plan
+
+The centre and client financial reports in Cloud and Desktop break settled amounts and included tax down by service, retail product, manual item, package plan and membership plan. Rows keep the name printed at settlement and combine equal names within the same catalog identity and family. Different catalog identities or names remain separate. Gift card issuance is grouped without individual card identifiers or labels. Historical receipts whose stored lines no longer reconcile remain unallocated, with no inferred quantity.
+
+Both views page through the rows and include the full detail in the financial CSV. The original financial report filters, permissions, settlement dates and prepaid allocation apply. Tips and later refunds remain in their existing sections.
+
+The item breakdown uses the financial report's read-only snapshot and responsive breakdown renderer. Paging limits the rendered rows in each client while totals, families and the complete export use the same settlement snapshot.
+
 ### Team occupancy
 
 Cloud and Desktop use the same report snapshot for the selected salon-local dates and team member. Effective shifts use the current weekly schedule and dated overrides. The report counts overlapping blocks once and clips them to the shift. Reserved staff work includes active bookings and completed visits inside the remaining shift. Simultaneous reservations count once, and processing gaps are taken from each appointment's frozen work plan. Completed and missed time sums each visit's calendar duration within the report dates, including concurrent visits. Occupancy uses all currencies and is blank when no shift time remains. Schedule changes refresh open reports. A period with no appointments remains exportable when it has scheduled capacity. A period with neither appointments nor occupancy minutes has no CSV action. The report and its CSV measure planned time from the calendar. Attendance records would be required to report hours actually worked.

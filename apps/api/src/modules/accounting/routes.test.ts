@@ -239,13 +239,32 @@ test("retail commissions exclude included tax and preserve costs and rate snapsh
     productCostCents: 7000,
     unknownCostLines: 0,
     settledByFamily: [{ family: "product", amountCents: 12100, taxCents: 2100 }],
+    settledByItem: [
+      {
+        family: "product",
+        itemId: product.id,
+        name: "Shampoo",
+        quantity: 1,
+        amountCents: 12100,
+        taxCents: 2100,
+      },
+    ],
   });
   expect((await call(staff, `/admin/accounting/sales?from=${date}&to=${date}`)).status).toBe(403);
   const otherReport = await call(
     owner,
     `/admin/accounting/sales?from=${date}&to=${date}&staffId=${other.staffId}`,
   );
-  expect(await otherReport.json()).toMatchObject({ settledByFamily: [], collectedCents: 0 });
+  expect(await otherReport.json()).toMatchObject({
+    settledByFamily: [],
+    settledByItem: [],
+    collectedCents: 0,
+  });
+  const { sql } = await import("drizzle-orm");
+  await t.db.execute(sql`update retail_product set name = 'New label' where id = ${product.id}`);
+  expect(
+    await (await call(owner, `/admin/accounting/sales?from=${date}&to=${date}`)).json(),
+  ).toMatchObject({ settledByItem: [{ itemId: product.id, name: "Shampoo" }] });
 });
 
 test("settled families exclude tips and put historical receipts without matching line allocations in unallocated", async () => {
@@ -259,6 +278,9 @@ test("settled families exclude tips and put historical receipts without matching
     soldCents: 9500,
     tipsCents: 500,
     settledByFamily: [{ family: "service", amountCents: 9000, taxCents: 0 }],
+    settledByItem: [
+      { family: "service", name: "Haircut", quantity: 1, amountCents: 9000, taxCents: 0 },
+    ],
   });
   const { sql } = await import("drizzle-orm");
   await t.db.execute(
@@ -267,6 +289,16 @@ test("settled families exclude tips and put historical receipts without matching
   expect(await (await call(owner, path)).json()).toMatchObject({
     soldCents: 9500,
     settledByFamily: [{ family: "unallocated", amountCents: 9000, taxCents: 0 }],
+    settledByItem: [
+      {
+        family: "unallocated",
+        itemId: null,
+        name: null,
+        quantity: null,
+        amountCents: 9000,
+        taxCents: 0,
+      },
+    ],
   });
 });
 

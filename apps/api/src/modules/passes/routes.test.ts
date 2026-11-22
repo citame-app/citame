@@ -455,6 +455,20 @@ test("membership periods follow the original billing anchor, manual renewal is u
       .status,
   ).toBe(409);
   expect((await get(bought.pass.id)).periods[0]?.availableUses).toBe(2);
+  const date = Temporal.Now.plainDateISO("America/Argentina/Buenos_Aires").toString();
+  const sales = await call(owner, `/admin/accounting/sales?from=${date}&to=${date}`);
+  expect(salesReportSchema.parse(await sales.json())).toMatchObject({
+    settledByItem: [
+      {
+        family: "membership_period",
+        itemId: bought.pass.planId,
+        name: "Three visits",
+        quantity: 2,
+        amountCents: 2000,
+        taxCents: 0,
+      },
+    ],
+  });
 });
 test("membership discounts apply only to eligible services and never change existing receipts", async () => {
   const bought = await paid({
@@ -683,6 +697,17 @@ test("financial reports separate new cash, receipt face values and the prepaid a
     settledByFamily: [
       { family: "service", amountCents: 334, taxCents: 0 },
       { family: "package_purchase", amountCents: 1000, taxCents: 0 },
+    ],
+    settledByItem: [
+      { family: "service", itemId: f.haircutId, quantity: 1, amountCents: 334, taxCents: 0 },
+      {
+        family: "package_purchase",
+        itemId: bought.pass.planId,
+        name: "Three visits",
+        quantity: 1,
+        amountCents: 1000,
+        taxCents: 0,
+      },
     ],
   });
   expect((await refund(used.payment.id, 2000)).status).toBe(201);
