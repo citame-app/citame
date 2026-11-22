@@ -79,28 +79,35 @@ describe("SMTP provider against a real local SMTP server", () => {
     await provider.close?.();
   });
 
-  test("returns a disconnected send to the queue after one SMTP connection", async () => {
-    let connections = 0;
-    const disconnecting = createServer((socket) => {
-      connections++;
-      socket.end();
-    });
-    await new Promise<void>((resolve) => disconnecting.listen(0, "127.0.0.1", resolve));
-    const address = disconnecting.address();
-    if (!address || typeof address === "string") throw new Error("Missing SMTP address");
-    const provider = createSmtpProvider({
-      url: `smtp://127.0.0.1:${address.port}`,
-      from: "a@salon.example",
-      timeouts: { connectionMs: 500, greetingMs: 500, socketMs: 500 },
-    });
-    try {
-      await expect(provider.send(message)).rejects.toBeInstanceOf(TransientProviderError);
-      expect(connections).toBe(1);
-    } finally {
-      await provider.close?.();
-      await new Promise<void>((resolve) => disconnecting.close(() => resolve()));
-    }
-  }, 15_000);
+  test.each(["default", "retry parameter", "nested URL"])(
+    "rejects a disconnected send after one SMTP connection (%s)",
+    async (configuration) => {
+      let connections = 0;
+      const disconnecting = createServer((socket) => {
+        connections++;
+        socket.end();
+      });
+      await new Promise<void>((resolve) => disconnecting.listen(0, "127.0.0.1", resolve));
+      const address = disconnecting.address();
+      if (!address || typeof address === "string") throw new Error("Missing SMTP address");
+      const url = new URL(`smtp://127.0.0.1:${address.port}`);
+      if (configuration === "retry parameter") url.searchParams.set("maxRequeues", "1");
+      if (configuration === "nested URL") url.searchParams.set("url", `${url.href}?maxRequeues=1`);
+      const provider = createSmtpProvider({
+        url: url.href,
+        from: "a@salon.example",
+        timeouts: { connectionMs: 500, greetingMs: 500, socketMs: 500 },
+      });
+      try {
+        await expect(provider.send(message)).rejects.toBeInstanceOf(TransientProviderError);
+        expect(connections).toBe(1);
+      } finally {
+        await provider.close?.();
+        await new Promise<void>((resolve) => disconnecting.close(() => resolve()));
+      }
+    },
+    15_000,
+  );
 
   test("an unreachable server is transient", async () => {
     const provider = createSmtpProvider({ url: "smtp://127.0.0.1:1", from: "a@salon.example" });
