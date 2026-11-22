@@ -181,14 +181,25 @@ function ProfitabilityRows({
           ),
         }))}
       />
-      <BreakdownPager
-        page={page - 1}
-        pageCount={Math.ceil(pagination.total / pagination.pageSize)}
-        setPage={(next) => setPage(next + 1)}
-        disabled={reviewed !== null || report.isError}
-        previous={t("table.previous")}
-        next={t("table.next")}
-      />
+      {page > Math.max(1, Math.ceil(pagination.total / pagination.pageSize)) ? (
+        <Button
+          type="button"
+          variant="secondary"
+          disabled={reviewed !== null}
+          onClick={() => setPage(1)}
+        >
+          {t("accounting.profitability.firstPage")}
+        </Button>
+      ) : (
+        <BreakdownPager
+          page={page - 1}
+          pageCount={Math.ceil(pagination.total / pagination.pageSize)}
+          setPage={(next) => setPage(next + 1)}
+          disabled={reviewed !== null || report.isError}
+          previous={t("table.previous")}
+          next={t("table.next")}
+        />
+      )}
     </>
   );
 }

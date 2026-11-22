@@ -20,6 +20,7 @@ import {
   ScheduledRevenue,
 } from "./financial-breakdowns";
 import { centsInput, inputCents } from "./money";
+
 type MarginPaging = { page: number; setPage: (page: number) => void };
 
 export function AccountingView({

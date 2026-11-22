@@ -465,7 +465,7 @@ for (const scheme of ["light", "dark"] as const)
         });
         expect(concurrentCosts.status(), await concurrentCosts.text()).toBe(200);
         await saveCosts.click();
-        await page.getByRole("button", { name: "Retry", exact: true }).click();
+        await page.getByRole("button", { name: "Try again", exact: true }).click();
         await page.getByRole("button", { name: "Use the current revision", exact: true }).click();
         await saveCosts.click();
         await expect(margins.getByText("€55", { exact: true })).toBeVisible();
