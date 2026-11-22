@@ -5,6 +5,13 @@ describe("validateReportsSearch", () => {
   test("defaults to the last 30 days", () => {
     expect(validateReportsSearch({})).toEqual({ preset: "last30" });
   });
+  test("keeps a recognised report section for deep links", () => {
+    expect(validateReportsSearch({ section: "financial" })).toEqual({
+      preset: "last30",
+      section: "financial",
+    });
+    expect(validateReportsSearch({ section: "unknown" })).toEqual({ preset: "last30" });
+  });
   test("keeps presets, custom dates and a staff filter, drops junk", () => {
     const id = "0198f5a0-7b1c-7000-8000-000000000201";
     expect(

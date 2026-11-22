@@ -359,6 +359,11 @@ test("forecast separates future booked service value by currency and keeps unpri
   ]);
   // This line begins on the next UTC date and belongs to the selected salon date.
   await fixture(toInstant(date, 23), otherStaffId, [{ currency: "ars", priceCents: 6000 }]);
+  await fixture(toInstant(date, 20), otherStaffId, [{ currency: "12!", priceCents: 100 }]);
+  await fixture(toInstant(date, 21), otherStaffId, [
+    { currency: "EUR", priceCents: 300 },
+    { currency: "ARS", priceCents: 400 },
+  ]);
   const [unrelated, alias] = await t.db
     .insert(clientProfile)
     .values([{ name: "Other forecast client" }, { name: "Historical forecast client" }])
@@ -414,11 +419,11 @@ test("forecast separates future booked service value by currency and keeps unpri
         { currency: "ARS", amountCents: 6000 },
         { currency: "EUR", amountCents: 14500 },
       ],
-      pendingPriceLines: 2,
+      pendingPriceLines: 4,
       rows: [
         { date: String(date), currency: "ARS", appointmentLines: 1, amountCents: 6000 },
         { date: String(date), currency: "EUR", appointmentLines: 3, amountCents: 14500 },
-        { date: String(date), currency: null, appointmentLines: 2, amountCents: null },
+        { date: String(date), currency: null, appointmentLines: 4, amountCents: null },
       ],
     },
   });
@@ -449,7 +454,7 @@ test("forecast separates future booked service value by currency and keeps unpri
       rows: [
         { currency: "ARS", appointmentLines: 1, amountCents: 6000 },
         { currency: "EUR", appointmentLines: 4, amountCents: 19500 },
-        { currency: null, appointmentLines: 1, amountCents: null },
+        { currency: null, appointmentLines: 3, amountCents: null },
       ],
     },
   });

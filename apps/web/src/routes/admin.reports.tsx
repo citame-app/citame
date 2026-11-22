@@ -3,7 +3,11 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { PageHeading } from "~/components/pages";
 import { AccountingView, SalesReport } from "~/features/admin/commerce/accounting-view";
-import { resolveRange, validateReportsSearch } from "~/features/admin/reports/range";
+import {
+  type ReportSection,
+  resolveRange,
+  validateReportsSearch,
+} from "~/features/admin/reports/range";
 import { ReportsView } from "~/features/admin/reports/reports-view";
 import { adminHead } from "~/features/admin/route-head";
 import { useI18n } from "~/i18n/react";
@@ -19,10 +23,7 @@ function ReportsPage() {
   const { session } = Route.useRouteContext();
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
-  const [section, setSection] = useState<"overview" | "clients" | "financial" | "commissions">(
-    "overview",
-  );
-  const [visited, setVisited] = useState(() => new Set<string>(["overview"]));
+  const [visited, setVisited] = useState(() => new Set<ReportSection>());
   const permissions = permissionsFor(session?.user.role ?? "client", session?.accessPreset);
   if (!session) return null;
   const today = new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date());
@@ -64,26 +65,25 @@ function ReportsPage() {
     );
   }
   const all = permissions.allCalendars;
+  const sections: ReportSection[] = ["overview"];
+  if (permissions.financialReports) sections.push("clients", "financial");
+  if (permissions.commerce) sections.push("commissions");
+  const requestedSection = search.section ?? "overview";
+  const section = sections.includes(requestedSection) ? requestedSection : "overview";
   const financialRange =
     search.preset === "custom" ? resolveRange(search, today) : { from: today, to: today };
   return (
     <div className="view-reports">
       <PageHeading title={t("reports.title")} lead={t(all ? "reports.lead" : "reports.leadOwn")} />
       <nav className="commerce-section-nav" aria-label={t("reports.title")}>
-        {(
-          [
-            "overview",
-            ...(permissions.financialReports ? ["clients", "financial"] : []),
-            ...(permissions.commerce ? ["commissions"] : []),
-          ] as const
-        ).map((value) => (
+        {sections.map((value) => (
           <button
             type="button"
             key={value}
             aria-pressed={section === value}
             onClick={() => {
-              setSection(value as typeof section);
-              setVisited((current) => new Set([...current, value]));
+              setVisited((current) => new Set([...current, section]));
+              void navigate({ search: (current) => ({ ...current, section: value }) });
             }}
           >
             {t(
@@ -108,7 +108,7 @@ function ReportsPage() {
           showClients={section === "clients" && permissions.financialReports}
         />
       </div>
-      {visited.has("financial") && permissions.financialReports && (
+      {(section === "financial" || visited.has("financial")) && permissions.financialReports && (
         <div hidden={section !== "financial"}>
           <AccountingView
             key={JSON.stringify([financialRange.from, financialRange.to, search.staff])}
@@ -119,7 +119,7 @@ function ReportsPage() {
           />
         </div>
       )}
-      {visited.has("commissions") && permissions.commerce && (
+      {(section === "commissions" || visited.has("commissions")) && permissions.commerce && (
         <div hidden={section !== "commissions"}>
           <AccountingView
             role={permissions.financialReports ? "owner" : session.user.role}

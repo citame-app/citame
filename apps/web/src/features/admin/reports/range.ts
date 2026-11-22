@@ -1,6 +1,9 @@
 import { idSchema, localDateSchema, reportQuerySchema } from "@sob/contracts";
 import { presetRange, REPORT_PRESETS, type ReportPreset } from "./logic";
 
+const reportSections = ["overview", "clients", "financial", "commissions"] as const;
+export type ReportSection = (typeof reportSections)[number];
+
 export interface ReportsSearch {
   preset: ReportPreset | "custom";
   from?: string;
@@ -8,6 +11,7 @@ export interface ReportsSearch {
   staff?: string;
   currency?: string;
   client?: string;
+  section?: ReportSection;
 }
 
 export function validateReportsSearch(raw: Record<string, unknown>): ReportsSearch {
@@ -17,12 +21,14 @@ export function validateReportsSearch(raw: Record<string, unknown>): ReportsSear
   const to = localDateSchema.safeParse(raw.to);
   const staff = idSchema.safeParse(raw.staff);
   const client = idSchema.safeParse(raw.client);
+  const section = reportSections.find((value) => value === raw.section);
   return {
     preset,
     ...(preset === "custom" && from.success ? { from: from.data } : {}),
     ...(preset === "custom" && to.success ? { to: to.data } : {}),
     ...(staff.success ? { staff: staff.data } : {}),
     ...(client.success ? { client: client.data } : {}),
+    ...(section ? { section } : {}),
     ...(typeof raw.currency === "string" && /^[A-Z]{3}$/.test(raw.currency)
       ? { currency: raw.currency }
       : {}),

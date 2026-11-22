@@ -376,6 +376,7 @@ for (const scheme of ["light", "dark"] as const)
         await expectNoSeriousA11yViolations(page, `booking revenue forecast ${scheme}`);
         const forecastRange = new URL(page.url()).searchParams;
         expect(forecastRange.get("staff")).toBe(staff.id);
+        expect(forecastRange.get("section")).toBe("financial");
         expect(
           Date.parse(forecastRange.get("to") ?? "") - Date.parse(forecastRange.get("from") ?? ""),
         ).toBe(29 * 86_400_000);
@@ -384,6 +385,13 @@ for (const scheme of ["light", "dark"] as const)
         expect(await readFile(await (await forecastDownload).path(), "utf8")).toContain(
           `"${day}","EUR","${(baseline?.appointmentLines ?? 0) + 1}","${(baseline?.amountCents ?? 0) + 10000}"`,
         );
+        await page.reload();
+        await expect(
+          forecast
+            .getByRole(mobile ? "listitem" : "row")
+            .filter({ hasText: /EUR/ })
+            .first(),
+        ).toBeVisible();
         await switchLocale(page, "English");
         const english = page.getByRole(mobile ? "list" : "table", {
           name: "Collections by booking promotion",
