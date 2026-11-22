@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { readFile, realpath } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
+  account,
   booksyDesktopTestDatabase,
   connectToNamedDatabase,
   runMigrations,
@@ -10,14 +11,15 @@ import {
   verifyMigrationLedger,
 } from "@sob/db";
 import { RedisClient } from "bun";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import { z } from "zod";
 import { createApp } from "../app";
 import { createAccount } from "../auth/accounts";
 import { createAuth } from "../auth/auth";
 import { loadConfig } from "../config";
 import { restoreLegacyBooksyPaymentEvidence } from "../modules/booksy-transfer/operational-rehearsal";
 import { loadBooksySourceModel } from "../modules/booksy-transfer/source-store";
-import { privateCliError, privateWrite } from "../modules/booksy-transfer/vault";
+import { privateCliError, privateWrite, readPrivateArchiveFile } from "../modules/booksy-transfer/vault";
 
 const slots = {
   archive: { apiPort: 4301, webPort: 4276, name: "consultation", cacheScope: "" },
@@ -31,6 +33,21 @@ const slots = {
     cacheScope: "desktop-test:",
   },
 } as const;
+
+const localOwnerSchema = z.object({
+  email: z.email(),
+  password: z.string().min(1),
+  secret: z.string().min(32),
+});
+
+export async function readBooksyLocalOwner(file: string): Promise<z.infer<typeof localOwnerSchema>> {
+  const { bytes } = await readPrivateArchiveFile(file);
+  try {
+    return localOwnerSchema.parse(JSON.parse(bytes.toString("utf8")));
+  } catch (cause) {
+    throw new Error("Invalid local owner credentials", { cause });
+  }
+}
 
 /** Local import reviews and the isolated desktop test copy. No public listener or operational workers. */
 if (import.meta.main) {
@@ -86,7 +103,7 @@ if (import.meta.main) {
     const credentialFile = resolve(root, "local-owner.json");
     let credentials: { email: string; password: string; secret: string };
     try {
-      credentials = JSON.parse(await readFile(credentialFile, "utf8"));
+      credentials = await readBooksyLocalOwner(credentialFile);
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
       if (prepared)
@@ -128,6 +145,25 @@ if (import.meta.main) {
         throw new Error(
           "The prepared desktop copy is missing the configured owner",
         );
+      const owner = existing[0];
+      const [credential, duplicate] = await db.db
+        .select({ hash: account.password })
+        .from(account)
+        .where(and(eq(account.userId, owner.id), eq(account.providerId, "credential")))
+        .limit(2);
+      if (!credential?.hash || duplicate)
+        throw new Error("The prepared desktop copy is missing a usable owner credential");
+      const auth = createAuth({ db: db.db, valkey, config });
+      try {
+        const { password } = await auth.$context;
+        const valid = await password.verify({
+          hash: credential.hash,
+          password: credentials.password,
+        }).catch(() => false);
+        if (!valid) throw new Error("The local owner credentials do not match the prepared copy");
+      } finally {
+        await auth.mailer.stop();
+      }
       const [settings] = await db.db
         .select({ id: salonSettings.id })
         .from(salonSettings);
