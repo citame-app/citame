@@ -29,6 +29,14 @@ bash scripts/package-desktop.sh
 
 The release CI builds the Linux x86_64 archive on Ubuntu 24.04. The archive contains the executable, per-user installer, application icon, MIT license, desktop usage guide and release metadata. It uses deterministic file ordering, ownership, timestamps and gzip headers. Repackaging the same executable and metadata produces the same checksum. `SOURCE_DATE_EPOCH` can override the default commit timestamp. Build on the target architecture; the packaging script does not cross-compile or bundle Linux system libraries. Extract the verified archive and run `./install.sh` to add Citame to the user’s application menu. Installation replaces the executable, icon and launcher while preserving the separate settings and replica.
 
+From a graphical session, verify the installed executable reaches its first GPUI frame callback:
+
+```sh
+bash scripts/verify-desktop-startup.sh "${XDG_DATA_HOME:-$HOME/.local/share}/citame/bin/sob-desktop"
+```
+
+The probe opens Citame with a temporary profile and a loopback URL, reports the timing and closes the process. It uses the same callback as the macOS ZIP verification and leaves the operator's profile untouched.
+
 ## GitHub publication gate
 
 The release workflow derives GHCR paths from `GITHUB_REPOSITORY` and verifies that the remote tag still points to the commit that triggered the job. The commit must be reachable from `origin/main`. The reusable CI workflow, desktop builds, image builds and final release job check out that same commit. A manual retry must select the release tag as the workflow ref, for example `gh workflow run release.yml --ref v0.1.0 -f tag=v0.1.0`. Configure a GitHub tag ruleset to restrict updates and deletion of release tags. Keep writes to the API and web packages restricted to the release workflow and any account that manages the registry through an approved release procedure.

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -101,6 +101,50 @@ test("packaging refuses a missing executable instead of producing an empty relea
   expect(result.stderr.toString()).toContain("executable");
 });
 
+test("the installed desktop startup probe uses an isolated profile and stops its process", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "citame-desktop-startup-"));
+  try {
+    const binary = join(dir, "installed Citame");
+    const profile = join(dir, "original-profile");
+    const processInfo = join(dir, "process");
+    await Bun.write(
+      binary,
+      `#!/bin/sh
+test "$SOB_API_URL" = http://127.0.0.1:1 && test "$SOB_STARTUP_TIMINGS" = 1 || exit 2
+test "$SOB_DATA_DIR" != "$TEST_ORIGINAL_PROFILE" || exit 3
+printf '%s\\n%s\\n' "$$" "$SOB_DATA_DIR" > "$TEST_PROCESS_INFO"
+printf 'citame startup first frame callback: 24 ms\\n'
+exec /bin/sleep 30
+`,
+    );
+    chmodSync(binary, 0o755);
+    const result = Bun.spawnSync(
+      ["bash", "scripts/verify-desktop-startup.sh", binary],
+      {
+        timeout: 8_000,
+        env: {
+          ...process.env,
+          TMPDIR: dir,
+          SOB_DATA_DIR: profile,
+          TEST_ORIGINAL_PROFILE: profile,
+          TEST_PROCESS_INFO: processInfo,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(result.stdout.toString()).toContain(
+      "citame startup first frame callback: 24 ms",
+    );
+    const [pid] = (await Bun.file(processInfo).text()).split("\n");
+    expect(() => process.kill(Number(pid), 0)).toThrow();
+    expect(readdirSync(dir).sort()).toEqual(["installed Citame", "process"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 10_000);
+
 test("macOS packaging verifies the extracted revision, startup and notarization before emitting a ZIP", async () => {
   const dir = mkdtempSync(join(tmpdir(), "citame-macos-package-"));
   const binary = join(dir, "sob-desktop");
@@ -162,6 +206,10 @@ if [ "$1" = --check-installation ]; then
 fi
 test "$SOB_API_URL" = http://127.0.0.1:1 && test -n "$SOB_DATA_DIR" && test "$SOB_STARTUP_TIMINGS" = 1 || exit 2
 if [ "$MACOS_GUI_RESULT" = failure ]; then exit 3; fi
+if [ "$MACOS_GUI_RESULT" = cancel ]; then
+  printf '%s\\n' "$$" > "$MACOS_GUI_PID_FILE"
+  exec /bin/sleep 30
+fi
 if [ "$MACOS_GUI_RESULT" = ignore-term ]; then trap '' TERM; fi
 if [ "$MACOS_GUI_RESULT" != timeout ]; then printf 'citame startup first frame callback: 24 ms\n'; fi
 exec /bin/sleep 30
@@ -262,6 +310,52 @@ exec /bin/sleep 30
     expect(timedOut.exitCode).not.toBe(0);
     expect(timedOut.stderr.toString()).toContain("did not open its first window");
     expect(readdirSync(output)).toEqual([]);
+
+    const archive = join(dir, "cancel.zip");
+    const contents = join(`${archive}.bundle`, "Contents");
+    const staged = join(contents, "MacOS", "sob-desktop");
+    mkdirSync(join(contents, "MacOS"), { recursive: true });
+    mkdirSync(join(contents, "Resources"), { recursive: true });
+    await Bun.write(staged, Bun.file(binary));
+    chmodSync(staged, 0o755);
+    await Bun.write(join(contents, "Info.plist"), "mock plist");
+    await Bun.write(join(contents, "Resources", "Citame.icns"), "mock icon");
+    const pidFile = join(dir, "macos-probe.pid");
+    const verifier = Bun.spawn(["bash", "scripts/verify-desktop-macos.sh", archive, "arm64"], {
+      stdout: "ignore",
+      stderr: "ignore",
+      env: {
+        ...process.env,
+        PATH: `${dir}:${process.env.PATH}`,
+        NOTARY_LOG: events,
+        MACOS_TEST_ARCH: "arm64",
+        MACOS_BINARY_MINIMUM: "15.0",
+        ...adHocVerification,
+        MACOS_GUI_RESULT: "cancel",
+        MACOS_GUI_PID_FILE: pidFile,
+      },
+    });
+    let probePid: number | undefined;
+    try {
+      for (let attempt = 0; attempt < 40 && !(await Bun.file(pidFile).exists()); attempt++)
+        await Bun.sleep(50);
+      const reportedPid = Number(await Bun.file(pidFile).text());
+      expect(reportedPid).toBeGreaterThan(1);
+      probePid = reportedPid;
+      verifier.kill("SIGTERM");
+      expect(await verifier.exited).toBe(143);
+      expect(() => process.kill(reportedPid, 0)).toThrow();
+    } finally {
+      if (verifier.exitCode === null) verifier.kill();
+      if (probePid) {
+        try {
+          process.kill(probePid);
+        } catch {
+          // The verifier already cleaned up the probe.
+        }
+      }
+    }
+
     const start = performance.now();
     const window = run(
       "Accepted",
