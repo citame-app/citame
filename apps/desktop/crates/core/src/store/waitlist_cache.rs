@@ -44,6 +44,7 @@ impl WaitlistCacheScope {
 pub struct SavedWaitlistPages {
     pub current: Option<WaitlistPage>,
     pub pages: Vec<u32>,
+    pub scope: Option<WaitlistCacheScope>,
 }
 
 fn prefix(active: bool) -> &'static str {
@@ -95,8 +96,12 @@ impl Store {
 
     pub fn waitlist_cache(&self, active: bool, page: u32) -> Result<SavedWaitlistPages> {
         let tx = self.conn.unchecked_transaction()?;
-        if !WaitlistCacheScope::read(&tx)?.permits_read() {
-            return Ok(SavedWaitlistPages::default());
+        let scope = WaitlistCacheScope::read(&tx)?;
+        if !scope.permits_read() {
+            return Ok(SavedWaitlistPages {
+                scope: Some(scope),
+                ..SavedWaitlistPages::default()
+            });
         }
         let pages = saved_pages(&tx, active)?;
         let mut raw = Self::meta_at(&tx, &format!("{}{page}", prefix(active)))?;
@@ -108,7 +113,11 @@ impl Store {
             .transpose()?
             .filter(|data| data.page == page);
         tx.commit()?;
-        Ok(SavedWaitlistPages { current, pages })
+        Ok(SavedWaitlistPages {
+            current,
+            pages,
+            scope: Some(scope),
+        })
     }
 
     pub fn cache_waitlist(

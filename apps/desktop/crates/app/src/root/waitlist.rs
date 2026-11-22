@@ -1,5 +1,6 @@
 use super::*;
 use chrono::NaiveTime;
+use sob_core::store::WaitlistCacheScope;
 use sob_core::sync::TransportError;
 use sob_core::waitlist::{
     AcceptOffer, AcceptOfferError, BookedAppointment, ImportedRequest, WaitlistPage,
@@ -14,6 +15,7 @@ pub(super) use review::show_intake_test_offer;
 pub(super) struct Desk {
     active: bool,
     page: u32,
+    scope: Option<WaitlistCacheScope>,
     data: Option<WaitlistPage>,
     busy: bool,
     cached: bool,
@@ -29,10 +31,16 @@ pub(super) struct Desk {
 }
 
 impl Desk {
+    fn reject_scope(&mut self) {
+        self.clear_private_data();
+        self.saved_pages.clear();
+        self.busy = false;
+        self.error = Some(Key::WaitlistError);
+    }
+
     fn clear_private_data(&mut self) {
         self.data = None;
         self.cached = false;
-        self.saved_pages.clear();
         self.form = None;
         self.offer_review = None;
         self.policy_review = None;
@@ -123,6 +131,15 @@ enum ReloadNotice {
 }
 
 impl Root {
+    pub(super) fn refresh_open_waitlist_scope(&mut self) {
+        if let Overlay::Waitlist(desk) = &self.overlay
+            && self.svc.store.waitlist_cache_scope().ok() != desk.scope
+        {
+            self.waitlist_generation = self.waitlist_generation.wrapping_add(1);
+            self.overlay = Overlay::None;
+        }
+    }
+
     pub(super) fn refresh_waitlist_if_changed(
         &mut self,
         reconnected: bool,
@@ -142,6 +159,7 @@ impl Root {
         if matches!(&self.overlay, Overlay::Waitlist(d) if d.busy) {
             return;
         }
+        self.waitlist_generation = self.waitlist_generation.wrapping_add(1);
         let saved = self
             .svc
             .store
@@ -150,6 +168,9 @@ impl Root {
         self.overlay = Overlay::Waitlist(Box::new(Desk {
             active,
             page,
+            scope: saved
+                .scope
+                .or_else(|| self.svc.store.waitlist_cache_scope().ok()),
             busy: false,
             cached: saved.current.is_some(),
             data: saved.current,
@@ -177,20 +198,25 @@ impl Root {
         if d.busy {
             return;
         }
-        if !matches!(action, Action::Read)
-            && (d.cached || self.status.connectivity != Connectivity::Online)
-        {
-            return;
-        }
         d.requested_at = Instant::now();
         let Ok(scope) = self.svc.store.waitlist_cache_scope() else {
-            d.error = Some(Key::WaitlistError);
+            d.reject_scope();
             cx.notify();
             return;
         };
-        if !scope.permits_read() {
-            d.error = Some(Key::WaitlistError);
+        if !scope.permits_read() || Some(&scope) != d.scope.as_ref() {
+            d.reject_scope();
             cx.notify();
+            return;
+        }
+        if !matches!(action, Action::Read)
+            && (self.status.connectivity != Connectivity::Online
+                || (d.cached
+                    && !d
+                        .offer_review
+                        .as_ref()
+                        .is_some_and(|review| review.is_acceptance_retry(&action))))
+        {
             return;
         }
         let Some(transport) = self.svc.transport() else {
@@ -266,9 +292,7 @@ impl Root {
                     if generation == this.waitlist_generation
                         && let Overlay::Waitlist(d) = &mut this.overlay
                     {
-                        d.busy = false;
-                        d.clear_private_data();
-                        d.error = Some(Key::WaitlistError);
+                        d.reject_scope();
                         cx.notify();
                     }
                     return;
@@ -277,7 +301,7 @@ impl Root {
                     &result,
                     Err(TransportError::Unauthorized | TransportError::Forbidden(_))
                 );
-                if changed || denied {
+                if denied {
                     let _ = this.svc.store.clear_waitlist_cache();
                 }
                 if booked.is_some() {
@@ -313,14 +337,16 @@ impl Root {
                 if changed || denied {
                     d.clear_private_data();
                     d.booked = booked;
+                    if denied {
+                        d.saved_pages.clear();
+                    }
                 }
                 match result {
                     Ok(data) => {
                         match this.svc.store.cache_waitlist(&scope, active, &data) {
                             Ok(Some(pages)) => d.saved_pages = pages,
                             Ok(None) => {
-                                d.clear_private_data();
-                                d.error = Some(Key::WaitlistError);
+                                d.reject_scope();
                                 cx.notify();
                                 return;
                             }
@@ -755,7 +781,7 @@ impl Root {
                     |d| d.child(div().text_sm().child(self.t(Key::WaitlistPaused))),
                 )
                 .when((desk.cached || !online) && desk.data.is_some(), |d| {
-                    d.child(div().text_sm().child(self.t(Key::InboxCached)))
+                    d.child(div().text_sm().child(self.t(Key::WaitlistSavedPage)))
                 })
                 .when(
                     !online && !desk.busy && desk.data.is_none() && desk.error.is_none(),
@@ -1069,6 +1095,7 @@ mod tests {
             root.overlay = Overlay::Waitlist(Box::new(Desk {
                 active: true,
                 page: 1,
+                scope: root.svc.store.waitlist_cache_scope().ok(),
                 data: Some(WaitlistPage {
                     page: 1,
                     page_size: 15,
@@ -1159,7 +1186,9 @@ mod tests {
                     panic!("missing waitlist");
                 };
                 assert_eq!(desk.adjacent_pages(false), (None, Some(3)));
+                let previous_request = root.waitlist_generation;
                 root.open_waitlist(false, 3, cx);
+                assert_ne!(root.waitlist_generation, previous_request);
                 let Overlay::Waitlist(desk) = &root.overlay else {
                     panic!("missing waitlist");
                 };
@@ -1172,6 +1201,34 @@ mod tests {
                     panic!("missing waitlist");
                 };
                 assert!(!desk.busy);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    async fn directory_revocation_closes_an_open_waitlist_without_changing_the_calendar(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, window) = super::super::tests::open(cx);
+        window
+            .update(cx, |root, _, cx| {
+                root.svc.stop_sync();
+                root.svc
+                    .store
+                    .set_meta("client_directory", "allowed")
+                    .unwrap();
+                root.reload(cx);
+                show_intake_test_offer(root, cx);
+                assert!(matches!(root.overlay, Overlay::Waitlist(_)));
+                let calendar_scope = root.calendar_scope.clone();
+
+                root.svc
+                    .store
+                    .set_meta("client_directory", "denied")
+                    .unwrap();
+                root.reload(cx);
+                assert_eq!(root.calendar_scope, calendar_scope);
+                assert!(matches!(root.overlay, Overlay::None));
             })
             .unwrap();
     }
