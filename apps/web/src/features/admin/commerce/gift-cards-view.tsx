@@ -29,22 +29,22 @@ import { GiftServicePicker } from "./gift-service-picker";
 import { printGiftVoucher } from "./gift-voucher";
 import { invalidateCommerce } from "./invalidate";
 import { inputCents } from "./money";
+export type GiftNavigation = {
+  review?: { actorId: string; offerId: string };
+  cardId?: string;
+  setCard: (id?: string) => void;
+};
+
 export function GiftCardsView({
   mode,
   role,
   accessPreset,
-  actorId,
-  giftOfferId,
-  initialGiftCardId,
-  onGiftOrder,
+  giftNavigation,
 }: {
   mode: CommerceMode;
   role: UserRole;
   accessPreset?: StaffAccessPreset | null;
-  actorId?: string;
-  giftOfferId?: string;
-  initialGiftCardId?: string;
-  onGiftOrder?: (id?: string) => void;
+  giftNavigation?: GiftNavigation;
 }) {
   const { t, locale } = useI18n();
   const [page, setPage] = useState(1);
@@ -53,7 +53,7 @@ export function GiftCardsView({
   const search = /^SOB(?:[ -]|[A-F0-9]+$)/i.test(searchInput.trim()) ? "" : searchInput;
   const [creating, setCreating] = useState(false);
   const [purchaseLocked, setPurchaseLocked] = useState(false);
-  const [selected, setSelected] = useState<string | null>(initialGiftCardId ?? null);
+  const [selected, setSelected] = useState<string | null>(giftNavigation?.cardId ?? null);
   const [pendingOffer, setPendingOffer] = useState(false);
   const [showOffers, setShowOffers] = useState(false);
   const canEditOffers = mode === "admin" && permissionsFor(role, accessPreset).editCatalog;
@@ -88,7 +88,7 @@ export function GiftCardsView({
           variant="ghost"
           onClick={() => {
             setSelected(null);
-            if (initialGiftCardId) onGiftOrder?.();
+            if (giftNavigation?.cardId) giftNavigation.setCard();
           }}
         >
           {t("gift.back")}
@@ -121,14 +121,13 @@ export function GiftCardsView({
           }}
         />
       )}
-      {mode === "client" && giftOfferId && actorId && (
+      {mode === "client" && giftNavigation?.review && (
         <GiftOfferOrderForm
-          key={giftOfferId}
-          offerId={giftOfferId}
-          actorId={actorId}
+          key={giftNavigation.review.offerId}
+          {...giftNavigation.review}
           onOrder={(id) => {
             setSelected(id);
-            onGiftOrder?.(id);
+            giftNavigation.setCard(id);
           }}
         />
       )}
@@ -500,7 +499,9 @@ function GiftDetail({
                   timeZone,
                 }).format(new Date(current.expiresAt)),
               })
-            : t("gift.noExpiry")}
+            : current.offerValidityDays
+              ? t("gift.storefront.duration", { days: current.offerValidityDays })
+              : t("gift.noExpiry")}
         </p>
       </div>
       {current.status === "pending" ? (

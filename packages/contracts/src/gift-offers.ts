@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { idempotencyKeySchema, moneyCentsSchema } from "./commerce";
 import { idSchema } from "./common";
-import { giftOfferThemeSchema, maximumGiftServices } from "./gift-cards";
+import { eligibleGiftServiceSchema, giftOfferThemeSchema, maximumGiftServices } from "./gift-cards";
 
 export const giftOfferTermsSchema = z
   .object({
@@ -27,7 +27,7 @@ export const giftOfferAdminListSchema = z.object({ offers: z.array(giftOfferSche
 
 const publicGiftOfferSchema = giftOfferSchema
   .omit({ published: true, eligibleServiceIds: true })
-  .extend({ eligibleServices: z.array(z.object({ id: idSchema, name: z.string() })) });
+  .extend({ eligibleServices: z.array(eligibleGiftServiceSchema).max(maximumGiftServices) });
 export const publicGiftOfferListSchema = z.object({
   offers: z.array(publicGiftOfferSchema),
 });

@@ -89,10 +89,12 @@ impl Root {
                 page,
                 search,
                 status,
+                pending_orders,
             } => OfflineGiftQuery::List {
                 page,
                 search,
                 status,
+                pending_orders,
             },
             Request::Detail(id, page) => OfflineGiftQuery::Detail(id, page),
             _ => return,

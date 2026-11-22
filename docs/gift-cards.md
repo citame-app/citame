@@ -2,11 +2,19 @@
 
 Open **Sales & register → Gift cards & rewards**. Clients use the same area under **My account**. An operator can create a prepaid purchase for a walk-in bearer or associate it with an existing client. Clients can buy online when the bank provider is configured; the interface explains when online purchase is unavailable.
 
-Gift value is EUR and becomes spendable only when its purchase is fully paid. Pending purchases expose no redeemable code. The receipt uses the server's face value, and a gift card cannot buy another gift card. Card creation and receipt creation share one transaction and replay key.
+Gift value is EUR and becomes spendable only when its purchase is fully paid. Pending purchases expose no redeemable code. The receipt uses the reviewed sale price, and the card activates with the selected value. A gift card cannot buy another gift card. Card creation and receipt creation share one transaction and replay key.
 
 After activation, an authorized buyer/operator can reveal, copy or print the code. The voucher prints in an isolated document containing that card's value/code and expiry; it does not clone the cash drawer, other sales or payment forms. The code is a bearer credential: its holder can check the balance and redeem it against a checkout they are authorized to pay. Balance checks do not expose the buyer, reference, receipt or history.
 
 Gift codes travel in authenticated POST bodies and no-store responses. The database stores a hash, random nonce and masked suffix, not the plaintext code. Code generation uses a purpose-separated HMAC from the server authentication secret. Changing that secret does not invalidate already-issued codes for redemption, because redemption checks their stored hash. Later revelation may require the owner/manager to reissue the code with an audited reason. Reissue invalidates the old code and preserves value.
+
+## Publishing gift offers
+
+In Web Caja, open **Gift cards → Gift templates**. Choose a name, design, gift value and sale price. To limit use to specific treatments, select them in the editor. An optional validity period begins when the gift is paid. The preview reflects the terms that the buyer will see. Keep unfinished offers as drafts and use the publication control when the offer is ready.
+
+An offer appears on the public profile while online payment is available and its reviewed treatments are still valid. If the catalogue changes, open the relevant template and save the reviewed terms again. Buyers sign in, confirm the offer, and open the receipt for payment. Orders already created retain their original price, terms and design after changes or withdrawal.
+
+Open **Pending online orders** in the gift register to locate orders awaiting payment and reopen their receipts. The list follows normal sales permissions and removes an order when it settles or is cancelled.
 
 ## Redeeming and refunding
 

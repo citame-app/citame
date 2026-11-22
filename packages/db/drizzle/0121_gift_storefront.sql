@@ -8,6 +8,7 @@ CREATE TABLE gift_offer (
   validity_days integer,
   eligible_service_ids uuid[] NOT NULL DEFAULT '{}'::uuid[],
   published boolean NOT NULL DEFAULT false,
+  catalogue_review text NOT NULL DEFAULT '',
   version integer NOT NULL DEFAULT 1,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),

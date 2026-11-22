@@ -14,6 +14,7 @@ import { SelectField, TextAreaField } from "~/components/ui/select-field";
 import { ErrorState, Skeleton, useOnline } from "~/components/ui/states";
 import { GiftOfferCard } from "~/features/booking/gift-storefront";
 import { useI18n } from "~/i18n/react";
+import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { GiftServicePicker } from "./gift-service-picker";
 import { invalidateCommerce } from "./invalidate";
@@ -99,6 +100,10 @@ function GiftOfferEditor({ offer, onClose }: { offer?: GiftOffer; onClose: () =>
   const [validation, setValidation] = useState(false);
   const save = useMutation({
     mutationFn: (input: GiftOfferUpdate) => api().giftCards.saveOffer(id, input),
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409)
+        void queryClient.invalidateQueries({ queryKey: ["gift-cards", "offers"] });
+    },
     onSuccess: () => {
       void invalidateCommerce(queryClient);
       onClose();

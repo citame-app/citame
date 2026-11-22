@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Button } from "~/components/ui/button";
 import { useI18n } from "~/i18n/react";
 import type { CommerceMode } from "~/lib/api/commerce-endpoints";
-import { GiftCardsView } from "./gift-cards-view";
+import { GiftCardsView, type GiftNavigation } from "./gift-cards-view";
 import { LoyaltyView } from "./loyalty-view";
 import { PassesView } from "./passes-view";
 import { StampCardsView } from "./stamp-cards-view";
@@ -12,10 +12,7 @@ export function RewardsView(props: {
   role: UserRole;
   accessPreset?: StaffAccessPreset | null;
   clientId?: string | null;
-  actorId?: string;
-  giftOfferId?: string;
-  initialGiftCardId?: string;
-  onGiftOrder?: (id?: string) => void;
+  giftNavigation?: GiftNavigation;
   stampClientId?: string;
   initialTab?: "gift" | "packages" | "memberships" | "loyalty" | "stamps";
 }) {

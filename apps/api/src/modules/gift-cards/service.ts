@@ -126,6 +126,7 @@ function toGiftCard(
     checkoutId,
     ...(row.offerId ? { offerId: row.offerId } : {}),
     ...(row.offerTheme ? { offerTheme: row.offerTheme } : {}),
+    ...(row.offerValidityDays ? { offerValidityDays: row.offerValidityDays } : {}),
     amountCents: row.amountCents,
     purchasePriceCents: priceCents,
     ...(row.eligibleServices.length ? { eligibleServices: row.eligibleServices } : {}),

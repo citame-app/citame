@@ -5,7 +5,7 @@ import { giftCardCodeSchema } from "./gift-card-code";
 
 export { giftCardCodeSchema } from "./gift-card-code";
 
-const eligibleGiftServiceSchema = z.object({ id: idSchema, name: z.string() });
+export const eligibleGiftServiceSchema = z.object({ id: idSchema, name: z.string() });
 export const giftEligibleCatalogSchema = z.object({
   services: z.array(eligibleGiftServiceSchema),
 });
@@ -38,6 +38,7 @@ export const giftCardSchema = z.object({
   checkoutId: idSchema,
   offerId: idSchema.optional(),
   offerTheme: giftOfferThemeSchema.optional(),
+  offerValidityDays: z.number().int().min(1).max(730).optional(),
   amountCents: moneyCentsSchema,
   purchasePriceCents: moneyCentsSchema.positive().optional(),
   eligibleServices: z.array(eligibleGiftServiceSchema).max(maximumGiftServices).optional(),

@@ -16,6 +16,7 @@ export const giftOffer = pgTable(
     validityDays: integer(),
     eligibleServiceIds: uuid().array().notNull().default(sql`'{}'::uuid[]`),
     published: boolean().notNull().default(false),
+    catalogueReview: text().notNull().default(""),
     version: integer().notNull().default(1),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

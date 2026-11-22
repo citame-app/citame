@@ -27,6 +27,25 @@ impl GiftStatus {
 
 pub const MAX_GIFT_SERVICES: usize = 50;
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GiftOfferTheme {
+    #[default]
+    Rose,
+    Sage,
+    Ink,
+}
+
+impl GiftOfferTheme {
+    pub fn print_accent(self) -> &'static str {
+        match self {
+            Self::Rose => "#a14468",
+            Self::Sage => "#3d7459",
+            Self::Ink => "#26354f",
+        }
+    }
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 pub struct GiftService {
     pub id: Uuid,
@@ -53,6 +72,9 @@ pub struct GiftCard {
     pub id: Uuid,
     pub label: String,
     pub checkout_id: Uuid,
+    pub offer_id: Option<Uuid>,
+    pub offer_theme: Option<GiftOfferTheme>,
+    pub offer_validity_days: Option<u16>,
     pub amount_cents: u32,
     pub purchase_price_cents: Option<u32>,
     #[serde(flatten)]
@@ -214,6 +236,17 @@ impl GiftCatalogue {
         status: Option<GiftStatus>,
         now: DateTime<Utc>,
     ) -> GiftPage {
+        self.search_filtered(page, search, status, now, false)
+    }
+
+    pub fn search_filtered(
+        &self,
+        page: u32,
+        search: &str,
+        status: Option<GiftStatus>,
+        now: DateTime<Utc>,
+        pending_orders: bool,
+    ) -> GiftPage {
         const PAGE_SIZE: usize = 20;
         let label_term = search.to_lowercase();
         let page = usize::try_from(page.max(1)).unwrap_or(usize::MAX);
@@ -222,7 +255,9 @@ impl GiftCatalogue {
         let mut cards = Vec::with_capacity(PAGE_SIZE);
         for card in &self.cards {
             let current_status = card.balance.status_at(now);
-            if status.is_some_and(|status| current_status != status)
+            if (pending_orders
+                && (card.offer_id.is_none() || current_status != GiftStatus::Pending))
+                || status.is_some_and(|status| current_status != status)
                 || (!label_term.is_empty()
                     && !card.balance.code_last4.eq_ignore_ascii_case(search)
                     && !card.label.to_lowercase().contains(&label_term))
@@ -339,8 +374,21 @@ impl HttpTransport {
         search: &str,
         status: Option<GiftStatus>,
     ) -> Result<GiftPage, TransportError> {
+        self.gift_cards_filtered(page, search, status, false)
+    }
+
+    pub fn gift_cards_filtered(
+        &self,
+        page: u32,
+        search: &str,
+        status: Option<GiftStatus>,
+        pending_orders: bool,
+    ) -> Result<GiftPage, TransportError> {
         let mut query = url::form_urlencoded::Serializer::new(String::new());
         query.append_pair("page", &page.to_string());
+        if pending_orders {
+            query.append_pair("pendingOffer", "1");
+        }
         if !search.is_empty() {
             query.append_pair("search", search);
         }

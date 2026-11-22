@@ -62,6 +62,8 @@ export function GiftOfferOrderForm({
       if (
         error instanceof ApiError &&
         error.status < 500 &&
+        error.status !== 401 &&
+        error.status !== 403 &&
         error.status !== 408 &&
         error.status !== 429
       ) {

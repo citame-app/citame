@@ -19,13 +19,20 @@ const offer = {
 const key = `citame:gift-order:client-one:${id}`;
 let posted: object[];
 let publicOffers: object[];
+let sessionExpired: boolean;
 beforeEach(() => {
   sessionStorage.removeItem(key);
   posted = [];
+  sessionExpired = false;
   publicOffers = [offer];
   globalThis.fetch = mock(async (_url: URL | RequestInfo, init?: RequestInit) => {
     if (init?.method === "POST") {
       posted.push(JSON.parse(String(init.body)));
+      if (sessionExpired)
+        return Response.json(
+          { error: { code: "unauthorized", message: "Sign in" } },
+          { status: 401 },
+        );
       throw new TypeError("Response dropped");
     }
     return Response.json({ offers: publicOffers });
@@ -48,8 +55,11 @@ test("an uncertain public order reuses the server-priced request after reopening
   expect(callback).not.toHaveBeenCalled();
   unmount();
   publicOffers = [];
+  sessionExpired = true;
   renderApp(<GiftOfferOrderForm offerId={id} actorId="client-one" onOrder={callback} />);
   fireEvent.click(await screen.findByRole("button", { name: "Retry the same purchase" }));
   await waitFor(() => expect(posted).toHaveLength(2));
   expect(posted[1]).toEqual(posted[0]);
+  await screen.findByRole("alert");
+  expect(JSON.parse(sessionStorage.getItem(key) ?? "null")).toEqual(posted[0]);
 });

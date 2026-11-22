@@ -7,6 +7,7 @@ import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { createCheckoutInTransaction, getCheckoutInTransaction } from "../commerce/service";
 import { giftCode, giftCodeHash } from "./code";
+import { verifyOfferCatalogue } from "./offers";
 import {
   authorizeGiftAccess,
   giftView,
@@ -153,6 +154,7 @@ function createGift(db: Database, request: GiftRequest, principal: Principal, se
       if (!buyer) throw new DomainError("validation_error", "Choose an active buyer");
     }
     const eligibleServices = await reviewGiftServices(tx, terms.eligibleServiceIds);
+    if (offer) await verifyOfferCatalogue(tx, offer);
     const id = randomUUID();
     const nonce = randomBytes(16).toString("hex");
     const code = giftCode(secret, id, nonce);

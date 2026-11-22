@@ -32,10 +32,11 @@ function RewardsPage() {
       role={session.user.role}
       accessPreset={session.accessPreset}
       clientId={session.clientId}
-      actorId={session.user.id}
-      giftOfferId={giftOffer}
-      initialGiftCardId={giftCard}
-      onGiftOrder={(id) => void navigate({ search: id ? { giftCard: id } : {}, replace: true })}
+      giftNavigation={{
+        review: giftOffer ? { actorId: session.user.id, offerId: giftOffer } : undefined,
+        cardId: giftCard,
+        setCard: (id) => void navigate({ search: id ? { giftCard: id } : {}, replace: true }),
+      }}
     />
   );
 }

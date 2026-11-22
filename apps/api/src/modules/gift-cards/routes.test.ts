@@ -228,6 +228,7 @@ test("a published offer freezes its checkout, enters the pending desk and activa
     buyerClientId: client.clientId,
     status: "pending",
     expiresAt: null,
+    offerValidityDays: 30,
     balanceCents: 0,
     amountCents: 3000,
   });
@@ -270,6 +271,39 @@ test("a published offer freezes its checkout, enters the pending desk and activa
   });
   expect(Date.parse(issued.expiresAt ?? "") - Date.now()).toBeGreaterThan(29 * 86400_000);
   expect(await pending(owner)).toEqual([]);
+});
+
+test("a reactivated treatment requires an explicit offer review before it can be ordered again", async () => {
+  await t.db.execute(sql`update service set currency = 'EUR' where id = ${fixtures.haircutId}`);
+  const id = key();
+  const route = `/admin/gift-cards/offers/${id}`;
+  const terms = {
+    name: "Reviewed treatment",
+    amountCents: 1500,
+    priceCents: 1000,
+    eligibleServiceIds: [fixtures.haircutId],
+    published: true,
+    version: 0,
+  };
+  const browse = async () =>
+    publicGiftOfferListSchema.parse(await (await t.app.request("/gift-offers")).json()).offers;
+  expect((await call(owner, route, "PUT", terms)).status).toBe(200);
+  expect(await browse()).toMatchObject([{ id, version: 1 }]);
+  await t.db.execute(
+    sql`update service set active = false, catalog_version = catalog_version + 1 where id = ${fixtures.haircutId}`,
+  );
+  expect(await browse()).toEqual([]);
+  await t.db.execute(
+    sql`update service set active = true, catalog_version = catalog_version + 1 where id = ${fixtures.haircutId}`,
+  );
+  expect(await browse()).toEqual([]);
+  const request = { offerId: id, idempotencyKey: key(), version: 1 };
+  expect((await call(client, "/me/gift-cards/storefront", "POST", request)).status).toBe(409);
+  expect((await call(owner, route, "PUT", { ...terms, version: 1 })).status).toBe(200);
+  expect(await browse()).toMatchObject([{ id, version: 2 }]);
+  expect(
+    (await call(client, "/me/gift-cards/storefront", "POST", { ...request, version: 2 })).status,
+  ).toBe(201);
 });
 
 test("the offline register contains only cards in the current account scope", async () => {
