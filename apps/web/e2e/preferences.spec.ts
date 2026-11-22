@@ -7,7 +7,7 @@ test.describe("language", () => {
   }) => {
     await page.goto("/");
     await expect(page.locator("html")).toHaveAttribute("lang", "en");
-    await page.getByRole("radio", { name: "Español" }).check({ force: true });
+    await page.getByRole("radio", { name: "Español" }).check();
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Tu salón de belleza.");
     await expect(page.locator("html")).toHaveAttribute("lang", "es-AR");
     await page.reload();
@@ -27,7 +27,7 @@ test.describe("language", () => {
     const page = await context.newPage();
     await page.goto("/");
     await expect(page.locator("html")).toHaveAttribute("lang", "es-AR");
-    await page.getByRole("radio", { name: "English" }).check({ force: true });
+    await page.getByRole("radio", { name: "English" }).check();
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Your beauty salon.");
     await context.close();
   });
