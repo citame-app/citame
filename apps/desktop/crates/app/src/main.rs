@@ -8,9 +8,7 @@ mod root;
 mod services;
 mod theme;
 
-use gpui::{
-    App, Application, Bounds, TitlebarOptions, WindowBounds, WindowOptions, prelude::*, px, size,
-};
+use gpui::{App, Bounds, TitlebarOptions, WindowBounds, WindowOptions, prelude::*, px, size};
 use sob_core::store::Store;
 
 fn check_installation() -> Result<(), Box<dyn std::error::Error>> {
@@ -59,10 +57,14 @@ fn main() {
     let startup = std::time::Instant::now();
     let report_startup = std::env::var_os("SOB_STARTUP_TIMINGS").is_some();
     let config = config::Config::from_env();
-    Application::new().run(move |cx: &mut App| {
+    #[cfg(target_os = "linux")]
+    let application = linux_window::open_application();
+    #[cfg(not(target_os = "linux"))]
+    let application = gpui::Application::new();
+    application.run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
         let title = sob_core::i18n::t(config.locale, sob_core::i18n::Key::AppTitle);
-        cx.open_window(
+        let opened = cx.open_window(
             WindowOptions {
                 app_id: Some("app.citame.desktop".into()),
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -86,8 +88,12 @@ fn main() {
                 }
                 root
             },
-        )
-        .expect("open the main window");
+        );
+        if let Err(error) = opened {
+            #[cfg(target_os = "linux")]
+            linux_window::retry_on_wayland();
+            panic!("open the main window: {error:#}");
+        }
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
                 cx.quit();

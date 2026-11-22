@@ -11,6 +11,7 @@ use x11rb::protocol::xproto::ConnectionExt as _;
 use crate::theme;
 
 pub(crate) const CLIENT_TITLE_HEIGHT: Pixels = px(36.);
+const WAYLAND_AFTER_X11_FAILURE: &str = "CITAME_WAYLAND_AFTER_X11_FAILURE";
 
 fn uses_gnome_wayland() -> bool {
     gpui::guess_compositor() == "Wayland"
@@ -62,9 +63,13 @@ pub(crate) fn prefer_native_gnome_decorations() {
     if !local_xwayland_display(&display) || !has_dri3(&display) {
         return;
     }
+    let Some(wayland) = std::env::var_os("WAYLAND_DISPLAY") else {
+        return;
+    };
     if let Ok(executable) = std::env::current_exe() {
         let error = Command::new(executable)
             .args(std::env::args_os().skip(1))
+            .env(WAYLAND_AFTER_X11_FAILURE, wayland)
             .env_remove("WAYLAND_DISPLAY")
             .env_remove("WAYLAND_SOCKET")
             .exec();
@@ -72,9 +77,41 @@ pub(crate) fn prefer_native_gnome_decorations() {
     }
 }
 
+pub(crate) fn open_application() -> gpui::Application {
+    if std::env::var_os(WAYLAND_AFTER_X11_FAILURE).is_none() {
+        return gpui::Application::new();
+    }
+    // GPUI 0.2.2 can panic when the X11 platform itself fails to initialize.
+    match std::panic::catch_unwind(gpui::Application::new) {
+        Ok(application) => application,
+        Err(error) => {
+            retry_on_wayland();
+            std::panic::resume_unwind(error);
+        }
+    }
+}
+
+pub(crate) fn retry_on_wayland() {
+    if gpui::guess_compositor() != "X11" {
+        return;
+    }
+    let Some(wayland) = std::env::var_os(WAYLAND_AFTER_X11_FAILURE) else {
+        return;
+    };
+    if let Ok(executable) = std::env::current_exe() {
+        eprintln!("Trying Wayland after XWayland initialization failed");
+        let error = Command::new(executable)
+            .args(std::env::args_os().skip(1))
+            .env("WAYLAND_DISPLAY", wayland)
+            .env_remove("DISPLAY")
+            .env_remove(WAYLAND_AFTER_X11_FAILURE)
+            .exec();
+        eprintln!("Citame could not restart through Wayland: {error}");
+    }
+}
+
 pub(crate) fn client_title_bar(window: &Window, locale: Locale) -> Option<gpui::Div> {
-    if window.is_fullscreen() || !matches!(window.window_decorations(), Decorations::Client { .. })
-    {
+    if !show_client_title(window.window_decorations(), window.is_fullscreen()) {
         return None;
     }
     let controls = window.window_controls();
@@ -88,6 +125,7 @@ pub(crate) fn client_title_bar(window: &Window, locale: Locale) -> Option<gpui::
             .h(CLIENT_TITLE_HEIGHT)
             .flex_shrink_0()
             .flex()
+            .tab_group()
             .items_center()
             .bg(theme::panel())
             .border_b_1()
@@ -135,6 +173,10 @@ pub(crate) fn client_title_bar(window: &Window, locale: Locale) -> Option<gpui::
     )
 }
 
+fn show_client_title(decorations: Decorations, fullscreen: bool) -> bool {
+    !fullscreen && matches!(decorations, Decorations::Client { .. })
+}
+
 fn control(
     id: &'static str,
     glyph: &'static str,
@@ -150,6 +192,8 @@ fn control(
         .justify_center()
         .text_base()
         .cursor_pointer()
+        .tab_index(0)
+        .focus(|style| style.bg(theme::accent_soft()).underline())
         .hover(|style| style.bg(theme::accent_soft()))
         .on_click(move |_, window, _| action(window))
         .tooltip(move |_, cx| cx.new(|_| WindowControlTooltip(label.into())).into())
@@ -192,5 +236,50 @@ mod tests {
         ] {
             assert!(!local_xwayland_display(display));
         }
+    }
+
+    #[test]
+    fn keeps_controls_only_for_windowed_client_decorations() {
+        let client = Decorations::Client {
+            tiling: Default::default(),
+        };
+        assert!(show_client_title(client, false));
+        assert!(!show_client_title(client, true));
+        assert!(!show_client_title(Decorations::Server, false));
+    }
+
+    #[gpui::test]
+    async fn window_controls_accept_keyboard_activation(cx: &mut gpui::TestAppContext) {
+        use std::{cell::Cell, rc::Rc};
+
+        struct Demo(Rc<Cell<usize>>);
+        impl gpui::Render for Demo {
+            fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+                let activations = self.0.clone();
+                div().tab_group().size_full().child(control(
+                    "close-test",
+                    "×",
+                    "Close",
+                    move |_| {
+                        activations.set(activations.get() + 1);
+                    },
+                ))
+            }
+        }
+
+        let activations = Rc::new(Cell::new(0));
+        let (_, cx) = cx.add_window_view(|_, _| Demo(activations.clone()));
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            window.focus_next();
+            assert!(window.focused(app).is_some());
+        });
+        cx.run_until_parked();
+        for key in ["enter", "space"] {
+            cx.simulate_event(gpui::KeyUpEvent {
+                keystroke: gpui::Keystroke::parse(key).unwrap(),
+            });
+        }
+        assert_eq!(activations.get(), 2);
     }
 }
