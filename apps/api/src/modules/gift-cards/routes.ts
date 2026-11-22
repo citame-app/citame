@@ -19,6 +19,7 @@ import {
   checkGift,
   getGift,
   giftHistory,
+  giftReplicaPage,
   listGifts,
   reissueGift,
   revealGift,
@@ -66,6 +67,13 @@ export function giftCardRoutes(deps: AppDeps) {
         ),
       ),
     )
+    .get("/replica", async (c) => {
+      const query = parseOrThrow(giftCardQuerySchema, c.req.query());
+      return c.json({
+        ...(await giftReplicaPage(deps.db, c.get("principal"), query.page)),
+        generation: deps.config.syncReplicaGeneration,
+      });
+    })
     .get("/:id", async (c) =>
       c.json(await getGift(deps.db, parseOrThrow(idSchema, c.req.param("id")), c.get("principal"))),
     )

@@ -11,6 +11,8 @@ use sob_core::http::{
 use sob_core::{receipt_print::ReceiptPreview, sync::TransportError};
 use uuid::Uuid;
 
+mod offline;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum View {
     List,
@@ -50,6 +52,12 @@ pub(super) struct Desk {
     observed: Option<i64>,
     refresh_after: Option<Instant>,
     can_manage: bool,
+    cached_at: Option<DateTime<Utc>>,
+    visible_scope: Option<sob_core::store::gift_cache::GiftCacheScope>,
+    last_online: bool,
+    catalogue_version: Option<offline::CacheVersion>,
+    catalogue_job: Option<Arc<()>>,
+    catalogue_retry: Option<Instant>,
     error: Option<Key>,
     _buyer_changed: Option<Subscription>,
 }
@@ -220,6 +228,12 @@ impl Root {
             observed: None,
             refresh_after: None,
             can_manage: false,
+            cached_at: None,
+            visible_scope: self.svc.store.gift_cache_scope().ok().flatten(),
+            last_online: self.status.connectivity == Connectivity::Online,
+            catalogue_version: None,
+            catalogue_job: None,
+            catalogue_retry: None,
             error: storage_error.then_some(Key::GiftStorageUnavailable),
             _buyer_changed: None,
         };
@@ -227,6 +241,9 @@ impl Root {
         self.overlay = Overlay::GiftCards(Box::new(desk));
         if view == View::List && !storage_error {
             self.load_gift_list(1, cx);
+        }
+        if self.status.connectivity == Connectivity::Online {
+            self.refresh_gift_catalogue(cx);
         }
         cx.notify();
     }
@@ -329,12 +346,27 @@ impl Root {
     }
 
     pub(super) fn refresh_gift_cards(&mut self, reconnected: bool, cx: &mut Context<Self>) {
+        if !matches!(self.overlay, Overlay::GiftCards(_)) {
+            return;
+        }
         let observed = self.svc.store.live_view_revision("commerce").ok();
         let online = self.status.connectivity == Connectivity::Online;
+        let scope = self.svc.store.gift_cache_scope().ok().flatten();
         let Some(desk) = self.gift_cards_desk() else {
             return;
         };
-        let changed = desk.observed != observed;
+        let visibility_changed = desk.visible_scope != scope;
+        desk.visible_scope = scope;
+        let changed = desk.observed != observed || visibility_changed;
+        let went_offline = desk.last_online && !online;
+        desk.last_online = online;
+        if visibility_changed && desk.receipt.is_none() {
+            desk.cached_at = None;
+            desk.page = None;
+            desk.card = None;
+            desk.movements = None;
+            cx.notify();
+        }
         if !online || reconnected || changed && desk.revealed.is_some() {
             let hidden = desk.hide_code();
             if hidden {
@@ -346,8 +378,26 @@ impl Root {
             cx.notify();
         }
         if !online {
+            if (went_offline || visibility_changed)
+                && desk.request.is_none()
+                && desk.receipt.is_none()
+            {
+                desk.edit = None;
+                match desk.view {
+                    View::List => {
+                        let page = desk.page.as_ref().map_or(1, |list| list.pagination.page);
+                        self.load_gift_list(page, cx);
+                    }
+                    View::Detail(id) => self.request_gift(Request::Detail(id, 1), cx),
+                    _ => {}
+                }
+            }
             return;
         }
+        self.refresh_gift_catalogue(cx);
+        let Some(desk) = self.gift_cards_desk() else {
+            return;
+        };
         if desk.request.is_some()
             || desk.receipt.is_some()
             || desk.edit.is_some()
@@ -374,6 +424,7 @@ impl Root {
 
     fn request_gift(&mut self, request: Request, cx: &mut Context<Self>) {
         if self.status.connectivity != Connectivity::Online {
+            self.show_offline_gift(request, cx);
             return;
         }
         let Some(transport) = self.svc.transport() else {
@@ -381,6 +432,25 @@ impl Root {
         };
         let observation = self.svc.store.live_view_revision("commerce").ok();
         let session = self.svc.session.clone();
+        let cache_scope = self.svc.store.gift_cache_scope().ok().flatten();
+        let cache_actor = self.svc.current_session().map(|session| session.user_id);
+        let detail_id = match &request {
+            Request::Detail(id, _) => Some(*id),
+            _ => None,
+        };
+        let cached_request = match &request {
+            Request::List {
+                page,
+                search,
+                status,
+            } => Some(Request::List {
+                page: *page,
+                search: search.clone(),
+                status: *status,
+            }),
+            Request::Detail(id, page) => Some(Request::Detail(*id, *page)),
+            _ => None,
+        };
         let pending = match &request {
             Request::Issue(purchase) => self
                 .svc
@@ -412,6 +482,17 @@ impl Root {
                     return;
                 }
                 let online = root.status.connectivity == Connectivity::Online;
+                if let (Some(scope), Some(actor), Some(id), Ok(Loaded::Detail(_, history))) =
+                    (&cache_scope, &cache_actor, detail_id, &reply)
+                {
+                    let _ = root.svc.store.save_gift_movement_history(
+                        scope,
+                        actor,
+                        id,
+                        history,
+                        Utc::now(),
+                    );
+                }
                 let revision = root.svc.store.live_view_revision("commerce").ok();
                 let retired = pending.as_ref().zip(reply.as_ref().err()).is_some_and(
                     |((actor, purchase), error)| {
@@ -429,17 +510,32 @@ impl Root {
                     return;
                 };
                 desk.request = None;
+                if let Some(cached_request) = cached_request {
+                    if !online {
+                        root.show_offline_gift(cached_request, cx);
+                        return;
+                    }
+                    if root.svc.store.gift_cache_scope().ok().flatten() != cache_scope {
+                        root.refresh_gift_cards(true, cx);
+                        return;
+                    }
+                }
+                let Some(desk) = root.gift_cards_desk() else {
+                    return;
+                };
                 let fresh = online && observation == revision && private_access.strong_count() > 0;
                 match reply {
                     Ok(Loaded::List(page, capability)) => {
                         desk.observed = observation;
                         desk.refresh_after = None;
+                        desk.cached_at = None;
                         desk.page = Some(page);
                         desk.can_manage = capability;
                     }
                     Ok(Loaded::Detail(card, movements)) => {
                         desk.observed = observation;
                         desk.refresh_after = None;
+                        desk.cached_at = None;
                         if desk
                             .card
                             .as_ref()
@@ -828,7 +924,17 @@ impl Root {
         let width = (viewport.width - px(24.)).max(px(260.)).min(px(680.));
         let body = div()
             .child(title)
-            .when(!online, |body| body.child(self.t(Key::GiftOffline)))
+            .when(!online, |body| {
+                if let Some(at) = desk.cached_at {
+                    body.child(format!(
+                        "{} · {}",
+                        self.t(Key::GiftOfflineSnapshot),
+                        self.date_time_label(at)
+                    ))
+                } else {
+                    body.child(self.t(Key::GiftOffline))
+                }
+            })
             .when(desk.request.is_some(), |body| {
                 body.child(self.t(Key::CheckoutLoading))
             })
@@ -855,6 +961,7 @@ impl Root {
     }
 
     fn render_gift_list(&self, desk: &Desk, ready: bool, cx: &mut Context<Self>) -> gpui::Div {
+        let browse = desk.request.is_none() && (ready || desk.cached_at.is_some());
         let body = div().flex().flex_col().gap_3().when(ready, |body| {
             body.child(
                 div()
@@ -876,8 +983,9 @@ impl Root {
                         cx,
                     )),
             )
-            .child(desk.search.clone())
-            .child(
+        });
+        let body = body.when(browse, |body| {
+            body.child(desk.search.clone()).child(
                 div()
                     .flex()
                     .flex_wrap()
@@ -941,7 +1049,7 @@ impl Root {
                     &card.balance.currency
                 ),
             );
-            if ready {
+            if browse {
                 div().child(self.button(
                     SharedString::from(format!("open-gift-card-{id}")),
                     label,
@@ -953,7 +1061,7 @@ impl Root {
             }
         }));
         let pagination = &page.pagination;
-        body.when(ready, |body| {
+        body.when(browse, |body| {
             body.child(
                 div()
                     .flex()
@@ -1303,37 +1411,42 @@ impl Root {
                         money(item.amount_cents),
                     ))
                 }))
-                .when(ready, |body| {
-                    body.child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .when(pagination.page > 1, |row| {
-                                let page = pagination.page - 1;
-                                row.child(self.gift_button(
-                                    "previous-gift-movements",
-                                    Key::GiftPrevious,
-                                    Kind::Ghost,
-                                    move |root, cx| {
-                                        root.request_gift(Request::Detail(id, page), cx)
-                                    },
-                                    cx,
-                                ))
-                            })
-                            .when(pagination.has_next(), |row| {
-                                let page = pagination.page + 1;
-                                row.child(self.gift_button(
-                                    "next-gift-movements",
-                                    Key::GiftNext,
-                                    Kind::Ghost,
-                                    move |root, cx| {
-                                        root.request_gift(Request::Detail(id, page), cx)
-                                    },
-                                    cx,
-                                ))
-                            }),
-                    )
-                });
+                .when(
+                    desk.request.is_none() && (ready || desk.cached_at.is_some()),
+                    |body| {
+                        body.child(
+                            div()
+                                .flex()
+                                .gap_2()
+                                .when(pagination.page > 1, |row| {
+                                    let page = pagination.page - 1;
+                                    row.child(self.gift_button(
+                                        "previous-gift-movements",
+                                        Key::GiftPrevious,
+                                        Kind::Ghost,
+                                        move |root, cx| {
+                                            root.request_gift(Request::Detail(id, page), cx)
+                                        },
+                                        cx,
+                                    ))
+                                })
+                                .when(pagination.has_next(), |row| {
+                                    let page = pagination.page + 1;
+                                    row.child(self.gift_button(
+                                        "next-gift-movements",
+                                        Key::GiftNext,
+                                        Kind::Ghost,
+                                        move |root, cx| {
+                                            root.request_gift(Request::Detail(id, page), cx)
+                                        },
+                                        cx,
+                                    ))
+                                }),
+                        )
+                    },
+                );
+        } else if desk.cached_at.is_some() {
+            body = body.child(self.t(Key::GiftOfflineMovements));
         }
         body
     }

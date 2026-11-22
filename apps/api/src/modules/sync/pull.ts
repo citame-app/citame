@@ -32,6 +32,7 @@ import { calendarBadges } from "../appointments/context";
 import { loadSnapshots, toAppointment } from "../appointments/service";
 import { groupName } from "../clients/groups";
 import { compatibleBillingReasons } from "../commerce/appointment-billing";
+import { giftReplicaScope } from "../gift-cards/service";
 import { listResources } from "../resources/catalog";
 import { listCombinations } from "../services/combinations";
 import { catalogMetadata, publicService } from "../services/options";
@@ -404,6 +405,7 @@ export async function pullChanges(
     headSeq: Math.max(head, nextCursor),
     timeOffScope,
     clientDirectory: permissions.clients,
+    giftCardsScope: giftReplicaScope(principal),
     ...(query.clientGroups && permissions.clients ? { clientGroups: true as const } : {}),
     viewerRole: principal.role === "owner" ? "owner" : "staff",
     viewerEditCatalogue: permissions.editCatalog,

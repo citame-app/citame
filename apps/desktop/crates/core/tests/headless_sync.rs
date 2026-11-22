@@ -4436,6 +4436,42 @@ fn native_gift_card_redeems_and_refunds_once_through_the_proxy() {
         )
         .unwrap();
     assert_eq!(paid_gift.status, "paid");
+    browser.sync();
+    let fence = browser.store.gift_cache_scope().unwrap().unwrap();
+    let saved = device
+        .transport
+        .gift_catalogue(&fence.scope, &fence.generation)
+        .unwrap();
+    assert_eq!(
+        saved
+            .card(gift_id, Utc::now())
+            .unwrap()
+            .balance
+            .available_cents,
+        2000
+    );
+    let actor = browser.rest_get("/me")["user"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        browser
+            .store
+            .save_gift_catalogue(&fence, &actor, saved)
+            .unwrap()
+    );
+    let reopened = Store::open(&browser.path).unwrap();
+    assert_eq!(
+        reopened
+            .gift_catalogue(&actor)
+            .unwrap()
+            .unwrap()
+            .card(gift_id, Utc::now())
+            .unwrap()
+            .balance
+            .available_cents,
+        2000
+    );
     let listed = device
         .transport
         .gift_cards(1, &purchase.label, Some(GiftStatus::Active))

@@ -450,6 +450,8 @@ pub struct PullResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_directory: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gift_cards_scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_groups: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar_scope: Option<String>,

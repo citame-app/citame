@@ -8,6 +8,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Added
 
+- Desktop can search and browse the saved gift register offline. The register shows when balances were saved, retains previously opened movement pages, and clears the saved data when account visibility changes.
+
 - Desktop can browse previously loaded active and history waitlist pages offline. Offer actions continue to use the current server state.
 
 - Desktop shows live notices when an appointment is moved or cancelled from another client, alongside the existing new-booking notices.
