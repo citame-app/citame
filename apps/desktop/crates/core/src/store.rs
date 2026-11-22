@@ -1142,6 +1142,17 @@ impl Store {
         let mut applied = 0;
         for c in changes.iter().filter(|change| change.seq > cursor) {
             apply_change(&tx, c, alert)?;
+            if c.op == "delete"
+                && matches!(c.entity.as_str(), "appointment" | "client" | "time_off")
+            {
+                // An older log entry can already carry the server's current tombstone.
+                tx.execute(
+                    "UPDATE meta SET value = '0' WHERE key IN (
+                       SELECT 'assignment_ack:' || mutation_id FROM outbox
+                       WHERE entity_id = ?1 AND kind GLOB (?2 || '.*'))",
+                    params![c.id, c.entity],
+                )?;
+            }
             if c.entity == "appointment" {
                 tx.execute(
                     "DELETE FROM local_booking_confirmation WHERE appointment_id=?1",
@@ -1170,7 +1181,7 @@ impl Store {
             )?;
             tx.execute("DELETE FROM meta WHERE key = ?1", [SALON_CONFIGURATION_ACK])?;
         }
-        Self::retire_confirmed_catalogue_edits(&tx, next_cursor)?;
+        Self::retire_confirmed_outbox(&tx, next_cursor)?;
         if complete {
             tx.execute(
                 "INSERT OR IGNORE INTO meta (key,value) VALUES ('calendar_snapshot_complete','1')",
@@ -1644,14 +1655,76 @@ impl Store {
         Self::outbox_at(&self.conn, limit, None, false)
     }
 
+    // Keep confirmed local projections visible until the authoritative pull catches up.
+    // The checkpoint key keeps its original name for existing replicas.
+    fn retire_confirmed_outbox(tx: &Transaction, cursor: i64) -> Result<()> {
+        tx.execute(
+            "DELETE FROM outbox WHERE mutation_id IN (
+               SELECT substr(key, length('assignment_ack:') + 1) FROM meta
+               WHERE key GLOB 'assignment_ack:*' AND CAST(value AS INTEGER) <= ?1)",
+            [cursor],
+        )?;
+        tx.execute(
+            "DELETE FROM meta WHERE key GLOB 'assignment_ack:*' AND CAST(value AS INTEGER) <= ?1",
+            [cursor],
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn calendar_outbox(&self) -> Result<Vec<OutboxEntry>> {
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT {OUTBOX_COLS} FROM outbox WHERE kind GLOB 'appointment.*'
-               OR kind GLOB 'client.*' OR kind GLOB 'time_off.*' ORDER BY seq"
+            "SELECT {OUTBOX_COLS} FROM outbox
+             WHERE (kind GLOB 'appointment.*' OR kind GLOB 'client.*' OR kind GLOB 'time_off.*')
+               AND (
+                 NOT EXISTS (SELECT 1 FROM meta WHERE key = 'assignment_ack:' || mutation_id)
+                 OR CASE
+                 WHEN kind = 'client.create' THEN
+                   (SELECT value FROM meta WHERE key = 'client_directory') IS NOT 'denied'
+                   AND NOT EXISTS (SELECT 1 FROM client WHERE id = outbox.entity_id)
+                 WHEN kind = 'time_off.create' THEN
+                   NOT EXISTS (SELECT 1 FROM time_off WHERE id = outbox.entity_id)
+                 WHEN kind = 'time_off.update' THEN NOT EXISTS (
+                     SELECT 1 FROM time_off
+                     WHERE id = outbox.entity_id
+                       AND julianday(json_extract(json, '$.updatedAt')) > coalesce(
+                         julianday(json_extract(payload, '$.expectedUpdatedAt')),
+                         julianday(outbox.created_at, '-0.001 seconds'))
+                   )
+                 WHEN kind = 'time_off.delete' THEN 1
+                 ELSE NOT EXISTS (
+                     SELECT 1 FROM appointment
+                     WHERE id = outbox.entity_id AND version > coalesce(json_extract(payload, '$.version'), 0)
+                   )
+                 END
+               )
+             ORDER BY seq"
         ))?;
         Ok(stmt
             .query_map([], outbox_from_row)?
             .collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub(crate) fn has_acknowledged_time_off(&self, id: &str) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM outbox WHERE entity_id = ?1
+               AND kind IN ('time_off.create', 'time_off.update')
+               AND EXISTS (SELECT 1 FROM meta WHERE key = 'assignment_ack:' || mutation_id))",
+            [id],
+            |row| row.get(0),
+        )?)
+    }
+
+    pub(crate) fn queued_client_display_name(&self, id: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT json_extract(payload, '$.name') FROM outbox
+             WHERE entity_id = ?1 AND kind = 'client.create' ORDER BY seq DESC LIMIT 1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten())
     }
 
     pub(crate) fn conflicted_appointment_ids(&self) -> Result<HashSet<String>> {
@@ -1713,9 +1786,32 @@ impl Store {
             as usize)
     }
 
-    /// Records the server's verdicts for a batch, in order, in one transaction. `applied` and
-    /// `rejected` leave the outbox (rejections become conflicts); the first `retry` and
-    /// everything after it stay queued.
+    fn keeps_calendar_projection(tx: &Transaction, entry: &OutboxEntry) -> Result<bool> {
+        if entry.kind.starts_with("appointment.") || entry.kind.starts_with("time_off.") {
+            return Ok(true);
+        }
+        if entry.kind != "client.create" {
+            return Ok(false);
+        }
+        Ok(tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM outbox WHERE kind = 'appointment.create'
+                           AND json_extract(payload, '$.clientId') = ?1)",
+            [&entry.entity_id],
+            |r| r.get(0),
+        )?)
+    }
+
+    fn acknowledge_outbox(tx: &Transaction, entry: &OutboxEntry, through: i64) -> Result<()> {
+        Self::set_meta_at(
+            tx,
+            &format!("assignment_ack:{}", entry.mutation_id),
+            &through.to_string(),
+        )
+    }
+
+    /// Records the server's verdicts for a batch in order. Rejections become conflicts.
+    /// Confirmed projections leave the send queue and stay visible until the pull catches up.
+    /// The first retry and everything after it stay queued.
     pub fn apply_push_results(
         &mut self,
         sent: &[OutboxEntry],
@@ -1790,7 +1886,11 @@ impl Store {
                     {
                         calendar_notices::remember_applied(&tx, s, *seq)?;
                     }
-                    if let Some(through) = response_head
+                    if let Some(head) = response_head
+                        && Self::keeps_calendar_projection(&tx, s)?
+                    {
+                        Self::acknowledge_outbox(&tx, s, applied_seq.unwrap_or(head))?;
+                    } else if let Some(through) = response_head
                         && s.kind == "settings.update"
                         && s.payload.get("expectedRevision").is_some()
                     {
@@ -1818,11 +1918,7 @@ impl Store {
                                     | crate::http::PORTFOLIO_UPLOAD
                             ))
                     {
-                        Self::set_meta_at(
-                            &tx,
-                            &format!("assignment_ack:{}", s.mutation_id),
-                            &through.max(applied_seq.unwrap_or(0)).to_string(),
-                        )?;
+                        Self::acknowledge_outbox(&tx, s, through.max(applied_seq.unwrap_or(0)))?;
                     } else {
                         tx.execute(
                             "DELETE FROM outbox WHERE mutation_id = ?1",

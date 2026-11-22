@@ -5164,9 +5164,15 @@ fn an_appointment_created_offline_reaches_the_server_and_other_devices() {
     );
     assert_eq!(a.store.outbox_len().unwrap(), 2);
 
-    // Reconnect.
-    let report = a.sync();
-    assert_eq!(report.push.applied, 2, "{report:?}");
+    // Reconnect just long enough to receive the push receipt, then reopen before pulling.
+    let pushed = sync::push_outbox(&mut a.store, &*a.transport).unwrap();
+    assert_eq!(pushed.applied, 2, "{pushed:?}");
+    a.store = Store::open(&a.path).unwrap();
+    assert!(a.store.appointment(&appt).unwrap().is_none());
+    assert!(day_items(&a, at, &c.staff).iter().any(|item| {
+        item.appointment.id == appt && item.pending && item.client_name == "Offline Lucia"
+    }));
+    assert_eq!(a.sync().push.applied, 0);
     assert_eq!(a.store.outbox_len().unwrap(), 0);
     let items = day_items(&a, at, &c.staff);
     let mine = items

@@ -556,6 +556,7 @@ impl OutboxEntry {
             && let Some(fields) = payload.as_object_mut()
         {
             fields.remove("_reviewedServices");
+            fields.remove("_clientName");
         } else if self.kind == crate::store::SERVICE_EDIT_KIND
             && let Some(fields) = payload.as_object_mut()
         {

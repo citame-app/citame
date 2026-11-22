@@ -167,7 +167,7 @@ fn str_of(v: &Value, key: &str) -> Option<String> {
 }
 
 /// Applies the outbox, in order, on top of `map` (mirror state). Returns the ids of the
-/// appointments that carry unacknowledged edits.
+/// appointments with local edits that are waiting for the mirror to catch up.
 fn overlay(
     store: &Store,
     map: &mut HashMap<String, Appointment>,
@@ -244,6 +244,11 @@ fn overlay_calendar_outbox(
                     .iter()
                     .map(|s| s.duration_minutes + s.buffer_minutes)
                     .sum();
+                let client_id = str_of(p, "clientId").unwrap_or_default();
+                let client_name = match str_of(p, "_clientName") {
+                    Some(name) => Some(name),
+                    None => store.queued_client_display_name(&client_id)?,
+                };
                 map.insert(
                     e.entity_id.clone(),
                     Appointment {
@@ -251,8 +256,8 @@ fn overlay_calendar_outbox(
                         visit_group_id: None,
                         itinerary_id: None,
                         staff_id,
-                        client_id: str_of(p, "clientId").unwrap_or_default(),
-                        client_name: None,
+                        client_id,
+                        client_name,
                         starts_at,
                         ends_at: starts_at + Duration::minutes(block),
                         status: AppointmentStatus::Booked,
@@ -317,6 +322,9 @@ fn overlay_calendar_outbox(
             }
             _ => {}
         }
+    }
+    if let Some(scope) = store.get_meta("calendar_scope")?.filter(|s| s != "all") {
+        map.retain(|_, appointment| appointment.staff_id == scope);
     }
     Ok(pending)
 }
@@ -588,8 +596,7 @@ pub(crate) fn effective_appointments_between(
         .collect())
 }
 
-/// Pending edits remain local until their result is acknowledged. Rejected edits are shown
-/// in the conflict inbox and the mirror remains the authoritative fallback.
+/// Keep local edits visible while the mirror catches up to the server's receipt.
 pub fn effective_time_off(
     store: &Store,
     from: DateTime<Utc>,
@@ -640,9 +647,16 @@ pub fn effective_time_off(
             _ => {}
         }
     }
+    let scope = store.get_meta("calendar_scope")?;
     let mut rows: Vec<_> = blocks
         .into_values()
-        .filter(|b| b.time_off.starts_at < to && b.time_off.ends_at > from)
+        .filter(|b| {
+            b.time_off.starts_at < to
+                && b.time_off.ends_at > from
+                && scope
+                    .as_deref()
+                    .is_none_or(|staff| staff == "all" || staff == b.time_off.staff_id)
+        })
         .collect();
     rows.sort_by(|a, b| {
         a.time_off
