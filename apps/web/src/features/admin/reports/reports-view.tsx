@@ -37,6 +37,8 @@ const topHelper = createColumnHelper<DataTableFeatures, ReportSummary["topServic
 const staffHelper = createColumnHelper<DataTableFeatures, ReportSummary["perStaff"][number]>();
 const breakdownHelper = createColumnHelper<DataTableFeatures, ReportBreakdownRow>();
 const breakdownStatuses = ["booked", "completed", "cancelled", "no_show"] as const;
+const promotionBreakdownKinds = [...reportBreakdownKinds, "promotion"] as const;
+type BreakdownKind = ReportBreakdownKind | "promotion";
 const BREAKDOWN_PAGE_SIZE = 15;
 const RevenueChart = lazy(() =>
   import("./charts").then((module) => ({ default: module.RevenueChart })),
@@ -468,7 +470,10 @@ export function ReportsView({
               </div>
 
               {report.appointmentBreakdown && (
-                <AppointmentBreakdown breakdown={report.appointmentBreakdown} />
+                <AppointmentBreakdown
+                  breakdown={report.appointmentBreakdown}
+                  promotionBreakdown={report.promotionBreakdown}
+                />
               )}
 
               <AppointmentOutcomes
@@ -525,11 +530,15 @@ export function ReportsView({
 
 function AppointmentBreakdown({
   breakdown,
+  promotionBreakdown,
 }: {
   breakdown: NonNullable<ReportSummary["appointmentBreakdown"]>;
+  promotionBreakdown?: ReportBreakdownRow[];
 }) {
   const { t } = useI18n();
-  const [kind, setKind] = useState<ReportBreakdownKind>("hour");
+  const [selectedKind, setKind] = useState<BreakdownKind>("hour");
+  const kinds = promotionBreakdown ? promotionBreakdownKinds : reportBreakdownKinds;
+  const kind = selectedKind === "promotion" && !promotionBreakdown ? "hour" : selectedKind;
   const [requestedPage, setPage] = useState(1);
   const [sorting, setSorting] = useState<SortingState>([]);
   const columns = useMemo(
@@ -538,6 +547,7 @@ function AppointmentBreakdown({
         breakdownHelper.accessor((row) => row.label ?? t("reports.breakdown.uncategorized"), {
           id: "label",
           header: t(`reports.breakdown.${kind}`),
+          cell: (info) => <span className="wrap-anywhere">{info.getValue()}</span>,
           meta: { cardTitle: true },
         }),
         breakdownHelper.accessor("appointments", {
@@ -556,7 +566,7 @@ function AppointmentBreakdown({
   );
   const rows = useMemo(
     () =>
-      sortBy(breakdown[kind], sorting, {
+      sortBy(kind === "promotion" ? (promotionBreakdown ?? []) : breakdown[kind], sorting, {
         label: (row) => (row.label ?? t("reports.breakdown.uncategorized")).toLowerCase(),
         appointments: (row) => row.appointments,
         booked: (row) => row.byStatus.booked,
@@ -564,7 +574,7 @@ function AppointmentBreakdown({
         cancelled: (row) => row.byStatus.cancelled,
         no_show: (row) => row.byStatus.no_show,
       }),
-    [breakdown, kind, sorting, t],
+    [breakdown, kind, promotionBreakdown, sorting, t],
   );
   const page = Math.min(requestedPage, Math.max(1, Math.ceil(rows.length / BREAKDOWN_PAGE_SIZE)));
   return (
@@ -593,12 +603,12 @@ function AppointmentBreakdown({
             className="w-52 max-w-full"
             label={t("reports.breakdown.group")}
             value={kind}
-            options={reportBreakdownKinds.map((value) => ({
+            options={kinds.map((value) => ({
               value,
               label: t(`reports.breakdown.${value}`),
             }))}
             onChange={(value) => {
-              const next = reportBreakdownKinds.find((option) => option === value);
+              const next = kinds.find((option) => option === value);
               if (!next) return;
               setKind(next);
               setSorting([]);
