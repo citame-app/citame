@@ -1704,6 +1704,7 @@ keys! {
     WaitlistConfirmProfessional => ("Confirm the professional or choose any available professional.", "Confirma la profesional o elige cualquier profesional disponible."),
     WaitlistPaused => ("Offers are paused", "Las ofertas están pausadas"),
     WaitlistEmpty => ("No requests on this page", "No hay solicitudes en esta página"),
+    WaitlistPageNotSaved => ("Connect to load this waitlist page.", "Conéctate para cargar esta página de la lista de espera."),
     WaitlistLoading => ("Updating waitlist…", "Actualizando lista de espera…"),
     WaitlistError => ("Could not complete the request. Refresh and check the queue.", "No se pudo completar la operación. Actualiza y revisa la lista."),
     WaitlistInvalid => ("Enter dates as YYYY-MM-DD and times as HH:MM. Select up to eight services.", "Usa fechas AAAA-MM-DD y horas HH:MM. Elige hasta ocho servicios."),

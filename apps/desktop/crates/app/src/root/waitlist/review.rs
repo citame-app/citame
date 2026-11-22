@@ -85,12 +85,21 @@ impl Root {
     }
 
     fn load_waitlist_offer_requirements(&mut self, cx: &mut Context<Self>) {
+        if self.status.connectivity != Connectivity::Online {
+            return;
+        }
         let Some(transport) = self.svc.transport() else {
             return;
         };
         let Overlay::Waitlist(desk) = &mut self.overlay else {
             return;
         };
+        let Ok(scope) = self.svc.store.waitlist_cache_scope() else {
+            return;
+        };
+        if desk.cached || !scope.permits_read() {
+            return;
+        }
         let Some(review) = desk
             .offer_review
             .as_mut()
@@ -122,6 +131,12 @@ impl Root {
                     return;
                 };
                 desk.busy = false;
+                if this.svc.store.waitlist_cache_scope().ok().as_ref() != Some(&scope) {
+                    desk.clear_private_data();
+                    desk.error = Some(Key::WaitlistError);
+                    cx.notify();
+                    return;
+                }
                 match result {
                     Ok((requirements, can_waive)) => {
                         if let Some(review) = &mut desk.offer_review {
@@ -528,6 +543,7 @@ pub(in crate::root) fn show_intake_test_offer(root: &mut Root, cx: &mut Context<
         active: true,
         page: 1,
         data: None,
+        saved_pages: vec![],
         busy: false,
         cached: false,
         error: None,

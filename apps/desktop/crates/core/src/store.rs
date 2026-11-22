@@ -20,6 +20,8 @@ use crate::reports::commissions::SavedCommissionPayout;
 use crate::sync::{CATALOG_COLORS_CACHED, CatalogColors};
 
 mod calendar_notices;
+mod waitlist_cache;
+pub use waitlist_cache::{SavedWaitlistPages, WaitlistCacheScope};
 
 fn pending_bank_refund_key(checkout_id: uuid::Uuid, actor_user_id: &str) -> String {
     format!("bank_refund_pending:{checkout_id}:{actor_user_id}")
@@ -1286,11 +1288,12 @@ impl Store {
             tx.execute(&format!("DELETE FROM {t}"), [])?;
         }
         tx.execute(
-            "DELETE FROM meta WHERE key IN ('cursor','client_groups_cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','desk_waitlist','resource_pool_catalogue','service_combinations',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
+            "DELETE FROM meta WHERE key IN ('cursor','client_groups_cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','resource_pool_catalogue','service_combinations',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
             [CATALOG_COLORS_CACHED, SALON_CONFIGURATION_CACHE, SALON_CONFIGURATION_ACK, SALON_CONFIGURATION_UNAVAILABLE],
         )?;
         tx.execute("DELETE FROM local_booking_confirmation", [])?;
         tx.execute("DELETE FROM local_calendar_ack", [])?;
+        waitlist_cache::invalidate_visibility(tx)?;
         Self::apply_inventory_access_at(tx, false)?;
         Self::apply_inventory_read_access_at(tx, false)?;
         Ok(())
@@ -1328,6 +1331,8 @@ impl Store {
         let restart = Self::meta_at(&tx, "cursor")?.is_some_and(|cursor| cursor != "0");
         if restart {
             Self::clear_replica(&tx)?;
+        } else {
+            waitlist_cache::invalidate_visibility(&tx)?;
         }
         for (key, scope) in changes {
             tx.execute(
@@ -1363,22 +1368,6 @@ impl Store {
             "DELETE FROM meta WHERE key IN ('calendar_inbox_archived','calendar_inbox_active')",
             [],
         )?;
-        Ok(())
-    }
-
-    pub fn waitlist_cache(&self) -> Result<Option<crate::waitlist::WaitlistPage>> {
-        self.get_meta("desk_waitlist")?
-            .map(|raw| serde_json::from_str(&raw).map_err(CoreError::from))
-            .transpose()
-    }
-
-    pub fn cache_waitlist(&self, page: &crate::waitlist::WaitlistPage) -> Result<()> {
-        self.set_meta("desk_waitlist", &serde_json::to_string(page)?)
-    }
-
-    pub fn clear_waitlist_cache(&self) -> Result<()> {
-        self.conn
-            .execute("DELETE FROM meta WHERE key = 'desk_waitlist'", [])?;
         Ok(())
     }
 
