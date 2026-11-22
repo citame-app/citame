@@ -390,14 +390,16 @@ export async function applyMutation(
       );
       return;
     }
-    case "inventory.classification_reorder":
+    case "inventory.classification_reorder": {
+      const { move: _move, ...order } = mutation.payload;
       await reorderInventoryClassifications(
         db,
-        { ...mutation.payload, generation: ctx.generation },
+        { ...order, generation: ctx.generation },
         principal,
         ctx.generation,
       );
       return;
+    }
     case "staff.update": {
       authorizeStaffAdmin(principal);
       const { id, ...changes } = mutation.payload;

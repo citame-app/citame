@@ -9,6 +9,7 @@ import { Button } from "~/components/ui/button";
 import { TextField } from "~/components/ui/field";
 import { SelectField } from "~/components/ui/select-field";
 import { ErrorState, Skeleton, useOnline } from "~/components/ui/states";
+import { useToast } from "~/components/ui/toast";
 import { useI18n } from "~/i18n/react";
 import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
@@ -46,6 +47,7 @@ export function InventoryClassifications({
   const catalogue = useInventoryClassifications();
   const query = useQueryClient();
   const online = useOnline();
+  const toast = useToast();
   const title = useId();
   const [draft, setDraft] = useState<Draft>();
   const [baseline, setBaseline] = useState<InventoryClassification>();
@@ -77,6 +79,9 @@ export function InventoryClassifications({
   const order = useMutation({
     mutationFn: (input: InventoryClassificationReorder) =>
       api().inventory.reorderClassifications(input),
+    onSuccess: () => {
+      toast.success(t("inventory.classification.orderSaved"));
+    },
     onSettled: async () => {
       await query.invalidateQueries({ queryKey: ["inventory"] });
     },
@@ -254,9 +259,6 @@ export function InventoryClassifications({
         )}
       </div>
       {notice && <p role="status">{t("inventory.classification.saved")}</p>}
-      <p role="status" className="sr-only">
-        {order.isSuccess ? t("inventory.classification.orderSaved") : ""}
-      </p>
       {order.isError &&
         (isClassificationConflict(order.error) ? (
           <p role="alert">{t("inventory.classification.orderChanged")}</p>

@@ -22,7 +22,12 @@ type Drag = {
   generation: string;
 };
 
-function proposal(rows: InventoryClassification[], generation: string, id: string, target: Target) {
+export function classificationMoveProposal(
+  rows: InventoryClassification[],
+  generation: string,
+  id: string,
+  target: Target,
+) {
   const source = rows.find((row) => row.id === id);
   const next = rows.filter((row) => row.id !== id);
   const index = next.findIndex((row) => row.id === target.id);
@@ -37,7 +42,7 @@ function proposal(rows: InventoryClassification[], generation: string, id: strin
   };
 }
 
-function dropTarget(
+export function classificationDropTarget(
   container: HTMLUListElement,
   source: string,
   x: number,
@@ -154,7 +159,7 @@ export function ClassificationOrderList({
           lastY = current.y;
           lastX = current.x;
           lastScroll = scroll.scrollTop;
-          const next = dropTarget(container, current.id, current.x, current.y);
+          const next = classificationDropTarget(container, current.id, current.x, current.y);
           if (next?.id !== target.current?.id || next?.after !== target.current?.after) {
             target.current = next;
             setMarker(next);
@@ -188,12 +193,17 @@ export function ClassificationOrderList({
     if (!source || source.pointer !== event.pointerId) return;
     const destination =
       list.current && Math.abs(source.start - event.clientY) > 5
-        ? dropTarget(list.current, source.id, event.clientX, event.clientY)
+        ? classificationDropTarget(list.current, source.id, event.clientX, event.clientY)
         : null;
     stop();
     event.currentTarget.releasePointerCapture(event.pointerId);
     if (!destination || !canMove) return;
-    const input = proposal(source.rows, source.generation, source.id, destination);
+    const input = classificationMoveProposal(
+      source.rows,
+      source.generation,
+      source.id,
+      destination,
+    );
     if (input) commit(input);
   }
 
@@ -203,7 +213,7 @@ export function ClassificationOrderList({
         const movement = (delta: -1 | 1) => {
           const neighbor = rows[index + delta];
           if (!canMove || !neighbor) return;
-          const input = proposal(rows, generation, entry.id, {
+          const input = classificationMoveProposal(rows, generation, entry.id, {
             id: neighbor.id,
             after: delta === 1,
           });

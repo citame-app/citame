@@ -36,6 +36,7 @@ export const inventoryClassificationOrderSchema = z.strictObject({
 export const inventoryClassificationReorderSchema = inventoryClassificationOrderSchema.extend({
   generation: syncGenerationSchema,
 });
+export const inventoryClassificationOrderResultSchema = z.object({ ok: z.literal(true) });
 export type InventoryClassificationReorder = z.infer<typeof inventoryClassificationReorderSchema>;
 export const inventoryClassificationAssignmentSchema = z.strictObject({
   categoryId: idSchema.nullable(),

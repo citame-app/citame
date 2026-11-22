@@ -1557,7 +1557,7 @@ test("a reviewed classification reorder persists atomically and fences concurren
     kind: "inventory.classification_reorder",
     mutationId: mid(),
     createdAt: new Date().toISOString(),
-    payload: { ...payload, entries },
+    payload: { ...payload, entries, move: { source: first, anchor: last, after: false } },
   };
   const result = (await push(t, owner, [reorder])).body;
   expect(result.results[0]).toMatchObject({ status: "applied" });

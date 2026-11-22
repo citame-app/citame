@@ -7311,7 +7311,9 @@ fn native_stock_adjustment_to_an_empty_warehouse_replays_and_reviews_after_resta
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_classifications_replay_after_restart_and_keep_legacy_product_stock() {
-    use sob_core::inventory_classifications::{Classification, ClassificationKind};
+    use sob_core::inventory_classifications::{
+        Classification, ClassificationKind, ClassificationMove,
+    };
     use sob_core::product_editor::ProductReview;
     use uuid::Uuid;
 
@@ -7428,12 +7430,21 @@ fn native_classifications_replay_after_restart_and_keep_legacy_product_stock() {
         .move_to(other.id, subcategory.id, false)
         .unwrap();
     store
-        .queue_inventory_order(&generation, other.id, &order, None)
+        .queue_inventory_order(
+            &generation,
+            ClassificationMove {
+                source: other.id,
+                anchor: subcategory.id,
+                after: false,
+            },
+            &order,
+            None,
+        )
         .unwrap();
     drop(store);
 
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(store.pending_inventory_orders().unwrap(), [order]);
+    assert_eq!(store.pending_inventory_orders().unwrap()[0].order, order);
     assert_eq!(
         sync::sync_cycle(&mut store, &*desktop.transport)
             .unwrap()
@@ -7442,6 +7453,17 @@ fn native_classifications_replay_after_restart_and_keep_legacy_product_stock() {
         1
     );
     assert!(store.pending_inventory_orders().unwrap().is_empty());
+    let cached = store.inventory_classifications().unwrap().unwrap();
+    assert_eq!(
+        cached
+            .reviewed_order(other.id)
+            .unwrap()
+            .entries
+            .iter()
+            .map(|entry| entry.id)
+            .collect::<Vec<_>>(),
+        [other.id, subcategory.id]
+    );
     let remote = web.rest_get("/admin/inventory/classifications");
     let visible = remote["entries"]
         .as_array()

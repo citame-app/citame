@@ -8,6 +8,12 @@ import { DomainError } from "../../errors";
 import { lockInventoryClassification } from "./classification-fields";
 import { requireCurrentInventoryWriter } from "./service";
 
+const classificationOrder = [
+  asc(inventoryClassification.position),
+  asc(sql`lower(${inventoryClassification.name})`),
+  asc(inventoryClassification.id),
+] as const;
+
 export async function listInventoryClassifications(
   db: Database,
   principal: Principal,
@@ -20,9 +26,7 @@ export async function listInventoryClassifications(
     .orderBy(
       asc(inventoryClassification.kind),
       asc(inventoryClassification.parentId),
-      asc(inventoryClassification.position),
-      asc(sql`lower(${inventoryClassification.name})`),
-      asc(inventoryClassification.id),
+      ...classificationOrder,
     );
   return { entries, generation };
 }
@@ -184,11 +188,7 @@ export async function reorderInventoryClassifications(
             : isNull(inventoryClassification.parentId),
         ),
       )
-      .orderBy(
-        asc(inventoryClassification.position),
-        asc(sql`lower(${inventoryClassification.name})`),
-        asc(inventoryClassification.id),
-      );
+      .orderBy(...classificationOrder);
     const byId = new Map(siblings.map((row) => [row.id, row]));
     if (
       siblings.length !== entries.length ||

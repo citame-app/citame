@@ -367,7 +367,9 @@ const classificationSave = z.object({
 const classificationReorder = z.object({
   ...envelope,
   kind: z.literal("inventory.classification_reorder"),
-  payload: inventoryClassificationOrderSchema,
+  payload: inventoryClassificationOrderSchema.extend({
+    move: z.strictObject({ source: idSchema, anchor: idSchema, after: z.boolean() }),
+  }),
 });
 
 const staffUpdate = z.object({

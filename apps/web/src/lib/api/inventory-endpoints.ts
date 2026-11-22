@@ -3,6 +3,7 @@ import {
   type InventoryClassificationInput,
   type InventoryClassificationReorder,
   inventoryClassificationListSchema,
+  inventoryClassificationOrderResultSchema,
   inventoryClassificationSchema,
   inventoryFacetsSchema,
   inventoryReportSchema,
@@ -41,7 +42,6 @@ import {
   warehouseSchema,
   warehouseStockSchema,
 } from "@sob/contracts";
-import { z } from "zod";
 import type { ApiClient } from "./client";
 
 const inventoryParams = ({ resellable, lowStock, ...query }: Partial<ProductQuery>) => ({
@@ -71,7 +71,11 @@ export function inventoryEndpoints(client: ApiClient) {
     classifications: () =>
       client.get("/admin/inventory/classifications", inventoryClassificationListSchema),
     reorderClassifications: (body: InventoryClassificationReorder) =>
-      client.put("/admin/inventory/classifications/order", body, z.object({ ok: z.literal(true) })),
+      client.put(
+        "/admin/inventory/classifications/order",
+        body,
+        inventoryClassificationOrderResultSchema,
+      ),
     saveClassification: (id: string, body: InventoryClassificationInput) =>
       client.put(`/admin/inventory/classifications/${id}`, body, inventoryClassificationSchema),
     warehouses: () => client.get("/admin/inventory/warehouses", warehouseListSchema),

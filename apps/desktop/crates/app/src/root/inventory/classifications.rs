@@ -1,7 +1,7 @@
 use super::*;
 use sob_core::inventory_classifications::{
-    Classification, ClassificationCatalogue, ClassificationKind, ClassificationOrder,
-    ClassificationProposal, REORDER, SAVE,
+    Classification, ClassificationCatalogue, ClassificationKind, ClassificationMove,
+    ClassificationProposal, QueuedClassificationOrder, SAVE,
 };
 use uuid::Uuid;
 
@@ -21,7 +21,7 @@ pub(super) struct Panel {
     notice: Option<Key>,
     discard: bool,
     handles: std::cell::RefCell<HashMap<Uuid, gpui::FocusHandle>>,
-    order_conflict: Option<(String, Uuid, ClassificationOrder)>,
+    order_conflict: Option<(String, QueuedClassificationOrder)>,
 }
 
 #[derive(Clone)]
@@ -31,6 +31,12 @@ struct ClassificationDrag {
     kind: ClassificationKind,
     parent: Option<Uuid>,
     label: String,
+}
+
+impl ClassificationDrag {
+    fn accepts(&self, id: Uuid, kind: ClassificationKind, parent: Option<Uuid>) -> bool {
+        self.source != id && self.kind == kind && self.parent == parent
+    }
 }
 
 struct ClassificationDragLabel(String);
@@ -411,26 +417,13 @@ impl Root {
         id: &str,
         cx: &mut Context<Self>,
     ) {
-        let Some(row) = self
-            .svc
-            .store
-            .conflict(id)
-            .ok()
-            .flatten()
-            .filter(|row| row.kind == REORDER)
-        else {
-            return;
-        };
-        let Ok(source) = Uuid::parse_str(&row.entity_id) else {
-            return;
-        };
-        let Ok(order) = serde_json::from_value::<ClassificationOrder>(row.payload) else {
+        let Some(order) = self.svc.store.inventory_order_conflict(id).ok().flatten() else {
             return;
         };
         self.prepare_inventory(cx);
         self.open_classifications(cx);
         if let Some(panel) = self.classifications_panel() {
-            panel.order_conflict = Some((id.to_owned(), source, order));
+            panel.order_conflict = Some((id.to_owned(), order));
             panel.notice = Some(Key::InventoryClassificationOrderChanged);
         }
     }
@@ -450,10 +443,15 @@ impl Root {
         else {
             return;
         };
+        let movement = ClassificationMove {
+            source,
+            anchor: target,
+            after,
+        };
         let result =
             self.svc
                 .store
-                .queue_inventory_order(&catalogue.generation, source, &order, replaces);
+                .queue_inventory_order(&catalogue.generation, movement, &order, replaces);
         if let Some(panel) = self.classifications_panel() {
             panel.notice = Some(match result {
                 Ok(()) => {
@@ -579,7 +577,13 @@ impl Root {
             )
             .when_some(panel.notice, |body, key| body.child(self.t(key)))
             .when(loading, |body| body.child(self.t(Key::InventoryLoading)));
-        let Some(mut list) = self.svc.store.inventory_classifications().ok().flatten() else {
+        let Some(list) = self
+            .svc
+            .store
+            .displayed_inventory_classifications()
+            .ok()
+            .flatten()
+        else {
             return body
                 .child(self.t(Key::InventoryClassificationsUnavailable))
                 .when(!loading, |body| {
@@ -729,15 +733,17 @@ impl Root {
             .store
             .pending_inventory_orders()
             .unwrap_or_default();
-        for order in &pending_orders {
-            list.apply_reviewed_order(order);
-        }
+        let pending_groups = self
+            .svc
+            .store
+            .classification_order_pending_groups()
+            .unwrap_or_default();
         let pending_entries = self
             .svc
             .store
             .pending_inventory_classifications()
             .unwrap_or_default();
-        let ordering = write && pending_entries.is_empty() && panel.order_conflict.is_none();
+        let ordering = write && panel.order_conflict.is_none();
         let list = Arc::new(list);
         let body = body
             .when(ordering && list.entries.len() > 1, |body| {
@@ -746,75 +752,62 @@ impl Root {
             .when(!pending_orders.is_empty(), |body| {
                 body.child(self.t(Key::InventoryClassificationOrderQueued))
             })
-            .when_some(
-                panel.order_conflict.as_ref(),
-                |body, (id, source, previous)| {
-                    let source = *source;
-                    let target = previous.reference(source);
-                    let reviewed = list.reviewed_order(source);
-                    let action = target.and_then(|(target, after)| {
-                        reviewed
-                            .as_ref()?
-                            .move_to(source, target, after)
-                            .map(|_| (target, after))
-                    });
-                    let described = target.and_then(|(target, after)| {
-                        let name = list
-                            .entries
-                            .iter()
-                            .find(|entry| entry.id == source)?
-                            .name
-                            .clone();
-                        let reference = list
-                            .entries
-                            .iter()
-                            .find(|entry| entry.id == target)?
-                            .name
-                            .clone();
-                        Some(format!(
-                            "{name} · {} · {reference}",
-                            self.t(if after {
-                                Key::InventoryClassificationAfter
-                            } else {
-                                Key::InventoryClassificationBefore
-                            })
-                        ))
-                    });
-                    body.when_some(described, |body, text| body.child(text))
-                        .when_some(
-                            action.filter(|_| {
-                                current
-                                    && write
-                                    && !pending_orders.iter().any(|order| {
-                                        reviewed.as_ref().is_some_and(|reviewed| {
-                                            order.kind == reviewed.kind
-                                                && order.parent_id == reviewed.parent_id
-                                        })
-                                    })
-                                    && pending_entries.is_empty()
-                            }),
-                            |body, (target, after)| {
-                                let id = id.clone();
-                                let list = list.clone();
-                                body.child(self.button(
-                                    "classification-order-review",
-                                    self.t(Key::InventoryClassificationReapplyOrder),
-                                    Kind::Primary,
-                                    cx.listener(move |root, _, _, cx| {
-                                        root.move_classification(
-                                            &list,
-                                            source,
-                                            target,
-                                            after,
-                                            Some(&id),
-                                            cx,
-                                        )
-                                    }),
-                                ))
-                            },
-                        )
-                },
-            );
+            .when_some(panel.order_conflict.as_ref(), |body, (id, pending)| {
+                let movement = pending.movement;
+                let source = movement.source;
+                let target = Some((movement.anchor, movement.after));
+                let action = pending.review(&list);
+                let described = target.and_then(|(target, after)| {
+                    let name = list
+                        .entries
+                        .iter()
+                        .find(|entry| entry.id == source)?
+                        .name
+                        .clone();
+                    let reference = list
+                        .entries
+                        .iter()
+                        .find(|entry| entry.id == target)?
+                        .name
+                        .clone();
+                    Some(format!(
+                        "{name} · {} · {reference}",
+                        self.t(if after {
+                            Key::InventoryClassificationAfter
+                        } else {
+                            Key::InventoryClassificationBefore
+                        })
+                    ))
+                });
+                body.when_some(described, |body, text| body.child(text))
+                    .when_some(
+                        action.filter(|order| {
+                            current
+                                && write
+                                && !pending_groups.contains(&(order.kind, order.parent_id))
+                        }),
+                        |body, _| {
+                            let (target, after) = (movement.anchor, movement.after);
+                            let id = id.clone();
+                            let list = list.clone();
+                            body.child(self.button(
+                                "classification-order-review",
+                                self.t(Key::InventoryClassificationReapplyOrder),
+                                Kind::Primary,
+                                cx.listener(move |root, _, _, cx| {
+                                    root.move_classification(
+                                        &list,
+                                        source,
+                                        target,
+                                        after,
+                                        Some(&id),
+                                        cx,
+                                    )
+                                }),
+                            ))
+                        },
+                    )
+            });
         let mut by_group: HashMap<_, Vec<&Classification>> = HashMap::new();
         for row in &list.entries {
             by_group
@@ -888,9 +881,7 @@ impl Root {
             let kind = entry.kind;
             let parent = entry.parent_id;
             let (previous, next) = neighbors.get(&id).copied().unwrap_or_default();
-            let group_pending = pending_orders
-                .iter()
-                .any(|order| order.matches_group(&entry));
+            let group_pending = pending_groups.contains(&(kind, parent));
             let write = write && !group_pending;
             let ordering = ordering && !group_pending;
             div()
@@ -916,40 +907,44 @@ impl Root {
                     },
                 )
                 .when(ordering, |row| {
-                    row.can_drop(move |payload, _, _| {
-                        payload
-                            .downcast_ref::<ClassificationDrag>()
-                            .is_some_and(|drag| {
-                                drag.source != id && drag.kind == kind && drag.parent == parent
-                            })
-                    })
-                    .drag_over::<ClassificationDrag>(move |style, payload, _, _| {
-                        if payload.source != id && payload.kind == kind && payload.parent == parent
-                        {
-                            style.bg(theme::accent_soft())
-                        } else {
-                            style
-                        }
-                    })
-                    .on_drop(cx.listener(
-                        move |root, drag: &ClassificationDrag, _, cx| {
-                            if let Some(reviewed) = drag.catalogue.reviewed_order(drag.source) {
-                                let after = reviewed
-                                    .entries
-                                    .iter()
-                                    .find(|row| row.id == drag.source || row.id == id)
-                                    .is_some_and(|row| row.id == drag.source);
-                                root.move_classification(
-                                    &drag.catalogue,
-                                    drag.source,
-                                    id,
-                                    after,
-                                    None,
-                                    cx,
-                                );
+                    let bounds = std::rc::Rc::new(std::cell::Cell::new(None));
+                    let measure = bounds.clone();
+                    row.relative()
+                        .child(
+                            gpui::canvas(
+                                move |rect, _, _| measure.set(Some(rect)),
+                                |_, _, _, _| {},
+                            )
+                            .absolute()
+                            .inset_0(),
+                        )
+                        .can_drop(move |payload, _, _| {
+                            payload
+                                .downcast_ref::<ClassificationDrag>()
+                                .is_some_and(|drag| drag.accepts(id, kind, parent))
+                        })
+                        .drag_over::<ClassificationDrag>(move |style, payload, _, _| {
+                            if payload.accepts(id, kind, parent) {
+                                style.bg(theme::accent_soft())
+                            } else {
+                                style
                             }
-                        },
-                    ))
+                        })
+                        .on_drop(
+                            cx.listener(move |root, drag: &ClassificationDrag, window, cx| {
+                                if let Some(rect) = bounds.get() {
+                                    let after = window.mouse_position().y >= rect.center().y;
+                                    root.move_classification(
+                                        &drag.catalogue,
+                                        drag.source,
+                                        id,
+                                        after,
+                                        None,
+                                        cx,
+                                    );
+                                }
+                            }),
+                        )
                 })
                 .when(!entry.active, |row| {
                     row.child(self.t(Key::InventoryWarehouseArchived))
@@ -1023,8 +1018,8 @@ mod tests {
             .center();
         let end = cx
             .debug_bounds("classification-row-00000000-0000-0000-0000-00000000000c")
-            .unwrap()
-            .center();
+            .unwrap();
+        let end = gpui::point(end.center().x, end.center().y + px(1.));
         cx.simulate_mouse_down(start, gpui::MouseButton::Left, Default::default());
         cx.simulate_mouse_move(end, gpui::MouseButton::Left, Default::default());
         cx.run_until_parked();
@@ -1039,7 +1034,7 @@ mod tests {
         root.update(cx, |root, _| {
             let pending = root.svc.store.pending_inventory_orders().unwrap();
             assert_eq!(pending.len(), 2);
-            let order = &pending[0];
+            let order = &pending[0].order;
             assert_eq!(
                 order
                     .entries
@@ -1050,6 +1045,7 @@ mod tests {
             );
             assert_eq!(
                 pending[1]
+                    .order
                     .entries
                     .iter()
                     .map(|entry| entry.id)
