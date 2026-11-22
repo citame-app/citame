@@ -18,7 +18,7 @@ sudo apt install build-essential cmake pkg-config libasound2-dev libfontconfig-d
   libxkbcommon-x11-dev libssl-dev libzstd-dev libvulkan1 mesa-vulkan-drivers
 ```
 
-The running app needs a Linux graphical session with Vulkan presentation support. A plain Xvfb display may lack DRI3: in this session it could not create the GPUI surface. GPUI interaction tests use their deterministic test platform and do not establish real-driver compatibility.
+The running app needs a Linux graphical session with Vulkan presentation support. In a GNOME Wayland session, Citame requests the native title bar through XWayland when the local X display connects and offers DRI3. Otherwise it starts on Wayland and draws a title bar with close and the window controls supported by the compositor. The title bar is hidden in fullscreen. A plain Xvfb display can lack the DRI3 extension required for Vulkan presentation. GPUI interaction tests use their deterministic test platform and do not establish real-driver compatibility.
 
 ```bash
 cd apps/desktop

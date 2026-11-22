@@ -17,5 +17,8 @@ uuid = "=1.29.2"
 sob-core = { path = "../core" }
 tempfile = "=3.27.0"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = "=0.13.2"
+
 [dev-dependencies]
 gpui = { version = "=0.2.2", features = ["test-support"] }

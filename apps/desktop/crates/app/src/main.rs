@@ -2,6 +2,8 @@
 
 mod config;
 mod field;
+#[cfg(target_os = "linux")]
+mod linux_window;
 mod root;
 mod services;
 mod theme;
@@ -52,7 +54,7 @@ fn main() {
         return;
     }
     #[cfg(target_os = "linux")]
-    use_gnome_window_manager_decorations();
+    linux_window::prefer_native_gnome_decorations();
 
     let startup = std::time::Instant::now();
     let report_startup = std::env::var_os("SOB_STARTUP_TIMINGS").is_some();
@@ -65,7 +67,7 @@ fn main() {
                 app_id: Some("app.citame.desktop".into()),
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 #[cfg(target_os = "linux")]
-                window_decorations: Some(gpui::WindowDecorations::Server),
+                window_decorations: Some(linux_window::requested_decorations()),
                 titlebar: Some(TitlebarOptions {
                     title: Some(title.into()),
                     ..Default::default()
@@ -94,34 +96,4 @@ fn main() {
         .detach();
         cx.activate(true);
     });
-}
-
-// GNOME's Wayland compositor expects applications to draw decorations. Use its XWayland
-// window manager for system title bars when both display backends are in the session.
-#[cfg(target_os = "linux")]
-fn use_gnome_window_manager_decorations() {
-    use std::os::unix::process::CommandExt;
-    use std::process::Command;
-
-    let has_display = |name| std::env::var_os(name).is_some_and(|value| !value.is_empty());
-    if !(has_display("DISPLAY")
-        && (has_display("WAYLAND_DISPLAY") || has_display("WAYLAND_SOCKET")))
-    {
-        return;
-    }
-    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
-    if !desktop
-        .split(':')
-        .any(|name| name.eq_ignore_ascii_case("GNOME"))
-    {
-        return;
-    }
-    if let Ok(executable) = std::env::current_exe() {
-        let error = Command::new(executable)
-            .args(std::env::args_os().skip(1))
-            .env_remove("WAYLAND_DISPLAY")
-            .env_remove("WAYLAND_SOCKET")
-            .exec();
-        eprintln!("Citame could not start through XWayland: {error}");
-    }
 }
