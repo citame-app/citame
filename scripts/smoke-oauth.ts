@@ -591,7 +591,10 @@ const [nativeFamilies, webFamilies] = await Promise.all([
 assert.equal(nativeFamilies.status, 200);
 assert.equal(webFamilies.status, 200);
 const salesFamilies = salesReportSchema.parse(await nativeFamilies.json());
-assert.deepEqual(salesReportSchema.parse(await webFamilies.json()), salesFamilies);
+assert.deepEqual(
+  stableSales(salesReportSchema.parse(await webFamilies.json())),
+  stableSales(salesFamilies),
+);
 assert.deepEqual(
   salesFamilies.settledByFamily?.find((row) => row.family === "product"),
   {
