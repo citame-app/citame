@@ -10,6 +10,7 @@ import type { Tx } from "../../tx";
 import { getSalonSettings } from "../settings/service";
 import { requireStaff } from "../staff/admin";
 import { buildReportSummary, type DayStaffStatusRow, type ServiceRow } from "./aggregate";
+import { reportStaffOccupancy } from "./occupancy";
 
 type BucketRow = {
   day: string;
@@ -208,16 +209,31 @@ async function reportSummarySnapshot(db: Tx, query: ReportQuery): Promise<Report
     });
   }
 
-  return {
-    ...buildReportSummary({
-      from: query.from,
-      to: query.to,
+  const summary = buildReportSummary({
+    from: query.from,
+    to: query.to,
+    timezone,
+    staffId: query.staffId ?? null,
+    rows,
+    serviceRows,
+    staff,
+  });
+  const occupancy = await reportStaffOccupancy(
+    db,
+    staff.map(({ id }) => id),
+    query,
+    {
       timezone,
-      staffId: query.staffId ?? null,
-      rows,
-      serviceRows,
-      staff,
-    }),
+      fromAt,
+      toAt,
+    },
+  );
+  return {
+    ...summary,
+    perStaff: summary.perStaff.map((member) => ({
+      ...member,
+      occupancy: occupancy.get(member.staffId),
+    })),
     currency,
     currencies,
     appointmentBreakdown,

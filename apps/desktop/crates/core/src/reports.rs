@@ -128,8 +128,32 @@ pub struct DailyReport {
 pub struct StaffReport {
     pub display_name: String,
     pub no_show_rate: Option<f64>,
+    pub occupancy: Option<StaffOccupancy>,
     #[serde(flatten)]
     pub slice: ReportSlice,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StaffOccupancy {
+    pub scheduled_minutes: u64,
+    pub blocked_minutes: u64,
+    pub reserved_minutes: u64,
+    pub completed_minutes: u64,
+    pub no_show_minutes: u64,
+    pub occupancy_rate: Option<f64>,
+}
+
+impl StaffOccupancy {
+    pub fn minutes(&self) -> [u64; 5] {
+        [
+            self.scheduled_minutes,
+            self.blocked_minutes,
+            self.reserved_minutes,
+            self.completed_minutes,
+            self.no_show_minutes,
+        ]
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -399,6 +423,37 @@ impl ReportSummary {
                 .chain(currency.map(str::to_owned))
                 .chain(unpriced_cell(staff.slice.unpriced_services)),
             );
+        }
+        if self.per_staff.iter().any(|staff| staff.occupancy.is_some()) {
+            output.push_str("\r\n");
+            csv_row(
+                &mut output,
+                [
+                    "staff",
+                    "scheduled_minutes",
+                    "blocked_minutes",
+                    "reserved_minutes",
+                    "completed_visit_minutes",
+                    "no_show_minutes",
+                    "occupancy_rate",
+                ],
+            );
+            for staff in &self.per_staff {
+                let Some(occupancy) = staff.occupancy.as_ref() else {
+                    continue;
+                };
+                csv_row(
+                    &mut output,
+                    std::iter::once(staff.display_name.clone())
+                        .chain(occupancy.minutes().map(|value| value.to_string()))
+                        .chain(std::iter::once(
+                            occupancy
+                                .occupancy_rate
+                                .map(|rate| format!("{rate:.4}"))
+                                .unwrap_or_default(),
+                        )),
+                );
+            }
         }
         if let Some(breakdown) = &self.appointment_breakdown {
             output.push_str("\r\n");

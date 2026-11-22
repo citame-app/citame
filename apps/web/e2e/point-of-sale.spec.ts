@@ -86,6 +86,23 @@ for (const scheme of ["light", "dark"] as const) {
   });
 }
 
+test("the team occupancy report shows scheduled capacity and exports it", async ({ page }) => {
+  const from = salonDate(7);
+  const to = salonDate(14);
+  const route = `/admin/reports?preset=custom&from=${from}&to=${to}`;
+  await signInThroughUi(page, fixture.ownerEmail, route);
+  const report = page.getByRole("region", { name: "Team occupancy" });
+  await expect(report.getByText("Reserved in shift").filter({ visible: true }).first()).toBeVisible();
+  await expectNoHorizontalScroll(page);
+  const exporting = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export CSV", exact: true }).click();
+  const csv = await readFile(await (await exporting).path(), "utf8");
+  expect(csv).toContain(
+    "staff,scheduled_minutes,blocked_minutes,reserved_minutes,completed_visit_minutes,no_show_minutes,occupancy_rate",
+  );
+  expect(csv).toMatch(/,\d{3,},0,0,0,0,0\.0000\r\n/);
+});
+
 test("client collections report shows and exports net payments", async ({ page }) => {
   const from = salonDate(-1);
   const to = salonDate(1);

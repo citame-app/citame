@@ -3,6 +3,7 @@ import type { ReportSummary } from "@sob/contracts";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderApp } from "../../../../test/render";
 import { clientGroupReportCsv, clientReportCsv } from "./client-report";
+import { reportToCsv } from "./logic";
 import { ReportsView } from "./reports-view";
 
 const ANA = "0198f5a0-7b1c-7000-8000-000000000201";
@@ -92,6 +93,46 @@ const open = (
   renderApp(<ReportsView search={search} onSearchChange={onSearchChange} role={role} now={NOW} />);
 
 describe("ReportsView", () => {
+  test("shows the team's planned and reserved minutes and exports the same occupancy", async () => {
+    const [member] = report.perStaff;
+    if (!member) throw new Error("Missing staff fixture");
+    member.occupancy = {
+      scheduledMinutes: 240,
+      blockedMinutes: 30,
+      reservedMinutes: 45,
+      completedMinutes: 150,
+      noShowMinutes: 60,
+      occupancyRate: 0.2143,
+    };
+    open();
+    const table = await screen.findByRole("table", { name: "Team occupancy" });
+    const row = within(table).getByRole("row", { name: /Ana/ });
+    expect(
+      within(row)
+        .getAllByRole("cell")
+        .map((cell) => cell.textContent),
+    ).toEqual(["Ana", "240", "30", "45", "150", "60", "21%"]);
+    expect(reportToCsv(report)).toContain("Ana,240,30,45,150,60,0.2143\r\n");
+  });
+
+  test("shows scheduled capacity and allows export even without appointments", async () => {
+    const [member] = report.perStaff;
+    if (!member) throw new Error("Missing staff fixture");
+    report.totals = { ...slice(0, 0, 0), noShowRate: null };
+    member.occupancy = {
+      scheduledMinutes: 540,
+      blockedMinutes: 60,
+      reservedMinutes: 0,
+      completedMinutes: 0,
+      noShowMinutes: 0,
+      occupancyRate: 0,
+    };
+    open();
+    const table = await screen.findByRole("table", { name: "Team occupancy" });
+    expect(within(table).getByRole("cell", { name: "0%" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Export CSV" })).toBeEnabled();
+  });
+
   test("distinguishes an unknown imported price from a free service", async () => {
     report.totals.unpricedServices = 1;
     report.topServices = [

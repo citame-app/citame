@@ -661,7 +661,11 @@ impl Root {
                         !desk.export_pending
                             && desk.request.is_none()
                             && desk.mode == ReportMode::Overview
-                            && report.totals.appointments > 0,
+                            && (report.totals.appointments > 0
+                                || report
+                                    .per_staff
+                                    .iter()
+                                    .any(|entry| entry.occupancy.is_some())),
                         |view| {
                             view.child(self.button(
                                 "reports-export",
@@ -890,6 +894,79 @@ impl Root {
             .when(pages > 1, |view| {
                 view.child(self.render_report_pager(page, pages, cx))
             })
+            .when(desk.group == Group::Staff, |view| {
+                view.children(self.render_staff_occupancy(report, start))
+            })
+    }
+
+    fn render_staff_occupancy(
+        &self,
+        report: &ReportSummary,
+        start: usize,
+    ) -> Option<impl IntoElement> {
+        let staff = report.per_staff.iter().skip(start).take(PAGE_SIZE);
+        let rows: Vec<_> = staff
+            .filter_map(|entry| {
+                let occupancy = entry.occupancy.as_ref()?;
+                let rate = occupancy
+                    .occupancy_rate
+                    .map_or_else(|| "—".to_string(), |rate| format!("{:.0}%", rate * 100.));
+                Some(report_table_row(
+                    entry.display_name.clone(),
+                    occupancy.minutes().map(|value| value.to_string()),
+                    Some(rate),
+                    false,
+                ))
+            })
+            .collect();
+        if rows.is_empty() {
+            return None;
+        }
+        Some(
+            div()
+                .id("staff-occupancy")
+                .debug_selector(|| "staff-occupancy".to_string())
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(
+                    div()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(self.t(Key::TeamOccupancy)),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::muted())
+                        .child(self.t(Key::TeamOccupancyHelp)),
+                )
+                .child(
+                    div()
+                        .id("staff-occupancy-grid")
+                        .overflow_x_scroll()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(theme::line())
+                        .child(
+                            div()
+                                .min_w(px(680.))
+                                .child(report_table_row(
+                                    self.t(Group::Staff.label()).to_string(),
+                                    [
+                                        Key::OccupancyScheduled,
+                                        Key::OccupancyBlocked,
+                                        Key::OccupancyReserved,
+                                        Key::OccupancyCompleted,
+                                        Key::OccupancyMissed,
+                                    ]
+                                    .map(|key| self.t(key).to_string()),
+                                    Some(self.t(Key::OccupancyRate).to_string()),
+                                    true,
+                                ))
+                                .children(rows),
+                        ),
+                ),
+        )
     }
 
     fn render_report_pager(&self, page: usize, pages: usize, cx: &mut Context<Self>) -> gpui::Div {
@@ -996,7 +1073,13 @@ mod tests {
             });
             desk.summary = Some(serde_json::from_value(serde_json::json!({
                 "from": "2026-11-18", "to": "2026-11-18", "currency": "EUR",
-                "totals": row, "series": vec![row; 40], "perStaff": [], "topServices": [],
+                "totals": row, "series": vec![row; 40], "topServices": [],
+                "perStaff": [{
+                    "displayName": "Ana", "appointments": 1, "byStatus": counts, "revenueCents": 0,
+                    "occupancy": { "scheduledMinutes": 240, "blockedMinutes": 30,
+                        "reservedMinutes": 45, "completedMinutes": 150, "noShowMinutes": 60,
+                        "occupancyRate": 0.2143 },
+                }],
                 "appointmentBreakdown": {"hour": [], "service": [], "category": [], "addon": []},
             })).unwrap());
             cx.notify();
@@ -1021,6 +1104,10 @@ mod tests {
         cx.run_until_parked();
         let csv = std::fs::read_to_string(&export).unwrap();
         assert!(csv.contains("2026-11-18,1,0,1,0,0,0.00,EUR,1"));
+        assert!(csv.contains("Ana,240,30,45,150,60,0.2143\r\n"));
+        root.update(cx, |root, cx| root.report_group(Group::Staff, cx));
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("staff-occupancy").is_some());
         let failed_export = dir.path().join("interrupted.csv");
         root.update(cx, |root, cx| {
             root.choose_report_export(

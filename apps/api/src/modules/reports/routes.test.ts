@@ -12,8 +12,10 @@ import {
   checkoutPayment,
   checkoutRefund,
   clientProfile,
+  dateShift,
   service,
   staffProfile,
+  timeOff,
 } from "@sob/db";
 import { eq, inArray } from "drizzle-orm";
 import {
@@ -57,6 +59,53 @@ const summary = async (who: Actor, query: string) => {
 
 type Svc = "haircut" | "color";
 const PRICE = { haircut: 10000, color: 25000 } as const;
+
+test("occupancy uses dated shifts, clipped blocks and actual reserved work without counting overlaps twice", async () => {
+  await t.db.update(staffProfile).set({ maxConcurrent: 2 }).where(eq(staffProfile.id, f.anaId));
+  await t.db.insert(dateShift).values([
+    { staffId: f.anaId, date: "2026-03-09", ranges: [{ startTime: "09:00", endTime: "13:00" }] },
+    { staffId: f.anaId, date: "2026-03-10", ranges: [] },
+  ]);
+  await t.db.insert(timeOff).values([
+    {
+      staffId: f.anaId,
+      startsAt: new Date("2026-03-09T11:50Z"),
+      endsAt: new Date("2026-03-09T12:15Z"),
+    },
+    {
+      staffId: f.anaId,
+      startsAt: new Date("2026-03-09T12:10Z"),
+      endsAt: new Date("2026-03-09T12:30Z"),
+    },
+  ]);
+  await t.db.insert(appointment).values({
+    staffId: f.anaId,
+    clientId: f.clientId,
+    startsAt: new Date("2026-03-09T12:45Z"),
+    endsAt: new Date("2026-03-09T14:15Z"),
+    workWindows: [
+      { offsetMinutes: 0, endOffsetMinutes: 15 },
+      { offsetMinutes: 75, endOffsetMinutes: 90 },
+    ],
+  });
+  const report = await summary(ana, "from=2026-03-09&to=2026-03-10&currency=EUR");
+  expect(report.perStaff).toHaveLength(1);
+  expect(report.perStaff[0]?.occupancy).toEqual({
+    scheduledMinutes: 240,
+    blockedMinutes: 30,
+    reservedMinutes: 45,
+    completedMinutes: 150,
+    noShowMinutes: 60,
+    occupancyRate: 0.2143,
+  });
+  const closed = await summary(ana, "from=2026-03-10&to=2026-03-10");
+  expect(closed.perStaff[0]?.occupancy).toMatchObject({
+    scheduledMinutes: 0,
+    blockedMinutes: 0,
+    reservedMinutes: 0,
+    occupancyRate: null,
+  });
+});
 
 async function insert(
   who: "ana" | "bea",
@@ -560,6 +609,14 @@ describe("GET /admin/reports/summary as the owner", () => {
         byStatus: { booked: 0, completed: 2, cancelled: 1, no_show: 1 },
         revenueCents: 45000,
         noShowRate: 0.3333,
+        occupancy: {
+          scheduledMinutes: 540,
+          blockedMinutes: 0,
+          reservedMinutes: 60,
+          completedMinutes: 150,
+          noShowMinutes: 60,
+          occupancyRate: 0.1111,
+        },
       },
       {
         staffId: f.beaId,
@@ -568,6 +625,14 @@ describe("GET /admin/reports/summary as the owner", () => {
         byStatus: { booked: 1, completed: 2, cancelled: 0, no_show: 0 },
         revenueCents: 20000,
         noShowRate: 0,
+        occupancy: {
+          scheduledMinutes: 540,
+          blockedMinutes: 0,
+          reservedMinutes: 0,
+          completedMinutes: 90,
+          noShowMinutes: 0,
+          occupancyRate: 0,
+        },
       },
     ]);
   });

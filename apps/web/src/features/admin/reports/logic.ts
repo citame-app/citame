@@ -124,6 +124,35 @@ export function reportToCsv(summary: ReportSummary): string {
       ]),
     ),
   ];
+  if (summary.perStaff.some((staff) => staff.occupancy)) {
+    lines.push(
+      "",
+      row([
+        "staff",
+        "scheduled_minutes",
+        "blocked_minutes",
+        "reserved_minutes",
+        "completed_visit_minutes",
+        "no_show_minutes",
+        "occupancy_rate",
+      ]),
+    );
+    for (const staff of summary.perStaff) {
+      if (!staff.occupancy) continue;
+      const time = staff.occupancy;
+      lines.push(
+        row([
+          staff.displayName,
+          time.scheduledMinutes,
+          time.blockedMinutes,
+          time.reservedMinutes,
+          time.completedMinutes,
+          time.noShowMinutes,
+          time.occupancyRate?.toFixed(4) ?? "",
+        ]),
+      );
+    }
+  }
   const breakdown = summary.appointmentBreakdown;
   if (breakdown) {
     lines.push(

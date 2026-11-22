@@ -31,6 +31,7 @@ import {
 } from "./client-report";
 import { formatRate, REPORT_PRESETS, reportToCsv } from "./logic";
 import { type ReportsSearch, rangeError, resolveRange } from "./range";
+import { StaffOccupancy } from "./staff-occupancy";
 
 const topHelper = createColumnHelper<DataTableFeatures, ReportSummary["topServices"][number]>();
 const staffHelper = createColumnHelper<DataTableFeatures, ReportSummary["perStaff"][number]>();
@@ -109,6 +110,9 @@ export function ReportsView({
   const [staffSort, setStaffSort] = useState<SortingState>([{ id: "revenue", desc: true }]);
 
   const report = showClients ? undefined : query.data;
+  const canExportSummary =
+    report &&
+    (report.totals.appointments > 0 || report.perStaff.some(({ occupancy }) => occupancy));
   const currency = report?.currency ?? "ARS";
   const money = (cents: number) => formatMoney(cents, currency, locale);
   const day = (date: string) => formatDateWithYear(date, locale);
@@ -323,8 +327,7 @@ export function ReportsView({
           variant="secondary"
           className="ml-auto"
           disabled={
-            Boolean(problem) ||
-            (showClients ? !clients.data?.rows.length : !report?.totals.appointments)
+            Boolean(problem) || (showClients ? !clients.data?.rows.length : !canExportSummary)
           }
           onClick={exportCsv}
         >
@@ -514,6 +517,7 @@ export function ReportsView({
               </section>
             </>
           )}
+          <StaffOccupancy staff={staffRows} />
         </>
       )}
     </div>

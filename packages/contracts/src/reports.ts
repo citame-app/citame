@@ -106,6 +106,16 @@ export const reportSliceSchema = z.object({
   unpricedServices: z.number().int().positive().optional(),
 });
 
+const staffOccupancySchema = z.object({
+  scheduledMinutes: count,
+  blockedMinutes: count,
+  reservedMinutes: count,
+  completedMinutes: count,
+  noShowMinutes: count,
+  occupancyRate: rateSchema,
+});
+export type StaffOccupancy = z.infer<typeof staffOccupancySchema>;
+
 export const reportSummarySchema = z.object({
   canReportClients: z.boolean().optional(),
   from: localDateSchema,
@@ -139,6 +149,7 @@ export const reportSummarySchema = z.object({
       staffId: idSchema,
       displayName: z.string(),
       noShowRate: rateSchema,
+      occupancy: staffOccupancySchema.optional(),
     }),
   ),
   appointmentBreakdown: z

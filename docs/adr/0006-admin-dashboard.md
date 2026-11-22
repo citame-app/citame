@@ -82,6 +82,10 @@ Cloud and Desktop use the same client report and export the ten highest positive
 
 The client profile opens a scoped financial report in Cloud and Desktop. The existing financial report endpoint accepts a client identifier and resolves it to the current profile within the reporting snapshot. Date and professional filters apply to the same checkout ledger and settlement calculations as the centre report. Scoped exports identify the client and keep the settled family, included tax, external collections and refunds distinct. Cash register sessions remain available in the centre report. The client view requires financial report and client directory permissions.
 
+### Team occupancy
+
+Cloud and Desktop use the same report snapshot for the selected salon-local dates and team member. Effective shifts use the current weekly schedule and dated overrides. The report counts overlapping blocks once and clips them to the shift. Reserved staff work includes active bookings and completed visits inside the remaining shift. Simultaneous reservations count once, and processing gaps are taken from each appointment's frozen work plan. Completed and missed visit spans use their calendar duration. Occupancy uses all currencies and is blank when no shift time remains. The report and its CSV measure planned time from the calendar. Attendance records would be required to report hours actually worked.
+
 ## Consequences
 
 - Two new runtime dependencies in `apps/web`: `@tanstack/react-table` 9.3.1 and `recharts` 3.10.1 (plus `react-is` 19.3.1, a Recharts peer).
