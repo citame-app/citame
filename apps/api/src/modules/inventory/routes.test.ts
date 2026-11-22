@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import {
   checkoutSchema,
+  inventoryBrandLogoResultSchema,
   inventoryClassificationListSchema,
   inventoryNumberingSnapshotSchema,
   productListSchema,
@@ -711,6 +712,96 @@ test("product photos are private, normalized and protected against stale writes"
   expect(
     productSchema.parse(await (await call(staff, productPath)).json()).photoVersion,
   ).toBeUndefined();
+});
+
+test("brand logos are private, survive sync replay and reject revisions from before removal", async () => {
+  const cataloguePath = "/admin/inventory/classifications";
+  const catalogue = async () =>
+    inventoryClassificationListSchema.parse(await (await call(staff, cataloguePath)).json());
+  const { generation } = await catalogue();
+  const brandId = crypto.randomUUID();
+  const categoryId = crypto.randomUUID();
+  for (const [id, kind] of [
+    [brandId, "brand"],
+    [categoryId, "category"],
+  ]) {
+    expect(
+      (
+        await call(owner, `${cataloguePath}/${id}`, "PUT", {
+          kind,
+          name: "Demo",
+          parentId: null,
+          active: true,
+          position: 0,
+          version: 0,
+          generation,
+        })
+      ).status,
+    ).toBe(200);
+  }
+  const logoPath = `${cataloguePath}/${brandId}/logo`;
+  const raster = await sharp({
+    create: { width: 48, height: 32, channels: 3, background: "#87556a" },
+  })
+    .png()
+    .withMetadata({ orientation: 6 })
+    .toBuffer();
+  const input = { version: null, imageBase64: raster.toString("base64"), generation };
+  expect((await call(staff, logoPath, "PUT", input)).status).toBe(403);
+  expect((await call(owner, `${cataloguePath}/${categoryId}/logo`, "PUT", input)).status).toBe(404);
+  expect(
+    (await call(owner, logoPath, "PUT", { ...input, generation: "other-generation" })).status,
+  ).toBe(409);
+  expect((await call(owner, logoPath, "PUT", { ...input, imageBase64: "YWJj" })).status).toBe(400);
+
+  const attempts = await Promise.all([
+    call(owner, logoPath, "PUT", input),
+    call(owner, logoPath, "PUT", input),
+  ]);
+  expect(attempts.map((result) => result.status).sort()).toEqual([200, 409]);
+  const saved = attempts.find((row) => row.ok);
+  if (!saved) throw new Error("Brand logo creation failed");
+  const logo = inventoryBrandLogoResultSchema.parse(await saved.json());
+  if (!logo) throw new Error("Brand logo save returned no logo");
+  expect(logo.present).toBe(true);
+  expect((await catalogue()).entries.find((row) => row.id === brandId)).toMatchObject({
+    logo,
+    version: 1,
+  });
+  const imagePath = `${logoPath}/${logo.version}`;
+  expect((await call(null, imagePath)).status).toBe(401);
+  expect((await call(client, imagePath)).status).toBe(403);
+  const image = await call(staff, imagePath);
+  expect(image.headers.get("cache-control")).toBe("private, no-store");
+  const metadata = await sharp(Buffer.from(await image.arrayBuffer())).metadata();
+  expect(metadata).toMatchObject({ format: "jpeg", width: 32, height: 48 });
+  expect(metadata.exif).toBeUndefined();
+
+  const before = await pull(t, owner);
+  const remove = {
+    mutationId: mid(),
+    createdAt: new Date().toISOString(),
+    kind: "inventory.brand_logo",
+    payload: { id: brandId, version: logo.version, imageBase64: null },
+  };
+  expect((await push(t, staff, [{ ...remove, mutationId: mid() }])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "forbidden",
+  });
+  const applied = (await push(t, owner, [remove])).body.results[0];
+  if (applied?.status !== "applied") throw new Error("Brand logo sync did not apply");
+  expect(applied).toMatchObject({ status: "applied", appliedSeq: expect.any(Number) });
+  expect((await push(t, owner, [remove])).body.results[0]).toEqual({
+    ...applied,
+    replayed: true,
+  });
+  expect((await pull(t, owner, { since: before.headSeq })).refresh).toContain("commerce");
+  expect((await call(staff, imagePath)).status).toBe(404);
+  expect((await catalogue()).entries.find((row) => row.id === brandId)).toMatchObject({
+    version: 1,
+    logo: { version: expect.any(String), present: false },
+  });
+  expect((await call(owner, logoPath, "PUT", input)).status).toBe(409);
 });
 
 test("offline inventory documents write one receipt and emit commerce acknowledgments", async () => {

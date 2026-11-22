@@ -1,6 +1,12 @@
 import type { InventoryClassificationInput, InventoryClassificationReorder } from "@sob/contracts";
-import { type Database, inventoryClassification, pgErrorCode, retailProduct } from "@sob/db";
-import { and, asc, eq, isNull, or, sql } from "drizzle-orm";
+import {
+  type Database,
+  inventoryBrandLogo,
+  inventoryClassification,
+  pgErrorCode,
+  retailProduct,
+} from "@sob/db";
+import { and, asc, eq, getTableColumns, isNull, or, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
@@ -20,14 +26,22 @@ export async function listInventoryClassifications(
   generation: string,
 ) {
   requirePermission(principal, "readInventory");
-  const entries = await db
-    .select()
+  const rows = await db
+    .select({
+      ...getTableColumns(inventoryClassification),
+      logoVersion: inventoryBrandLogo.version,
+      logoPresent: sql<boolean>`${inventoryBrandLogo.image} is not null`,
+    })
     .from(inventoryClassification)
+    .leftJoin(inventoryBrandLogo, eq(inventoryBrandLogo.brandId, inventoryClassification.id))
     .orderBy(
       asc(inventoryClassification.kind),
       asc(inventoryClassification.parentId),
       ...classificationOrder,
     );
+  const entries = rows.map(({ logoVersion, logoPresent, ...entry }) =>
+    logoVersion ? { ...entry, logo: { version: logoVersion, present: logoPresent } } : entry,
+  );
   return { entries, generation };
 }
 

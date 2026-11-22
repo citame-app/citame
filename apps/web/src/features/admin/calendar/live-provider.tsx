@@ -59,7 +59,13 @@ export function CalendarLiveProvider({
             setInventoryRevision((current) => current + 1);
             void queryClient.invalidateQueries({
               queryKey,
-              predicate: (query) => query.queryKey[1] !== "ledger",
+              predicate: (query) =>
+                !["ledger", "classifications"].includes(String(query.queryKey[1])),
+            });
+            // Keep the last successful catalogue visible if a realtime refetch fails.
+            const classifications = { queryKey: ["inventory", "classifications"] };
+            void queryClient.cancelQueries(classifications).then(() => {
+              if (!closed) return queryClient.invalidateQueries(classifications);
             });
           } else if (
             queryKey[0] === "staff" ||

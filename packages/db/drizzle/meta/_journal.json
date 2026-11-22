@@ -820,6 +820,13 @@
       "when": 1795315500000,
       "tag": "0116_private_inventory_numbering",
       "breakpoints": true
+    },
+    {
+      "idx": 117,
+      "version": "7",
+      "when": 1795316100000,
+      "tag": "0117_inventory_brand_logo",
+      "breakpoints": true
     }
   ]
 }

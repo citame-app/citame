@@ -1,7 +1,8 @@
 use super::*;
 use crate::inventory_classifications::{
-    Classification, ClassificationCatalogue, ClassificationKind, ClassificationMove,
-    ClassificationOrder, ClassificationProposal, QueuedClassificationOrder, REORDER, SAVE,
+    BRAND_LOGO, BrandLogoProposal, Classification, ClassificationCatalogue, ClassificationKind,
+    ClassificationMove, ClassificationOrder, ClassificationProposal, QueuedClassificationOrder,
+    REORDER, SAVE,
 };
 
 const CLASSIFICATIONS: &str = "inventory_classifications";
@@ -186,6 +187,7 @@ impl Store {
         mut proposal: Classification,
         replaces: Option<&str>,
     ) -> Result<()> {
+        proposal.logo = None;
         if !proposal.normalize() {
             return Err(CoreError::Invalid("Review the classification".into()));
         }
@@ -258,6 +260,65 @@ impl Store {
                 reviewed: current.cloned(),
             };
             store.enqueue(SAVE, &id, serde_json::to_value(saved)?)?;
+            Ok(())
+        })
+    }
+
+    pub fn pending_brand_logo(&self, id: uuid::Uuid) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM outbox WHERE kind = ?1 AND entity_id = ?2)",
+            params![BRAND_LOGO, id.to_string()],
+            |row| row.get(0),
+        )?)
+    }
+
+    pub fn inventory_brand_logo_conflict(&self, id: &str) -> Result<Option<BrandLogoProposal>> {
+        if !self.can_queue_product_edits() {
+            return Ok(None);
+        }
+        self.conflict(id)?
+            .filter(|row| row.kind == BRAND_LOGO)
+            .map(|row| Ok(serde_json::from_value(row.payload)?))
+            .transpose()
+    }
+
+    pub fn queue_inventory_brand_logo(
+        &mut self,
+        generation: &str,
+        proposal: BrandLogoProposal,
+        replaces: Option<&str>,
+    ) -> Result<()> {
+        proposal.image()?;
+        self.write_transaction(|store| {
+            if !store.can_queue_product_edits()
+                || store.verified_reviewed_generation()? != generation
+            {
+                return Err(CoreError::CalendarGenerationChanged);
+            }
+            let catalogue = store
+                .inventory_classifications()?
+                .filter(|list| list.generation == generation)
+                .ok_or(CoreError::CalendarGenerationChanged)?;
+            let brand = catalogue
+                .entries
+                .iter()
+                .find(|row| row.id == proposal.id && row.kind == ClassificationKind::Brand)
+                .ok_or_else(|| CoreError::NotFound("inventory brand".into()))?;
+            if brand.logo.map(|logo| logo.version) != proposal.version {
+                return Err(CoreError::CatalogueVersionChanged);
+            }
+            if store.pending_brand_logo(proposal.id)? {
+                return Err(CoreError::CatalogueEditPending);
+            }
+            let id = proposal.id.to_string();
+            if let Some(previous) = replaces {
+                store
+                    .conflict(previous)?
+                    .filter(|row| row.kind == BRAND_LOGO && row.entity_id == id)
+                    .ok_or_else(|| CoreError::NotFound("brand logo proposal".into()))?;
+                store.resolve_conflict(previous, "resubmitted")?;
+            }
+            store.enqueue(BRAND_LOGO, &id, serde_json::to_value(proposal)?)?;
             Ok(())
         })
     }

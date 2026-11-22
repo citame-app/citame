@@ -10,6 +10,7 @@ use sob_core::sync::TransportError;
 mod catalogue;
 mod classifications;
 mod documents;
+mod image;
 mod ledger;
 mod product_form;
 mod product_photo;

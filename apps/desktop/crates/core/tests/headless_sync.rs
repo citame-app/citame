@@ -7310,6 +7310,156 @@ fn native_stock_adjustment_to_an_empty_warehouse_replays_and_reviews_after_resta
 
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_brand_logo_replays_after_restart_and_requires_review_after_a_cloud_write() {
+    use sob_core::inventory_classifications::{
+        BrandLogoProposal, Classification, ClassificationKind,
+    };
+    use sob_core::staff_portrait_image::prepare_photo;
+    use uuid::Uuid;
+
+    let device = proxy_device();
+    let web = Device::sign_in();
+    let temporary = tempfile::tempdir().unwrap();
+    let raster = temporary.path().join("logo.png");
+    image::RgbImage::from_pixel(64, 32, image::Rgb([120, 64, 90]))
+        .save(&raster)
+        .unwrap();
+    let jpeg = prepare_photo(&raster).unwrap();
+    let path = temporary.path().join("brand-logo.sqlite");
+    let mut store = Store::open(&path).unwrap();
+    sync::pull_all(&mut store, &*device.transport).unwrap();
+    let generation = store.verified_reviewed_generation().unwrap();
+    let id = Uuid::now_v7();
+    let brand = Classification {
+        id,
+        kind: ClassificationKind::Brand,
+        parent_id: None,
+        name: format!("Native brand {id}"),
+        active: true,
+        position: 0,
+        version: 0,
+        logo: None,
+    };
+    let refresh = |store: &mut Store| {
+        let catalogue = device.transport.inventory_classifications().unwrap();
+        store
+            .remember_inventory_classifications(&catalogue)
+            .unwrap();
+        catalogue.entries.into_iter().find(|row| row.id == id)
+    };
+    refresh(&mut store);
+    store
+        .queue_inventory_classification(&generation, brand.clone(), None)
+        .unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    assert!(brand.acknowledged_by(&refresh(&mut store).unwrap()));
+    store
+        .queue_inventory_brand_logo(
+            &generation,
+            BrandLogoProposal::new(id, None, Some(&jpeg)).unwrap(),
+            None,
+        )
+        .unwrap();
+    drop(store);
+
+    let mut store = Store::open(&path).unwrap();
+    assert!(store.pending_brand_logo(id).unwrap());
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    assert!(!store.pending_brand_logo(id).unwrap());
+    let first = refresh(&mut store).unwrap().logo.unwrap();
+    assert!(first.present);
+    assert!(
+        !device
+            .transport
+            .inventory_brand_logo(id, first.version)
+            .unwrap()
+            .is_empty()
+    );
+    store
+        .queue_inventory_brand_logo(
+            &generation,
+            BrandLogoProposal::new(id, Some(first.version), None).unwrap(),
+            None,
+        )
+        .unwrap();
+
+    let prefix = std::env::var("SOB_TEST_REST_PREFIX").unwrap_or_default();
+    let request_path = format!("/admin/inventory/classifications/{id}/logo");
+    let mut replacement =
+        serde_json::to_value(BrandLogoProposal::new(id, Some(first.version), Some(&jpeg)).unwrap())
+            .unwrap();
+    replacement.as_object_mut().unwrap().remove("id");
+    replacement["generation"] = json!(generation);
+    ureq::put(&format!("{}{prefix}{request_path}", web.base))
+        .header("Cookie", &web.cookie)
+        .header("Origin", &web.base)
+        .content_type("application/json")
+        .send(replacement.to_string())
+        .unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .rejected,
+        1
+    );
+    let conflict = store.conflicts().unwrap().pop().unwrap();
+    assert_eq!(conflict.reason, "conflict");
+    assert!(
+        store
+            .inventory_brand_logo_conflict(&conflict.mutation_id)
+            .unwrap()
+            .is_some()
+    );
+    let current = refresh(&mut store).unwrap().logo.unwrap();
+    assert_ne!(first.version, current.version);
+    assert!(
+        device
+            .transport
+            .inventory_brand_logo(id, first.version)
+            .is_err()
+    );
+    store
+        .queue_inventory_brand_logo(
+            &generation,
+            BrandLogoProposal::new(id, Some(current.version), None).unwrap(),
+            Some(&conflict.mutation_id),
+        )
+        .unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let final_brand = refresh(&mut store).unwrap();
+    assert_eq!(final_brand.version, 1);
+    let tombstone = final_brand.logo.unwrap();
+    assert!(!tombstone.present);
+    assert_ne!(current.version, tombstone.version);
+    assert!(
+        device
+            .transport
+            .inventory_brand_logo(id, current.version)
+            .is_err()
+    );
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_classifications_replay_after_restart_and_keep_legacy_product_stock() {
     use sob_core::inventory_classifications::{
         Classification, ClassificationKind, ClassificationMove,
@@ -7335,6 +7485,7 @@ fn native_classifications_replay_after_restart_and_keep_legacy_product_stock() {
         position: 2,
         active: true,
         version: 0,
+        logo: None,
     };
     store
         .queue_inventory_classification(&generation, parent.clone(), None)

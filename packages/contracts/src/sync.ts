@@ -11,6 +11,7 @@ import {
   updateProductSchema,
 } from "./inventory";
 import {
+  inventoryBrandLogoInputSchema,
   inventoryClassificationInputSchema,
   inventoryClassificationOrderSchema,
 } from "./inventory-classification";
@@ -364,6 +365,14 @@ const classificationSave = z.object({
   }),
 });
 
+const brandLogo = z.object({
+  ...envelope,
+  kind: z.literal("inventory.brand_logo"),
+  payload: inventoryBrandLogoInputSchema.omit({ generation: true }).extend({
+    id: idSchema.transform((id) => id.toLowerCase()),
+  }),
+});
+
 const classificationReorder = z.object({
   ...envelope,
   kind: z.literal("inventory.classification_reorder"),
@@ -421,6 +430,7 @@ export const syncMutationSchema = z.discriminatedUnion("kind", [
   warehouseAdjustment,
   classificationSave,
   classificationReorder,
+  brandLogo,
   staffUpdate,
   settingsUpdate,
 ]);

@@ -833,6 +833,8 @@ test("old product fingerprints verify before and after classification backfill",
         sql`update booksy_rehearsal.source_entity set target_hash=${fingerprint(legacy)} where kind='sourceProducts'`,
       );
       await tx.execute(sql`set constraints all immediate`);
+      // The fixture recreates the schema from before classifications and brand logos.
+      await tx.execute(sql`drop table inventory_brand_logo`);
       await tx.execute(sql`alter table retail_product drop column category_id,
         drop column subcategory_id, drop column brand_id`);
       await tx.execute(sql`drop table inventory_classification`);

@@ -1,4 +1,6 @@
 use super::*;
+
+mod logo;
 use sob_core::inventory_classifications::{
     Classification, ClassificationCatalogue, ClassificationKind, ClassificationMove,
     ClassificationProposal, QueuedClassificationOrder, SAVE,
@@ -22,6 +24,7 @@ pub(super) struct Panel {
     discard: bool,
     handles: std::cell::RefCell<HashMap<Uuid, gpui::FocusHandle>>,
     order_conflict: Option<(String, QueuedClassificationOrder)>,
+    logo: Option<logo::Editor>,
 }
 
 #[derive(Clone)]
@@ -61,6 +64,17 @@ pub(super) struct Load {
 
 impl Panel {
     pub(super) fn dismiss(&mut self) -> bool {
+        if let Some(editor) = &self.logo {
+            if editor.busy() {
+                return false;
+            }
+            if editor.dirty() {
+                self.discard = !self.discard;
+            } else {
+                self.logo = None;
+            }
+            return false;
+        }
         if self.draft.is_none() {
             return true;
         }
@@ -98,6 +112,9 @@ impl Root {
         let Some(panel) = self.classifications_panel() else {
             return false;
         };
+        if let Some(editor) = &mut panel.logo {
+            editor.preserve_after_restore();
+        }
         if panel.draft.is_some() {
             panel.notice = Some(Key::InventoryClassificationsChanged);
         }
@@ -126,6 +143,9 @@ impl Root {
             load.request.is_none() && (reconnected || load.observed != Some((revision, staff)))
         }) {
             self.load_classifications(cx);
+        }
+        if reconnected {
+            self.refresh_brand_logo(cx);
         }
         self.classifications_panel().is_some()
     }
@@ -210,6 +230,14 @@ impl Root {
                 {
                     panel.notice = Some(Key::InventoryClassificationsUnavailable);
                 }
+                if saved {
+                    if let Some(panel) = root.classifications_panel()
+                        && panel.notice == Some(Key::InventoryClassificationsUnavailable)
+                    {
+                        panel.notice = None;
+                    }
+                    root.refresh_brand_logo(cx);
+                }
                 cx.notify();
             });
         })
@@ -226,6 +254,7 @@ impl Root {
                 position: 0,
                 active: true,
                 version: 0,
+                logo: None,
             },
             None,
             cx,
@@ -607,11 +636,15 @@ impl Root {
                     cx.listener(|root, _, _, cx| {
                         if let Some(panel) = root.classifications_panel() {
                             panel.draft = None;
+                            panel.logo = None;
                             panel.discard = false;
                             cx.notify();
                         }
                     }),
                 ));
+        }
+        if let Some(logo) = &panel.logo {
+            return body.child(self.render_brand_logo(logo, &list, current, loading, cx));
         }
         if let Some(draft) = &panel.draft {
             let latest = list.entries.iter().find(|entry| entry.id == draft.entry.id);
@@ -949,6 +982,18 @@ impl Root {
                 .when(!entry.active, |row| {
                     row.child(self.t(Key::InventoryWarehouseArchived))
                 })
+                .when(
+                    kind == ClassificationKind::Brand
+                        && (editable || entry.logo.is_some_and(|logo| logo.present)),
+                    |row| {
+                        row.child(self.button(
+                            ("classification-logo", index),
+                            self.t(Key::InventoryBrandLogo),
+                            Kind::Ghost,
+                            cx.listener(move |root, _, _, cx| root.open_brand_logo(id, cx)),
+                        ))
+                    },
+                )
                 .when(write, |row| {
                     row.child(self.button(
                         ("classification-edit", index),
@@ -1004,6 +1049,7 @@ mod tests {
                             position: index as u32,
                             active: true,
                             version: 1,
+                            logo: None,
                         })
                         .collect(),
                 })

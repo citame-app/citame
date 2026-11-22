@@ -1770,6 +1770,21 @@ impl Store {
         Self::ensure_generation(&tx, generation)?;
         let mut out = PushApplied::default();
         for (s, r) in sent.iter().zip(results) {
+            let inventory_mutation = matches!(
+                s.kind.as_str(),
+                crate::product_editor::CREATE
+                    | crate::product_editor::UPDATE
+                    | crate::product_editor::PHOTO
+                    | crate::inventory_documents::SUPPLIER_SAVE
+                    | crate::inventory_documents::RECEIVE_STOCK
+                    | crate::purchase_orders::PURCHASE_ORDER_WRITE
+                    | crate::warehouses::SAVE
+                    | crate::warehouses::TRANSFER
+                    | crate::warehouses::ADJUST
+                    | crate::inventory_classifications::SAVE
+                    | crate::inventory_classifications::REORDER
+                    | crate::inventory_classifications::BRAND_LOGO
+            );
             match r {
                 MutationResult::Applied { applied_seq, .. } => {
                     if s.kind == crate::service_resources::MUTATION_KIND {
@@ -1799,29 +1814,19 @@ impl Store {
                             &serde_json::to_string(&ack)?,
                         )?;
                     } else if let Some(through) = response_head
-                        && matches!(
-                            s.kind.as_str(),
-                            service_assignments::KIND
-                                | SERVICE_CREATION_KIND
-                                | SERVICE_EDIT_KIND
-                                | crate::service_resources::MUTATION_KIND
-                                | crate::resource_pools::CREATE
-                                | crate::resource_pools::UPDATE
-                                | crate::combinations::CREATE
-                                | crate::combinations::UPDATE
-                                | crate::product_editor::CREATE
-                                | crate::product_editor::UPDATE
-                                | crate::product_editor::PHOTO
-                                | crate::http::PORTFOLIO_UPLOAD
-                                | crate::inventory_documents::SUPPLIER_SAVE
-                                | crate::inventory_documents::RECEIVE_STOCK
-                                | crate::purchase_orders::PURCHASE_ORDER_WRITE
-                                | crate::warehouses::SAVE
-                                | crate::warehouses::TRANSFER
-                                | crate::warehouses::ADJUST
-                                | crate::inventory_classifications::SAVE
-                                | crate::inventory_classifications::REORDER
-                        )
+                        && (inventory_mutation
+                            || matches!(
+                                s.kind.as_str(),
+                                service_assignments::KIND
+                                    | SERVICE_CREATION_KIND
+                                    | SERVICE_EDIT_KIND
+                                    | crate::service_resources::MUTATION_KIND
+                                    | crate::resource_pools::CREATE
+                                    | crate::resource_pools::UPDATE
+                                    | crate::combinations::CREATE
+                                    | crate::combinations::UPDATE
+                                    | crate::http::PORTFOLIO_UPLOAD
+                            ))
                     {
                         Self::set_meta_at(
                             &tx,
@@ -1839,22 +1844,7 @@ impl Store {
                 MutationResult::Rejected {
                     reason, message, ..
                 } => {
-                    if reason == "forbidden"
-                        && matches!(
-                            s.kind.as_str(),
-                            crate::product_editor::CREATE
-                                | crate::product_editor::UPDATE
-                                | crate::product_editor::PHOTO
-                                | crate::inventory_documents::SUPPLIER_SAVE
-                                | crate::inventory_documents::RECEIVE_STOCK
-                                | crate::purchase_orders::PURCHASE_ORDER_WRITE
-                                | crate::warehouses::SAVE
-                                | crate::warehouses::TRANSFER
-                                | crate::warehouses::ADJUST
-                                | crate::inventory_classifications::SAVE
-                                | crate::inventory_classifications::REORDER
-                        )
-                    {
+                    if reason == "forbidden" && inventory_mutation {
                         Self::apply_inventory_access_at(&tx, false)?;
                     }
                     if reason == "forbidden"
@@ -1972,7 +1962,7 @@ impl Store {
     fn resolve_conflict_at(conn: &Connection, mutation_id: &str, resolution: &str) -> Result<()> {
         let n = conn.execute(
             "UPDATE conflict SET resolved_at = ?2, resolution = ?3,
-             payload = CASE WHEN kind IN ('product.photo','portfolio.upload') THEN json_remove(payload, '$.imageBase64') ELSE payload END
+             payload = CASE WHEN kind IN ('product.photo','portfolio.upload','inventory.brand_logo') THEN json_remove(payload, '$.imageBase64') ELSE payload END
              WHERE mutation_id = ?1 AND resolved_at IS NULL",
             params![mutation_id, now_iso(), resolution],
         )?;

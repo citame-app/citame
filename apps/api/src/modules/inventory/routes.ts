@@ -1,6 +1,7 @@
 import {
   createProductSchema,
   idSchema,
+  inventoryBrandLogoInputSchema,
   inventoryClassificationInputSchema,
   inventoryClassificationReorderSchema,
   productExportQuerySchema,
@@ -28,6 +29,7 @@ import type { AppDeps } from "../../app";
 import { requirePermission } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
 import { parseOrThrow, readJson } from "../../http";
+import { readInventoryBrandLogo, saveInventoryBrandLogo } from "./brand-logo";
 import {
   listInventoryClassifications,
   reorderInventoryClassifications,
@@ -76,6 +78,25 @@ export function inventoryRoutes(deps: AppDeps) {
       c.json(await listInventoryClassifications(deps.db, c.get("principal"), generation), 200, {
         "Cache-Control": "private, no-store",
       }),
+    )
+    .get("/classifications/:id/logo/:version", (c) =>
+      readInventoryBrandLogo(
+        deps.db,
+        parseOrThrow(idSchema, c.req.param("id")).toLowerCase(),
+        parseOrThrow(idSchema, c.req.param("version")).toLowerCase(),
+        c.get("principal"),
+      ),
+    )
+    .put("/classifications/:id/logo", async (c) =>
+      c.json(
+        await saveInventoryBrandLogo(
+          deps.db,
+          parseOrThrow(idSchema, c.req.param("id")).toLowerCase(),
+          parseOrThrow(inventoryBrandLogoInputSchema, await readJson(c)),
+          c.get("principal"),
+          generation,
+        ),
+      ),
     )
     .put("/classifications/order", async (c) =>
       c.json(

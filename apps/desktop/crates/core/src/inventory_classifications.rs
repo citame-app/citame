@@ -2,6 +2,15 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub const SAVE: &str = "inventory.classification_save";
+pub const BRAND_LOGO: &str = "inventory.brand_logo";
+
+pub type BrandLogoProposal = crate::product_editor::InventoryImageProposal<Uuid>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BrandLogo {
+    pub version: Uuid,
+    pub present: bool,
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -20,6 +29,8 @@ pub struct Classification {
     pub position: u32,
     pub active: bool,
     pub version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logo: Option<BrandLogo>,
 }
 
 impl Classification {
@@ -225,6 +236,7 @@ mod tests {
                     position: position as u32,
                     active: true,
                     version: 1,
+                    logo: None,
                 })
                 .collect(),
         }

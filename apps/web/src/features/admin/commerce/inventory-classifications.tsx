@@ -3,7 +3,7 @@ import type {
   InventoryClassificationAssignment,
   InventoryClassificationReorder,
 } from "@sob/contracts";
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useId, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { TextField } from "~/components/ui/field";
@@ -13,16 +13,14 @@ import { useToast } from "~/components/ui/toast";
 import { useI18n } from "~/i18n/react";
 import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
-import { useInventoryLiveRevision } from "../calendar/live-provider";
 import { UnsavedGuard } from "../unsaved-guard";
+import { BrandLogo, BrandLogoEditor } from "./brand-logo";
 import { ClassificationOrderList } from "./classification-order-list";
 
 export function useInventoryClassifications(enabled = true) {
-  const revision = useInventoryLiveRevision();
   return useQuery({
-    queryKey: ["inventory", "classifications", revision],
-    queryFn: () => api().inventory.classifications(),
-    placeholderData: keepPreviousData,
+    queryKey: ["inventory", "classifications"],
+    queryFn: ({ signal }) => api().inventory.classifications(signal),
     enabled,
   });
 }
@@ -52,9 +50,11 @@ export function InventoryClassifications({
   const [draft, setDraft] = useState<Draft>();
   const [baseline, setBaseline] = useState<InventoryClassification>();
   const [notice, setNotice] = useState(false);
+  const [logoBrandId, setLogoBrandId] = useState<string>();
   const review = catalogue.data;
   const entries = review?.entries ?? [];
   const current = entries.find((entry) => entry.id === draft?.id);
+  const logoBrand = entries.find((entry) => entry.id === logoBrandId && entry.kind === "brand");
   const stale = Boolean(
     draft &&
       review &&
@@ -66,7 +66,16 @@ export function InventoryClassifications({
     return () => onEditingChange(false);
   }, [editing, onEditingChange]);
   const save = useMutation({
-    mutationFn: ({ id, ...value }: Draft) => api().inventory.saveClassification(id, value),
+    mutationFn: ({ id, kind, parentId, name, active, position, version, generation }: Draft) =>
+      api().inventory.saveClassification(id, {
+        kind,
+        parentId,
+        name,
+        active,
+        position,
+        version,
+        generation,
+      }),
     onError: (error) => {
       if (isClassificationConflict(error)) void catalogue.refetch();
     },
@@ -86,11 +95,12 @@ export function InventoryClassifications({
       await query.invalidateQueries({ queryKey: ["inventory"] });
     },
   });
-  const canReorder = canWrite && online && !catalogue.isPlaceholderData && !order.isPending;
+  const canReorder = canWrite && online && !catalogue.isError && !order.isPending;
   // Background refreshes retain the last reviewed data. The API checks the draft's
   // generation and version before writing, even if a newer catalogue is still loading.
   const conflict = isClassificationConflict(save.error);
-  const canSave = canWrite && online && !stale && !conflict && !save.isPending;
+  const canSave =
+    canWrite && online && !catalogue.isError && !stale && !conflict && !save.isPending;
   function edit(entry: InventoryClassification) {
     if (!review || !canWrite) return;
     save.reset();
@@ -130,7 +140,13 @@ export function InventoryClassifications({
       (row.active || row.id === draft?.parentId),
   );
   if (catalogue.isPending) return <Skeleton className="h-40" />;
-  if (catalogue.isError)
+  const accessLost =
+    catalogue.error instanceof ApiError && [401, 403].includes(catalogue.error.status);
+  const refreshError =
+    catalogue.isError && !accessLost ? (
+      <ErrorState error={catalogue.error} onRetry={() => void catalogue.refetch()} />
+    ) : undefined;
+  if (accessLost || (catalogue.isError && !review))
     return <ErrorState error={catalogue.error} onRetry={() => void catalogue.refetch()} />;
   if (!review) return <Skeleton className="h-40" />;
   if (editing && draft) {
@@ -146,6 +162,7 @@ export function InventoryClassifications({
         }}
       >
         <UnsavedGuard dirty={!save.isPending} />
+        {refreshError}
         <h3 id={title} className="font-semibold sm:col-span-2">
           {t("inventory.classification.edit")}
         </h3>
@@ -258,6 +275,17 @@ export function InventoryClassifications({
           </div>
         )}
       </div>
+      {!logoBrand && refreshError}
+      {canWrite && logoBrand && (
+        <BrandLogoEditor
+          key={logoBrand.id}
+          brand={logoBrand}
+          generation={review.generation}
+          ready={!catalogue.isError}
+          refreshError={refreshError}
+          onClose={() => setLogoBrandId(undefined)}
+        />
+      )}
       {notice && <p role="status">{t("inventory.classification.saved")}</p>}
       {order.isError &&
         (isClassificationConflict(order.error) ? (
@@ -289,6 +317,7 @@ export function InventoryClassifications({
                       movement={canWrite && movement}
                       canWrite={canWrite}
                       onEdit={edit}
+                      onLogo={root.kind === "brand" ? () => setLogoBrandId(root.id) : undefined}
                     />
                     {children.length > 0 && (
                       <ClassificationOrderList
@@ -323,23 +352,40 @@ function ClassificationRow({
   canWrite,
   movement,
   onEdit,
+  onLogo,
 }: {
   entry: InventoryClassification;
   movement: ReactNode;
   canWrite: boolean;
   onEdit: (entry: InventoryClassification) => void;
+  onLogo?: () => void;
 }) {
   const { t } = useI18n();
   return (
     <div className="flex min-h-11 flex-wrap items-center justify-between gap-2 py-2">
-      <span className="min-w-0 break-words">
-        {entry.name}
-        {!entry.active && (
-          <span className="ms-2 text-sm text-muted">{t("inventory.classification.archived")}</span>
-        )}
-      </span>
+      <div className="flex min-w-0 items-center gap-2">
+        {entry.kind === "brand" && <BrandLogo brand={entry} compact />}
+        <span className="min-w-0 break-words">
+          {entry.name}
+          {!entry.active && (
+            <span className="ms-2 text-sm text-muted">
+              {t("inventory.classification.archived")}
+            </span>
+          )}
+        </span>
+      </div>
       <div className="flex min-w-0 flex-wrap items-center gap-1">
         {movement}
+        {canWrite && onLogo && (
+          <Button
+            variant="secondary"
+            type="button"
+            aria-label={`${t("inventory.brandLogo.title")} · ${entry.name}`}
+            onClick={onLogo}
+          >
+            {t("inventory.brandLogo.title")}
+          </Button>
+        )}
         {canWrite && (
           <Button
             variant="secondary"

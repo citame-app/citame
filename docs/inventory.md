@@ -22,6 +22,8 @@ Owners can open **Settings → Document numbering** on the web or in Desktop to 
 
 Reorder classifications within their group by dragging the handle, using the up or down control, or pressing Alt + Up/Down on the handle. The server reviews the group together so simultaneous changes can be reviewed before another move. Desktop queues a move when offline and sends it after reconnecting. Desktop can queue moves in separate groups. A group with a queued move can be reordered again after that move syncs.
 
+Open **Brand logo** beside a saved brand to upload, replace or remove its image. The image is private to inventory readers. Desktop can queue a change offline once the brand is available in its local catalogue. If somebody else changes the logo, reopen the conflicted proposal, review the current image and decide whether to reapply it.
+
 In **New sale**, search for products, add quantities, and optionally add a custom line, discount and tip. The server reads each product's authoritative price/tax and reserves stock transactionally. The receipt retains those values after later catalog edits. Full payment (or a fully discounted checkout) consumes reserved stock exactly once. Partial payment keeps the remaining units reserved.
 
 Unpaid product checkouts expire after 30 minutes if they have no captured or unresolved payments. The API and standalone worker sweep up to 50 expired carts per minute; multiple replicas are safe. An operator can explicitly void an unpaid checkout from its receipt. Bank attempts and partially collected payments must be resolved first. A signed bank success arriving after a checkout was voided is retained as captured money for reconciliation/refund; it does not sell inventory already released to another cart.

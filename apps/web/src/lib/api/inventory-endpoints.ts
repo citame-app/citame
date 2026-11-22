@@ -1,7 +1,9 @@
 import {
   type CreateProductInput,
+  type InventoryBrandLogoInput,
   type InventoryClassificationInput,
   type InventoryClassificationReorder,
+  inventoryBrandLogoResultSchema,
   inventoryClassificationListSchema,
   inventoryClassificationOrderResultSchema,
   inventoryClassificationSchema,
@@ -68,8 +70,14 @@ export const stockLedgerExportHref = (filters: Partial<StockLedgerFilters>) =>
 
 export function inventoryEndpoints(client: ApiClient) {
   return {
-    classifications: () =>
-      client.get("/admin/inventory/classifications", inventoryClassificationListSchema),
+    classifications: (signal?: AbortSignal) =>
+      client.get("/admin/inventory/classifications", inventoryClassificationListSchema, { signal }),
+    saveBrandLogo: (id: string, body: InventoryBrandLogoInput) =>
+      client.put(
+        `/admin/inventory/classifications/${id}/logo`,
+        body,
+        inventoryBrandLogoResultSchema,
+      ),
     reorderClassifications: (body: InventoryClassificationReorder) =>
       client.put(
         "/admin/inventory/classifications/order",

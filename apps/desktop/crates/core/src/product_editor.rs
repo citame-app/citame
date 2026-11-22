@@ -315,19 +315,21 @@ pub struct ProductProposal {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ProductPhotoProposal {
-    pub id: ProductId,
+pub struct InventoryImageProposal<Id> {
+    pub id: Id,
     pub version: Option<uuid::Uuid>,
     image_base64: Option<String>,
 }
 
-impl ProductPhotoProposal {
+pub type ProductPhotoProposal = InventoryImageProposal<ProductId>;
+
+impl<Id> InventoryImageProposal<Id> {
     fn valid_jpeg(bytes: &[u8]) -> bool {
         bytes.len() <= crate::staff_portrait_image::INPUT_LIMIT
             && crate::staff_portrait_image::is_bounded_jpeg(bytes)
     }
 
-    pub fn new(id: ProductId, version: Option<uuid::Uuid>, jpeg: Option<&[u8]>) -> Result<Self> {
+    pub fn new(id: Id, version: Option<uuid::Uuid>, jpeg: Option<&[u8]>) -> Result<Self> {
         if jpeg.is_some_and(|bytes| !Self::valid_jpeg(bytes)) {
             return Err(invalid());
         }
