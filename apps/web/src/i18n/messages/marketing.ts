@@ -1,4 +1,15 @@
 export const marketingEn = {
+  "marketing.invite": "Invite to book",
+  "marketing.invitationSubject": "Book your next appointment at {{salon_name}}",
+  "marketing.invitationBody":
+    "Hello {{first_name}}, book your next visit to {{salon_name}} here: {{booking_url}}",
+  "marketing.invitationContacts": "Clients to invite",
+  "marketing.invitationHelp":
+    "Select up to {count} clients. Citame checks their marketing consent before delivery.",
+  "marketing.invitationSelected": "{count} selected",
+  "marketing.invitationRemove": "Remove {name}",
+  "marketing.invitationUnavailable": "unavailable client",
+  "marketing.invitationRequired": "Select at least one client.",
   "marketing.status": "Status",
   "marketing.birthdayBody":
     "Happy birthday, {{first_name}}! Best wishes from {{salon_name}}. Treat yourself: {{booking_url}}",
@@ -112,6 +123,17 @@ export const marketingEn = {
   "marketing.optoutDone": "You are unsubscribed from offers on this channel.",
 } as const;
 export const marketingEs: Record<keyof typeof marketingEn, string> = {
+  "marketing.invite": "Invitar a reservar",
+  "marketing.invitationSubject": "Reserva tu próxima cita en {{salon_name}}",
+  "marketing.invitationBody":
+    "Hola, {{first_name}}. Reserva tu próxima cita en {{salon_name}} aquí: {{booking_url}}",
+  "marketing.invitationContacts": "Clientes a invitar",
+  "marketing.invitationHelp":
+    "Selecciona hasta {count} clientes. Citame comprueba su consentimiento comercial antes del envío.",
+  "marketing.invitationSelected": "{count} seleccionados",
+  "marketing.invitationRemove": "Quitar a {name}",
+  "marketing.invitationUnavailable": "cliente no disponible",
+  "marketing.invitationRequired": "Selecciona al menos un cliente.",
   "marketing.status": "Estado",
   "marketing.birthdayBody":
     "¡Feliz cumpleaños, {{first_name}}! Te deseamos un gran día desde {{salon_name}}. Dedícate un momento: {{booking_url}}",

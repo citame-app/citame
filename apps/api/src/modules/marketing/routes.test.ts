@@ -117,6 +117,60 @@ beforeEach(async () => {
     .where(eq(clientProfile.id, client.clientId!));
 });
 
+test("booking invitations queue only the selected contacts with consent", async () => {
+  const other = await actor(t, "client", "unselected@example.com");
+  const excluded = await actor(t, "client", "selected-without-consent@example.com");
+  await allow();
+  expect(
+    (
+      await call(owner, `/admin/clients/${other.clientId}/marketing-consent`, "PATCH", {
+        channel: "email",
+        enabled: true,
+        version: 0,
+        source: "Explicit salon consent fixture",
+      })
+    ).status,
+  ).toBe(200);
+  const campaign = await create({
+    audience: { selectedClientIds: [client.clientId, excluded.clientId] },
+  });
+  const legacyList = await call(owner, "/admin/marketing/campaigns");
+  expect(await legacyList.json()).toMatchObject({ campaigns: [] });
+  const list = await call(owner, "/admin/marketing/campaigns?bookingInvitations=1");
+  expect(await list.json()).toMatchObject({
+    bookingInvitations: true,
+    campaigns: [
+      {
+        id: campaign.id,
+        selectedContacts: [{ id: client.clientId }, { id: excluded.clientId }],
+      },
+    ],
+  });
+  const path = `/admin/marketing/campaigns/${campaign.id}`;
+  expect(await preview(campaign)).toMatchObject({
+    eligible: 1,
+    excluded: 1,
+    sample: [expect.objectContaining({ clientId: client.clientId })],
+  });
+  const { id: _, ...legacyDraft } = draft();
+  expect(
+    (await call(owner, path, "PATCH", { ...legacyDraft, version: campaign.version })).status,
+  ).toBe(409);
+  expect(
+    (
+      await call(owner, "/admin/marketing/campaigns", "POST", {
+        ...draft({ trigger: "first_visit" }),
+        audience: { selectedClientIds: [client.clientId] },
+      })
+    ).status,
+  ).toBe(400);
+  const result = await queue(campaign);
+  expect(result.campaign.counts.pending).toBe(1);
+  await worker().runOnce();
+  expect(email.calls).toHaveLength(1);
+  expect(email.calls[0]?.to).toBe("marketing-client@example.com");
+});
+
 test("campaigns require marketing access; commercial consent defaults to off independently of booking reminders", async () => {
   expect((await call(client, "/admin/marketing/campaigns")).status).toBe(403);
   expect((await call(staff, "/admin/marketing/campaigns")).status).toBe(403);

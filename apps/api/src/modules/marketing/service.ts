@@ -15,7 +15,7 @@ import {
   marketingCampaign,
   marketingDelivery,
 } from "@sob/db";
-import { and, count, desc, eq, ilike, inArray, sql } from "drizzle-orm";
+import { and, count, desc, eq, ilike, inArray, isNull, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
@@ -26,6 +26,15 @@ import { campaignAudience, marketingCapabilities } from "./audience";
 
 type Connection = Database | Tx;
 export type CampaignRow = typeof marketingCampaign.$inferSelect;
+const editablePurpose = () =>
+  inArray(marketingCampaign.purpose, ["campaign", "booking_invitation"]);
+
+function draftPurpose(fields: Pick<CampaignCreate, "audience" | "trigger">) {
+  if (!fields.audience.selectedClientIds) return "campaign";
+  if (fields.trigger !== "manual")
+    throw new DomainError("validation_error", "Booking invitations must be one-time campaigns");
+  return "booking_invitation";
+}
 export const emptyCampaignCounts = () => ({
   pending: 0,
   processing: 0,
@@ -39,7 +48,7 @@ export async function campaignRow(db: Connection, id: string, lock = false) {
   const query = db
     .select()
     .from(marketingCampaign)
-    .where(and(eq(marketingCampaign.id, id), eq(marketingCampaign.purpose, "campaign")));
+    .where(and(eq(marketingCampaign.id, id), editablePurpose()));
   const [row] = await (lock ? query.for("update") : query);
   if (!row) throw new DomainError("not_found", "Campaign not found");
   return row;
@@ -66,6 +75,20 @@ export async function campaignViews(db: Connection, rows: CampaignRow[]): Promis
     const target = totals.get(row.campaignId);
     if (target) target[row.status] = row.n;
   }
+  const contactIds = [...new Set(rows.flatMap((row) => row.audience.selectedClientIds ?? []))];
+  const contacts = contactIds.length
+    ? await db
+        .select({ id: clientProfile.id, name: clientProfile.name })
+        .from(clientProfile)
+        .where(
+          and(
+            inArray(clientProfile.id, contactIds),
+            isNull(clientProfile.deletedAt),
+            isNull(clientProfile.mergedIntoId),
+          ),
+        )
+    : [];
+  const contactNames = new Map(contacts.map(({ id, name }) => [id, name]));
   return rows.map((row) => {
     const { createdBy: _, requestDigest: __, evaluatedAt: ___, purpose: ____, ...visible } = row;
     return campaignSchema.parse({
@@ -75,6 +98,10 @@ export async function campaignViews(db: Connection, rows: CampaignRow[]): Promis
       scheduledFor: row.scheduledFor?.toISOString() ?? null,
       activatedAt: row.activatedAt?.toISOString() ?? null,
       counts: totals.get(row.id),
+      selectedContacts: row.audience.selectedClientIds?.flatMap((id) => {
+        const name = contactNames.get(id.toLowerCase());
+        return name === undefined ? [] : [{ id, name }];
+      }),
     });
   });
 }
@@ -89,7 +116,7 @@ export async function listCampaigns(db: Database, q: CampaignQuery, p: Principal
   requirePermission(p, "editCatalog");
   const term = q.search.replace(/[\\%_]/g, "\\$&");
   const where = and(
-    eq(marketingCampaign.purpose, "campaign"),
+    q.bookingInvitations ? editablePurpose() : eq(marketingCampaign.purpose, "campaign"),
     q.search ? ilike(marketingCampaign.name, `%${term}%`) : undefined,
     q.status ? eq(marketingCampaign.status, q.status) : undefined,
   );
@@ -106,6 +133,7 @@ export async function listCampaigns(db: Database, q: CampaignQuery, p: Principal
       return {
         campaigns: await campaignViews(tx, rows),
         pagination: { page: q.page, pageSize: q.pageSize, total: total?.n ?? 0 },
+        bookingInvitations: q.bookingInvitations ? true : undefined,
       };
     },
     { isolationLevel: "repeatable read", accessMode: "read only" },
@@ -114,6 +142,7 @@ export async function listCampaigns(db: Database, q: CampaignQuery, p: Principal
 export async function createCampaign(db: Database, input: CampaignCreate, p: Principal) {
   requirePermission(p, "editCatalog");
   const { id, ...fields } = input;
+  const purpose = draftPurpose(fields);
   const digest = createHash("sha256").update(JSON.stringify(fields)).digest("hex");
   return db.transaction(async (tx) => {
     await tx.execute(
@@ -130,7 +159,7 @@ export async function createCampaign(db: Database, input: CampaignCreate, p: Pri
     }
     const [row] = await tx
       .insert(marketingCampaign)
-      .values({ id, ...fields, createdBy: p.userId, requestDigest: digest })
+      .values({ id, ...fields, purpose, createdBy: p.userId, requestDigest: digest })
       .returning();
     if (!row) throw Error("Campaign insert failed");
     await recordAudit(tx, {
@@ -153,6 +182,11 @@ export async function updateCampaign(
   return db.transaction(async (tx) => {
     const current = await campaignRow(tx, id, true);
     const { version, ...fields } = input;
+    if (draftPurpose(fields) !== current.purpose)
+      throw new DomainError(
+        "invalid_state",
+        "Keep the reviewed type and audience of this campaign",
+      );
     if (
       allowIdenticalReplay &&
       current.status === "draft" &&

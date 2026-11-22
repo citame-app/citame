@@ -1,5 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import type { Campaign, CampaignTestEmail } from "@sob/contracts";
+import type { Campaign, CampaignCreate, CampaignTestEmail } from "@sob/contracts";
 import { fireEvent, screen } from "@testing-library/react";
 import { renderApp } from "../../../test/render";
 import { CampaignsView } from "./campaigns";
@@ -7,6 +7,84 @@ import { CampaignsView } from "./campaigns";
 const originalFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = originalFetch;
+});
+
+test("booking invitations require selected contacts before opening the recipient review", async () => {
+  const contact = {
+    id: "0198f5a0-7b1c-7000-8000-000000000202",
+    name: "Synthetic contact",
+    phone: null,
+    email: "contact@example.com",
+    notes: null,
+    createdAt: "2026-11-22T08:00:00.000Z",
+    updatedAt: "2026-11-22T08:00:00.000Z",
+    appointmentCount: 0,
+    lastVisitAt: null,
+  };
+  const drafts: CampaignCreate[] = [];
+  globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = new URL(String(input), "http://localhost").pathname;
+    if (path.endsWith("/campaigns") && init?.method === "POST") {
+      const packet: CampaignCreate = JSON.parse(String(init.body));
+      drafts.push(packet);
+      return Response.json({
+        ...packet,
+        status: "draft",
+        version: 1,
+        counts: {
+          pending: 0,
+          processing: 0,
+          sent: 0,
+          skipped: 0,
+          failed: 0,
+          unknown: 0,
+          cancelled: 0,
+        },
+        scheduledFor: null,
+        activatedAt: null,
+        createdAt: "2026-11-22T08:00:00Z",
+        updatedAt: "2026-11-22T08:00:00Z",
+        selectedContacts: [{ id: contact.id, name: contact.name }],
+      });
+    }
+    if (path.endsWith("/campaigns"))
+      return Response.json({
+        campaigns: [],
+        pagination: { total: 0, page: 1, pageSize: 20 },
+        bookingInvitations: true,
+      });
+    if (path.endsWith("/clients"))
+      return Response.json({ clients: [contact], total: 1, page: 1, pageSize: 10 });
+    if (path.endsWith("/capabilities"))
+      return Response.json({ email: false, sms: false, worker: false });
+    if (path.endsWith("/preview"))
+      return Response.json({
+        campaignId: drafts[0]?.id,
+        version: 1,
+        audienceHash: "a".repeat(64),
+        eligible: 0,
+        email: 0,
+        sms: 0,
+        excluded: 1,
+        sample: [],
+      });
+    return Response.json({}, { status: 404 });
+  }) as unknown as typeof fetch;
+  renderApp(<CampaignsView viewerId="owner" isOwner />);
+  fireEvent.click(await screen.findByRole("button", { name: "Invite to book" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+  expect(screen.getByText("Select at least one client.")).toBeVisible();
+  expect(drafts).toHaveLength(0);
+  fireEvent.click(await screen.findByRole("checkbox", { name: /Synthetic contact/ }));
+  expect(screen.getByRole("button", { name: "Remove Synthetic contact" })).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Review recipients" }));
+  await screen.findByText("0 eligible recipients now");
+  expect(drafts).toHaveLength(1);
+  expect(drafts[0]).toMatchObject({
+    trigger: "manual",
+    emailBody: expect.stringContaining("{{booking_url}}"),
+    audience: { selectedClientIds: [contact.id] },
+  });
 });
 
 test("an owner can retry a test email without creating another request", async () => {

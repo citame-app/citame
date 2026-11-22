@@ -11,11 +11,20 @@ export const campaignStatusSchema = z.enum([
   "completed",
   "cancelled",
 ]);
+export const BOOKING_INVITATION_MAX_CONTACTS = 100;
 export const campaignAudienceSchema = z
   .object({
     tags: clientTagsSchema.default([]),
     inactiveDays: z.number().int().min(1).max(3650).nullable().default(null),
     noFutureAppointments: z.boolean().default(false),
+    selectedClientIds: z
+      .array(idSchema)
+      .min(1)
+      .max(BOOKING_INVITATION_MAX_CONTACTS)
+      .refine((ids) => new Set(ids.map((id) => id.toLowerCase())).size === ids.length, {
+        message: "Clients must be selected once",
+      })
+      .optional(),
   })
   .strict();
 const campaignFields = {
@@ -43,6 +52,7 @@ export const campaignQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
   search: z.string().trim().max(100).default(""),
   status: campaignStatusSchema.optional(),
+  bookingInvitations: z.literal("1").optional(),
 });
 export const campaignCountsSchema = z.object({
   pending: z.number().int().nonnegative(),
@@ -62,10 +72,12 @@ export const campaignSchema = campaignDraftSchema.extend({
   createdAt: instantSchema,
   updatedAt: instantSchema,
   counts: campaignCountsSchema,
+  selectedContacts: z.array(z.object({ id: idSchema, name: z.string() })).optional(),
 });
 export const campaignListSchema = z.object({
   campaigns: z.array(campaignSchema),
   pagination: pageInfoSchema,
+  bookingInvitations: z.boolean().optional(),
 });
 export const campaignCapabilitySchema = z.object({
   email: z.boolean(),

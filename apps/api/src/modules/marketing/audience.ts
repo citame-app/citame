@@ -50,6 +50,7 @@ export async function campaignAudience(
 ) {
   const inactiveDays = campaign.audience.inactiveDays;
   const tags = campaign.audience.tags;
+  const selectedIds = campaign.audience.selectedClientIds;
   const rows = await db.execute<Candidate>(sql`
     with visits as (
       select client_root_id(client_id) as client_id,count(*)::int as visits,min(ends_at) as first_at,max(ends_at) as last_at,
@@ -61,6 +62,14 @@ export async function campaignAudience(
       (${commercialPermissionSql(sql`c.id`, "sms")}) as sms_allowed
     from client_profile c left join visits v on v.client_id=c.id
     where c.deleted_at is null and c.merged_into_id is null
+      ${
+        selectedIds
+          ? sql`and c.id in (${sql.join(
+              selectedIds.map((id) => sql`${id}::uuid`),
+              sql`, `,
+            )})`
+          : sql``
+      }
       ${
         tags.length
           ? sql`and c.tags && array[${sql.join(
@@ -153,5 +162,9 @@ export async function campaignAudience(
       }),
     )
     .digest("hex");
-  return { recipients, excluded: rows.length - recipients.length, audienceHash };
+  return {
+    recipients,
+    excluded: (selectedIds?.length ?? rows.length) - recipients.length,
+    audienceHash,
+  };
 }

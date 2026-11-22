@@ -6777,6 +6777,7 @@ fn native_reviews_future_campaign_delivery_and_cancels_through_the_proxy() {
                 tags: vec!["synthetic-desk".into()],
                 inactive_days: None,
                 no_future_appointments: false,
+                selected_client_ids: None,
             },
         },
     };

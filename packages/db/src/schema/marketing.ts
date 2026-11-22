@@ -40,7 +40,10 @@ export const marketingCampaign = pgTable(
   {
     id: primaryId(),
     name: text().notNull(),
-    purpose: text().$type<"campaign" | "review_request">().notNull().default("campaign"),
+    purpose: text()
+      .$type<"campaign" | "review_request" | "booking_invitation">()
+      .notNull()
+      .default("campaign"),
     channel: text().$type<"email" | "sms" | "optimized">().notNull(),
     subject: text().notNull().default(""),
     emailBody: text().notNull().default(""),
@@ -49,6 +52,7 @@ export const marketingCampaign = pgTable(
       tags: string[];
       inactiveDays: number | null;
       noFutureAppointments: boolean;
+      selectedClientIds?: string[];
     }>()
       .notNull()
       .default(sql`'{"tags":[],"inactiveDays":null,"noFutureAppointments":false}'::jsonb`),
@@ -73,7 +77,16 @@ export const marketingCampaign = pgTable(
   },
   (t) => [
     index("marketing_campaign_schedule_idx").on(t.status, t.scheduledFor),
-    check("marketing_campaign_purpose_valid", sql`${t.purpose} in ('campaign','review_request')`),
+    check(
+      "marketing_campaign_purpose_valid",
+      sql`case when ${t.purpose} = 'booking_invitation'
+        then ${t.trigger} = 'manual' and case
+          when jsonb_typeof(${t.audience}->'selectedClientIds') = 'array'
+          then jsonb_array_length(${t.audience}->'selectedClientIds') between 1 and 100
+          else false end
+        else ${t.purpose} in ('campaign','review_request') and not (${t.audience} ? 'selectedClientIds')
+        end`,
+    ),
     check(
       "marketing_campaign_valid",
       sql`${t.channel} in ('email','sms','optimized') and ${t.trigger} in ('manual','first_visit','inactive','birthday') and ${t.status} in ('draft','scheduled','active','completed','cancelled') and ${t.version}>0 and ${t.delayMinutes} between 0 and 525600 and ${t.birthdayLeadDays} between 0 and 30`,
