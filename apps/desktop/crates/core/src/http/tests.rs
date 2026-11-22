@@ -665,6 +665,45 @@ fn report_export_uses_scheduled_minutes_when_the_period_has_no_appointments() {
 }
 
 #[test]
+fn profile_image_writes_are_fenced_by_the_reviewed_generation_and_revision() {
+    use crate::http::{ProfileImageAction, ProfileImageKind};
+    let original =
+        r#"{"revision":"2026-11-22T00:00:00Z","generation":"profile-generation","images":[]}"#;
+    let saved =
+        r#"{"revision":"2026-11-22T00:00:01Z","generation":"profile-generation","images":[]}"#;
+    let (base, seen) = serve(vec![
+        http("200 OK", &[], original),
+        http("200 OK", &[], saved),
+    ]);
+    let transport = signed_in(&base);
+    let snapshot = transport.profile_images().unwrap();
+    let result = transport
+        .update_profile_image(
+            &snapshot,
+            ProfileImageAction::Upload {
+                kind: ProfileImageKind::Cover,
+                replace_id: None,
+                alt: "Entrance".into(),
+                jpeg: vec![255, 216, 255],
+            },
+        )
+        .unwrap();
+    assert!(result.revision > snapshot.revision);
+    let requests = seen.lock().unwrap();
+    assert!(requests[0].starts_with("GET /admin/settings/profile/images HTTP/"));
+    let (request, body) = requests[1].split_once("\r\n\r\n").unwrap();
+    assert!(request.starts_with("PUT /admin/settings/profile/images HTTP/"));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(body).unwrap(),
+        serde_json::json!({
+            "generation": "profile-generation",
+            "expectedRevision": "2026-11-22T00:00:00Z",
+            "action": {"mode": "upload", "kind": "cover", "alt": "Entrance", "imageBase64": "/9j/"}
+        }),
+    );
+}
+
+#[test]
 fn report_csv_distinguishes_unknown_amounts_from_free_services() {
     let report: crate::reports::ReportSummary = serde_json::from_value(serde_json::json!({
         "from": "2026-11-18", "to": "2026-11-18", "currency": "EUR",

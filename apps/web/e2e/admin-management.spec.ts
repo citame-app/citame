@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { type BusinessProfileChanges, desktopSalonSettingsSchema } from "@sob/contracts";
+import { clientPhotoFixture } from "../../api/test/client-photo-fixture";
 import { RECURRING_FIXTURE as fixture } from "../../api/test/recurring-values";
 import { expectNoHorizontalScroll, salonDate } from "./admin-helpers";
 import { expectNoSeriousA11yViolations, signInThroughUi } from "./helpers";
@@ -150,6 +151,66 @@ test("the owner can draft, publish, revise and withdraw the public business prof
   } finally {
     const restored = await writeProfile(original);
     expect(restored.status()).toBe(200);
+    await visitor.close();
+  }
+});
+
+test("centre photos follow image publication and profile visibility", async ({ page, browser }) => {
+  await signInThroughUi(page, fixture.ownerEmail, "/admin/settings?section=profile");
+  const visitor = await browser.newPage({ viewport: page.viewportSize() });
+  const settings = page.getByRole("region", { name: "Centre images", exact: true });
+  const gallery = settings.getByRole("region", { name: "Centre photos", exact: true });
+  const title = `Entrance ${crypto.randomUUID()}`;
+  const file = {
+    name: "synthetic.jpg",
+    mimeType: "image/jpeg",
+    buffer: await clientPhotoFixture(),
+  };
+  const publishProfile = page.getByLabel("Publish on the booking site", { exact: true });
+  const image = gallery.getByRole("article", { name: title, exact: true });
+  try {
+    await gallery.getByRole("button", { name: "Add image", exact: true }).click();
+    const draft = settings.getByRole("form", { name: "Centre photos", exact: true });
+    await draft.getByLabel("Image file", { exact: true }).setInputFiles(file);
+    await draft.getByLabel("Image description", { exact: true }).fill(title);
+    await draft.getByRole("button", { name: "Save image draft" }).click();
+    await expect(image.getByText("Draft", { exact: true })).toBeVisible();
+    await expectNoHorizontalScroll(page);
+    await publishProfile.check();
+    await page.getByRole("button", { name: "Save settings", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Save settings", exact: true })).toBeDisabled();
+    await visitor.goto(fixture.baseURL);
+    await expect(visitor.getByRole("img", { name: title, exact: true })).toHaveCount(0);
+    await image.getByRole("button", { name: "Publish image", exact: true }).click();
+    await expect(image.getByText("Published", { exact: true })).toBeVisible();
+    await visitor.reload();
+    const published = visitor.getByRole("img", { name: title, exact: true });
+    await expect(published).toBeVisible();
+    const path = await published.getAttribute("src");
+    if (!path) throw new Error("Published image URL missing");
+    const url = new URL(path, fixture.baseURL).href;
+    expect((await visitor.request.get(url)).status()).toBe(200);
+    await image.getByRole("button", { name: "Remove image", exact: true }).click();
+    await page
+      .getByRole("dialog", { name: "Remove image" })
+      .getByRole("button", { name: "Remove image" })
+      .click();
+    await expect(image).toHaveCount(0);
+    expect((await visitor.request.get(url)).status()).toBe(404);
+  } finally {
+    if (await image.count()) {
+      await image.getByRole("button", { name: "Remove image", exact: true }).click();
+      await page
+        .getByRole("dialog", { name: "Remove image" })
+        .getByRole("button", { name: "Remove image" })
+        .click();
+      await expect(image).toHaveCount(0);
+    }
+    if (await publishProfile.isChecked()) {
+      await publishProfile.uncheck();
+      await page.getByRole("button", { name: "Save settings", exact: true }).click();
+      await expect(page.getByRole("button", { name: "Save settings", exact: true })).toBeDisabled();
+    }
     await visitor.close();
   }
 });

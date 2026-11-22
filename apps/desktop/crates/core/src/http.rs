@@ -99,10 +99,14 @@ mod weekly_hours;
 pub use weekly_hours::{WeeklyHours, WeeklyRange, parse_weekly_hours};
 mod date_shifts;
 mod intake_records;
+mod profile_media;
 mod salon_configuration;
 pub use date_shifts::{
     DatedShiftConflict, DatedShiftConflictReason, DatedShiftCopy, DatedShiftDay, DatedShiftEdit,
     DatedShiftReview, DatedShiftSelection, MAX_DATE_SHIFT_RANGES, ReviewedDatedShift,
+};
+pub use profile_media::{
+    PROFILE_GALLERY_LIMIT, ProfileImage, ProfileImageAction, ProfileImageKind, ProfileImageSnapshot,
 };
 pub use salon_configuration::{
     BusinessAmenity, BusinessProfile, OPENING_EXCEPTION_LIMIT, OpeningException, OpeningSchedule,

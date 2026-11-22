@@ -3,11 +3,13 @@ import {
   availabilityResponseSchema,
   desktopSalonSettingsSchema,
   errorResponseSchema,
+  profileMediaSnapshotSchema,
   publicBusinessProfileSchema,
   salonResponseSchema,
 } from "@sob/contracts";
 import { auditLog } from "@sob/db";
 import { eq } from "drizzle-orm";
+import sharp from "sharp";
 import {
   type Actor,
   actor,
@@ -44,6 +46,91 @@ beforeEach(async () => {
 const call = (who: Actor | null, method: string, body?: unknown) =>
   json(t.app, "/admin/settings", method, body, who?.cookie);
 const code = async (res: Response) => errorResponseSchema.parse(await res.json()).error.code;
+
+test("profile images stay private until both the image and profile are published", async () => {
+  const media = "/admin/settings/profile/images";
+  const publicMedia = "/salon/profile/images";
+  const get = (who: Actor | null, path: string) => json(t.app, path, "GET", undefined, who?.cookie);
+  const snapshot = profileMediaSnapshotSchema.parse(await (await get(owner, media)).json());
+  const save = (base: typeof snapshot, action: unknown, who = owner) =>
+    json(
+      t.app,
+      media,
+      "PUT",
+      { generation: base.generation, expectedRevision: base.revision, action },
+      who.cookie,
+    );
+  const profile = async () =>
+    publicBusinessProfileSchema.parse(await (await get(null, "/salon/profile")).json());
+  const imageBase64 = (
+    await sharp({
+      create: { width: 24, height: 16, channels: 3, background: "#333333" },
+    })
+      .png()
+      .toBuffer()
+  ).toString("base64");
+  const upload = { mode: "upload", kind: "cover", alt: "Centre entrance", imageBase64 };
+  expect((await get(ana, media)).status).toBe(403);
+  expect((await save(snapshot, upload, ana)).status).toBe(403);
+  expect((await save({ ...snapshot, generation: "old-backup" }, upload)).status).toBe(409);
+  const saved = await save(snapshot, upload);
+  expect(saved.status, await saved.clone().text()).toBe(200);
+  const draft = profileMediaSnapshotSchema.parse(await saved.json());
+  const [cover] = draft.images;
+  if (!cover) throw new Error("Missing cover");
+  const url = (base: string, version: string) => `${base}/${cover.id}/${version}`;
+  expect(cover).toMatchObject({ width: 24, height: 16, published: false });
+  expect((await get(owner, url(media, cover.version))).headers.get("Content-Type")).toBe(
+    "image/jpeg",
+  );
+  expect((await get(ana, url(media, cover.version))).status).toBe(403);
+  expect((await get(null, url(publicMedia, cover.version))).status).toBe(404);
+  expect((await save(snapshot, upload)).status).toBe(409);
+  expect((await save(draft, upload)).status).toBe(400);
+  const publication = { mode: "publication", id: cover.id, published: true };
+  const published = profileMediaSnapshotSchema.parse(await (await save(draft, publication)).json());
+  const current = published.images[0]?.version ?? "";
+  expect(await profile()).toEqual({ profile: null });
+  expect((await get(null, url(publicMedia, current))).status).toBe(404);
+  const writeProfile = (revision: string, published: boolean) =>
+    json(
+      t.app,
+      "/admin/settings/profile",
+      "PUT",
+      { generation: snapshot.generation, expectedRevision: revision, changes: { published } },
+      owner.cookie,
+    );
+  const profileWrite = await writeProfile(published.revision, true);
+  expect(profileWrite.status).toBe(200);
+  expect((await profile()).images).toEqual([
+    {
+      id: cover.id,
+      kind: "cover",
+      alt: "Centre entrance",
+      width: 24,
+      height: 16,
+      version: current,
+    },
+  ]);
+  const image = await get(null, url(publicMedia, current));
+  expect(image.status).toBe(200);
+  expect(image.headers.get("Cache-Control")).toBe("private, no-store");
+  expect((await get(null, url(publicMedia, cover.version))).status).toBe(404);
+  const { revision } = desktopSalonSettingsSchema.parse(await profileWrite.json());
+  expect((await writeProfile(revision, false)).status).toBe(200);
+  expect((await get(null, url(publicMedia, current))).status).toBe(404);
+  expect((await save(published, { ...upload, replaceId: cover.id })).status).toBe(409);
+  const latest = profileMediaSnapshotSchema.parse(await (await get(owner, media)).json());
+  const replaced = profileMediaSnapshotSchema.parse(
+    await (await save(latest, { ...upload, replaceId: cover.id })).json(),
+  );
+  expect(replaced.images[0]).toMatchObject({ id: cover.id, published: false });
+  expect((await get(owner, url(media, current))).status).toBe(404);
+  const removed = profileMediaSnapshotSchema.parse(
+    await (await save(replaced, { mode: "remove", id: cover.id })).json(),
+  );
+  expect(removed.images).toEqual([]);
+});
 
 test("split opening hours and dated closures are published without changing bookable slots", async () => {
   const available = async () => {

@@ -30,6 +30,7 @@ export * from "./portfolio";
 export * from "./resources";
 export * from "./review";
 export * from "./rewards";
+export * from "./salon-profile-media";
 export * from "./salon-settings";
 export * from "./service";
 export * from "./service-combination";

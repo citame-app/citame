@@ -5,7 +5,10 @@ import { PageContainer } from "~/components/pages";
 import { buttonClasses } from "~/components/ui/button";
 import { ChevronRightIcon, ClockIcon } from "~/components/ui/icons";
 import { Skeleton } from "~/components/ui/states";
-import { PublicBusinessProfile } from "~/features/booking/public-business-profile";
+import {
+  PublicBusinessProfile,
+  publicProfileImageUrl,
+} from "~/features/booking/public-business-profile";
 import { priceLabel } from "~/features/booking/service-price";
 import { createTranslator } from "~/i18n";
 import { useI18n } from "~/i18n/react";
@@ -25,7 +28,7 @@ export const Route = createFileRoute("/")({
         context.queryClient.ensureQueryData(salonQuery),
         api()
           .businessProfile()
-          .catch(() => ({ profile: null, openingSchedule: undefined })),
+          .catch(() => ({ profile: null, openingSchedule: undefined, images: undefined })),
       ]);
       return {
         ...published,
@@ -63,7 +66,9 @@ function HomeSkeleton() {
 }
 
 function Home() {
-  const { profile, openingSchedule, localDate } = Route.useLoaderData();
+  const { profile, openingSchedule, images, localDate } = Route.useLoaderData();
+  const logo = images?.find(({ kind }) => kind === "logo");
+  const cover = images?.find(({ kind }) => kind === "cover");
   const { t, locale } = useI18n();
   const { data: salon } = useSuspenseQuery(salonQuery);
   const { data: services } = useSuspenseQuery(servicesQuery);
@@ -92,23 +97,44 @@ function Home() {
         <div className="wrap editorial-wrap">
           <div className="hero-text">
             <div className="hero__media salon-hero-media m-zoom" data-enter-media="">
-              <img
-                src="/images/editorial/hair-v1-1536.webp"
-                srcSet="/images/editorial/hair-v1-640.webp 640w, /images/editorial/hair-v1-1024.webp 1024w, /images/editorial/hair-v1-1536.webp 1536w"
-                sizes="(min-width: 1280px) 1152px, calc(100vw - 48px)"
-                width="1536"
-                height="1024"
-                fetchPriority="high"
-                alt={
-                  locale === "en"
-                    ? "Hair being gently combed, beauty editorial illustration"
-                    : "Cuidado del cabello con un peine, ilustración editorial de belleza"
-                }
-              />
+              {cover ? (
+                <img
+                  src={publicProfileImageUrl(cover)}
+                  alt={cover.alt}
+                  width={cover.width}
+                  height={cover.height}
+                  fetchPriority="high"
+                />
+              ) : (
+                <img
+                  src="/images/editorial/hair-v1-1536.webp"
+                  srcSet="/images/editorial/hair-v1-640.webp 640w, /images/editorial/hair-v1-1024.webp 1024w, /images/editorial/hair-v1-1536.webp 1536w"
+                  sizes="(min-width: 1280px) 1152px, calc(100vw - 48px)"
+                  width="1536"
+                  height="1024"
+                  fetchPriority="high"
+                  alt={
+                    locale === "en"
+                      ? "Hair being gently combed, beauty editorial illustration"
+                      : "Cuidado del cabello con un peine, ilustración editorial de belleza"
+                  }
+                />
+              )}
             </div>
             <div className="salon-hero-copy">
               <div>
-                <p className="editorial-kicker">{salon.name}</p>
+                <div className="flex items-center gap-3">
+                  {logo && (
+                    <img
+                      src={publicProfileImageUrl(logo)}
+                      alt={logo.alt}
+                      width={logo.width}
+                      height={logo.height}
+                      className="size-12 rounded-md object-contain"
+                    />
+                  )}
+                  <p className="editorial-kicker">{salon.name}</p>
+                </div>
                 <h1 id="home-title" data-enter-whole="">
                   {t("home.title")}
                 </h1>
@@ -200,6 +226,7 @@ function Home() {
         <PublicBusinessProfile
           profile={profile}
           openingSchedule={openingSchedule}
+          gallery={images?.filter(({ kind }) => kind === "gallery")}
           initialDate={localDate}
           timezone={salon.timezone}
         />
