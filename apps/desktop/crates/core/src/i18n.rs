@@ -978,6 +978,7 @@ keys! {
     ReportNoShow => ("No-shows", "Inasistencias"),
     ReportUncategorized => ("Uncategorized", "Sin categoría"),
     ReportNoRows => ("No appointments in this group.", "No hay citas en este grupo."),
+    ReportNoAppointments => ("No appointments in this period", "No hay citas en este período"),
     ReportOverview => ("Summary", "Resumen"),
     ReportClients => ("Clients", "Clientes"),
     StaffPortraits => ("Team photos", "Fotos del equipo"),

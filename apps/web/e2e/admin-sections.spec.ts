@@ -307,6 +307,10 @@ test.describe("reports", () => {
     await expect(page.getByText("No appointments in this period")).toBeVisible();
     await expect(page.getByRole("region", { name: "Team occupancy" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Export CSV" })).toBeEnabled();
+    const download = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Export CSV" }).click();
+    const csv = readFileSync(await (await download).path(), "utf8");
+    expect(csv).toMatch(/Stylist A,\d{3,},0,0,0,0,0\.0000\r\n/);
   });
 
   test("staff see only their own numbers and no team filter", async ({ page }) => {
