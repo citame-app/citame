@@ -11,6 +11,20 @@ export const REPORT_PRESETS: readonly ReportPreset[] = [
   "lastMonth",
 ];
 
+export const OCCUPANCY_MINUTES = [
+  "scheduledMinutes",
+  "blockedMinutes",
+  "reservedMinutes",
+  "completedMinutes",
+  "noShowMinutes",
+] as const;
+
+export function hasOccupancyMinutes(staff: ReportSummary["perStaff"]): boolean {
+  return staff.some(({ occupancy }) =>
+    OCCUPANCY_MINUTES.some((field) => (occupancy?.[field] ?? 0) > 0),
+  );
+}
+
 const lastDayOfMonth = (year: number, month: number) =>
   new Date(Date.UTC(year, month, 0)).getUTCDate();
 const pad = (n: number) => String(n).padStart(2, "0");

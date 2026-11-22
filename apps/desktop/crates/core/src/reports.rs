@@ -343,6 +343,17 @@ fn csv_row(output: &mut String, cells: impl IntoIterator<Item = impl AsRef<str>>
 }
 
 impl ReportSummary {
+    pub fn has_occupancy_minutes(&self) -> bool {
+        self.per_staff
+            .iter()
+            .filter_map(|staff| staff.occupancy.as_ref())
+            .any(|occupancy| occupancy.minutes().into_iter().any(|minutes| minutes > 0))
+    }
+
+    pub fn has_overview_data(&self) -> bool {
+        self.totals.appointments > 0 || self.has_occupancy_minutes()
+    }
+
     pub fn to_csv(&self) -> String {
         let currency = self.currency.as_deref();
         let include_unpriced = self.totals.unpriced_services > 0;

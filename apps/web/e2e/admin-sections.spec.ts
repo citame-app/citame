@@ -299,13 +299,20 @@ test.describe("reports", () => {
   });
 
   test("an empty period shows a clear empty state", async ({ page }) => {
-    await signInAs(page, OWNER_EMAIL, "/admin/reports?preset=custom&from=2020-01-06&to=2020-01-07");
+    await signInAs(page, OWNER_EMAIL, "/admin/reports?preset=custom&from=2020-01-05&to=2020-01-05");
     await expect(page.getByText("No appointments in this period")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Team occupancy" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Export CSV" })).toBeDisabled();
+    await page.goto("/admin/reports?preset=custom&from=2020-01-06&to=2020-01-07");
+    await expect(page.getByText("No appointments in this period")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Team occupancy" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Export CSV" })).toBeEnabled();
   });
 
   test("staff see only their own numbers and no team filter", async ({ page }) => {
-    await signInAs(page, STAFF_EMAIL, `/admin/reports?preset=custom&from=${past}&to=${past}`);
+    const email = `reports-${stamp}@example.com`;
+    await ensureStaff(email, `Report staff ${stamp}`);
+    await signInAs(page, email, `/admin/reports?preset=custom&from=${past}&to=${past}`);
     await expect(page.getByLabel("Team member")).toHaveCount(0);
     await expect(
       page

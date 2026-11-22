@@ -380,7 +380,11 @@ impl Root {
                 (report.csv_filename(), report.to_csv())
             }
             ReportMode::Overview => {
-                let Some(report) = desk.summary.as_ref() else {
+                let Some(report) = desk
+                    .summary
+                    .as_ref()
+                    .filter(|report| report.has_overview_data())
+                else {
                     return;
                 };
                 (
@@ -661,11 +665,7 @@ impl Root {
                         !desk.export_pending
                             && desk.request.is_none()
                             && desk.mode == ReportMode::Overview
-                            && (report.totals.appointments > 0
-                                || report
-                                    .per_staff
-                                    .iter()
-                                    .any(|entry| entry.occupancy.is_some())),
+                            && report.has_overview_data(),
                         |view| {
                             view.child(self.button(
                                 "reports-export",
@@ -894,9 +894,10 @@ impl Root {
             .when(pages > 1, |view| {
                 view.child(self.render_report_pager(page, pages, cx))
             })
-            .when(desk.group == Group::Staff, |view| {
-                view.children(self.render_staff_occupancy(report, start))
-            })
+            .when(
+                desk.group == Group::Staff && report.has_occupancy_minutes(),
+                |view| view.children(self.render_staff_occupancy(report, start)),
+            )
     }
 
     fn render_staff_occupancy(
