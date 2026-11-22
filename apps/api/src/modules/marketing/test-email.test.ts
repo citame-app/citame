@@ -7,6 +7,7 @@ import { actor, json, seedFixtures, setupApiTest } from "../../../test/helpers";
 
 const messages: { to: string; content: string }[] = [];
 let smtpResult: "accept" | "reject" | "disconnect" = "accept";
+let smtpAcknowledgement: Promise<void> | null = null;
 const smtp = createServer((socket) => {
   let buffer = "";
   let body: string[] | undefined;
@@ -33,7 +34,9 @@ const smtp = createServer((socket) => {
             socket.destroy();
             return;
           }
-          socket.write("250 queued by test fixture\r\n");
+          if (smtpAcknowledgement)
+            void smtpAcknowledgement.then(() => socket.write("250 queued by test fixture\r\n"));
+          else socket.write("250 queued by test fixture\r\n");
         } else {
           body.push(line);
         }
@@ -75,6 +78,7 @@ async function prepareDraft() {
   await t.reset();
   messages.length = 0;
   smtpResult = "accept";
+  smtpAcknowledgement = null;
   const fixtures = await seedFixtures(t.db);
   const [owner, staff] = await Promise.all([
     actor(t, "owner", "preview-owner@example.com"),
@@ -136,7 +140,7 @@ test("only the verified owner receives a reviewed test, with a safe replay", asy
   }
   const retry = await send(owner.cookie);
   expect(retry.status).toBe(200);
-  expect(await retry.json()).toEqual({ status: "accepted" });
+  expect(await retry.json()).toEqual({ status: "accepted", requestId: packet.requestId });
   const audit = await t.db
     .select({ action: auditLog.action, metadata: auditLog.metadata })
     .from(auditLog)
@@ -159,7 +163,7 @@ test("an SMTP rejection permits a fresh test and an ambiguous send requires anot
       t.app,
       `${root}/${id}/test-email`,
       "POST",
-      { version: 1, requestId, replaceUnconfirmed },
+      { version: 1, requestId, mode: replaceUnconfirmed ? "replace_unconfirmed" : "send" },
       owner.cookie,
     );
     expect(response.status, await response.clone().text()).toBe(200);
@@ -185,6 +189,37 @@ test("an SMTP rejection permits a fresh test and an ambiguous send requires anot
   expect(messages).toHaveLength(2);
 });
 
+test("a status check from another window never claims a new send", async () => {
+  const { owner, id, root } = await prepareDraft();
+  const held = Promise.withResolvers<void>();
+  smtpAcknowledgement = held.promise;
+  const next = async (requestId: string, mode: "send" | "check") => {
+    const response = await json(
+      t.app,
+      `${root}/${id}/test-email`,
+      "POST",
+      { version: 1, requestId, mode },
+      owner.cookie,
+    );
+    expect(response.status, await response.clone().text()).toBe(200);
+    return campaignTestEmailReceiptSchema.parse(await response.json());
+  };
+  const first = crypto.randomUUID();
+  const other = crypto.randomUUID();
+  const send = next(first, "send");
+  try {
+    for (let i = 0; i < 100 && !messages.length; i += 1) await Bun.sleep(10);
+    expect(messages).toHaveLength(1);
+    expect(await next(other, "send")).toEqual({ status: "pending", requestId: first });
+  } finally {
+    held.resolve();
+    await send;
+  }
+  expect(await next(first, "check")).toEqual({ status: "accepted", requestId: first });
+  expect(await next(other, "check")).toEqual({ status: "not_requested", requestId: other });
+  expect(messages).toHaveLength(1);
+});
+
 test("a draft edit in flight invalidates the reviewed test before the SMTP claim", async () => {
   const { owner, id, root } = await prepareDraft();
   let request: Promise<Response> | undefined;
@@ -193,12 +228,14 @@ test("a draft edit in flight invalidates the reviewed test before the SMTP claim
       .update(marketingCampaign)
       .set({ version: 2, subject: "Edited draft" })
       .where(eq(marketingCampaign.id, id));
-    request = json(
-      t.app,
-      `${root}/${id}/test-email`,
-      "POST",
-      { version: 1, requestId: crypto.randomUUID() },
-      owner.cookie,
+    request = Promise.resolve(
+      json(
+        t.app,
+        `${root}/${id}/test-email`,
+        "POST",
+        { version: 1, requestId: crypto.randomUUID() },
+        owner.cookie,
+      ),
     );
     for (let attempt = 0; attempt < 100; attempt += 1) {
       const [row] = await t.db.execute<{ blocked: boolean }>(sql`

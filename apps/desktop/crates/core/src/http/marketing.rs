@@ -256,6 +256,22 @@ pub enum TestEmailStatus {
     Pending,
     Unconfirmed,
     Rejected,
+    NotRequested,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TestEmailMode {
+    Send,
+    Check,
+    ReplaceUnconfirmed,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TestEmailReceipt {
+    pub status: TestEmailStatus,
+    pub request_id: uuid::Uuid,
 }
 
 #[derive(Clone, Deserialize)]
@@ -442,22 +458,14 @@ impl HttpTransport {
         generation: &str,
         version: u32,
         request_id: uuid::Uuid,
-        replace_unconfirmed: bool,
-    ) -> Result<TestEmailStatus, MutationError> {
-        #[derive(Deserialize)]
-        struct Receipt {
-            status: TestEmailStatus,
-        }
+        mode: TestEmailMode,
+    ) -> Result<TestEmailReceipt, MutationError> {
         let id = parse_id(campaign_id)?;
         let req = self
             .agent
             .post(&format!("{}{PATH}/{id}/test-email", self.base_url));
-        let mut body = serde_json::json!({ "version": version, "requestId": request_id });
-        if replace_unconfirmed {
-            body["replaceUnconfirmed"] = true.into();
-        }
-        let receipt: Receipt = self.send_campaign_write(req, generation, body.to_string())?;
-        Ok(receipt.status)
+        let body = serde_json::json!({ "version": version, "requestId": request_id, "mode": mode });
+        self.send_campaign_write(req, generation, body.to_string())
     }
 
     pub fn save_campaign_draft(&self, write: &DraftWrite) -> Result<Campaign, MutationError> {

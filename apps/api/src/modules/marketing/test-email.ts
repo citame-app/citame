@@ -14,7 +14,7 @@ import { getSalonSettings } from "../settings/service";
 import { renderCampaignMessage } from "./message";
 import { campaignRow } from "./service";
 
-type Status = CampaignTestEmailReceipt["status"];
+type Status = Exclude<CampaignTestEmailReceipt["status"], "not_requested">;
 
 const actionFor: Record<Status, string> = {
   pending: "marketing.campaign_test_requested",
@@ -67,9 +67,11 @@ async function testAttempt(
   const status = (Object.keys(actionFor) as Status[]).find(
     (key) => actionFor[key] === attempt.action,
   );
-  if (!status) throw new Error("Unexpected campaign test state");
+  const { version, requestId } = attempt.metadata;
+  if (!status || typeof requestId !== "string") throw new Error("Unexpected campaign test state");
   return {
-    version: attempt.metadata.version,
+    version,
+    requestId,
     status: status === "pending" && attempt.interrupted ? "unconfirmed" : status,
   } as const;
 }
@@ -93,10 +95,13 @@ export async function requestCampaignTestEmail(
     entityId: id,
     metadata: { version: input.version, requestId: input.requestId },
   };
-  const budget = await limiter.hit("marketing-campaign-test", principal.userId, {
-    max: 3,
-    windowSeconds: 60,
-  });
+  const budget =
+    input.mode === "check"
+      ? null
+      : await limiter.hit("marketing-campaign-test", principal.userId, {
+          max: 3,
+          windowSeconds: 60,
+        });
   const claim = await db.transaction(async (tx) => {
     const draft = await campaignRow(tx, id, true);
     const recipient = await verifiedCampaignEmailRecipient(tx, principal.userId, true);
@@ -110,14 +115,15 @@ export async function requestCampaignTestEmail(
     if (repeated) {
       if (repeated.version !== input.version)
         throw new DomainError("version_conflict", "Review this campaign version again");
-      return { status: repeated.status };
+      return { status: repeated.status, requestId: repeated.requestId };
     }
+    if (!budget) return { status: "not_requested" as const, requestId: input.requestId };
     const previous = await testAttempt(tx, audit, { version: input.version });
     if (
       previous?.status === "pending" ||
-      (previous?.status === "unconfirmed" && !input.replaceUnconfirmed)
+      (previous?.status === "unconfirmed" && input.mode !== "replace_unconfirmed")
     )
-      return { status: previous.status };
+      return { status: previous.status, requestId: previous.requestId };
     if (!budget.allowed) return { retryAfterSeconds: budget.retryAfterSeconds };
 
     const salon = await getSalonSettings(tx);
@@ -152,5 +158,5 @@ export async function requestCampaignTestEmail(
     await provider.close?.();
   }
   await recordAudit(db, { ...audit, action: actionFor[status] });
-  return { status };
+  return { status, requestId: input.requestId };
 }

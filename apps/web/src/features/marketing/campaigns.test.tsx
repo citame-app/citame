@@ -51,10 +51,16 @@ test("an owner can retry a test email without creating another request", async (
         sample: [],
       });
     if (path.endsWith("/test-email")) {
-      attempts.push(JSON.parse(String(init?.body)));
+      const packet: CampaignTestEmail = JSON.parse(String(init?.body));
+      attempts.push(packet);
+      if (attempts.length === 3)
+        return Response.json(
+          { error: { code: "version_conflict", message: "The draft changed." } },
+          { status: 409 },
+        );
       return attempts.length === 1
         ? Response.json({ error: { code: "invalid_state" } }, { status: 409 })
-        : Response.json({ status: "accepted" });
+        : Response.json({ status: "accepted", requestId: packet.requestId });
     }
     return Response.json({}, { status: 404 });
   }) as unknown as typeof fetch;
@@ -67,8 +73,15 @@ test("an owner can retry a test email without creating another request", async (
   fireEvent.click(screen.getByRole("button", { name: "Check test delivery" }));
   expect(await screen.findByText("Test email accepted. Check your inbox.")).toBeVisible();
   expect(attempts).toHaveLength(2);
-  expect(attempts[0]).toMatchObject({ version: 3, requestId: expect.any(String) });
-  expect(attempts[1]).toEqual(attempts[0]);
+  const [firstAttempt, checkAttempt] = attempts;
+  if (!firstAttempt || !checkAttempt) throw new Error("Expected a send and a status check");
+  expect(firstAttempt).toMatchObject({ version: 3, requestId: expect.any(String), mode: "send" });
+  expect(checkAttempt).toEqual({ ...firstAttempt, mode: "check" });
+  fireEvent.click(screen.getByRole("button", { name: label }));
+  expect(
+    await screen.findByText("The draft changed. Reopen it to test the current version."),
+  ).toBeVisible();
+  expect(screen.getByRole("button", { name: label })).toBeDisabled();
   view.unmount();
   renderApp(<CampaignsView viewerId="manager" isOwner={false} />);
   fireEvent.click(await screen.findByRole("button", { name: /Salon news/ }));

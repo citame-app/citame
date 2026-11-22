@@ -399,6 +399,7 @@ keys! {
     MarketingTestEmailAgain => ("Send another test", "Enviar otra prueba"),
     MarketingTestEmailSent => ("Test email accepted. Check your inbox.", "Envío de prueba aceptado. Revisa tu bandeja de entrada."),
     MarketingTestEmailPending => ("Delivery is awaiting confirmation.", "El envío está pendiente de confirmación."),
+    MarketingTestEmailNotRequested => ("The test did not start. You can send it now.", "El envío de prueba no se inició. Puedes enviarlo ahora."),
     MarketingTestEmailRejected => ("The email server rejected the test. Check its settings before trying again.", "El servidor de correo rechazó la prueba. Revisa su configuración antes de reintentar."),
     MarketingTestEmailFailed => ("Could not confirm the test email. Check your inbox before retrying.", "No se pudo confirmar el envío de prueba. Revisa tu bandeja de entrada antes de reintentar."),
     MarketingConfirmCancel => ("Cancel this campaign? Pending deliveries are withdrawn. Deliveries already processing can complete.", "¿Cancelar esta campaña? Se retiran los envíos pendientes. Los que ya están en proceso pueden completarse."),

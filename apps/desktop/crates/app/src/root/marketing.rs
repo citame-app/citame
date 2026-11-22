@@ -2,7 +2,7 @@ use super::*;
 use chrono::{NaiveDateTime, TimeZone};
 use sob_core::http::marketing::{
     Campaign, CampaignAction, CampaignPage, Capabilities, Channel, DeliveryPage, DeliveryStatus,
-    LIVE_TOPIC, MutationError, Preview, Status, TestEmailStatus, Trigger,
+    LIVE_TOPIC, MutationError, Preview, Status, TestEmailMode, TestEmailStatus, Trigger,
 };
 use sob_core::sync::TransportError;
 
@@ -107,6 +107,7 @@ enum Request {
         campaign_id: String,
         generation: String,
         version: u32,
+        mode: TestEmailMode,
         test: TestEmailResult,
     },
     Write(CampaignAction),
@@ -124,7 +125,6 @@ enum Loaded {
 #[derive(Clone, Copy)]
 struct TestEmailResult {
     request_id: uuid::Uuid,
-    replace_unconfirmed: bool,
     status: Option<TestEmailStatus>,
 }
 
@@ -356,15 +356,18 @@ impl Root {
                             campaign_id,
                             generation,
                             version,
+                            mode,
                             mut test,
                         } => {
-                            test.status = Some(transport.send_campaign_test_email(
+                            let receipt = transport.send_campaign_test_email(
                                 &campaign_id,
                                 &generation,
                                 version,
                                 test.request_id,
-                                test.replace_unconfirmed,
-                            )?);
+                                mode,
+                            )?;
+                            test.status = Some(receipt.status);
+                            test.request_id = receipt.request_id;
                             Loaded::TestEmail(test)
                         }
                         Request::Write(action) => {
@@ -547,21 +550,22 @@ impl Root {
         let Some((campaign, generation)) = desk.reviewed_email_test() else {
             return;
         };
-        let test = desk
-            .test_email
-            .filter(|previous| previous.for_retry())
-            .unwrap_or_else(|| TestEmailResult {
-                request_id: uuid::Uuid::now_v7(),
-                replace_unconfirmed: desk
-                    .test_email
-                    .is_some_and(|previous| previous.status == Some(TestEmailStatus::Unconfirmed)),
-                status: None,
-            });
+        let (request_id, mode) = match desk.test_email {
+            Some(previous) if previous.for_retry() => (previous.request_id, TestEmailMode::Check),
+            Some(previous) if previous.status == Some(TestEmailStatus::Unconfirmed) => {
+                (uuid::Uuid::now_v7(), TestEmailMode::ReplaceUnconfirmed)
+            }
+            _ => (uuid::Uuid::now_v7(), TestEmailMode::Send),
+        };
         let request = Request::TestEmail {
             campaign_id: campaign.id.clone(),
             generation: generation.to_owned(),
             version: campaign.version,
-            test,
+            mode,
+            test: TestEmailResult {
+                request_id,
+                status: None,
+            },
         };
         self.request_marketing(request, cx);
     }
@@ -1043,6 +1047,9 @@ impl Root {
                             Some(TestEmailStatus::Accepted) => Key::MarketingTestEmailSent,
                             Some(TestEmailStatus::Pending) => Key::MarketingTestEmailPending,
                             Some(TestEmailStatus::Rejected) => Key::MarketingTestEmailRejected,
+                            Some(TestEmailStatus::NotRequested) => {
+                                Key::MarketingTestEmailNotRequested
+                            }
                             Some(TestEmailStatus::Unconfirmed) | None => {
                                 Key::MarketingTestEmailFailed
                             }

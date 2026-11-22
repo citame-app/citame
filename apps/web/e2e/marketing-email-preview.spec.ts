@@ -32,7 +32,7 @@ test("a draft email test reaches the owner's inbox without activating the campai
     review.getByRole("button", { name: "Send test to my email", exact: true }).click(),
   ]);
   expect(response.ok()).toBe(true);
-  expect(await response.json()).toEqual({ status: "accepted" });
+  expect(await response.json()).toEqual({ status: "accepted", requestId: expect.any(String) });
   await expect(review.getByText("Test email accepted. Check your inbox.")).toBeVisible();
   const message = await waitForMail(email, { subject: new RegExp(`Preview ${label}`) });
   expect(message.subject).toBe(`[Prueba / Test] Preview ${label}`);

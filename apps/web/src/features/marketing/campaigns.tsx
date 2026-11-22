@@ -601,6 +601,18 @@ function CampaignReview({
   });
   const testStatus = testEmail.data?.status;
   const retryTest = testEmail.isError || testStatus === "pending";
+  const testConflict =
+    testEmail.error instanceof ApiError && testEmail.error.code === "version_conflict";
+  const requestTestEmail = () => {
+    const requestId = retryTest
+      ? (testEmail.data?.requestId ?? testEmail.variables?.requestId)
+      : undefined;
+    testEmail.mutate({
+      version: campaign.version,
+      requestId: requestId ?? crypto.randomUUID(),
+      mode: retryTest ? "check" : testStatus === "unconfirmed" ? "replace_unconfirmed" : "send",
+    });
+  };
   const reviewMatches =
     audience.data?.campaignId === campaign.id && audience.data.version === campaign.version;
   let scheduledFor: string | null = null,
@@ -727,20 +739,16 @@ function CampaignReview({
                   variant="secondary"
                   loading={testEmail.isPending}
                   disabled={
-                    !online || audience.isFetching || testEmail.isPending || queue.isPending
+                    !online ||
+                    audience.isFetching ||
+                    testEmail.isPending ||
+                    queue.isPending ||
+                    testConflict
                   }
-                  onClick={() =>
-                    testEmail.mutate(
-                      (retryTest && testEmail.variables) || {
-                        version: campaign.version,
-                        requestId: crypto.randomUUID(),
-                        ...(testStatus === "unconfirmed" ? { replaceUnconfirmed: true } : {}),
-                      },
-                    )
-                  }
+                  onClick={requestTestEmail}
                 >
                   {t(
-                    retryTest
+                    retryTest && !testConflict
                       ? "marketing.testEmailCheck"
                       : testStatus === "unconfirmed"
                         ? "marketing.testEmailAgain"
@@ -750,15 +758,18 @@ function CampaignReview({
                 <p role="status" className="text-sm text-success-fg">
                   {testStatus === "accepted" && t("marketing.testEmailSent")}
                   {testStatus === "pending" && t("marketing.testEmailPending")}
+                  {testStatus === "not_requested" && t("marketing.testEmailNotRequested")}
                 </p>
                 {(testEmail.isError ||
                   testStatus === "unconfirmed" ||
                   testStatus === "rejected") && (
                   <p role="alert" className="text-sm text-danger-fg">
                     {t(
-                      testStatus === "rejected"
-                        ? "marketing.testEmailRejected"
-                        : "marketing.testEmailFailed",
+                      testConflict
+                        ? "marketing.testEmailChanged"
+                        : testStatus === "rejected"
+                          ? "marketing.testEmailRejected"
+                          : "marketing.testEmailFailed",
                     )}
                   </p>
                 )}

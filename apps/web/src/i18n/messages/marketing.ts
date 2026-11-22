@@ -53,6 +53,8 @@ export const marketingEn = {
   "marketing.testEmailAgain": "Send another test",
   "marketing.testEmailSent": "Test email accepted. Check your inbox.",
   "marketing.testEmailPending": "Delivery is awaiting confirmation.",
+  "marketing.testEmailNotRequested": "The test did not start. You can send it now.",
+  "marketing.testEmailChanged": "The draft changed. Reopen it to test the current version.",
   "marketing.testEmailRejected":
     "The email server rejected the test. Check its settings before trying again.",
   "marketing.testEmailFailed":
@@ -163,6 +165,9 @@ export const marketingEs: Record<keyof typeof marketingEn, string> = {
   "marketing.testEmailAgain": "Enviar otra prueba",
   "marketing.testEmailSent": "Envío de prueba aceptado. Revisa tu bandeja de entrada.",
   "marketing.testEmailPending": "El envío está pendiente de confirmación.",
+  "marketing.testEmailNotRequested": "El envío de prueba no se inició. Puedes enviarlo ahora.",
+  "marketing.testEmailChanged":
+    "El borrador cambió. Vuelve a abrirlo para probar la versión actual.",
   "marketing.testEmailRejected":
     "El servidor de correo rechazó la prueba. Revisa su configuración antes de reintentar.",
   "marketing.testEmailFailed":
