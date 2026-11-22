@@ -198,6 +198,37 @@ function operationalReceipt(move?: typeof operationalWrite) {
   };
 }
 
+test("operational receipts bind the expanded desktop evidence to the recovered calendar", () => {
+  const receipt = operationalReceipt(operationalWrite);
+  const verify = (evidence: {
+    groupedCalendarLinesVerified?: number;
+    frozenServicesVerified?: number;
+  }) =>
+    verifyPortableBooksyRehearsal(
+      {
+        ...receipt,
+        operationalCopy: {
+          ...receipt.operationalCopy,
+          replica: { ...receipt.operationalCopy.replica, ...evidence },
+        },
+      },
+      operationalReference,
+      "operational-write",
+    );
+  expect(verify({ groupedCalendarLinesVerified: 787, frozenServicesVerified: 817 })).toMatchObject({
+    groupedCalendarLinesVerified: 787,
+    frozenServicesVerified: 817,
+  });
+  for (const incomplete of [
+    { groupedCalendarLinesVerified: 787 },
+    { frozenServicesVerified: 817 },
+    { groupedCalendarLinesVerified: 788, frozenServicesVerified: 817 },
+    { groupedCalendarLinesVerified: 787, frozenServicesVerified: 816 },
+  ]) {
+    expect(() => verify(incomplete)).toThrow("successful migrated rehearsal");
+  }
+});
+
 test("an operational write receipt verifies the archived day and live synchronization in both directions", () => {
   const receipt = operationalReceipt(operationalWrite);
   expect(
