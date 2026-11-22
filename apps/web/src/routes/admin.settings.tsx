@@ -6,6 +6,7 @@ import { adminHead } from "~/features/admin/route-head";
 import { BookingPolicyForm } from "~/features/admin/settings/booking-policy-form";
 import { BusinessProfileForm } from "~/features/admin/settings/business-profile-form";
 import { EmailDelivery } from "~/features/admin/settings/email-delivery-form";
+import { InventoryNumbering } from "~/features/admin/settings/inventory-numbering";
 import { ProfileMediaEditor } from "~/features/admin/settings/profile-media-editor";
 import { SettingsView } from "~/features/admin/settings/settings-view";
 import { UnsavedGuard } from "~/features/admin/unsaved-guard";
@@ -51,6 +52,11 @@ const sections = {
     "emailDelivery.gmailPassword",
     "emailDelivery.gmailHint",
     "emailDelivery.resendKey",
+  ],
+  numbering: [
+    "settings.numbering.title",
+    "settings.numbering.orders",
+    "settings.numbering.receipts",
   ],
   protection: [
     "protection.title",
@@ -186,6 +192,13 @@ function SettingsPage() {
           </div>
           <div id="email-delivery" hidden={section !== "email"} className="settings-section">
             {visited.has("email") && session && <EmailDelivery email={session.user.email} />}
+          </div>
+          <div
+            id="inventory-numbering"
+            hidden={section !== "numbering"}
+            className="settings-section"
+          >
+            {visited.has("numbering") && <InventoryNumbering />}
           </div>
           <div id="booking-policy" hidden={section !== "protection"} className="settings-section">
             {visited.has("protection") && <BookingPolicyForm />}

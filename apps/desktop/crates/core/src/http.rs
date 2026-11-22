@@ -67,6 +67,11 @@ mod checkout_rewards;
 pub mod client_controls;
 pub mod email_delivery;
 mod inventory_documents;
+mod inventory_numbering;
+pub use inventory_numbering::{
+    INVENTORY_NUMBER_MAX, InventoryNumberingSeries, InventoryNumberingSnapshot,
+    InventoryNumberingState,
+};
 mod loyalty;
 pub mod marketing;
 mod portfolio;

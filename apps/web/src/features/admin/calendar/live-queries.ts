@@ -20,6 +20,7 @@ const staffSchedule = [
 ] as const;
 const moderation = ["reviews", "admin"] as const;
 const commerce = [
+  ["admin", "settings", "inventory-numbering"],
   ["commerce"],
   ["inventory"],
   ["passes"],

@@ -1,4 +1,5 @@
 import {
+  type AdvanceInventoryNumbering,
   type AppointmentContextUpdate,
   type AppointmentListQuery,
   adminClientSchema,
@@ -41,6 +42,9 @@ import {
   type EmailDeliverySettings,
   emailDeliverySettingsSchema,
   emailDeliveryTestReceiptSchema,
+  type InventoryNumberingSeries,
+  inventoryNumberingSnapshotSchema,
+  inventoryNumberingStateSchema,
   listAdminServicesResponseSchema,
   listAdminStaffResponseSchema,
   listAppointmentsResponseSchema,
@@ -404,6 +408,17 @@ export function createEndpoints(client: ApiClient) {
         reviewed: () => client.get("/admin/settings/desktop", desktopSalonSettingsSchema),
         saveProfile: (request: ReviewedBusinessProfileRequest) =>
           client.put("/admin/settings/profile", request, desktopSalonSettingsSchema),
+        inventoryNumbering: () =>
+          client.get("/admin/settings/inventory-numbering", inventoryNumberingSnapshotSchema),
+        advanceInventoryNumbering: (
+          series: InventoryNumberingSeries,
+          request: AdvanceInventoryNumbering,
+        ) =>
+          client.put(
+            `/admin/settings/inventory-numbering/${series}`,
+            request,
+            inventoryNumberingStateSchema,
+          ),
         profileImages: () =>
           client.get("/admin/settings/profile/images", profileMediaSnapshotSchema),
         saveProfileImage: (request: ProfileMediaWrite) =>

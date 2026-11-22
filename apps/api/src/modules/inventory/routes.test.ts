@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import {
   checkoutSchema,
   inventoryClassificationListSchema,
+  inventoryNumberingSnapshotSchema,
   productListSchema,
   productPhotoVersionSchema,
   productSchema,
@@ -91,6 +92,94 @@ test("owner creates catalog stock, staff see availability but not costs, clients
   ).toBe(403);
 });
 
+test("only the owner can advance reviewed numbering, and new documents keep their allocated numbers", async () => {
+  const path = "/admin/settings/inventory-numbering";
+  const read = async () => {
+    const response = await call(owner, path);
+    expect(response.status, await response.clone().text()).toBe(200);
+    return inventoryNumberingSnapshotSchema.parse(await response.json());
+  };
+  const item = await product();
+  const supplierId = crypto.randomUUID();
+  expect(
+    (
+      await call(owner, `/admin/inventory/suppliers/${supplierId}`, "PUT", {
+        name: "Numbering supplier",
+        email: null,
+        phone: null,
+        taxId: null,
+        notes: null,
+        active: true,
+        generation: item.inventoryGeneration,
+        version: 0,
+      })
+    ).status,
+  ).toBe(200);
+  const createOrder = async () => {
+    const result = await call(owner, `/admin/inventory/orders/${crypto.randomUUID()}`, "PUT", {
+      action: "save",
+      supplierId,
+      supplierReference: null,
+      expectedOn: null,
+      notes: null,
+      lines: [{ productId: item.id, quantity: 1 }],
+      version: 0,
+      generation: item.inventoryGeneration,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(result.status, await result.clone().text()).toBe(200);
+    return purchaseOrderSchema.parse(await result.json());
+  };
+  const old = await createOrder();
+  const original = await read();
+  const { nextNumber } = original.orders;
+  if (nextNumber === null) throw new Error("Missing next order number");
+  const request = {
+    generation: original.generation,
+    expectedNextNumber: nextNumber,
+    nextNumber: nextNumber + 100,
+  };
+  const change = (who: Actor, body: unknown) => call(who, `${path}/orders`, "PUT", body);
+  expect((await call(staff, path)).status).toBe(403);
+  expect((await change(staff, request)).status).toBe(403);
+  expect((await change(owner, { ...request, generation: "previous-replica" })).status).toBe(409);
+  expect((await change(owner, { ...request, nextNumber: old.number })).status).toBe(400);
+  const locked = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const issuing = t.db.transaction(async (tx) => {
+    await tx.execute(sql`LOCK TABLE public.purchase_order IN ROW EXCLUSIVE MODE`);
+    locked.resolve();
+    await release.promise;
+  });
+  try {
+    await Promise.race([locked.promise, issuing]);
+    expect((await change(owner, request)).status).toBe(409);
+  } finally {
+    release.resolve();
+    await issuing;
+  }
+  const recent = await createOrder();
+  expect(recent.number).toBe(nextNumber);
+  expect((await change(owner, request)).status).toBe(409);
+  const reviewed = await read();
+  const applied = await change(owner, {
+    ...request,
+    expectedNextNumber: reviewed.orders.nextNumber,
+  });
+  expect(applied.status, await applied.clone().text()).toBe(200);
+  expect((await createOrder()).number).toBe(request.nextNumber);
+  const unchanged = purchaseOrderSchema.parse(
+    await (await call(owner, `/admin/inventory/orders/${old.id}`)).json(),
+  );
+  expect(unchanged.number).toBe(old.number);
+  const latest = await read();
+  expect(latest.receipts).toEqual(original.receipts);
+  expect(latest.orders).toEqual({
+    lastIssuedNumber: request.nextNumber,
+    nextNumber: request.nextNumber + 1,
+  });
+});
+
 test("numbered receipts atomically receive reviewed lines and replay without adding stock twice", async () => {
   const first = await product();
   const second = await product({ sku: "CREAM", openingStock: 1, name: "Cream" });
@@ -147,6 +236,23 @@ test("numbered receipts atomically receive reviewed lines and replay without add
   expect(await (await call(owner, firstPath)).json()).toMatchObject({ stockOnHand: 5, version: 1 });
   expect(await (await call(owner, base)).json()).toMatchObject({ receipts: [] });
 
+  const numbering = "/admin/settings/inventory-numbering";
+  const before = inventoryNumberingSnapshotSchema.parse(
+    await (await call(owner, numbering)).json(),
+  );
+  const next = before.receipts.nextNumber;
+  if (next === null) throw new Error("Missing next receipt number");
+  const assigned = next + 50;
+  expect(
+    (
+      await call(owner, `${numbering}/receipts`, "PUT", {
+        generation: before.generation,
+        expectedNextNumber: next,
+        nextNumber: assigned,
+      })
+    ).status,
+  ).toBe(200);
+
   const results = await Promise.all([
     call(owner, base, "POST", input),
     call(owner, base, "POST", input),
@@ -160,6 +266,7 @@ test("numbered receipts atomically receive reviewed lines and replay without add
   ).toEqual(receipt);
   expect(stockReceiptSchema.parse(await results[1]!.json())).toEqual(receipt);
   expect(receipt).toMatchObject({
+    number: assigned,
     supplierId,
     supplierName: "Care Supplies",
     invoiceReference: "INV-42",

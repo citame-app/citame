@@ -1856,6 +1856,38 @@ fn native_service_assignments_replay_and_keep_concurrent_cloud_changes_through_t
 
 #[test]
 #[ignore = "needs the isolated production smoke stack behind the web gateway (see README)"]
+fn native_document_numbering_uses_the_reviewed_connection_through_the_proxy() {
+    use sob_core::http::InventoryNumberingSeries::Orders;
+
+    let device = proxy_device();
+    let browser = Device::sign_in();
+    let initial = device.transport.inventory_numbering().unwrap();
+    let current = initial.orders.next_number.unwrap();
+    let next = current + 10;
+    let updated = device
+        .transport
+        .advance_inventory_numbering(Orders, &initial.generation, current, next)
+        .unwrap();
+    assert_eq!(updated.next_number, Some(next));
+    assert_eq!(
+        updated.last_issued_number,
+        initial.orders.last_issued_number
+    );
+    let refreshed = browser.rest_get("/admin/settings/inventory-numbering");
+    assert_eq!(refreshed["orders"]["nextNumber"], next);
+    assert!(matches!(
+        device.transport.advance_inventory_numbering(
+            Orders,
+            &initial.generation,
+            current,
+            next + 1
+        ),
+        Err(TransportError::BadRequest(message)) if message.contains("The series changed")
+    ));
+}
+
+#[test]
+#[ignore = "needs the isolated production smoke stack behind the web gateway (see README)"]
 fn native_profile_images_use_the_reviewed_connection_through_the_proxy() {
     use sob_core::http::{ProfileImageAction, ProfileImageKind};
     use sob_core::staff_portrait_image::prepare_photo;

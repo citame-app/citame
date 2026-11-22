@@ -33,6 +33,7 @@ export * from "./gift-cards";
 export * from "./intake";
 export * from "./inventory";
 export * from "./inventory-classification";
+export * from "./inventory-numbering";
 export * from "./inventory-orders";
 export * from "./inventory-receipts";
 export * from "./inventory-warehouses";

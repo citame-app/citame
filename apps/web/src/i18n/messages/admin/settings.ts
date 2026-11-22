@@ -10,6 +10,22 @@ export const settingsEn = {
     "When off, clients cannot make new bookings or join the waitlist online. Your team can still book from the calendar.",
   "settings.name": "Salon name",
   "settings.profile.title": "Public business profile",
+  "settings.numbering.title": "Document numbering",
+  "settings.numbering.help":
+    "Set the next number for inventory orders and supplier receipts. Numbers already issued stay in history.",
+  "settings.numbering.orders": "Purchase orders",
+  "settings.numbering.receipts": "Supplier receipts",
+  "settings.numbering.last": "Last issued",
+  "settings.numbering.next": "Next available",
+  "settings.numbering.advanceTo": "New next number",
+  "settings.numbering.save": "Advance numbering",
+  "settings.numbering.invalid":
+    "Enter a whole number from the next available number up to 2147483647.",
+  "settings.numbering.exhausted": "This series has reached its limit.",
+  "settings.numbering.offline": "Connect to Cloud to change document numbering.",
+  "settings.numbering.conflict":
+    "The next number changed. Review the current series before saving.",
+  "settings.numbering.review": "Review current numbering",
   "settings.media.title": "Centre images",
   "settings.media.help":
     "Upload images as drafts. Published images appear when the business profile is public.",
@@ -111,6 +127,22 @@ export const settingsEsAR: Record<keyof typeof settingsEn, string> = {
     "Al desactivarlo, los clientes no pueden reservar ni apuntarse a la lista de espera en línea. El equipo puede seguir reservando desde la agenda.",
   "settings.name": "Nombre del salón",
   "settings.profile.title": "Ficha pública del centro",
+  "settings.numbering.title": "Numeración de documentos",
+  "settings.numbering.help":
+    "Configura el siguiente número de los pedidos de inventario y los albaranes. Los números ya emitidos se conservan en el historial.",
+  "settings.numbering.orders": "Pedidos de compra",
+  "settings.numbering.receipts": "Albaranes de proveedor",
+  "settings.numbering.last": "Último emitido",
+  "settings.numbering.next": "Próximo disponible",
+  "settings.numbering.advanceTo": "Nuevo próximo número",
+  "settings.numbering.save": "Adelantar numeración",
+  "settings.numbering.invalid":
+    "Introduce un número entero entre el próximo disponible y 2147483647.",
+  "settings.numbering.exhausted": "Esta serie ha llegado a su límite.",
+  "settings.numbering.offline": "Conéctate a Cloud para cambiar la numeración.",
+  "settings.numbering.conflict":
+    "El próximo número cambió. Revisa la serie actual antes de guardar.",
+  "settings.numbering.review": "Revisar la numeración actual",
   "settings.media.title": "Imágenes del centro",
   "settings.media.help":
     "Sube imágenes como borradores. Las imágenes publicadas aparecen cuando la ficha del centro es pública.",
