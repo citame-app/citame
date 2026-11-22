@@ -300,6 +300,21 @@ test("a reviewed sale price is charged separately from the face value, including
   expect(await card(gift.card.id)).toMatchObject({ status: "void", balanceCents: 0 });
 });
 
+test("rounding away the remaining gift balance does not close a partially refunded receipt", async () => {
+  const gift = await buy(100, { purchasePriceCents: 200 });
+  const paid = await pay(gift.checkout.id, "external_card", 200);
+  expect(paid.status).toBe(201);
+  const { payment } = (await paid.json()) as { payment: { id: string } };
+
+  expect((await refund(payment.id, 199)).status).toBe(201);
+  expect(await card(gift.card.id)).toMatchObject({ status: "active", balanceCents: 0 });
+  const receipt = await call(owner, `/admin/commerce/checkouts/${gift.checkout.id}`);
+  expect(await receipt.json()).toMatchObject({ status: "partially_refunded", refundedCents: 199 });
+
+  expect((await refund(payment.id, 1)).status).toBe(201);
+  expect(await card(gift.card.id)).toMatchObject({ status: "void", balanceCents: 0 });
+});
+
 test("a pending bank refund reserves proportional value and a failed refund releases it", async () => {
   const gift = await buy(3000, { purchasePriceCents: 2400 });
   const bank = await pay(gift.checkout.id, "redsys_card", 2400);
@@ -506,8 +521,8 @@ test("gift redemption is stored value rather than a second collection of cash", 
   });
 });
 test("late excess bank capture restores covered gift value and refunding excess does not reduce it", async () => {
-  const gift = await buy();
-  const pending = await pay(gift.checkout.id, "redsys_card", 1000);
+  const gift = await buy(1000, { purchasePriceCents: 2000 });
+  const pending = await pay(gift.checkout.id, "redsys_card", 2000);
   const { payment } = (await pending.json()) as { payment: { id: string; order: string } };
   await t.db.execute(
     sql`update checkout_payment set updated_at = now() - interval '2 minutes' where id = ${payment.id}`,
@@ -520,14 +535,14 @@ test("late excess bank capture restores covered gift value and refunding excess 
       })
     ).status,
   ).toBe(200);
-  const collected = await pay(gift.checkout.id, "external_card", 1000);
+  const collected = await pay(gift.checkout.id, "external_card", 2000);
   const manual = (await collected.json()) as { payment: { id: string } };
-  expect((await refund(manual.payment.id, 300)).status).toBe(201);
-  expect(await card(gift.card.id)).toMatchObject({ balanceCents: 700 });
-  expect((await notify(payment.order, 1000)).status).toBe(200);
-  expect((await notify(payment.order, 1000)).status).toBe(200);
+  expect((await refund(manual.payment.id, 1999)).status).toBe(201);
+  expect(await card(gift.card.id)).toMatchObject({ status: "active", balanceCents: 0 });
+  expect((await notify(payment.order, 2000)).status).toBe(200);
+  expect((await notify(payment.order, 2000)).status).toBe(200);
   expect(await card(gift.card.id)).toMatchObject({ balanceCents: 1000, reservedCents: 0 });
-  const requested = await refund(payment.id, 700);
+  const requested = await refund(payment.id, 1);
   expect(requested.status).toBe(201);
   const bankRefund = (await requested.json()) as { id: string };
   expect(await card(gift.card.id)).toMatchObject({ balanceCents: 1000, reservedCents: 0 });

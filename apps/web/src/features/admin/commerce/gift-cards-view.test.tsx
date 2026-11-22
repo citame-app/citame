@@ -101,3 +101,24 @@ test("the admin can issue a card with a separate reviewed sale price", async () 
   await waitFor(() => expect(posts).toHaveLength(1));
   expect(posts[0]?.body).toMatchObject({ amountCents: 3000, purchasePriceCents: 2450 });
 });
+
+test("an uncertain purchase keeps the reviewed amounts and reuses its receipt key", async () => {
+  renderApp(<GiftCardsView mode="admin" role="owner" />);
+  await screen.findByText("Birthday");
+  const newCard = screen.getByRole("button", { name: "New gift card" });
+  fireEvent.click(newCard);
+  const value = screen.getByLabelText("Gift value (EUR)");
+  const price = screen.getByLabelText("Sale price (EUR, optional)");
+  fireEvent.change(value, { target: { value: "30" } });
+  fireEvent.change(price, { target: { value: "24,50" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create gift purchase" }));
+
+  // The fixture sends a malformed success body after logging the request.
+  const retry = await screen.findByRole("button", { name: "Retry the same purchase" });
+  expect(newCard).toBeDisabled();
+  expect(value).toBeDisabled();
+  expect(price).toBeDisabled();
+  fireEvent.click(retry);
+  await waitFor(() => expect(posts).toHaveLength(2));
+  expect(posts[1]).toEqual(posts[0]);
+});

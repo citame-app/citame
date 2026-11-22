@@ -217,7 +217,7 @@ export async function syncCheckoutGiftRefunds(tx: Tx, checkoutId: string) {
           "invalid_state",
           "Gift card purchase value has already been spent or reserved",
         );
-      const fullyReturned = desiredReturned === card.amountCents && desiredReserved === 0;
+      const fullyReturned = returned - excess >= line.priceCents;
       if (!deduction && card.reservedCents === desiredReserved && !fullyReturned) continue;
       if (fullyReturned) closed = true;
       await tx

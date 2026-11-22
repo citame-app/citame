@@ -11,6 +11,8 @@ export const giftCardsEn = {
   "gift.positiveAmount": "Enter a positive amount in euros with up to two decimal places.",
   "gift.label": "Recipient or reference",
   "gift.create": "Create gift purchase",
+  "gift.retryPurchase": "Retry the same purchase",
+  "gift.purchaseUncertain": "The purchase may have been saved. Retry to recover the same receipt.",
   "gift.value": "Original value: {amount}",
   "gift.available": "Available: {amount}",
   "gift.reserved": "Reserved: {amount}",
@@ -81,6 +83,9 @@ export const giftCardsEsAR: Record<keyof typeof giftCardsEn, string> = {
   "gift.positiveAmount": "Introduce un importe positivo en euros con hasta dos decimales.",
   "gift.label": "Destinatario o referencia",
   "gift.create": "Crear compra de regalo",
+  "gift.retryPurchase": "Reintentar la misma compra",
+  "gift.purchaseUncertain":
+    "Puede que la compra se haya guardado. Reintenta para recuperar el mismo recibo.",
   "gift.value": "Valor original: {amount}",
   "gift.available": "Disponible: {amount}",
   "gift.reserved": "Reservado: {amount}",
