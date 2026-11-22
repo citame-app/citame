@@ -531,6 +531,16 @@ Tras la migración `0101`, Caja separa las dos citas activas que carecen de evid
 
 La restauración aislada de un respaldo anterior a `0101` reconstruye la evidencia de pago a partir de los detalles archivados de cada reserva. Una marca negativa sin detalle suficiente conserva el bloqueo y genera un evento para actualizar las réplicas. El ensayo verifica los bloqueos contra el archivo antes de crear una candidata operativa.
 
+#### Prepared local calendar backup
+
+The editable local copy may contain changes made after the source export. Export a PostgreSQL snapshot in a read-only Repeatable Read transaction, fingerprint its tables, and keep the transaction open while `pg_dump --format=custom --snapshot=ID` reads that snapshot. Sequence changes are visible across transactions. Compare sequence state before and after the dump and after restoration. Retry with writers paused if the states differ. Encrypt the dump with the recovery key and record both the plaintext and encrypted SHA-256 digests. Store the recovery key and local owner credential separately. [PostgreSQL snapshot export](https://www.postgresql.org/docs/18/functions-admin.html#FUNCTIONS-SNAPSHOT-SYNCHRONIZATION), [sequence behavior](https://www.postgresql.org/docs/18/transaction-iso.html).
+
+Restore into an empty disposable PostgreSQL instance on the same major version. Use the recorded `sob_booksy_desktop_test_YYYYMMDD` database name, the `citame_import` owner and any roles referenced by the dump's grants. Compare the table and sequence fingerprints, archived source bytes and calendar totals for the selected day. Run `--check-prepared` against the restored database, with loopback database and Valkey addresses and the existing private `local-owner.json`. Recover into a separate database and preserve and reconcile any local changes made after the backup before switching the editable agenda to the recovered copy.
+
+On November 22, 2026, an isolated restore of the prepared copy for November 23 matched 116 table fingerprints, five sequences and the complete 118-migration ledger. It verified 1,053 archived originals and 38 service lines in 33 bookings. The local owner credential and Valkey check passed against the restored copy. The encrypted archive and verification receipt are held on the same machine, with `canCutOver: false`.
+
+On a dedicated test machine with the local user units installed, `systemctl --user add-wants default.target citame-local-web.service` schedules the web unit on the next start of the user manager. The web unit starts its API dependency. Docker is configured to restart the two loopback storage containers unless they were explicitly stopped. The test stopped both user units and started only the web unit. Both became active, the gateway returned a successful `/api/ready` result, and all 15 operational table fingerprints and the Monday calendar matched. A full machine restart remains untested. [systemd user targets](https://www.freedesktop.org/software/systemd/man/latest/systemd.special.html#default.target).
+
 ## 5. Cuando se decida dejar Booksy: corte futuro separado
 
 Esta fase no se ejecuta durante el ensayo actual. Booksy sigue recibiendo cambios mientras tanto; por ello, una copia de hoy no sustituye una extracción final.
@@ -554,7 +564,7 @@ Esta fase no se ejecuta durante el ensayo actual. Booksy sigue recibiendo cambio
 
 ## Recuperación
 
-Mientras el centro siga operando en Booksy, un fallo en el ensayo se resuelve conservando su base y abriendo otra base aislada desde los originales verificados. No se restaura nada sobre Booksy. Tras un corte futuro, detener nuevas escrituras en el sistema afectado y exportar los movimientos posteriores al corte antes de restaurar o regresar al otro sistema: una restauración ciega perdería las reservas nuevas. Documentar y conciliar esos movimientos antes de reabrir reservas.
+Para recuperar la copia editable, sigue el procedimiento de [respaldo de la copia preparada](#prepared-local-calendar-backup). Para iniciar otro ensayo desde el origen, conserva la base anterior y crea una base aislada desde los originales verificados. No se restaura nada sobre Booksy. Tras un corte futuro, detener nuevas escrituras en el sistema afectado y exportar los movimientos posteriores al corte antes de restaurar o regresar al otro sistema: una restauración ciega perdería las reservas nuevas. Documentar y conciliar esos movimientos antes de reabrir reservas.
 
 ## Solicitud de exportación completa para el proveedor
 
