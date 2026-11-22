@@ -8,6 +8,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Added
 
+- Desktop shows live notices when an appointment is moved or cancelled from another client, alongside the existing new-booking notices.
+
 - The Booksy recovery verifier checks trusted operational copy and bidirectional write receipts against the selected snapshot, encrypted backup, rehearsal date and full release migration ledger.
 - The isolated Booksy restore rehearsal verifies Web-to-Desktop and Desktop-to-Web appointment moves, live updates, retry idempotency and stale-version rejection while preserving appointment details, resource assignments and existing mutation receipts. [Migration protocol](docs/booksy-import-protocol.md#ensayar-la-separación-de-la-base-operativa)
 

@@ -12,6 +12,15 @@ pub enum CalendarNoticeKind {
     Cancelled,
 }
 
+impl CalendarNoticeKind {
+    pub fn appointment_status(self) -> AppointmentStatus {
+        match self {
+            Self::New | Self::Rescheduled => AppointmentStatus::Booked,
+            Self::Cancelled => AppointmentStatus::Cancelled,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CalendarNotice {
