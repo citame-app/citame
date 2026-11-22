@@ -1968,13 +1968,62 @@ fn native_recovers_reviews_and_sends_a_private_staff_photo_through_the_proxy() {
         .unwrap();
     assert_ne!(updated.portrait_version, reviewed.portrait_version);
     assert!(!updated.portrait_published);
+    let private_version = updated.portrait_version.as_deref().unwrap();
     assert!(
         device
             .transport
-            .staff_portrait(&staff_id, updated.portrait_version.as_deref().unwrap())
+            .staff_portrait(&staff_id, private_version)
             .unwrap()
             .starts_with(&[255, 216, 255])
     );
+    let public_agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .max_redirects(0)
+        .build()
+        .into();
+    let public_status = |version| {
+        let url = device
+            .base
+            .join(&format!("/api/staff/{staff_id}/portrait/{version}"))
+            .unwrap();
+        public_agent
+            .get(url.as_str())
+            .call()
+            .unwrap()
+            .status()
+            .as_u16()
+    };
+    assert_eq!(public_status(private_version), 404);
+    device
+        .transport
+        .set_staff_portrait(
+            &staff_id,
+            PortraitUpdate::Publish {
+                version: private_version.into(),
+                published: true,
+            },
+        )
+        .unwrap();
+    let published = device.transport.portrait_directory().unwrap();
+    let published = published
+        .staff
+        .iter()
+        .find(|row| row.id == staff_id)
+        .unwrap();
+    assert!(published.portrait_published);
+    let public_version = published.portrait_version.as_deref().unwrap();
+    assert_eq!(public_status(public_version), 200);
+    device
+        .transport
+        .set_staff_portrait(
+            &staff_id,
+            PortraitUpdate::Publish {
+                version: public_version.into(),
+                published: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(public_status(public_version), 404);
 }
 
 #[test]
