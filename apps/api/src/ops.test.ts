@@ -41,6 +41,23 @@ describe("liveness and readiness", () => {
     expect(body.status).toBe("ready");
     expect(body.checks).toEqual({ database: "ok", valkey: "ok" });
     expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.has("x-citame-api-instance")).toBe(false);
+  });
+
+  test("an opt-in readiness probe identifies the responding API instance", async () => {
+    const headers = { "x-citame-readiness-probe": "instance" };
+    const second = createApp({ db: t.db, valkey: t.valkey.client, config: t.config });
+    try {
+      const first = (await get("/ready", headers)).headers.get("x-citame-api-instance");
+      expect(first).toMatch(/^[0-9a-f-]{36}$/);
+      expect((await get("/ready", headers)).headers.get("x-citame-api-instance")).toBe(first);
+      const other = await second.request("/ready", { headers });
+      expect(other.status).toBe(200);
+      expect(other.headers.get("x-citame-api-instance")).toMatch(/^[0-9a-f-]{36}$/);
+      expect(other.headers.get("x-citame-api-instance")).not.toBe(first);
+    } finally {
+      await second.shutdown();
+    }
   });
 
   test("/ready is 503 and names the failing dependency when Valkey is unreachable", async () => {

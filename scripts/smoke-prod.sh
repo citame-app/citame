@@ -797,8 +797,46 @@ DOCKERFILE
   release_web_id=$(docker image inspect --format '{{.Id}}' "$SOB_WEB_IMAGE")
   [ "$release_api_id" != "$prior_api_id" ] && [ "$release_web_id" != "$prior_web_id" ] ||
     fail "the staged release did not contain distinct images"
-  bash scripts/upgrade-prod.sh --prebuilt --maintenance "${release_args[@]}" ||
-    fail "staged maintenance upgrade failed"
+  step "reject a healthy API from the wrong instance before replacing Caddy"
+  cat > "$SMOKE_DIR/broken-web.yaml" <<'YAML'
+services:
+  web:
+    extra_hosts:
+      - "api:127.0.0.1"
+    command:
+      - bun
+      - -e
+      - |
+        Bun.serve({
+          hostname: "127.0.0.1",
+          port: 3000,
+          fetch: () => Response.json({ status: "ready" }, {
+            headers: { "x-citame-api-instance": "541357c2-a9ca-498c-9376-f841f436488f" },
+          }),
+        });
+        await import("./server.ts");
+YAML
+  broken_args=("${release_args[@]}" -f "$SMOKE_DIR/broken-web.yaml")
+  if bash scripts/upgrade-prod.sh --prebuilt --maintenance "${broken_args[@]}" > "$SMOKE_DIR/upgrade-web-failed.log" 2>&1; then
+    fail "the upgrade accepted readiness from a different API instance"
+  fi
+  grep -Fq "The web gateway could not reach the upgraded API" "$SMOKE_DIR/upgrade-web-failed.log" ||
+    fail "the upgrade did not report the failed gateway check"
+  [ "$caddy_before" = "$("${COMPOSE[@]}" ps -q caddy)" ] || fail "Caddy changed despite the failed gateway check"
+  [ "$booked_before" = "$(booked_row)" ] || fail "the gateway failure changed the booking"
+  [ "$("${COMPOSE[@]}" exec -T postgres psql -X -U sob -d sob -qAtc \
+    "SELECT to_regclass('public.smoke_upgrade_probe') IS NOT NULL")" = t ] ||
+    fail "the gateway failure lost the committed migration"
+  for svc in api worker; do
+    replaced=$("${COMPOSE[@]}" ps -q "$svc")
+    [ -n "$replaced" ] && [ "$replaced" != "${service_before[$svc]}" ] &&
+      [ "$(docker inspect --format '{{.Image}}' "$replaced")" = "$release_api_id" ] ||
+      fail "the failed gateway check did not preserve the new $svc"
+  done
+
+  step "repair the upgraded gateway and refresh Caddy"
+  bash scripts/upgrade-prod.sh --prebuilt "${release_args[@]}" ||
+    fail "the corrected gateway upgrade failed"
   for svc in api worker web; do
     replaced=$("${COMPOSE[@]}" ps -q "$svc")
     [ -n "$replaced" ] && [ "$replaced" != "${service_before[$svc]}" ] ||
@@ -824,6 +862,8 @@ DOCKERFILE
   grep -Fq 'hub.verify_token=REDACTED' <<<"$edge_logs" ||
     fail "the upgraded proxy did not redact the verification token"
   if grep -Fq "$probe" <<<"$edge_logs"; then fail "the upgraded proxy logged a verification token"; fi
+
+
 fi
 
 if [ "${SMOKE_RESTORE:-0}" = 1 ]; then

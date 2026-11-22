@@ -174,6 +174,7 @@ export function createApp(input: AppDeps): App {
     readHead: () => headSeq(deps.db),
   });
   let draining = false;
+  const readinessInstance = crypto.randomUUID();
   app.drain = () => {
     draining = true;
   };
@@ -228,6 +229,8 @@ export function createApp(input: AppDeps): App {
     c.header("cache-control", "no-store");
     if (draining) return c.json({ status: "draining" }, 503);
     const report = await checkReady(deps, deps.readyTimeoutMs);
+    if (report.status === "ready" && c.req.header("x-citame-readiness-probe") === "instance")
+      c.header("x-citame-api-instance", readinessInstance);
     return c.json(report, report.status === "ready" ? 200 : 503);
   });
   // Prometheus scrape. With METRICS_TOKEN it needs the bearer token; without one it answers only
