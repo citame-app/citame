@@ -514,6 +514,7 @@ async function verifyNativeProjection(
     importedResourceUnits,
     resourceLimits,
   }: Awaited<ReturnType<typeof expectedNativeCapacity>>,
+  preparedCopy = false,
 ) {
   const bookedServiceRows = plan.visits.reduce((total, v) => total + v.services.length, 0);
   const occupiedResources = plan.visits.filter((v) => v.resource).length;
@@ -532,6 +533,7 @@ async function verifyNativeProjection(
       workWindows: appointment.workWindows,
       sourceStaffWindow: appointment.sourceStaffWindow,
       sourceResourceWindow: appointment.sourceResourceWindow,
+      notes: appointment.notes,
       businessMessage: appointment.sourceBusinessMessage,
       customerComment: appointment.customerComment,
     })
@@ -584,6 +586,7 @@ async function verifyNativeProjection(
         row.workWindows !== null ||
         stableJson(row.sourceStaffWindow) !== stableJson(expectedStaffWindow) ||
         stableJson(row.sourceResourceWindow) !== stableJson(expectedResourceWindow) ||
+        (preparedCopy && row.notes !== null) ||
         row.businessMessage !== (v.context.businessMessage ?? null) ||
         row.customerComment !== (v.context.customerComment ?? null)
       );
@@ -602,6 +605,7 @@ async function verifyNativeProjection(
         row.processingMinutes !== null ||
         row.priceCents !== expected.priceCents ||
         row.reviewedPriceCents !== null ||
+        (preparedCopy && (row.priceType !== "fixed" || row.peakSurchargeCents !== null)) ||
         row.sourceUnpriced !== (expected.sourceUnpriced === true) ||
         row.currency !== expected.currency
       );
@@ -829,7 +833,12 @@ export async function inspectNativeBooksy(
       const base = await verifyBooksyProjection(tx, model.base, { candidate: true });
       const plan = planNativeRehearsal(model);
       const capacity = await expectedNativeCapacity(tx, plan);
-      const servicePositions = await verifyNativeProjection(tx, plan, capacity);
+      const servicePositions = await verifyNativeProjection(
+        tx,
+        plan,
+        capacity,
+        options.preparedCopy,
+      );
       if (options.paymentEvidence || options.preparedCopy)
         await verifyNativePaymentEvidence(tx, plan);
       const waitlist = await planBooksyWaitlist(tx, model);

@@ -1039,6 +1039,11 @@ test("candidate reconciliation rejects invented processing and an inactive staff
       .set({ sourcePaymentUnverified: true })
       .where(eq(appointmentContext.appointmentId, booking.id));
     expect((await verifyPaymentEvidence()).nativeFieldsVerified).toBe(true);
+    await db.update(appointment).set({ notes: "Local note" }).where(eq(appointment.id, booking.id));
+    await expect(inspectPreparedCopy()).rejects.toThrow(
+      "Native transaction did not reconcile the source schedule",
+    );
+    await db.update(appointment).set({ notes: null }).where(eq(appointment.id, booking.id));
     const draftId = crypto.randomUUID();
     await db.insert(checkout).values({
       id: draftId,
