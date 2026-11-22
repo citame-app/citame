@@ -19,7 +19,7 @@ export function PublicBusinessProfile({ profile }: { profile: Profile }) {
   if (!Object.values(profile).some((value) => (Array.isArray(value) ? value.length : value)))
     return null;
   return (
-    <section className="editorial-section" aria-labelledby="public-business-heading">
+    <section className="py-12 sm:py-16" aria-labelledby="public-business-heading">
       <div className="wrap editorial-wrap grid gap-8 lg:grid-cols-2">
         <div className="editorial-section-heading">
           {category && <p className="editorial-kicker">{category}</p>}
