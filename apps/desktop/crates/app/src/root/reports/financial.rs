@@ -370,6 +370,14 @@ mod tests {
             assert!(desk.submitted.as_ref() == Some(&query));
             desk.request = None;
             desk.error = None;
+            let mut item_rows = vec![
+                serde_json::json!({ "family": "product", "itemId": null, "name": "=Classic shampoo", "quantity": 2, "amountCents": 900, "taxCents": 156 }),
+                serde_json::json!({ "family": "unallocated", "itemId": null, "name": null, "quantity": null, "amountCents": 100, "taxCents": 17 }),
+            ];
+            item_rows.extend((1..PAGE_SIZE).map(|index| serde_json::json!({
+                "family": "custom", "itemId": null, "name": format!("Manual item {index}"),
+                "quantity": 1, "amountCents": 100, "taxCents": 0,
+            })));
             desk.financial_report = Some(serde_json::from_value(serde_json::json!({
                 "from": query.from,
                 "to": query.to,
@@ -386,10 +394,7 @@ mod tests {
                     { "family": "product", "amountCents": 900, "taxCents": 156 },
                     { "family": "unallocated", "amountCents": 100, "taxCents": 17 }
                 ],
-                "settledByItem": [
-                    { "family": "product", "itemId": null, "name": "=Classic shampoo", "quantity": 2, "amountCents": 900, "taxCents": 156 },
-                    { "family": "unallocated", "itemId": null, "name": null, "quantity": null, "amountCents": 100, "taxCents": 17 }
-                ],
+                "settledByItem": item_rows,
                 "promotionCollections": [
                     { "name": "=Original offer", "code": "OFFER", "collectedCents": 0, "refundedCents": 125, "netCents": -125 }
                 ],
@@ -421,6 +426,16 @@ mod tests {
             csv.contains("\"product\",\"\",\"'=Classic shampoo\",\"2\",\"900\",\"156\",\"EUR\"")
         );
         assert!(csv.contains("\"unallocated\",\"\",\"\",\"\",\"100\",\"17\",\"EUR\""));
+        assert!(csv.contains(&format!(
+            "\"custom\",\"\",\"Manual item {}\",\"1\",\"100\",\"0\",\"EUR\"",
+            PAGE_SIZE - 1
+        )));
+        root.update(cx, |root, cx| {
+            root.report_page(ReportPage::SettledItems, 1, cx);
+            assert!(matches!(&root.overlay, Overlay::Reports(desk)
+                if desk.item_page == 1 && desk.page == 0));
+        });
+        cx.run_until_parked();
 
         let revoked = dir.path().join("revoked.csv");
         root.update(cx, |root, cx| {

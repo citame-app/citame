@@ -260,6 +260,11 @@ test("retail commissions exclude included tax and preserve costs and rate snapsh
     settledByItem: [],
     collectedCents: 0,
   });
+  const { sql } = await import("drizzle-orm");
+  await t.db.execute(sql`update retail_product set name = 'New label' where id = ${product.id}`);
+  expect(
+    await (await call(owner, `/admin/accounting/sales?from=${date}&to=${date}`)).json(),
+  ).toMatchObject({ settledByItem: [{ itemId: product.id, name: "Shampoo" }] });
 });
 
 test("settled families exclude tips and put historical receipts without matching line allocations in unallocated", async () => {

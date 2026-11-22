@@ -54,6 +54,14 @@ beforeEach(() => {
             amountCents: 100,
             taxCents: 0,
           },
+          ...Array.from({ length: 23 }, (_, index) => ({
+            family: "custom",
+            itemId: null,
+            name: `Manual item ${index + 1}`,
+            quantity: 1,
+            amountCents: 100,
+            taxCents: 0,
+          })),
         ],
         promotionCollections: [
           {
@@ -151,6 +159,7 @@ test("financial reports apply the professional filter and export the visible fam
     expect(within(treatment).getByRole("cell", { name: "2" })).toBeInTheDocument();
     const unallocated = within(items).getByRole("row", { name: /Unallocated/ });
     expect(within(unallocated).getByRole("cell", { name: "—" })).toBeInTheDocument();
+    expect(within(items).queryByRole("row", { name: /Manual item 23/ })).toBeNull();
     const promotions = await screen.findByRole("table", {
       name: "Collections by booking promotion",
     });
@@ -169,6 +178,12 @@ test("financial reports apply the professional filter and export the visible fam
     expect(await download?.text()).toContain(
       `"sale_family","item_id","item_name","quantity","settled_amount_cents","included_tax_cents","currency"\r\n"service","${id}","'=Treatment","2","1700","172","EUR"\r\n"unallocated","","","","100","0","EUR"`,
     );
+    expect(await download?.text()).toContain('"custom","","Manual item 23","1","100","0","EUR"');
+    fireEvent.click(screen.getByRole("button", { name: "Next items" }));
+    expect(within(items).getByRole("rowheader", { name: /Manual item 23/ })).toBeInTheDocument();
+    expect(within(items).queryByRole("row", { name: /=Treatment/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Previous items" }));
+    expect(within(items).getByRole("rowheader", { name: /=Treatment/ })).toBeInTheDocument();
   } finally {
     click.mockRestore();
     create.mockRestore();

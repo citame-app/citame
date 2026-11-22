@@ -98,6 +98,8 @@ The centre and client financial reports in Cloud and Desktop break settled amoun
 
 Both views page through the rows and include the full detail in the financial CSV. The original financial report filters, permissions, settlement dates and prepaid allocation apply. Tips and later refunds remain in their existing sections.
 
+The item breakdown uses the financial report's read-only snapshot and responsive breakdown renderer. Paging limits the rendered rows in each client while totals, families and the complete export use the same settlement snapshot.
+
 ### Team occupancy
 
 Cloud and Desktop use the same report snapshot for the selected salon-local dates and team member. Effective shifts use the current weekly schedule and dated overrides. The report counts overlapping blocks once and clips them to the shift. Reserved staff work includes active bookings and completed visits inside the remaining shift. Simultaneous reservations count once, and processing gaps are taken from each appointment's frozen work plan. Completed and missed time sums each visit's calendar duration within the report dates, including concurrent visits. Occupancy uses all currencies and is blank when no shift time remains. Schedule changes refresh open reports. A period with no appointments remains exportable when it has scheduled capacity. A period with neither appointments nor occupancy minutes has no CSV action. The report and its CSV measure planned time from the calendar. Attendance records would be required to report hours actually worked.

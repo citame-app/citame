@@ -20,7 +20,7 @@ export const redeemedAtSettlement = sql`(pr.refunded_at is null or pr.refunded_a
 export async function settledSales(tx: Tx, fromAt: Date, toAt: Date, scope: SQL) {
   const rows = await tx.execute<{
     family: SalesFamilyTotal["family"] | null;
-    detail: boolean;
+    is_item_row: boolean;
     item_id: string | null;
     name: string | null;
     quantity: string | number | null;
@@ -84,9 +84,9 @@ export async function settledSales(tx: Tx, fromAt: Date, toAt: Date, scope: SQL)
         r.tax_cents
       from checked_receipts r where not r.matches_lines
     )
-    select family, detail, item_id, name, quantity, amount, tax, tips
+    select family, is_item_row, item_id, name, quantity, amount, tax, tips
     from (
-      select family, grouping(item_id) = 0 as detail, item_id, name, sum(quantity)::bigint as quantity,
+      select family, grouping(item_id) = 0 as is_item_row, item_id, name, sum(quantity)::bigint as quantity,
         sum(amount)::bigint as amount, sum(tax)::bigint as tax, 0::bigint as tips
       from settled_values group by grouping sets ((family), (family, item_id, name))
       union all
@@ -95,7 +95,7 @@ export async function settledSales(tx: Tx, fromAt: Date, toAt: Date, scope: SQL)
         coalesce(sum(tip_cents), 0)::bigint
       from checked_receipts where not issues_value
     ) totals
-    order by array_position(array[${familyOrder}]::text[], family), detail, amount desc, name, item_id
+    order by array_position(array[${familyOrder}]::text[], family), is_item_row, amount desc, name, item_id
   `);
 
   const summary = rows.find((row) => row.family === null);
@@ -104,12 +104,12 @@ export async function settledSales(tx: Tx, fromAt: Date, toAt: Date, scope: SQL)
     includedTaxCents: Number(summary?.tax ?? 0),
     tipsCents: Number(summary?.tips ?? 0),
     settledByFamily: rows.flatMap((row): SalesFamilyTotal[] =>
-      row.family === null || row.detail
+      row.family === null || row.is_item_row
         ? []
         : [{ family: row.family, amountCents: Number(row.amount), taxCents: Number(row.tax) }],
     ),
     settledByItem: rows.flatMap((row): SettledSaleItem[] =>
-      row.family !== null && row.detail
+      row.family !== null && row.is_item_row
         ? [
             {
               family: row.family,
