@@ -587,7 +587,6 @@ mod tests {
         let (_dir, window) = super::super::super::tests::open(cx);
         window
             .update(cx, |root, _, cx| {
-                root.svc.stop_sync();
                 root.status.connectivity = Connectivity::Online;
                 show_intake_test_offer(root, cx);
                 let Overlay::Waitlist(desk) = &mut root.overlay else {
